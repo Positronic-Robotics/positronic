@@ -745,6 +745,32 @@ def test_trial_seed_reaches_task_reset_and_meta(world):
 
 
 @pytest.mark.timeout(3.0)
+@pytest.mark.parametrize('scored', [False, True])
+def test_scored_comes_from_task_not_done_wiring(world, scored):
+    """``eval.scored`` records the task's declared success oracle, not the presence of a ``done`` port
+    (regression: a lifecycle-only ``done`` stamped a downstream-scored eval as scored, so its timeouts
+    read as failures instead of unscored)."""
+
+    class _LifecycleOnly(pimm.ControlSystem):
+        def __init__(self):
+            self.done = pimm.ControlSystemEmitter(self)
+
+        def run(self, should_stop, clock):
+            yield pimm.Sleep(0.01)
+
+    task = Task(instruction='t', timeout=0.05, done=_LifecycleOnly().done, scored=scored)
+    harness = Harness(StubPolicy(), make_embodiment(), task=task, trials=[{}])
+    p = _pair_all(world, harness)
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=400)
+
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert stops[0].static_data['eval.scored'] is scored
+
+
+@pytest.mark.timeout(3.0)
 def test_trial_plan_self_drives(world):
     """With a trial plan the harness runs unattended: no driver, one episode per entry."""
     policy = StubPolicy()

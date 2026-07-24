@@ -22,6 +22,9 @@ path has no seed hook, so a recorded seed would only mislead.
 import argparse
 import os
 import tempfile
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import cv2  # noqa: F401 -- robolab requires cv2 imported before isaaclab
@@ -29,7 +32,7 @@ import numpy as np
 import torch
 from isaaclab.app import AppLauncher
 from protocol import decode
-from server import EnvProtocol, EnvServer
+from server import EnvProtocol, EnvServer, disjoint_step_phases  # pyright: ignore[reportAttributeAccessIssue]
 
 # Isaac's rigid bring-up order: parse CLI args, launch the app, and only then import anything that touches the
 # omni/isaaclab runtime — which forces the second import block below and the module-level parse. ``validate.py``
@@ -37,6 +40,8 @@ from server import EnvProtocol, EnvServer
 parser = argparse.ArgumentParser(description='Serve RoboLab over the env-server protocol.')
 parser.add_argument('--host', default='localhost')
 parser.add_argument('--port', type=int)
+parser.add_argument('--camera-res', type=int, nargs=2, default=(1280, 720), metavar=('WIDTH', 'HEIGHT'))
+parser.add_argument('--disable-viewport', action='store_true')
 AppLauncher.add_app_launcher_args(parser)
 args, _ = parser.parse_known_args()
 args.enable_cameras = True  # not a CLI flag: every robolab runner forces it (the image obs need rendering)
@@ -45,6 +50,7 @@ simulation_app = AppLauncher(args).app
 import omni.kit.app  # noqa: E402
 import omni.timeline  # noqa: E402
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg  # noqa: E402
+from isaaclab.sensors import TiledCameraCfg  # noqa: E402  # pyright: ignore[reportMissingImports]
 from isaaclab.utils.math import (  # noqa: E402
     matrix_from_quat,
     quat_from_matrix,
@@ -52,13 +58,16 @@ from isaaclab.utils.math import (  # noqa: E402
     quat_mul,
     subtract_frame_transforms,
 )
+from omni.kit.viewport.utility import get_active_viewport  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 import robolab.constants  # noqa: E402
 from robolab.core.environments.factory import get_envs  # noqa: E402
 from robolab.core.environments.runtime import create_env  # noqa: E402
 from robolab.core.logging.results import get_all_env_subtask_infos  # noqa: E402
 from robolab.registrations.droid.auto_env_registrations_jointpos import auto_register_droid_envs  # noqa: E402
+from robolab.robots import droid  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.robots.droid import EEF_OFFSET_ROT  # noqa: E402
+from robolab.variations.camera import OverShoulderLeftCameraCfg  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 # Both flags gate recorder construction in the env cfg's ``__post_init__``, so they are set before any
 # ``create_env``: subtask progress feeds the wire ``subtask`` observation; per-step image recording only bloats
@@ -67,6 +76,30 @@ from robolab.robots.droid import EEF_OFFSET_ROT  # noqa: E402
 robolab.constants.ENABLE_SUBTASK_PROGRESS_CHECKING = True
 robolab.constants.RECORD_IMAGE_DATA = False
 robolab.constants.set_output_dir(tempfile.mkdtemp(prefix='robolab-env-'))
+
+# The policy cameras (RoboLab's WRIST_LEFT preset) render at a stock 1280x720 (16:9) while pi05-class
+# policies consume ~224x224, so most of the tile render is discarded. Keep any ``--camera-res`` override at
+# 16:9: the policies letterbox-pad each frame to a square, so an off-aspect render shifts the scene's
+# scale/padding in the policy input. The resolution override mutates the ORIGINAL
+# ``TiledCameraCfg`` objects: isaaclab's ``configclass`` strips class-level mutables into dataclass fields
+# whose ``default_factory`` deepcopies the captured original on every cfg instantiation, so writing the
+# originals (before any registration) reaches every task's scene. The wrist original is the ``droid`` module
+# global (``DroidCfg`` and ``WristCameraCfg`` both capture it); the over-shoulder original exists only inside
+# its factory's closure.
+_over_shoulder = (
+    OverShoulderLeftCameraCfg
+    .__dataclass_fields__['over_shoulder_left_camera']
+    .default_factory.__closure__[0]
+    .cell_contents
+)
+assert isinstance(_over_shoulder, TiledCameraCfg), _over_shoulder
+for _camera in (droid._WRIST_CAM, _over_shoulder):
+    _camera.width, _camera.height = args.camera_res
+
+if args.disable_viewport:
+    # The default viewport ('/OmniverseKit_Persp', 1280x720) renders every render step even headless, and
+    # nothing in this server consumes it.
+    get_active_viewport().updates_enabled = False
 
 
 def _load_robot_meta() -> dict[str, Any]:
@@ -79,6 +112,24 @@ def _load_robot_meta() -> dict[str, Any]:
         return {}
     with open(path, 'rb') as f:
         return decode(f.read())
+
+
+@dataclass
+class _PhaseTimes:
+    """Wall time (seconds) of the native phases inside one RoboLab ``env.step``, zeroed each step."""
+
+    physics: float = 0.0
+    render: float = 0.0
+
+    def add_physics(self, seconds: float) -> None:
+        self.physics += seconds
+
+    def add_render(self, seconds: float) -> None:
+        self.render += seconds
+
+    def reset(self) -> None:
+        self.physics = 0.0
+        self.render = 0.0
 
 
 class RobolabEnv(EnvProtocol):
@@ -111,6 +162,18 @@ class RobolabEnv(EnvProtocol):
         self._timeline = omni.timeline.get_timeline_interface()
         self._kit_app = omni.kit.app.get_app()
 
+    def _timed_phase(self, method, add: Callable[[float], None]):
+        """``method`` wrapped to accumulate its wall time via ``add`` (one of ``_phase_s``'s phase adders)."""
+
+        def timed(*args, **kwargs):
+            start = time.perf_counter()
+            try:
+                return method(*args, **kwargs)
+            finally:
+                add(time.perf_counter() - start)
+
+        return timed
+
     def _build(self, task: str, instruction_type: str) -> None:
         if self._env is not None:
             self._env.close()  # release the prior task's env before create_env opens a fresh USD stage
@@ -122,6 +185,13 @@ class RobolabEnv(EnvProtocol):
             env_name, device=args.device, num_envs=1, instruction_type=instruction_type
         )
         self._control_dt = self._env_cfg.sim.dt * self._env_cfg.decimation
+        # The sim context's ``step`` (physics substeps) and ``render`` are the two native phases inside
+        # ``env.step``; both are re-wrapped per build (a new env brings a fresh SimulationContext). The sums
+        # feed the step response's ``timing`` and are zeroed at each ``step`` call, so reset-time rendering
+        # never leaks into a step's decomposition.
+        self._phase_s = _PhaseTimes()
+        self._env.sim.step = self._timed_phase(self._env.sim.step, self._phase_s.add_physics)
+        self._env.sim.render = self._timed_phase(self._env.sim.render, self._phase_s.add_render)
         # ``instruction`` is the resolved language goal (``create_env`` picks the variant); the rest is the
         # task identity the episode records.
         self._meta = {
@@ -172,6 +242,8 @@ class RobolabEnv(EnvProtocol):
         }
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
+        start = time.perf_counter()
+        self._phase_s.reset()
         # Isaac pauses its timeline while assets stream in; stepping a paused sim stalls, so pump the kit
         # update loop until it plays again (robolab's episode loop does the same before every step).
         while not self._timeline.is_playing():
@@ -190,6 +262,12 @@ class RobolabEnv(EnvProtocol):
             'done': done,
             'success': done and bool(self._env.get_env_results()[0]['success']),
             'control_dt': self._control_dt,
+            # The server's own step decomposition as disjoint additive phases summing to this call's whole
+            # wall (observation materialisation included): physics substeps, sensor/viewport rendering, and
+            # everything else in the step. The client records it against its socket-level step time.
+            'timing': disjoint_step_phases(
+                time.perf_counter() - start, physics_s=self._phase_s.physics, render_s=self._phase_s.render
+            ),
         }
 
     def _joint_targets(self, command: dict[str, Any]) -> torch.Tensor:

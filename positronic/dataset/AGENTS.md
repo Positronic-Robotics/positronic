@@ -38,7 +38,20 @@ Recordings are immutable. All post-hoc modification goes through one mechanism: 
 
 `duration_ns`, `start_ts`, `last_ts` are **first-class properties on Episode**, always derived from signals. They are never stored in meta. If a transform changes signals, these properties reflect the change.
 
+Bounds and time sampling (`episode.time[...]`) cover every signal — the core reserves no name and gives no signal special bounds treatment.
+
 Implementations may cache these values internally (e.g. `DiskEpisode` reads a cached `duration_ns` from `meta.json`), but this is a private optimization — `episode.meta` must not expose `duration_ns`.
+
+## The dataset holds no opinions
+
+The core — `Signal`, `Episode`, `Dataset`, and the writer — is agnostic to the nature, source, and structure of every signal. There are **no reserved names, no name-based dispatch, and no signal classes**: recording appends whatever `(name, value)` pairs it is handed, at the original resolution and fidelity, and never interprets them. A telemetry producer — the eval's per-tick wall-clock costs and inference latencies — is just another source feeding the standard append path as opaque pairs; the writer cannot tell those signals from a camera's. Meaning is a consumer's job, never the core's.
+
+Two consumer classes read the raw recording, each supplying its own interpretation:
+
+- **Replay / debug** — code we control. It decides how to reconcile sparse and dense signals, and derives whatever boundary or alignment notion it needs directly from the raw signals.
+- **Training-set conversion** — codec-driven. `apply_codec` wraps the dataset in `TransformedDataset(codec.training_encoder)`, and every `training_encoder` is a pure **projection** (`Derive`) that yields only the keys the codec declares. An undeclared signal is a no-op *by construction* — it never reaches the training columns, and no whitelist is needed. Keep it so: a training encoder is a pure projection, so **never add an `Identity()` passthrough to one** (that would leak every raw signal into the training set).
+
+Bounds (`start_ts`, `last_ts`, `duration_ns`, `time`) are a **convenience projection over the signals, not semantics**: a consumer that needs a different episode extent derives it from the raw signals rather than expecting the core to carve one out. Today they are the plain intersection over all signals; after #508 they intersect only the non-defaulted signals, so a sparse stream that declares its pre-first-sample default stops pulling `start_ts` inward.
 
 ## Laziness
 

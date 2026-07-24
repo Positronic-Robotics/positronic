@@ -1,7 +1,10 @@
+import contextlib
 import logging
+from collections.abc import Iterator
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
-from typing import Any
+from typing import Any, Protocol
 
 import pimm
 from positronic.utils import frozen_keys_dict
@@ -12,6 +15,41 @@ from .serializers import Serializer, StatefulSerializer, Timestamped, _PureSeria
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
+class TimingHooks(Protocol):
+    """Optional wall-clock telemetry taps the writer drives without knowing what they measure.
+
+    The writer appends whatever ``drain`` yields and sets whatever ``finish`` yields as opaque ``(name,
+    value)`` pairs — it never learns their meaning, so no telemetry concept leaks into the dataset core. The
+    default (``_NO_TIMING``) is inert: no extra samples, an unmeasured record-IO span."""
+
+    def record_io(self) -> AbstractContextManager: ...
+
+    def drain(self) -> Iterator[tuple[str, float]]: ...
+
+    def finish(self) -> Iterator[tuple[str, Any]]: ...
+
+    def discard(self) -> None: ...
+
+
+class _NoTiming:
+    """Inert ``TimingHooks``: the writer records only its inputs, with an unmeasured record-IO span."""
+
+    def record_io(self) -> AbstractContextManager:
+        return contextlib.nullcontext()
+
+    def drain(self) -> Iterator[tuple[str, float]]:
+        return iter(())
+
+    def finish(self) -> Iterator[tuple[str, Any]]:
+        return iter(())
+
+    def discard(self) -> None:
+        pass
+
+
+_NO_TIMING = _NoTiming()
 
 
 class DsWriterCommandType(Enum):
@@ -169,15 +207,23 @@ class DsWriterAgent(pimm.ControlSystem):
         poll_hz: float = 1000.0,
         time_mode: TimeMode = TimeMode.CLOCK,
         virtual_time: bool = False,
+        timing: TimingHooks = _NO_TIMING,
     ):
         self.ds_writer = ds_writer
         self._poll_hz = float(poll_hz)
         self._time_mode = time_mode
         self._virtual_time = virtual_time
+        self._timing = timing
         self.command = pimm.ControlSystemReceiver[DsWriterCommand](self, default=None)
 
         self._inputs: dict[str, pimm.ControlSystemReceiver[Any]] = {}
         self._serializers: dict[str, StatefulSerializer] = {}
+
+    def _drain_timing(self, ep_writer: EpisodeWriter, ts_ns: int) -> None:
+        """Append the timing hooks' drained ``(name, value)`` pairs at ``ts_ns`` — opaque to the writer, inert
+        when no hooks are bound."""
+        for name, value in self._timing.drain():
+            _append(ep_writer, name, value, ts_ns)
 
     def add_signal(self, name: str, serializer: Serializer | StatefulSerializer | None = None):
         self._inputs[name] = pimm.ControlSystemReceiver[Any](self, default=None)
@@ -231,18 +277,25 @@ class DsWriterAgent(pimm.ControlSystem):
                             if not isinstance(clock, pimm.world.SystemClock):
                                 extra_ts['world'] = world_time_ns
 
-                            serializer = self._serializers.get(name)
-                            value = msg.data
-                            if serializer is not None:
-                                value = serializer(value)
-                            # Gate on `Timestamped` so plain list-valued samples
-                            # (e.g. list-state vectors) still go through `_append`.
-                            # Empty list matches too — used as the cancel signal.
-                            if isinstance(value, list) and (not value or isinstance(value[0], Timestamped)):
-                                for sample in value:
-                                    _append(ep_writer, name, sample.value, sample.ts, None)
-                            else:
-                                _append(ep_writer, name, value, primary_ts, extra_ts)
+                            with self._timing.record_io():
+                                serializer = self._serializers.get(name)
+                                value = msg.data
+                                if serializer is not None:
+                                    value = serializer(value)
+                                # Gate on `Timestamped` so plain list-valued samples
+                                # (e.g. list-state vectors) still go through `_append`.
+                                # Empty list matches too — used as the cancel signal.
+                                if isinstance(value, list) and (not value or isinstance(value[0], Timestamped)):
+                                    for sample in value:
+                                        _append(ep_writer, name, sample.value, sample.ts, None)
+                                else:
+                                    _append(ep_writer, name, value, primary_ts, extra_ts)
+
+                    # Append this tick's drained timing pairs (inert when no hooks are bound). The closing turn
+                    # is skipped here — STOP does the final drain after its own record IO, at the command ts, so
+                    # the last sample stays monotonic against these per-tick ones.
+                    if not closing:
+                        self._drain_timing(ep_writer, clock.now_ns())
 
                 if closing:
                     ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts)
@@ -259,6 +312,7 @@ class DsWriterAgent(pimm.ControlSystem):
                 finally:
                     ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
+                    self._timing.discard()
 
     def _handle_command(
         self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None, ep_counter: int, now_ns: int | None = None
@@ -277,9 +331,16 @@ class DsWriterAgent(pimm.ControlSystem):
                     logger.warning('Episode already started, ignoring start command')
             case DsWriterCommandType.STOP_EPISODE:
                 if ep_writer is not None:
-                    for name, ser in self._serializers.items():
-                        for sample in ser.flush(now_ns):
-                            _append(ep_writer, name, sample.value, sample.ts, None)
+                    with self._timing.record_io():
+                        for name, ser in self._serializers.items():
+                            for sample in ser.flush(now_ns):
+                                _append(ep_writer, name, sample.value, sample.ts, None)
+                    # Append the final drained timing pairs, then set the sealed episode's timing statics —
+                    # both opaque (name, value) pairs the hooks supply; the writer never learns their meaning.
+                    if now_ns is not None:
+                        self._drain_timing(ep_writer, now_ns)
+                    for key, value in self._timing.finish():
+                        ep_writer.set_static(key, value)
                     for k, v in cmd.static_data.items():
                         ep_writer.set_static(k, v)
                     ep_writer.__exit__(None, None, None)
@@ -292,6 +353,7 @@ class DsWriterAgent(pimm.ControlSystem):
                     ep_writer.abort()
                     ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
+                    self._timing.discard()
                     ep_writer = None
                 else:
                     logger.warning('Episode not started, ignoring abort command')

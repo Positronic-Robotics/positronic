@@ -14,9 +14,11 @@ from contextlib import AbstractContextManager, ExitStack
 from typing import Any
 
 import pimm
+from positronic import eval_timing
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
+from positronic.eval_timing import Phase
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
 
@@ -106,11 +108,20 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     # terminal, so the recorder samples it before any step advances the env.
                     self._reset_pending = False
                     self.robot_meta.emit(self._robot_meta)
-                    self._emit_payload(self._frame['obs'])
+                    # Frame-0 materialisation (allocating shared-memory image buffers and copying each camera
+                    # frame) is part of the reset cost, like ``_conn.reset``'s server-side render already under
+                    # ``reset_s`` — time it there so it isn't billed to ``overhead_s``.
+                    with eval_timing.timed(Phase.RESET):
+                        self._emit_payload(self._frame['obs'])
                     self.done.emit({})
                 elif self._active:
                     self._frame = self._step_env(clock)
-                    self._emit_payload(self._frame['obs'])
+                    # The step's observation is materialised client-side here (the adapter allocates
+                    # shared-memory image buffers and copies each camera frame). It is part of the env step —
+                    # matching the native path, so image-heavy remote runs don't bill it to ``overhead_s`` — but
+                    # tracked apart (``env_client_s``) so the reduce charges it to materialisation, not wire.
+                    with eval_timing.timed(Phase.MATERIALIZE):
+                        self._emit_payload(self._frame['obs'])
         finally:
             # Closes the connection then the server, in that order (reverse of acquisition); a no-op if no reset
             # ever connected.
@@ -118,7 +129,14 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
 
     def _step_env(self, clock: pimm.Clock) -> dict[str, Any]:
         commands = {name: receiver.read() for name, receiver in self.commands.items()}
-        result = self._conn.step(self._adapter.action(commands, clock.now_ns()))
+        with eval_timing.timed(Phase.ENV_STEP):
+            result = self._conn.step(self._adapter.action(commands, clock.now_ns()))
+        # An env server that decomposes its own step cost reports a disjoint phase map in the response; forward
+        # it unchanged so the reduce can split it out of the client-observed ``env_step_s``. The proxy neither
+        # names nor sums the phases — the env owns its decomposition.
+        timing = result.get('timing')
+        if timing is not None:
+            eval_timing.record_env_phases(timing)
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues
             self.done.emit(payload)

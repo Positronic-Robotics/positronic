@@ -5,9 +5,11 @@ from enum import Enum
 from typing import Any
 
 import pimm
+from positronic import eval_timing
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.eval import Embodiment, Task
+from positronic.eval_timing import Phase
 from positronic.policy.base import Policy, PolicyWrapper, Session
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils import flatten_dict, frozen_view
@@ -143,6 +145,11 @@ class Harness(pimm.ControlSystem):
             meta['eval.universe'] = 'sim' if self._embodiment.simulated else 'real'
             meta['eval.embodiment'] = self._embodiment.descriptor
             meta['eval.timeout'] = self._task.timeout
+            # Whether the eval scores success live: a scored task's ``done`` oracle emits ``eval.success``
+            # on a terminal, so its timeouts are real failures. An unscored eval (success judged downstream)
+            # leaves an episode with no ``eval.success`` simply unscored, not a failure — even when a
+            # ``done`` port is wired for trial lifecycle alone.
+            meta['eval.scored'] = self._task.scored
         # ``policy.meta`` is the static baseline (the wrapped policy aggregates model +
         # codec meta); the session overlays per-episode specifics (e.g. the sampled
         # sub-policy) and wins on conflict.
@@ -219,11 +226,13 @@ class Harness(pimm.ControlSystem):
         self.context = context
         # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
         self._inference_latency = self.context.get('inference_latency', False)
+        eval_timing.begin_episode()
         # Reset the scene before opening the session: a resettable task only learns its instruction on reset
         # (a remote env reports it then), so the session context — and the task-grouped sampling/counting it
         # drives — must read the instruction here, once it is known.
         if self._task is not None and self._task.reset is not None:
-            self._task.reset(self.context)
+            with eval_timing.timed(Phase.RESET):
+                self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, 'task': self._task.instruction}
         self._session = self.policy.new_session(self.context)
@@ -334,6 +343,9 @@ class Harness(pimm.ControlSystem):
         actions = self._session(frozen_view(obs))
         if actions is None:
             return
+        # Only a chunk-producing call actually round-tripped the policy server; a ``None`` was the
+        # scheduler replaying a live chunk, no inference, so it is not a policy wait.
+        eval_timing.record_infer(time.monotonic() - wall_start)
         delay = self._inference_delay(wall_start)
         if delay > 0.0:
             yield pimm.Sleep(delay)

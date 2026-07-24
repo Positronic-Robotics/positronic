@@ -1,0 +1,458 @@
+"""Reduce the per-rollout timing recorded by ``positronic eval run --timing`` into a pass-level report.
+
+Everything is read back from the recorded episodes: the wall-clock costs a virtual-clock rollout cannot
+recover from its own timestamps (the per-step ``timing.*`` signal + wall/finish/inference statics, summed
+here per rollout), joined with the virtual duration (for the real-time factor), the on-disk size (bytes
+per rollout) and the terminal flag. The sim box's GPU utilisation and VRAM ride in as recorded
+``timing.gpu_*`` signals; the policy endpoint (a different box) folds in from an optional ``nvidia-smi
+dmon`` log.
+"""
+
+import json
+import logging
+from dataclasses import asdict, dataclass, fields
+from pathlib import Path
+
+import configuronic as cfn
+import numpy as np
+import pos3
+
+from positronic.dataset.episode import Episode
+from positronic.dataset.local_dataset import load_all_datasets
+from positronic.eval_timing import FINISHED_AT_KEY, INFER_MS_SIGNAL, RESET_S_KEY, TELEMETRY_PREFIX, WALL_S_KEY
+
+logger = logging.getLogger(__name__)
+
+# The namespace the env server's own step phases record under, and the two client-measured step signals that
+# share it but are not env phases (excluded when gathering the env decomposition).
+_ENV_PHASE_PREFIX = f'{TELEMETRY_PREFIX}env_'
+_CLIENT_ENV_SIGNALS = {f'{TELEMETRY_PREFIX}env_step_s', f'{TELEMETRY_PREFIX}env_client_s'}
+
+# The sim box's per-tick GPU telemetry, recorded as signals by ``GpuMonitor`` (whole-box utilisation %,
+# whole-box memory MiB, and this eval's process-tree memory MiB).
+_GPU_UTIL_SIGNAL = f'{TELEMETRY_PREFIX}gpu_util'
+_GPU_MEM_SIGNAL = f'{TELEMETRY_PREFIX}gpu_mem'
+_GPU_MEM_PROC_SIGNAL = f'{TELEMETRY_PREFIX}gpu_mem_proc'
+_MIB_PER_GB = 1024.0
+
+
+@dataclass
+class _RecordedFacts:
+    """What the recorded episode contributes to the join, keyed by ``episode_uid``."""
+
+    duration_s: float
+    size_mb: float
+    success: bool | None  # the env's eval.success verdict; None when it recorded none
+    terminated: bool | None  # eval.terminated: the trial ended within budget vs timed out; None if unrecorded
+    scored: bool  # eval.scored: the eval has a live success oracle, so a no-success termination is a failure
+
+
+@dataclass
+class _EpisodeTiming:
+    """One rollout's wall-clock aggregate, recreated by summing its recorded ``timing.*`` signal and reading
+    its statics — the per-episode reduce the recorder never stores. Fields are seconds unless named otherwise;
+    ``env_step_s`` includes materialisation, ``env_client_s`` is materialisation alone. ``overhead_s`` is the
+    wall unattributed to a measured phase. ``infer_ms`` is the raw per-call latency list."""
+
+    episode_uid: str
+    wall_s: float
+    reset_s: float
+    env_step_s: float
+    policy_wait_s: float
+    record_io_s: float
+    overhead_s: float
+    infer_ms: list[float]
+    finished_at: float
+    env_client_s: float
+    env_phases: dict[str, float]  # env-reported phase name -> summed seconds; the env owns this key space
+    gpu_util: list[float]  # whole-box utilisation % samples recorded during the episode (empty on a CPU box)
+    gpu_mem_mib: list[float]  # whole-box memory-used MiB samples
+    gpu_proc_mib: list[float]  # this eval's process-tree memory MiB samples
+
+
+@dataclass
+class GpuSummary:
+    """Mean utilisation and peak VRAM for one box.
+
+    ``peak_proc_vram_gb`` is the peak memory attributed to this eval's process tree; it is ``None`` for a
+    policy ``dmon`` log, which carries no per-process attribution (only the whole box).
+    """
+
+    mean_util_pct: float
+    peak_vram_gb: float
+    peak_proc_vram_gb: float | None
+
+
+@dataclass
+class GpuReport:
+    """GPU summaries per box: the sim box (from the recorded ``timing.gpu_*`` signals) and the policy endpoint.
+
+    ``sim`` is ``None`` on a CPU sim box (no GPU signals recorded); ``policy`` is ``None`` when no policy
+    ``dmon`` log was passed in.
+    """
+
+    sim: GpuSummary | None
+    policy: GpuSummary | None
+
+
+@dataclass
+class WallSplit:
+    """Each phase's share of pass wall time; all fractions sum to 1.
+
+    ``overhead`` is the within-episode wall unattributed to a measured phase; ``between_episodes`` is the
+    inter-episode wall (episode writer close — parquet/video flush — plus session teardown, homing, world
+    rebuild) between one simulated episode's finish and the next's start within a timed run, which a
+    per-episode sum drops (a real eval that splits the runs is excluded, not counted here). An episode seals
+    its timing statics while its writer is open, so the writer-close flush lands here rather than in that
+    episode's ``record_io``; the final episode's close falls outside the pass span entirely.
+    """
+
+    reset: float
+    env_step: float
+    policy_wait: float
+    record_io: float
+    overhead: float
+    between_episodes: float
+
+
+@dataclass
+class EnvStepSplit:
+    """Fractions of the client-observed env-step wall, from the env server's own decomposition.
+
+    ``phases`` maps each env-reported phase (its own decomposition — physics, rendering, its other in-step
+    wall) to that phase's share of the client step wall; the env owns the phase set, so it is a map, not
+    fixed fields. ``wire`` is the client step wall minus the server's whole in-step wall and the client
+    materialisation (socket + codec); ``materialize`` is the client-side observation materialisation
+    (shared-memory image allocation + camera copies). ``None`` when no episode carried a server decomposition.
+    """
+
+    phases: dict[str, float]
+    wire: float
+    materialize: float
+
+
+@dataclass
+class PassReport:
+    """Pass-level wall-clock roll-up reduced from the recorded episodes' timing signals, statics and facts."""
+
+    episodes: int
+    wall_pass_s: float
+    real_time_factor: float
+    policy_busy_fraction: float
+    infer_calls: int
+    infer_p50_ms: float
+    infer_p95_ms: float
+    wall_split: WallSplit
+    env_step_split: EnvStepSplit | None
+    mean_bytes_per_rollout: float
+    success_rate: float | None  # None when no episode carried a success verdict (scored downstream)
+    gpu: GpuReport
+
+
+def _episode_timing(ep: Episode, uid: str) -> _EpisodeTiming | None:
+    """Recreate one rollout's wall-clock aggregate from its recorded ``timing.*`` signals and statics.
+
+    ``None`` when the episode carries no timing (recorded without ``--timing``). Each ``timing.<phase>_s``
+    signal is the per-tick cost stream, summed here to the episode total; ``policy_wait_s`` is the sum of the
+    per-call ``timing.infer_ms`` signal; ``reset_s`` and the wall scalars come from statics; ``overhead_s`` is
+    the wall left unattributed after the measured phases.
+    """
+    if WALL_S_KEY not in ep.static:
+        return None
+
+    def phase_total(name: str) -> float:
+        sig = ep.signals.get(f'{TELEMETRY_PREFIX}{name}')
+        return float(sum(np.asarray(value).sum() for value, _ in sig)) if sig is not None else 0.0
+
+    def samples(name: str) -> list[float]:
+        sig = ep.signals.get(name)
+        return [float(value) for value, _ in sig] if sig is not None else []
+
+    # The env server's own decomposition rides in as ``timing.env_<phase>`` signals with an env-owned key
+    # space; the report never enumerates them. The two client-measured step signals share the ``env_`` prefix
+    # but are not env phases, so they are excluded here.
+    env_phases = {
+        name[len(_ENV_PHASE_PREFIX) :]: phase_total(name[len(TELEMETRY_PREFIX) :])
+        for name in ep.signals
+        if name.startswith(_ENV_PHASE_PREFIX) and name not in _CLIENT_ENV_SIGNALS
+    }
+
+    infer_sig = ep.signals.get(INFER_MS_SIGNAL)
+    infer_ms = [float(value) for value, _ in infer_sig] if infer_sig is not None else []
+    policy_wait_s = sum(infer_ms) / 1000.0
+    reset_s = float(ep.static[RESET_S_KEY])
+    env_step_s = phase_total('env_step_s')
+    record_io_s = phase_total('record_io_s')
+    wall_s = float(ep.static[WALL_S_KEY])
+    measured = reset_s + env_step_s + policy_wait_s + record_io_s
+    return _EpisodeTiming(
+        episode_uid=uid,
+        wall_s=wall_s,
+        reset_s=reset_s,
+        env_step_s=env_step_s,
+        policy_wait_s=policy_wait_s,
+        record_io_s=record_io_s,
+        overhead_s=max(wall_s - measured, 0.0),
+        infer_ms=infer_ms,
+        finished_at=float(ep.static[FINISHED_AT_KEY]),
+        env_client_s=phase_total('env_client_s'),
+        env_phases=env_phases,
+        gpu_util=samples(_GPU_UTIL_SIGNAL),
+        gpu_mem_mib=samples(_GPU_MEM_SIGNAL),
+        gpu_proc_mib=samples(_GPU_MEM_PROC_SIGNAL),
+    )
+
+
+def _load_episodes(dataset_dir: Path) -> tuple[list[list[_EpisodeTiming]], dict[str, _RecordedFacts]]:
+    """One pass over the recorded episodes: the per-rollout timing records grouped into contiguous runs, and
+    the recorded facts (duration/size/success) every episode contributes to the join, keyed by uid.
+
+    A run is a maximal sequence of timed episodes with no untimed one between them. An untimed (real) episode
+    carries no timing and splits the runs around it, so its wall stays out of the pass span — only the
+    simulated spans are reported, even in a mixed sim/real sweep.
+    """
+    dataset = load_all_datasets(dataset_dir)
+    runs: list[list[_EpisodeTiming]] = []
+    facts: dict[str, _RecordedFacts] = {}
+    split = True  # the next timed episode opens a fresh run (first one, or one after an untimed episode)
+    for i, ep in enumerate(dataset):
+        uid = str(ep.meta.get('uid', f'ts-{ep.meta.get("created_ts_ns", i)}'))
+        # ``eval.success`` is the env's task-success verdict; ``eval.terminated`` only means the episode
+        # ended within budget, so a failed-but-done rollout is terminated=True, success=False and a
+        # timed-out one is terminated=False with no success verdict. ``eval.scored`` says whether the eval
+        # scores success at all, which is what makes a no-success termination a failure rather than unscored.
+        verdict = ep.static.get('eval.success')
+        terminated = ep.static.get('eval.terminated')
+        facts[uid] = _RecordedFacts(
+            duration_s=ep.duration_ns / 1e9,
+            size_mb=float(ep.meta.get('size_mb', 0.0)),
+            success=None if verdict is None else bool(verdict),
+            terminated=None if terminated is None else bool(terminated),
+            scored=bool(ep.static.get('eval.scored', False)),
+        )
+        timing = _episode_timing(ep, uid)
+        if timing is None:
+            split = True
+            continue
+        if split:
+            runs.append([])
+            split = False
+        runs[-1].append(timing)
+    return runs, facts
+
+
+def _timed_spans(runs: list[list[_EpisodeTiming]]) -> list[tuple[float, float]]:
+    """The wall-clock (epoch) span each contiguous run of timed episodes occupied, first episode's start to
+    last's finish — the span the pass wall covers, excluding any real eval between runs."""
+    return [(run[0].finished_at - run[0].wall_s, run[-1].finished_at) for run in runs]
+
+
+def _sim_gpu_summary(records: list[_EpisodeTiming]) -> GpuSummary | None:
+    """The sim box's GPU summary from the recorded ``timing.gpu_*`` samples across all timed episodes: mean
+    whole-box utilisation, peak whole-box VRAM, and this eval's peak process-tree VRAM. ``None`` on a CPU sim
+    box, where ``GpuMonitor`` recorded no GPU samples."""
+    util = [u for r in records for u in r.gpu_util]
+    mem_mib = [m for r in records for m in r.gpu_mem_mib]
+    proc_mib = [p for r in records for p in r.gpu_proc_mib]
+    if not util and not mem_mib:
+        return None
+    return GpuSummary(
+        mean_util_pct=float(np.mean(util)) if util else 0.0,
+        peak_vram_gb=(max(mem_mib) / _MIB_PER_GB) if mem_mib else 0.0,
+        peak_proc_vram_gb=(max(proc_mib) / _MIB_PER_GB) if proc_mib else None,
+    )
+
+
+def _parse_dmon(log_path: Path) -> GpuSummary:
+    """Mean SM utilisation and peak framebuffer (GB) from a policy endpoint's ``nvidia-smi dmon`` log.
+
+    Column layout varies — ``-o DT`` prepends date/time, ``-s u`` adds encoder/decoder (and, on newer
+    drivers, JPEG/OFA) columns before the framebuffer — so the positions are read from the ``# ... sm ...
+    fb ...`` name header rather than hard-coded. ``sm`` is SM utilisation (%) and ``fb`` the framebuffer
+    use (MiB). Rows before the header, or with missing numeric fields, are skipped; a log whose header has
+    ``sm`` but no ``fb`` (plain ``dmon`` / ``-s u``) fails loudly rather than silently reporting 0. A dmon
+    log carries no per-process attribution, so ``peak_proc_vram_gb`` is ``None``.
+    """
+    sm_idx: int | None = None
+    fb_idx: int | None = None
+    utils: list[float] = []
+    fb_mib: list[float] = []
+    for line in log_path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith('#'):
+            # The name header carries the column names ('sm', 'fb', ...); the units line ('%', 'MB') has no 'sm'.
+            names = stripped.lstrip('#').split()
+            if 'sm' in names:
+                if 'fb' not in names:
+                    # Plain ``nvidia-smi dmon`` (or ``-s u``) omits the framebuffer column, so every row would
+                    # be skipped and peak VRAM silently read as 0. Fail loudly instead of under-reporting.
+                    raise ValueError(
+                        f'{log_path}: nvidia-smi dmon log has an `sm` column but no `fb` (framebuffer) column, so '
+                        f'peak VRAM cannot be read and every sample would be dropped. Re-collect it with '
+                        f'`nvidia-smi dmon -s um` (u=utilisation, m=memory), which emits the `fb` column.'
+                    )
+                sm_idx, fb_idx = names.index('sm'), names.index('fb')
+            continue
+        if sm_idx is None or fb_idx is None:
+            continue
+        fields = line.split()
+        try:
+            utils.append(float(fields[sm_idx]))
+            fb_mib.append(float(fields[fb_idx]))
+        except (IndexError, ValueError):
+            continue
+    return GpuSummary(
+        mean_util_pct=float(np.mean(utils)) if utils else 0.0,
+        peak_vram_gb=(max(fb_mib) / _MIB_PER_GB) if fb_mib else 0.0,
+        peak_proc_vram_gb=None,
+    )
+
+
+def _success_outcome(facts: _RecordedFacts) -> bool | None:
+    """Whether the episode is a success (True), a failure (False), or unscored (None).
+
+    A recorded ``eval.success`` is taken as-is. With none, an episode of a *scored* eval that reached a
+    verdict or timed out (``eval.terminated`` recorded) is a failure — this is the timed-out rollout an
+    adapter only marks on live success. An episode of an unscored eval (success computed downstream) is not
+    scored here at all.
+    """
+    if facts.success is not None:
+        return facts.success
+    if facts.scored and facts.terminated is not None:
+        return False
+    return None
+
+
+def _build_report(
+    runs: list[list[_EpisodeTiming]], facts: dict[str, _RecordedFacts], policy_gpu: GpuSummary | None
+) -> PassReport:
+    # ``runs`` and ``facts`` come from the same pass over the dataset, so every record's uid is a facts key by
+    # construction: the episode count and wall come from the timed ``records``, RTF/bytes/success from facts.
+    records = [r for run in runs for r in run]
+
+    # W_pass is the timed span — each contiguous run's first-episode start to its last-episode finish, summed —
+    # so inter-episode teardown (session close, homing, world rebuild) between simulated episodes counts in the
+    # denominator, while a real eval that split the runs does not. A per-episode sum would drop the teardown,
+    # inflating the real-time factor and sizing numbers.
+    episode_wall_sum = float(sum(r.wall_s for r in records))
+    wall_pass = float(sum(hi - lo for lo, hi in _timed_spans(runs)))
+    all_infer_ms = np.array([ms for r in records for ms in r.infer_ms], dtype=float)
+
+    # Aggregate fraction = summed phase over W_pass, so long episodes weigh proportionally.
+    def phase_fraction(attr: str) -> float:
+        return float(sum(getattr(r, attr) for r in records) / wall_pass) if wall_pass else 0.0
+
+    # The split covers only the episodes whose env reports its own decomposition: in a sweep mixing a
+    # decomposing env server with a sim that reports none, the undecomposed episodes' env-step wall would
+    # otherwise all land in ``wire``. The env server reports disjoint additive phases summing to its whole
+    # in-step wall, so their sum is that wall and each phase's share is its column over ``env_step``.
+    decomposed = [r for r in records if r.env_phases]
+    env_step_sum = float(sum(r.env_step_s for r in decomposed))
+    env_step_split = None
+    if env_step_sum:
+        client_sum = float(sum(r.env_client_s for r in decomposed))
+        phase_names = sorted({name for r in decomposed for name in r.env_phases})
+        phase_sums = {name: float(sum(r.env_phases.get(name, 0.0) for r in decomposed)) for name in phase_names}
+        server_sum = float(sum(phase_sums.values()))
+        env_step_split = EnvStepSplit(
+            phases={name: total / env_step_sum for name, total in phase_sums.items()},
+            wire=(env_step_sum - server_sum - client_sum) / env_step_sum,
+            materialize=client_sum / env_step_sum,
+        )
+
+    matched = [facts[r.episode_uid] for r in records]
+    sim_seconds = sum(f.duration_s for f in matched)
+    # Each episode carries whether its eval scores success (``eval.scored``), so scoring needs no pass-wide
+    # oracle: a scored eval's timeouts count as failures (even an all-timeout eval reads 0%), while an
+    # unscored eval's episodes stay out of the rate entirely regardless of what else ran in the sweep.
+    judged = [outcome for outcome in (_success_outcome(f) for f in matched) if outcome is not None]
+    return PassReport(
+        episodes=len(records),
+        wall_pass_s=wall_pass,
+        real_time_factor=(sim_seconds / wall_pass) if wall_pass else 0.0,
+        policy_busy_fraction=phase_fraction('policy_wait_s'),
+        infer_calls=int(all_infer_ms.size),
+        infer_p50_ms=float(np.percentile(all_infer_ms, 50)) if all_infer_ms.size else 0.0,
+        infer_p95_ms=float(np.percentile(all_infer_ms, 95)) if all_infer_ms.size else 0.0,
+        wall_split=WallSplit(
+            reset=phase_fraction('reset_s'),
+            env_step=phase_fraction('env_step_s'),
+            policy_wait=phase_fraction('policy_wait_s'),
+            record_io=phase_fraction('record_io_s'),
+            overhead=phase_fraction('overhead_s'),
+            between_episodes=float((wall_pass - episode_wall_sum) / wall_pass) if wall_pass else 0.0,
+        ),
+        env_step_split=env_step_split,
+        mean_bytes_per_rollout=(sum(f.size_mb for f in matched) / len(matched) * 1024 * 1024) if matched else 0.0,
+        success_rate=(sum(judged) / len(judged)) if judged else None,
+        gpu=GpuReport(sim=_sim_gpu_summary(records), policy=policy_gpu),
+    )
+
+
+def _render(report: PassReport) -> str:
+    lines = [
+        f'episodes:            {report.episodes}',
+        f'W_pass (wall):       {report.wall_pass_s:.1f} s ({report.wall_pass_s / 3600:.2f} h)',
+        f'real-time factor:    {report.real_time_factor:.3f} (sim-s per wall-s)',
+        f'policy busy (k):     {report.policy_busy_fraction:.3f}  -> ~{1 / report.policy_busy_fraction:.1f} sims/H100'
+        if report.policy_busy_fraction
+        else 'policy busy (k):     n/a',
+        f'infer calls:         {report.infer_calls}',
+        f'infer p50 / p95:     {report.infer_p50_ms:.1f} / {report.infer_p95_ms:.1f} ms',
+        f'bytes / rollout:     {report.mean_bytes_per_rollout / 1e6:.1f} MB',
+        f'success rate:        {report.success_rate:.3f}'
+        if report.success_rate is not None
+        else 'success rate:        n/a',
+        'wall split (fraction of W_pass):',
+    ]
+    lines += [f'  {f.name:<12} {getattr(report.wall_split, f.name):.3f}' for f in fields(WallSplit)]
+    if report.env_step_split is not None:
+        split = report.env_step_split
+        lines.append('env-step split (fraction of env_step):')
+        lines += [f'  {name:<14} {frac:.3f}' for name, frac in split.phases.items()]
+        lines.append(f'  {"wire":<14} {split.wire:.3f}')
+        lines.append(f'  {"materialize":<14} {split.materialize:.3f}')
+    for f in fields(GpuReport):
+        summary = getattr(report.gpu, f.name)
+        if summary is not None:
+            line = f'gpu[{f.name}]: util {summary.mean_util_pct:.0f}%  peak VRAM {summary.peak_vram_gb:.1f} GB'
+            if summary.peak_proc_vram_gb is not None:
+                line += f'  (this eval {summary.peak_proc_vram_gb:.1f} GB)'
+            lines.append(line)
+    return '\n'.join(lines)
+
+
+@cfn.config(gpu_policy_log=None)
+def timing_report(dataset_dir: str, gpu_policy_log: str | None):
+    """Reduce the recorded per-rollout timing (the ``timing.*`` signal + statics on each episode) into a pass report.
+
+    ``dataset_dir`` may be an ``s3://`` URI — the documented Nebius eval path writes there — in which case
+    it is pulled local first, mirroring how the eval command syncs its output. The sim box's GPU utilisation
+    and VRAM come from the recorded ``timing.gpu_*`` signals; ``gpu_policy_log`` is an optional
+    ``nvidia-smi dmon -s um`` log for the policy endpoint (a different box) folded in the same way. Writes
+    ``timing_summary.json`` next to the input — for an ``s3://`` input to the sibling key
+    ``<dataset_dir>.timing_summary.json`` (pos3 forbids uploading inside the downloaded prefix) — and prints
+    the report.
+    """
+    # Pull a remote dataset local before reading; a plain local path is used as-is (never handed to pos3,
+    # whose download would prune it).
+    root = Path(pos3.download(dataset_dir)) if '://' in dataset_dir else Path(dataset_dir)
+    runs, facts = _load_episodes(root)
+    if not runs:
+        raise ValueError(f'no timed episodes under {root} (recorded without --timing?)')
+
+    # The policy endpoint is a different box, so its GPU is folded from a passed-in dmon log; the sim box's
+    # GPU is reduced from the recorded ``timing.gpu_*`` signals inside ``_build_report``.
+    policy_gpu = _parse_dmon(Path(gpu_policy_log)) if gpu_policy_log is not None else None
+    report = _build_report(runs, facts, policy_gpu)
+    summary_path = root / 'timing_summary.json'
+    summary_path.write_text(json.dumps(asdict(report), indent=2))
+    if '://' in dataset_dir:
+        # A remote input was only downloaded, so the write above lands in the local cache. pos3 rejects an
+        # upload inside a registered download prefix, so push the summary to a sibling key next to the
+        # dataset dir (the CLI's @pos3.with_mirror flushes it on exit; delete=False never prunes the bucket).
+        pos3.upload(f'{dataset_dir.rstrip("/")}.timing_summary.json', summary_path, delete=False)
+    logger.info(f'wrote {summary_path}')
+    print(_render(report))

@@ -1,3 +1,4 @@
+import contextlib
 from functools import partial
 from typing import Any
 
@@ -554,3 +555,50 @@ def test_stop_commits_due_drops_future_trajectory(world):
     # 'due' (ts <= stop time) is committed; the future 'tail' is dropped.
     assert [(s, v) for (s, v, _, _) in w.appends] == [('traj', 'due')]
     assert w.exited is True
+
+
+class _FakeTiming:
+    """A ``TimingHooks`` that hands the writer fixed opaque ``(name, value)`` pairs, to prove they are
+    recorded verbatim — no signal name carries behavior in the writer."""
+
+    def __init__(self, drain_items: list[tuple[str, float]], finish_items: list[tuple[str, Any]]) -> None:
+        self._drain_items = list(drain_items)
+        self._finish_items = list(finish_items)
+
+    def record_io(self):
+        return contextlib.nullcontext()
+
+    def drain(self):
+        items, self._drain_items = self._drain_items, []  # yield once, then nothing (one sample per name)
+        return iter(items)
+
+    def finish(self):
+        return iter(self._finish_items)
+
+    def discard(self) -> None:
+        pass
+
+
+def test_writer_records_timing_hook_pairs_verbatim(world):
+    """The writer appends whatever the timing hooks drain and sets whatever they finish, as opaque
+    ``(name, value)`` pairs — arbitrary names land unchanged, so no name is special-cased in the writer."""
+    ds = FakeDatasetWriter()
+    timing = _FakeTiming(drain_items=[('custom.alpha', 1.5), ('weird_name', 2.5)], finish_items=[('custom.stat', 9.0)])
+    agent = DsWriterAgent(ds, time_mode=TimeMode.CLOCK, timing=timing)
+    agent.add_signal('a', None)
+    cmd_em = world.pair(agent.command)
+    a_em = world.pair(agent.inputs['a'])
+
+    script = [
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(a_em.emit, 1), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+    ]
+    run_scripted_agent(agent, script, world=world)
+
+    w = ds.created[-1]
+    recorded = {s: v for (s, v, _, _) in w.appends}
+    assert recorded['custom.alpha'] == 1.5
+    assert recorded['weird_name'] == 2.5
+    assert recorded['a'] == 1  # the ordinary input records alongside the opaque timing pairs
+    assert w.statics.get('custom.stat') == 9.0
