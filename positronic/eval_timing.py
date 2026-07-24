@@ -197,28 +197,6 @@ def begin_episode() -> None:
         timer.begin_episode()
 
 
-def drain_step() -> StepTiming | None:
-    """The recorder's per-tick pull of the costs accumulated since the last drain (``None`` when off)."""
-    if (timer := _ACTIVE.get()) is not None:
-        return timer.drain_step()
-    return None
-
-
-def drain_infers() -> list[float]:
-    """The recorder's per-tick pull of the policy round-trip latencies (ms) recorded since the last drain,
-    each becoming one ``timing.infer_ms`` sample (empty when off or none occurred)."""
-    if (timer := _ACTIVE.get()) is not None:
-        return timer.drain_infers()
-    return []
-
-
-def finish_episode() -> EpisodeTimingStatics | None:
-    """Seal the in-flight rollout and return its per-episode statics (``None`` when off)."""
-    if (timer := _ACTIVE.get()) is not None:
-        return timer.finish_episode()
-    return None
-
-
 def discard_episode() -> None:
     """Drop the in-flight rollout without sealing it — an abort."""
     if (timer := _ACTIVE.get()) is not None:
@@ -237,19 +215,52 @@ def record_env_phases(physics_s: float, render_s: float, server_s: float) -> Non
         timer.add_env_phases(physics_s, render_s, server_s)
 
 
-def step_signal_items(step: StepTiming) -> Iterator[tuple[str, float]]:
-    """The ``(signal_name, seconds)`` pairs to append for one drained step, skipping the zero columns so a
-    tick that saw no activity in a phase writes no sample for it."""
-    for name, seconds in asdict(step).items():
-        if seconds != 0.0:
-            yield f'{TELEMETRY_PREFIX}{name}', seconds
+def drain_signal_items() -> Iterator[tuple[str, float]]:
+    """One tick's drained wall-clock telemetry as ``(signal_name, seconds)`` pairs: each non-zero phase cost
+    as its ``timing.<phase>`` signal, then each policy round-trip as one ``timing.infer_ms`` sample. Empty
+    when telemetry is off or the tick accumulated nothing — the recorder appends whatever it yields, without
+    knowing what the names mean."""
+    timer = _ACTIVE.get()
+    if timer is None:
+        return
+    step = timer.drain_step()
+    if step is not None and not step.is_empty():
+        for name, seconds in asdict(step).items():
+            if seconds != 0.0:
+                yield f'{TELEMETRY_PREFIX}{name}', seconds
+    for infer_ms in timer.drain_infers():
+        yield INFER_MS_SIGNAL, infer_ms
 
 
-def statics_items(statics: EpisodeTimingStatics) -> Iterator[tuple[str, object]]:
-    """The ``(static_key, value)`` pairs the recorder sets on the sealed episode."""
-    yield WALL_S_KEY, statics.wall_s
-    yield FINISHED_AT_KEY, statics.finished_at
-    yield RESET_S_KEY, statics.reset_s
+def finish_static_items() -> Iterator[tuple[str, object]]:
+    """Seal the in-flight rollout and yield the ``(static_key, value)`` pairs the recorder sets on it — the
+    per-episode wall scalars. Empty when telemetry is off or no rollout is in flight."""
+    timer = _ACTIVE.get()
+    if timer is None:
+        return
+    statics = timer.finish_episode()
+    if statics is not None:
+        yield WALL_S_KEY, statics.wall_s
+        yield FINISHED_AT_KEY, statics.finished_at
+        yield RESET_S_KEY, statics.reset_s
+
+
+class WriterHooks:
+    """The recorder's opaque view of this module's telemetry: per-tick ``(name, value)`` drains, a record-IO
+    span, and the seal/discard lifecycle. Every method is inert when no collector is bound (a normal eval), so
+    the recorder carries one unconditionally and pays nothing off the timing path."""
+
+    def record_io(self) -> contextlib.AbstractContextManager:
+        return timed(Phase.RECORD_IO)
+
+    def drain(self) -> Iterator[tuple[str, float]]:
+        return drain_signal_items()
+
+    def finish(self) -> Iterator[tuple[str, object]]:
+        return finish_static_items()
+
+    def discard(self) -> None:
+        discard_episode()
 
 
 def _start_gpu_sampler(out_dir: Path) -> subprocess.Popen | None:
