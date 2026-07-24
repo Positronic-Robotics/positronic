@@ -1332,14 +1332,6 @@
                     "endColumn": 33,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 44,
-                    "endColumn": 51,
-                    "lineCount": 1
-                }
             }
         ],
         "./positronic/cfg/simulator.py": [
