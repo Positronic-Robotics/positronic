@@ -60,7 +60,7 @@ def _require_untimed_dir(output_dir: Path):
         dataset = load_all_datasets(output_dir)
     except ValueError:
         return
-    timed = sum(1 for i in range(len(dataset)) if eval_timing.WALL_S_KEY in dataset[i].static)
+    timed = sum(1 for ep in dataset if eval_timing.WALL_S_KEY in ep.static)
     if timed:
         raise ValueError(
             f'{output_dir} already holds {timed} timed episode(s) and a timing report covers a single pass: '
@@ -164,7 +164,11 @@ def main(
         # Sim-only by construction: a real embodiment runs the recorder and producers as separate processes
         # that do not inherit the timer context, so its episodes carry no timing signal. A mixed sweep still
         # times its simulated evals and leaves the real ones untimed; only a sweep with nothing to time fails.
-        simulated = [ev.embodiment.simulated for ev in evals] if evals is not None else [embodiment.simulated]
+        if evals is not None:
+            simulated = [ev.embodiment.simulated for ev in evals]
+        else:
+            assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
+            simulated = [embodiment.simulated]
         if not any(simulated):
             raise ValueError(
                 'eval timing needs a simulated embodiment: a real embodiment carries no timing signal, and '
@@ -203,10 +207,12 @@ def main(
     try:
         with timing_cm:
             if driver is not None:
+                assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
                 _run_world(
                     policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete, wrap=wrap
                 )
             else:
+                assert evals is not None  # driver/evals XOR asserted up front
                 for ev in evals:
                     _run_world(
                         policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete, wrap=wrap

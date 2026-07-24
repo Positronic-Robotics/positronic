@@ -50,7 +50,7 @@ simulation_app = AppLauncher(args).app
 import omni.kit.app  # noqa: E402
 import omni.timeline  # noqa: E402
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg  # noqa: E402
-from isaaclab.sensors import TiledCameraCfg  # noqa: E402
+from isaaclab.sensors import TiledCameraCfg  # noqa: E402  # pyright: ignore[reportMissingImports]
 from isaaclab.utils.math import (  # noqa: E402
     matrix_from_quat,
     quat_from_matrix,
@@ -58,16 +58,16 @@ from isaaclab.utils.math import (  # noqa: E402
     quat_mul,
     subtract_frame_transforms,
 )
-from omni.kit.viewport.utility import get_active_viewport  # noqa: E402
+from omni.kit.viewport.utility import get_active_viewport  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 import robolab.constants  # noqa: E402
 from robolab.core.environments.factory import get_envs  # noqa: E402
 from robolab.core.environments.runtime import create_env  # noqa: E402
 from robolab.core.logging.results import get_all_env_subtask_infos  # noqa: E402
 from robolab.registrations.droid.auto_env_registrations_jointpos import auto_register_droid_envs  # noqa: E402
-from robolab.robots import droid  # noqa: E402
+from robolab.robots import droid  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.robots.droid import EEF_OFFSET_ROT  # noqa: E402
-from robolab.variations.camera import OverShoulderLeftCameraCfg  # noqa: E402
+from robolab.variations.camera import OverShoulderLeftCameraCfg  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 # Both flags gate recorder construction in the env cfg's ``__post_init__``, so they are set before any
 # ``create_env``: subtask progress feeds the wire ``subtask`` observation; per-step image recording only bloats

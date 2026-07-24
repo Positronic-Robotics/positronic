@@ -190,8 +190,7 @@ def _load_episodes(dataset_dir: Path) -> tuple[list[list[_EpisodeTiming]], dict[
     runs: list[list[_EpisodeTiming]] = []
     facts: dict[str, _RecordedFacts] = {}
     split = True  # the next timed episode opens a fresh run (first one, or one after an untimed episode)
-    for i in range(len(dataset)):
-        ep = dataset[i]
+    for i, ep in enumerate(dataset):
         uid = str(ep.meta.get('uid', f'ts-{ep.meta.get("created_ts_ns", i)}'))
         # ``eval.success`` is the env's task-success verdict; ``eval.terminated`` only means the episode
         # ended within budget, so a failed-but-done rollout is terminated=True, success=False and a
