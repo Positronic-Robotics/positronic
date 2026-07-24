@@ -54,7 +54,7 @@ async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
     await server._startup()
 
     websocket = _DummyWebSocket()
-    await server.websocket_endpoint(websocket)
+    await server.default_session(websocket)
 
     assert requested['checkpoint_id'] == '42'
     assert websocket.events == ['send_bytes']
@@ -89,7 +89,7 @@ async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
     server._manager.get_policy.reset_mock()
 
     websocket = _DummyWebSocket()
-    await server.websocket_endpoint(websocket, model_id='42')
+    await server.model_session(websocket, '42')
 
     assert websocket.events == ['send_bytes', 'close']
     error_response = deserialise(websocket._send_bytes.await_args.args[0])
