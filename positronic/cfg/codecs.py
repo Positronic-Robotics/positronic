@@ -3,7 +3,10 @@
 import configuronic as cfn
 
 from positronic import geom
+from positronic.cfg import wrappers
+from positronic.policy import Codec, PolicyWrapper
 from positronic.policy.observation import ObservationCodec
+from positronic.policy.spec import remote
 
 RotRep = geom.Rotation.Representation
 
@@ -70,6 +73,15 @@ def compose(obs, action, fps: float, horizon: float | None, binarize_grip: tuple
     if horizon is not None:
         result = ActionHorizon(horizon) | result
     return result
+
+
+@cfn.config(local=wrappers.chunked_schedule, codec=compose)
+def pipeline(local: PolicyWrapper | None, codec: Codec):
+    """One policy pipeline: the rig-side stack, the ``remote`` split marker, the server-side codec.
+
+    ``local=None`` declares that the policy needs no rig-side glue.
+    """
+    return (local | remote | codec) if local is not None else (remote | codec)
 
 
 @cfn.config(rotation_rep=None, tgt_ee_pose_key='robot_command.pose', tgt_grip_key='target_grip')

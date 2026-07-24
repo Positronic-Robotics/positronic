@@ -82,7 +82,7 @@ class ScriptedProportionalPolicy(Policy):
     clock, no images. Codec stamps/truncates; the harness anchors/schedules.
     """
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         return _ScriptedSession()
 
 
@@ -203,7 +203,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
             static_meta=dict(ROBOT_STATIC_META),
             meta_source=robot.robot_meta,
         )
-        harness = Harness(policy, embodiment, wrap=ChunkedSchedule())
+        harness = Harness(ChunkedSchedule().wrap(policy), embodiment)
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
         directive_em = world.pair(harness.directive)

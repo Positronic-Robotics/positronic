@@ -76,7 +76,7 @@ class LerobotPolicy(Policy):
         self._preprocessor, self._postprocessor = make_pre_post_processors(config, pretrained_path=checkpoint_path)
         self._meta = {**(extra_meta or {}), 'type': config.type}
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         self._policy.reset()
         return _LerobotSession(self._policy, self._preprocessor, self._postprocessor, self._device, self._meta)
 

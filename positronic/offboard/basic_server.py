@@ -2,6 +2,7 @@ import asyncio
 import logging
 import traceback
 from collections.abc import Callable
+from importlib.metadata import version as _pkg_version
 from typing import Any
 
 import configuronic as cfn
@@ -12,7 +13,6 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialise, serialise
 
-# Configure logging
 logger = logging.getLogger(__name__)
 
 
@@ -82,8 +82,10 @@ class InferenceServer:
             session = policy.new_session()
 
             # Send ready with metadata. ``policy.meta`` is the static baseline;
-            # ``session.meta`` overlays per-episode specifics and wins on conflict.
-            await websocket.send_bytes(serialise({'status': 'ready', 'meta': {**policy.meta, **session.meta}}))
+            # ``session.meta`` overlays per-episode specifics and wins on conflict. This server
+            # declares no ``local_stack``, leaving the rig-side stack to the client's default.
+            meta = {**policy.meta, **session.meta, 'positronic_version': _pkg_version('positronic')}
+            await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
 
             # Inference Loop
             async for message in websocket.iter_bytes():
@@ -120,11 +122,7 @@ def main(policy, port: int, host: str):
     """
     Starts the inference server with the given policy.
     """
-    # Wrap single policy in a registry for backward compatibility
-    registry = {'default': lambda: policy}
-    server = InferenceServer(registry, host, port)
-
-    # Run the server
+    server = InferenceServer(policy, host, port)
     try:
         asyncio.run(server.serve())
     except KeyboardInterrupt:

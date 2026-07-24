@@ -3,27 +3,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import WebSocketDisconnect
 
+from positronic.policy.spec import remote
 from positronic.utils.serialization import deserialise
 
 pytest.importorskip('torch')
 
 from positronic.vendors.lerobot_0_3_3 import server as lerobot_server  # noqa: E402
-
-
-class _PassthroughEncoder:
-    def encode(self, obs):
-        return obs
-
-
-class _PassthroughDecoder:
-    def decode(self, action, obs=None):
-        return action
-
-
-class _PassthroughCodec:
-    def __init__(self):
-        self.observation = _PassthroughEncoder()
-        self.action = _PassthroughDecoder()
 
 
 class _DummyWebSocket:
@@ -52,7 +37,7 @@ async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
 
     server = lerobot_server.InferenceServer(
         policy_factory=lambda _checkpoint: MagicMock(),
-        codec=_PassthroughCodec(),
+        pipeline=remote,
         checkpoints_dir='s3://bucket/exp',
         checkpoint='42',
     )
@@ -81,7 +66,7 @@ async def test_lerobot_server_reports_missing_checkpoint(monkeypatch):
 
     server = lerobot_server.InferenceServer(
         policy_factory=lambda _checkpoint: MagicMock(),
-        codec=_PassthroughCodec(),
+        pipeline=remote,
         checkpoints_dir='s3://bucket/exp',
         checkpoint='42',
     )
@@ -107,7 +92,7 @@ async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
 
     server = lerobot_server.InferenceServer(
         policy_factory=lambda _checkpoint: MagicMock(),
-        codec=_PassthroughCodec(),
+        pipeline=remote,
         checkpoints_dir='s3://bucket/exp',
         checkpoint=None,
     )

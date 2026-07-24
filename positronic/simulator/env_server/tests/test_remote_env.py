@@ -225,10 +225,9 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
         ev.task.timeout = 0.1
         policy = StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
         main(
-            policy=policy,
+            policy=ChunkedSchedule().wrap(policy),
             evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
             output_dir=str(tmp_path),
-            wrap=ChunkedSchedule(),
         )
 
     ds = LocalDataset(tmp_path)
@@ -253,7 +252,7 @@ class _JointposChunks(Policy):
         self.chunk_len = chunk_len
         self.chunks = 0
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         return _JointposChunkSession(self)
 
 
@@ -282,7 +281,7 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
 
     chunk_len = 5
     raw = _JointposChunks(roboarm_command.JointPosition(np.zeros(7)), chunk_len)
-    policy = ActionTimestamp(fps=1.0 / control_dt).wrap(raw)
+    policy = (ChunkedSchedule() | ActionTimestamp(fps=1.0 / control_dt)).wrap(raw)
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
         ev.task.timeout = 20 * control_dt
@@ -290,7 +289,6 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
             policy=policy,
             evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
             output_dir=str(tmp_path),
-            wrap=ChunkedSchedule(),
         )
 
     grip = LocalDataset(tmp_path)[0].signals['target_grip']

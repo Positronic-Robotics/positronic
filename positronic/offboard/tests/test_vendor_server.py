@@ -3,6 +3,7 @@ import socket
 import threading
 import time
 from collections.abc import Generator
+from typing import TypeVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -10,7 +11,10 @@ import uvicorn
 
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.vendor_server import VendorServer
-from positronic.policy import Codec
+from positronic.policy import Codec, Policy, RemotePolicy, Session
+from positronic.policy.codec import ActionTimestamp
+from positronic.policy.spec import inline, remote
+from positronic.policy.wrappers import ChunkedSchedule
 
 
 def find_free_port() -> int:
@@ -20,16 +24,17 @@ def find_free_port() -> int:
 
 
 class _StubVendorServer(VendorServer):
-    def __init__(self, codec=None, **kwargs):
-        super().__init__(codec=codec, **kwargs)
+    def __init__(self, pipeline=remote, policy=None, **kwargs):
+        super().__init__(pipeline=pipeline, **kwargs)
         self.mock_session = MagicMock()
         self.mock_session.return_value = [{'action': [1, 2, 3]}]
         self.mock_session.meta = {'model_name': 'stub'}
         self.mock_session.close = MagicMock()
 
-        self.mock_policy = MagicMock()
-        self.mock_policy.new_session.return_value = self.mock_session
-        self.mock_policy.meta = {}
+        mock_policy = MagicMock()
+        mock_policy.new_session.return_value = self.mock_session
+        mock_policy.meta = {}
+        self.policy = policy or mock_policy
         self.metadata = {'type': 'stub'}
         self.warmup_called = False
 
@@ -37,7 +42,7 @@ class _StubVendorServer(VendorServer):
         return 'dummy_handle', {'checkpoint_id': model_id or 'default'}
 
     def create_policy(self, model_handle):
-        return self.mock_policy
+        return self.policy
 
     async def get_models(self):
         return {'models': ['stub']}
@@ -46,7 +51,10 @@ class _StubVendorServer(VendorServer):
         self.warmup_called = True
 
 
-def _start_server(server: VendorServer) -> tuple[str, int, _StubVendorServer]:
+_S = TypeVar('_S', bound=VendorServer)
+
+
+def _start_server(server: _S) -> tuple[str, int, _S]:
     async def _run():
         await server._startup()
         config = uvicorn.Config(server.app, host=server.host, port=server.port, log_level='warning')
@@ -77,6 +85,8 @@ def test_full_inference_cycle(stub_server):
     try:
         assert session.metadata['model_name'] == 'stub'
         assert session.metadata['type'] == 'stub'
+        assert session.metadata['local_stack'] == {'seq': []}
+        assert 'positronic_version' in session.metadata
 
         obs = {'image': 'test'}
         result = session.infer(obs)
@@ -93,7 +103,7 @@ def test_warmup_called_on_startup(stub_server):
 
 def test_no_codec(stub_server):
     host, port, server = stub_server
-    assert server.codec is None
+    assert server._remote is None
 
     client = InferenceClient(host, port)
     session = client.new_session()
@@ -119,7 +129,7 @@ class _LatestTrackingServer(VendorServer):
     returns the current latest, mirroring real vendor servers."""
 
     def __init__(self, **kwargs):
-        super().__init__(codec=None, **kwargs)
+        super().__init__(pipeline=remote, **kwargs)
         self.latest = '100'
         self.mock_session = MagicMock()
         self.mock_session.return_value = [{'action': [1, 2, 3]}]
@@ -177,7 +187,8 @@ class _IdentityCodec(Codec):
 
 @pytest.fixture
 def codec_server() -> Generator[tuple[str, int, _StubVendorServer], None, None]:
-    yield _start_server(_StubVendorServer(codec=_IdentityCodec(), host='localhost', port=find_free_port()))
+    pipeline = remote | _IdentityCodec()
+    yield _start_server(_StubVendorServer(pipeline=pipeline, host='localhost', port=find_free_port()))
 
 
 def test_codec_wrapping(codec_server):
@@ -190,3 +201,66 @@ def test_codec_wrapping(codec_server):
         assert result == [{'action': [1, 2, 3]}]
     finally:
         session.close()
+
+
+@pytest.fixture
+def declaring_server() -> Generator[tuple[str, int, _StubVendorServer], None, None]:
+    pipeline = ChunkedSchedule() | remote | _IdentityCodec()
+    yield _start_server(_StubVendorServer(pipeline=pipeline, host='localhost', port=find_free_port()))
+
+
+def test_local_stack_declared_in_handshake(declaring_server):
+    host, port, _server = declaring_server
+    client = InferenceClient(host, port)
+    session = client.new_session()
+    try:
+        assert session.metadata['local_stack'] == {'name': 'chunked_schedule'}
+    finally:
+        session.close()
+
+
+class _ScriptedSession(Session):
+    def __call__(self, obs):
+        return [{'a': 1.0}, {'a': 2.0}, {'a': 3.0}]
+
+
+class _ScriptedPolicy(Policy):
+    """Deterministic base policy: every session returns the same untimestamped chunk."""
+
+    def new_session(self, context=None, now=None) -> Session:
+        return _ScriptedSession()
+
+
+def test_in_process_equals_remote_for_same_pipeline():
+    """The same pipeline must behave identically served in-process and over the wire."""
+
+    def pipeline():
+        return ChunkedSchedule() | remote | ActionTimestamp(fps=10.0)
+
+    clock = [100.0]
+
+    served = _StubVendorServer(pipeline=pipeline(), policy=_ScriptedPolicy(), host='localhost', port=find_free_port())
+    host, port, _ = _start_server(served)
+    remote_session = RemotePolicy(host, port).new_session(now=lambda: clock[0])
+
+    local = inline(pipeline())
+    assert local is not None
+    local_session = local.wrap(_ScriptedPolicy()).new_session(now=lambda: clock[0])
+
+    remote_actions = remote_session({'obs_time_ns': 0})
+    local_actions = local_session({'obs_time_ns': 0})
+    assert remote_actions == local_actions
+    # Three scripted actions plus the chunk-closing validity sentinel ActionTimestamp appends.
+    assert local_actions == [
+        {'a': 1.0, 'timestamp': 100.0},
+        {'a': 2.0, 'timestamp': 100.1},
+        {'a': 3.0, 'timestamp': 100.2},
+        {'timestamp': 100.3},
+    ]
+
+    # Both gate identically while the chunk plays out.
+    clock[0] = 100.15
+    assert remote_session({'obs_time_ns': 0}) is None
+    assert local_session({'obs_time_ns': 0}) is None
+
+    remote_session.close()

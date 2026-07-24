@@ -183,7 +183,7 @@ Start an inference server that exposes a unified WebSocket API. All vendors impl
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
   --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --codec=@positronic.vendors.lerobot.codecs.ee \
+  --pipeline.codec=@positronic.vendors.lerobot.codecs.ee \
   --port=8000
 ```
 
@@ -192,7 +192,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
   --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
+  --pipeline.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
   --port=8000
 ```
 
@@ -209,7 +209,7 @@ cd docker && docker compose run --rm --service-ports groot-server \
 ```bash
 cd docker && docker compose run --rm --service-ports openpi-server \
   --checkpoints_dir=~/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
-  --codec=@positronic.vendors.openpi.codecs.ee
+  --pipeline.codec=@positronic.vendors.openpi.codecs.ee
 ```
 
 ### Server Parameters
@@ -218,7 +218,7 @@ cd docker && docker compose run --rm --service-ports openpi-server \
 |-----------|-------------|---------|
 | `--checkpoints_dir` | Path to experiment directory (contains checkpoint folders) | `~/checkpoints/lerobot/experiment_v1/` |
 | `--checkpoint` | (Optional) Specific checkpoint ID to load | `10000`, `20000` |
-| `--codec` | Codec (must match training) | `@positronic.vendors.lerobot.codecs.ee` |
+| `--pipeline.codec` | Server-side codec of the policy pipeline (must match training) | `@positronic.vendors.lerobot.codecs.ee` |
 | `--port` | Server port | `8000` (default) |
 | `--host` | Server host | `0.0.0.0` (default, binds to all interfaces) |
 
@@ -267,7 +267,7 @@ cd docker && docker compose run --rm lerobot-train expert_only \
 # 5. Evaluate
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
   --checkpoints_dir=~/checkpoints/lerobot/baseline_v1/ \
-  --codec=@positronic.vendors.lerobot.codecs.ee &
+  --pipeline.codec=@positronic.vendors.lerobot.codecs.ee &
 
 uv run positronic-inference sim \
   --policy=.remote \

@@ -22,7 +22,7 @@ OpenPI supports multiple codecs for different use cases:
 - **`ee`**: The primary codec. Handles both training data generation (LeRobot format) and inference (OpenPI format) automatically.
 - **`ee_joints`**: Same as `ee` but includes joint positions in the observation for richer state feedback.
 - **`_traj` variants**: Train on actual robot trajectory instead of commanded targets, with binarized grip signals.
-- **`droid`**: Inference-only codec for pretrained DROID checkpoints. The model predicts per-step joint velocities; the codec scales each into a `JointDelta` command (grip binarized) and truncates each chunk to DROID's 8-step open-loop horizon. The driver applies each delta to the live measured joints (`set_target_joints(st.q + delta)`), reproducing the DROID controller with no special client wrap. Serve with `droid` and run inference normally.
+- **`droid`**: Inference-only codec for pretrained DROID checkpoints. The model predicts per-step joint velocities; the codec scales each into a `JointDelta` command (grip binarized) and truncates each chunk to DROID's 8-step open-loop horizon. The driver applies each delta to the live measured joints (`set_target_joints(st.q + delta)`), reproducing the DROID controller. Serve with `droid` and run inference normally.
 - **`droid_jointpos`**: Inference-only codec for openpi's `*_droid_jointpos` checkpoints — the policies RoboLab's leaderboard evaluates. The model emits absolute joint-position chunks; the codec decodes each step into a `JointPosition` command (grip binarized at 0.5) and executes the whole chunk before replanning, matching RoboLab's client cadence (`open_loop_horizon` = the model's `action_horizon`). Serve with `droid_jointpos`.
 
 ## 1. Prepare Data
@@ -107,7 +107,7 @@ docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-ser
 
 # With joint feedback
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server serve \
-  --codec=@positronic.vendors.openpi.codecs.ee_joints \
+  --pipeline.codec=@positronic.vendors.openpi.codecs.ee_joints \
   --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
 
 # Pretrained DROID model (pi05_droid) — preset codec, config, and public checkpoint
@@ -120,14 +120,14 @@ docker compose run --rm --service-ports openpi-server droid_jointpos
 The `droid` config serves the public `pi05_droid` checkpoint from
 `s3://positronic-public/checkpoints/openpi/pi05_droid/` (downloaded on first request);
 no local checkpoint mount is needed. The server emits per-step `JointDelta` commands (grip
-binarized); the driver applies each delta to the live joints, so no special client wrap is needed.
+binarized); the driver applies each delta to the live joints.
 
 The `droid_jointpos` config serves openpi's `pi05_droid_jointpos` checkpoint from
 `gs://openpi-assets-simeval/pi05_droid_jointpos` (openpi fetches it itself on first request). The server
 emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence — see the codec note above.
 
 **Parameters:**
-- `--codec`: Codec for observation/action encoding (default: `@positronic.vendors.openpi.codecs.ee`).
+- `--pipeline.codec`: Server-side codec of the policy pipeline (default: `@positronic.vendors.openpi.codecs.ee`).
   Available: `ee`, `ee_joints`, `ee_traj`, `ee_joints_traj`, `joints_traj`, `droid`, `droid_jointpos`
 - `--checkpoints_dir`: Full path to the experiment directory containing checkpoints
 - `--checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
@@ -212,8 +212,7 @@ uv run --locked positronic-inference sim \
 - `--policy.host`: The machine that runs the inference server.
 - `--policy.port`: The port that the inference server exposes.
 
-A `droid` server emits `JointDelta` commands; the driver applies each to the live joints, so no
-special client wrap is needed.
+A `droid` server emits `JointDelta` commands; the driver applies each to the live joints.
 
 ## Troubleshooting
 

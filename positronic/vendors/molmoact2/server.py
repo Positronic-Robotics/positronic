@@ -5,8 +5,9 @@ from typing import Any
 import configuronic as cfn
 from fastapi import WebSocket
 
+from positronic.cfg import codecs as cfg_codecs
 from positronic.offboard.vendor_server import VendorServer
-from positronic.policy import Codec, Policy
+from positronic.policy import Policy, PolicyWrapper
 from positronic.utils.logging import init_logging
 from positronic.vendors.molmoact2 import codecs as molmoact2_codecs
 from positronic.vendors.molmoact2.policy import MolmoAct2Policy
@@ -21,7 +22,7 @@ class InferenceServer(VendorServer):
 
     def __init__(
         self,
-        codec: Codec | None,
+        pipeline: PolicyWrapper,
         hf_repo: str = DEFAULT_HF_REPO,
         *,
         device_map: str = 'auto',
@@ -33,7 +34,7 @@ class InferenceServer(VendorServer):
         idle_timeout_min: float | None = None,
     ):
         super().__init__(
-            codec=codec, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
+            pipeline=pipeline, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
         )
         self.hf_repo = hf_repo
         # Clients echo the advertised id onto the single-segment session route
@@ -75,7 +76,7 @@ class InferenceServer(VendorServer):
 
 
 @cfn.config(
-    codec=molmoact2_codecs.droid,
+    pipeline=cfg_codecs.pipeline.override(codec=molmoact2_codecs.droid),
     hf_repo=DEFAULT_HF_REPO,
     device_map='auto',
     norm_tag='franka_droid',
@@ -86,7 +87,7 @@ class InferenceServer(VendorServer):
     idle_timeout_min=None,
 )
 def server(
-    codec: Codec | None,
+    pipeline: PolicyWrapper,
     hf_repo: str,
     device_map: str,
     norm_tag: str,
@@ -98,7 +99,7 @@ def server(
 ):
     """Starts the in-process MolmoAct2 inference server."""
     InferenceServer(
-        codec=codec,
+        pipeline=pipeline,
         hf_repo=hf_repo,
         device_map=device_map,
         norm_tag=norm_tag,

@@ -44,16 +44,15 @@ CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports
 # Run sim inference locally (only inference is remote; MuJoCo runs on your machine).
 uv run --locked positronic-inference sim \
   --policy=.remote --policy.host=<h100-host> --policy.port=8000 \
-  --wrap=@positronic.vendors.dreamzero.codecs.dreamzero_wrappers \
   --eval.trial_count=2 --show_gui=True
 ```
 
-The server owns the codec, so you don't pass one client-side — it takes raw observations and returns
-decoded joint commands. The client-side piece that matters is `--wrap`: it supplies the model's
-autoregressive video context (`TemporalStack`) and must run every control tick to record frames,
-so omitting it strips the multi-frame history the model conditions on. (Server config and defaults:
-[`server.py`](./server.py); wrappers: [`codecs.py`](./codecs.py); remote-policy protocol:
-[Inference Guide](../../../docs/inference.md).)
+The server owns the whole policy pipeline: it runs the codec (raw observations in, decoded joint
+commands out) and declares the rig-side half — the model's autoregressive video context
+(`TemporalStack`, which must run every control tick to record frames) plus chunk scheduling — in its
+handshake. The client builds that declared stack automatically.
+(Server config and defaults: [`server.py`](./server.py); wrappers: [`codecs.py`](./codecs.py);
+remote-policy protocol: [Inference Guide](../../../docs/inference.md).)
 
 ## Full pipeline (fine-tune your own checkpoint)
 
@@ -149,7 +148,6 @@ Sanity-check once warm: `curl http://<h100-host>:8000/api/v1/models` → `{"mode
 ```bash
 uv run --locked positronic-inference sim \
   --policy=.remote --policy.host=<h100-host> --policy.port=8000 \
-  --wrap=@positronic.vendors.dreamzero.codecs.dreamzero_wrappers \
   --eval.trial_count=<N> --output_dir=<dir-or-s3-path>
 ```
 
@@ -189,8 +187,8 @@ that decodes to a `JointPosition` command. They differ only in how **training la
 - **Observation**: 3 cameras (2 exterior + 1 wrist) + joint state + language prompt. The wan2.2 fine-tunes
   use the `(320, 176)` codec and the trainer resizes to 160 at load; the pretrained DROID model (wan2.1)
   asserts exactly `(320, 180)`, so the `droid` codec (`codecs.droid`) feeds that resolution.
-- **Action horizon**: 24 timesteps per inference; the `dreamzero_wrappers` re-query aligns the
-  chunk schedule with the AR frame-stack window
+- **Action horizon**: 24 timesteps per inference; the server-declared `dreamzero_wrappers` re-query
+  aligns the chunk schedule with the AR frame-stack window
 - **Wire protocol**: Positronic's standard WebSocket protocol — see [Connect Your Model](../../../docs/connect-your-model.md)
 - **No Positronic fork**: upstream DreamZero is used unmodified (pinned SHA in [`Dockerfile`](./Dockerfile));
   configs are injected via Hydra YAML. No sibling `../dreamzero` checkout is needed — the image bakes it in.

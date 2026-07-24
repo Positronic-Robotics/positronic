@@ -9,7 +9,6 @@ import pos3
 
 import pimm
 import positronic.cfg.policy as policy_cfg
-import positronic.cfg.wrappers as wrappers_cfg
 from positronic import utils, wire
 from positronic.cfg.eval import placeholder
 from positronic.dataset.ds_writer_agent import TimeMode
@@ -70,15 +69,13 @@ def _run_world(
     output_dir: Path | None,
     show_gui: bool,
     on_complete,
-    *,
-    wrap,
 ):
     """Wire one embodiment under a fresh Harness + World and run it to completion.
 
     ``driver`` (attended) and ``trials`` (unattended self-driving) are the two lifecycle sources, mutually
-    exclusive per the caller. The shared ``policy`` is wrapped here per run, but its lifetime stays with ``main``.
+    exclusive per the caller. The shared ``policy``'s lifetime stays with ``main``.
     """
-    harness = Harness(policy, embodiment, task=task, trials=trials, wrap=wrap, on_episode_complete=on_complete)
+    harness = Harness(policy, embodiment, task=task, trials=trials, on_episode_complete=on_complete)
     gui = driver.gui if driver is not None else (DearpyguiUi() if show_gui else None)
 
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
@@ -122,7 +119,6 @@ def _run_world(
 def main(
     policy,
     *,
-    wrap,
     evals: list[Eval] | None = None,
     embodiment: Embodiment | None = None,
     driver: Callable[[Path | None], Driver] | None = None,
@@ -158,20 +154,18 @@ def main(
     on_complete = _completion_sink(policy)
     try:
         if driver is not None:
-            _run_world(policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete, wrap=wrap)
+            _run_world(policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete)
         else:
             for ev in evals:
-                _run_world(
-                    policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete, wrap=wrap
-                )
+                _run_world(policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete)
     finally:
         policy.close()
 
 
-@cfn.config(eval=placeholder, policy=policy_cfg.placeholder, show_gui=False, wrap=wrappers_cfg.default_wrappers)
-def run(eval: Eval, policy, show_gui, output_dir=None, inference_latency=False, *, wrap):
+@cfn.config(eval=placeholder, policy=policy_cfg.placeholder, show_gui=False)
+def run(eval: Eval, policy, show_gui, output_dir=None, inference_latency=False):
     """Run a selected eval (embodiment + task + its trial sweep) through the shared inference harness."""
     # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob
     # (sim inference-cost simulation). Overlay it onto every trial context, then self-drive the eval.
     eval = replace(eval, trials=[{**trial, 'inference_latency': inference_latency} for trial in eval.trials])
-    main(policy=policy, evals=[eval], show_gui=show_gui, output_dir=output_dir, wrap=wrap)
+    main(policy=policy, evals=[eval], show_gui=show_gui, output_dir=output_dir)

@@ -9,8 +9,9 @@ from fastapi import WebSocket
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
+from positronic.cfg import codecs as cfg_codecs
 from positronic.offboard.vendor_server import PolicyManager, VendorServer, resolve_checkpoint
-from positronic.policy import Codec, Policy
+from positronic.policy import Policy, PolicyWrapper
 from positronic.utils.checkpoints import list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.vendors.lerobot_0_3_3 import codecs as lerobot_codecs
@@ -35,7 +36,7 @@ class InferenceServer(VendorServer):
     def __init__(
         self,
         policy_factory: Callable[[str], PreTrainedPolicy],
-        codec: Codec | None,
+        pipeline: PolicyWrapper,
         checkpoints_dir: str | Path,
         checkpoint: str | None = None,
         host: str = '0.0.0.0',
@@ -46,7 +47,7 @@ class InferenceServer(VendorServer):
         idle_timeout_min: float | None = None,
     ):
         super().__init__(
-            codec=codec, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
+            pipeline=pipeline, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
         )
         self.policy_factory = policy_factory
         self.checkpoints_dir = str(checkpoints_dir).rstrip('/') + '/checkpoints'
@@ -101,7 +102,7 @@ def act(checkpoint_path: str) -> PreTrainedPolicy:
 
 @cfn.config(
     policy_factory=act,
-    codec=lerobot_codecs.ee,
+    pipeline=cfg_codecs.pipeline.override(codec=lerobot_codecs.ee),
     checkpoint=None,
     port=8000,
     host='0.0.0.0',
@@ -112,7 +113,7 @@ def main(
     policy_factory: Callable[[str], PreTrainedPolicy],
     checkpoints_dir: str,
     checkpoint: str | None,
-    codec,
+    pipeline: PolicyWrapper,
     port: int,
     host: str,
     recording_dir: str | None,
@@ -121,7 +122,7 @@ def main(
     checkpoints_dir = str(pos3.download(checkpoints_dir))
     InferenceServer(
         policy_factory,
-        codec,
+        pipeline,
         checkpoints_dir,
         checkpoint,
         host=host,
@@ -139,23 +140,23 @@ phail = main.override(
 sim_stack = main.override(
     checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/',
     recording_dir='s3://inference/sim_stack/server_recordings/lerobot/230226-ee/',
-    **{'codec.flip_grip': True},
+    **{'pipeline.codec.flip_grip': True},
 )
 _DEMO_CHECKPOINT = 's3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'
 
 
 @cfn.config(
     policy_factory=act,
-    codec=lerobot_codecs.ee.override(flip_grip=True),
+    pipeline=cfg_codecs.pipeline.override(codec=lerobot_codecs.ee.override(flip_grip=True)),
     checkpoint=None,
     port=8000,
     host='0.0.0.0',
     idle_timeout_min=None,
 )
-def demo(policy_factory, checkpoint, codec, port, host, idle_timeout_min):
+def demo(policy_factory, checkpoint, pipeline, port, host, idle_timeout_min):
     checkpoints_dir = str(pos3.download(_DEMO_CHECKPOINT))
     InferenceServer(
-        policy_factory, codec, checkpoints_dir, checkpoint, host=host, port=port, idle_timeout_min=idle_timeout_min
+        policy_factory, pipeline, checkpoints_dir, checkpoint, host=host, port=port, idle_timeout_min=idle_timeout_min
     ).serve()
 
 

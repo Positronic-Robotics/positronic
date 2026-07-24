@@ -1,14 +1,21 @@
 import collections.abc as cabc
+import logging
 from typing import Any
 
 import numpy as np
+import pos3
 from PIL import Image as PilImage
 
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
-from .base import Policy, Session
+from .base import Policy, PolicyWrapper, Session
+from .recording import Recorder
+from .spec import from_spec
+from .wrappers import ChunkedSchedule
+
+logger = logging.getLogger(__name__)
 
 
 class RemoteSession(Session):
@@ -88,8 +95,8 @@ class RemoteSession(Session):
         self._session.close()
 
 
-class RemotePolicy(Policy):
-    """Policy that creates sessions forwarding observations to a remote inference server.
+class _Endpoint(Policy):
+    """The wire connection to one inference server: sessions forward observations as-is.
 
     Images are resized before sending to reduce bandwidth. The server reports
     expected sizes via ``image_sizes`` in its metadata (see ``Codec.meta``).
@@ -104,25 +111,23 @@ class RemotePolicy(Policy):
         self,
         host: str,
         port: int,
-        resize: int | None = None,
-        model_id: str | None = None,
+        resize: int | None,
+        model_id: str | None,
         *,
-        headers: dict[str, str] | None = None,
-        secure: bool = False,
-        infer_timeout: float = DEFAULT_INFER_TIMEOUT,
-        compress_images: bool = False,
+        headers: dict[str, str] | None,
+        secure: bool,
+        infer_timeout: float,
+        compress_images: bool,
     ):
         self._client = InferenceClient(host, port, headers=headers, secure=secure)
         self._resize = resize
         self._model_id = model_id
         self._infer_timeout = infer_timeout
         self._compress_images = compress_images
-        # Server metadata cached after the first session is created or `meta`
-        # is read. Needed so consumers like ``SampledPolicy._get_keys`` see
-        # ``server.checkpoint_path`` etc. before any session exists.
+        # Fetched lazily, via a throwaway session when ``meta`` is read before any session exists.
         self._server_meta: dict[str, Any] | None = None
 
-    def _ensure_server_meta(self) -> dict[str, Any]:
+    def server_meta(self) -> dict[str, Any]:
         if self._server_meta is None:
             ws_session = self._client.new_session(model_id=self._model_id, infer_timeout=self._infer_timeout)
             try:
@@ -131,7 +136,7 @@ class RemotePolicy(Policy):
                 ws_session.close()
         return self._server_meta
 
-    def new_session(self, context=None) -> RemoteSession:
+    def new_session(self, context=None, now=None) -> RemoteSession:
         ws_session = self._client.new_session(model_id=self._model_id, infer_timeout=self._infer_timeout)
         if self._server_meta is None:
             self._server_meta = dict(ws_session.metadata)
@@ -139,7 +144,87 @@ class RemotePolicy(Policy):
 
     @property
     def meta(self) -> dict[str, Any]:
-        return flatten_dict({'type': 'remote', 'server': self._ensure_server_meta()})
+        return flatten_dict({'type': 'remote', 'server': self.server_meta()})
 
     def close(self):
         self._client = None
+
+
+class RemotePolicy(Policy):
+    """Policy running against a remote inference server, owning the stack in front of the connection.
+
+    The server's ``ready`` handshake may declare the local half of its policy pipeline (the
+    ``local_stack`` spec — see ``positronic.policy.spec``); the declared wrappers are built here,
+    once, and every session runs through them. ``local`` is the operator's bypass: when set, the
+    declaration is ignored (and logged) and the given stack is used instead. When the server
+    declares nothing and no override is given, the standard ``ChunkedSchedule`` applies.
+
+    ``recording_dir`` places ``Recorder`` taps around the stack, recording the raw and wire
+    boundaries.
+    """
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        resize: int | None = None,
+        model_id: str | None = None,
+        *,
+        local: PolicyWrapper | None = None,
+        recording_dir: str | None = None,
+        headers: dict[str, str] | None = None,
+        secure: bool = False,
+        infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+        compress_images: bool = False,
+    ):
+        self._endpoint = _Endpoint(
+            host,
+            port,
+            resize,
+            model_id,
+            headers=headers,
+            secure=secure,
+            infer_timeout=infer_timeout,
+            compress_images=compress_images,
+        )
+        self._local = local
+        self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
+        self._stacked: Policy | None = None
+
+    def _resolve_stack(self) -> PolicyWrapper | None:
+        declared = self._endpoint.server_meta().get('local_stack')
+        if self._local is not None:
+            if declared is not None:
+                logger.info('Operator-supplied local stack bypasses the server declaration (ignored: %r)', declared)
+            return self._local
+        if declared is not None:
+            try:
+                return from_spec(declared)
+            except Exception as e:
+                version = self._endpoint.server_meta().get('positronic_version', 'unknown')
+                raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
+        logger.info('Server declared no local stack; running the standard ChunkedSchedule')
+        return ChunkedSchedule()
+
+    def _policy(self) -> Policy:
+        if self._stacked is None:
+            stack = self._resolve_stack()
+            if self._recording_dir is not None:
+                rec = Recorder(self._recording_dir)
+                if stack is None:
+                    # With no stack the raw and wire boundaries coincide, so a single tap.
+                    stack = rec.tap('raw')
+                else:
+                    stack = rec.tap('raw') | stack | rec.tap('server')
+            self._stacked = stack.wrap(self._endpoint) if stack is not None else self._endpoint
+        return self._stacked
+
+    def new_session(self, context=None, now=None) -> Session:
+        return self._policy().new_session(context, now)
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self._policy().meta
+
+    def close(self):
+        self._endpoint.close()

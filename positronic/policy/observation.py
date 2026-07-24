@@ -95,3 +95,11 @@ class ObservationCodec(Codec):
     @property
     def training_encoder(self):
         return Derive(meta=self._training_meta, **self._derive_transforms)
+
+    def to_spec(self):
+        # Normalized to lists so the spec is identical before and after a wire round-trip.
+        images = {name: [key, list(size)] for name, (key, size) in self._image_configs.items()}
+        return {
+            'name': 'observation_codec',
+            'args': {'state': self._state, 'images': images, 'task_field': self._task_field},
+        }

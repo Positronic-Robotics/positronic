@@ -15,9 +15,10 @@ import pos3
 from fastapi import WebSocket
 from huggingface_hub import snapshot_download
 
+from positronic.cfg import codecs as cfg_codecs
 from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
 from positronic.offboard.vendor_server import VendorServer
-from positronic.policy import Codec, Policy, Session
+from positronic.policy import Policy, PolicyWrapper, Session
 from positronic.utils.checkpoints import get_latest_checkpoint
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialize, serialize
@@ -208,7 +209,7 @@ class DreamZeroPolicy(Policy):
         self._client = client
         self._prev_session_id: str | None = None
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         if self._prev_session_id is not None:
             self._client.reset(session_id=self._prev_session_id)
         session_id = str(uuid.uuid4())
@@ -219,7 +220,7 @@ class DreamZeroPolicy(Policy):
 class InferenceServer(VendorServer):
     def __init__(
         self,
-        codec: Codec | None,
+        pipeline: PolicyWrapper,
         model_path: str,
         dreamzero_venv: str = '/.venv/',
         backbone: str = 'wan2.1',
@@ -232,7 +233,7 @@ class InferenceServer(VendorServer):
         idle_timeout_min: float | None = None,
     ):
         super().__init__(
-            codec=codec, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
+            pipeline=pipeline, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
         )
         self.model_path = _resolve_checkpoint_path(model_path)
         self.dreamzero_venv = Path(dreamzero_venv)
@@ -294,7 +295,7 @@ class InferenceServer(VendorServer):
 
 
 @cfn.config(
-    codec=codecs.joints,
+    pipeline=cfg_codecs.pipeline.override(local=codecs.dreamzero_wrappers, codec=codecs.joints),
     dreamzero_venv='/.venv/',
     backbone='wan2.1',
     num_gpus=1,
@@ -304,7 +305,7 @@ class InferenceServer(VendorServer):
     idle_timeout_min=None,
 )
 def server(
-    codec: Codec | None,
+    pipeline: PolicyWrapper,
     model_path: str,
     dreamzero_venv: str,
     backbone: str,
@@ -317,7 +318,7 @@ def server(
     """Starts the DreamZero inference server."""
     with pos3.mirror():
         InferenceServer(
-            codec=codec,
+            pipeline=pipeline,
             model_path=model_path,
             dreamzero_venv=dreamzero_venv,
             backbone=backbone,
@@ -331,7 +332,7 @@ def server(
 
 # Public pretrained DROID checkpoint: wan2.1 backbone (the base server default) paired with the DROID
 # codec that feeds its required 320x180 frames.
-droid = server.override(model_path='GEAR-Dreams/DreamZero-DROID', codec=codecs.droid)
+droid = server.override(model_path='GEAR-Dreams/DreamZero-DROID', **{'pipeline.codec': codecs.droid})
 
 
 if __name__ == '__main__':

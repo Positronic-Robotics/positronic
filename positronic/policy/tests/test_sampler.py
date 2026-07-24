@@ -23,7 +23,7 @@ class StubPolicy(Policy):
         self._action = action
         self.session_count = 0
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         self.session_count += 1
         return _StubSession(self._action, self._meta)
 

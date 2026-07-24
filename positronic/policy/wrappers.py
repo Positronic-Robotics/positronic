@@ -4,7 +4,7 @@ Wrappers are composable serving-time concerns layered around a policy with ``|``
 outermost), exactly like codecs. Most read time from the observation (``obs_time_ns``); only
 ``ChunkedSchedule`` needs the live clock — it anchors a chunk to inference *completion*, which the
 pre-inference observation stamp cannot give — so the harness passes ``now`` (a ``Callable[[], float]``
-in seconds) to ``wrap`` and it reaches that one session.
+in seconds) to ``new_session`` and it reaches that one session.
 """
 
 from collections import deque
@@ -31,12 +31,18 @@ class ChunkedSchedule(PolicyWrapper):
     class _Session(DelegatingSession):
         """Skips inner calls while the current trajectory plays; stamps absolute on emit."""
 
-        def __init__(self, inner: Session, now: Now):
+        def __init__(self, inner: Session, now: Now | None):
             super().__init__(inner)
             self._now = now
             self._trajectory_end: float | None = None
 
         def __call__(self, obs):
+            if self._now is None:
+                raise ValueError(
+                    'ChunkedSchedule needs a clock to run inference: pass now (a callable returning seconds) to '
+                    'new_session. The harness supplies it; a direct RemotePolicy.new_session() outside the harness '
+                    'must too.'
+                )
             if self._trajectory_end is not None and self._now() < self._trajectory_end:
                 return None
             result = self._inner(obs)
@@ -57,8 +63,11 @@ class ChunkedSchedule(PolicyWrapper):
             self._trajectory_end = None
             super().cancel()
 
-    def wrap_session(self, inner: Session, context, now: Now):
+    def wrap_session(self, inner: Session, context, now: Now | None):
         return ChunkedSchedule._Session(inner, now)
+
+    def to_spec(self):
+        return {'name': 'chunked_schedule'}
 
 
 class _StackBuffer:
@@ -150,3 +159,9 @@ class TemporalStack(PolicyWrapper):
 
     def wrap_session(self, inner: Session, context, now: Now):
         return TemporalStack._Session(inner, self._keys, self._offsets_sec, self._pad_start)
+
+    def to_spec(self):
+        return {
+            'name': 'temporal_stack',
+            'args': {'keys': list(self._keys), 'offsets_sec': list(self._offsets_sec), 'pad_start': self._pad_start},
+        }

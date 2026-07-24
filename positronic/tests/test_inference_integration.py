@@ -75,10 +75,9 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             timeout=0.4,
         )
         main(
-            policy=policy,
+            policy=ChunkedSchedule().wrap(policy),
             evals=[replace(ev, trials=[{'eval.trial_index': i, 'eval.seed': 100 + i} for i in range(2)])],
             output_dir=str(tmp_path),
-            wrap=ChunkedSchedule(),
         )
 
     ds = LocalDataset(tmp_path)
@@ -220,8 +219,8 @@ def test_countdown_records_frame0_every_trial(tmp_path):
         main(
             policy=StubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0),
             evals=[replace(ev, trials=[{'eval.trial_index': i, 'eval.seed': i} for i in range(2)])],
+            # the degenerate obs is not Franka-shaped, so run the policy unwrapped
             output_dir=str(tmp_path),
-            wrap=None,  # the degenerate obs is not Franka-shaped, so run the policy unwrapped
         )
 
     ds = LocalDataset(tmp_path)
@@ -241,7 +240,6 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
             policy=StubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0),
             evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
             output_dir=str(tmp_path),
-            wrap=None,
         )
 
     ds = LocalDataset(tmp_path)

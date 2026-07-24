@@ -1,11 +1,15 @@
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.remote import RemoteSession
+from positronic.policy.wrappers import ChunkedSchedule
+
+EMPTY_STACK = {'local_stack': {'seq': []}}
 
 
 def _mock_ws_session(metadata=None):
@@ -13,6 +17,17 @@ def _mock_ws_session(metadata=None):
     session.metadata = metadata or {}
     session.infer.return_value = {'action': 'test'}
     return session
+
+
+def _mock_remote_policy(metadata=None, infer_return=None, **kwargs):
+    """A RemotePolicy whose wire client is mocked out; returns (policy, mock_ws)."""
+    mock_ws = _mock_ws_session(metadata)
+    if infer_return is not None:
+        mock_ws.infer.return_value = infer_return
+    policy = RemotePolicy('localhost', 0, **kwargs)
+    policy._endpoint._client = MagicMock()
+    policy._endpoint._client.new_session.return_value = mock_ws
+    return policy, mock_ws
 
 
 def _make_image(h, w):
@@ -89,7 +104,7 @@ class TestInferenceClientHeaders:
         assert client.headers == headers
         # Defensive copy — mutating the caller's dict must not affect the client.
         headers['Modal-Key'] = 'mutated'
-        assert client.headers['Modal-Key'] == 'k'
+        assert client.headers is not None and client.headers['Modal-Key'] == 'k'
 
     def test_secure_switches_scheme_and_omits_default_port(self):
         client = InferenceClient('example.com', 443, secure=True)
@@ -154,56 +169,53 @@ class TestRemotePolicyHeaderPropagation:
     def test_headers_and_secure_forwarded_to_client(self):
         headers = {'Modal-Key': 'k'}
         policy = RemotePolicy('example.com', 443, headers=headers, secure=True)
-        assert policy._client.headers == headers
-        assert policy._client.base_uri == 'wss://example.com/api/v1/session'
+        client = policy._endpoint._client
+        assert client is not None
+        assert client.headers == headers
+        assert client.base_uri == 'wss://example.com/api/v1/session'
 
-    def test_defaults_match_pre_existing_behaviour(self):
+    def test_default_headers_and_ws_uri(self):
         policy = RemotePolicy('localhost', 8000)
-        assert policy._client.headers is None
-        assert policy._client.base_uri == 'ws://localhost:8000/api/v1/session'
+        client = policy._endpoint._client
+        assert client is not None
+        assert client.headers is None
+        assert client.base_uri == 'ws://localhost:8000/api/v1/session'
 
 
 class TestActionHorizonWrapping:
     def test_truncates_action_chunks(self):
-        mock_ws = _mock_ws_session()
-        mock_ws.infer.return_value = [
+        actions = [
             {'a': 1, 'timestamp': 0.0},
             {'a': 2, 'timestamp': 0.25},
             {'a': 3, 'timestamp': 0.5},
             {'a': 4, 'timestamp': 0.75},
         ]
-        # Build: ActionHorizon wrapping a RemotePolicy
-        policy = RemotePolicy('localhost', 0)
-        policy._client = MagicMock()
-        policy._client.new_session.return_value = mock_ws
+        # Build: ActionHorizon wrapping a RemotePolicy with no local stack of its own
+        policy, _ = _mock_remote_policy(EMPTY_STACK, infer_return=actions)
         wrapped = ActionHorizon(0.5).wrap(policy)
 
         session = wrapped.new_session()
         actions = session({'obs_time_ns': 0})
+        assert actions is not None
         assert len(actions) == 3  # 2 within-horizon actions + horizon sentinel
         assert actions[0]['timestamp'] == 0.0
         assert actions[1]['timestamp'] == 0.25
         assert actions[2] == {'timestamp': 0.5}  # horizon sentinel (timestamp = horizon_sec)
 
     def test_no_truncation_without_horizon(self):
-        mock_ws = _mock_ws_session()
-        mock_ws.infer.return_value = [{'a': 1, 'timestamp': 0.0}, {'a': 2, 'timestamp': 1.0}]
-        policy = RemotePolicy('localhost', 0)
-        policy._client = MagicMock()
-        policy._client.new_session.return_value = mock_ws
+        policy, _ = _mock_remote_policy(
+            EMPTY_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}, {'a': 2, 'timestamp': 1.0}]
+        )
 
         session = policy.new_session()
         actions = session({})
+        assert actions is not None
         assert len(actions) == 2
 
 
 def test_remote_session_normalizes_single_dict():
     """Server returning a single action dict (legacy shape) is wrapped into a 1-element list."""
-    mock_ws = _mock_ws_session()
-    mock_ws.infer.return_value = {'robot_command': 'X', 'timestamp': 0.0}
-    policy = RemotePolicy('localhost', 0)
-    policy._client = MagicMock()
-    policy._client.new_session.return_value = mock_ws
+    policy, _ = _mock_remote_policy(EMPTY_STACK, infer_return={'robot_command': 'X', 'timestamp': 0.0})
 
     session = policy.new_session()
     actions = session({})
@@ -211,11 +223,8 @@ def test_remote_session_normalizes_single_dict():
 
 
 def test_remote_session_passes_through_none():
-    mock_ws = _mock_ws_session()
+    policy, mock_ws = _mock_remote_policy(EMPTY_STACK)
     mock_ws.infer.return_value = None
-    policy = RemotePolicy('localhost', 0)
-    policy._client = MagicMock()
-    policy._client.new_session.return_value = mock_ws
 
     session = policy.new_session()
     assert session({}) is None
@@ -224,10 +233,7 @@ def test_remote_session_passes_through_none():
 def test_remote_policy_meta_exposes_server_fields():
     """RemotePolicy.meta must expose server metadata so SampledPolicy._get_keys
     can read e.g. 'server.checkpoint_path' before a session is created."""
-    mock_ws = _mock_ws_session({'checkpoint_path': '/ckpts/abc', 'model_name': 'foo'})
-    policy = RemotePolicy('localhost', 0)
-    policy._client = MagicMock()
-    policy._client.new_session.return_value = mock_ws
+    policy, _ = _mock_remote_policy({'checkpoint_path': '/ckpts/abc', 'model_name': 'foo', **EMPTY_STACK})
 
     meta = policy.meta
     assert meta['type'] == 'remote'
@@ -235,12 +241,50 @@ def test_remote_policy_meta_exposes_server_fields():
     assert meta['server.model_name'] == 'foo'
 
 
+def test_no_declaration_falls_back_to_chunked_schedule():
+    """A server that declares no ``local_stack`` in the handshake gets the standard ChunkedSchedule."""
+    clock = [0.0]
+    policy, _ = _mock_remote_policy(infer_return=[{'a': 1, 'timestamp': 0.0}, {'a': 2, 'timestamp': 0.5}])
+    session = policy.new_session(now=lambda: clock[0])
+    actions = session({'obs_time_ns': 0})
+    # ChunkedSchedule anchored the chunk to now=0.0 and gates re-inference until it is consumed.
+    assert actions == [{'a': 1, 'timestamp': 0.0}, {'a': 2, 'timestamp': 0.5}]
+    clock[0] = 0.2
+    assert session({'obs_time_ns': 0}) is None
+
+
+def test_declared_stack_built_at_session_open():
+    """The server-declared local stack runs in front of the connection."""
+    declared = {'local_stack': {'name': 'chunked_schedule'}}
+    clock = [1.0]
+    policy, mock_ws = _mock_remote_policy(declared, infer_return=[{'a': 1, 'timestamp': 0.0}])
+    session = policy.new_session(now=lambda: clock[0])
+    actions = session({'obs_time_ns': 0})
+    assert actions == [{'a': 1, 'timestamp': 1.0}]
+
+
+def test_unknown_declared_entry_fails_before_motion():
+    policy, _ = _mock_remote_policy({'local_stack': {'name': 'run_arbitrary_code'}, 'positronic_version': '9.9.9'})
+    with pytest.raises(ValueError, match='9.9.9'):
+        policy.new_session()
+
+
+def test_operator_local_bypasses_declaration():
+    """An operator-supplied ``local`` stack ignores the server declaration entirely."""
+    declared = {'local_stack': {'name': 'temporal_stack', 'args': {'keys': ['v'], 'offsets_sec': [0.0]}}}
+    policy, _ = _mock_remote_policy(declared, infer_return=[{'a': 1}], local=ChunkedSchedule())
+    session = policy.new_session(now=lambda: 5.0)
+    actions = session({'obs_time_ns': 0})
+    # The declared TemporalStack would have stacked 'v'; instead the operator's ChunkedSchedule ran.
+    assert actions == [{'a': 1, 'timestamp': 5.0}]
+
+
 def test_remote_policy_lifecycle(inference_server, mock_policy):
-    """Test RemotePolicy.new_session() and session call."""
+    """RemotePolicy against a live basic server (no declaration → standard ChunkedSchedule)."""
     host, port = inference_server
 
     policy = RemotePolicy(host, port)
-    session = policy.new_session()
+    session = policy.new_session(now=lambda: 0.0)
 
     meta = session.meta
     assert meta['server.model_name'] == 'test_model'
@@ -248,48 +292,22 @@ def test_remote_policy_lifecycle(inference_server, mock_policy):
 
     obs = {'dataset': 'test'}
     action = session(obs)
-    # Single-dict server response is normalized to a 1-element list (Session contract).
-    assert action == [{'action_data': [1, 2, 3]}]
+    # Single-dict server response is normalized to a 1-element list (Session contract) and
+    # anchored to absolute time by the fallback ChunkedSchedule.
+    assert action == [{'action_data': [1, 2, 3], 'timestamp': 0.0}]
 
     session.close()
 
     # New session
-    session2 = policy.new_session()
+    session2 = policy.new_session(now=lambda: 0.0)
     session2.close()
-
-
-def test_remote_policy_chunking(inference_server):
-    """Test that RemotePolicy session returns action chunks correctly."""
-    host, port = inference_server
-
-    policy = RemotePolicy(host, port)
-    session = policy.new_session()
-
-    # Inject a mock ws session
-    mock_ws = MagicMock()
-    chunk = [{'a': 1}, {'a': 2}, {'a': 3}]
-    mock_ws.infer.return_value = chunk
-    mock_ws.metadata = {'model_name': 'test_model'}
-    session._session = mock_ws
-
-    actions = session({'obs': 1})
-    assert actions == chunk
-    assert mock_ws.infer.call_count == 1
-
-    new_chunk = [{'b': 1}]
-    mock_ws.infer.return_value = new_chunk
-    actions2 = session({'obs': 2})
-    assert actions2 == new_chunk
-    assert mock_ws.infer.call_count == 2
-
-    session.close()
 
 
 def test_remote_session_meta(inference_server):
     """Session meta must include server metadata."""
     host, port = inference_server
     policy = RemotePolicy(host, port)
-    session = policy.new_session()
+    session = policy.new_session(now=lambda: 0.0)
 
     meta = session.meta
     assert meta['type'] == 'remote'

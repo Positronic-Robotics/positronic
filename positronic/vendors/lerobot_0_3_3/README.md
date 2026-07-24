@@ -36,7 +36,7 @@ cd docker && docker compose run --rm lerobot-0_3_3-train \
 # 3. Serve
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
+  --pipeline.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
 # 4. Run inference
 uv run positronic-inference sim \
@@ -93,7 +93,7 @@ See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
+  --pipeline.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee \
   --port=8000 \
   --host=0.0.0.0
 ```
@@ -104,7 +104,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve 
 |-----------|-------------|---------|---------|
 | `--checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
 | `--checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
-| `--codec` | Codec (must match training) | `ee` | `joints` |
+| `--pipeline.codec` | Server-side codec of the policy pipeline (must match training) | `ee` | `joints` |
 | `--port` | Server port | `8000` | `8001` |
 | `--host` | Server host | `0.0.0.0` | Binds to all interfaces |
 | `--recording_dir` | Directory for server-side inference recordings | `None` | `s3://inference/...` |

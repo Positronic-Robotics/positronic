@@ -14,9 +14,10 @@ import pos3
 import zmq
 from fastapi import WebSocket
 
+from positronic.cfg import codecs as cfg_codecs
 from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
 from positronic.offboard.vendor_server import VendorServer
-from positronic.policy import Codec, Policy, Session
+from positronic.policy import Policy, PolicyWrapper, Session
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.vendors.gr00t import MODALITY_CONFIGS, codecs
@@ -157,16 +158,15 @@ class Gr00tSubprocess:
         self._wait_for_ready()
 
     def _check_crashed(self) -> tuple[bool, int | None]:
-        """Check if subprocess has crashed."""
         if self.process is None:
             return False, None
         exit_code = self.process.poll()
         return exit_code is not None, exit_code
 
     def _wait_for_ready(self, timeout: float | None = None, poll_interval: float = 1.0):
+        """Wait for the gr00t server to be ready by polling with ping."""
         if timeout is None:
             timeout = self.ready_timeout
-        """Wait for the gr00t server to be ready by polling with ping."""
         client = PolicyClient(host='127.0.0.1', port=self.zmq_port, timeout_ms=2000)
         start_time = time.time()
 
@@ -261,7 +261,7 @@ class Gr00tPolicy(Policy):
     def __init__(self, client: PolicyClient):
         self._client = client
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         self._client.reset()
         return _Gr00tSession(self._client)
 
@@ -274,7 +274,7 @@ class Gr00tPolicy(Policy):
 class InferenceServer(VendorServer):
     def __init__(
         self,
-        codec: Codec | None,
+        pipeline: PolicyWrapper,
         checkpoints_dir: str,
         checkpoint: str | None,
         modality_config: str,
@@ -287,7 +287,7 @@ class InferenceServer(VendorServer):
         idle_timeout_min: float | None = None,
     ):
         super().__init__(
-            codec=codec, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
+            pipeline=pipeline, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
         )
         self.checkpoints_dir = checkpoints_dir.rstrip('/')
         self.checkpoint = checkpoint
@@ -378,7 +378,7 @@ class InferenceServer(VendorServer):
 
 
 @cfn.config(
-    codec=codecs.ee_quat,
+    pipeline=cfg_codecs.pipeline.override(codec=codecs.ee_quat),
     checkpoint=None,
     port=8000,
     groot_venv_path='/.venv/',
@@ -388,7 +388,7 @@ class InferenceServer(VendorServer):
     idle_timeout_min=None,
 )
 def server(
-    codec: Codec,
+    pipeline: PolicyWrapper,
     checkpoints_dir: str,
     checkpoint: str | None,
     port: int,
@@ -402,7 +402,7 @@ def server(
 
     with pos3.mirror():
         InferenceServer(
-            codec=codec,
+            pipeline=pipeline,
             checkpoints_dir=checkpoints_dir,
             checkpoint=checkpoint,
             modality_config=modality_config,
@@ -415,12 +415,12 @@ def server(
 
 
 # Pre-configured server variants matching GR00T modality configs
-ee = server.copy()  # Uses default codec=codecs.ee_quat, modality='ee'
-ee_joints = server.override(codec=codecs.ee_quat_joints, modality_config='ee_q')
-ee_rot6d = server.override(codec=codecs.ee_rot6d, modality_config='ee_rot6d')
-ee_rot6d_joints = server.override(codec=codecs.ee_rot6d_joints, modality_config='ee_rot6d_q')
-ee_rot6d_rel = server.override(codec=codecs.ee_rot6d, modality_config='ee_rot6d_rel')
-ee_rot6d_joints_rel = server.override(codec=codecs.ee_rot6d_joints, modality_config='ee_rot6d_q_rel')
+ee = server.copy()  # Uses the default pipeline.codec=codecs.ee_quat, modality='ee'
+ee_joints = server.override(**{'pipeline.codec': codecs.ee_quat_joints, 'modality_config': 'ee_q'})
+ee_rot6d = server.override(**{'pipeline.codec': codecs.ee_rot6d, 'modality_config': 'ee_rot6d'})
+ee_rot6d_joints = server.override(**{'pipeline.codec': codecs.ee_rot6d_joints, 'modality_config': 'ee_rot6d_q'})
+ee_rot6d_rel = server.override(**{'pipeline.codec': codecs.ee_rot6d, 'modality_config': 'ee_rot6d_rel'})
+ee_rot6d_joints_rel = server.override(**{'pipeline.codec': codecs.ee_rot6d_joints, 'modality_config': 'ee_rot6d_q_rel'})
 
 
 phail = ee_rot6d_rel.override(
@@ -431,7 +431,7 @@ phail = ee_rot6d_rel.override(
 sim_stack = ee_rot6d.override(
     checkpoints_dir='s3://checkpoints/sim_stack/groot/ee_rot6d/230226/',
     recording_dir='s3://inference/sim_stack/server_recordings/groot/230226/',
-    **{'codec.flip_grip': True},
+    **{'pipeline.codec.flip_grip': True},
 )
 
 

@@ -3,7 +3,8 @@ import pos3
 
 from positronic.cfg import codecs
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT
-from positronic.policy import ActionHorizon, Codec, Policy, Recorder, RemotePolicy
+from positronic.policy import Policy, PolicyWrapper, RemotePolicy
+from positronic.policy.spec import inline
 from positronic.utils import get_latest_checkpoint
 
 
@@ -15,11 +16,11 @@ def placeholder():
     )
 
 
-@cfn.config(codec=None)
-def wrapped(base: Policy, codec: Codec | None):
-    if codec is None:
-        return base
-    return codec.wrap(base)
+@cfn.config(pipeline=codecs.pipeline)
+def wrapped(base: Policy, pipeline: PolicyWrapper):
+    """Serve a whole policy pipeline in-process: both halves compose around ``base``."""
+    composed = inline(pipeline)
+    return composed.wrap(base) if composed is not None else base
 
 
 @cfn.config(checkpoint=None)
@@ -45,9 +46,12 @@ def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None
     return LerobotPolicy(policy, device, extra_meta={'type': 'act', 'checkpoint_path': fully_specified_checkpoint_dir})
 
 
-act_absolute = wrapped.override(
-    base=act, codec=codecs.compose.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action, horizon=1.0)
-)
+act_absolute = wrapped.override(**{
+    'base': act,
+    'pipeline.codec.obs': codecs.eepose_obs,
+    'pipeline.codec.action': codecs.absolute_pos_action,
+    'pipeline.codec.horizon': 1.0,
+})
 
 
 @cfn.config(weights=None)
@@ -60,51 +64,7 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
     return SampledPolicy(*origins, weights=weights)
 
 
-@cfn.config(
-    host='localhost',
-    port=8000,
-    resize=640,
-    model_id=None,
-    horizon_sec=None,
-    codec=None,
-    secure=False,
-    recording_dir=None,
-    infer_timeout=DEFAULT_INFER_TIMEOUT,
-    compress_images=False,
-)
-def remote(
-    host: str,
-    port: int,
-    resize: int | None = None,
-    model_id: str | None = None,
-    horizon_sec: float | None = None,
-    codec: Codec | None = None,
-    headers: dict[str, str] | None = None,
-    secure: bool = False,
-    recording_dir: str | None = None,
-    infer_timeout: float = DEFAULT_INFER_TIMEOUT,
-    compress_images: bool = False,
-):
-    effective_resize = None if codec and codec.meta.get('image_sizes') else resize
-    policy = RemotePolicy(
-        host,
-        port,
-        effective_resize,
-        model_id=model_id,
-        headers=headers,
-        secure=secure,
-        infer_timeout=infer_timeout,
-        compress_images=compress_images,
-    )
-    if horizon_sec is not None:
-        codec = ActionHorizon(horizon_sec) | codec if codec else ActionHorizon(horizon_sec)
-    if recording_dir is not None:
-        rec = Recorder(pos3.sync(recording_dir))
-        if codec is None:
-            # No codec: the raw and server boundaries coincide, so a single tap.
-            return rec.tap('raw').wrap(policy)
-        return (rec.tap('raw') | codec | rec.tap('server')).wrap(policy)
-    return codec.wrap(policy) if codec else policy
+remote = cfn.Config(RemotePolicy, host='localhost', port=8000, resize=640)
 
 
 @cfn.config(
@@ -113,8 +73,7 @@ def remote(
     weight=1.0,
     model_id=None,
     resize=640,
-    horizon_sec=None,
-    codec=None,
+    local=None,
     secure=False,
     recording_dir=None,
     infer_timeout=DEFAULT_INFER_TIMEOUT,
@@ -126,8 +85,7 @@ def weighted_remote(
     weight: float,
     model_id: str | None,
     resize: int | None,
-    horizon_sec: float | None,
-    codec: Codec | None = None,
+    local: PolicyWrapper | None = None,
     headers: dict[str, str] | None = None,
     secure: bool = False,
     recording_dir: str | None = None,
@@ -137,26 +95,19 @@ def weighted_remote(
     if not host:
         return None
 
-    effective_resize = None if codec and codec.meta.get('image_sizes') else resize
     policy = RemotePolicy(
         host,
         port,
-        effective_resize,
+        resize,
         model_id=model_id,
+        local=local,
+        recording_dir=recording_dir,
         headers=headers,
         secure=secure,
         infer_timeout=infer_timeout,
         compress_images=compress_images,
     )
-    if horizon_sec is not None:
-        codec = ActionHorizon(horizon_sec) | codec if codec else ActionHorizon(horizon_sec)
-    if recording_dir is not None:
-        rec = Recorder(pos3.sync(recording_dir))
-        if codec is None:
-            # No codec: the raw and server boundaries coincide, so a single tap.
-            return rec.tap('raw').wrap(policy), weight
-        return (rec.tap('raw') | codec | rec.tap('server')).wrap(policy), weight
-    return (codec.wrap(policy) if codec else policy), weight
+    return policy, weight
 
 
 @cfn.config(balance=2)
