@@ -13,6 +13,7 @@ from openpi_client.websocket_client_policy import WebsocketClientPolicy
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Codec, Policy, Session
+from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
@@ -239,7 +240,7 @@ openpi_source = cfn.Config(OpenpiSource)
 @cfn.config(codec=codecs.ee, source=openpi_source)
 def pipe(codec: Codec, source: ModelSource):
     """The OpenPI serving pipe: rig-side chunk scheduling, the server-side codec, the checkpoint source."""
-    return ChunkedSchedule() | remote | codec | source
+    return ChunkedSchedule() | RestrictImageSize.from_codec(codec) | remote | codec | source
 
 
 PIPES = {

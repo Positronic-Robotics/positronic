@@ -40,6 +40,7 @@ from positronic.policy.codec import (
     BinarizeGripInference,
     BinarizeGripTraining,
     FlipGrip,
+    RestrictImageSize,
 )
 from positronic.policy.observation import ObservationCodec
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
@@ -123,6 +124,7 @@ WIRE_WRAPPERS: dict[str, type[PolicyWrapper]] = {
     'binarize_grip_training': BinarizeGripTraining,
     'binarize_grip_inference': BinarizeGripInference,
     'flip_grip': FlipGrip,
+    'restrict_image_size': RestrictImageSize,
     'observation_codec': ObservationCodec,
     'absolute_position_action': AbsolutePositionAction,
     'absolute_joints_action': AbsoluteJointsAction,

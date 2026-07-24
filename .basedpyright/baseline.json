@@ -8496,14 +8496,6 @@
         ],
         "./positronic/policy/remote.py": [
             {
-                "code": "reportAssignmentType",
-                "range": {
-                    "startColumn": 20,
-                    "endColumn": 38,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportOptionalMemberAccess",
                 "range": {
                     "startColumn": 38,

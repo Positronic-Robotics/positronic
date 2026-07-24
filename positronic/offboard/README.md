@@ -77,7 +77,10 @@ Upon connection, the server sends a ready packet with metadata:
     "image_sizes": [224, 224],
     "action_fps": 15.0,
     "action_horizon_sec": 1.0,
-    "local_stack": {"seq": [{"name": "chunked_schedule"}]},
+    "local_stack": {"seq": [
+      {"name": "chunked_schedule"},
+      {"name": "restrict_image_size", "args": {"sizes": [224, 224]}}
+    ]},
     "positronic_version": "0.2.1"
   }
 }
@@ -88,7 +91,7 @@ The client ignores all messages until it sees `status == "ready"` (status update
 This metadata tells the client:
 - Which checkpoint is loaded
 - Server connection details
-- Codec metadata (`image_sizes` for client-side resize, `action_fps` and `action_horizon_sec` for timing)
+- Codec metadata (`image_sizes` — the geometry the codec encodes to, `action_fps` and `action_horizon_sec` for timing)
 - `local_stack` — the declared local half of the policy pipe: a spec tree of `{"name", "args"}`
   leaves composed by `"seq"` (the `|` operator) and `"par"` (the `&` operator). `RemotePolicy` builds
   this stack in front of the connection, resolving names only against the closed vocabulary in

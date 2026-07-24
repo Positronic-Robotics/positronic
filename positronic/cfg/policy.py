@@ -56,9 +56,9 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
     return SampledPolicy(*origins, weights=weights)
 
 
-remote = cfn.Config(RemotePolicy, host='localhost', port=8000, resize=640, params={})
+remote = cfn.Config(RemotePolicy, host='localhost', port=8000, params={})
 
-remote_url = cfn.Config(RemotePolicy.from_url, resize=640)
+remote_url = cfn.Config(RemotePolicy.from_url)
 
 
 @cfn.config(balance=2)
@@ -68,11 +68,10 @@ def balanced(balance: int):
     return BalancedSampler(balance=balance)
 
 
-@cfn.config(endpoints={}, weights={}, resize=640, recording_dir=None, sampler=None, group_fields=None)
+@cfn.config(endpoints={}, weights={}, recording_dir=None, sampler=None, group_fields=None)
 def production(
     endpoints: dict[str, str],
     weights: dict[str, float],
-    resize: int | None,
     recording_dir: str | None,
     sampler: Sampler | None,
     group_fields: list[str] | None,
@@ -90,16 +89,16 @@ def production(
     # Every Sampler but the default uniform one picks by episode counts alone, so weights would be dropped.
     if weights and sampler is not None:
         raise ValueError(f'weights cannot be combined with {type(sampler).__name__}, which samples by count')
-    policies = [RemotePolicy.from_url(url, resize, recording_dir=recording_dir) for url in endpoints.values()]
+    policies = [RemotePolicy.from_url(url, recording_dir=recording_dir) for url in endpoints.values()]
     w = [weights.get(name, 1.0) for name in endpoints] if weights else None
     return SampledPolicy(*policies, weights=w, sampler=sampler, group_fields=group_fields)
 
 
 @cfn.config()
 def phail_single(hostname, w_openpi=1.0, w_groot=1.0, w_act=1.0):
-    openpi = RemotePolicy(hostname, 8000, resize=640)
-    groot = RemotePolicy(hostname, 8001, resize=640)
-    act = RemotePolicy(hostname, 8002, resize=640)
+    openpi = RemotePolicy(hostname, 8000)
+    groot = RemotePolicy(hostname, 8001)
+    act = RemotePolicy(hostname, 8002)
 
     return SampledPolicy(openpi, groot, act, weights=[w_openpi, w_groot, w_act])
 

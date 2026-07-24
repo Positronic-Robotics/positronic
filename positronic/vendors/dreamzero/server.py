@@ -19,6 +19,7 @@ from websockets.exceptions import ConnectionClosed
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Codec, Policy, PolicyWrapper, Session
+from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import get_latest_checkpoint
 from positronic.utils.logging import init_logging
@@ -282,7 +283,7 @@ dreamzero_source = cfn.Config(DreamZeroSource)
 @cfn.config(local=codecs.dreamzero_wrappers, codec=codecs.joints, source=dreamzero_source)
 def pipe(local: PolicyWrapper, codec: Codec, source: ModelSource):
     """One DreamZero serving pipe: the rig-side AR video context, the codec, the subprocess-backed source."""
-    return local | remote | codec | source
+    return local | RestrictImageSize.from_codec(codec) | remote | codec | source
 
 
 PIPES = {
