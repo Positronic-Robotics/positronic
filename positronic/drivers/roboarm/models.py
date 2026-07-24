@@ -17,6 +17,12 @@ _2F85_MOUNT_RPY = '0 0 0.7853981634'
 _DROID_EEF_XYZ = '0 0 0.01817402261'
 _DROID_EEF_RPY = '0 0 1.5707963268'
 
+# MolmoSpaces' end-effector control frame ``molmo_grasp``, relative to the franka flange (``link8``). Its env
+# reports and accepts Cartesian poses at the arm move group's grasp site (``gripper/grasp_site``, the 2F-85 TCP).
+# Measured off MolmoSpaces' own DROID model (``robots/franka_droid/model.xml`` @ allenai/molmospaces c2f1b58):
+# 155mm along the flange Z, no rotation — a deeper, unrotated frame than ``droid_eef``.
+_MOLMO_GRASP_XYZ = '0 0 0.155'
+
 
 def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
     """One 2F-85 finger as URDF rows. ``sign`` mirrors the y-offsets and ``base_rpy`` (180deg Z on the
@@ -72,13 +78,14 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
 # A row with an axis is a revolute joint whose axis sign sets its closing direction, so one positive
 # ``grip`` drives the whole 4-bar: driver/spring_link swing the finger in (+X), coupler/follower
 # counter-rotate (-X) to keep the pad parallel. Rows without an axis are fixed. A row with ``mesh`` None
-# is a pure frame (no visual) — ``droid_eef`` is such a frame, the DROID control frame on the flange.
+# is a pure frame (no visual) — ``droid_eef`` and ``molmo_grasp`` are such frames, EE control frames on the flange.
 _ROBOTIQ_2F85 = [
     ('gripper_base_mount', _FLANGE_LINK, None, '0 0 0.007', _2F85_MOUNT_RPY, None, 'base_mount.stl', None),
     ('gripper_base', 'gripper_base_mount', None, '0 0 0.0038', '0 0 -1.5707963268', None, 'base.stl', None),
     *_2f85_finger('right', 1, '0 0 0'),
     *_2f85_finger('left', -1, '0 0 3.1415926536'),
     ('droid_eef', _FLANGE_LINK, None, _DROID_EEF_XYZ, _DROID_EEF_RPY, None, None, None),
+    ('molmo_grasp', _FLANGE_LINK, None, _MOLMO_GRASP_XYZ, '0 0 0', None, None, None),
 ]
 _ROBOTIQ_2F85_JOINTS = [row[2] for row in _ROBOTIQ_2F85 if row[2]]
 

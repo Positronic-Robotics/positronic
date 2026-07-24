@@ -144,6 +144,16 @@ def test_frame_transform_reproduces_droid_eef_across_configs():
         assert q_diff < 1e-9, f'rotation mismatch: {q_diff}'
 
 
+def test_molmo_grasp_matches_molmospaces_grasp_site():
+    """``molmo_grasp`` relative to the flange is MolmoSpaces' arm-move-group grasp site (``gripper/grasp_site``),
+    measured off its own DROID model (``robots/franka_droid/model.xml`` @ allenai/molmospaces c2f1b58): 155mm
+    along the flange Z, no rotation. It is the frame ``env.py`` reports ``robot_state.ee_pose`` in, so the served
+    ``robot_meta`` declares it as the control frame — a deeper, unrotated frame than ``droid_eef``."""
+    transform = frame_transform(bundled_franka_model()['urdf'], 'link8', 'molmo_grasp')
+    np.testing.assert_allclose(transform.translation, [0.0, 0.0, 0.155], atol=1e-9)
+    np.testing.assert_allclose(transform.rotation.as_quat, geom.Rotation.identity.as_quat, atol=1e-9)
+
+
 def test_frame_transform_identity_when_frames_match():
     transform = frame_transform(bundled_franka_model()['urdf'], 'end_effector', 'end_effector')
     np.testing.assert_allclose(transform.translation, 0.0, atol=1e-12)
