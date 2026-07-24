@@ -5,36 +5,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import check_basedpyright_baseline_ratchet as ratchet  # noqa: E402
 
 
-def _entry(line: int) -> dict[str, object]:
-    return {'code': 'reportReturnType', 'range': {'startColumn': 1, 'endColumn': 2, 'lineCount': 1, 'line': line}}
+def _entry(code: str, col: int = 1) -> dict[str, object]:
+    return {'code': code, 'range': {'startColumn': col, 'endColumn': col + 1, 'lineCount': 1}}
 
 
-def _baseline(counts: dict[str, int]) -> dict[str, object]:
-    return {'files': {path: [_entry(i) for i in range(n)] for path, n in counts.items()}}
+def _baseline(files: dict[str, list[str]]) -> dict[str, object]:
+    """Build a baseline from {path: [code, code, ...]}; columns are auto-assigned distinctly."""
+    return {'files': {path: [_entry(c, i + 1) for i, c in enumerate(codes)] for path, codes in files.items()}}
 
 
-def test_passes_when_every_file_at_or_below_base():
-    base = _baseline({'./a.py': 3, './b.py': 2})
-    current = _baseline({'./a.py': 3, './b.py': 1})  # b shrank, a unchanged
+def test_reanchor_same_codes_changed_columns_passes():
+    base = {'files': {'./a.py': [_entry('reportReturnType', 1), _entry('reportArgumentType', 5)]}}
+    current = {'files': {'./a.py': [_entry('reportReturnType', 40), _entry('reportArgumentType', 88)]}}
     assert ratchet.grown_files(base, current) == []
 
 
-def test_fails_when_a_file_grew():
-    base = _baseline({'./a.py': 2})
-    current = _baseline({'./a.py': 5})
-    assert ratchet.grown_files(base, current) == [('./a.py', 2, 5)]
+def test_cross_code_swap_same_total_fails():
+    base = _baseline({'./a.py': ['reportReturnType', 'reportReturnType']})
+    current = _baseline({'./a.py': ['reportReturnType', 'reportArgumentType']})  # dropped one, added a new code
+    assert ratchet.grown_files(base, current) == [('./a.py', 'reportArgumentType', 0, 1)]
 
 
-def test_fails_when_new_file_appears_with_entries():
-    base = _baseline({'./a.py': 2})
-    current = _baseline({'./a.py': 2, './new.py': 1})
-    assert ratchet.grown_files(base, current) == [('./new.py', 0, 1)]
-
-
-def test_passes_on_reanchor_same_count_different_lines():
-    base = {'files': {'./a.py': [_entry(10), _entry(20)]}}
-    current = {'files': {'./a.py': [_entry(99), _entry(120)]}}  # same count, shifted lines
+def test_genuine_fix_fewer_entries_passes():
+    base = _baseline({'./a.py': ['reportReturnType', 'reportReturnType']})
+    current = _baseline({'./a.py': ['reportReturnType']})
     assert ratchet.grown_files(base, current) == []
+
+
+def test_new_file_with_entries_fails():
+    base = _baseline({'./a.py': ['reportReturnType']})
+    current = _baseline({'./a.py': ['reportReturnType'], './new.py': ['reportUnknownMemberType']})
+    assert ratchet.grown_files(base, current) == [('./new.py', 'reportUnknownMemberType', 0, 1)]
+
+
+def test_more_of_existing_code_fails():
+    base = _baseline({'./a.py': ['reportReturnType']})
+    current = _baseline({'./a.py': ['reportReturnType', 'reportReturnType']})
+    assert ratchet.grown_files(base, current) == [('./a.py', 'reportReturnType', 1, 2)]
 
 
 def test_base_ref_arg_wins_then_env_then_default():

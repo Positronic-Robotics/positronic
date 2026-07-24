@@ -1,16 +1,24 @@
-"""Enforce the basedpyright baseline as a one-way ratchet: a file's entry count may shrink, never grow.
+"""Enforce the basedpyright baseline as a one-way ratchet: a file's diagnostics may shrink, never grow.
 
 Compares the working-tree `.basedpyright/baseline.json` against the merge-base with a base ref (the
-merge-base, not the tip, so an unrelated base-side shrink cannot flag an untouched file here). Any
-file whose entry count exceeds its merge-base count has a new error grandfathered into the baseline;
-the fix is to resolve the error, not to widen the baseline.
+merge-base, not the tip, so an unrelated base-side shrink cannot flag an untouched file here). A new
+error grandfathered into the baseline is flagged; the fix is to resolve the error, not widen it.
 
 The base ref is `--base <ref>`, else the `RATCHET_BASE` env var, else `origin/main` (the local
 pre-commit default). CI runs a detached-HEAD checkout where `origin/main` may not resolve, so it
 passes the PR base sha explicitly.
 
-Counts, never raw lines: re-anchoring an existing entry shifts its line numbers legitimately, so only
-the number of entries per file is compared.
+Per-code multiset, never raw lines: each baseline entry is `{"code": <rule>, "range": {startColumn,
+endColumn, lineCount}}` — there is no absolute line, so re-anchoring on re-indentation shifts an
+entry's columns but not its `code`. The re-anchor-safe identity is therefore the `code`: a file is
+flagged if any diagnostic `code` occurs more times than at the base. That catches a brand-new
+rule-kind, more entries of an existing kind, AND a swap of one code for a different one (which a bare
+per-file entry-count comparison would miss, since the total stays flat).
+
+Residual: a swap WITHIN the same code — resolving one `reportReturnType` while introducing a different
+`reportReturnType` in the same file — leaves the multiset identical and cannot be caught by a static
+baseline diff (entries re-anchor by column, so there is no stable position identity). Distinguishing
+it would require re-running basedpyright on both base and branch, out of scope for a fast guard.
 
 Fails open (exit 0, note on stderr) when the base ref or either baseline cannot be resolved, so an
 offline commit is never blocked; CI always has the base sha, where the gate holds.
@@ -21,26 +29,30 @@ import json
 import os
 import subprocess
 import sys
+from collections import Counter
 from typing import Any
 
 BASELINE_PATH = '.basedpyright/baseline.json'
 
 
-def _counts(baseline: Any) -> dict[str, int]:
-    return {path: len(entries) for path, entries in baseline.get('files', {}).items()}
+def _code_counts(baseline: Any) -> dict[str, Counter[str]]:
+    return {path: Counter(str(e['code']) for e in entries) for path, entries in baseline.get('files', {}).items()}
 
 
-def grown_files(base: Any, current: Any) -> list[tuple[str, int, int]]:
-    """Return (path, base_count, current_count) for every file whose baseline entry count grew.
+def grown_files(base: Any, current: Any) -> list[tuple[str, str, int, int]]:
+    """Return (path, code, base_count, current_count) for every diagnostic `code` a file gained.
 
-    A file absent from `base` counts as 0, so a newly-appearing file with entries is a growth.
+    Compares the per-file multiset of diagnostic codes; a code absent from `base` counts as 0, so a
+    new rule-kind (including a swap to a different code at flat total) or a newly-appearing file is
+    flagged.
     """
-    base_counts = _counts(base)
-    grown: list[tuple[str, int, int]] = []
-    for path, cur_n in sorted(_counts(current).items()):
-        base_n = base_counts.get(path, 0)
-        if cur_n > base_n:
-            grown.append((path, base_n, cur_n))
+    base_counts = _code_counts(base)
+    grown: list[tuple[str, str, int, int]] = []
+    for path, cur_codes in sorted(_code_counts(current).items()):
+        base_codes = base_counts.get(path, Counter())
+        for code, cur_n in sorted(cur_codes.items()):
+            if cur_n > base_codes[code]:
+                grown.append((path, code, base_codes[code], cur_n))
     return grown
 
 
@@ -108,11 +120,11 @@ def main(argv: list[str]) -> int:
     if not grown:
         return 0
 
-    print('basedpyright baseline is a one-way ratchet — it may shrink, never grow per file.', file=sys.stderr)
-    print('These files gained baseline entries; fix the new issue instead of grandfathering it', file=sys.stderr)
+    print('basedpyright baseline is a one-way ratchet — a file may shrink, never grow per code.', file=sys.stderr)
+    print('These files gained baseline diagnostics; fix the new issue instead of grandfathering it', file=sys.stderr)
     print('(see the no_grandfather_new_code discipline):', file=sys.stderr)
-    for path, base_n, cur_n in grown:
-        print(f'  {path}: {base_n} -> {cur_n} entries', file=sys.stderr)
+    for path, code, base_n, cur_n in grown:
+        print(f'  {path}: {code} {base_n} -> {cur_n}', file=sys.stderr)
     return 1
 
 
