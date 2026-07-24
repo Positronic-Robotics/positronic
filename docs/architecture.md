@@ -126,10 +126,10 @@ A codec owns `encode`/`decode` and its `training_encoder` in one object, so the 
 builds the training set and the transformation applied at inference are one specification and
 cannot diverge.
 
-**The rollout records, analysis scores.** The run computes no verdicts: it records the raw
-privileged state as-is (for a sim task, the entire simulator state), and success criteria are
-functions over those recordings, computed in a separate analysis pass — one expensive rollout,
-many cheap criteria experiments. The only live exception is an optional stop-signal that ends a
-trial without judging it; whether that end was a success is, like everything else, an analysis
-question. A criterion baked into the run is bound too early: changing it would mean re-running
-the robot.
+**The rollout records, analysis scores.** Positronic computes no verdicts in the loop: the run
+records the raw privileged state as-is (for a sim task, the entire simulator state), and success
+criteria are functions over those recordings, computed in a separate analysis pass — one expensive
+rollout, many cheap criteria experiments. A stop-signal may end a trial early, and a foreign env
+may report its own success at termination; both are captured as original data from where the
+ground truth lives, not as scores — analysis is free to use, recompute, or override them. A
+criterion baked into the run is bound too early: changing it would mean re-running the robot.
