@@ -15,6 +15,11 @@ flagged if any diagnostic `code` occurs more times than at the base. That catche
 rule-kind, more entries of an existing kind, AND a swap of one code for a different one (which a bare
 per-file entry-count comparison would miss, since the total stays flat).
 
+Renames re-key the baseline (the entries move to the new path), so a rename map from
+`git diff --name-status -M -C <base> HEAD` routes each moved file's counts back to its base path;
+a pure rename/move of a file carrying existing entries is therefore not flagged. Rename detection
+fails open (empty map, every file compared under its own path) if the git call fails.
+
 Residual: a swap WITHIN the same code — resolving one `reportReturnType` while introducing a different
 `reportReturnType` in the same file — leaves the multiset identical and cannot be caught by a static
 baseline diff (entries re-anchor by column, so there is no stable position identity). Distinguishing
@@ -35,21 +40,29 @@ from typing import Any
 BASELINE_PATH = '.basedpyright/baseline.json'
 
 
+def _norm(path: str) -> str:
+    """Drop the leading `./` that baseline keys carry, so paths match git's (`positronic/foo.py`)."""
+    return path[2:] if path.startswith('./') else path
+
+
 def _code_counts(baseline: Any) -> dict[str, Counter[str]]:
-    return {path: Counter(str(e['code']) for e in entries) for path, entries in baseline.get('files', {}).items()}
+    files = baseline.get('files', {})
+    return {_norm(path): Counter(str(e['code']) for e in entries) for path, entries in files.items()}
 
 
-def grown_files(base: Any, current: Any) -> list[tuple[str, str, int, int]]:
+def grown_files(base: Any, current: Any, rename_map: dict[str, str] | None = None) -> list[tuple[str, str, int, int]]:
     """Return (path, code, base_count, current_count) for every diagnostic `code` a file gained.
 
     Compares the per-file multiset of diagnostic codes; a code absent from `base` counts as 0, so a
     new rule-kind (including a swap to a different code at flat total) or a newly-appearing file is
-    flagged.
+    flagged. `rename_map` (new path -> base path, git-style without `./`) routes a moved file's
+    counts back to its base path, so a pure rename of a file with existing entries is not flagged.
     """
+    renames = rename_map or {}
     base_counts = _code_counts(base)
     grown: list[tuple[str, str, int, int]] = []
     for path, cur_codes in sorted(_code_counts(current).items()):
-        base_codes = base_counts.get(path, Counter())
+        base_codes = base_counts.get(renames.get(path, path), Counter())
         for code, cur_n in sorted(cur_codes.items()):
             if cur_n > base_codes[code]:
                 grown.append((path, code, base_codes[code], cur_n))
@@ -59,6 +72,23 @@ def grown_files(base: Any, current: Any) -> list[tuple[str, str, int, int]]:
 def resolve_base_ref(arg: str | None, env: str | None) -> str:
     """Pick the base ref: an explicit `--base` arg wins, then `RATCHET_BASE` env, else `origin/main`."""
     return arg or env or 'origin/main'
+
+
+def build_rename_map(base: str) -> dict[str, str]:
+    """Map new path -> base path for files renamed or copied between `base` and HEAD (git-style paths).
+
+    Fails open (empty map) if the git call fails, so rename-detection trouble never blocks a commit.
+    """
+    out = _run_git('diff', '--name-status', '-M', '-C', base, 'HEAD')
+    if out is None:
+        return {}
+    renames: dict[str, str] = {}
+    for line in out.splitlines():
+        parts = line.split('\t')
+        if len(parts) == 3 and parts[0][:1] in ('R', 'C'):
+            _status, old, new = parts
+            renames[new] = old
+    return renames
 
 
 def _run_git(*args: str) -> str | None:
@@ -116,7 +146,7 @@ def main(argv: list[str]) -> int:
         print(f'baseline-ratchet: could not read working-tree {BASELINE_PATH}; skipping check', file=sys.stderr)
         return 0
 
-    grown = grown_files(base_baseline, current_baseline)
+    grown = grown_files(base_baseline, current_baseline, build_rename_map(base))
     if not grown:
         return 0
 

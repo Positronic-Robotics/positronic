@@ -23,7 +23,7 @@ def test_reanchor_same_codes_changed_columns_passes():
 def test_cross_code_swap_same_total_fails():
     base = _baseline({'./a.py': ['reportReturnType', 'reportReturnType']})
     current = _baseline({'./a.py': ['reportReturnType', 'reportArgumentType']})  # dropped one, added a new code
-    assert ratchet.grown_files(base, current) == [('./a.py', 'reportArgumentType', 0, 1)]
+    assert ratchet.grown_files(base, current) == [('a.py', 'reportArgumentType', 0, 1)]
 
 
 def test_genuine_fix_fewer_entries_passes():
@@ -35,13 +35,35 @@ def test_genuine_fix_fewer_entries_passes():
 def test_new_file_with_entries_fails():
     base = _baseline({'./a.py': ['reportReturnType']})
     current = _baseline({'./a.py': ['reportReturnType'], './new.py': ['reportUnknownMemberType']})
-    assert ratchet.grown_files(base, current) == [('./new.py', 'reportUnknownMemberType', 0, 1)]
+    assert ratchet.grown_files(base, current) == [('new.py', 'reportUnknownMemberType', 0, 1)]
 
 
 def test_more_of_existing_code_fails():
     base = _baseline({'./a.py': ['reportReturnType']})
     current = _baseline({'./a.py': ['reportReturnType', 'reportReturnType']})
-    assert ratchet.grown_files(base, current) == [('./a.py', 'reportReturnType', 1, 2)]
+    assert ratchet.grown_files(base, current) == [('a.py', 'reportReturnType', 1, 2)]
+
+
+def test_pure_rename_with_identical_entries_passes():
+    base = _baseline({'./positronic/old.py': ['reportReturnType', 'reportArgumentType']})
+    current = _baseline({'./positronic/new.py': ['reportReturnType', 'reportArgumentType']})
+    rename_map = {'positronic/new.py': 'positronic/old.py'}  # git-style, no leading ./
+    assert ratchet.grown_files(base, current, rename_map) == []
+
+
+def test_rename_that_also_grew_fails_on_new_path():
+    base = _baseline({'./positronic/old.py': ['reportReturnType']})
+    current = _baseline({'./positronic/new.py': ['reportReturnType', 'reportArgumentType']})  # renamed AND grew
+    rename_map = {'positronic/new.py': 'positronic/old.py'}
+    assert ratchet.grown_files(base, current, rename_map) == [('positronic/new.py', 'reportArgumentType', 0, 1)]
+
+
+def test_rename_without_map_flags_every_entry_as_new():
+    # A rename NOT reflected in the map (empty map) reads the moved file as brand-new — the exact
+    # false-positive build_rename_map prevents; asserts the map is what suppresses it.
+    base = _baseline({'./positronic/old.py': ['reportReturnType']})
+    current = _baseline({'./positronic/new.py': ['reportReturnType']})
+    assert ratchet.grown_files(base, current) == [('positronic/new.py', 'reportReturnType', 0, 1)]
 
 
 def test_base_ref_arg_wins_then_env_then_default():
