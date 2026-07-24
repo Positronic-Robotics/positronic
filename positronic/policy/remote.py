@@ -10,6 +10,10 @@ from positronic.utils.serialization import encode_jpeg
 
 from .base import Policy, Session
 
+# Client-only robot-model metadata the harness puts in the observation for client-side frame codecs
+# (``ChangeEEFrame``); it is never a model input, so it is dropped before an observation crosses the wire.
+_LOCAL_ONLY_KEYS = frozenset({'urdf', 'control_frame'})
+
 
 class RemoteSession(Session):
     """Per-episode session that forwards observations to a remote inference server."""
@@ -41,7 +45,7 @@ class RemoteSession(Session):
         return RemoteSession._resize_to(image, int(w * scale), int(h * scale))
 
     def _prepare_obs(self, obs: dict[str, Any]) -> dict[str, Any]:
-        return {key: self._prepare_value(key, value) for key, value in obs.items()}
+        return {key: self._prepare_value(key, value) for key, value in obs.items() if key not in _LOCAL_ONLY_KEYS}
 
     def _prepare_value(self, key: str, value: Any) -> Any:
         # Client-side codecs (e.g. GR00T) nest images inside dicts/lists, so recurse to reach every

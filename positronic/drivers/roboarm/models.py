@@ -11,6 +11,12 @@ _FLANGE_LINK = 'link8'
 # (a +45deg Z, i.e. 90deg off the franka ``end_effector`` frame).
 _2F85_MOUNT_RPY = '0 0 0.7853981634'
 
+# The DROID/RoboLab end-effector control frame ``droid_eef``, relative to the franka flange (``link8``). RoboLab
+# reports and accepts Cartesian poses in it (``eef_frame`` = its ``Robotiq_2F_85/base_link`` ∘ ``EEF_OFFSET_ROT``).
+# Measured off RoboLab's DROID USD (``franka_robotiq_2f_85_flattened.usd``): 18.17mm along the flange Z, +90deg Z.
+_DROID_EEF_XYZ = '0 0 0.01817402261'
+_DROID_EEF_RPY = '0 0 1.5707963268'
+
 
 def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
     """One 2F-85 finger as URDF rows. ``sign`` mirrors the y-offsets and ``base_rpy`` (180deg Z on the
@@ -62,15 +68,17 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
     ]
 
 
-# Rows: (link, parent, joint | None, origin xyz, origin rpy, axis | None, mesh, visual xyz | None).
+# Rows: (link, parent, joint | None, origin xyz, origin rpy, axis | None, mesh | None, visual xyz | None).
 # A row with an axis is a revolute joint whose axis sign sets its closing direction, so one positive
 # ``grip`` drives the whole 4-bar: driver/spring_link swing the finger in (+X), coupler/follower
-# counter-rotate (-X) to keep the pad parallel. Rows without an axis are fixed.
+# counter-rotate (-X) to keep the pad parallel. Rows without an axis are fixed. A row with ``mesh`` None
+# is a pure frame (no visual) — ``droid_eef`` is such a frame, the DROID control frame on the flange.
 _ROBOTIQ_2F85 = [
     ('gripper_base_mount', _FLANGE_LINK, None, '0 0 0.007', _2F85_MOUNT_RPY, None, 'base_mount.stl', None),
     ('gripper_base', 'gripper_base_mount', None, '0 0 0.0038', '0 0 -1.5707963268', None, 'base.stl', None),
     *_2f85_finger('right', 1, '0 0 0'),
     *_2f85_finger('left', -1, '0 0 3.1415926536'),
+    ('droid_eef', _FLANGE_LINK, None, _DROID_EEF_XYZ, _DROID_EEF_RPY, None, None, None),
 ]
 _ROBOTIQ_2F85_JOINTS = [row[2] for row in _ROBOTIQ_2F85 if row[2]]
 
@@ -85,10 +93,11 @@ def _build_2f85_elements() -> list[ET.Element]:
         inertial = ET.SubElement(link_el, 'inertial')
         ET.SubElement(inertial, 'mass', value='0.01')
         ET.SubElement(inertial, 'inertia', ixx='1e-5', iyy='1e-5', izz='1e-5', ixy='0', ixz='0', iyz='0')
-        visual = ET.SubElement(link_el, 'visual')
-        if visual_xyz is not None:
-            ET.SubElement(visual, 'origin', xyz=visual_xyz, rpy='0 0 0')
-        ET.SubElement(ET.SubElement(visual, 'geometry'), 'mesh', filename=mesh)
+        if mesh is not None:
+            visual = ET.SubElement(link_el, 'visual')
+            if visual_xyz is not None:
+                ET.SubElement(visual, 'origin', xyz=visual_xyz, rpy='0 0 0')
+            ET.SubElement(ET.SubElement(visual, 'geometry'), 'mesh', filename=mesh)
         joint_el = ET.Element('joint', name=joint or f'{link}_fixed', type='revolute' if axis else 'fixed')
         ET.SubElement(joint_el, 'origin', xyz=xyz, rpy=rpy)
         ET.SubElement(joint_el, 'parent', link=parent)
