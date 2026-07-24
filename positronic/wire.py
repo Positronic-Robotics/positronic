@@ -3,6 +3,7 @@ from positronic import eval_timing
 from positronic.dataset import DatasetWriter
 from positronic.dataset.ds_writer_agent import DsWriterAgent, TimeMode, TrajectoryOverrideSerializer
 from positronic.dataset.serializers import Serializers, StatefulSerializer
+from positronic.drivers.gpu_monitor import GpuMonitor
 from positronic.eval import ROBOT_STATIC_META, Embodiment, Observation
 
 __all__ = ['ROBOT_STATIC_META', 'wire', 'wire_embodiment']
@@ -69,6 +70,7 @@ def wire_embodiment(
     time_mode: TimeMode = TimeMode.CLOCK,
     privileged: dict[str, Observation] | None = None,
     done: pimm.SignalEmitter | None = None,
+    gpu_monitor: GpuMonitor | None = None,
 ):
     """Wire an embodiment to the Harness for the inference path.
 
@@ -77,6 +79,9 @@ def wire_embodiment(
     chunks, and the task's privileged ground-truth into the dataset. The task's ``done``
     terminating signal, when present, is connected to ``harness.done``. GUI camera wiring
     stays with the caller — it is a presentation concern, not part of the embodiment contract.
+
+    ``gpu_monitor`` (present only under ``--timing``) records the box's GPU as a ``timing.gpu``
+    signal fanned out to ``timing.gpu_*``; the caller runs it as a foreground control system.
     """
     privileged = privileged or {}
     for name, obs in embodiment.observations.items():
@@ -106,5 +111,8 @@ def wire_embodiment(
         for name, priv in privileged.items():
             ds_agent.add_signal(name, priv.serializer)
             world.connect(priv.source, ds_agent.inputs[name])
+        if gpu_monitor is not None:
+            ds_agent.add_signal('timing.gpu')
+            world.connect(gpu_monitor.output, ds_agent.inputs['timing.gpu'])
 
     return ds_agent

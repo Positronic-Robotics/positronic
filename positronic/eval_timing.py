@@ -18,19 +18,13 @@ separate processes, which do not inherit the context — so this telemetry is si
 
 import contextlib
 import logging
-import os
-import shutil
-import subprocess
 import time
 from collections.abc import Iterator, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field, fields
 from enum import IntEnum, auto
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
-GPU_LOG_FILENAME = 'gpu_dmon.log'
 
 # The name prefix under which this module's telemetry signals and statics live — a producer-side naming
 # convention this module owns, not something the dataset core interprets or dispatches on.
@@ -271,61 +265,16 @@ class WriterHooks:
         discard_episode()
 
 
-def _start_gpu_sampler(out_dir: Path) -> subprocess.Popen | None:
-    """Background ``nvidia-smi dmon`` writing this box's util+memory to ``gpu_dmon.log``.
-
-    ``None`` when no ``nvidia-smi`` is on PATH (a CPU dev box) — GPU telemetry is then simply absent, not
-    an error. ``-i`` pins the one GPU this eval uses (``-s um`` samples SM/memory utilisation + framebuffer,
-    ``-d 1`` once a second, ``-o DT`` prefixes each row with date and time).
-    """
-    # A prior pass in the same output_dir may have left a log; drop it first so a run that ends up without
-    # GPU samples (no nvidia-smi here) can't be summarised against a stale one — the reducer auto-reads
-    # this file whenever it exists.
-    log_path = out_dir / GPU_LOG_FILENAME
-    log_path.unlink(missing_ok=True)
-    if shutil.which('nvidia-smi') is None:
-        logger.info('EvalTimer: no nvidia-smi on PATH; skipping GPU sampling')
-        return None
-    # Sample only the GPU this eval runs on — the first CUDA-visible device, else device 0. Left unpinned,
-    # dmon logs every visible GPU and ``_parse_dmon`` would average idle/unrelated devices into the numbers.
-    device = (os.environ.get('CUDA_VISIBLE_DEVICES', '') or '0').split(',')[0]
-    return subprocess.Popen([
-        'nvidia-smi',
-        'dmon',
-        '-i',
-        device,
-        '-s',
-        'um',
-        '-d',
-        '1',
-        '-o',
-        'DT',
-        '-f',
-        str(log_path),
-    ])
-
-
 @contextlib.contextmanager
-def bind(out_dir: Path) -> Iterator[EvalTimer]:
-    """Bind a fresh collector (and a GPU sampler) for the enclosed run.
-
-    The GPU sampler's ``gpu_dmon.log`` is the one telemetry stream the dataset cannot carry — a background
-    per-box time series that outlives any single episode — so it stays a side file the reduce reads; the
-    per-rollout timing rides the recorded episodes.
-    """
+def bind() -> Iterator[EvalTimer]:
+    """Bind a fresh collector for the enclosed run; the hook functions are live only within it, so a normal
+    eval (no bind) pays nothing."""
     timer = EvalTimer()
     token = _ACTIVE.set(timer)
-    sampler = _start_gpu_sampler(out_dir)
     try:
         yield timer
     finally:
         _ACTIVE.reset(token)
-        if sampler is not None:
-            sampler.terminate()
-            try:
-                sampler.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                sampler.kill()
 
 
 @contextlib.contextmanager
