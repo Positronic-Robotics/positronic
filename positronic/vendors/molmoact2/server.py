@@ -6,6 +6,7 @@ import configuronic as cfn
 
 from positronic.offboard.server import PolicyServer
 from positronic.policy import Codec, Policy
+from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.logging import init_logging
@@ -56,7 +57,7 @@ molmoact2_source = cfn.Config(MolmoAct2Source)
 
 @cfn.config(codec=molmoact2_codecs.droid, source=molmoact2_source)
 def pipe(codec: Codec, source: ModelSource):
-    return ChunkedSchedule() | remote | codec | source
+    return ChunkedSchedule() | RestrictImageSize.from_codec(codec) | remote | codec | source
 
 
 PIPES = {'droid': pipe}

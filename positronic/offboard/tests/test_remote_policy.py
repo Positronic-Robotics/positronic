@@ -36,60 +36,26 @@ def _make_image(h, w):
 
 
 class TestPrepareObs:
-    """Tests for RemoteSession._prepare_obs image resize logic."""
+    """Tests for RemoteSession's optional JPEG compression. Image geometry is the declared
+    stack's business (see RestrictImageSize) — the session only compresses."""
 
-    def test_server_tuple_resizes_all_images(self):
-        session = RemoteSession(_mock_ws_session({'image_sizes': (64, 48)}), resize=None)
-        obs = {'cam_a': _make_image(480, 640), 'cam_b': _make_image(240, 320), 'state': np.array([1.0])}
-        result = session._prepare_obs(obs)
-        assert result['cam_a'].shape == (48, 64, 3)
-        assert result['cam_b'].shape == (48, 64, 3)
-        np.testing.assert_array_equal(result['state'], obs['state'])
+    def test_images_pass_through_untouched_by_default(self):
+        session = RemoteSession(_mock_ws_session())
+        obs = {'cam': _make_image(480, 640), 'state': np.array([1.0])}
+        assert session._prepare_obs(obs) is obs
 
-    def test_server_dict_resizes_per_key(self):
-        sizes = {'cam_a': (64, 48), 'cam_b': (32, 24)}
-        session = RemoteSession(_mock_ws_session({'image_sizes': sizes}), resize=None)
-        obs = {'cam_a': _make_image(480, 640), 'cam_b': _make_image(480, 640)}
-        result = session._prepare_obs(obs)
-        assert result['cam_a'].shape == (48, 64, 3)
-        assert result['cam_b'].shape == (24, 32, 3)
-
-    def test_fallback_resize_scales_by_max_dim(self):
-        session = RemoteSession(_mock_ws_session(), resize=160)
-        obs = {'cam': _make_image(480, 640)}
-        result = session._prepare_obs(obs)
-        assert result['cam'].shape == (120, 160, 3)
-
-    def test_no_resize_when_already_correct_size(self):
-        session = RemoteSession(_mock_ws_session({'image_sizes': (64, 48)}), resize=None)
-        img = _make_image(48, 64)
-        result = session._prepare_obs({'cam': img})
-        assert result['cam'] is img
-
-    def test_no_resize_without_server_sizes_or_fallback(self):
-        session = RemoteSession(_mock_ws_session(), resize=None)
-        img = _make_image(480, 640)
-        result = session._prepare_obs({'cam': img})
-        assert result['cam'] is img
-
-    def test_normalizes_list_to_tuple(self):
-        """Wire format (msgpack) turns tuples into lists — must normalize."""
-        session = RemoteSession(_mock_ws_session({'image_sizes': [64, 48]}), resize=None)
-        assert session._default_image_size == (64, 48)
-        assert isinstance(session._default_image_size, tuple)
-
-    def test_normalizes_dict_values(self):
-        session = RemoteSession(_mock_ws_session({'image_sizes': {'cam_a': [64, 48], 'cam_b': [32, 24]}}), resize=None)
-        assert session._image_sizes == {'cam_a': (64, 48), 'cam_b': (32, 24)}
-        assert all(isinstance(v, tuple) for v in session._image_sizes.values())
-
-    def test_non_image_values_pass_through(self):
-        session = RemoteSession(_mock_ws_session({'image_sizes': (64, 48)}), resize=None)
-        obs = {'state': np.array([1.0, 2.0]), 'task': 'pick cube', 'flag': True}
-        result = session._prepare_obs(obs)
-        np.testing.assert_array_equal(result['state'], obs['state'])
+    def test_compression_reaches_nested_images(self):
+        session = RemoteSession(_mock_ws_session(), compress_images=True)
+        result = session._prepare_obs({
+            'cam': _make_image(48, 64),
+            'video': {'wrist': _make_image(48, 64)},
+            'state': np.array([1.0, 2.0]),
+            'task': 'pick cube',
+        })
+        assert isinstance(result['cam'], dict)
+        assert isinstance(result['video']['wrist'], dict)
+        np.testing.assert_array_equal(result['state'], np.array([1.0, 2.0]))
         assert result['task'] == 'pick cube'
-        assert result['flag'] is True
 
 
 class TestInferenceClientHeaders:

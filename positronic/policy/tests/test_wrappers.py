@@ -21,6 +21,7 @@ from positronic.policy.codec import (
     BinarizeGripTraining,
     Codec,
     FlipGrip,
+    RestrictImageSize,
 )
 from positronic.policy.observation import ObservationCodec
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
@@ -315,6 +316,7 @@ class TestPipelineSpec:
             'binarize_grip_training': BinarizeGripTraining(('grip',)),
             'binarize_grip_inference': BinarizeGripInference(),
             'flip_grip': FlipGrip(),
+            'restrict_image_size': RestrictImageSize((64, 48)),
             'observation_codec': ObservationCodec(state={}, images={}),
             'absolute_position_action': AbsolutePositionAction('robot_command.pose', 'target_grip'),
             'absolute_joints_action': AbsoluteJointsAction('robot_command.joints', 'target_grip'),
@@ -442,3 +444,87 @@ class TestPipe:
         assert progress == []
         assert source.meta('const') == {}
         assert spec.PolicySource(policy).get_models() == ['default']
+
+
+def _image(h, w):
+    return np.zeros((h, w, 3), dtype=np.uint8)
+
+
+class _SizedCodec(Codec):
+    def __init__(self, sizes):
+        self._sizes = sizes
+
+    @property
+    def meta(self):
+        return {'image_sizes': self._sizes}
+
+
+class TestRestrictImageSize:
+    def test_one_bound_applies_to_every_image(self):
+        result = RestrictImageSize((64, 48)).encode({
+            'cam_a': _image(480, 640),
+            'cam_b': _image(240, 320),
+            'state': np.array([1.0]),
+        })
+        assert result['cam_a'].shape == (48, 64, 3)
+        assert result['cam_b'].shape == (48, 64, 3)
+        np.testing.assert_array_equal(result['state'], np.array([1.0]))
+
+    def test_bound_per_key(self):
+        result = RestrictImageSize({'cam_a': (64, 48), 'cam_b': (32, 24)}).encode({
+            'cam_a': _image(480, 640),
+            'cam_b': _image(480, 640),
+            'cam_c': _image(480, 640),
+        })
+        assert result['cam_a'].shape == (48, 64, 3)
+        assert result['cam_b'].shape == (24, 32, 3)
+        # No bound named for this key, and a per-key mapping sets no default: left alone.
+        assert result['cam_c'].shape == (480, 640, 3)
+
+    def test_aspect_is_kept_and_images_only_shrink(self):
+        result = RestrictImageSize((160, 160)).encode({'wide': _image(480, 640), 'small': _image(24, 32)})
+        assert result['wide'].shape == (120, 160, 3)
+        assert result['small'].shape == (24, 32, 3)
+
+    def test_image_within_bound_is_the_same_object(self):
+        img = _image(48, 64)
+        assert RestrictImageSize((64, 48)).encode({'cam': img})['cam'] is img
+
+    def test_stacked_frames_are_bounded_per_frame(self):
+        stack = np.zeros((3, 480, 640, 3), dtype=np.uint8)
+        assert RestrictImageSize((64, 48)).encode({'cam': stack})['cam'].shape == (3, 48, 64, 3)
+
+    def test_nested_images_are_reached(self):
+        result = RestrictImageSize((64, 48)).encode({'video': {'cam': _image(480, 640)}, 'seq': [_image(480, 640)]})
+        assert result['video']['cam'].shape == (48, 64, 3)
+        assert result['seq'][0].shape == (48, 64, 3)
+
+    def test_non_image_values_pass_through(self):
+        obs = {'state': np.array([1.0, 2.0]), 'task': 'pick cube', 'flag': True}
+        result = RestrictImageSize((64, 48)).encode(obs)
+        np.testing.assert_array_equal(result['state'], obs['state'])
+        assert result['task'] == 'pick cube'
+        assert result['flag'] is True
+
+    def test_actions_pass_through_untouched(self):
+        actions = [{'target_grip': 0.5}, {'target_grip': 1.0}]
+        assert RestrictImageSize((64, 48)).decode(actions) == actions
+
+    def test_training_encoder_refuses(self):
+        with pytest.raises(NotImplementedError, match='full-resolution'):
+            _ = RestrictImageSize((64, 48)).training_encoder
+
+    def test_from_codec_reads_declared_sizes(self):
+        assert RestrictImageSize.from_codec(_SizedCodec((64, 48))).to_spec()['args']['sizes'] == [64, 48]
+        per_key = RestrictImageSize.from_codec(_SizedCodec({'cam': (64, 48)}))
+        assert per_key.to_spec()['args']['sizes'] == {'cam': [64, 48]}
+
+    def test_from_codec_without_declared_sizes_fails(self):
+        with pytest.raises(ValueError, match='no image_sizes'):
+            RestrictImageSize.from_codec(_SizedCodec(None))
+
+    def test_survives_a_wire_round_trip(self):
+        for sizes in ((64, 48), {'cam': (64, 48)}):
+            rebuilt = spec.from_spec(RestrictImageSize(sizes).to_spec())
+            assert isinstance(rebuilt, RestrictImageSize)
+            assert rebuilt.encode({'cam': _image(480, 640)})['cam'].shape == (48, 64, 3)

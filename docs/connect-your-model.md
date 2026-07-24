@@ -201,7 +201,13 @@ The pipe reads left to right: everything left of the `remote` marker is the clie
 
 `new_session`'s `now` argument is the runtime clock that wrappers scheduling against live time read; a policy that does no scheduling of its own just accepts and ignores it (server-side it is `None`).
 
-If you put a `Codec` right of the marker (`ChunkedSchedule() | remote | codec | PolicySource(...)`), your session works entirely in *model space* — it receives encoded observations and returns model-native actions, and the codec handles the wire format. Test the server with the same client as the demo:
+If you put a `Codec` right of the marker (`ChunkedSchedule() | remote | codec | PolicySource(...)`), your session works entirely in *model space* — it receives encoded observations and returns model-native actions, and the codec handles the wire format. A codec that encodes images should also bound them on the rig, so full-resolution frames never cross the wire — that is what the built-in vendor pipes do:
+
+```python
+ChunkedSchedule() | RestrictImageSize.from_codec(codec) | remote | codec | source
+```
+
+`from_codec` reads the codec's own `image_sizes`, so the geometry is stated once. Leaving it out costs bandwidth, not correctness. Test the server with the same client as the demo:
 
 ```bash
 uv run positronic-inference sim --policy=.remote --policy.host=localhost --policy.port=8000

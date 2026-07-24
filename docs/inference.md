@@ -48,7 +48,9 @@ uv run positronic-inference real \
   --output_dir=~/datasets/inference_logs/franka_eval
 ```
 
-**Remote policy parameters:** `--policy.host` (server hostname/IP), `--policy.port` (default 8000), `--policy.model_id` (specific checkpoint; the default is the one the server pinned at startup), `--policy.resize` (client-side image resize for bandwidth optimization; server-reported `image_sizes` take precedence).
+**Remote policy parameters:** `--policy.host` (server hostname/IP), `--policy.port` (default 8000), `--policy.model_id` (specific checkpoint; the default is the one the server pinned at startup), `--policy.compress_images` (JPEG-encode frames before sending, for endpoints behind a proxy with a message-size cap).
+
+Image size is not a client setting: a server that wants smaller frames declares `RestrictImageSize` in its rig-side stack, sized from its own codec, and the client applies it like any other declared component.
 
 The client builds the wrapper stack the server declares in its handshake (a server that declares nothing gets the standard `ChunkedSchedule`). `--policy.local=@...` is the operator's escape hatch: it bypasses the declaration entirely (the ignored declaration is logged) and runs the given stack instead.
 
