@@ -32,7 +32,7 @@ import numpy as np
 import torch
 from isaaclab.app import AppLauncher
 from protocol import decode
-from server import EnvProtocol, EnvServer, disjoint_step_phases  # pyright: ignore[reportAttributeAccessIssue]
+from server import EnvProtocol, EnvServer  # pyright: ignore[reportAttributeAccessIssue]
 
 # Isaac's rigid bring-up order: parse CLI args, launch the app, and only then import anything that touches the
 # omni/isaaclab runtime — which forces the second import block below and the module-level parse. ``validate.py``
@@ -112,6 +112,11 @@ def _load_robot_meta() -> dict[str, Any]:
         return {}
     with open(path, 'rb') as f:
         return decode(f.read())
+
+
+# Float slack tolerated on the phase-sum invariant: the measured spans and the whole-step wall are separate
+# ``perf_counter`` reads, so their difference can dip a hair below zero without any real double-count.
+_PHASE_SLACK_S = 1e-6
 
 
 @dataclass
@@ -257,18 +262,27 @@ class RobolabEnv(EnvProtocol):
         # termination within the first two steps is a physics artifact its env resets in place and keeps
         # running (never frozen, no verdict), while a real success/time-out freezes the env and records one.
         done = self._env.all_terminated
-        return {
+        result = {
             'obs': self._observe(obs, self._subtask_progress()),
             'done': done,
             'success': done and bool(self._env.get_env_results()[0]['success']),
             'control_dt': self._control_dt,
-            # The server's own step decomposition as disjoint additive phases summing to this call's whole
-            # wall (observation materialisation included): physics substeps, sensor/viewport rendering, and
-            # everything else in the step. The client records it against its socket-level step time.
-            'timing': disjoint_step_phases(
-                time.perf_counter() - start, physics_s=self._phase_s.physics, render_s=self._phase_s.render
-            ),
         }
+        # The server's own step decomposition as disjoint additive phases summing to this call's whole wall
+        # (observation materialisation included): physics substeps, sensor/viewport rendering, and the residual
+        # ``server_other_s`` (managers, IK, plumbing) the client normalises against its socket-level step time.
+        # A phase timed inside another (e.g. rendering inside the physics loop) double-counts that wall and
+        # drives the residual negative, so raise rather than emit an untrustworthy split; a float dip is clamped.
+        wall_s = time.perf_counter() - start
+        physics_s, render_s = self._phase_s.physics, self._phase_s.render
+        server_other_s = wall_s - physics_s - render_s
+        if server_other_s < -_PHASE_SLACK_S:
+            raise ValueError(
+                f'env step wall {wall_s:.6f}s is below physics {physics_s:.6f}s + render {render_s:.6f}s: a '
+                f'phase is double-counted (timed inside another), so the step decomposition is not disjoint'
+            )
+        result['timing'] = {'physics_s': physics_s, 'render_s': render_s, 'server_other_s': max(server_other_s, 0.0)}
+        return result
 
     def _joint_targets(self, command: dict[str, Any]) -> torch.Tensor:
         """The wire command as the 7 absolute joint targets the jointpos substrate steps."""
