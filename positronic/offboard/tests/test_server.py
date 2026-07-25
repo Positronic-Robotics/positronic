@@ -75,7 +75,15 @@ def test_no_codec(stub_server):
 
 
 @pytest.mark.parametrize(
-    'checkpoint_id', ['my_checkpoint', 'GEAR-Dreams/DreamZero-DROID', 's3://bucket/ckpt-1', 'weird?x#y', '100%done']
+    'checkpoint_id',
+    [
+        'my_checkpoint',
+        'GEAR-Dreams/DreamZero-DROID',
+        's3://bucket/ckpt-1',
+        's3://bucket/checkpoint-500/',
+        'weird?x#y',
+        '100%done',
+    ],
 )
 def test_checkpoint_id_in_route(stub_server, checkpoint_id):
     host, port, _server, _policy = stub_server

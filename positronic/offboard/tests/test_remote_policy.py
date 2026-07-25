@@ -240,12 +240,18 @@ class TestRemotePolicyFromUrl:
         assert policy._endpoint._model_id == '10000'
         assert client._query == 'fps=2.5'
 
-    def test_session_path_without_model_id(self):
-        policy = RemotePolicy.from_url('http://gpu-host/api/v1/session')
+    @pytest.mark.parametrize('url', ['gpu-host/', 'http://gpu-host/api/v1/session', 'http://gpu-host/api/v1/session/'])
+    def test_session_path_without_model_id(self, url):
+        policy = RemotePolicy.from_url(url)
         client = policy._endpoint._client
         assert client is not None
         assert policy._endpoint._model_id is None
         assert client.base_uri == 'ws://gpu-host:8000/api/v1/session'
+
+    def test_trailing_slash_belongs_to_the_model_id(self):
+        """Sources advertise pinned checkpoint dirs verbatim, and `resolve` matches ids exactly."""
+        policy = RemotePolicy.from_url('http://gpu-host/api/v1/session/s3%3A//ckpt/checkpoint-500/')
+        assert policy._endpoint._model_id == 's3://ckpt/checkpoint-500/'
 
     def test_model_id_keeps_its_slashes(self):
         policy = RemotePolicy.from_url('http://gpu-host:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID')

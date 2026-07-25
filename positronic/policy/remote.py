@@ -185,12 +185,15 @@ class RemotePolicy(Policy):
             raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
         if not split.hostname:
             raise ValueError(f'No host in {url!r}')
-        path = split.path.rstrip('/')
+        path = split.path
         model_id = None
-        if path and path != '/api/v1/session':
-            # The id keeps its own slashes; a source may advertise one that is itself a path, e.g. a
-            # HuggingFace repo id. Decoded here because the id is held decoded and the client
-            # percent-encodes it again when it builds each session URL.
+        # Trailing slashes are noise on the bare endpoint and part of the id everywhere else, so
+        # they are stripped only to recognize the endpoint, never from the id itself.
+        if path.rstrip('/') not in ('', '/api/v1/session'):
+            # The id keeps its own slashes, trailing ones included; a source may advertise one that
+            # is itself a path, e.g. a HuggingFace repo id or a pinned checkpoint directory. Decoded
+            # here because the id is held decoded and the client percent-encodes it again when it
+            # builds each session URL.
             if not path.startswith('/api/v1/session/'):
                 raise ValueError(f'Unexpected path {split.path!r} in {url!r}; expected /api/v1/session[/<model_id>]')
             model_id = urllib.parse.unquote(path.removeprefix('/api/v1/session/'))
