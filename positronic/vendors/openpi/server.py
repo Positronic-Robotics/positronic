@@ -307,8 +307,7 @@ def main(
 
 
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
-# The names that appear in both (``droid``, ``droid_jointpos``, ``libero``) resolve to the deployment,
-# which is the same pipeline plus the checkpoint it is trained for.
+# A name in both (``droid``, ``droid_jointpos``, ``libero``) resolves to the deployment.
 COMMANDS = {
     'serve': main,
     **{name: main.override(pipeline=name) for name in PIPELINES},

@@ -106,8 +106,8 @@ class InferenceClient:
         self.host = host
         self.port = port
         self.headers = dict(headers) if headers else None
-        # Forwarded verbatim, so a customer-supplied URL keeps its literals untouched: the server reads each
-        # value as a JSON literal, and only the caller knows whether `true` means the bool or the string.
+        # Forwarded verbatim: the server reads each value as a JSON literal, and only the caller knows
+        # whether `true` means the bool or the string.
         self._query = params or None
         ws_scheme = 'wss' if secure else 'ws'
         http_scheme = 'https' if secure else 'http'
@@ -132,8 +132,8 @@ class InferenceClient:
                         This only covers TCP/HTTP handshake, not model loading.
                         Model loading timeout is controlled by per-message timeout in handshake.
         """
-        # ``safe='/'`` keeps a path-shaped id's separators as path segments while percent-encoding
-        # the characters that would otherwise end the path (``?``, ``#``) or be decoded away (``%``).
+        # ``safe='/'`` keeps a path-shaped id's separators as path segments, and encodes the characters
+        # that would otherwise end the path (``?``, ``#``) or be decoded away (``%``).
         quoted = None if model_id is None else urllib.parse.quote(model_id, safe='/')
         uri = self.base_uri if quoted is None else f'{self.base_uri}/{quoted}'
         if self._query:

@@ -16,10 +16,10 @@ The server publishes the local half in its ``ready`` handshake as a plain-data s
 ``{PAR: [...]}`` (the ``&`` operator). ``RemotePolicy`` rebuilds the stack via ``from_spec``.
 
 ``WIRE_WRAPPERS`` is the closed vocabulary and the security boundary: names resolve only against
-this table, so a server can select which of our components the rig runs but can never execute
-foreign code. Model sources are never wire-deliverable — they exist only server-side. Wire names
-follow the command wire format's discipline — stable, decoupled from import paths; new constructor
-arguments must have defaults; changing an entry's meaning means a new name.
+this table, so a server can select which components the rig runs but can never make it execute
+foreign code. Model sources are never wire-deliverable — they exist only server-side. Names are
+stable and decoupled from import paths: new constructor arguments need defaults, and changing an
+entry's meaning means a new name.
 """
 
 import abc

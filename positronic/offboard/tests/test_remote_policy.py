@@ -340,10 +340,10 @@ def _sent_frame(metadata):
 
 
 def test_legacy_image_sizes_bound_frames_on_the_rig(caplog):
-    """A server too old to declare a stack still reports `image_sizes`; the rig honours it as a wire bound."""
+    """A server that declares no stack but reports `image_sizes` gets them honoured as a wire bound."""
     with caplog.at_level(logging.WARNING, logger='positronic.policy.remote'):
         sent = _sent_frame({'image_sizes': (224, 224)})
-    # 480x640 scaled down to fit 224x224, aspect ratio kept — what a pre-declaration client did with these.
+    # 480x640 scaled down to fit 224x224, aspect ratio kept.
     assert sent.shape == (168, 224, 3)
     assert 'image_sizes' in caplog.text
 

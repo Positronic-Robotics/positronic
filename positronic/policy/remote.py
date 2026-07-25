@@ -22,11 +22,10 @@ logger = logging.getLogger(__name__)
 def _operator_override(name: str, value: Any, declared: Any) -> bool:
     """Whether the operator's ``value`` stands in for a ``name`` the server did not declare.
 
-    An override drives a server too old to declare anything of its own; against a server that does
-    declare, it is a contradiction rather than a preference, so it raises.
+    A server that declares its own ``name`` is the authority on it, so an override against one is a
+    contradiction rather than a preference and raises.
 
-    TODO(#514): drop the overrides and this helper once every deployed server declares — that is,
-    once every server runs this version or newer.
+    TODO(#514): drop the overrides and this helper once every server declares.
     """
     if value is None:
         return False
@@ -40,14 +39,12 @@ def _operator_override(name: str, value: Any, declared: Any) -> bool:
 
 
 def _legacy_bound(sizes: Any) -> RestrictImageSize:
-    """The wire bound a server too old to declare a stack asked for through ``image_sizes``.
+    """A wire bound read off the ``image_sizes`` a server reports, for one that declares no stack.
 
-    ``RestrictImageSize`` scales an image down to fit while keeping its aspect ratio, which is what such
-    a server's client did with these sizes, so a ``(width, height)`` pair reconstructs it exactly. A
-    per-camera mapping collapses to the widest and tallest it names — one bound covers every image, and
-    erring large keeps any camera from being sent smaller than that server expects.
+    A ``(width, height)`` pair bounds every image directly; a per-camera mapping collapses to the widest
+    and tallest it names, so no camera is sent smaller than the server encodes it.
 
-    TODO(#514): drop this and its caller once every deployed server declares its own stack.
+    TODO(#514): drop this and its caller once every server declares its own stack.
     """
     pairs = list(sizes.values()) if isinstance(sizes, cabc.Mapping) else [sizes]
     return RestrictImageSize(max(w for w, _ in pairs), max(h for _, h in pairs))
@@ -68,8 +65,7 @@ class RemoteSession(Session):
     def _prepare_value(self, key: str, value: Any) -> Any:
         # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
         if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
-            # JPEG-compress before sending: a raw HD frame — and especially a (T, H, W, 3) stack — can
-            # exceed the ~2 MB websocket message cap of a Modal-fronted endpoint.
+            # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's websocket message cap.
             return encode_jpeg(value)
         if isinstance(value, cabc.Mapping):
             return {k: self._prepare_value(k, v) for k, v in value.items()}
@@ -99,15 +95,13 @@ class RemoteSession(Session):
 
 def _model_id_from(path: str, url: str) -> str | None:
     """The model id a session URL names, or ``None`` when it addresses the bare endpoint."""
-    # Trailing slashes are noise on the bare endpoint and part of the id everywhere else, so
-    # they are stripped only to recognize the endpoint, never from the id itself.
+    # Stripped only to recognize the bare endpoint; elsewhere a trailing slash is part of the id.
     if path.rstrip('/') in ('', '/api/v1/session'):
         return None
     if not path.startswith('/api/v1/session/'):
         raise ValueError(f'Unexpected path {path!r} in {url!r}; expected /api/v1/session[/<model_id>]')
-    # The id keeps its own slashes, trailing ones included; a source may advertise one that is itself a
-    # path, e.g. a HuggingFace repo id or a pinned checkpoint directory. Decoded here because the id is
-    # held decoded and the client percent-encodes it again when it builds each session URL.
+    # An id may itself be a path (a HuggingFace repo, say), so its own slashes stay. Held decoded; the
+    # client percent-encodes it again for each session URL.
     return urllib.parse.unquote(path.removeprefix('/api/v1/session/'))
 
 
@@ -119,13 +113,8 @@ class _Endpoint(Policy):
     port defaults to 443 for TLS schemes and 8000 otherwise; the query string is forwarded verbatim as session
     params, so the URL's literals reach the server exactly as written.
 
-    What crosses the wire is the pipeline's business, declared by the server: a server that wants smaller
-    frames declares ``RestrictImageSize`` in front of the marker, and one behind a message-size cap declares
-    ``remote(compress_images=True)``. ``compress_images`` here overrides that declaration for a server that
-    makes none.
-
-    ``headers`` are forwarded to the underlying ``InferenceClient`` for auth against fronted endpoints
-    (e.g. Modal, behind a reverse proxy).
+    ``compress_images`` stands in for a server that declares no wire settings of its own; ``headers``
+    carry auth for an endpoint behind a reverse proxy.
     """
 
     def __init__(self, url: str, *, headers: dict[str, str] | None, infer_timeout: float, compress_images: bool | None):
@@ -142,8 +131,8 @@ class _Endpoint(Policy):
         self._model_id = _model_id_from(split.path, url)
         self._infer_timeout = infer_timeout
         self._compress_override = compress_images
-        # Both fetched lazily: the metadata via a throwaway session when ``meta`` is read before any session
-        # exists, the compression flag from that metadata once the server has spoken.
+        # Both filled on first contact: the metadata via a throwaway session if ``meta`` is read before any
+        # real one exists, the compression flag from that metadata.
         self._server_meta: dict[str, Any] | None = None
         self._compress: bool | None = None
 
@@ -165,8 +154,7 @@ class _Endpoint(Policy):
         return self._compress
 
     def new_session(self, context=None, now=None) -> RemoteSession:
-        # Resolved before connecting, so a session that contradicts the declaration fails without leaving a
-        # socket open. The handshake is already cached by the time the stack in front of this asked for it.
+        # Resolved before connecting, so a session that contradicts the declaration leaves no socket open.
         compress = self._compression()
         ws_session = self._client.new_session(model_id=self._model_id, infer_timeout=self._infer_timeout)
         return RemoteSession(ws_session, compress_images=compress)
@@ -191,11 +179,8 @@ class RemotePolicy(Policy):
     ``remote`` marker. The declared wrappers are built here, once, and every session runs through
     them; a server that declares no stack gets the standard ``ChunkedSchedule``.
 
-    ``local`` and ``compress_images`` stand in for a server too old to declare either. Against a
-    server that does declare, they raise — see ``_operator_override``.
-
-    ``recording_dir`` places ``Recorder`` taps around the stack, recording the raw and wire
-    boundaries.
+    ``local`` and ``compress_images`` stand in for a server that declares neither — see
+    ``_operator_override``. ``recording_dir`` taps the raw and wire boundaries around the stack.
     """
 
     def __init__(
@@ -227,8 +212,7 @@ class RemotePolicy(Policy):
         if 'image_sizes' in meta:
             bound = _legacy_bound(meta['image_sizes'])
             logger.warning(
-                'Server declares no local stack; bounding frames to %r from the image_sizes %r it reports. '
-                'This stand-in goes away once the server declares its own stack.',
+                'Server declares no local stack; bounding frames to %r from the image_sizes %r it reports',
                 bound.to_spec()['args'],
                 meta['image_sizes'],
             )

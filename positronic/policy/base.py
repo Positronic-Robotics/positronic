@@ -9,8 +9,7 @@ from positronic.policy.sampler import EpisodeCounter, Sampler, UniformSampler
 
 Now = Callable[[], float]
 
-# Structural keys of the wire spec (see ``positronic.policy.spec``): ``|`` composition serializes
-# as ``{SEQ: [...]}``, ``&`` composition as ``{PAR: [...]}``.
+# Structural keys of the wire spec: ``|`` serializes as ``{SEQ: [...]}``, ``&`` as ``{PAR: [...]}``.
 SEQ = 'seq'
 PAR = 'par'
 
@@ -90,10 +89,8 @@ class Policy(ABC):
 
         Args:
             context: Episode context (task description, eval metadata, etc.).
-            now: The runtime clock (current time in seconds), supplied by the harness. It flows
-                through wrapper pipelines into ``wrap_session``, so sessions that schedule against
-                live time (e.g. ``ChunkedSchedule``) can read it. ``None`` where no runtime clock
-                exists (server-side sessions, warmup).
+            now: The runtime clock (current time in seconds), supplied by the harness and passed down
+                to every wrapped session. ``None`` where no runtime clock exists (server-side, warmup).
         """
 
     @property
@@ -156,10 +153,9 @@ class PolicyWrapper:
     def to_spec(self) -> dict[str, Any]:
         """Plain-data wire spec of this wrapper, for a server's local-stack declaration.
 
-        Only wrappers registered in ``positronic.policy.spec.WIRE_WRAPPERS`` are deliverable to a
-        rig; they return ``{'name': <wire name>}`` plus ``{'args': {...}}`` when they take arguments.
-        ``args`` must be the wrapper's constructor keywords — the rig rebuilds by calling the
-        constructor with them, so unknown args fail loudly (``TypeError``).
+        Only wrappers registered in ``positronic.policy.spec.WIRE_WRAPPERS`` are deliverable to a rig.
+        The spec is ``{'name': <wire name>}`` plus ``{'args': {...}}`` when the wrapper takes any;
+        ``args`` are constructor keywords, since the rig rebuilds by calling the constructor with them.
         """
         raise NotImplementedError(f'{type(self).__name__} is not deliverable to a rig (no wire spec)')
 

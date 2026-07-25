@@ -72,8 +72,7 @@ class PolicyManager:
                 if self.current_policy:
                     logger.info('Unloading current policy')
                     self.current_policy.close()
-                    # Empty the slot before loading: a failed load must not leave the closed policy
-                    # cached under the old id, where the next session would get it back.
+                    # Empty the slot first: a failed load must not leave the closed policy under the old id.
                     self.current_policy = None
                     self.current_checkpoint_id = None
 
@@ -164,11 +163,9 @@ class PolicyServer:
 
     On startup (before accepting connections): resolve(None) → load → warmup.
 
-    The default checkpoint is resolved exactly once, at startup: whatever ``source.resolve(None)``
-    picks (the latest checkpoint, or the configured one) is pinned and reused for every request
-    that does not name an explicit checkpoint. A running server therefore never auto-switches to a
-    newer checkpoint that lands in checkpoints_dir after startup. Clients can still load a
-    specific checkpoint on demand via /api/v1/session/{model_id}.
+    The default checkpoint is resolved once, at startup, and pinned for every request that names no
+    explicit one — a running server never switches to a newer checkpoint that lands later. A request
+    for /api/v1/session/{model_id} still loads that one on demand.
     """
 
     def __init__(
@@ -185,8 +182,8 @@ class PolicyServer:
             f'PolicyServer serves a policy pipeline closed by a model source, got {type(self._pipeline).__name__}'
         )
         local, _, self._remote = split(self._pipeline)
-        # A local half that cannot be rendered fails here, at startup, rather than at a client's connect.
-        # Each session declares the spec of its own pipeline, which session params may have changed.
+        # A local half that cannot be rendered fails at startup, not at a client's connect. The spec itself
+        # is built per session, which params may have changed.
         if local is not None:
             local.to_spec()
         self._source = self._pipeline.source
@@ -194,27 +191,23 @@ class PolicyServer:
         self.host = host
         self.port = port
         self.metadata: dict[str, Any] = {'host': host, 'port': port}
-        # Synced once; a fresh ``Recorder`` is created per websocket session so
-        # concurrent sessions never share a stream or recorder state.
+        # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
 
         self.idle_timeout_min = idle_timeout_min
         self._active_sessions = 0
         self._last_activity = time.monotonic()
-        # Backend calls — inference and the per-session reset in ``new_session`` — run in a worker thread
-        # (so the event loop keeps servicing other connections and keepalives) but are serialized under this lock:
-        # sessions may share one backend client/connection, which concurrent calls would corrupt.
+        # Backend calls run in a worker thread, so the event loop keeps servicing other connections, but are
+        # serialized here: sessions may share one backend client, which concurrent calls would corrupt.
         self._infer_lock = asyncio.Lock()
 
-        # The default checkpoint, resolved once at startup (see class docstring). Pinned
-        # here so a request without an explicit checkpoint never re-resolves the latest.
         self._default_id: str | None = None
 
         self.app = FastAPI()
         self.app.get('/api/v1/models')(self.get_models)
         self.app.websocket('/api/v1/session')(self.default_session)
-        # ``:path`` so an id that is itself a path — a HuggingFace repo, say — opens under the same
-        # name ``/api/v1/models`` advertises.
+        # ``:path`` so an id that is itself a path (a HuggingFace repo, say) opens under the name
+        # ``/api/v1/models`` advertises.
         self.app.websocket('/api/v1/session/{model_id:path}')(self.model_session)
 
     async def get_models(self) -> dict:
@@ -229,8 +222,8 @@ class PolicyServer:
                 'Session params require a config-launched pipeline; this server was launched from an '
                 'instantiated Pipeline'
             )
-        # ``override_data``: the values came off the wire, so a string must stay a string and never
-        # name a Python object to import.
+        # ``override_data``: values came off the wire, so a string stays a string and never names a
+        # Python object to import.
         pipeline = self._pipeline_cfg.override_data(**params).instantiate()
         if pipeline.source != self._source:
             raise ValueError('Session params must not change the model source; it is fixed at launch')
@@ -257,14 +250,11 @@ class PolicyServer:
             local, border, remote_half = split(pipeline)
             local_spec = local.to_spec() if local is not None else {SEQ: []}
 
-            # No explicit checkpoint requested -> serve the one pinned at startup
-            # (resolved once) rather than re-resolving the latest on every request.
             rid = self._source.resolve(model_id) if model_id is not None else self._default_id
             assert rid is not None
             policy = await self._manager.get_policy(rid, websocket)
             if self._recording_dir is not None:
-                # Tap both sides of the remote half so one recording holds the obs/action at the
-                # wire boundary ('raw') and the encoded obs / raw model output ('inference').
+                # Tap both sides: 'raw' is the wire boundary, 'inference' the encoded obs and model output.
                 rec = Recorder(self._recording_dir)
                 if remote_half is not None:
                     served = (rec.tap('raw') | remote_half | rec.tap('inference')).wrap(policy)
@@ -272,18 +262,15 @@ class PolicyServer:
                     served = rec.tap('inference').wrap(policy)
             else:
                 served = remote_half.wrap(policy) if remote_half is not None else policy
-            # ``new_session`` resets the backend client, which sessions may share; hold the inference lock
-            # so the reset can't interleave with an in-flight ``session(raw_obs)`` running in another worker thread.
-            # Acquire it with keepalives so queuing behind a peer's slow inference doesn't trip the handshake timeout.
+            # ``new_session`` resets the shared backend client, so it must not interleave with an in-flight
+            # inference. Keepalives here: queuing behind a peer would otherwise trip the handshake timeout.
             await _acquire_with_keepalives(self._infer_lock, websocket, 'Waiting for inference slot')
             try:
                 session = await asyncio.to_thread(served.new_session)
             finally:
                 self._infer_lock.release()
             assert session is not None
-            # ``served.meta`` is the static baseline; ``session.meta`` overlays per-episode
-            # specifics and wins on conflict. The pipeline's declarations and the server's
-            # positronic version are server-authoritative, so they merge last.
+            # Later entries win: per-episode session facts over static ones, the server's own last.
             meta = {
                 **self.metadata,
                 **self._source.meta(rid),
@@ -302,9 +289,8 @@ class PolicyServer:
                     self._last_activity = time.monotonic()
                     try:
                         raw_obs = deserialise(message)
-                        # Plain acquire, not the keepalive helper: past the handshake the client awaits a
-                        # ``result`` and would mis-parse a ``waiting`` keepalive; the wait is bounded client-side
-                        # by ``infer_timeout``.
+                        # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
+                        # would mis-parse a ``waiting`` frame. Its ``infer_timeout`` bounds the wait.
                         async with self._infer_lock:
                             actions = await asyncio.to_thread(session, raw_obs)
                         await websocket.send_bytes(serialise({'result': actions}))
@@ -326,8 +312,8 @@ class PolicyServer:
             self._last_activity = time.monotonic()
             try:
                 if session is not None:
-                    # Session close may do backend I/O (e.g. a reset round-trip over the vendor's own
-                    # socket) — keep it off the event loop, and never let it swallow the manager release.
+                    # Close may do backend I/O (a reset round-trip), so keep it off the event loop; the
+                    # nesting keeps a failure here from swallowing the manager release.
                     await asyncio.to_thread(session.close)
             finally:
                 if policy is not None:
@@ -350,8 +336,6 @@ class PolicyServer:
                 session.close()
 
     async def _startup(self):
-        # Pin whatever resolves now (latest, or the configured checkpoint) as the
-        # default for subsequent requests, so the latest is resolved exactly once.
         self._default_id = self._source.resolve(None)
         logger.info(f'Pinned default checkpoint at startup: {self._default_id}')
         policy = await self._manager.get_policy(self._default_id)
