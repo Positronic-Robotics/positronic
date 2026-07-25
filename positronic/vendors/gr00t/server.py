@@ -312,7 +312,7 @@ gr00t_source = cfn.Config(Gr00tSource)
 
 @cfn.config(codec=codecs.ee_quat, source=gr00t_source)
 def pipe(codec, source):
-    return ChunkedSchedule() | RestrictImageSize() | remote | codec | source
+    return ChunkedSchedule() | RestrictImageSize(224, 224) | remote | codec | source
 
 
 # Each entry pairs the codec with the matching GR00T modality config; they must agree with training.

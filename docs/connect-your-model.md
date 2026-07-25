@@ -207,7 +207,7 @@ If you put a `Codec` right of the marker (`ChunkedSchedule() | remote | codec | 
 ChunkedSchedule() | RestrictImageSize() | remote | codec | source
 ```
 
-The default bound is 640x640; pass `RestrictImageSize(224, 224)` to send less. Leaving it out costs bandwidth, not correctness. Test the server with the same client as the demo:
+Give it the geometry your codec encodes to — `RestrictImageSize(224, 224)` for a 224x224 model — so a frame is shrunk once, on the rig. The default is a loose 640x640, for a codec that resizes to nothing in particular. Leaving it out costs bandwidth, not correctness. Test the server with the same client as the demo:
 
 ```bash
 uv run positronic-inference sim --policy=.remote --policy.host=localhost --policy.port=8000
