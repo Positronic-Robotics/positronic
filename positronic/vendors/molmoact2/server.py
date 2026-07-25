@@ -57,7 +57,7 @@ molmoact2_source = cfn.Config(MolmoAct2Source)
 
 @cfn.config(codec=molmoact2_codecs.droid, source=molmoact2_source)
 def pipe(codec: Codec, source: ModelSource):
-    return ChunkedSchedule() | RestrictImageSize.from_codec(codec) | remote | codec | source
+    return ChunkedSchedule() | RestrictImageSize() | remote | codec | source
 
 
 PIPES = {'droid': pipe}

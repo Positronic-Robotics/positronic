@@ -240,7 +240,7 @@ openpi_source = cfn.Config(OpenpiSource)
 @cfn.config(codec=codecs.ee, source=openpi_source)
 def pipe(codec: Codec, source: ModelSource):
     """The OpenPI serving pipe: rig-side chunk scheduling, the server-side codec, the checkpoint source."""
-    return ChunkedSchedule() | RestrictImageSize.from_codec(codec) | remote | codec | source
+    return ChunkedSchedule() | RestrictImageSize() | remote | codec | source
 
 
 PIPES = {

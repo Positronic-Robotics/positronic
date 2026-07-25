@@ -52,7 +52,7 @@ lerobot_source = cfn.Config(LerobotSource, checkpoint=None, device=None)
 
 @cfn.config(codec=lerobot_codecs.ee, source=lerobot_source)
 def pipe(codec: Codec, source: ModelSource) -> Pipe:
-    return ChunkedSchedule() | RestrictImageSize.from_codec(codec) | remote | codec | source
+    return ChunkedSchedule() | RestrictImageSize() | remote | codec | source
 
 
 PIPES = {
