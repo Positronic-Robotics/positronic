@@ -24,8 +24,8 @@ def _operator_override(name: str, value: Any, declared: Any) -> bool:
     An override drives a server too old to declare anything of its own; against a server that does
     declare, it is a contradiction rather than a preference, so it raises.
 
-    TODO: drop the overrides and this helper once every deployed server declares — that is, once
-    every server runs this version or newer.
+    TODO(#514): drop the overrides and this helper once every deployed server declares — that is,
+    once every server runs this version or newer.
     """
     if value is None:
         return False
