@@ -280,10 +280,13 @@ class DreamZeroSource(ModelSource):
 dreamzero_source = cfn.Config(DreamZeroSource)
 
 
-@cfn.config(local=codecs.dreamzero_wrappers, codec=codecs.joints, source=dreamzero_source)
-def pipe(local: PolicyWrapper, codec: Codec, source: ModelSource):
-    """One DreamZero serving pipe: the rig-side AR video context, the codec, the subprocess-backed source."""
-    return local | RestrictImageSize() | remote | codec | source
+@cfn.config(local=codecs.dreamzero_wrappers, codec=codecs.joints, source=dreamzero_source, width=320, height=176)
+def pipe(local: PolicyWrapper, codec: Codec, source: ModelSource, width: int, height: int):
+    """One DreamZero serving pipe: the rig-side AR video context, the codec, the subprocess-backed source.
+
+    ``width``/``height`` bound frames on the rig and follow the codec's own geometry.
+    """
+    return local | RestrictImageSize(width, height) | remote | codec | source
 
 
 PIPES = {
@@ -292,7 +295,7 @@ PIPES = {
     'joints_ik': pipe.override(codec=codecs.joints_ik),
     'joints_ik_sim': pipe.override(codec=codecs.joints_ik_sim),
     # The pretrained DROID model (wan2.1) asserts exactly 320x180 frames.
-    'droid': pipe.override(codec=codecs.droid),
+    'droid': pipe.override(codec=codecs.droid, height=180),
 }
 
 
