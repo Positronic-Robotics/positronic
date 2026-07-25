@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
@@ -261,7 +262,14 @@ class SampledPolicy(Policy):
 
     def _get_keys(self) -> tuple[str, ...]:
         if self._keys is None:
-            self._keys = tuple(p.meta.get(self._key_field, str(i)) for i, p in enumerate(self._policies))
+            keys = tuple(p.meta.get(self._key_field, str(i)) for i, p in enumerate(self._policies))
+            duplicates = sorted(k for k, n in Counter(keys).items() if n > 1)
+            if duplicates:
+                raise ValueError(
+                    f'Sampled policies must be distinguishable by {self._key_field!r}, but {duplicates} name more '
+                    f'than one of them: sampling would pick the first every time and never run the others'
+                )
+            self._keys = keys
         return self._keys
 
     def new_session(self, context=None, now=None):

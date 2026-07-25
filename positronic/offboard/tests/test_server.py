@@ -74,12 +74,13 @@ def test_no_codec(stub_server):
         session.close()
 
 
-def test_checkpoint_id_in_route(stub_server):
+@pytest.mark.parametrize('checkpoint_id', ['my_checkpoint', 'GEAR-Dreams/DreamZero-DROID'])
+def test_checkpoint_id_in_route(stub_server, checkpoint_id):
     host, port, _server, _policy = stub_server
     client = InferenceClient(host, port)
-    session = client.new_session('my_checkpoint')
+    session = client.new_session(checkpoint_id)
     try:
-        assert session.metadata['checkpoint_id'] == 'my_checkpoint'
+        assert session.metadata['checkpoint_id'] == checkpoint_id
     finally:
         session.close()
 

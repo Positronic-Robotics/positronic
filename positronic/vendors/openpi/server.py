@@ -224,7 +224,7 @@ class OpenpiSource(ModelSource):
         return {
             'type': 'openpi',
             'config_name': self.config_name,
-            'checkpoint_path': self.checkpoints_dir,
+            'checkpoint_path': self.checkpoints_dir if self._passthrough else f'{self.checkpoints_dir}/{model_id}',
             'experiment_name': self.checkpoints_dir.rsplit('/', 1)[-1],
         }
 

@@ -16,7 +16,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from starlette.datastructures import QueryParams
 
 from positronic.policy import Codec, Policy, Recorder
-from positronic.policy.spec import SEQ, Pipe, split
+from positronic.policy.spec import SEQ, ModelSource, Pipe, split
 from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
@@ -38,14 +38,14 @@ async def _acquire_with_keepalives(lock: asyncio.Lock, websocket: WebSocket | No
 
 
 class PolicyManager:
-    """Manages the lifecycle of a single active policy.
+    """Manages the lifecycle of the one policy ``source`` currently has loaded.
 
     Ensures only one policy is loaded at a time. Waits for all active sessions
     to finish before switching policies.
     """
 
-    def __init__(self, loader: Callable[[str, Callable[[str], None] | None], Policy]):
-        self.loader = loader
+    def __init__(self, source: ModelSource):
+        self._source = source
         self.current_checkpoint_id: str | None = None
         self.current_policy: Policy | None = None
         self.active_sessions: int = 0
@@ -84,7 +84,7 @@ class PolicyManager:
 
                 logger.info(f'Loading policy {checkpoint_id}')
                 on_progress = self._progress_callback(websocket)
-                self.current_policy = await asyncio.to_thread(self.loader, checkpoint_id, on_progress)
+                self.current_policy = await asyncio.to_thread(self._source.load, checkpoint_id, on_progress)
                 self.current_checkpoint_id = checkpoint_id
 
             assert self.current_policy is not None
@@ -96,7 +96,11 @@ class PolicyManager:
 
     @staticmethod
     def _progress_callback(websocket: WebSocket | None) -> Callable[[str], None] | None:
-        """Sync callback for the loader thread, marshaling ``loading`` frames onto the event loop."""
+        """Sync callback for the loader thread, marshaling ``loading`` frames onto the event loop.
+
+        Blocks the loader until each frame is on the wire, so a message emitted at the very end of a
+        load cannot overtake the ``ready`` that follows it and be read as the first inference result.
+        """
         if websocket is None:
             return None
         loop = asyncio.get_running_loop()
@@ -104,7 +108,7 @@ class PolicyManager:
         def on_progress(msg: str) -> None:
             asyncio.run_coroutine_threadsafe(
                 websocket.send_bytes(serialise({'status': 'loading', 'message': msg})), loop
-            )
+            ).result()
 
         return on_progress
 
@@ -201,7 +205,7 @@ class PolicyServer:
         # not at a client's connect. An empty half is an explicit "no glue needed" declaration.
         self._local_spec = local.to_spec() if local is not None else {SEQ: []}
         self._source = self._pipe.source
-        self._manager = PolicyManager(self._source.load)
+        self._manager = PolicyManager(self._source)
         self.host = host
         self.port = port
         self.metadata: dict[str, Any] = {'host': host, 'port': port}
@@ -224,7 +228,9 @@ class PolicyServer:
         self.app = FastAPI()
         self.app.get('/api/v1/models')(self.get_models)
         self.app.websocket('/api/v1/session')(self.default_session)
-        self.app.websocket('/api/v1/session/{model_id}')(self.model_session)
+        # ``:path`` so an id that is itself a path — a HuggingFace repo, an ``s3://`` checkpoint —
+        # opens under the same name ``/api/v1/models`` advertises.
+        self.app.websocket('/api/v1/session/{model_id:path}')(self.model_session)
 
     async def get_models(self) -> dict:
         return {'models': self._source.get_models()}

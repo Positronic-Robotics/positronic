@@ -103,17 +103,8 @@ def phail_single(hostname, w_openpi=1.0, w_groot=1.0, w_act=1.0):
     return SampledPolicy(openpi, groot, act, weights=[w_openpi, w_groot, w_act])
 
 
-_EVAL_GROUP_FIELDS = ['task', 'eval.object', 'eval.tote_placement', 'eval.external_camera']
-
 phail_multiple = production.override(
     endpoints={'smolvla': 'notebook:8000', 'act': 'notebook:8001', 'groot': 'desktop:8000', 'openpi': 'vm-openpi:8000'},
     sampler=balanced,
-    group_fields=_EVAL_GROUP_FIELDS,
-)
-
-
-spoons_ablation = production.override(
-    endpoints={'groot': 'vm-openpi:8000', 'smolvla': 'vm-openpi:8001', 'act': 'vm-openpi:8002'},
-    sampler=balanced,
-    group_fields=_EVAL_GROUP_FIELDS,
+    group_fields=['task', 'eval.object', 'eval.tote_placement', 'eval.external_camera'],
 )

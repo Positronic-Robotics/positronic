@@ -74,18 +74,7 @@ uv run positronic-inference sim \
 
 Accepted forms: `host`, `host:port`, and `http(s)://host[:port][/api/v1/session[/<model_id>]]` (`ws`/`wss` work too), each with an optional query. `https`/`wss` enable TLS and default the port to 443; other forms default to 8000. The query string is forwarded to the server verbatim, so its JSON literals arrive exactly as written.
 
-> **Recording inference I/O:** Pass `--policy.recording_dir=s3://bucket/path` to `.remote`, `.remote_url`, or `.production` to write a rerun `.rrd` file per episode capturing the raw and server-side observation/action boundaries. Useful for debugging codec behavior and visualizing what the policy actually received.
-
-**Multi-checkpoint sampling:** To evaluate several models at once, sampling configs route each episode to a different policy. `--policy=@positronic.cfg.policy.production` takes a dict of named endpoints, each one URL, and routes episodes across them — optionally with a balanced sampler and grouping fields:
-
-```bash
-uv run positronic-inference real \
-  --policy=@positronic.cfg.policy.production \
-  --policy.endpoints='{"groot": "desktop:8000", "openpi": "vm-openpi:8000"}' \
-  --policy.sampler=@positronic.cfg.policy.balanced
-```
-
-Each endpoint can also be set on its own: `--policy.endpoints.groot=desktop:8000` adds or repoints one without restating the rest, and `--policy.weights.groot=2` makes it twice as likely to be picked (endpoints left out weigh 1.0). Weights and `--policy.sampler` are mutually exclusive — a balanced sampler equalizes completed-episode counts and never consults weights, so asking for both fails loudly rather than silently dropping one. The `phail` subcommand wires this up end-to-end, defaulting to the `phail_multiple` policy (a `production` preset) and the `eval_ui` driver.
+> **Recording inference I/O:** Pass `--policy.recording_dir=s3://bucket/path` to `.remote` or `.remote_url` to write a rerun `.rrd` file per episode capturing the raw and server-side observation/action boundaries. Useful for debugging codec behavior and visualizing what the policy actually received.
 
 ## Local Inference
 

@@ -247,9 +247,15 @@ class TestRemotePolicyFromUrl:
         assert policy._endpoint._model_id is None
         assert client.base_uri == 'ws://gpu-host:8000/api/v1/session'
 
+    def test_model_id_keeps_its_slashes(self):
+        policy = RemotePolicy.from_url('http://gpu-host:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID')
+        assert policy._endpoint._model_id == 'GEAR-Dreams/DreamZero-DROID'
+
     def test_unexpected_path_rejected(self):
         with pytest.raises(ValueError, match='/api/v1/session'):
             RemotePolicy.from_url('gpu-host:8000/api/v2/other')
+        with pytest.raises(ValueError, match='/api/v1/session'):
+            RemotePolicy.from_url('gpu-host:8000/api/v1/sessions/10000')
 
     def test_unknown_scheme_rejected(self):
         with pytest.raises(ValueError, match='scheme'):

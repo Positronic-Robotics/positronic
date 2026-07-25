@@ -36,6 +36,9 @@ Establishes an inference session with a **specific** model.
 - `ws://localhost:8000/api/v1/session/10000` → Model 10000
 - `ws://localhost:8000/api/v1/session/20000` → Model 20000
 
+The id is everything after the prefix, slashes included, so a source may advertise one that is itself a path:
+`ws://localhost:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID` serves that HuggingFace checkpoint.
+
 #### Session parameters
 
 Query params on the session URL tune the served policy pipe for that one session. Each key is a dotted path into the server's pipe config — any argument at any depth — applied as a config override before the session is built:

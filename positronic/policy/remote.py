@@ -188,9 +188,11 @@ class RemotePolicy(Policy):
         path = split.path.rstrip('/')
         model_id = None
         if path and path != '/api/v1/session':
-            prefix, _, model_id = path.rpartition('/')
-            if prefix != '/api/v1/session' or not model_id:
+            # The id keeps its own slashes; a source may advertise one that is itself a path, e.g. a
+            # HuggingFace repo id.
+            if not path.startswith('/api/v1/session/'):
                 raise ValueError(f'Unexpected path {split.path!r} in {url!r}; expected /api/v1/session[/<model_id>]')
+            model_id = path.removeprefix('/api/v1/session/')
         secure = split.scheme in ('https', 'wss')
         # urlsplit strips the brackets an IPv6 host needs back in a netloc.
         host = f'[{split.hostname}]' if ':' in split.hostname else split.hostname
