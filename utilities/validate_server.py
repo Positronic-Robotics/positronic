@@ -1,6 +1,7 @@
 import shlex
 import shutil
 import subprocess
+import urllib.parse
 from pathlib import Path
 
 import configuronic as cfn
@@ -20,6 +21,8 @@ def _infer_repo_root() -> Path:
 def _build_inference_command(
     *, uv_path: str, eval_ref: str, host: str, port: int, model_id: str, output_dir: str, extra_args: list[str]
 ) -> list[str]:
+    # ``safe='/'`` keeps a path-shaped id's separators as path segments, matching how the server routes them.
+    quoted = urllib.parse.quote(model_id, safe='/')
     cmd = [
         uv_path,
         'run',
@@ -29,9 +32,7 @@ def _build_inference_command(
         'run',
         f'--eval={eval_ref}',
         '--policy=.remote',
-        f'--policy.host={host}',
-        f'--policy.port={port}',
-        f'--policy.model_id={model_id}',
+        f'--policy.url={host}:{port}/api/v1/session/{quoted}',
         f'--output_dir={output_dir}',
         *extra_args,
     ]
@@ -67,8 +68,7 @@ def main(
     This will execute commands like:
 
         uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes --policy=.remote \\
-            --policy.host=notebook --policy.port=8000 \\
-            --policy.model_id=checkpoint-123 \\
+            --policy.url=notebook:8000/api/v1/session/checkpoint-123 \\
             --output_dir=s3://runs/server_validation/021225/checkpoint-123/
     """
     uv_path = shutil.which('uv')

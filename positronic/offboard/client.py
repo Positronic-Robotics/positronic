@@ -1,4 +1,3 @@
-import json
 import logging
 import ssl
 import time
@@ -102,18 +101,14 @@ class InferenceClient:
         *,
         headers: dict[str, str] | None = None,
         secure: bool = False,
-        params: dict[str, Any] | str | None = None,
+        params: str | None = None,
     ):
         self.host = host
         self.port = port
         self.headers = dict(headers) if headers else None
-        # A dict is encoded once — json.dumps every value, strings included — so the server's json.loads
-        # round-trips types exactly ('true' stays a string, True arrives as a bool). A str is a ready query
-        # string forwarded verbatim, so a customer-supplied URL keeps its literals untouched.
-        if isinstance(params, str):
-            self._query = params or None
-        else:
-            self._query = urllib.parse.urlencode({k: json.dumps(v) for k, v in params.items()}) if params else None
+        # Forwarded verbatim, so a customer-supplied URL keeps its literals untouched: the server reads each
+        # value as a JSON literal, and only the caller knows whether `true` means the bool or the string.
+        self._query = params or None
         ws_scheme = 'wss' if secure else 'ws'
         http_scheme = 'https' if secure else 'http'
         default_port = 443 if secure else 80

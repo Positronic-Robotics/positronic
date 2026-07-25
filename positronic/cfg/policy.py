@@ -56,9 +56,7 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
     return SampledPolicy(*origins, weights=weights)
 
 
-remote = cfn.Config(RemotePolicy, host='localhost', port=8000, params={})
-
-remote_url = cfn.Config(RemotePolicy.from_url)
+remote = cfn.Config(RemotePolicy, url='localhost:8000')
 
 
 @cfn.config(balance=2)
@@ -78,9 +76,9 @@ def production(
 ):
     """Routes each episode to one of several remote endpoints, each named for CLI overrides.
 
-    An endpoint is one URL (`RemotePolicy.from_url`), so `--policy.endpoints.groot=desktop:8000` adds or
-    repoints one without restating the others. `weights` name the same endpoints and set their sampling
-    odds; endpoints left out of it weigh 1.0.
+    An endpoint is one URL, so `--policy.endpoints.groot=desktop:8000` adds or repoints one without
+    restating the others. `weights` name the same endpoints and set their sampling odds; endpoints left
+    out of it weigh 1.0.
     """
     if not endpoints:
         raise ValueError('At least one endpoint must be given, e.g. --policy.endpoints.groot=desktop:8000')
@@ -89,16 +87,16 @@ def production(
     # Every Sampler but the default uniform one picks by episode counts alone, so weights would be dropped.
     if weights and sampler is not None:
         raise ValueError(f'weights cannot be combined with {type(sampler).__name__}, which samples by count')
-    policies = [RemotePolicy.from_url(url, recording_dir=recording_dir) for url in endpoints.values()]
+    policies = [RemotePolicy(url, recording_dir=recording_dir) for url in endpoints.values()]
     w = [weights.get(name, 1.0) for name in endpoints] if weights else None
     return SampledPolicy(*policies, weights=w, sampler=sampler, group_fields=group_fields)
 
 
 @cfn.config()
 def phail_single(hostname, w_openpi=1.0, w_groot=1.0, w_act=1.0):
-    openpi = RemotePolicy(hostname, 8000)
-    groot = RemotePolicy(hostname, 8001)
-    act = RemotePolicy(hostname, 8002)
+    openpi = RemotePolicy(f'{hostname}:8000')
+    groot = RemotePolicy(f'{hostname}:8001')
+    act = RemotePolicy(f'{hostname}:8002')
 
     return SampledPolicy(openpi, groot, act, weights=[w_openpi, w_groot, w_act])
 

@@ -1,4 +1,3 @@
-import urllib.parse
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -25,7 +24,7 @@ def _mock_remote_policy(metadata=None, infer_return=None, **kwargs):
     mock_ws = _mock_ws_session(metadata)
     if infer_return is not None:
         mock_ws.infer.return_value = infer_return
-    policy = RemotePolicy('localhost', 0, **kwargs)
+    policy = RemotePolicy('localhost:0', **kwargs)
     policy._endpoint._client = MagicMock()
     policy._endpoint._client.new_session.return_value = mock_ws
     return policy, mock_ws
@@ -133,15 +132,7 @@ class TestInferenceClientHeaders:
 
 
 class TestInferenceClientParams:
-    def test_params_encoded_at_construction(self):
-        params = {'codec.fps': 10, 'tag': 'hello'}
-        client = InferenceClient('localhost', 8000, params=params)
-        assert client._query is not None
-        # Encoded once at construction — mutating the caller's dict must not affect the client.
-        params['codec.fps'] = 99
-        assert urllib.parse.parse_qs(client._query) == {'codec.fps': ['10'], 'tag': ['"hello"']}
-
-    def test_str_params_forwarded_verbatim(self):
+    def test_params_forwarded_verbatim(self):
         with (
             patch('positronic.offboard.client.connect') as mock_connect,
             patch('positronic.offboard.client.InferenceSession'),
@@ -149,21 +140,8 @@ class TestInferenceClientParams:
             client = InferenceClient('localhost', 8000, params='codec.fps=10&pad=false')
             client.new_session()
 
-            # A raw query string is not re-encoded: 'false' stays the JSON literal the caller wrote.
+            # A query string is not re-encoded: 'false' stays the JSON literal the caller wrote.
             assert mock_connect.call_args.args[0] == 'ws://localhost:8000/api/v1/session?codec.fps=10&pad=false'
-
-    def test_new_session_encodes_params_as_json_query(self):
-        with (
-            patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
-        ):
-            client = InferenceClient('localhost', 8000, params={'fps': 10, 'flag': False, 'tag': 'true'})
-            client.new_session()
-
-            base, query = mock_connect.call_args.args[0].split('?')
-            assert base == 'ws://localhost:8000/api/v1/session'
-            # Every value is JSON: numbers/bools arrive typed, while the string 'true' stays quoted.
-            assert urllib.parse.parse_qs(query) == {'fps': ['10'], 'flag': ['false'], 'tag': ['"true"']}
 
     def test_new_session_without_params_leaves_uri_bare(self):
         with (
@@ -180,69 +158,54 @@ class TestInferenceClientParams:
             patch('positronic.offboard.client.connect') as mock_connect,
             patch('positronic.offboard.client.InferenceSession'),
         ):
-            client = InferenceClient('localhost', 8000, params={'fps': 10})
+            client = InferenceClient('localhost', 8000, params='fps=10')
             client.new_session(model_id='m1')
 
             assert mock_connect.call_args.args[0] == 'ws://localhost:8000/api/v1/session/m1?fps=10'
 
 
-class TestRemotePolicyHeaderPropagation:
-    def test_headers_and_secure_forwarded_to_client(self):
-        headers = {'Modal-Key': 'k'}
-        policy = RemotePolicy('example.com', 443, headers=headers, secure=True)
-        client = policy._endpoint._client
-        assert client is not None
-        assert client.headers == headers
-        assert client.base_uri == 'wss://example.com/api/v1/session'
+class TestRemotePolicyUrl:
+    """One URL carries host, port, TLS, model id, and session params; headers stay their own argument."""
 
-    def test_default_headers_and_ws_uri(self):
-        policy = RemotePolicy('localhost', 8000)
-        client = policy._endpoint._client
-        assert client is not None
-        assert client.headers is None
-        assert client.base_uri == 'ws://localhost:8000/api/v1/session'
-
-
-class TestRemotePolicyParamsPropagation:
-    def test_params_forwarded_to_client(self):
-        policy = RemotePolicy('localhost', 8000, params={'codec.fps': 10})
-        client = policy._endpoint._client
-        assert client is not None
-        assert client._query == 'codec.fps=10'
-
-    def test_default_params_empty(self):
-        policy = RemotePolicy('localhost', 8000)
-        client = policy._endpoint._client
-        assert client is not None
-        assert client._query is None
-
-
-class TestRemotePolicyFromUrl:
     def test_bare_host_defaults(self):
-        policy = RemotePolicy.from_url('gpu-host')
+        policy = RemotePolicy('gpu-host')
         client = policy._endpoint._client
         assert client is not None
         assert client.base_uri == 'ws://gpu-host:8000/api/v1/session'
+        assert client.headers is None
         assert client._query is None
 
     def test_host_port_and_query_verbatim(self):
-        policy = RemotePolicy.from_url('gpu-host:9000?codec.fps=10&pad=false')
+        policy = RemotePolicy('gpu-host:9000?codec.fps=10&pad=false')
         client = policy._endpoint._client
         assert client is not None
         assert client.base_uri == 'ws://gpu-host:9000/api/v1/session'
         assert client._query == 'codec.fps=10&pad=false'
 
     def test_full_url_with_model_id(self):
-        policy = RemotePolicy.from_url('https://gpu-host:8443/api/v1/session/10000?fps=2.5')
+        policy = RemotePolicy('https://gpu-host:8443/api/v1/session/10000?fps=2.5')
         client = policy._endpoint._client
         assert client is not None
         assert client.base_uri == 'wss://gpu-host:8443/api/v1/session'
         assert policy._endpoint._model_id == '10000'
         assert client._query == 'fps=2.5'
 
+    def test_tls_scheme_defaults_to_443(self):
+        """`https://` is the scheme a fronted endpoint hands out; `wss://` names the same connection."""
+        for url in ('https://example.com', 'wss://example.com'):
+            client = RemotePolicy(url)._endpoint._client
+            assert client is not None
+            assert client.base_uri == 'wss://example.com/api/v1/session'
+
+    def test_headers_forwarded_to_client(self):
+        headers = {'Modal-Key': 'k'}
+        client = RemotePolicy('https://example.com', headers=headers)._endpoint._client
+        assert client is not None
+        assert client.headers == headers
+
     @pytest.mark.parametrize('url', ['gpu-host/', 'http://gpu-host/api/v1/session', 'http://gpu-host/api/v1/session/'])
     def test_session_path_without_model_id(self, url):
-        policy = RemotePolicy.from_url(url)
+        policy = RemotePolicy(url)
         client = policy._endpoint._client
         assert client is not None
         assert policy._endpoint._model_id is None
@@ -250,27 +213,27 @@ class TestRemotePolicyFromUrl:
 
     def test_trailing_slash_belongs_to_the_model_id(self):
         """Sources advertise pinned checkpoint dirs verbatim, and `resolve` matches ids exactly."""
-        policy = RemotePolicy.from_url('http://gpu-host/api/v1/session/s3%3A//ckpt/checkpoint-500/')
+        policy = RemotePolicy('http://gpu-host/api/v1/session/s3%3A//ckpt/checkpoint-500/')
         assert policy._endpoint._model_id == 's3://ckpt/checkpoint-500/'
 
     def test_model_id_keeps_its_slashes(self):
-        policy = RemotePolicy.from_url('http://gpu-host:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID')
+        policy = RemotePolicy('http://gpu-host:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID')
         assert policy._endpoint._model_id == 'GEAR-Dreams/DreamZero-DROID'
 
     def test_model_id_is_held_decoded(self):
         """The client percent-encodes the id per session URL, so holding it encoded would double-encode."""
-        policy = RemotePolicy.from_url('http://gpu-host:8000/api/v1/session/s3%3A//bucket/ckpt%231')
+        policy = RemotePolicy('http://gpu-host:8000/api/v1/session/s3%3A//bucket/ckpt%231')
         assert policy._endpoint._model_id == 's3://bucket/ckpt#1'
 
     def test_unexpected_path_rejected(self):
         with pytest.raises(ValueError, match='/api/v1/session'):
-            RemotePolicy.from_url('gpu-host:8000/api/v2/other')
+            RemotePolicy('gpu-host:8000/api/v2/other')
         with pytest.raises(ValueError, match='/api/v1/session'):
-            RemotePolicy.from_url('gpu-host:8000/api/v1/sessions/10000')
+            RemotePolicy('gpu-host:8000/api/v1/sessions/10000')
 
     def test_unknown_scheme_rejected(self):
         with pytest.raises(ValueError, match='scheme'):
-            RemotePolicy.from_url('ftp://gpu-host:8000')
+            RemotePolicy('ftp://gpu-host:8000')
 
 
 class TestActionHorizonWrapping:
@@ -360,21 +323,52 @@ def test_unknown_declared_entry_fails_before_motion():
         policy.new_session()
 
 
-def test_operator_local_bypasses_declaration():
-    """An operator-supplied ``local`` stack ignores the server declaration entirely."""
-    declared = {'local_stack': {'name': 'temporal_stack', 'args': {'keys': ['v'], 'offsets_sec': [0.0]}}}
-    policy, _ = _mock_remote_policy(declared, infer_return=[{'a': 1}], local=ChunkedSchedule())
+def test_operator_local_drives_a_server_that_declares_nothing():
+    """The deprecated override stands in where the standard ChunkedSchedule would otherwise apply."""
+    policy, _ = _mock_remote_policy(infer_return=[{'a': 1}], local=ActionHorizon(10.0))
     session = policy.new_session(now=lambda: 5.0)
-    actions = session({'obs_time_ns': 0})
-    # The declared TemporalStack would have stacked 'v'; instead the operator's ChunkedSchedule ran.
-    assert actions == [{'a': 1, 'timestamp': 5.0}]
+    # ActionHorizon leaves the untimestamped action alone, where ChunkedSchedule would have stamped it.
+    assert session({'obs_time_ns': 0}) == [{'a': 1}]
+
+
+def test_operator_local_rejected_when_the_server_declares():
+    """Against a declaring server the override is a contradiction, not a preference."""
+    declared = {'local_stack': {'name': 'temporal_stack', 'args': {'keys': ['v'], 'offsets_sec': [0.0]}}}
+    policy, _ = _mock_remote_policy(declared, local=ChunkedSchedule())
+    with pytest.raises(ValueError, match='--policy.local'):
+        policy.new_session()
+
+
+def test_compression_follows_the_server_declaration():
+    """A server behind a message-size cap declares ``remote(compress_images=True)`` and the rig obeys."""
+    policy, mock_ws = _mock_remote_policy({**EMPTY_STACK, 'compress_images': True}, infer_return=[])
+    policy.new_session()({'cam': _make_image(48, 64)})
+    assert isinstance(mock_ws.infer.call_args.args[0]['cam'], dict)
+
+
+def test_frames_stay_raw_where_the_server_declares_no_compression():
+    policy, mock_ws = _mock_remote_policy({**EMPTY_STACK, 'compress_images': False}, infer_return=[])
+    policy.new_session()({'cam': _make_image(48, 64)})
+    assert isinstance(mock_ws.infer.call_args.args[0]['cam'], np.ndarray)
+
+
+def test_compression_override_drives_a_server_that_declares_nothing():
+    policy, mock_ws = _mock_remote_policy(infer_return=[], compress_images=True)
+    policy.new_session(now=lambda: 0.0)({'obs_time_ns': 0, 'cam': _make_image(48, 64)})
+    assert isinstance(mock_ws.infer.call_args.args[0]['cam'], dict)
+
+
+def test_compression_override_rejected_when_the_server_declares():
+    policy, _ = _mock_remote_policy({**EMPTY_STACK, 'compress_images': False}, compress_images=True)
+    with pytest.raises(ValueError, match='--policy.compress_images'):
+        policy.new_session()
 
 
 def test_remote_policy_lifecycle(inference_server, mock_policy):
     """RemotePolicy against a live server whose pipeline declares a chunked_schedule local stack."""
     host, port = inference_server
 
-    policy = RemotePolicy(host, port)
+    policy = RemotePolicy(f'{host}:{port}')
     session = policy.new_session(now=lambda: 0.0)
 
     meta = session.meta
@@ -397,7 +391,7 @@ def test_remote_policy_lifecycle(inference_server, mock_policy):
 def test_remote_session_meta(inference_server):
     """Session meta must include server metadata."""
     host, port = inference_server
-    policy = RemotePolicy(host, port)
+    policy = RemotePolicy(f'{host}:{port}')
     session = policy.new_session(now=lambda: 0.0)
 
     meta = session.meta

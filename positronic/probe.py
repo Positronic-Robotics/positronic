@@ -14,7 +14,7 @@ Usage::
 
     uv run --locked positronic-probe \\
         --dataset.path=<episode-or-dataset> --episode=0 --at=3.0 \\
-        --policy=.remote --policy.host=<host> --policy.port=<port> \\
+        --policy=.remote --policy.url=<host>:<port> \\
         --task='Pick ...' --output_dir=./probe_recordings
 """
 

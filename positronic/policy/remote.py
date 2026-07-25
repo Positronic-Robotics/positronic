@@ -18,6 +18,26 @@ from .wrappers import ChunkedSchedule
 logger = logging.getLogger(__name__)
 
 
+def _operator_override(name: str, value: Any, declared: Any) -> bool:
+    """Whether the operator's ``value`` stands in for a ``name`` the server did not declare.
+
+    An override drives a server too old to declare anything of its own; against a server that does
+    declare, it is a contradiction rather than a preference, so it raises.
+
+    TODO: drop the overrides and this helper once every deployed server declares — that is, once
+    every server runs this version or newer.
+    """
+    if value is None:
+        return False
+    if declared is not None:
+        raise ValueError(
+            f'--policy.{name} was given, but the server declares its own {name} ({declared!r}); drop the '
+            f'override, or change the pipeline the server serves'
+        )
+    logger.warning('--policy.%s is deprecated; it applies only because the server declares no %s', name, name)
+    return True
+
+
 class RemoteSession(Session):
     """Per-episode session that forwards observations to a remote inference server."""
 
@@ -62,37 +82,55 @@ class RemoteSession(Session):
         self._session.close()
 
 
+def _model_id_from(path: str, url: str) -> str | None:
+    """The model id a session URL names, or ``None`` when it addresses the bare endpoint."""
+    # Trailing slashes are noise on the bare endpoint and part of the id everywhere else, so
+    # they are stripped only to recognize the endpoint, never from the id itself.
+    if path.rstrip('/') in ('', '/api/v1/session'):
+        return None
+    if not path.startswith('/api/v1/session/'):
+        raise ValueError(f'Unexpected path {path!r} in {url!r}; expected /api/v1/session[/<model_id>]')
+    # The id keeps its own slashes, trailing ones included; a source may advertise one that is itself a
+    # path, e.g. a HuggingFace repo id or a pinned checkpoint directory. Decoded here because the id is
+    # held decoded and the client percent-encodes it again when it builds each session URL.
+    return urllib.parse.unquote(path.removeprefix('/api/v1/session/'))
+
+
 class _Endpoint(Policy):
-    """The wire connection to one inference server: sessions forward observations as-is.
+    """The wire connection to one inference server, addressed by one URL: sessions forward observations as-is.
 
-    Image size is the declared stack's business — a server that wants smaller frames declares
-    ``RestrictImageSize`` in front of the marker. ``compress_images`` is this endpoint's own, because
-    the message-size cap belongs to the connection rather than to the policy.
+    Accepted URL forms: ``host``, ``host:port``, and ``scheme://host[:port][/api/v1/session[/<model_id>]]``,
+    each with an optional ``?query``. ``https``/``wss`` enable TLS (bare or ``http``/``ws`` forms don't); the
+    port defaults to 443 for TLS schemes and 8000 otherwise; the query string is forwarded verbatim as session
+    params, so the URL's literals reach the server exactly as written.
 
-    ``headers`` / ``secure`` / ``params`` are forwarded to the underlying
-    ``InferenceClient`` — auth / TLS for fronted endpoints (e.g. Modal, behind a
-    reverse proxy) and session query parameters the server applies as overrides
-    to its pipeline config.
+    What crosses the wire is the pipeline's business, declared by the server: a server that wants smaller
+    frames declares ``RestrictImageSize`` in front of the marker, and one behind a message-size cap declares
+    ``remote(compress_images=True)``. ``compress_images`` here overrides that declaration for a server that
+    makes none.
+
+    ``headers`` are forwarded to the underlying ``InferenceClient`` for auth against fronted endpoints
+    (e.g. Modal, behind a reverse proxy).
     """
 
-    def __init__(
-        self,
-        host: str,
-        port: int,
-        model_id: str | None,
-        *,
-        headers: dict[str, str] | None,
-        secure: bool,
-        params: dict[str, Any] | str | None,
-        infer_timeout: float,
-        compress_images: bool,
-    ):
-        self._client = InferenceClient(host, port, headers=headers, secure=secure, params=params)
-        self._model_id = model_id
+    def __init__(self, url: str, *, headers: dict[str, str] | None, infer_timeout: float, compress_images: bool | None):
+        split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
+        if split.scheme not in ('', 'http', 'ws', 'https', 'wss'):
+            raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
+        if not split.hostname:
+            raise ValueError(f'No host in {url!r}')
+        secure = split.scheme in ('https', 'wss')
+        # urlsplit strips the brackets an IPv6 host needs back in a netloc.
+        host = f'[{split.hostname}]' if ':' in split.hostname else split.hostname
+        port = split.port or (443 if secure else 8000)
+        self._client = InferenceClient(host, port, headers=headers, secure=secure, params=split.query or None)
+        self._model_id = _model_id_from(split.path, url)
         self._infer_timeout = infer_timeout
-        self._compress_images = compress_images
-        # Fetched lazily, via a throwaway session when ``meta`` is read before any session exists.
+        self._compress_override = compress_images
+        # Both fetched lazily: the metadata via a throwaway session when ``meta`` is read before any session
+        # exists, the compression flag from that metadata once the server has spoken.
         self._server_meta: dict[str, Any] | None = None
+        self._compress: bool | None = None
 
     def server_meta(self) -> dict[str, Any]:
         if self._server_meta is None:
@@ -103,11 +141,20 @@ class _Endpoint(Policy):
                 ws_session.close()
         return self._server_meta
 
+    def _compression(self) -> bool:
+        """Whether the rig JPEG-encodes frames: what the server declared, or the operator's stand-in."""
+        if self._compress is None:
+            declared = self.server_meta().get('compress_images')
+            override = _operator_override('compress_images', self._compress_override, declared)
+            self._compress = bool(self._compress_override if override else declared)
+        return self._compress
+
     def new_session(self, context=None, now=None) -> RemoteSession:
+        # Resolved before connecting, so a session that contradicts the declaration fails without leaving a
+        # socket open. The handshake is already cached by the time the stack in front of this asked for it.
+        compress = self._compression()
         ws_session = self._client.new_session(model_id=self._model_id, infer_timeout=self._infer_timeout)
-        if self._server_meta is None:
-            self._server_meta = dict(ws_session.metadata)
-        return RemoteSession(ws_session, compress_images=self._compress_images)
+        return RemoteSession(ws_session, compress_images=compress)
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -120,104 +167,40 @@ class _Endpoint(Policy):
 class RemotePolicy(Policy):
     """Policy running against a remote inference server, owning the stack in front of the connection.
 
-    The server's ``ready`` handshake may declare the local half of its policy pipeline (the
-    ``local_stack`` spec — see ``positronic.policy.spec``); the declared wrappers are built here,
-    once, and every session runs through them. ``local`` is the operator's bypass: when set, the
-    declaration is ignored (and logged) and the given stack is used instead. When the server
-    declares nothing and no override is given, the standard ``ChunkedSchedule`` applies.
+    One URL names the server, the model, and the session params — see ``_Endpoint`` for the forms it
+    takes. ``headers`` stay their own argument: they carry credentials, which a URL that gets pasted
+    around should not.
+
+    The server's ``ready`` handshake declares the local half of its policy pipeline (the
+    ``local_stack`` spec — see ``positronic.policy.spec``) along with the wire settings of the
+    ``remote`` marker. The declared wrappers are built here, once, and every session runs through
+    them; a server that declares no stack gets the standard ``ChunkedSchedule``.
+
+    ``local`` and ``compress_images`` stand in for a server too old to declare either. Against a
+    server that does declare, they raise — see ``_operator_override``.
 
     ``recording_dir`` places ``Recorder`` taps around the stack, recording the raw and wire
     boundaries.
-
-    ``params`` become query parameters on every session URL; the server applies them as
-    overrides to its pipeline config, so the declared ``local_stack`` reflects them too. A dict is
-    JSON-encoded per value; a str is a ready query string forwarded verbatim.
     """
 
     def __init__(
         self,
-        host: str,
-        port: int,
-        model_id: str | None = None,
-        *,
-        local: PolicyWrapper | None = None,
-        recording_dir: str | None = None,
-        headers: dict[str, str] | None = None,
-        secure: bool = False,
-        params: dict[str, Any] | str | None = None,
-        infer_timeout: float = DEFAULT_INFER_TIMEOUT,
-        compress_images: bool = False,
-    ):
-        self._endpoint = _Endpoint(
-            host,
-            port,
-            model_id,
-            headers=headers,
-            secure=secure,
-            params=params,
-            infer_timeout=infer_timeout,
-            compress_images=compress_images,
-        )
-        self._local = local
-        self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
-        self._stacked: Policy | None = None
-
-    @classmethod
-    def from_url(
-        cls,
         url: str,
         *,
         local: PolicyWrapper | None = None,
         recording_dir: str | None = None,
         headers: dict[str, str] | None = None,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
-        compress_images: bool = False,
-    ) -> 'RemotePolicy':
-        """Build a RemotePolicy from one URL carrying host, port, model id, and session params.
-
-        Accepted forms: ``host``, ``host:port``, and ``scheme://host[:port][/api/v1/session[/<model_id>]]``,
-        each with an optional ``?query``. ``https``/``wss`` enable TLS (bare or ``http``/``ws`` forms don't);
-        the port defaults to 443 for TLS schemes and 8000 otherwise; the query string is forwarded verbatim
-        as session params, so the URL's literals reach the server exactly as written.
-        """
-        split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
-        if split.scheme not in ('', 'http', 'ws', 'https', 'wss'):
-            raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
-        if not split.hostname:
-            raise ValueError(f'No host in {url!r}')
-        path = split.path
-        model_id = None
-        # Trailing slashes are noise on the bare endpoint and part of the id everywhere else, so
-        # they are stripped only to recognize the endpoint, never from the id itself.
-        if path.rstrip('/') not in ('', '/api/v1/session'):
-            # The id keeps its own slashes, trailing ones included; a source may advertise one that
-            # is itself a path, e.g. a HuggingFace repo id or a pinned checkpoint directory. Decoded
-            # here because the id is held decoded and the client percent-encodes it again when it
-            # builds each session URL.
-            if not path.startswith('/api/v1/session/'):
-                raise ValueError(f'Unexpected path {split.path!r} in {url!r}; expected /api/v1/session[/<model_id>]')
-            model_id = urllib.parse.unquote(path.removeprefix('/api/v1/session/'))
-        secure = split.scheme in ('https', 'wss')
-        # urlsplit strips the brackets an IPv6 host needs back in a netloc.
-        host = f'[{split.hostname}]' if ':' in split.hostname else split.hostname
-        return cls(
-            host,
-            split.port or (443 if secure else 8000),
-            model_id,
-            local=local,
-            recording_dir=recording_dir,
-            headers=headers,
-            secure=secure,
-            params=split.query or None,
-            infer_timeout=infer_timeout,
-            compress_images=compress_images,
-        )
+        compress_images: bool | None = None,
+    ):
+        self._endpoint = _Endpoint(url, headers=headers, infer_timeout=infer_timeout, compress_images=compress_images)
+        self._local = local
+        self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
+        self._stacked: Policy | None = None
 
     def _resolve_stack(self) -> PolicyWrapper | None:
         declared = self._endpoint.server_meta().get('local_stack')
-        if self._local is not None:
-            if declared is not None:
-                logger.info('Operator-supplied local stack bypasses the server declaration (ignored: %r)', declared)
+        if _operator_override('local', self._local, declared):
             return self._local
         if declared is not None:
             try:
