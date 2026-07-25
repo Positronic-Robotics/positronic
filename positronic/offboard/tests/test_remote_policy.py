@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -329,6 +330,15 @@ def test_operator_local_drives_a_server_that_declares_nothing():
     session = policy.new_session(now=lambda: 5.0)
     # ActionHorizon leaves the untimestamped action alone, where ChunkedSchedule would have stamped it.
     assert session({'obs_time_ns': 0}) == [{'a': 1}]
+
+
+def test_undeclared_stack_warns_when_the_server_only_reports_geometry(caplog):
+    """A server old enough to report `image_sizes` but not declare a stack bounds nothing on the rig."""
+    policy, _ = _mock_remote_policy({'image_sizes': [224, 224]}, infer_return=[])
+    with caplog.at_level(logging.WARNING, logger='positronic.policy.remote'):
+        policy.new_session(now=lambda: 0.0)
+    assert '--policy.local' in caplog.text
+    assert '[224, 224]' in caplog.text
 
 
 def test_operator_local_rejected_when_the_server_declares():

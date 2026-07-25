@@ -199,16 +199,27 @@ class RemotePolicy(Policy):
         self._stacked: Policy | None = None
 
     def _resolve_stack(self) -> PolicyWrapper | None:
-        declared = self._endpoint.server_meta().get('local_stack')
+        meta = self._endpoint.server_meta()
+        declared = meta.get('local_stack')
         if _operator_override('local', self._local, declared):
             return self._local
         if declared is not None:
             try:
                 return from_spec(declared)
             except Exception as e:
-                version = self._endpoint.server_meta().get('positronic_version', 'unknown')
+                version = meta.get('positronic_version', 'unknown')
                 raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
         logger.info('Server declared no local stack; running the standard ChunkedSchedule')
+        if 'image_sizes' in meta:
+            # A server that reports codec geometry but declares no stack predates declared stacks. Geometry is
+            # the codec's business and bandwidth is ``RestrictImageSize``'s, so nothing here turns one into the
+            # other — the rig cannot tell which size the server meant for the wire.
+            logger.warning(
+                'Server reports image_sizes %r but declares no stack, so frames cross the wire at full '
+                'resolution. Pass --policy.local to run a RestrictImageSize in front of the connection, or '
+                'update the server to declare one.',
+                meta['image_sizes'],
+            )
         return ChunkedSchedule()
 
     def _policy(self) -> Policy:

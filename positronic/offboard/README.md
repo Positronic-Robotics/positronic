@@ -212,8 +212,8 @@ A Python client for connecting to an inference server.
 from positronic.offboard.client import InferenceClient
 
 client = InferenceClient('localhost', 8000)
-# Session params ride on every session URL, JSON-encoded:
-# client = InferenceClient('localhost', 8000, params={'codec.fps': 10})
+# Session params ride on every session URL as a query string, forwarded verbatim:
+# client = InferenceClient('localhost', 8000, params='codec.fps=10')
 
 # Connect to default policy
 session = client.new_session()

@@ -66,7 +66,7 @@ The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server
 
 **What crosses the wire is the server's call, not the client's.** A server that wants smaller frames declares `RestrictImageSize` in its rig-side stack (640x640 by default); one behind a proxy with a message-size cap declares `remote(compress_images=True)` and the rig JPEG-encodes frames before sending. The client builds whatever the handshake declares — a server that declares nothing gets the standard `ChunkedSchedule`.
 
-`--policy.local=@...` and `--policy.compress_images` are deprecated stand-ins for a server too old to declare either; against a server that does declare, they raise rather than quietly winning.
+`--policy.local=@...` and `--policy.compress_images` are deprecated stand-ins for a server too old to declare either; against a server that does declare, they raise rather than quietly winning. A server that predates declared stacks bounds nothing on the rig — the client logs a warning naming the `image_sizes` it reported, and `--policy.local` is where you put a `RestrictImageSize` until that server is updated.
 
 > **Recording inference I/O:** Pass `--policy.recording_dir=s3://bucket/path` to write a rerun `.rrd` file per episode capturing the raw and server-side observation/action boundaries. Useful for debugging codec behavior and visualizing what the policy actually received.
 
