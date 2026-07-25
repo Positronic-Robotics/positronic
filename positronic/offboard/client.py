@@ -137,7 +137,10 @@ class InferenceClient:
                         This only covers TCP/HTTP handshake, not model loading.
                         Model loading timeout is controlled by per-message timeout in handshake.
         """
-        uri = self.base_uri if model_id is None else f'{self.base_uri}/{model_id}'
+        # ``safe='/'`` keeps a path-shaped id's separators as path segments while percent-encoding
+        # the characters that would otherwise end the path (``?``, ``#``) or be decoded away (``%``).
+        quoted = None if model_id is None else urllib.parse.quote(model_id, safe='/')
+        uri = self.base_uri if quoted is None else f'{self.base_uri}/{quoted}'
         if self._query:
             uri += '?' + self._query
         connect_kwargs: dict[str, object] = {'open_timeout': open_timeout}

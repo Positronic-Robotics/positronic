@@ -74,7 +74,9 @@ def test_no_codec(stub_server):
         session.close()
 
 
-@pytest.mark.parametrize('checkpoint_id', ['my_checkpoint', 'GEAR-Dreams/DreamZero-DROID'])
+@pytest.mark.parametrize(
+    'checkpoint_id', ['my_checkpoint', 'GEAR-Dreams/DreamZero-DROID', 's3://bucket/ckpt-1', 'weird?x#y', '100%done']
+)
 def test_checkpoint_id_in_route(stub_server, checkpoint_id):
     host, port, _server, _policy = stub_server
     client = InferenceClient(host, port)

@@ -37,7 +37,9 @@ Establishes an inference session with a **specific** model.
 - `ws://localhost:8000/api/v1/session/20000` → Model 20000
 
 The id is everything after the prefix, slashes included, so a source may advertise one that is itself a path:
-`ws://localhost:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID` serves that HuggingFace checkpoint.
+`ws://localhost:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID` serves that HuggingFace checkpoint. Anything else
+that would end the path or be decoded away (`?`, `#`, `%`, `:`) must be percent-encoded — the Python client does
+this for you, so `s3://bucket/ckpt-1` is requested as `s3%3A//bucket/ckpt-1` and arrives as the original id.
 
 #### Session parameters
 

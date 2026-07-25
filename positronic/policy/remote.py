@@ -189,10 +189,11 @@ class RemotePolicy(Policy):
         model_id = None
         if path and path != '/api/v1/session':
             # The id keeps its own slashes; a source may advertise one that is itself a path, e.g. a
-            # HuggingFace repo id.
+            # HuggingFace repo id. Decoded here because the id is held decoded and the client
+            # percent-encodes it again when it builds each session URL.
             if not path.startswith('/api/v1/session/'):
                 raise ValueError(f'Unexpected path {split.path!r} in {url!r}; expected /api/v1/session[/<model_id>]')
-            model_id = path.removeprefix('/api/v1/session/')
+            model_id = urllib.parse.unquote(path.removeprefix('/api/v1/session/'))
         secure = split.scheme in ('https', 'wss')
         # urlsplit strips the brackets an IPv6 host needs back in a netloc.
         host = f'[{split.hostname}]' if ':' in split.hostname else split.hostname

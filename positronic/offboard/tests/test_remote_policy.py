@@ -251,6 +251,11 @@ class TestRemotePolicyFromUrl:
         policy = RemotePolicy.from_url('http://gpu-host:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID')
         assert policy._endpoint._model_id == 'GEAR-Dreams/DreamZero-DROID'
 
+    def test_model_id_is_held_decoded(self):
+        """The client percent-encodes the id per session URL, so holding it encoded would double-encode."""
+        policy = RemotePolicy.from_url('http://gpu-host:8000/api/v1/session/s3%3A//bucket/ckpt%231')
+        assert policy._endpoint._model_id == 's3://bucket/ckpt#1'
+
     def test_unexpected_path_rejected(self):
         with pytest.raises(ValueError, match='/api/v1/session'):
             RemotePolicy.from_url('gpu-host:8000/api/v2/other')
