@@ -96,7 +96,8 @@ def main(
 
 
 # Every pipeline is a subcommand; MolmoAct2 pins one checkpoint, so there is no separate deployment.
-COMMANDS = {'serve': main, **{name: main.override(pipeline=name) for name in PIPELINES}}
+# The empty key is the default command, so the documented no-argument launch still starts the server.
+COMMANDS = {'': main, 'serve': main, **{name: main.override(pipeline=name) for name in PIPELINES}}
 
 
 if __name__ == '__main__':
