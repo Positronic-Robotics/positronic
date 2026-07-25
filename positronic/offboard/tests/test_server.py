@@ -323,12 +323,26 @@ def test_unknown_session_param_rejected(param_server):
 
 def test_import_string_session_params_rejected(param_server):
     host, port = param_server
-    with pytest.raises(RuntimeError, match='literal'):
+    with pytest.raises(RuntimeError, match='import syntax'):
         _param_session(host, port, [('pad_start', '"@os.system"')])
-    with pytest.raises(RuntimeError, match='literal'):
-        _param_session(host, port, [('pad_start', '.foo')])
-    with pytest.raises(RuntimeError, match='literal'):
+    # The relative form is no safer: leading dots walk up the module tree from the key's current
+    # value, and `source` holds a config, so they resolve.
+    with pytest.raises(RuntimeError, match='import syntax'):
+        _param_session(host, port, [('source', '".....os.system"')])
+    # Nested values are refused too, and the error names the position inside the value.
+    with pytest.raises(RuntimeError, match=r'offsets\[0\]'):
         _param_session(host, port, [('offsets', '["@os.getcwd"]')])
+
+
+def test_dotted_param_is_data_where_it_could_not_import(param_server):
+    """A leading-dot value stays a plain string on a key that gives imports no base to resolve
+    against — so ordinary path-ish values are usable as data."""
+    host, port = param_server
+    session = _param_session(host, port, [('pad_start', '"./data"')])
+    try:
+        assert session.metadata['local_stack']['seq'][0]['args']['pad_start'] == './data'
+    finally:
+        session.close()
 
 
 def test_source_touching_session_param_rejected(param_server):

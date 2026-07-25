@@ -126,28 +126,12 @@ class PolicyManager:
             self.current_checkpoint_id = None
 
 
-def _reject_imports(key: str, value: Any) -> None:
-    if isinstance(value, str) and value.startswith(('@', '.')):
-        raise ValueError(
-            f'Session param {key!r} value {value!r} must be a literal: '
-            "configuronic resolves strings starting with '@' or '.' as imports"
-        )
-    elif isinstance(value, list):
-        for item in value:
-            _reject_imports(key, item)
-    elif isinstance(value, dict):
-        for item in value.values():
-            _reject_imports(key, item)
-
-
-def _literal_value(key: str, raw: str) -> Any:
-    """JSON-decode one query value (raw string on parse failure), allowing only literal strings inside."""
+def _literal_value(raw: str) -> Any:
+    """JSON-decode one query value, or keep it as the raw string when it does not parse."""
     try:
-        value = json.loads(raw)
+        return json.loads(raw)
     except json.JSONDecodeError:
-        value = raw
-    _reject_imports(key, value)
-    return value
+        return raw
 
 
 def _session_params(query_params: QueryParams) -> dict[str, Any]:
@@ -157,7 +141,7 @@ def _session_params(query_params: QueryParams) -> dict[str, Any]:
         counts = Counter(key for key, _ in items)
         dupes = sorted(key for key, n in counts.items() if n > 1)
         raise ValueError(f'Duplicate session param keys: {dupes}')
-    return {key: _literal_value(key, raw) for key, raw in items}
+    return {key: _literal_value(raw) for key, raw in items}
 
 
 class PolicyServer:
@@ -170,10 +154,10 @@ class PolicyServer:
 
     When ``pipeline`` is a ``cfn.Config``, query params on the session websocket URL become dotted
     overrides into the pipeline config (e.g. ``?codec.fps=10``), applied and instantiated per session.
-    Values must be JSON literals (unparseable values pass through as strings); strings starting
-    with ``@`` or ``.`` are rejected because configuronic would resolve them as imports, and
-    params that change the model source are rejected. A server built from an already-instantiated
-    ``Pipeline`` rejects all session params.
+    Values must be JSON literals (unparseable values pass through as strings) and are applied with
+    ``Config.override_data``, so a param can tune an argument but never name a Python object to
+    import; params that change the model source are rejected too. A server built from an
+    already-instantiated ``Pipeline`` rejects all session params.
 
     The WebSocket session flow is:
         accept → session params → resolve → load via manager → remote-half wrap → reset → inference loop
@@ -244,7 +228,9 @@ class PolicyServer:
                 'Session params require a config-launched pipeline; this server was launched from an '
                 'instantiated Pipeline'
             )
-        pipeline = self._pipeline_cfg.override(**params).instantiate()
+        # ``override_data``: the values came off the wire, so a string must stay a string and never
+        # name a Python object to import.
+        pipeline = self._pipeline_cfg.override_data(**params).instantiate()
         if pipeline.source != self._source:
             raise ValueError('Session params must not change the model source; it is fixed at launch')
         return pipeline

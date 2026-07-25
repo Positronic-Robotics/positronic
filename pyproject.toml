@@ -17,7 +17,7 @@ classifiers = [
 dependencies = [
     "av",
     "coloredlogs>=15.0.1",
-    "configuronic>=0.5.0",
+    "configuronic>=0.6.0",
     "cvxopt",
     "dearpygui; platform_machine != 'aarch64'",
     "fastapi",
