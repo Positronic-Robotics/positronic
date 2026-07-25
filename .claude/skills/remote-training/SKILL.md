@@ -221,7 +221,7 @@ Point the `positronic-inference` CLI at the endpoint IP:
 
 ```bash
 uv run --locked positronic-inference sim \
-  --policy=.remote --policy.host=<endpoint-ip> --policy.port=8000 \
+  --policy=.remote --policy.url=<endpoint-ip>:8000 \
   --output_dir=s3://inference/sim_stack_validation/<run_name>/<vendor>/
 ```
 
@@ -269,7 +269,7 @@ hostname:
 
 ```bash
 uv run --locked positronic-inference sim \
-  --policy=.remote --policy.host=desktop --policy.port=8000 \
+  --policy=.remote --policy.url=desktop:8000 \
   --output_dir=<...>
 ```
 

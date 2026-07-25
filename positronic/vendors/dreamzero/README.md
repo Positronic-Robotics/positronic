@@ -43,7 +43,7 @@ CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports
 
 # Run sim inference locally (only inference is remote; MuJoCo runs on your machine).
 uv run --locked positronic-inference sim \
-  --policy=.remote --policy.host=<h100-host> --policy.port=8000 \
+  --policy=.remote --policy.url=<h100-host>:8000 \
   --eval.trial_count=2 --show_gui=True
 ```
 
@@ -147,7 +147,7 @@ Sanity-check once warm: `curl http://<h100-host>:8000/api/v1/models` → `{"mode
 
 ```bash
 uv run --locked positronic-inference sim \
-  --policy=.remote --policy.host=<h100-host> --policy.port=8000 \
+  --policy=.remote --policy.url=<h100-host>:8000 \
   --eval.trial_count=<N> --output_dir=<dir-or-s3-path>
 ```
 
@@ -194,8 +194,7 @@ launch). With `positronic-inference`, pass them through the remote policy:
 # At episode start, send only the observed history (a growing frame stack) instead of
 # padding the window with the current frame repeated.
 uv run --locked positronic-inference sim \
-  --policy=.remote --policy.host=<h100-host> --policy.port=8000 \
-  --policy.params='{"local.pad_start": False}' \
+  --policy=.remote --policy.url='<h100-host>:8000?local.pad_start=false' \
   --eval.trial_count=2 --show_gui=True
 ```
 
@@ -243,6 +242,6 @@ bash workflows/nebius/train.sh dreamzero wan22_full_h100x1 \
 bash workflows/nebius/serve.sh dreamzero <endpoint-name> serve \
   --model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
   --backbone=wan2.2
-# ... infer against the printed endpoint IP with --policy.port=8000, then tear down:
+# ... infer against the printed endpoint IP with --policy.url=<ip>:8000, then tear down:
 bash workflows/nebius/stop.sh <endpoint-name>
 ```

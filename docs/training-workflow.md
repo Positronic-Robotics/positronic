@@ -222,7 +222,7 @@ cd docker && docker compose run --rm --service-ports openpi-server serve \
 | `--port` | Server port | `8000` (default) |
 | `--host` | Server host | `0.0.0.0` (default, binds to all interfaces) |
 
-The launch choice is the named pipeline; its inner arguments are tuned per session via client query params (`--policy.params` on the inference CLI — see the [Inference Guide](inference.md)) or by a new named pipeline entry in the vendor's `PIPELINES`.
+The launch choice is the named pipeline; its inner arguments are tuned per session via client query params (the `?...` on `--policy.url` — see the [Inference Guide](inference.md)) or by a new named pipeline entry in the vendor's `PIPELINES`.
 
 ### Checking Server Status
 

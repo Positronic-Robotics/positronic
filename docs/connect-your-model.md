@@ -25,7 +25,7 @@ In a separate terminal, run inference inside the simulation:
 
 ```bash
 uv run positronic-inference sim \
-  --policy=.remote --policy.host=localhost --policy.port=8000 \
+  --policy=.remote --policy.url=localhost:8000 \
   --show_gui=True \
   --output_dir=~/datasets/demo_run
 ```
@@ -207,10 +207,14 @@ If you put a `Codec` right of the marker (`ChunkedSchedule() | remote | codec | 
 ChunkedSchedule() | RestrictImageSize() | remote | codec | source
 ```
 
-Give it the geometry your codec encodes to — `RestrictImageSize(224, 224)` for a 224x224 model — so a frame is shrunk once, on the rig. The default is a loose 640x640, for a codec that resizes to nothing in particular. Leaving it out costs bandwidth, not correctness. Test the server with the same client as the demo:
+Give it the geometry your codec encodes to — `RestrictImageSize(224, 224)` for a 224x224 model — so a frame is shrunk once, on the rig. The default is a loose 640x640, for a codec that resizes to nothing in particular. Leaving it out costs bandwidth, not correctness.
+
+If your server sits behind a proxy that caps message size (Modal's is ~2 MB), write `remote(compress_images=True)` instead of the bare marker: the rig then JPEG-encodes frames before sending. That is the marker's own setting because it describes the wire, not the policy — and the rig can't know what fronts your server, so the server declares it.
+
+Test the server with the same client as the demo:
 
 ```bash
-uv run positronic-inference sim --policy=.remote --policy.host=localhost --policy.port=8000
+uv run positronic-inference sim --policy=.remote --policy.url=localhost:8000
 ```
 
 ### Slow-loading or subprocess models

@@ -38,43 +38,37 @@ Check server: `curl http://localhost:8000/api/v1/models` returns available model
 # Simulation
 uv run positronic-inference sim \
   --policy=.remote \
-  --policy.host=localhost \
+  --policy.url=localhost \
   --output_dir=~/datasets/inference_logs/exp_v1
 
 # Hardware
 uv run positronic-inference real \
   --policy=.remote \
-  --policy.host=gpu-server \
+  --policy.url=gpu-server \
   --output_dir=~/datasets/inference_logs/franka_eval
 ```
 
-**Remote policy parameters:** `--policy.host` (server hostname/IP), `--policy.port` (default 8000), `--policy.model_id` (specific checkpoint; the default is the one the server pinned at startup), `--policy.compress_images` (JPEG-encode frames before sending, for endpoints behind a proxy with a message-size cap).
-
-Image size is not a client setting: a server that wants smaller frames declares `RestrictImageSize` in its rig-side stack (640x640 by default), and the client applies it like any other declared component.
-
-The client builds the wrapper stack the server declares in its handshake (a server that declares nothing gets the standard `ChunkedSchedule`). `--policy.local=@...` is the operator's escape hatch: it bypasses the declaration entirely (the ignored declaration is logged) and runs the given stack instead.
-
-**Session parameters:** `--policy.params` attaches query params to every session; the server applies them as overrides to its pipeline config, so you can tune the served pipeline without restarting the server. Keys are dotted paths into the pipeline config, values JSON literals. Because the keys contain dots, pass the whole dict at once (a dot-free key can also be set individually, e.g. `--policy.params.foo=1`):
+**One URL is the whole endpoint.** `--policy.url` carries the host, port, TLS, model id, and session params, so a server can be handed out as a single string:
 
 ```bash
 uv run positronic-inference sim \
-  --policy=.remote --policy.host=gpu-server \
-  --policy.params='{"codec.fps": 10}'
+  --policy=.remote \
+  --policy.url='https://gpu-server/api/v1/session/checkpoint-20000?codec.fps=10&local.pad_start=false'
 ```
 
-The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server launch — `source.*` params are rejected; use `--policy.model_id` to pick a checkpoint. Bad params fail at connect with a clear server error. The server CLI itself takes no deep overrides into the pipeline: the launch choice is a named pipeline, and everything inside it is tuned per session with params (or by adding a named pipeline variant to the vendor's `PIPELINES`). Full rules in the [Offboard README](../positronic/offboard/README.md).
+Accepted forms: `host`, `host:port`, and `https://host[:port][/api/v1/session[/<model_id>]]` (`http`, `ws` and `wss` work too), each with an optional query. `https`/`wss` enable TLS and default the port to 443; other forms default to 8000. Naming no model id serves the checkpoint the server pinned at startup.
 
-**One-URL endpoints:** `.remote_url` packs host, port, TLS, model id, and session params into a single string — hand it out, paste it, done:
+**Session parameters** are the URL's query string: the server applies them as overrides to its pipeline config, so you can tune the served pipeline without restarting the server. Keys are dotted paths into that config and values are JSON literals, forwarded verbatim so they arrive exactly as written (`fps=10`, `pad=false`, `name="s3"`).
 
-```bash
-uv run positronic-inference sim \
-  --policy=.remote_url \
-  --policy.url='gpu-server:8000?codec.fps=10&local.pad_start=false'
-```
+The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server launch — `source.*` params are rejected; name a checkpoint in the URL path instead. Bad params fail at connect with a clear server error. The server CLI itself takes no deep overrides into the pipeline: the launch choice is a named pipeline, and everything inside it is tuned per session with params (or by adding a named pipeline variant to the vendor's `PIPELINES`). Full rules in the [Offboard README](../positronic/offboard/README.md).
 
-Accepted forms: `host`, `host:port`, and `http(s)://host[:port][/api/v1/session[/<model_id>]]` (`ws`/`wss` work too), each with an optional query. `https`/`wss` enable TLS and default the port to 443; other forms default to 8000. The query string is forwarded to the server verbatim, so its JSON literals arrive exactly as written.
+**Credentials stay out of the URL.** `--policy.headers='{"Modal-Key": "..."}'` passes auth headers for a fronted endpoint, so the URL itself is safe to paste around.
 
-> **Recording inference I/O:** Pass `--policy.recording_dir=s3://bucket/path` to `.remote` or `.remote_url` to write a rerun `.rrd` file per episode capturing the raw and server-side observation/action boundaries. Useful for debugging codec behavior and visualizing what the policy actually received.
+**What crosses the wire is the server's call, not the client's.** A server that wants smaller frames declares `RestrictImageSize` in its rig-side stack (640x640 by default); one behind a proxy with a message-size cap declares `remote(compress_images=True)` and the rig JPEG-encodes frames before sending. The client builds whatever the handshake declares — a server that declares nothing gets the standard `ChunkedSchedule`.
+
+`--policy.local=@...` and `--policy.compress_images` are deprecated stand-ins for a server too old to declare either; against a server that does declare, they raise rather than quietly winning.
+
+> **Recording inference I/O:** Pass `--policy.recording_dir=s3://bucket/path` to write a rerun `.rrd` file per episode capturing the raw and server-side observation/action boundaries. Useful for debugging codec behavior and visualizing what the policy actually received.
 
 ## Local Inference
 
@@ -107,7 +101,7 @@ Replay recorded runs: `uv run positronic-server --dataset.path=~/datasets/infere
 
 ## Evaluation Workflow
 
-Run inference with recording, review in Positronic server, score manually (success/partial/failure), repeat for 10-50 trials, calculate success rate and note common failure modes. Compare checkpoints by running inference with different `--policy.model_id` values. For batch evaluation, use [`utilities/validate_server.py`](../utilities/validate_server.py).
+Run inference with recording, review in Positronic server, score manually (success/partial/failure), repeat for 10-50 trials, calculate success rate and note common failure modes. Compare checkpoints by pointing `--policy.url` at different `/api/v1/session/<checkpoint>` paths. For batch evaluation, use [`utilities/validate_server.py`](../utilities/validate_server.py).
 
 **Iteration:** Evaluate checkpoint → identify failures in server → collect targeted demos for failure modes → append to dataset → retrain → re-evaluate. Convergence typically occurs after 3-5 iterations.
 

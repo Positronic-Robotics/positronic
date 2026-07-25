@@ -210,15 +210,13 @@ To evaluate the policy, run the inference client locally using the unified `.rem
 ```bash
 uv run --locked positronic-inference sim \
   --policy=.remote \
-  --policy.host=vm-h100 \
-  --policy.port=8000 \
+  --policy.url=vm-h100:8000 \
   --eval.timeout=20 \
   --show_gui=True \
   --output_dir=~/datasets/inference_logs
 ```
 
-- `--policy.host`: The machine that runs the inference server.
-- `--policy.port`: The port that the inference server exposes.
+- `--policy.url`: The inference server — `host`, `host:port`, or a full URL.
 
 A `droid` server emits `JointDelta` commands; the driver applies each to the live joints.
 

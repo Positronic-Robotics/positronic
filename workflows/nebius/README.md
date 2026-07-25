@@ -253,8 +253,7 @@ Run inference from your laptop or robot host using the existing `positronic-infe
 ```bash
 uv run positronic-inference sim \
   --policy=.remote \
-  --policy.host=<endpoint-ip> \
-  --policy.port=8000 \
+  --policy.url=<endpoint-ip>:8000 \
   --output_dir=.data/inference/<run-name>/
 ```
 
@@ -299,8 +298,7 @@ bash workflows/nebius/eval.sh \
   --eval=@positronic.cfg.eval.sim.robolab.banana_in_bowl \
   --eval.trial_count=10 \
   --policy=@positronic.cfg.policy.remote \
-  --policy.host=<endpoint-ip> \
-  --policy.resize=None \
+  --policy.url=<endpoint-ip>:8000 \
   --output_dir=s3://<your-bucket>/evals/robolab_banana/
 ```
 

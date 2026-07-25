@@ -45,7 +45,7 @@ cd docker && docker compose run --rm --service-ports groot-server \
 # 4. Run inference
 uv run --locked positronic-inference sim \
   --policy=.remote \
-  --policy.host=localhost \
+  --policy.url=localhost \
   --show_gui=True
 ```
 
@@ -134,7 +134,7 @@ and `sim_stack` subcommands are the same pipelines with their `checkpoints_dir`/
 | `--modality_config` | Override the pipeline's paired modality config | Paired | `ee_rot6d_q` |
 
 **Session parameters:** a client can tune the served pipeline per connection via query params on the
-session URL — e.g. `--policy.params='{"codec.fps": 10}'` on the eval CLI sends `?codec.fps=10`. Values
+session URL — e.g. `--policy.url='vm-h100:8000?codec.fps=10'` on the eval CLI. Values
 must be JSON literals. The model source (`checkpoints_dir`, `--checkpoint`, modality config) is
 fixed at launch and cannot be changed per session.
 

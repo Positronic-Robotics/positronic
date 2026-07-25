@@ -46,7 +46,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server serve \
 # 4. Run inference
 uv run --locked positronic-inference sim \
   --policy=.remote \
-  --policy.host=localhost \
+  --policy.url=localhost \
   --show_gui=True
 ```
 
