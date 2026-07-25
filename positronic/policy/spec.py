@@ -7,8 +7,9 @@ closed by a ``ModelSource`` terminal::
 
 Everything left of the marker is the *local* half — the stack the rig runs in front of the
 connection; everything right of it is the *remote* half — what the inference server runs around
-the model the source loads. ``split`` separates the two halves; ``inline`` composes the whole
-pipeline around the source's model into one in-process ``Policy``.
+the model the source loads. The marker itself carries the settings of the wire between them.
+``split`` separates the halves and the border; ``inline`` composes the whole pipeline around the
+source's model into one in-process ``Policy``.
 
 The server publishes the local half in its ``ready`` handshake as a plain-data spec tree:
 ``{'name': ..., 'args': {...}}`` leaves composed by ``{SEQ: [...]}`` (the ``|`` operator) and
@@ -46,14 +47,29 @@ from positronic.policy.observation import ObservationCodec
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
 
 
-class _RemoteMarker(PolicyWrapper):
-    """The client/server border in a policy pipeline. Only ever split on, never applied."""
+class RemoteMarker(PolicyWrapper):
+    """The client/server border in a policy pipeline. Only ever split on, never applied.
+
+    Its arguments describe the wire rather than the policy, so they belong to the border itself:
+    ``compress_images`` has the rig JPEG-encode frames before sending, for an endpoint behind a
+    proxy with a message-size cap. The server declares them in its handshake and the rig obeys.
+
+    ``remote`` is the plain border; call it to describe the wire::
+
+        ChunkedSchedule() | remote(compress_images=True) | codec | source
+    """
+
+    def __init__(self, compress_images: bool = False):
+        self.compress_images = compress_images
+
+    def __call__(self, *, compress_images: bool = False) -> 'RemoteMarker':
+        return RemoteMarker(compress_images=compress_images)
 
     def wrap(self, policy: Policy) -> Policy:
         raise TypeError('`remote` marks the client/server border of a pipeline; split() it instead of wrapping')
 
 
-remote = _RemoteMarker()
+remote = RemoteMarker()
 
 
 class ModelSource(abc.ABC):
@@ -137,22 +153,23 @@ def _join(components: tuple) -> PolicyWrapper | None:
     return functools.reduce(operator.or_, components) if components else None
 
 
-def split(pipeline: Pipeline | PolicyWrapper) -> tuple[PolicyWrapper | None, PolicyWrapper | None]:
-    """Split a pipeline's wrapper chain on the ``remote`` marker into its ``(local, remote)`` halves.
+def split(pipeline: Pipeline | PolicyWrapper) -> tuple[PolicyWrapper | None, RemoteMarker, PolicyWrapper | None]:
+    """Split a pipeline's wrapper chain at the ``remote`` marker into ``(local, border, remote)``.
 
-    An empty half is ``None``; a chain of just the marker means "no glue on either side".
+    An empty half is ``None``; a chain of just the marker means "no glue on either side". The border
+    carries the wire's own settings for the server to declare.
     """
     components = pipeline.components if isinstance(pipeline, Pipeline) else pipeline._wrappers()
-    markers = [i for i, c in enumerate(components) if isinstance(c, _RemoteMarker)]
+    markers = [(i, c) for i, c in enumerate(components) if isinstance(c, RemoteMarker)]
     if len(markers) != 1:
         raise ValueError(f'A policy pipeline needs exactly one `remote` marker, found {len(markers)}')
-    idx = markers[0]
-    return _join(components[:idx]), _join(components[idx + 1 :])
+    idx, border = markers[0]
+    return _join(components[:idx]), border, _join(components[idx + 1 :])
 
 
 def inline(pipeline: Pipeline) -> Policy:
     """The whole pipeline in one process: components (marker dropped) wrapped around the source's latest model."""
-    components = tuple(c for c in pipeline.components if not isinstance(c, _RemoteMarker))
+    components = tuple(c for c in pipeline.components if not isinstance(c, RemoteMarker))
     policy = pipeline.source.load(pipeline.source.resolve(None))
     joined = _join(components)
     return joined.wrap(policy) if joined is not None else policy

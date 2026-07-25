@@ -61,9 +61,10 @@ Rules:
 Any violation — including an unknown key — fails at connect: the server sends `{"status": "error", "error": ...}` and closes the socket (code 1008) before anything moves, and the Python client raises `RuntimeError`. Overrides apply per session, and the `local_stack` declared in the ready handshake reflects them.
 
 Because the whole session configuration fits in the URL, one string is a complete endpoint description:
-`RemotePolicy.from_url('gpu-host:8000?codec.fps=10')` (CLI: `--policy=.remote_url --policy.url='...'`) accepts
-`host`, `host:port`, and full `http(s)`/`ws(s)` URLs — optionally with `/api/v1/session/<model_id>` — and forwards
-the query string verbatim.
+`RemotePolicy('gpu-host:8000?codec.fps=10')` (CLI: `--policy=.remote --policy.url='...'`) accepts `host`,
+`host:port`, and full `http(s)`/`ws(s)` URLs — optionally with `/api/v1/session/<model_id>` — and forwards the
+query string verbatim. Credentials are the exception and stay a separate `headers` argument, so the URL itself
+is safe to hand around.
 
 ### WebSocket Flow
 
@@ -86,6 +87,7 @@ Upon connection, the server sends a ready packet with metadata:
       {"name": "chunked_schedule"},
       {"name": "restrict_image_size", "args": {"width": 224, "height": 224}}
     ]},
+    "compress_images": false,
     "positronic_version": "0.2.1"
   }
 }
@@ -103,6 +105,8 @@ This metadata tells the client:
   `positronic.policy.spec.WIRE_WRAPPERS` — an unknown entry fails at connect, before the robot moves.
   An empty declaration (`{"seq": []}`) means the policy needs no rig-side glue; when the key is
   absent the server declares nothing and the client falls back to the standard `ChunkedSchedule`.
+- `compress_images` — the `remote` marker's own wire setting: whether the rig JPEG-encodes frames before
+  sending, for an endpoint behind a proxy with a message-size cap
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
 
 #### 2. Status Updates (Long Model Loading)
@@ -174,7 +178,7 @@ cd docker && docker compose run --rm --service-ports groot-server \
 # Client connects the same way
 uv run positronic-inference sim \
   --policy=.remote \
-  --policy.host=localhost
+  --policy.url=localhost
 ```
 
 **Model Switching:** Compare multiple models without restarting the server by using specific session endpoints.

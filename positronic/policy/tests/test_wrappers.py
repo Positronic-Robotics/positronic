@@ -232,13 +232,14 @@ class TestPipelineSpec:
         stack = TemporalStack(keys=('v',), offsets_sec=(0.0,))
         sched = ChunkedSchedule()
         codec = ActionTimestamp(fps=10.0)
-        local, rem = spec.split(stack | sched | spec.remote | codec)
+        local, border, rem = spec.split(stack | sched | spec.remote | codec)
         assert local is not None and local._wrappers() == (stack, sched)
+        assert border is spec.remote
         assert rem is codec
 
     def test_split_empty_halves(self):
-        assert spec.split(spec.remote) == (None, None)
-        local, rem = spec.split(ChunkedSchedule() | spec.remote)
+        assert spec.split(spec.remote) == (None, spec.remote, None)
+        local, _, rem = spec.split(ChunkedSchedule() | spec.remote)
         assert rem is None and isinstance(local, ChunkedSchedule)
 
     def test_split_requires_exactly_one_marker(self):
@@ -248,8 +249,14 @@ class TestPipelineSpec:
             spec.split(spec.remote | spec.remote)
 
     def test_split_recomposes_codec_half_as_codec(self):
-        rem = spec.split(spec.remote | ActionTimestamp(fps=10.0) | ActionTimestamp(fps=5.0))[1]
+        rem = spec.split(spec.remote | ActionTimestamp(fps=10.0) | ActionTimestamp(fps=5.0))[2]
         assert isinstance(rem, Codec)
+
+    def test_border_carries_the_wire_settings(self):
+        """``remote`` is the plain border; calling it describes the wire without changing the split."""
+        border = spec.split(ChunkedSchedule() | spec.remote(compress_images=True) | ActionTimestamp(fps=10.0))[1]
+        assert border.compress_images is True
+        assert spec.remote.compress_images is False
 
     def test_marker_cannot_be_applied(self):
         with pytest.raises(TypeError, match='border'):
@@ -367,8 +374,9 @@ class TestPipe:
     def test_split_pipe(self):
         sched = ChunkedSchedule()
         codec = ActionTimestamp(fps=10.0)
-        local, rem = spec.split(sched | spec.remote | codec | spec.PolicySource(_ConstPolicy([])))
+        local, border, rem = spec.split(sched | spec.remote | codec | spec.PolicySource(_ConstPolicy([])))
         assert local is sched
+        assert border is spec.remote
         assert rem is codec
 
     def test_split_pipe_requires_exactly_one_marker(self):

@@ -149,8 +149,8 @@ class PolicyServer:
     (see ``positronic.policy.spec``).
 
     The half right of the marker wraps the model here; the half left of it is published as the
-    ``local_stack`` spec in the ``ready`` handshake for the rig to build. The source is the only
-    model loader and is fixed at launch.
+    ``local_stack`` spec in the ``ready`` handshake for the rig to build, alongside the marker's own
+    wire settings. The source is the only model loader and is fixed at launch.
 
     When ``pipeline`` is a ``cfn.Config``, query params on the session websocket URL become dotted
     overrides into the pipeline config (e.g. ``?codec.fps=10``), applied and instantiated per session.
@@ -184,10 +184,11 @@ class PolicyServer:
         assert isinstance(self._pipeline, Pipeline), (
             f'PolicyServer serves a policy pipeline closed by a model source, got {type(self._pipeline).__name__}'
         )
-        local, self._remote = split(self._pipeline)
-        # Resolved eagerly so a pipeline whose local half is not deliverable fails at startup,
-        # not at a client's connect. An empty half is an explicit "no glue needed" declaration.
-        self._local_spec = local.to_spec() if local is not None else {SEQ: []}
+        local, _, self._remote = split(self._pipeline)
+        # A local half that cannot be rendered fails here, at startup, rather than at a client's connect.
+        # Each session declares the spec of its own pipeline, which session params may have changed.
+        if local is not None:
+            local.to_spec()
         self._source = self._pipeline.source
         self._manager = PolicyManager(self._source)
         self.host = host
@@ -253,7 +254,7 @@ class PolicyServer:
         session = None
         try:
             pipeline = self._session_pipeline(_session_params(websocket.query_params))
-            local, remote_half = split(pipeline)
+            local, border, remote_half = split(pipeline)
             local_spec = local.to_spec() if local is not None else {SEQ: []}
 
             # No explicit checkpoint requested -> serve the one pinned at startup
@@ -281,7 +282,7 @@ class PolicyServer:
                 self._infer_lock.release()
             assert session is not None
             # ``served.meta`` is the static baseline; ``session.meta`` overlays per-episode
-            # specifics and wins on conflict. The local-stack declaration and the server's
+            # specifics and wins on conflict. The pipeline's declarations and the server's
             # positronic version are server-authoritative, so they merge last.
             meta = {
                 **self.metadata,
@@ -290,6 +291,7 @@ class PolicyServer:
                 **served.meta,
                 **session.meta,
                 'local_stack': local_spec,
+                'compress_images': border.compress_images,
                 'positronic_version': _pkg_version('positronic'),
             }
             await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
