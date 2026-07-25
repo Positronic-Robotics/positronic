@@ -52,7 +52,7 @@ uv run positronic-inference real \
 
 Image size is not a client setting: a server that wants smaller frames declares `RestrictImageSize` in its rig-side stack (640x640 by default), and the client applies it like any other declared component.
 
-The client builds the wrapper stack the server declares in its handshake (a server that declares nothing gets the standard `ChunkedSchedule`). `--policy.local=@...` is the operator's escape hatch: it bypasses the declaration entirely (the ignored declaration is logged) and runs the given stack instead.
+The client builds the wrapper stack the server declares in its handshake (a server that declares nothing gets the standard `ChunkedSchedule`).
 
 **Session parameters:** `--policy.params` attaches query params to every session; the server applies them as overrides to its pipe config, so you can tune the served pipe without restarting the server. Keys are dotted paths into the pipe config, values JSON literals. Because the keys contain dots, pass the whole dict at once (a dot-free key can also be set individually, e.g. `--policy.params.foo=1`):
 

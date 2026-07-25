@@ -122,9 +122,8 @@ class RemotePolicy(Policy):
 
     The server's ``ready`` handshake may declare the local half of its policy pipeline (the
     ``local_stack`` spec — see ``positronic.policy.spec``); the declared wrappers are built here,
-    once, and every session runs through them. ``local`` is the operator's bypass: when set, the
-    declaration is ignored (and logged) and the given stack is used instead. When the server
-    declares nothing and no override is given, the standard ``ChunkedSchedule`` applies.
+    once, and every session runs through them. When the server declares nothing, the standard
+    ``ChunkedSchedule`` applies.
 
     ``recording_dir`` places ``Recorder`` taps around the stack, recording the raw and wire
     boundaries.
@@ -140,7 +139,6 @@ class RemotePolicy(Policy):
         port: int,
         model_id: str | None = None,
         *,
-        local: PolicyWrapper | None = None,
         recording_dir: str | None = None,
         headers: dict[str, str] | None = None,
         secure: bool = False,
@@ -158,7 +156,6 @@ class RemotePolicy(Policy):
             infer_timeout=infer_timeout,
             compress_images=compress_images,
         )
-        self._local = local
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
         self._stacked: Policy | None = None
 
@@ -167,7 +164,6 @@ class RemotePolicy(Policy):
         cls,
         url: str,
         *,
-        local: PolicyWrapper | None = None,
         recording_dir: str | None = None,
         headers: dict[str, str] | None = None,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
@@ -198,7 +194,6 @@ class RemotePolicy(Policy):
             host,
             split.port or (443 if secure else 8000),
             model_id,
-            local=local,
             recording_dir=recording_dir,
             headers=headers,
             secure=secure,
@@ -209,10 +204,6 @@ class RemotePolicy(Policy):
 
     def _resolve_stack(self) -> PolicyWrapper | None:
         declared = self._endpoint.server_meta().get('local_stack')
-        if self._local is not None:
-            if declared is not None:
-                logger.info('Operator-supplied local stack bypasses the server declaration (ignored: %r)', declared)
-            return self._local
         if declared is not None:
             try:
                 return from_spec(declared)

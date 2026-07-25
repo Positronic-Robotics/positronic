@@ -8,7 +8,6 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.remote import RemoteSession
-from positronic.policy.wrappers import ChunkedSchedule
 
 EMPTY_STACK = {'local_stack': {'seq': []}}
 
@@ -341,16 +340,6 @@ def test_unknown_declared_entry_fails_before_motion():
     policy, _ = _mock_remote_policy({'local_stack': {'name': 'run_arbitrary_code'}, 'positronic_version': '9.9.9'})
     with pytest.raises(ValueError, match='9.9.9'):
         policy.new_session()
-
-
-def test_operator_local_bypasses_declaration():
-    """An operator-supplied ``local`` stack ignores the server declaration entirely."""
-    declared = {'local_stack': {'name': 'temporal_stack', 'args': {'keys': ['v'], 'offsets_sec': [0.0]}}}
-    policy, _ = _mock_remote_policy(declared, infer_return=[{'a': 1}], local=ChunkedSchedule())
-    session = policy.new_session(now=lambda: 5.0)
-    actions = session({'obs_time_ns': 0})
-    # The declared TemporalStack would have stacked 'v'; instead the operator's ChunkedSchedule ran.
-    assert actions == [{'a': 1, 'timestamp': 5.0}]
 
 
 def test_remote_policy_lifecycle(inference_server, mock_policy):
