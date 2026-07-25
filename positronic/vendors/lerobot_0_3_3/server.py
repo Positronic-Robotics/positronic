@@ -70,27 +70,33 @@ lerobot_source = cfn.Config(LerobotSource, policy_factory=act)
 
 
 @cfn.config(codec=lerobot_codecs.ee, source=lerobot_source)
-def pipe(codec: Codec, source: ModelSource):
+def pipeline(codec: Codec, source: ModelSource):
     return ChunkedSchedule() | RestrictImageSize(224, 224) | remote | codec | source
 
 
-PIPES = {
-    'ee': pipe,
-    'joints': pipe.override(codec=lerobot_codecs.joints),
-    'ee_traj': pipe.override(codec=lerobot_codecs.ee_traj),
-    'joints_traj': pipe.override(codec=lerobot_codecs.joints_traj),
-    'joints_ik': pipe.override(codec=lerobot_codecs.joints_ik),
-    'joints_ik_sim': pipe.override(codec=lerobot_codecs.joints_ik_sim),
+PIPELINES = {
+    'ee': pipeline,
+    'joints': pipeline.override(codec=lerobot_codecs.joints),
+    'ee_traj': pipeline.override(codec=lerobot_codecs.ee_traj),
+    'joints_traj': pipeline.override(codec=lerobot_codecs.joints_traj),
+    'joints_ik': pipeline.override(codec=lerobot_codecs.joints_ik),
+    'joints_ik_sim': pipeline.override(codec=lerobot_codecs.joints_ik_sim),
     # For checkpoints trained on inverted-grip (1 = open) sim data, which speak the flipped convention.
-    'ee_flip': pipe.override(codec=lerobot_codecs.ee.override(flip_grip=True)),
+    'ee_flip': pipeline.override(codec=lerobot_codecs.ee.override(flip_grip=True)),
 }
 
 
 @cfn.config(
-    pipe='ee', policy_factory=act, checkpoint=None, port=8000, host='0.0.0.0', recording_dir=None, idle_timeout_min=None
+    pipeline='ee',
+    policy_factory=act,
+    checkpoint=None,
+    port=8000,
+    host='0.0.0.0',
+    recording_dir=None,
+    idle_timeout_min=None,
 )
 def main(
-    pipe: str,
+    pipeline: str,
     policy_factory: Callable[[str], PreTrainedPolicy],
     checkpoints_dir: str,
     checkpoint: str | None,
@@ -99,7 +105,7 @@ def main(
     recording_dir: str | None,
     idle_timeout_min: float | None,
 ):
-    cfg = PIPES[pipe].override(**{
+    cfg = PIPELINES[pipeline].override(**{
         'source.policy_factory': policy_factory,
         'source.checkpoints_dir': str(pos3.download(checkpoints_dir)),
         'source.checkpoint': checkpoint,
@@ -107,20 +113,27 @@ def main(
     PolicyServer(cfg, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
 
 
-phail = main.override(
-    checkpoints_dir='s3://checkpoints/phail_unified/lerobot/270226-ee/',
-    recording_dir='s3://inference/phail_unified/server_recordings/lerobot/270226-ee/',
-)
-# The sim_stack and demo checkpoints were trained on inverted-grip (1 = open) sim data, hence the flipped pipe.
-sim_stack = main.override(
-    pipe='ee_flip',
-    checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/',
-    recording_dir='s3://inference/sim_stack/server_recordings/lerobot/230226-ee/',
-)
-demo = main.override(pipe='ee_flip', checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/')
+# Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
+# The sim_stack and demo checkpoints were trained on inverted-grip (1 = open) sim data, hence the flipped pipeline.
+COMMANDS = {
+    'serve': main,
+    **{name: main.override(pipeline=name) for name in PIPELINES},
+    'phail': main.override(
+        checkpoints_dir='s3://checkpoints/phail_unified/lerobot/270226-ee/',
+        recording_dir='s3://inference/phail_unified/server_recordings/lerobot/270226-ee/',
+    ),
+    'sim_stack': main.override(
+        pipeline='ee_flip',
+        checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/',
+        recording_dir='s3://inference/sim_stack/server_recordings/lerobot/230226-ee/',
+    ),
+    'demo': main.override(
+        pipeline='ee_flip', checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'
+    ),
+}
 
 
 if __name__ == '__main__':
     init_logging()
     with pos3.mirror():
-        cfn.cli({'serve': main, 'phail': phail, 'sim_stack': sim_stack, 'demo': demo})
+        cfn.cli(COMMANDS)

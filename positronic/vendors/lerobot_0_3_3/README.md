@@ -36,7 +36,7 @@ cd docker && docker compose run --rm lerobot-0_3_3-train \
 # 3. Serve
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --pipe=ee
+  --pipeline=ee
 
 # 4. Run inference
 uv run positronic-inference sim \
@@ -93,7 +93,7 @@ See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --pipe=ee \
+  --pipeline=ee \
   --port=8000 \
   --host=0.0.0.0
 ```
@@ -104,18 +104,18 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve 
 |-----------|-------------|---------|---------|
 | `--checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
 | `--checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
-| `--pipe` | Named policy pipe: the server-side codec (must match training) | `ee` | `joints` |
+| `--pipeline` | Named policy pipeline: the server-side codec (must match training) | `ee` | `joints` |
 | `--policy_factory` | Builds the backbone policy from a checkpoint path | `act` | `@my_module.factory` |
 | `--port` | Server port | `8000` | `8001` |
 | `--host` | Server host | `0.0.0.0` | Binds to all interfaces |
 | `--recording_dir` | Directory for server-side inference recordings | `None` | `s3://inference/...` |
 | `--idle_timeout_min` | Shut down after this many idle minutes | `None` | `30` |
 
-**Available pipes:** `ee`, `joints`, `ee_traj`, `joints_traj`, `joints_ik`, `joints_ik_sim` (one per codec in [`codecs.py`](codecs.py)), plus `ee_flip` — the `ee` codec with `flip_grip=True`, for checkpoints trained on inverted-grip (1 = open) sim data.
+**Available pipelines:** `ee`, `joints`, `ee_traj`, `joints_traj`, `joints_ik`, `joints_ik_sim` (one per codec in [`codecs.py`](codecs.py)), plus `ee_flip` — the `ee` codec with `flip_grip=True`, for checkpoints trained on inverted-grip (1 = open) sim data.
 
-**Session params:** clients can tune pipe arguments per session via query params on the session URL — e.g. `codec.fps=10`, sent with `--policy.params='{"codec.fps": 10}'` on the inference CLI. Values must be JSON literals, and the model source (checkpoints, device) is fixed at launch. See the [offboard README](../../offboard/README.md).
+**Session params:** clients can tune pipeline arguments per session via query params on the session URL — e.g. `codec.fps=10`, sent with `--policy.params='{"codec.fps": 10}'` on the inference CLI. Values must be JSON literals, and the model source (checkpoints, device) is fixed at launch. See the [offboard README](../../offboard/README.md).
 
-**Presets:** Besides `serve`, the server exposes `phail`, `sim_stack`, and `demo` presets with pre-configured `checkpoints_dir`/`recording_dir`/`pipe` (e.g. `lerobot-0_3_3-server phail`).
+**Subcommands:** Every pipeline name is one (`lerobot-0_3_3-server joints_ik`), as is `serve` with every flag open. `phail`, `sim_stack`, and `demo` are the same pipelines with their `checkpoints_dir`/`recording_dir` bound (e.g. `lerobot-0_3_3-server phail`).
 
 ## Troubleshooting
 

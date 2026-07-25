@@ -1,4 +1,4 @@
-"""DreamZero inference server: the roboarena subprocess model source and its serving pipes."""
+"""DreamZero inference server: the roboarena subprocess model source and its serving pipelines."""
 
 import logging
 import os
@@ -281,26 +281,26 @@ dreamzero_source = cfn.Config(DreamZeroSource)
 
 
 @cfn.config(local=codecs.dreamzero_wrappers, codec=codecs.joints, source=dreamzero_source, width=320, height=176)
-def pipe(local: PolicyWrapper, codec: Codec, source: ModelSource, width: int, height: int):
-    """One DreamZero serving pipe: the rig-side AR video context, the codec, the subprocess-backed source.
+def pipeline(local: PolicyWrapper, codec: Codec, source: ModelSource, width: int, height: int):
+    """One DreamZero serving pipeline: the rig-side AR video context, the codec, the subprocess-backed source.
 
     ``width``/``height`` bound frames on the rig and follow the codec's own geometry.
     """
     return local | RestrictImageSize(width, height) | remote | codec | source
 
 
-PIPES = {
-    'joints': pipe,
-    'joints_traj': pipe.override(codec=codecs.joints_traj),
-    'joints_ik': pipe.override(codec=codecs.joints_ik),
-    'joints_ik_sim': pipe.override(codec=codecs.joints_ik_sim),
+PIPELINES = {
+    'joints': pipeline,
+    'joints_traj': pipeline.override(codec=codecs.joints_traj),
+    'joints_ik': pipeline.override(codec=codecs.joints_ik),
+    'joints_ik_sim': pipeline.override(codec=codecs.joints_ik_sim),
     # The pretrained DROID model (wan2.1) asserts exactly 320x180 frames.
-    'droid': pipe.override(codec=codecs.droid, height=180),
+    'droid': pipeline.override(codec=codecs.droid, height=180),
 }
 
 
 @cfn.config(
-    pipe='joints',
+    pipeline='joints',
     dreamzero_venv='/.venv/',
     backbone='wan2.1',
     num_gpus=1,
@@ -311,7 +311,7 @@ PIPES = {
     idle_timeout_min=None,
 )
 def main(
-    pipe: str,
+    pipeline: str,
     model_path: str,
     dreamzero_venv: str,
     backbone: str,
@@ -323,7 +323,7 @@ def main(
     idle_timeout_min: float | None,
 ):
     """Starts the DreamZero inference server."""
-    cfg = PIPES[pipe].override(**{
+    cfg = PIPELINES[pipeline].override(**{
         'source.model_path': model_path,
         'source.dreamzero_venv': dreamzero_venv,
         'source.backbone': backbone,
@@ -334,11 +334,16 @@ def main(
         PolicyServer(cfg, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
 
 
-# Public pretrained DROID checkpoint: wan2.1 backbone (the base default) paired with the DROID
-# pipe whose codec feeds its required 320x180 frames.
-droid = main.override(pipe='droid', model_path='GEAR-Dreams/DreamZero-DROID')
+# Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoint bound.
+COMMANDS = {
+    'serve': main,
+    **{name: main.override(pipeline=name) for name in PIPELINES},
+    # Public pretrained DROID checkpoint: wan2.1 backbone (the base default) paired with the DROID
+    # pipeline whose codec feeds its required 320x180 frames.
+    'droid': main.override(pipeline='droid', model_path='GEAR-Dreams/DreamZero-DROID'),
+}
 
 
 if __name__ == '__main__':
     init_logging()
-    cfn.cli({'serve': main, 'droid': droid})
+    cfn.cli(COMMANDS)

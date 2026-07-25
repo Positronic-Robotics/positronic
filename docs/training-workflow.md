@@ -183,7 +183,7 @@ Start an inference server that exposes a unified WebSocket API. All vendors impl
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --pipe=ee \
+  --pipeline=ee \
   --port=8000
 ```
 
@@ -192,11 +192,11 @@ cd docker && docker compose run --rm --service-ports lerobot-server serve \
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --pipe=ee \
+  --pipeline=ee \
   --port=8000
 ```
 
-**GR00T Server (the subcommand names the pipe):**
+**GR00T Server (naming the pipeline as the subcommand):**
 
 ```bash
 cd docker && docker compose run --rm --service-ports groot-server \
@@ -209,7 +209,7 @@ cd docker && docker compose run --rm --service-ports groot-server \
 ```bash
 cd docker && docker compose run --rm --service-ports openpi-server serve \
   --checkpoints_dir=~/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
-  --pipe=ee
+  --pipeline=ee
 ```
 
 ### Server Parameters
@@ -218,11 +218,11 @@ cd docker && docker compose run --rm --service-ports openpi-server serve \
 |-----------|-------------|---------|
 | `--checkpoints_dir` | Path to experiment directory (contains checkpoint folders) | `~/checkpoints/lerobot/experiment_v1/` |
 | `--checkpoint` | (Optional) Specific checkpoint ID to load | `10000`, `20000` |
-| `--pipe` | Named policy pipe: the server-side codec (must match training). Each vendor lists its pipe names in its README | `ee` |
+| `--pipeline` | Named policy pipeline: the server-side codec (must match training). Each vendor lists its pipeline names in its README | `ee` |
 | `--port` | Server port | `8000` (default) |
 | `--host` | Server host | `0.0.0.0` (default, binds to all interfaces) |
 
-The launch choice is the named pipe; its inner arguments are tuned per session via client query params (`--policy.params` on the inference CLI — see the [Inference Guide](inference.md)) or by a new named pipe entry in the vendor's `PIPES`.
+The launch choice is the named pipeline; its inner arguments are tuned per session via client query params (`--policy.params` on the inference CLI — see the [Inference Guide](inference.md)) or by a new named pipeline entry in the vendor's `PIPELINES`.
 
 ### Checking Server Status
 
@@ -269,7 +269,7 @@ cd docker && docker compose run --rm lerobot-train expert_only \
 # 5. Evaluate
 cd docker && docker compose run --rm --service-ports lerobot-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/baseline_v1/ \
-  --pipe=ee &
+  --pipeline=ee &
 
 uv run positronic-inference sim \
   --policy=.remote \

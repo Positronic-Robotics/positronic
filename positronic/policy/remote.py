@@ -72,7 +72,7 @@ class _Endpoint(Policy):
     ``headers`` / ``secure`` / ``params`` are forwarded to the underlying
     ``InferenceClient`` — auth / TLS for fronted endpoints (e.g. Modal, behind a
     reverse proxy) and session query parameters the server applies as overrides
-    to its pipe config.
+    to its pipeline config.
     """
 
     def __init__(
@@ -130,7 +130,7 @@ class RemotePolicy(Policy):
     boundaries.
 
     ``params`` become query parameters on every session URL; the server applies them as
-    overrides to its pipe config, so the declared ``local_stack`` reflects them too. A dict is
+    overrides to its pipeline config, so the declared ``local_stack`` reflects them too. A dict is
     JSON-encoded per value; a str is a ready query string forwarded verbatim.
     """
 

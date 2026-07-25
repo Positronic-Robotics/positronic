@@ -37,7 +37,7 @@ To try the pretrained DROID model with no training. `positronic-inference` comes
 
 ```bash
 # Serve the public pretrained DROID checkpoint on your H100 box (auto-downloaded on first start,
-# ~10-20 min via HuggingFace). The `droid` preset pins the checkpoint, wan2.1 backbone, and serving pipe.
+# ~10-20 min via HuggingFace). The `droid` preset pins the checkpoint, wan2.1 backbone, and serving pipeline.
 cd docker
 CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports dreamzero-server droid
 
@@ -131,7 +131,7 @@ Multi-GPU presets (`*_h100x8`) run `torchrun --nproc_per_node=8`, so use them on
 ### 3. Serve a checkpoint
 
 `dreamzero-server serve` downloads `--model_path` (an `s3://` checkpoint or HF repo), **needs `--backbone`
-to match training**, and serves the `joints` pipe — pick another with `--pipe` (see [Codecs](#codecs);
+to match training**, and serves the `joints` pipeline — pick another with `--pipeline` (see [Codecs](#codecs);
 config + defaults: [`server.py`](./server.py)). `--service-ports` publishes the WebSocket API on `8000`:
 
 ```bash
@@ -179,15 +179,15 @@ that decodes to a `JointPosition` command. They differ only in how **training la
 | `joints_ik` | Joints solved from recorded EE-pose targets via IK (`dls_limits` solver) | EE-driven datasets |
 | `joints_ik_sim` | `joints_ik` with the `dm_control` IK solver | Sim datasets (used for `sim_stack_cubes`) |
 
-Each codec has a same-named serving pipe (`PIPES` in [`server.py`](./server.py)), selected at serve time
-with `--pipe`. Since the four `joints*` codecs decode inference identically, the default `--pipe=joints`
-serves any of their checkpoints; the `droid` pipe pairs the pretrained DROID model with its required
+Each codec has a same-named serving pipeline (`PIPELINES` in [`server.py`](./server.py)), selected at serve time
+with `--pipeline`. Since the four `joints*` codecs decode inference identically, the default `--pipeline=joints`
+serves any of their checkpoints; the `droid` pipeline pairs the pretrained DROID model with its required
 320×180 frames.
 
 ## Session parameters
 
-A client can tune the serving pipe per connection: session query params become dotted overrides into the
-pipe config, applied server-side (values are literals; the model checkpoint and backbone are fixed at
+A client can tune the serving pipeline per connection: session query params become dotted overrides into the
+pipeline config, applied server-side (values are literals; the model checkpoint and backbone are fixed at
 launch). With `positronic-inference`, pass them through the remote policy:
 
 ```bash

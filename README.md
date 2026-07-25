@@ -262,10 +262,10 @@ uv run --locked positronic-inference sim \
 **Remote inference** (run policy on a different machine):
 
 ```bash
-# On inference server (--pipe selects the codec pipe; must match training):
+# On inference server (--pipeline selects the codec pipeline; must match training):
 cd docker && docker compose run --rm --service-ports lerobot-server serve \
     --checkpoints_dir=~/checkpoints/lerobot/<run_id> \
-    --pipe=ee
+    --pipeline=ee
 
 # On the simulator machine:
 uv run --locked positronic-inference sim \

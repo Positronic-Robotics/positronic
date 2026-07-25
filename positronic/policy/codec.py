@@ -17,7 +17,7 @@ from PIL import Image as PilImage
 
 from positronic.dataset.transforms import Elementwise
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
-from positronic.policy.base import PAR, SEQ, DelegatingSession, PolicyWrapper, Session, _Pipeline
+from positronic.policy.base import PAR, SEQ, DelegatingSession, PolicyWrapper, Session, _ComposedWrapper
 from positronic.utils import merge_dicts
 
 
@@ -91,7 +91,7 @@ class Codec(PolicyWrapper):
             return _ComposedCodec(self, other)
         if isinstance(other, PolicyWrapper):
             # Mixed Codec | non-Codec-wrapper → generic pipeline, not a Codec.
-            return _Pipeline((self, *other._pipeline_components()))
+            return _ComposedWrapper((self, *other._wrappers()))
         return NotImplemented
 
     @final

@@ -1,14 +1,14 @@
-"""The policy-pipe algebra: the split marker, the model-source terminal, and the rig-side wire format.
+"""The policy-pipeline algebra: the split marker, the model-source terminal, and the rig-side wire format.
 
-A policy pipe is one wrapper chain with a ``remote`` marker naming the client/server border,
+A policy pipeline is one wrapper chain with a ``remote`` marker naming the client/server border,
 closed by a ``ModelSource`` terminal::
 
-    pipe = TemporalStack(...) | ChunkedSchedule() | remote | codec | source
+    pipeline = TemporalStack(...) | ChunkedSchedule() | remote | codec | source
 
 Everything left of the marker is the *local* half — the stack the rig runs in front of the
 connection; everything right of it is the *remote* half — what the inference server runs around
 the model the source loads. ``split`` separates the two halves; ``inline`` composes the whole
-pipe around the source's model into one in-process ``Policy``.
+pipeline around the source's model into one in-process ``Policy``.
 
 The server publishes the local half in its ``ready`` handshake as a plain-data spec tree:
 ``{'name': ..., 'args': {...}}`` leaves composed by ``{SEQ: [...]}`` (the ``|`` operator) and
@@ -57,7 +57,7 @@ remote = _RemoteMarker()
 
 
 class ModelSource(abc.ABC):
-    """Serving-side terminal of a policy pipe: a stateless factory of models.
+    """Serving-side terminal of a policy pipeline: a stateless factory of models.
 
     Construction is cheap and side-effect-free; all runtime state (weights, subprocesses) belongs to
     the Policy returned by ``load``, torn down by its ``close()``. On a server the source is fixed at
@@ -90,12 +90,12 @@ class ModelSource(abc.ABC):
 
     def __ror__(self, left):
         if isinstance(left, PolicyWrapper):
-            return Pipe(left._pipeline_components(), self)
+            return Pipeline(left._wrappers(), self)
         return NotImplemented
 
 
-class Pipe:
-    """A policy pipe closed by a model source: the full description of a policy server."""
+class Pipeline:
+    """A policy pipeline closed by a model source: the full description of a policy server."""
 
     def __init__(self, components: tuple[PolicyWrapper, ...], source: ModelSource):
         self.components = tuple(components)
@@ -103,7 +103,7 @@ class Pipe:
 
 
 class PolicySource(ModelSource):
-    """Serves one ready in-process Policy — for in-process pipes and tests."""
+    """Serves one ready in-process Policy — for in-process pipelines and tests."""
 
     def __init__(self, policy: Policy, name: str = 'default'):
         self._policy = policy
@@ -137,23 +137,23 @@ def _join(components: tuple) -> PolicyWrapper | None:
     return functools.reduce(operator.or_, components) if components else None
 
 
-def split(pipe: Pipe | PolicyWrapper) -> tuple[PolicyWrapper | None, PolicyWrapper | None]:
-    """Split a pipe's wrapper chain on the ``remote`` marker into its ``(local, remote)`` halves.
+def split(pipeline: Pipeline | PolicyWrapper) -> tuple[PolicyWrapper | None, PolicyWrapper | None]:
+    """Split a pipeline's wrapper chain on the ``remote`` marker into its ``(local, remote)`` halves.
 
     An empty half is ``None``; a chain of just the marker means "no glue on either side".
     """
-    components = pipe.components if isinstance(pipe, Pipe) else pipe._pipeline_components()
+    components = pipeline.components if isinstance(pipeline, Pipeline) else pipeline._wrappers()
     markers = [i for i, c in enumerate(components) if isinstance(c, _RemoteMarker)]
     if len(markers) != 1:
-        raise ValueError(f'A policy pipe needs exactly one `remote` marker, found {len(markers)}')
+        raise ValueError(f'A policy pipeline needs exactly one `remote` marker, found {len(markers)}')
     idx = markers[0]
     return _join(components[:idx]), _join(components[idx + 1 :])
 
 
-def inline(pipe: Pipe) -> Policy:
-    """The whole pipe in one process: components (marker dropped) wrapped around the source's latest model."""
-    components = tuple(c for c in pipe.components if not isinstance(c, _RemoteMarker))
-    policy = pipe.source.load(pipe.source.resolve(None))
+def inline(pipeline: Pipeline) -> Policy:
+    """The whole pipeline in one process: components (marker dropped) wrapped around the source's latest model."""
+    components = tuple(c for c in pipeline.components if not isinstance(c, _RemoteMarker))
+    policy = pipeline.source.load(pipeline.source.resolve(None))
     joined = _join(components)
     return joined.wrap(policy) if joined is not None else policy
 

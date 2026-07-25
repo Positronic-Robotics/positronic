@@ -360,7 +360,7 @@ def test_operator_local_bypasses_declaration():
 
 
 def test_remote_policy_lifecycle(inference_server, mock_policy):
-    """RemotePolicy against a live server whose pipe declares a chunked_schedule local stack."""
+    """RemotePolicy against a live server whose pipeline declares a chunked_schedule local stack."""
     host, port = inference_server
 
     policy = RemotePolicy(host, port)

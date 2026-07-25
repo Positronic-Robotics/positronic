@@ -56,15 +56,15 @@ molmoact2_source = cfn.Config(MolmoAct2Source)
 
 
 @cfn.config(codec=molmoact2_codecs.droid, source=molmoact2_source)
-def pipe(codec: Codec, source: ModelSource):
+def pipeline(codec: Codec, source: ModelSource):
     return ChunkedSchedule() | RestrictImageSize() | remote | codec | source
 
 
-PIPES = {'droid': pipe}
+PIPELINES = {'droid': pipeline}
 
 
 @cfn.config(
-    pipe='droid',
+    pipeline='droid',
     hf_repo=DEFAULT_HF_REPO,
     device_map='auto',
     norm_tag='franka_droid',
@@ -75,7 +75,7 @@ PIPES = {'droid': pipe}
     idle_timeout_min=None,
 )
 def main(
-    pipe: str,
+    pipeline: str,
     hf_repo: str,
     device_map: str,
     norm_tag: str,
@@ -86,7 +86,7 @@ def main(
     idle_timeout_min: float | None,
 ):
     """Starts the in-process MolmoAct2 inference server."""
-    cfg = PIPES[pipe].override(**{
+    cfg = PIPELINES[pipeline].override(**{
         'source.hf_repo': hf_repo,
         'source.device_map': device_map,
         'source.norm_tag': norm_tag,
@@ -95,6 +95,10 @@ def main(
     PolicyServer(cfg, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
 
 
+# Every pipeline is a subcommand; MolmoAct2 pins one checkpoint, so there is no separate deployment.
+COMMANDS = {'serve': main, **{name: main.override(pipeline=name) for name in PIPELINES}}
+
+
 if __name__ == '__main__':
     init_logging()
-    cfn.cli(main)
+    cfn.cli(COMMANDS)

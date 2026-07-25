@@ -1,4 +1,4 @@
-"""Unit tests for PolicyWrapper composition, ChunkedSchedule, TemporalStack, and the policy-pipe algebra."""
+"""Unit tests for PolicyWrapper composition, ChunkedSchedule, TemporalStack, and the policy-pipeline algebra."""
 
 from typing import Any
 
@@ -233,7 +233,7 @@ class TestPipelineSpec:
         sched = ChunkedSchedule()
         codec = ActionTimestamp(fps=10.0)
         local, rem = spec.split(stack | sched | spec.remote | codec)
-        assert local is not None and local._pipeline_components() == (stack, sched)
+        assert local is not None and local._wrappers() == (stack, sched)
         assert rem is codec
 
     def test_split_empty_halves(self):
@@ -341,28 +341,28 @@ class _ListSource(spec.ModelSource):
 
 
 class TestPipe:
-    """The source terminal: ``... | source`` closes a wrapper chain into a Pipe."""
+    """The source terminal: ``... | source`` closes a wrapper chain into a Pipeline."""
 
     def test_wrapper_chain_terminates_into_pipe(self):
         stack = TemporalStack(keys=('v',), offsets_sec=(0.0,))
         sched = ChunkedSchedule()
         codec = ActionTimestamp(fps=10.0)
         source = spec.PolicySource(_ConstPolicy([]))
-        pipe = stack | sched | spec.remote | codec | source
-        assert isinstance(pipe, spec.Pipe)
-        assert pipe.components == (stack, sched, spec.remote, codec)
-        assert pipe.source is source
+        pipeline = stack | sched | spec.remote | codec | source
+        assert isinstance(pipeline, spec.Pipeline)
+        assert pipeline.components == (stack, sched, spec.remote, codec)
+        assert pipeline.source is source
 
     def test_lone_codec_terminates_into_pipe(self):
         codec = ActionTimestamp(fps=10.0)
-        pipe = codec | spec.PolicySource(_ConstPolicy([]))
-        assert isinstance(pipe, spec.Pipe)
-        assert pipe.components == (codec,)
+        pipeline = codec | spec.PolicySource(_ConstPolicy([]))
+        assert isinstance(pipeline, spec.Pipeline)
+        assert pipeline.components == (codec,)
 
     def test_bare_marker_terminates_into_pipe(self):
-        pipe = spec.remote | spec.PolicySource(_ConstPolicy([]))
-        assert isinstance(pipe, spec.Pipe)
-        assert pipe.components == (spec.remote,)
+        pipeline = spec.remote | spec.PolicySource(_ConstPolicy([]))
+        assert isinstance(pipeline, spec.Pipeline)
+        assert pipeline.components == (spec.remote,)
 
     def test_split_pipe(self):
         sched = ChunkedSchedule()
@@ -376,13 +376,13 @@ class TestPipe:
             spec.split(ChunkedSchedule() | spec.PolicySource(_ConstPolicy([])))
 
     def test_pipe_composes_no_further(self):
-        pipe: Any = ChunkedSchedule() | spec.remote | spec.PolicySource(_ConstPolicy([]))
+        pipeline: Any = ChunkedSchedule() | spec.remote | spec.PolicySource(_ConstPolicy([]))
         with pytest.raises(TypeError):
-            _ = pipe | ActionTimestamp(fps=10.0)
+            _ = pipeline | ActionTimestamp(fps=10.0)
         with pytest.raises(TypeError):
-            _ = ChunkedSchedule() | pipe
+            _ = ChunkedSchedule() | pipeline
         with pytest.raises(TypeError):
-            _ = pipe | spec.PolicySource(_ConstPolicy([]))
+            _ = pipeline | spec.PolicySource(_ConstPolicy([]))
 
     def test_inline_full_pipe(self):
         clock = _FakeClock(t=1.0)

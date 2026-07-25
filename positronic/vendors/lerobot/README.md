@@ -38,10 +38,10 @@ cd docker && docker compose run --rm lerobot-train full_finetune \
   --output_dir=~/checkpoints/lerobot/ \
   --num_train_steps=50000
 
-# 3. Serve (--pipe selects the codec pipe; must match training, default is ee)
+# 3. Serve (--pipeline selects the codec pipeline; must match training, default is ee)
 cd docker && docker compose run --rm --service-ports lerobot-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --pipe=ee
+  --pipeline=ee
 
 # 4. Run inference
 uv run --locked positronic-inference sim \
@@ -54,7 +54,7 @@ See [Training Workflow](../../docs/training-workflow.md) for detailed step-by-st
 
 ## Available Codecs
 
-Each codec is served as the policy pipe of the same name (`--pipe=<name>`); conversion references it as
+Each codec is served as the policy pipeline of the same name (`--pipeline=<name>`); conversion references it as
 `--dataset.codec=@positronic.vendors.lerobot.codecs.<name>`.
 
 | Codec | Observation | Action | Use Case |
@@ -100,7 +100,7 @@ Two training modes are available:
 ```bash
 cd docker && docker compose run --rm --service-ports lerobot-server serve \
   --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --pipe=ee \
+  --pipeline=ee \
   --port=8000
 ```
 
@@ -108,17 +108,17 @@ cd docker && docker compose run --rm --service-ports lerobot-server serve \
 |-----------|-------------|---------|---------|
 | `--checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
 | `--checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
-| `--pipe` | Named policy pipe to serve — its codec must match training: `ee`, `joints`, `joints_ik`, `joints_ik_sim` | `ee` | `joints` |
+| `--pipeline` | Named policy pipeline to serve — its codec must match training: `ee`, `joints`, `joints_ik`, `joints_ik_sim` | `ee` | `joints` |
 | `--device` | Torch device the policy runs on | Auto-detected | `cuda`, `mps`, `cpu` |
 | `--port` | Server port | `8000` | `8001` |
 | `--host` | Server host | `0.0.0.0` | Binds to all interfaces |
 | `--recording_dir` | Directory for server-side inference recordings | `None` | `s3://inference/...` |
 | `--idle_timeout_min` | Shut down after this many idle minutes | `None` | `30` |
 
-**Presets:** Besides `serve`, the server exposes a `phail` preset with pre-configured `checkpoints_dir`/`recording_dir` (e.g. `lerobot-server phail`).
+**Subcommands:** Every pipeline name is one (`lerobot-server joints_ik`), as is `serve` with every flag open. `phail` is the `ee` pipeline with its `checkpoints_dir`/`recording_dir` bound (e.g. `lerobot-server phail`).
 
-**Session parameters:** A client can tune the served pipe per session with query params on the session URL —
-dotted paths into the pipe config with JSON-literal values (e.g. `?codec.fps=10`). The model source
+**Session parameters:** A client can tune the served pipeline per session with query params on the session URL —
+dotted paths into the pipeline config with JSON-literal values (e.g. `?codec.fps=10`). The model source
 (`checkpoints_dir`, `checkpoint`, `device`) is fixed at launch and cannot be changed per session. See the
 [offboard README](../../offboard/README.md) for the full syntax and error behavior.
 

@@ -9,7 +9,7 @@ import pos3
 from positronic.offboard.server import PolicyServer
 from positronic.policy import Codec, Policy
 from positronic.policy.codec import RestrictImageSize
-from positronic.policy.spec import ModelSource, Pipe, remote
+from positronic.policy.spec import ModelSource, Pipeline, remote
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.checkpoints import list_checkpoints, resolve_checkpoint
 from positronic.utils.logging import init_logging
@@ -51,23 +51,23 @@ lerobot_source = cfn.Config(LerobotSource, checkpoint=None, device=None)
 
 
 @cfn.config(codec=lerobot_codecs.ee, source=lerobot_source)
-def pipe(codec: Codec, source: ModelSource) -> Pipe:
+def pipeline(codec: Codec, source: ModelSource) -> Pipeline:
     return ChunkedSchedule() | RestrictImageSize(512, 512) | remote | codec | source
 
 
-PIPES = {
-    'ee': pipe,
-    'joints': pipe.override(codec=lerobot_codecs.joints),
-    'joints_ik': pipe.override(codec=lerobot_codecs.joints_ik),
-    'joints_ik_sim': pipe.override(codec=lerobot_codecs.joints_ik_sim),
+PIPELINES = {
+    'ee': pipeline,
+    'joints': pipeline.override(codec=lerobot_codecs.joints),
+    'joints_ik': pipeline.override(codec=lerobot_codecs.joints_ik),
+    'joints_ik_sim': pipeline.override(codec=lerobot_codecs.joints_ik_sim),
 }
 
 
 @cfn.config(
-    pipe='ee', checkpoint=None, device=None, port=8000, host='0.0.0.0', recording_dir=None, idle_timeout_min=None
+    pipeline='ee', checkpoint=None, device=None, port=8000, host='0.0.0.0', recording_dir=None, idle_timeout_min=None
 )
 def main(
-    pipe: str,
+    pipeline: str,
     checkpoints_dir: str,
     checkpoint: str | None,
     device: str | None,
@@ -77,7 +77,7 @@ def main(
     idle_timeout_min: float | None,
 ):
     checkpoints_dir = str(pos3.download(checkpoints_dir))
-    cfg = PIPES[pipe].override(**{
+    cfg = PIPELINES[pipeline].override(**{
         'source.checkpoints_dir': checkpoints_dir,
         'source.checkpoint': checkpoint,
         'source.device': device,
@@ -85,13 +85,18 @@ def main(
     PolicyServer(cfg, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
 
 
-phail = main.override(
-    checkpoints_dir='s3://checkpoints/phail_unified/smolvla/170316_ee/',
-    recording_dir='s3://inference/phail_unified/server_recordings/smolvla/170316_ee/',
-)
+# Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
+COMMANDS = {
+    'serve': main,
+    **{name: main.override(pipeline=name) for name in PIPELINES},
+    'phail': main.override(
+        checkpoints_dir='s3://checkpoints/phail_unified/smolvla/170316_ee/',
+        recording_dir='s3://inference/phail_unified/server_recordings/smolvla/170316_ee/',
+    ),
+}
 
 
 if __name__ == '__main__':
     init_logging()
     with pos3.mirror():
-        cfn.cli({'serve': main, 'phail': phail})
+        cfn.cli(COMMANDS)

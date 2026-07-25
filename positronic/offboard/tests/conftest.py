@@ -25,11 +25,11 @@ StartServer = Callable[..., tuple[str, int, PolicyServer]]
 
 @pytest.fixture
 def start_server() -> Generator[StartServer, None, None]:
-    """Factory serving pipes on daemon threads; every started server is stopped and joined at teardown."""
+    """Factory serving pipelines on daemon threads; every started server is stopped and joined at teardown."""
     running: list[tuple[uvicorn.Server, threading.Thread]] = []
 
-    def start(pipe, **server_kwargs) -> tuple[str, int, PolicyServer]:
-        server = PolicyServer(pipe, host='localhost', port=_find_free_port(), **server_kwargs)
+    def start(pipeline, **server_kwargs) -> tuple[str, int, PolicyServer]:
+        server = PolicyServer(pipeline, host='localhost', port=_find_free_port(), **server_kwargs)
         uv_server = uvicorn.Server(uvicorn.Config(server.app, host=server.host, port=server.port, log_level='warning'))
 
         async def _run():
@@ -110,7 +110,7 @@ def mock_policy_registry() -> dict[str, MagicMock]:
 
 @pytest.fixture
 def inference_server(start_server: StartServer, mock_policy: MagicMock) -> tuple[str, int]:
-    """A served single-policy pipe.
+    """A served single-policy pipeline.
 
     Returns:
         tuple[str, int]: (host, port)

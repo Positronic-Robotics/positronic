@@ -190,8 +190,8 @@ def test_warmup_runs_dummy_inference_at_startup(codec_server):
 
 def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    pipe = ChunkedSchedule() | remote | _IdentityCodec() | _StubSource(stub)
-    host, port, _server = start_server(pipe)
+    pipeline = ChunkedSchedule() | remote | _IdentityCodec() | _StubSource(stub)
+    host, port, _server = start_server(pipeline)
     client = InferenceClient(host, port)
     session = client.new_session()
     try:
@@ -213,17 +213,17 @@ class _ScriptedPolicy(Policy):
 
 
 def test_in_process_equals_remote_for_same_pipeline(start_server):
-    """The same pipe must behave identically served in-process and over the wire."""
+    """The same pipeline must behave identically served in-process and over the wire."""
 
-    def pipe():
+    def pipeline():
         return ChunkedSchedule() | remote | ActionTimestamp(fps=10.0) | PolicySource(_ScriptedPolicy())
 
     clock = [100.0]
 
-    host, port, _server = start_server(pipe())
+    host, port, _server = start_server(pipeline())
     remote_session = RemotePolicy(host, port).new_session(now=lambda: clock[0])
 
-    local_session = inline(pipe()).new_session(now=lambda: clock[0])
+    local_session = inline(pipeline()).new_session(now=lambda: clock[0])
 
     remote_actions = remote_session({'obs_time_ns': 0})
     local_actions = local_session({'obs_time_ns': 0})

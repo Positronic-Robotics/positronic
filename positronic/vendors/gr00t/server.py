@@ -311,27 +311,29 @@ gr00t_source = cfn.Config(Gr00tSource)
 
 
 @cfn.config(codec=codecs.ee_quat, source=gr00t_source)
-def pipe(codec, source):
+def pipeline(codec, source):
     return ChunkedSchedule() | RestrictImageSize(224, 224) | remote | codec | source
 
 
 # Each entry pairs the codec with the matching GR00T modality config; they must agree with training.
-PIPES = {
-    'ee': pipe,
-    'ee_joints': pipe.override(codec=codecs.ee_quat_joints, **{'source.modality_config': 'ee_q'}),
-    'ee_rot6d': pipe.override(codec=codecs.ee_rot6d, **{'source.modality_config': 'ee_rot6d'}),
-    'ee_rot6d_joints': pipe.override(codec=codecs.ee_rot6d_joints, **{'source.modality_config': 'ee_rot6d_q'}),
-    'ee_rot6d_rel': pipe.override(codec=codecs.ee_rot6d, **{'source.modality_config': 'ee_rot6d_rel'}),
-    'ee_rot6d_joints_rel': pipe.override(codec=codecs.ee_rot6d_joints, **{'source.modality_config': 'ee_rot6d_q_rel'}),
+PIPELINES = {
+    'ee': pipeline,
+    'ee_joints': pipeline.override(codec=codecs.ee_quat_joints, **{'source.modality_config': 'ee_q'}),
+    'ee_rot6d': pipeline.override(codec=codecs.ee_rot6d, **{'source.modality_config': 'ee_rot6d'}),
+    'ee_rot6d_joints': pipeline.override(codec=codecs.ee_rot6d_joints, **{'source.modality_config': 'ee_rot6d_q'}),
+    'ee_rot6d_rel': pipeline.override(codec=codecs.ee_rot6d, **{'source.modality_config': 'ee_rot6d_rel'}),
+    'ee_rot6d_joints_rel': pipeline.override(
+        codec=codecs.ee_rot6d_joints, **{'source.modality_config': 'ee_rot6d_q_rel'}
+    ),
     # The sim_stack checkpoint was trained on inverted-grip (1 = open) sim data, hence flip_grip.
-    'sim_stack': pipe.override(
+    'sim_stack': pipeline.override(
         codec=codecs.ee_rot6d.override(flip_grip=True), **{'source.modality_config': 'ee_rot6d'}
     ),
 }
 
 
 @cfn.config(
-    pipe='ee',
+    pipeline='ee',
     checkpoint=None,
     host='0.0.0.0',
     port=8000,
@@ -342,7 +344,7 @@ PIPES = {
     idle_timeout_min=None,
 )
 def main(
-    pipe: str,
+    pipeline: str,
     checkpoints_dir: str,
     checkpoint: str | None,
     host: str,
@@ -353,7 +355,7 @@ def main(
     ready_timeout: float,
     idle_timeout_min: float | None,
 ):
-    """Serves the named GR00T policy pipe; ``modality_config`` overrides the pipe's paired one."""
+    """Serves the named GR00T policy pipeline; ``modality_config`` overrides the pipeline's paired one."""
     overrides = {
         'source.checkpoints_dir': checkpoints_dir,
         'source.checkpoint': checkpoint,
@@ -362,33 +364,29 @@ def main(
     }
     if modality_config is not None:
         overrides['source.modality_config'] = modality_config
-    cfg = PIPES[pipe].override(**overrides)
+    cfg = PIPELINES[pipeline].override(**overrides)
     with pos3.mirror():
         PolicyServer(cfg, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
 
 
-phail = main.override(
-    pipe='ee_rot6d_rel',
-    checkpoints_dir='s3://checkpoints/phail_unified/groot/270226-ee_rot6d_rel/',
-    recording_dir='s3://inference/phail_unified/server_recordings/groot/270226-ee_rot6d_rel/',
-)
-sim_stack = main.override(
-    pipe='sim_stack',
-    checkpoints_dir='s3://checkpoints/sim_stack/groot/ee_rot6d/230226/',
-    recording_dir='s3://inference/sim_stack/server_recordings/groot/230226/',
-)
+# Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
+# ``sim_stack`` names both, and the deployment wins: it is the same pipeline plus its checkpoints.
+COMMANDS = {
+    'serve': main,
+    **{name: main.override(pipeline=name) for name in PIPELINES},
+    'phail': main.override(
+        pipeline='ee_rot6d_rel',
+        checkpoints_dir='s3://checkpoints/phail_unified/groot/270226-ee_rot6d_rel/',
+        recording_dir='s3://inference/phail_unified/server_recordings/groot/270226-ee_rot6d_rel/',
+    ),
+    'sim_stack': main.override(
+        pipeline='sim_stack',
+        checkpoints_dir='s3://checkpoints/sim_stack/groot/ee_rot6d/230226/',
+        recording_dir='s3://inference/sim_stack/server_recordings/groot/230226/',
+    ),
+}
 
 
 if __name__ == '__main__':
     init_logging()
-    cfn.cli({
-        'serve': main,
-        'ee': main.override(pipe='ee'),
-        'ee_joints': main.override(pipe='ee_joints'),
-        'ee_rot6d': main.override(pipe='ee_rot6d'),
-        'ee_rot6d_joints': main.override(pipe='ee_rot6d_joints'),
-        'ee_rot6d_rel': main.override(pipe='ee_rot6d_rel'),
-        'ee_rot6d_joints_rel': main.override(pipe='ee_rot6d_joints_rel'),
-        'phail': phail,
-        'sim_stack': sim_stack,
-    })
+    cfn.cli(COMMANDS)

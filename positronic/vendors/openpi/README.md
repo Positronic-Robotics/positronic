@@ -101,16 +101,16 @@ The OpenPI inference server wraps the OpenPI policy in a FastAPI server that pro
 ### Starting the Server
 
 ```bash
-# Default pipe (ee codec)
+# Default pipeline (ee codec)
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server serve \
   --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
 
 # With joint feedback
 docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server serve \
-  --pipe=ee_joints \
+  --pipeline=ee_joints \
   --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
 
-# Pretrained DROID model (pi05_droid) — preset pipe (codec + config) and public checkpoint
+# Pretrained DROID model (pi05_droid) — preset pipeline (codec + config) and public checkpoint
 docker compose run --rm --service-ports openpi-server droid
 
 # DROID jointpos model (pi05_droid_jointpos) — the RoboLab leaderboard policy
@@ -127,12 +127,12 @@ The `droid_jointpos` config serves openpi's `pi05_droid_jointpos` checkpoint fro
 emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence — see the codec note above.
 
 **Parameters:**
-- `--pipe`: Named policy pipe (default: `ee`). Picks the server-side codec and, for `droid` /
+- `--pipeline`: Named policy pipeline (default: `ee`). Picks the server-side codec and, for `droid` /
   `droid_jointpos` / `libero`, the paired OpenPI config. Available: `ee`, `ee_joints`, `ee_traj`,
   `ee_joints_traj`, `joints_traj`, `ee_flip_grip`, `droid`, `droid_jointpos`, `libero`
 - `--checkpoints_dir`: Full path to the experiment directory containing checkpoints
 - `--checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
-- `--config_name`: (Optional) OpenPI config name; overrides the pipe's pairing (base pipes use `pi05_positronic_lowmem`)
+- `--config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)
 - `--port`: (Optional) Port to serve on (default: 8000)
 - `--openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
 - `--recording_dir`: (Optional) Directory for server-side `.rrd` recordings (local or S3)
@@ -155,8 +155,8 @@ The server exposes the following endpoints:
 - Session with specific checkpoint
 - Same protocol as default session
 
-**Session parameters:** query params on the session URL tune the serving pipe per session — each key
-is a dotted path into the pipe config, e.g. `ws://host:8000/api/v1/session?codec.fps=10`. Values must
+**Session parameters:** query params on the session URL tune the serving pipeline per session — each key
+is a dotted path into the pipeline config, e.g. `ws://host:8000/api/v1/session?codec.fps=10`. Values must
 be JSON literals; the model source is fixed at launch, so `source.*` params are rejected. See
 [`positronic/offboard/README.md`](../../offboard/README.md) for the full rules.
 

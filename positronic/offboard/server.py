@@ -1,4 +1,4 @@
-"""The inference server: serves a policy pipe (see ``positronic.policy.spec``) over the offboard protocol."""
+"""The inference server: serves a policy pipeline (see ``positronic.policy.spec``) over the offboard protocol."""
 
 import asyncio
 import json
@@ -16,7 +16,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from starlette.datastructures import QueryParams
 
 from positronic.policy import Codec, Policy, Recorder
-from positronic.policy.spec import SEQ, ModelSource, Pipe, split
+from positronic.policy.spec import SEQ, ModelSource, Pipeline, split
 from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
@@ -151,7 +151,7 @@ def _literal_value(key: str, raw: str) -> Any:
 
 
 def _session_params(query_params: QueryParams) -> dict[str, Any]:
-    """Decode session query params into pipe-config override kwargs (dotted keys reach nested args)."""
+    """Decode session query params into pipeline-config override kwargs (dotted keys reach nested args)."""
     items = query_params.multi_items()
     if len(items) != len(dict(query_params)):
         counts = Counter(key for key, _ in items)
@@ -161,19 +161,19 @@ def _session_params(query_params: QueryParams) -> dict[str, Any]:
 
 
 class PolicyServer:
-    """Serves a policy pipe: one wrapper chain with a ``remote`` marker, closed by a ``ModelSource``
+    """Serves a policy pipeline: one wrapper chain with a ``remote`` marker, closed by a ``ModelSource``
     (see ``positronic.policy.spec``).
 
     The half right of the marker wraps the model here; the half left of it is published as the
     ``local_stack`` spec in the ``ready`` handshake for the rig to build. The source is the only
     model loader and is fixed at launch.
 
-    When ``pipe`` is a ``cfn.Config``, query params on the session websocket URL become dotted
-    overrides into the pipe config (e.g. ``?codec.fps=10``), applied and instantiated per session.
+    When ``pipeline`` is a ``cfn.Config``, query params on the session websocket URL become dotted
+    overrides into the pipeline config (e.g. ``?codec.fps=10``), applied and instantiated per session.
     Values must be JSON literals (unparseable values pass through as strings); strings starting
     with ``@`` or ``.`` are rejected because configuronic would resolve them as imports, and
     params that change the model source are rejected. A server built from an already-instantiated
-    ``Pipe`` rejects all session params.
+    ``Pipeline`` rejects all session params.
 
     The WebSocket session flow is:
         accept → session params → resolve → load via manager → remote-half wrap → reset → inference loop
@@ -189,22 +189,22 @@ class PolicyServer:
 
     def __init__(
         self,
-        pipe: cfn.Config | Pipe,
+        pipeline: cfn.Config | Pipeline,
         host: str = '0.0.0.0',
         port: int = 8000,
         recording_dir: str | None = None,
         idle_timeout_min: float | None = None,
     ):
-        self._pipe_cfg = pipe if isinstance(pipe, cfn.Config) else None
-        self._pipe = pipe.instantiate() if isinstance(pipe, cfn.Config) else pipe
-        assert isinstance(self._pipe, Pipe), (
-            f'PolicyServer serves a policy pipe closed by a model source, got {type(self._pipe).__name__}'
+        self._pipeline_cfg = pipeline if isinstance(pipeline, cfn.Config) else None
+        self._pipeline = pipeline.instantiate() if isinstance(pipeline, cfn.Config) else pipeline
+        assert isinstance(self._pipeline, Pipeline), (
+            f'PolicyServer serves a policy pipeline closed by a model source, got {type(self._pipeline).__name__}'
         )
-        local, self._remote = split(self._pipe)
-        # Resolved eagerly so a pipe whose local half is not deliverable fails at startup,
+        local, self._remote = split(self._pipeline)
+        # Resolved eagerly so a pipeline whose local half is not deliverable fails at startup,
         # not at a client's connect. An empty half is an explicit "no glue needed" declaration.
         self._local_spec = local.to_spec() if local is not None else {SEQ: []}
-        self._source = self._pipe.source
+        self._source = self._pipeline.source
         self._manager = PolicyManager(self._source)
         self.host = host
         self.port = port
@@ -228,29 +228,30 @@ class PolicyServer:
         self.app = FastAPI()
         self.app.get('/api/v1/models')(self.get_models)
         self.app.websocket('/api/v1/session')(self.default_session)
-        # ``:path`` so an id that is itself a path — a HuggingFace repo, an ``s3://`` checkpoint —
-        # opens under the same name ``/api/v1/models`` advertises.
+        # ``:path`` so an id that is itself a path — a HuggingFace repo, say — opens under the same
+        # name ``/api/v1/models`` advertises.
         self.app.websocket('/api/v1/session/{model_id:path}')(self.model_session)
 
     async def get_models(self) -> dict:
         return {'models': self._source.get_models()}
 
-    def _session_pipe(self, params: dict[str, Any]) -> Pipe:
-        """The launch pipe, or a per-session variant with ``params`` applied as config overrides."""
+    def _session_pipeline(self, params: dict[str, Any]) -> Pipeline:
+        """The launch pipeline, or a per-session variant with ``params`` applied as config overrides."""
         if not params:
-            return self._pipe
-        if self._pipe_cfg is None:
+            return self._pipeline
+        if self._pipeline_cfg is None:
             raise ValueError(
-                'Session params require a config-launched pipe; this server was launched from an instantiated Pipe'
+                'Session params require a config-launched pipeline; this server was launched from an '
+                'instantiated Pipeline'
             )
-        pipe = self._pipe_cfg.override(**params).instantiate()
-        if pipe.source != self._source:
+        pipeline = self._pipeline_cfg.override(**params).instantiate()
+        if pipeline.source != self._source:
             raise ValueError('Session params must not change the model source; it is fixed at launch')
-        return pipe
+        return pipeline
 
     async def default_session(self, websocket: WebSocket):
         """Serves the model pinned at startup. Naming a model is the path's job, so every query param here
-        is a pipe override."""
+        is a pipeline override."""
         await self._serve_session(websocket, None)
 
     async def model_session(self, websocket: WebSocket, model_id: str):
@@ -265,8 +266,8 @@ class PolicyServer:
         policy: Policy | None = None
         session = None
         try:
-            pipe = self._session_pipe(_session_params(websocket.query_params))
-            local, remote_half = split(pipe)
+            pipeline = self._session_pipeline(_session_params(websocket.query_params))
+            local, remote_half = split(pipeline)
             local_spec = local.to_spec() if local is not None else {SEQ: []}
 
             # No explicit checkpoint requested -> serve the one pinned at startup

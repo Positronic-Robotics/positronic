@@ -30,8 +30,8 @@ Or from a checkout:
 uv run --python 3.13 --extra molmoact2 python -m positronic.vendors.molmoact2.server
 ```
 
-The server serves a named policy pipe — the codec plus the HuggingFace model source. MolmoAct2 ships one
-pipe, `droid`, which is the default (`--pipe=droid`). The codec lives server-side, so clients send raw
+The server serves a named policy pipeline — the codec plus the HuggingFace model source. MolmoAct2 ships one
+pipeline, `droid`, which is the default (`--pipeline=droid`). The codec lives server-side, so clients send raw
 observations and receive decoded joint commands. Launch flags — `--hf_repo`, `--device_map`, `--norm_tag`,
 `--num_steps`, `--host`, `--port`, `--recording_dir`, `--idle_timeout_min` — and their defaults are in
 [`server.py`](./server.py). Sanity-check once warm:

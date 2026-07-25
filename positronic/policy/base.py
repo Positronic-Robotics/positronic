@@ -170,11 +170,11 @@ class PolicyWrapper:
 
     def __or__(self, other: PolicyWrapper) -> PolicyWrapper:
         if isinstance(other, PolicyWrapper):
-            return _Pipeline((*self._pipeline_components(), *other._pipeline_components()))
+            return _ComposedWrapper((*self._wrappers(), *other._wrappers()))
         return NotImplemented
 
-    # Used for flattening nested | compositions into a single _Pipeline
-    def _pipeline_components(self) -> tuple:
+    # Used for flattening nested | compositions into a single _ComposedWrapper
+    def _wrappers(self) -> tuple:
         return (self,)
 
 
@@ -196,7 +196,7 @@ class _WrapperPolicy(DelegatingPolicy):
         return self._inner.meta | self._wrapper.meta
 
 
-class _Pipeline(PolicyWrapper):
+class _ComposedWrapper(PolicyWrapper):
     """Composed pipeline of wrappers and codecs. Applies right-to-left."""
 
     def __init__(self, components: tuple):
@@ -210,7 +210,7 @@ class _Pipeline(PolicyWrapper):
     def to_spec(self) -> dict[str, Any]:
         return {SEQ: [component.to_spec() for component in self._components]}
 
-    def _pipeline_components(self) -> tuple:
+    def _wrappers(self) -> tuple:
         return self._components
 
 
