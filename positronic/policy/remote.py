@@ -11,6 +11,7 @@ from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
 from .base import Policy, PolicyWrapper, Session
+from .codec import RestrictImageSize
 from .recording import Recorder
 from .spec import from_spec
 from .wrappers import ChunkedSchedule
@@ -36,6 +37,20 @@ def _operator_override(name: str, value: Any, declared: Any) -> bool:
         )
     logger.warning('--policy.%s is deprecated; it applies only because the server declares no %s', name, name)
     return True
+
+
+def _legacy_bound(sizes: Any) -> RestrictImageSize:
+    """The wire bound a server too old to declare a stack asked for through ``image_sizes``.
+
+    ``RestrictImageSize`` scales an image down to fit while keeping its aspect ratio, which is what such
+    a server's client did with these sizes, so a ``(width, height)`` pair reconstructs it exactly. A
+    per-camera mapping collapses to the widest and tallest it names — one bound covers every image, and
+    erring large keeps any camera from being sent smaller than that server expects.
+
+    TODO(#514): drop this and its caller once every deployed server declares its own stack.
+    """
+    pairs = list(sizes.values()) if isinstance(sizes, cabc.Mapping) else [sizes]
+    return RestrictImageSize(max(w for w, _ in pairs), max(h for _, h in pairs))
 
 
 class RemoteSession(Session):
@@ -209,17 +224,16 @@ class RemotePolicy(Policy):
             except Exception as e:
                 version = meta.get('positronic_version', 'unknown')
                 raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
-        logger.info('Server declared no local stack; running the standard ChunkedSchedule')
         if 'image_sizes' in meta:
-            # A server that reports codec geometry but declares no stack predates declared stacks. Geometry is
-            # the codec's business and bandwidth is ``RestrictImageSize``'s, so nothing here turns one into the
-            # other — the rig cannot tell which size the server meant for the wire.
+            bound = _legacy_bound(meta['image_sizes'])
             logger.warning(
-                'Server reports image_sizes %r but declares no stack, so frames cross the wire at full '
-                'resolution. Pass --policy.local to run a RestrictImageSize in front of the connection, or '
-                'update the server to declare one.',
+                'Server declares no local stack; bounding frames to %r from the image_sizes %r it reports. '
+                'This stand-in goes away once the server declares its own stack.',
+                bound.to_spec()['args'],
                 meta['image_sizes'],
             )
+            return ChunkedSchedule() | bound
+        logger.info('Server declared no local stack; running the standard ChunkedSchedule')
         return ChunkedSchedule()
 
     def _policy(self) -> Policy:

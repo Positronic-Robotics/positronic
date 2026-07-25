@@ -332,13 +332,32 @@ def test_operator_local_drives_a_server_that_declares_nothing():
     assert session({'obs_time_ns': 0}) == [{'a': 1}]
 
 
-def test_undeclared_stack_warns_when_the_server_only_reports_geometry(caplog):
-    """A server old enough to report `image_sizes` but not declare a stack bounds nothing on the rig."""
-    policy, _ = _mock_remote_policy({'image_sizes': [224, 224]}, infer_return=[])
+def _sent_frame(metadata):
+    """The 'cam' frame as it reached the wire, for a server whose handshake is `metadata`."""
+    policy, mock_ws = _mock_remote_policy(metadata, infer_return=[])
+    policy.new_session(now=lambda: 0.0)({'obs_time_ns': 0, 'cam': _make_image(480, 640)})
+    return mock_ws.infer.call_args.args[0]['cam']
+
+
+def test_legacy_image_sizes_bound_frames_on_the_rig(caplog):
+    """A server too old to declare a stack still reports `image_sizes`; the rig honours it as a wire bound."""
     with caplog.at_level(logging.WARNING, logger='positronic.policy.remote'):
-        policy.new_session(now=lambda: 0.0)
-    assert '--policy.local' in caplog.text
-    assert '[224, 224]' in caplog.text
+        sent = _sent_frame({'image_sizes': (224, 224)})
+    # 480x640 scaled down to fit 224x224, aspect ratio kept — what a pre-declaration client did with these.
+    assert sent.shape == (168, 224, 3)
+    assert 'image_sizes' in caplog.text
+
+
+def test_legacy_per_camera_sizes_collapse_to_the_largest():
+    """One bound covers every image, so a mapping errs large rather than shrinking a camera too far."""
+    sent = _sent_frame({'image_sizes': {'cam': (224, 224), 'wrist': (320, 256)}})
+    assert sent.shape == (240, 320, 3)
+
+
+def test_declared_stack_wins_over_legacy_image_sizes():
+    """`image_sizes` is the codec's geometry; once a server declares a stack, only the stack bounds the wire."""
+    sent = _sent_frame({'image_sizes': (224, 224), **EMPTY_STACK})
+    assert sent.shape == (480, 640, 3)
 
 
 def test_operator_local_rejected_when_the_server_declares():
