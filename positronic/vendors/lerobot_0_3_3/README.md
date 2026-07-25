@@ -106,6 +106,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve 
 | `--checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
 | `--pipeline` | Named policy pipeline: the server-side codec (must match training) | `ee` | `joints` |
 | `--policy_factory` | Builds the backbone policy from a checkpoint path | `act` | `@my_module.factory` |
+| `--model_type` | Names what the factory builds, for the handshake metadata | `act` | `diffusion` |
 | `--port` | Server port | `8000` | `8001` |
 | `--host` | Server host | `0.0.0.0` | Binds to all interfaces |
 | `--recording_dir` | Directory for server-side inference recordings | `None` | `s3://inference/...` |

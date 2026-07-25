@@ -25,16 +25,15 @@ logger = logging.getLogger(__name__)
 
 
 def act(checkpoint_path: str) -> PreTrainedPolicy:
-    policy = ACTPolicy.from_pretrained(checkpoint_path, strict=True)
-    policy.metadata = {'type': 'act', 'checkpoint_path': checkpoint_path}
-    return policy
+    return ACTPolicy.from_pretrained(checkpoint_path, strict=True)
 
 
 class LerobotSource(ModelSource):
     """In-process LeRobot checkpoints from one experiment directory (its ``checkpoints/`` subdirectory).
 
-    ``policy_factory`` builds the backbone policy from a checkpoint path and attaches its handshake
-    ``metadata`` dict (see ``act``). Loads are synchronous and fast (<20s), so ``on_progress`` is unused.
+    ``policy_factory`` builds the backbone policy from a checkpoint path — that is its whole contract,
+    so any callable returning a ``PreTrainedPolicy`` works. ``model_type`` names what it built, for the
+    handshake. Loads are synchronous and fast (<20s), so ``on_progress`` is unused.
     """
 
     def __init__(
@@ -43,11 +42,13 @@ class LerobotSource(ModelSource):
         checkpoints_dir: str | Path,
         checkpoint: str | None = None,
         device: str | None = None,
+        model_type: str = 'act',
     ):
         self._policy_factory = policy_factory
         self._checkpoints_dir = str(checkpoints_dir).rstrip('/') + '/checkpoints'
         self._checkpoint = checkpoint
         self._device = device or _detect_device()
+        self._model_type = model_type
         self._experiment_name = str(checkpoints_dir).rstrip('/').split('/')[-1] or ''
 
     def get_models(self) -> list[str]:
@@ -60,7 +61,8 @@ class LerobotSource(ModelSource):
         checkpoint_path = f'{self._checkpoints_dir}/{model_id}/pretrained_model'
         logger.info(f'Loading checkpoint from {checkpoint_path}')
         policy = self._policy_factory(checkpoint_path)
-        return LerobotPolicy(policy, self._device, extra_meta=policy.metadata)
+        meta = {'type': self._model_type, 'checkpoint_path': checkpoint_path}
+        return LerobotPolicy(policy, self._device, extra_meta=meta)
 
     def meta(self, model_id: str) -> dict[str, Any]:
         return {'device': self._device, 'experiment_name': self._experiment_name}
@@ -89,6 +91,7 @@ PIPELINES = {
 @cfn.config(
     pipeline='ee',
     policy_factory=act,
+    model_type='act',
     checkpoint=None,
     port=8000,
     host='0.0.0.0',
@@ -98,6 +101,7 @@ PIPELINES = {
 def main(
     pipeline: str,
     policy_factory: Callable[[str], PreTrainedPolicy],
+    model_type: str,
     checkpoints_dir: str,
     checkpoint: str | None,
     port: int,
@@ -107,6 +111,7 @@ def main(
 ):
     cfg = PIPELINES[pipeline].override(**{
         'source.policy_factory': policy_factory,
+        'source.model_type': model_type,
         'source.checkpoints_dir': str(pos3.download(checkpoints_dir)),
         'source.checkpoint': checkpoint,
     })

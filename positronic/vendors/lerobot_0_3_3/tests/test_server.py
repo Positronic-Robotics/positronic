@@ -34,6 +34,18 @@ class _DummyWebSocket:
         await self._close(**kwargs)
 
 
+def test_handshake_metadata_does_not_depend_on_the_factory():
+    """A factory's whole contract is returning a policy, so a plain one carrying no extra attributes
+    still yields complete metadata — ``checkpoint_path`` included, since sampling keys on it."""
+    source = lerobot_server.LerobotSource(
+        policy_factory=lambda _path: MagicMock(spec=lerobot_server.PreTrainedPolicy), checkpoints_dir='s3://bucket/exp'
+    )
+    assert source.load('42').meta == {
+        'type': 'act',
+        'checkpoint_path': 's3://bucket/exp/checkpoints/42/pretrained_model',
+    }
+
+
 def _make_server(checkpoint: str | None) -> PolicyServer:
     source = lerobot_server.LerobotSource(
         policy_factory=lambda _checkpoint: MagicMock(), checkpoints_dir='s3://bucket/exp', checkpoint=checkpoint
