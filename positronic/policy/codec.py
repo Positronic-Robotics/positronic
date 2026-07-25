@@ -51,7 +51,6 @@ class Codec(PolicyWrapper):
     ``image_sizes``
         The image dimensions this codec encodes to. Either a ``(width, height)`` tuple (same
         size for all images) or a dict mapping raw input keys to ``(width, height)`` tuples.
-        ``RestrictImageSize.from_codec`` reads it to bound what a rig puts on the wire.
     """
 
     def encode(self, data: dict) -> dict:
@@ -409,33 +408,18 @@ def _scaled(image: np.ndarray, width: int, height: int) -> np.ndarray:
 class RestrictImageSize(Codec):
     """Bounds image dimensions on the rig so full-resolution frames never reach the wire.
 
-    ``sizes`` is one ``(width, height)`` bound for every image, or a bound per observation key. Images
-    larger than their bound are scaled down to fit it, keeping aspect ratio; anything already within it
-    passes through untouched. This decides bandwidth, never geometry — the model's own codec still
-    resizes exactly, and serving without this codec differs only in bytes on the wire.
+    Images larger than ``width`` x ``height`` are scaled down to fit it, keeping aspect ratio; anything
+    already within it passes through untouched. This decides bandwidth, never geometry — the model's own
+    codec still resizes exactly, and serving without this codec differs only in bytes on the wire.
 
     Declared left of the ``remote`` marker, so the rig applies it before sending::
 
-        ChunkedSchedule() | RestrictImageSize.from_codec(codec) | remote | codec | source
+        ChunkedSchedule() | RestrictImageSize() | remote | codec | source
     """
 
-    def __init__(self, sizes: Any):
-        # A wire round-trip (msgpack) turns tuples into lists, so both spellings normalize to tuples.
-        if isinstance(sizes, cabc.Mapping):
-            self._per_key = {k: (int(w), int(h)) for k, (w, h) in sizes.items()}
-            self._bound: tuple[int, int] | None = None
-        else:
-            w, h = sizes
-            self._per_key = {}
-            self._bound = (int(w), int(h))
-
-    @classmethod
-    def from_codec(cls, codec: Codec) -> 'RestrictImageSize':
-        """The bound implied by a codec's own declared input geometry."""
-        sizes = codec.meta.get('image_sizes')
-        if sizes is None:
-            raise ValueError(f'{type(codec).__name__} declares no image_sizes to bound images by')
-        return cls(sizes)
+    def __init__(self, width: int = 640, height: int = 640):
+        self._width = width
+        self._height = height
 
     def encode(self, data):
         return {key: self._restrict(key, value) for key, value in data.items()}
@@ -443,21 +427,15 @@ class RestrictImageSize(Codec):
     def _restrict(self, key: str, value: Any) -> Any:
         # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
         if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
-            return self._restrict_image(key, value)
+            # A TemporalStack emits a (T, H, W, 3) stack, so bound each frame rather than the stack's first axis.
+            if value.ndim == 4:
+                return np.stack([_scaled(frame, self._width, self._height) for frame in value])
+            return _scaled(value, self._width, self._height)
         if isinstance(value, cabc.Mapping):
             return {k: self._restrict(k, v) for k, v in value.items()}
         if isinstance(value, list | tuple):
             return type(value)(self._restrict(key, v) for v in value)
         return value
-
-    def _restrict_image(self, key: str, image: np.ndarray) -> np.ndarray:
-        bound = self._per_key.get(key, self._bound)
-        if bound is None:
-            return image
-        # A TemporalStack emits a (T, H, W, 3) stack, so bound each frame rather than the stack's first axis.
-        if image.ndim == 4:
-            return np.stack([_scaled(frame, *bound) for frame in image])
-        return _scaled(image, *bound)
 
     def decode(self, data, *, context=None):
         return data
@@ -470,6 +448,4 @@ class RestrictImageSize(Codec):
         )
 
     def to_spec(self):
-        # Normalized to lists so the spec is identical before and after a wire round-trip.
-        sizes = {k: list(v) for k, v in self._per_key.items()} if self._bound is None else list(self._bound)
-        return {'name': 'restrict_image_size', 'args': {'sizes': sizes}}
+        return {'name': 'restrict_image_size', 'args': {'width': self._width, 'height': self._height}}

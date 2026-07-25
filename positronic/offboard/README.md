@@ -79,7 +79,7 @@ Upon connection, the server sends a ready packet with metadata:
     "action_horizon_sec": 1.0,
     "local_stack": {"seq": [
       {"name": "chunked_schedule"},
-      {"name": "restrict_image_size", "args": {"sizes": [224, 224]}}
+      {"name": "restrict_image_size", "args": {"width": 640, "height": 640}}
     ]},
     "positronic_version": "0.2.1"
   }

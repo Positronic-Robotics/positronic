@@ -283,7 +283,7 @@ dreamzero_source = cfn.Config(DreamZeroSource)
 @cfn.config(local=codecs.dreamzero_wrappers, codec=codecs.joints, source=dreamzero_source)
 def pipe(local: PolicyWrapper, codec: Codec, source: ModelSource):
     """One DreamZero serving pipe: the rig-side AR video context, the codec, the subprocess-backed source."""
-    return local | RestrictImageSize.from_codec(codec) | remote | codec | source
+    return local | RestrictImageSize() | remote | codec | source
 
 
 PIPES = {
