@@ -11,7 +11,7 @@ import numpy as np
 
 try:
     import positronic_franka._franka as pf
-    from positronic_franka.desk import Desk
+    from positronic_franka.desk import Desk, SafetyControllerError
 except ImportError as e:
     raise ImportError(
         'Franka support is not installed. Install the hardware extra:\n'
@@ -29,6 +29,22 @@ from .models import attach_robotiq_2f85
 
 def _check_error(is_error, was_error):
     return is_error, is_error and not was_error
+
+
+def _read_desk_credentials() -> tuple[str, str]:
+    """Franka Desk login and password from the environment. Credentials stay out of the config so they never reach
+    the command line, which is recorded verbatim in every run's metadata."""
+    login, password = os.environ.get('FRANKA_DESK_USER'), os.environ.get('FRANKA_DESK_PASSWORD')
+    if not (login and password):
+        missing = ' and '.join(
+            name for name, value in (('FRANKA_DESK_USER', login), ('FRANKA_DESK_PASSWORD', password)) if not value
+        )
+        raise RuntimeError(
+            f'{missing} not set in the environment. The driver needs Desk credentials to open the brakes and '
+            f'activate FCI. Export them, or pass manage_desk=False to open the brakes and activate FCI yourself '
+            f'in Desk before starting.'
+        )
+    return login, password
 
 
 class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
@@ -100,8 +116,8 @@ class Robot(pimm.ControlSystem):
         home_joints_variation: list[float] | None = None,
         load: tuple | None = None,
         collision_coeff: float = 2.0,
-        desk_login: str | None = None,
-        desk_password: str | None = None,
+        manage_desk: bool = True,
+        reboot_on_safety_error: bool = False,
     ) -> None:
         """
         :param ip: IP address of the robot.
@@ -110,9 +126,13 @@ class Robot(pimm.ControlSystem):
         :param home_joints_variation: Max random deviation per joint in radians. Set to [0]*7 to disable.
         :param collision_coeff: Multiplier for collision thresholds. Higher = more tolerant.
             Default 2.0 (data collection). Use 6.0 for inference.
-        :param desk_login: Franka Desk login; defaults to the ``FRANKA_DESK_USER`` env var. When set with
-            ``desk_password``, the driver opens brakes and activates FCI via Desk on start and closes them on stop.
-        :param desk_password: Franka Desk password; defaults to the ``FRANKA_DESK_PASSWORD`` env var.
+        :param manage_desk: Run the Desk session from the driver: open the brakes and activate FCI on start, close
+            them on stop. Requires ``FRANKA_DESK_USER`` and ``FRANKA_DESK_PASSWORD`` in the environment. Set to
+            False to leave brakes and FCI to the operator; the driver then never contacts Desk and expects FCI to
+            be up already.
+        :param reboot_on_safety_error: When the control box is in an unrecoverable ``SafetyError`` on start, reboot
+            it, wait for it to come back, and try once more before giving up. Only applies when ``manage_desk`` is
+            set.
         """
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
@@ -126,8 +146,8 @@ class Robot(pimm.ControlSystem):
         self._load = load
         self._collision_coeff = collision_coeff
         self._robot: pf.Robot | None = None
-        self._desk_login = desk_login if desk_login is not None else os.environ.get('FRANKA_DESK_USER')
-        self._desk_password = desk_password if desk_password is not None else os.environ.get('FRANKA_DESK_PASSWORD')
+        self._desk_credentials = _read_desk_credentials() if manage_desk else None
+        self._reboot_on_safety_error = reboot_on_safety_error
 
     @staticmethod
     def _build_robot_meta(robot) -> dict:
@@ -189,8 +209,7 @@ class Robot(pimm.ControlSystem):
             lower_force_threshold_nominal=(coeff * force_threshold_nominal).tolist(),
             upper_force_threshold_nominal=(coeff * force_threshold_nominal * 2).tolist(),
         )
-        robot.set_joint_impedance([3000, 3000, 3000, 2500, 2500, 2000, 2000])
-        robot.set_cartesian_impedance([3000, 3000, 3000, 300, 300, 300])
+        robot.set_control_mode(pf.InternalImpedance([3000, 3000, 3000, 2500, 2500, 2000, 2000]))
         if self._load is not None:
             logging.info(f'Setting load to {self._load}')
             robot.set_load(*self._load)
@@ -215,13 +234,28 @@ class Robot(pimm.ControlSystem):
     @contextlib.contextmanager
     def _desk_session(self):
         """Bracket the run with a Franka Desk session that opens brakes and activates FCI, and always releases
-        control on exit. A no-op when Desk credentials are not configured (manual brake control, or simulation)."""
-        if not (self._desk_login and self._desk_password):
+        control on exit. Hands both over to the operator when the driver does not manage Desk. When configured,
+        recover a control box stuck in ``SafetyError`` by rebooting it once and retrying."""
+        if self._desk_credentials is None:
+            logging.info('Desk is not managed by the driver; brakes must be open and FCI active before the run')
             yield
             return
-        with Desk(self._ip, self._desk_login, self._desk_password) as desk:
-            desk.prepare()
-            yield
+        rebooted = False
+        while True:
+            with Desk(self._ip, *self._desk_credentials) as desk:
+                try:
+                    desk.prepare()
+                except SafetyControllerError:
+                    if rebooted or not self._reboot_on_safety_error:
+                        raise
+                    logging.warning('Control box in SafetyError; rebooting it (unreachable ~40s) and retrying once')
+                    desk.reboot(wait=True)
+                    rebooted = True
+                else:
+                    if rebooted:
+                        logging.info('Control box recovered after reboot')
+                    yield desk
+                    return
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         with self._desk_session():
