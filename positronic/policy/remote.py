@@ -37,15 +37,18 @@ def _operator_override(name: str, value: Any, declared: Any) -> bool:
     return True
 
 
-def _legacy_bound(sizes: Any) -> RestrictImageSize:
+def _legacy_bound(sizes: Any) -> RestrictImageSize | None:
     """A wire bound read off the ``image_sizes`` a server reports, for one that declares no stack.
 
     A ``(width, height)`` pair bounds every image directly; a per-camera mapping collapses to the widest
-    and tallest it names, so no camera is sent smaller than the server encodes it.
+    and tallest it names, so no camera is sent smaller than the server encodes it. A codec that encodes
+    no images names no geometry, and so bounds nothing.
 
     TODO(#514): drop this and its caller once every server declares its own stack.
     """
     pairs = list(sizes.values()) if isinstance(sizes, cabc.Mapping) else [sizes]
+    if not pairs:
+        return None
     return RestrictImageSize(max(w for w, _ in pairs), max(h for _, h in pairs))
 
 
@@ -180,8 +183,8 @@ class RemotePolicy(Policy):
             except Exception as e:
                 version = meta.get('positronic_version', 'unknown')
                 raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
-        if 'image_sizes' in meta:
-            bound = _legacy_bound(meta['image_sizes'])
+        bound = _legacy_bound(meta['image_sizes']) if 'image_sizes' in meta else None
+        if bound is not None:
             logger.warning(
                 'Server declares no local stack; bounding frames to %r from the image_sizes %r it reports',
                 bound.to_spec()['args'],

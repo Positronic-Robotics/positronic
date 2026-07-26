@@ -312,6 +312,12 @@ def test_legacy_per_camera_sizes_collapse_to_the_largest():
     assert sent.shape == (240, 320, 3)
 
 
+def test_legacy_state_only_codec_bounds_nothing():
+    """A codec with no images reports an empty mapping, which names no geometry to bound by."""
+    sent = _sent_frame({'image_sizes': {}})
+    assert sent.shape == (480, 640, 3)
+
+
 def test_declared_stack_wins_over_legacy_image_sizes():
     """`image_sizes` is the codec's geometry; once a server declares a stack, only the stack bounds the wire."""
     sent = _sent_frame({'image_sizes': (224, 224), **EMPTY_STACK})
