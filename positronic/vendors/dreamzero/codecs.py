@@ -13,6 +13,8 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
+from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver
+from positronic.policy.action import IKJointsAction
 from positronic.policy.codec import Codec, lerobot_action, lerobot_image, lerobot_state
 
 IMAGE_WIDTH = 320
@@ -237,9 +239,6 @@ _ik_action = codecs.ik_joints_action.override(tgt_joints_key='robot_command.join
 @cfn.config(solver='dls_limits')
 def _ik_dreamzero_action(solver: str):
     """IK signal derivation composed with DreamZero action codec."""
-    from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver
-    from positronic.policy.action import IKJointsAction
-
     solver_map = {'lm': LMIKSolver, 'dls': DLSIKSolver, 'dls_limits': DLSIKSolverWithLimits}
     ik = IKJointsAction(solver_cls=solver_map[solver])
     return ik | DreamZeroActionCodec(tgt_joints_key='robot_command.joints', tgt_grip_key='target_grip')

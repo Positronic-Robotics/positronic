@@ -27,6 +27,7 @@ import pos3
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.constants import ACTION, OBS_IMAGE, OBS_STATE
 from lerobot.envs.configs import EnvConfig, FeatureType, PolicyFeature
+from lerobot.scripts import train as lerobot_train
 
 from positronic import utils
 from positronic.policy import Codec
@@ -171,8 +172,6 @@ def train(
     utils.save_run_metadata_deferred(Path(cfg.output_dir), patterns=['*.py', '*.toml'])
 
     logging.info('Starting training...')
-    from lerobot.scripts import train as lerobot_train
-
     lerobot_train.init_logging()
     lerobot_train.train(cfg)
     logging.info('Training finished.')

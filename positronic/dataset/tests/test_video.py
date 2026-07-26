@@ -142,8 +142,6 @@ class TestVideoSignalWriter:
 
 class TestVideoSignalStartLastTs:
     def test_video_start_last_ts_basic(self, video_paths):
-        from positronic.dataset.video import VideoSignal
-
         with VideoSignalWriter(video_paths['video'], video_paths['frames'], gop_size=5, fps=30) as writer:
             writer.append(create_frame(10), 1000)
             writer.append(create_frame(20), 2000)
@@ -154,8 +152,6 @@ class TestVideoSignalStartLastTs:
         assert s.last_ts == 4000
 
     def test_video_start_last_ts_empty_raises(self, video_paths):
-        from positronic.dataset.video import VideoSignal
-
         with VideoSignalWriter(video_paths['video'], video_paths['frames']):
             pass
         s = VideoSignal(video_paths['video'], video_paths['frames'])

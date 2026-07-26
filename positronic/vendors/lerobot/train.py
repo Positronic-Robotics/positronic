@@ -31,6 +31,7 @@ from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.envs.configs import EnvConfig, FeatureType, PolicyFeature
 from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig  # noqa: F401 — registers policy
+from lerobot.scripts.lerobot_train import train as lerobot_train
 from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_STATE
 
 from positronic import utils
@@ -224,9 +225,6 @@ def train(
     utils.save_run_metadata_deferred(Path(cfg.output_dir), patterns=['*.py', '*.toml'])
 
     logging.info('Starting training...')
-    # Deferred: lerobot_train triggers heavy CUDA/model registry init on import.
-    from lerobot.scripts.lerobot_train import train as lerobot_train  # noqa: E402
-
     lerobot_train(cfg)
     logging.info('Training finished.')
 

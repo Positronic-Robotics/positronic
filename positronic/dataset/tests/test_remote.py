@@ -6,6 +6,7 @@ import socket
 import threading
 import time
 
+import httpx
 import numpy as np
 import pos3
 import pytest
@@ -159,8 +160,6 @@ def running_server(dataset_with_video):
     # Wait for server to start
     for _ in range(50):
         try:
-            import httpx
-
             httpx.get(f'http://127.0.0.1:{port}/api/v1/dataset/info', timeout=0.1)
             break
         except Exception:
@@ -267,8 +266,6 @@ def test_migrate_remote_dataset_numeric_only(tmp_path):
 
     for _ in range(50):
         try:
-            import httpx
-
             httpx.get(f'http://127.0.0.1:{port}/api/v1/dataset/info', timeout=0.1)
             break
         except Exception:
