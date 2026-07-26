@@ -150,8 +150,7 @@ pyzed = [
 openpi-client = { git = "https://github.com/Positronic-Robotics/openpi.git", rev = "main-positronic", subdirectory = "packages/openpi-client" }
 
 [tool.pytest.ini_options]
-# Search roots, not a list of suites: a new `tests/` directory is collected without being registered
-# here. Suites that cannot run in the default environment are excluded below, one line each.
+# Search roots, not a list of suites, so a new `tests/` directory is collected without being registered
 testpaths = ["pimm", "positronic", "utilities"]
 python_files = ["test_*.py", "*_test.py"]
 addopts = [
@@ -195,9 +194,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py files
-# Configs import hardware inside their `@cfn.config` bodies, so that selecting one config does not
-# drag in every driver's dependencies. Elsewhere a deferred import needs its own `# noqa: PLC0415`.
-"positronic/cfg/**" = ["PLC0415"]
+"positronic/cfg/**" = ["PLC0415"]  # Configs defer hardware imports into their `@cfn.config` bodies
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10
