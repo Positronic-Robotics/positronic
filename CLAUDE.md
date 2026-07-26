@@ -7,17 +7,22 @@
 - Ask clarifying questions only when requirements are genuinely ambiguous and investigation can't resolve them
 
 # Commands
-- Every Python execution goes through `uv run --locked` — bare `python`/`pytest` bypasses the locked venv
-- Run tests: `uv run --locked pytest --no-cov`
-- Run single test file: `uv run --locked pytest path/to/test_file.py --no-cov`
-- Lint: `uv run --locked ruff check --fix .`
-- Format: `uv run --locked ruff format .`
-- Run any Python: `uv run --locked python script.py`
-- Syntax check: `uv run --locked python -m py_compile file.py`
+- Every Python execution goes through `uv run --locked --extra dev` — bare `python`/`pytest` bypasses the locked
+  venv, and dropping `--extra dev` uninstalls the dev tools (see Dependency management)
+- Run tests: `uv run --locked --extra dev pytest --no-cov`
+- Run single test file: `uv run --locked --extra dev pytest path/to/test_file.py --no-cov`
+- Lint: `uv run --locked --extra dev ruff check --fix .`
+- Format: `uv run --locked --extra dev ruff format .`
+- Run any Python: `uv run --locked --extra dev python script.py`
+- Syntax check: `uv run --locked --extra dev python -m py_compile file.py`
 
 # Dependency management
 - `uv.lock` is committed; CI and Docker run `uv sync --locked` to install exactly what's locked
 - To change deps: edit `pyproject.toml`, then run `uv lock`, then commit `pyproject.toml` and `uv.lock` together in one reviewed change — never let `uv.lock` drift implicitly
+- `uv run` and `uv sync` make the venv match what the command asks for and uninstall everything else, so a run
+  without `--extra dev` removes `pre-commit` and the git hook that calls it stops working. Name every extra the
+  task needs in one command (`uv sync --locked --extra dev --extra yam`); a second command replaces the first
+  rather than adding to it
 
 # Design discipline
 - When a change has a design thesis ("World owns time", "Harness is name-free"), enumerate its consequences for
