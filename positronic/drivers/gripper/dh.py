@@ -7,8 +7,8 @@ from positronic.drivers.roboarm.command import Trajectory, TrajectoryPlayer
 
 try:
     import pymodbus.client as ModbusClient
-except ImportError as e:
-    raise ImportError(f'Gripper support is not installed. {HARDWARE_EXTRA_HINT}') from e
+except ModuleNotFoundError as e:
+    raise ModuleNotFoundError(f'Gripper support is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 
 class DHGripper(pimm.ControlSystem):

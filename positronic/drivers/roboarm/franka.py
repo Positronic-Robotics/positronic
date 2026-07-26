@@ -19,8 +19,8 @@ from .models import attach_robotiq_2f85
 try:
     import positronic_franka._franka as pf
     from positronic_franka.desk import Desk, SafetyControllerError
-except ImportError as e:
-    raise ImportError(f'Franka support is not installed. {HARDWARE_EXTRA_HINT}') from e
+except ModuleNotFoundError as e:
+    raise ModuleNotFoundError(f'Franka support is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 
 def _check_error(is_error, was_error):

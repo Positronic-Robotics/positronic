@@ -5,8 +5,8 @@ from positronic.drivers import HARDWARE_EXTRA_HINT
 
 try:
     import placo
-except ImportError as e:
-    raise ImportError(f'Kinematics support is not installed. {HARDWARE_EXTRA_HINT}') from e
+except ModuleNotFoundError as e:
+    raise ModuleNotFoundError(f'Kinematics support is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 
 class Kinematics:

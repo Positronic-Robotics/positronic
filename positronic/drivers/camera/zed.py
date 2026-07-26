@@ -10,8 +10,8 @@ from positronic.drivers import HARDWARE_EXTRA_HINT
 
 try:
     import pyzed.sl as sl
-except ImportError as e:
-    raise ImportError(f'ZED camera support is not installed. {HARDWARE_EXTRA_HINT}') from e
+except ModuleNotFoundError as e:
+    raise ModuleNotFoundError(f'ZED camera support is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 
 class SLCamera(pimm.ControlSystem):

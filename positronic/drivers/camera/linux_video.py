@@ -9,8 +9,8 @@ from positronic.drivers import HARDWARE_EXTRA_HINT
 
 try:
     from linuxpy.video.device import Device, PixelFormat
-except ImportError as e:
-    raise ImportError(f'Linux video capture is not installed. {HARDWARE_EXTRA_HINT}') from e
+except ModuleNotFoundError as e:
+    raise ModuleNotFoundError(f'Linux video capture is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 
 class LinuxVideo(pimm.ControlSystem):
