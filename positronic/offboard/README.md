@@ -38,8 +38,8 @@ Establishes an inference session with a **specific** model.
 
 The id is everything after the prefix, slashes included, so a source may advertise one that is itself a path:
 `ws://localhost:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID` serves that HuggingFace checkpoint. Anything else
-that would end the path or be decoded away (`?`, `#`, `%`, `:`) must be percent-encoded — the Python client does
-this for you, so `s3://bucket/ckpt-1` is requested as `s3%3A//bucket/ckpt-1` and arrives as the original id.
+that would end the path or be decoded away (`?`, `#`, `%`, `:`) must be percent-encoded by whoever writes the URL,
+so `s3://bucket/ckpt-1` is requested as `s3%3A//bucket/ckpt-1` and arrives as the original id.
 
 #### Session parameters
 
@@ -207,20 +207,18 @@ PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()
 
 ### `client.InferenceClient`
 A Python client for connecting to an inference server. One URL addresses it, in the same forms
-`RemotePolicy` accepts: an omitted port is the scheme's own, 443 for `https`/`wss` and 80 otherwise.
+`RemotePolicy` accepts: an omitted port is the scheme's own, 443 for `https`/`wss` and 80 otherwise. The URL
+fixes the model and the session params, so serving another model means another client.
 
 ```python
 from positronic.offboard.client import InferenceClient
 
+# The server's pinned checkpoint, with no session params
 client = InferenceClient('localhost:8000')
-# The query string rides on every session URL as session params, forwarded verbatim:
-# client = InferenceClient('localhost:8000?codec.fps=10')
+# A named model, tuned for every session this client opens
+# client = InferenceClient('localhost:8000/api/v1/session/model_a?codec.fps=10')
 
-# Connect to the model the URL names, or the server's pinned checkpoint if it names none
 session = client.new_session()
-# OR name one per session, overriding the URL's
-# session = client.new_session('model_a')
-
 meta = session.metadata
 action = session.infer(observation)
 ```

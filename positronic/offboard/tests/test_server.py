@@ -87,8 +87,11 @@ def test_no_codec(stub_server):
 )
 def test_checkpoint_id_in_route(stub_server, checkpoint_id):
     host, port, _server, _policy = stub_server
-    client = InferenceClient(f'{host}:{port}')
-    session = client.new_session(checkpoint_id)
+    # ``safe='/'`` keeps a path-shaped id's separators as path segments, and encodes the characters that
+    # would otherwise end the path (``?``, ``#``) or be decoded away (``%``).
+    quoted = urllib.parse.quote(checkpoint_id, safe='/')
+    client = InferenceClient(f'{host}:{port}/api/v1/session/{quoted}')
+    session = client.new_session()
     try:
         assert session.metadata['checkpoint_id'] == checkpoint_id
     finally:
@@ -126,7 +129,7 @@ def test_latest_checkpoint_pinned_once_at_startup(start_server, make_mock_policy
     finally:
         session.close()
     # Explicit requests still load the named checkpoint.
-    session = client.new_session('200')
+    session = InferenceClient(f'{host}:{port}/api/v1/session/200').new_session()
     try:
         assert session.metadata['checkpoint_id'] == '200'
     finally:

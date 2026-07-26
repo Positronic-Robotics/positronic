@@ -83,7 +83,7 @@ class TestInferenceClientHeaders:
             assert mock_connect.call_args.kwargs['additional_headers'] == headers
             mock_session_cls.assert_called_once_with(mock_connect.return_value, infer_timeout=DEFAULT_INFER_TIMEOUT)
 
-    def test_new_session_without_headers_omits_additional_headers(self):
+    def test_new_session_without_headers_passes_none(self):
         with (
             patch('positronic.offboard.client.connect') as mock_connect,
             patch('positronic.offboard.client.InferenceSession'),
@@ -92,7 +92,7 @@ class TestInferenceClientHeaders:
             client.new_session()
 
             mock_connect.assert_called_once()
-            assert 'additional_headers' not in mock_connect.call_args.kwargs
+            assert mock_connect.call_args.kwargs['additional_headers'] is None
 
     def test_list_models_passes_headers(self):
         headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
@@ -114,126 +114,54 @@ class TestInferenceClientHeaders:
             assert mock_get.call_args.kwargs['headers'] is None
 
 
-class TestSessionUri:
-    """The URI each session connects to: the model id as a path segment, then the query."""
-
-    def test_params_forwarded_verbatim(self):
-        with (
-            patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
-        ):
-            client = InferenceClient('localhost:8000?codec.fps=10&pad=false')
-            client.new_session()
-
-            # A query string is not re-encoded: 'false' stays the JSON literal the caller wrote.
-            assert mock_connect.call_args.args[0] == 'ws://localhost:8000/api/v1/session?codec.fps=10&pad=false'
-
-    def test_new_session_without_params_leaves_uri_bare(self):
-        with (
-            patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
-        ):
-            client = InferenceClient('localhost:8000')
-            client.new_session()
-
-            assert '?' not in mock_connect.call_args.args[0]
-
-    def test_new_session_appends_params_after_model_id(self):
-        with (
-            patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
-        ):
-            client = InferenceClient('localhost:8000?fps=10')
-            client.new_session(model_id='m1')
-
-            assert mock_connect.call_args.args[0] == 'ws://localhost:8000/api/v1/session/m1?fps=10'
-
-    def test_url_model_id_serves_every_session(self):
-        with (
-            patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
-        ):
-            client = InferenceClient('localhost:8000/api/v1/session/10000')
-            client.new_session()
-
-            assert mock_connect.call_args.args[0] == 'ws://localhost:8000/api/v1/session/10000'
-
-    def test_explicit_model_id_overrides_the_url(self):
-        with (
-            patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
-        ):
-            client = InferenceClient('localhost:8000/api/v1/session/10000')
-            client.new_session(model_id='20000')
-
-            assert mock_connect.call_args.args[0] == 'ws://localhost:8000/api/v1/session/20000'
-
-    def test_url_model_id_reaches_the_wire_as_written(self):
-        """The URL's own encoding is what the server decodes, so the client neither re-encodes nor normalizes."""
-        with (
-            patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
-        ):
-            client = InferenceClient('localhost:8000/api/v1/session/s3%3A//bucket/ckpt%231')
-            client.new_session()
-
-            assert mock_connect.call_args.args[0] == 'ws://localhost:8000/api/v1/session/s3%3A//bucket/ckpt%231'
-
-    def test_explicit_model_id_is_encoded_for_the_path(self):
-        """An id given as a Python string is raw, so the characters that would end the path are escaped."""
-        with (
-            patch('positronic.offboard.client.connect') as mock_connect,
-            patch('positronic.offboard.client.InferenceSession'),
-        ):
-            client = InferenceClient('localhost:8000')
-            client.new_session(model_id='s3://bucket/ckpt#1')
-
-            assert mock_connect.call_args.args[0] == 'ws://localhost:8000/api/v1/session/s3%3A//bucket/ckpt%231'
-
-
 class TestInferenceClientUrl:
     """One URL carries host, port, TLS, model id, and session params; headers stay their own argument."""
 
     def test_bare_host_defaults_to_the_scheme_port(self):
         client = InferenceClient('gpu-host')
-        assert client.base_uri == 'ws://gpu-host/api/v1/session'
+        assert client.session_url == 'ws://gpu-host/api/v1/session'
         assert client.api_url == 'http://gpu-host/api/v1'
-        assert client._query is None
 
-    def test_host_port_and_query_verbatim(self):
+    def test_explicit_port_is_kept(self):
+        client = InferenceClient('localhost:8000')
+        assert client.session_url == 'ws://localhost:8000/api/v1/session'
+        assert client.api_url == 'http://localhost:8000/api/v1'
+
+    def test_query_rides_along_verbatim(self):
+        """Nothing re-encodes the query: 'false' stays the JSON literal whoever wrote the URL meant."""
         client = InferenceClient('gpu-host:9000?codec.fps=10&pad=false')
-        assert client.base_uri == 'ws://gpu-host:9000/api/v1/session'
+        assert client.session_url == 'ws://gpu-host:9000/api/v1/session?codec.fps=10&pad=false'
         assert client.api_url == 'http://gpu-host:9000/api/v1'
-        assert client._query == 'codec.fps=10&pad=false'
-
-    def test_full_url_with_model_id(self):
-        client = InferenceClient('https://gpu-host:8443/api/v1/session/10000?fps=2.5')
-        assert client.base_uri == 'wss://gpu-host:8443/api/v1/session'
-        assert client.api_url == 'https://gpu-host:8443/api/v1'
-        assert client._model_segment == '10000'
-        assert client._query == 'fps=2.5'
 
     def test_tls_scheme_defaults_to_443(self):
         """`https://` is the scheme a fronted endpoint hands out; `wss://` names the same connection."""
         for url in ('https://example.com', 'wss://example.com'):
             client = InferenceClient(url)
-            assert client.base_uri == 'wss://example.com/api/v1/session'
+            assert client.session_url == 'wss://example.com/api/v1/session'
             assert client.api_url == 'https://example.com/api/v1'
 
+    def test_full_url_keeps_model_id_and_query(self):
+        client = InferenceClient('https://gpu-host:8443/api/v1/session/10000?fps=2.5')
+        assert client.session_url == 'wss://gpu-host:8443/api/v1/session/10000?fps=2.5'
+        assert client.api_url == 'https://gpu-host:8443/api/v1'
+
     @pytest.mark.parametrize('url', ['gpu-host/', 'http://gpu-host/api/v1/session', 'http://gpu-host/api/v1/session/'])
-    def test_session_path_without_model_id(self, url):
-        client = InferenceClient(url)
-        assert client._model_segment is None
-        assert client.base_uri == 'ws://gpu-host/api/v1/session'
+    def test_url_naming_no_model_is_the_bare_endpoint(self, url):
+        assert InferenceClient(url).session_url == 'ws://gpu-host/api/v1/session'
 
     def test_trailing_slash_belongs_to_the_model_id(self):
         """Sources advertise pinned checkpoint dirs verbatim, and `resolve` matches ids exactly."""
         client = InferenceClient('http://gpu-host/api/v1/session/s3%3A//ckpt/checkpoint-500/')
-        assert client._model_segment == 's3%3A//ckpt/checkpoint-500/'
+        assert client.session_url == 'ws://gpu-host/api/v1/session/s3%3A//ckpt/checkpoint-500/'
 
     def test_model_id_keeps_its_slashes(self):
         client = InferenceClient('http://gpu-host:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID')
-        assert client._model_segment == 'GEAR-Dreams/DreamZero-DROID'
+        assert client.session_url == 'ws://gpu-host:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID'
+
+    def test_percent_encoding_survives_as_written(self):
+        """The server decodes the id whoever handed out the URL meant, so the client normalizes nothing."""
+        client = InferenceClient('gpu-host:8000/api/v1/session/s3%3A//bucket/ckpt%231')
+        assert client.session_url == 'ws://gpu-host:8000/api/v1/session/s3%3A//bucket/ckpt%231'
 
     def test_unexpected_path_rejected(self):
         with pytest.raises(ValueError, match='/api/v1/session'):
@@ -245,13 +173,25 @@ class TestInferenceClientUrl:
         with pytest.raises(ValueError, match='scheme'):
             InferenceClient('ftp://gpu-host:8000')
 
+    def test_every_session_dials_the_session_url(self):
+        with (
+            patch('positronic.offboard.client.connect') as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+        ):
+            client = InferenceClient('localhost:8000/api/v1/session/10000?fps=10')
+            client.new_session()
+            client.new_session()
+
+            assert mock_connect.call_count == 2
+            for call in mock_connect.call_args_list:
+                assert call.args[0] == client.session_url == 'ws://localhost:8000/api/v1/session/10000?fps=10'
+
 
 def test_remote_policy_hands_the_url_and_headers_to_the_client():
     headers = {'Modal-Key': 'k'}
     client = RemotePolicy('https://example.com/api/v1/session/10000', headers=headers)._endpoint._client
     assert client is not None
-    assert client.base_uri == 'wss://example.com/api/v1/session'
-    assert client._model_segment == '10000'
+    assert client.session_url == 'wss://example.com/api/v1/session/10000'
     assert client.headers == headers
 
 
