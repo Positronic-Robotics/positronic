@@ -151,7 +151,8 @@ class RemotePolicy(Policy):
     The server's ``ready`` handshake declares the local half of its policy pipeline (the
     ``local_stack`` spec — see ``positronic.policy.spec``) along with the wire settings of the
     ``remote`` marker. The declared wrappers are built here, once, and every session runs through
-    them; a server that declares no stack gets the standard ``ChunkedSchedule``.
+    them. A server that declares no stack gets the standard ``ChunkedSchedule`` — or the operator's
+    ``local`` — with the ``image_sizes`` such a server reports bounding the wire either way.
 
     ``local`` and ``compress_images`` stand in for a server that declares neither — see
     ``_operator_override``. ``recording_dir`` taps the raw and wire boundaries around the stack.
@@ -175,24 +176,26 @@ class RemotePolicy(Policy):
     def _resolve_stack(self) -> PolicyWrapper | None:
         meta = self._endpoint.server_meta()
         declared = meta.get('local_stack')
-        if _operator_override('local', self._local, declared):
-            return self._local
+        # Settles the operator's stack against the declaration before either is built.
+        _operator_override('local', self._local, declared)
         if declared is not None:
             try:
                 return from_spec(declared)
             except Exception as e:
                 version = meta.get('positronic_version', 'unknown')
                 raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
+        # The bound is a wire setting rather than part of the stack, so it outlives whichever stack runs.
+        stack = ChunkedSchedule() if self._local is None else self._local
         bound = _legacy_bound(meta['image_sizes']) if 'image_sizes' in meta else None
-        if bound is not None:
-            logger.warning(
-                'Server declares no local stack; bounding frames to %r from the image_sizes %r it reports',
-                bound.to_spec()['args'],
-                meta['image_sizes'],
-            )
-            return ChunkedSchedule() | bound
-        logger.info('Server declared no local stack; running the standard ChunkedSchedule')
-        return ChunkedSchedule()
+        if bound is None:
+            logger.info('Server declares no local stack and names no image geometry; frames go out unbounded')
+            return stack
+        logger.warning(
+            'Server declares no local stack; bounding frames to %r from the image_sizes %r it reports',
+            bound.to_spec()['args'],
+            meta['image_sizes'],
+        )
+        return stack | bound
 
     def _policy(self) -> Policy:
         if self._stacked is None:

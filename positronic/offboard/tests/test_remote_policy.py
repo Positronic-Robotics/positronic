@@ -290,9 +290,9 @@ def test_operator_local_drives_a_server_that_declares_nothing():
     assert session({'obs_time_ns': 0}) == [{'a': 1}]
 
 
-def _sent_frame(metadata):
+def _sent_frame(metadata, local=None):
     """The 'cam' frame as it reached the wire, for a server whose handshake is `metadata`."""
-    policy, mock_ws = _mock_remote_policy(metadata, infer_return=[])
+    policy, mock_ws = _mock_remote_policy(metadata, infer_return=[], local=local)
     policy.new_session(now=lambda: 0.0)({'obs_time_ns': 0, 'cam': _make_image(480, 640)})
     return mock_ws.infer.call_args.args[0]['cam']
 
@@ -310,6 +310,11 @@ def test_legacy_per_camera_sizes_collapse_to_the_largest():
     """One bound covers every image, so a mapping errs large rather than shrinking a camera too far."""
     sent = _sent_frame({'image_sizes': {'cam': (224, 224), 'wrist': (320, 256)}})
     assert sent.shape == (240, 320, 3)
+
+
+def test_legacy_image_sizes_bound_an_operator_stack_too():
+    """The bound is a wire setting rather than part of the stack, so `--policy.local` does not drop it."""
+    assert _sent_frame({'image_sizes': (224, 224)}, local=ChunkedSchedule()).shape == (168, 224, 3)
 
 
 def test_legacy_state_only_codec_bounds_nothing():
