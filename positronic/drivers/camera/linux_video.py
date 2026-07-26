@@ -5,12 +5,10 @@ import cv2
 import numpy as np
 
 import pimm
-from positronic.drivers import HARDWARE_EXTRA_HINT
+from positronic.drivers import vendor_import
 
-try:
+with vendor_import('linuxpy', 'Linux video capture'):
     from linuxpy.video.device import Device, PixelFormat
-except ModuleNotFoundError as e:
-    raise ModuleNotFoundError(f'Linux video capture is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 
 class LinuxVideo(pimm.ControlSystem):

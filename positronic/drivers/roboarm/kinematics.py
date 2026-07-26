@@ -1,12 +1,10 @@
 import numpy as np
 
 from positronic import geom
-from positronic.drivers import HARDWARE_EXTRA_HINT
+from positronic.drivers import vendor_import
 
-try:
+with vendor_import('placo', 'Kinematics support'):
     import placo
-except ModuleNotFoundError as e:
-    raise ModuleNotFoundError(f'Kinematics support is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 
 class Kinematics:

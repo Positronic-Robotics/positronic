@@ -6,12 +6,10 @@ import numpy as np
 
 import pimm
 from pimm.shared_memory import NumpySMAdapter
-from positronic.drivers import HARDWARE_EXTRA_HINT
+from positronic.drivers import vendor_import
 
-try:
+with vendor_import('pyzed', 'ZED camera support'):
     import pyzed.sl as sl
-except ModuleNotFoundError as e:
-    raise ModuleNotFoundError(f'ZED camera support is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 
 class SLCamera(pimm.ControlSystem):

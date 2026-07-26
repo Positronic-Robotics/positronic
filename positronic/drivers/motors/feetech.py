@@ -2,12 +2,10 @@
 
 import numpy as np
 
-from positronic.drivers import HARDWARE_EXTRA_HINT
+from positronic.drivers import vendor_import
 
-try:
+with vendor_import('scservo_sdk', 'Feetech motor support'):
     import scservo_sdk as scs
-except ModuleNotFoundError as e:
-    raise ModuleNotFoundError(f'Feetech motor support is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 PROTOCOL_VERSION = 0
 TIMEOUT_MS = 1000

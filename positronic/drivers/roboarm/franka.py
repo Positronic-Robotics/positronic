@@ -11,16 +11,14 @@ import numpy as np
 
 import pimm
 from positronic import geom
-from positronic.drivers import HARDWARE_EXTRA_HINT
+from positronic.drivers import vendor_import
 
 from . import RobotStatus, State, command
 from .models import attach_robotiq_2f85
 
-try:
+with vendor_import('positronic_franka', 'Franka support'):
     import positronic_franka._franka as pf
     from positronic_franka.desk import Desk, SafetyControllerError
-except ModuleNotFoundError as e:
-    raise ModuleNotFoundError(f'Franka support is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 
 def _check_error(is_error, was_error):

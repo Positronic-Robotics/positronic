@@ -2,13 +2,11 @@ import time
 from ctypes import c_uint16
 
 import pimm
-from positronic.drivers import HARDWARE_EXTRA_HINT
+from positronic.drivers import vendor_import
 from positronic.drivers.roboarm.command import Trajectory, TrajectoryPlayer
 
-try:
+with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
-except ModuleNotFoundError as e:
-    raise ModuleNotFoundError(f'Gripper support is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 
 class DHGripper(pimm.ControlSystem):

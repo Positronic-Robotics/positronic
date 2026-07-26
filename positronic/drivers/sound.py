@@ -6,12 +6,10 @@ from collections.abc import Iterator
 import numpy as np
 
 import pimm
-from positronic.drivers import HARDWARE_EXTRA_HINT
+from positronic.drivers import vendor_import
 
-try:
+with vendor_import('pyaudio', 'Sound support'):
     import pyaudio
-except ModuleNotFoundError as e:
-    raise ModuleNotFoundError(f'Sound support is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 
 class SoundSystem(pimm.ControlSystem):
