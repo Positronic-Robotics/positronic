@@ -12,6 +12,7 @@ from typing import Any
 import configuronic as cfn
 import numpy as np
 import pos3
+import websockets.sync.client
 from fastapi import WebSocket
 from huggingface_hub import snapshot_download
 
@@ -66,8 +67,6 @@ class RoboarenaClient:
         self._server_metadata: dict | None = None
 
     def connect(self):
-        import websockets.sync.client
-
         self._ws = websockets.sync.client.connect(
             f'ws://{self._host}:{self._port}', compression=None, max_size=None, ping_interval=60, ping_timeout=600
         )

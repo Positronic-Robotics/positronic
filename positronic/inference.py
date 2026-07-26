@@ -38,7 +38,8 @@ class KeyboardHandler:
 @cfn.config(ui_scale=1)
 def eval_ui(ui_scale):
     def make(output_dir: Path | None) -> Driver:
-        from positronic.gui.eval import EvalUI
+        # Deferred: `dearpygui` has no ARM Linux wheel, so the desktop UI is imported only when one is asked for.
+        from positronic.gui.eval import EvalUI  # noqa: PLC0415
 
         gui = EvalUI(output_dir, ui_scale=ui_scale)
         return Driver(gui, gui.directive, pimm.utils.identity, [])

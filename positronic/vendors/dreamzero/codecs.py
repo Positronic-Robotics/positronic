@@ -237,8 +237,8 @@ _ik_action = codecs.ik_joints_action.override(tgt_joints_key='robot_command.join
 @cfn.config(solver='dls_limits')
 def _ik_dreamzero_action(solver: str):
     """IK signal derivation composed with DreamZero action codec."""
-    from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver
-    from positronic.policy.action import IKJointsAction
+    from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver  # noqa: PLC0415
+    from positronic.policy.action import IKJointsAction  # noqa: PLC0415
 
     solver_map = {'lm': LMIKSolver, 'dls': DLSIKSolver, 'dls_limits': DLSIKSolverWithLimits}
     ik = IKJointsAction(solver_cls=solver_map[solver])

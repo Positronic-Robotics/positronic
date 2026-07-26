@@ -15,9 +15,9 @@ try:
 except ImportError as e:
     raise ImportError(
         'Franka support is not installed. Install the hardware extra:\n'
-        '  pip install "positronic[hardware]"\n'
+        '  uv sync --locked --extra hardware\n'
         'or install the Franka core directly:\n'
-        '  pip install positronic-franka\n'
+        '  uv pip install positronic-franka\n'
     ) from e
 
 import pimm

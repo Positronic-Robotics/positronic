@@ -225,7 +225,7 @@ def train(
 
     logging.info('Starting training...')
     # Deferred: lerobot_train triggers heavy CUDA/model registry init on import.
-    from lerobot.scripts.lerobot_train import train as lerobot_train  # noqa: E402
+    from lerobot.scripts.lerobot_train import train as lerobot_train  # noqa: E402, PLC0415
 
     lerobot_train(cfg)
     logging.info('Training finished.')

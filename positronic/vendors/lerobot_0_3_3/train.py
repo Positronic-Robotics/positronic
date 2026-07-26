@@ -171,7 +171,8 @@ def train(
     utils.save_run_metadata_deferred(Path(cfg.output_dir), patterns=['*.py', '*.toml'])
 
     logging.info('Starting training...')
-    from lerobot.scripts import train as lerobot_train
+    # Deferred: lerobot_train triggers heavy CUDA/model registry init on import.
+    from lerobot.scripts import train as lerobot_train  # noqa: PLC0415
 
     lerobot_train.init_logging()
     lerobot_train.train(cfg)

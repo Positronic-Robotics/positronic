@@ -150,26 +150,16 @@ pyzed = [
 openpi-client = { git = "https://github.com/Positronic-Robotics/openpi.git", rev = "main-positronic", subdirectory = "packages/openpi-client" }
 
 [tool.pytest.ini_options]
-testpaths = [
-    "pimm/tests",
-    "positronic/cfg/tests",
-    "positronic/dataset/tests",
-    "positronic/geom/tests",
-    "positronic/offboard/tests",
-    "positronic/policy/tests",
-    "positronic/simulator/env_server/tests",
-    "positronic/tests",
-    "positronic/utils/tests",
-    "positronic/vendors/gr00t/tests",
-    "positronic/vendors/lerobot_0_3_3/tests",
-    "positronic/vendors/lerobot/tests",
-    "utilities/tests",
-]
+# Search roots, not a list of suites: a new `tests/` directory is collected without being registered
+# here. Suites that cannot run in the default environment are excluded below, one line each.
+testpaths = ["pimm", "positronic", "utilities"]
 python_files = ["test_*.py", "*_test.py"]
 addopts = [
     "--cov=pimm",
     "--cov=positronic",
     "--cov-report=term-missing",
+    # Needs the `libero` extra and OSMesa; `libero-e2e.yaml` runs it by path, which `--ignore` allows.
+    "--ignore=positronic/simulator/libero/tests",
 ]
 filterwarnings = [
     "ignore:.*DISPLAY environment variable is missing:glfw.GLFWError",
@@ -196,6 +186,7 @@ select = [
     "B",   # flake8-bugbear
     "C4",  # flake8-comprehensions
     "UP",  # pyupgrade
+    "PLC0415",  # imports belong at the top of the file
 ]
 ignore = [
     "E203",  # whitespace before ':'
@@ -204,6 +195,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py files
+# Configs import hardware inside their `@cfn.config` bodies, so that selecting one config does not
+# drag in every driver's dependencies. Elsewhere a deferred import needs its own `# noqa: PLC0415`.
+"positronic/cfg/**" = ["PLC0415"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10
