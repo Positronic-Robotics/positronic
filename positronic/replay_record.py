@@ -25,6 +25,13 @@ from positronic.utils import package_assets_path
 from positronic.utils.logging import init_logging
 
 
+class _TrajectoryEmitter(pimm.ControlSystemEmitter):
+    """Sends each replayed value as the one-waypoint trajectory the command channels carry, at its playback time."""
+
+    def emit(self, data: Any, ts: int = -1) -> None:
+        super().emit([(ts, data)], ts)
+
+
 class Replay(DsPlayerAgent):
     """Adapts `DsPlayerAgent` to be used as a policy control system."""
 
@@ -35,6 +42,8 @@ class Replay(DsPlayerAgent):
         self.gripper_state = pimm.FakeReceiver(self)
         self.robot_meta_in = pimm.FakeReceiver(self)
         self.frames = pimm.ReceiverDict(self, fake=True)
+        self.outputs['robot_commands'] = _TrajectoryEmitter(self)
+        self.outputs['target_grip'] = _TrajectoryEmitter(self)
 
     @property
     def robot_commands(self) -> pimm.ControlSystemEmitter:

@@ -122,22 +122,21 @@ class MujocoEnv(EnvProtocol):
         command = action['command']
         match command['type']:
             case 'hold':
-                pass
+                cmd = None
             case 'joint_pos':
-                self._cmd_emit.emit(roboarm_command.JointPosition(np.asarray(command['q'], dtype=np.float64)))
+                cmd = roboarm_command.JointPosition(np.asarray(command['q'], dtype=np.float64))
             case 'joint_vel':
-                self._cmd_emit.emit(roboarm_command.JointDelta(np.asarray(command['dq'], dtype=np.float64)))
+                cmd = roboarm_command.JointDelta(np.asarray(command['dq'], dtype=np.float64))
             case 'cartesian':
-                self._cmd_emit.emit(
-                    roboarm_command.CartesianPosition(geom.Transform3D.from_vector(command['pose'], _ROTMAT))
-                )
+                cmd = roboarm_command.CartesianPosition(geom.Transform3D.from_vector(command['pose'], _ROTMAT))
             case 'cartesian_delta':
-                self._cmd_emit.emit(
-                    roboarm_command.CartesianDelta(geom.Transform3D.from_vector(command['delta'], _ROTMAT))
-                )
+                cmd = roboarm_command.CartesianDelta(geom.Transform3D.from_vector(command['delta'], _ROTMAT))
             case other:
                 raise ValueError(f'MujocoEnv got unsupported command type {other!r}')
-        self._grip_emit.emit(float(action['grip']))
+        now_ns = self._clock.now_ns()
+        if cmd is not None:
+            self._cmd_emit.emit([(now_ns, cmd)])
+        self._grip_emit.emit([(now_ns, float(action['grip']))])
         self._advance(self._timestep)
         return {'obs': self._read_obs(), 'done': False, 'control_dt': self._timestep}
 

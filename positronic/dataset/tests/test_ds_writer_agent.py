@@ -481,9 +481,6 @@ def test_trajectory_override_serializer():
     # Episode end drains the still-live buffer.
     assert [(t.ts, t.value) for t in s.flush()] == [(2, 'B'), (3, 'C'), (4, 'D')]
 
-    # Bare (teleop) values bypass buffering entirely.
-    assert s('reset') == 'reset'
-
 
 def test_serializer_plain_list_value(world):
     """A serializer returning a plain list (non-`Timestamped`) is appended as one sample.

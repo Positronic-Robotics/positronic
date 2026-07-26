@@ -35,9 +35,8 @@ def wire(
         for signal_name in cameras.keys():
             ds_agent.add_signal(signal_name, Serializers.camera_images)
         if robot_arm is not None:
-            # Policies emit whole trajectories; flatten with last-writer-wins so the
-            # recording is a dense per-command stream (teleop emits bare commands,
-            # which pass straight through). See TrajectoryOverrideSerializer.
+            # Command channels carry whole trajectories; flatten with last-writer-wins so the
+            # recording is a dense per-command stream. See TrajectoryOverrideSerializer.
             ds_agent.add_signal('robot_command', TrajectoryOverrideSerializer(Serializers.robot_command))
             ds_agent.add_signal('robot_state', Serializers.robot_state)
         if gripper is not None:
@@ -96,7 +95,7 @@ def wire_embodiment(
             ds_agent.add_signal(name, obs.serializer)
             world.connect(obs.source, ds_agent.inputs[name])
         for name, cmd in embodiment.commands.items():
-            # Policies emit whole trajectories; flatten with last-writer-wins so the
+            # Command channels carry whole trajectories; flatten with last-writer-wins so the
             # recording is a dense per-command stream. See TrajectoryOverrideSerializer.
             ds_agent.add_signal(name, TrajectoryOverrideSerializer(cmd.serializer))
             world.connect(harness.commands[name], ds_agent.inputs[name])

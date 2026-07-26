@@ -137,7 +137,9 @@ class Robot(pimm.ControlSystem):
         self._home_joints_variation = (
             home_joints_variation if home_joints_variation is not None else [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
         )
-        self.commands: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=None)
+        self.commands: pimm.SignalReceiver[command.Trajectory[command.CommandType]] = pimm.ControlSystemReceiver(
+            self, default=[]
+        )
         self.state: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self._load = load
@@ -352,7 +354,8 @@ if __name__ == '__main__':
             pos = np.asarray(pos) * alpha
             if time.monotonic() > start + duration:
                 print(f'Moving to {pos + origin.translation}')
-                commands.emit(command.CartesianPosition(geom.Transform3D(pos + origin.translation, origin.rotation)))
+                target = command.CartesianPosition(geom.Transform3D(pos + origin.translation, origin.rotation))
+                commands.emit([(world.clock.now_ns(), target)])
                 i += 1
             else:
                 time.sleep(0.01)

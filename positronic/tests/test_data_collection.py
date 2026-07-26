@@ -7,7 +7,12 @@ import pytest
 import pimm
 from positronic import wire
 from positronic.data_collection import DataCollectionController, OperatorPosition, controller_positions_serializer
-from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType
+from positronic.dataset.ds_writer_agent import (
+    DsWriterAgent,
+    DsWriterCommand,
+    DsWriterCommandType,
+    TrajectoryOverrideSerializer,
+)
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.geom import Rotation, Transform3D
@@ -155,8 +160,8 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
 
         writer_cm = LocalDatasetWriter(tmp_path)
         agent = DsWriterAgent(writer_cm.__enter__())
-        agent.add_signal('target_grip')
-        agent.add_signal('robot_command', Serializers.robot_command)
+        agent.add_signal('target_grip', TrajectoryOverrideSerializer(None))
+        agent.add_signal('robot_command', TrajectoryOverrideSerializer(Serializers.robot_command))
         agent.add_signal('controller_positions', controller_positions_serializer)
         agent.add_signal('robot_state', Serializers.robot_state)
         agent.add_signal('grip')
@@ -257,9 +262,9 @@ def test_mujoco_grip_one_is_closed():
         grip = world.pair(sim.grip)
 
         driver = ManualDriver([
-            (lambda: target_grip.emit(1.0), 0.5),
+            (lambda: target_grip.emit([(world.clock.now_ns(), 1.0)]), 0.5),
             (lambda: snapshots.update(closed=finger_qpos(), closed_grip=grip.read().data), 0.0),
-            (lambda: target_grip.emit(0.0), 0.5),
+            (lambda: target_grip.emit([(world.clock.now_ns(), 0.0)]), 0.5),
             (lambda: snapshots.update(opened=finger_qpos(), opened_grip=grip.read().data), 0.0),
         ])
 
