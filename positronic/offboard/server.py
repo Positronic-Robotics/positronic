@@ -312,9 +312,11 @@ class PolicyServer:
             self._last_activity = time.monotonic()
             try:
                 if session is not None:
-                    # Close may do backend I/O (a reset round-trip), so keep it off the event loop; the
+                    # Both ends of a session's life touch the backend — close does a reset round-trip — so
+                    # it takes the inference lock like ``new_session`` and runs off the event loop. The
                     # nesting keeps a failure here from swallowing the manager release.
-                    await asyncio.to_thread(session.close)
+                    async with self._infer_lock:
+                        await asyncio.to_thread(session.close)
             finally:
                 if policy is not None:
                     await self._manager.release_session()
