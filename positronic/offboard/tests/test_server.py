@@ -45,7 +45,7 @@ def stub_server(start_server, make_mock_policy) -> tuple[str, int, PolicyServer,
 
 def test_full_inference_cycle(stub_server):
     host, port, _server, policy = stub_server
-    client = InferenceClient(host, port)
+    client = InferenceClient(f'{host}:{port}')
     session = client.new_session()
     try:
         assert session.metadata['model_name'] == 'stub'
@@ -65,7 +65,7 @@ def test_no_codec(stub_server):
     host, port, server, _policy = stub_server
     assert server._remote is None
 
-    client = InferenceClient(host, port)
+    client = InferenceClient(f'{host}:{port}')
     session = client.new_session()
     try:
         result = session.infer({'obs': 'data'})
@@ -87,7 +87,7 @@ def test_no_codec(stub_server):
 )
 def test_checkpoint_id_in_route(stub_server, checkpoint_id):
     host, port, _server, _policy = stub_server
-    client = InferenceClient(host, port)
+    client = InferenceClient(f'{host}:{port}')
     session = client.new_session(checkpoint_id)
     try:
         assert session.metadata['checkpoint_id'] == checkpoint_id
@@ -118,7 +118,7 @@ def test_latest_checkpoint_pinned_once_at_startup(start_server, make_mock_policy
     host, port, _server = start_server(remote | source)
     # A newer checkpoint lands after startup (e.g. a training job writes it)...
     source.latest = '200'
-    client = InferenceClient(host, port)
+    client = InferenceClient(f'{host}:{port}')
     # ...but a default session still serves the checkpoint pinned at startup.
     session = client.new_session()
     try:
@@ -182,7 +182,7 @@ def codec_server(start_server, make_mock_policy) -> tuple[str, int, MagicMock]:
 
 def test_codec_wrapping(codec_server):
     host, port, _policy = codec_server
-    client = InferenceClient(host, port)
+    client = InferenceClient(f'{host}:{port}')
     session = client.new_session()
     try:
         assert session.metadata['codec'] == 'identity'
@@ -202,7 +202,7 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     pipeline = ChunkedSchedule() | remote | _IdentityCodec() | _StubSource(stub)
     host, port, _server = start_server(pipeline)
-    client = InferenceClient(host, port)
+    client = InferenceClient(f'{host}:{port}')
     session = client.new_session()
     try:
         assert session.metadata['local_stack'] == {'name': 'chunked_schedule'}

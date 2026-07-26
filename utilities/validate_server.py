@@ -81,7 +81,7 @@ def main(
     repo_root = _infer_repo_root()
 
     print(f'Connecting to {host}:{port}...')
-    client = InferenceClient(host, port)
+    client = InferenceClient(f'{host}:{port}')
     try:
         models = client.list_models()
     except Exception as e:

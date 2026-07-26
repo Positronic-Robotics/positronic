@@ -270,7 +270,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server serve \
 # On the simulator machine:
 uv run --locked positronic-inference sim \
     --policy=.remote \
-    --policy.url=<server-ip>
+    --policy.url=<server-ip>:8000
 ```
 
 Monitor performance, collect edge cases, and iterate. See [Inference Guide](docs/inference.md) for details.

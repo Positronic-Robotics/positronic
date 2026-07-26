@@ -93,28 +93,55 @@ class InferenceSession:
         self._websocket.close()
 
 
+def _model_segment_from(path: str, url: str) -> str | None:
+    """The model id a session URL names, as the path segment it was written as.
+
+    ``None`` when the URL addresses the bare endpoint, which serves whatever the server pinned.
+    """
+    # Stripped only to recognize the bare endpoint; elsewhere a trailing slash is part of the id.
+    if path.rstrip('/') in ('', '/api/v1/session'):
+        return None
+    if not path.startswith('/api/v1/session/'):
+        raise ValueError(f'Unexpected path {path!r} in {url!r}; expected /api/v1/session[/<model_id>]')
+    # Left percent-encoded as written, so the server decodes exactly the id whoever handed out the URL
+    # meant. An id may itself be a path (a HuggingFace repo, say), so its own slashes stay separators.
+    return path.removeprefix('/api/v1/session/')
+
+
 class InferenceClient:
-    def __init__(
-        self,
-        host: str,
-        port: int,
-        *,
-        headers: dict[str, str] | None = None,
-        secure: bool = False,
-        params: str | None = None,
-    ):
-        self.host = host
-        self.port = port
-        self.headers = dict(headers) if headers else None
-        # Forwarded verbatim: the server reads each value as a JSON literal, and only the caller knows
-        # whether `true` means the bool or the string.
-        self._query = params or None
+    """The wire connection to one inference server, addressed by one URL.
+
+    Accepted URL forms: ``host``, ``host:port``, and ``scheme://host[:port][/api/v1/session[/<model_id>]]``,
+    each with an optional ``?query``. ``https``/``wss`` enable TLS (bare or ``http``/``ws`` forms don't); the
+    port defaults to the scheme's own, 443 for TLS and 80 otherwise; the query string is forwarded verbatim
+    as session params, so the URL's literals reach the server exactly as written. A model id in the path is
+    the one every session serves unless ``new_session`` names another.
+
+    ``headers`` carry auth for an endpoint behind a reverse proxy — credentials stay out of the URL, which
+    is meant to be safe to hand around.
+    """
+
+    def __init__(self, url: str, *, headers: dict[str, str] | None = None):
+        split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
+        if split.scheme not in ('', 'http', 'ws', 'https', 'wss'):
+            raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
+        if not split.hostname:
+            raise ValueError(f'No host in {url!r}')
+        secure = split.scheme in ('https', 'wss')
         ws_scheme = 'wss' if secure else 'ws'
         http_scheme = 'https' if secure else 'http'
         default_port = 443 if secure else 80
+        # urlsplit strips the brackets an IPv6 host needs back in a netloc.
+        host = f'[{split.hostname}]' if ':' in split.hostname else split.hostname
+        port = default_port if split.port is None else split.port
         netloc = host if port == default_port else f'{host}:{port}'
         self.base_uri = f'{ws_scheme}://{netloc}/api/v1/session'
         self.api_url = f'{http_scheme}://{netloc}/api/v1'
+        self.headers = dict(headers) if headers else None
+        self._model_segment = _model_segment_from(split.path, url)
+        # Forwarded verbatim: the server reads each value as a JSON literal, and only the caller knows
+        # whether `true` means the bool or the string.
+        self._query = split.query or None
 
     def new_session(
         self,
@@ -127,15 +154,16 @@ class InferenceClient:
         Creates a new inference session.
 
         Args:
-            model_id: Optional model ID to connect to
+            model_id: The model to serve, overriding the one the URL names. With neither, the server
+                    serves the checkpoint it pinned at startup.
             open_timeout: Timeout for initial WebSocket connection (default: 10s).
                         This only covers TCP/HTTP handshake, not model loading.
                         Model loading timeout is controlled by per-message timeout in handshake.
         """
         # ``safe='/'`` keeps a path-shaped id's separators as path segments, and encodes the characters
         # that would otherwise end the path (``?``, ``#``) or be decoded away (``%``).
-        quoted = None if model_id is None else urllib.parse.quote(model_id, safe='/')
-        uri = self.base_uri if quoted is None else f'{self.base_uri}/{quoted}'
+        segment = urllib.parse.quote(model_id, safe='/') if model_id else self._model_segment
+        uri = self.base_uri if segment is None else f'{self.base_uri}/{segment}'
         if self._query:
             uri += '?' + self._query
         connect_kwargs: dict[str, object] = {'open_timeout': open_timeout}
@@ -152,7 +180,7 @@ class InferenceClient:
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
             # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
             except ssl.SSLCertVerificationError as e:
-                raise type(e)(f'{e} (connecting to {self.host}:{self.port})') from e
+                raise type(e)(f'{e} (connecting to {self.base_uri})') from e
             # A cold backend fails before the session is ready in several ways: the connect times out, the edge
             # resets TLS (``SSLError``), it rejects or drops the HTTP upgrade (``InvalidHandshake`` — e.g. a
             # 502/503 while the backend boots), or it accepts the socket and then drops or stalls the status
@@ -168,12 +196,12 @@ class InferenceClient:
                 ):
                     raise
                 if time.monotonic() >= deadline:
-                    raise TimeoutError(f'{e} (connecting to {self.host}:{self.port})') from e
+                    raise TimeoutError(f'{e} (connecting to {self.base_uri})') from e
                 logger.info('Server not ready (cold start?): %s; retrying in %.0fs', e, backoff)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)
             except OSError as e:
-                raise type(e)(f'{e} (connecting to {self.host}:{self.port})') from e
+                raise type(e)(f'{e} (connecting to {self.base_uri})') from e
 
     def list_models(self) -> list[str]:
         """List available models from the server."""

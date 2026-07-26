@@ -11,7 +11,7 @@ from positronic.utils.serialization import deserialise, encode_jpeg, serialise
 def test_inference_client_connect_and_infer(inference_server, mock_policy):
     """Test standard client connection and inference flow."""
     host, port = inference_server
-    client = InferenceClient(host, port)
+    client = InferenceClient(f'{host}:{port}')
 
     session = client.new_session()
     try:
@@ -31,7 +31,7 @@ def test_inference_client_connect_and_infer(inference_server, mock_policy):
 def test_inference_client_new_session(inference_server, mock_policy):
     """Test that starting a new session calls new_session on the policy."""
     host, port = inference_server
-    client = InferenceClient(host, port)
+    client = InferenceClient(f'{host}:{port}')
 
     # First session
     session = client.new_session()
@@ -46,7 +46,7 @@ def test_inference_client_new_session(inference_server, mock_policy):
 
 def test_inference_client_selects_model_id(multi_policy_server):
     host, port, policies = multi_policy_server
-    client = InferenceClient(host, port)
+    client = InferenceClient(f'{host}:{port}')
 
     default_session = client.new_session()
     try:

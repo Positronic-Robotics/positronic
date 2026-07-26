@@ -1,6 +1,5 @@
 import collections.abc as cabc
 import logging
-import urllib.parse
 from typing import Any
 
 import numpy as np
@@ -93,42 +92,15 @@ class RemoteSession(Session):
         self._session.close()
 
 
-def _model_id_from(path: str, url: str) -> str | None:
-    """The model id a session URL names, or ``None`` when it addresses the bare endpoint."""
-    # Stripped only to recognize the bare endpoint; elsewhere a trailing slash is part of the id.
-    if path.rstrip('/') in ('', '/api/v1/session'):
-        return None
-    if not path.startswith('/api/v1/session/'):
-        raise ValueError(f'Unexpected path {path!r} in {url!r}; expected /api/v1/session[/<model_id>]')
-    # An id may itself be a path (a HuggingFace repo, say), so its own slashes stay. Held decoded; the
-    # client percent-encodes it again for each session URL.
-    return urllib.parse.unquote(path.removeprefix('/api/v1/session/'))
-
-
 class _Endpoint(Policy):
-    """The wire connection to one inference server, addressed by one URL: sessions forward observations as-is.
+    """The wire connection to one inference server: sessions forward observations as-is.
 
-    Accepted URL forms: ``host``, ``host:port``, and ``scheme://host[:port][/api/v1/session[/<model_id>]]``,
-    each with an optional ``?query``. ``https``/``wss`` enable TLS (bare or ``http``/``ws`` forms don't); the
-    port defaults to 443 for TLS schemes and 8000 otherwise; the query string is forwarded verbatim as session
-    params, so the URL's literals reach the server exactly as written.
-
-    ``compress_images`` stands in for a server that declares no wire settings of its own; ``headers``
-    carry auth for an endpoint behind a reverse proxy.
+    ``InferenceClient`` reads the server, the model, and the session params off the URL.
+    ``compress_images`` stands in for a server that declares no wire settings of its own.
     """
 
     def __init__(self, url: str, *, headers: dict[str, str] | None, infer_timeout: float, compress_images: bool | None):
-        split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
-        if split.scheme not in ('', 'http', 'ws', 'https', 'wss'):
-            raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
-        if not split.hostname:
-            raise ValueError(f'No host in {url!r}')
-        secure = split.scheme in ('https', 'wss')
-        # urlsplit strips the brackets an IPv6 host needs back in a netloc.
-        host = f'[{split.hostname}]' if ':' in split.hostname else split.hostname
-        port = split.port or (443 if secure else 8000)
-        self._client = InferenceClient(host, port, headers=headers, secure=secure, params=split.query or None)
-        self._model_id = _model_id_from(split.path, url)
+        self._client = InferenceClient(url, headers=headers)
         self._infer_timeout = infer_timeout
         self._compress_override = compress_images
         # Both filled on first contact: the metadata via a throwaway session if ``meta`` is read before any
@@ -138,7 +110,7 @@ class _Endpoint(Policy):
 
     def server_meta(self) -> dict[str, Any]:
         if self._server_meta is None:
-            ws_session = self._client.new_session(model_id=self._model_id, infer_timeout=self._infer_timeout)
+            ws_session = self._client.new_session(infer_timeout=self._infer_timeout)
             try:
                 self._server_meta = dict(ws_session.metadata)
             finally:
@@ -156,7 +128,7 @@ class _Endpoint(Policy):
     def new_session(self, context=None, now=None) -> RemoteSession:
         # Resolved before connecting, so a session that contradicts the declaration leaves no socket open.
         compress = self._compression()
-        ws_session = self._client.new_session(model_id=self._model_id, infer_timeout=self._infer_timeout)
+        ws_session = self._client.new_session(infer_timeout=self._infer_timeout)
         return RemoteSession(ws_session, compress_images=compress)
 
     @property
@@ -170,8 +142,8 @@ class _Endpoint(Policy):
 class RemotePolicy(Policy):
     """Policy running against a remote inference server, owning the stack in front of the connection.
 
-    One URL names the server, the model, and the session params — see ``_Endpoint`` for the forms it
-    takes. ``headers`` stay their own argument: they carry credentials, which a URL that gets pasted
+    One URL names the server, the model, and the session params — see ``InferenceClient`` for the forms
+    it takes. ``headers`` stay their own argument: they carry credentials, which a URL that gets pasted
     around should not.
 
     The server's ``ready`` handshake declares the local half of its policy pipeline (the

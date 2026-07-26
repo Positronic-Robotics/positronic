@@ -59,34 +59,16 @@ class TestPrepareObs:
 
 
 class TestInferenceClientHeaders:
-    def test_default_headers_empty_and_ws_scheme(self):
-        client = InferenceClient('localhost', 8000)
-        assert client.headers is None
-        assert client.base_uri == 'ws://localhost:8000/api/v1/session'
-        assert client.api_url == 'http://localhost:8000/api/v1'
+    def test_default_headers_empty(self):
+        assert InferenceClient('localhost:8000').headers is None
 
     def test_headers_stored_and_copied(self):
         headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
-        client = InferenceClient('localhost', 8000, headers=headers)
+        client = InferenceClient('localhost:8000', headers=headers)
         assert client.headers == headers
         # Defensive copy — mutating the caller's dict must not affect the client.
         headers['Modal-Key'] = 'mutated'
         assert client.headers is not None and client.headers['Modal-Key'] == 'k'
-
-    def test_secure_switches_scheme_and_omits_default_port(self):
-        client = InferenceClient('example.com', 443, secure=True)
-        assert client.base_uri == 'wss://example.com/api/v1/session'
-        assert client.api_url == 'https://example.com/api/v1'
-
-    def test_secure_keeps_non_default_port(self):
-        client = InferenceClient('example.com', 8443, secure=True)
-        assert client.base_uri == 'wss://example.com:8443/api/v1/session'
-        assert client.api_url == 'https://example.com:8443/api/v1'
-
-    def test_insecure_omits_default_port(self):
-        client = InferenceClient('example.com', 80, secure=False)
-        assert client.base_uri == 'ws://example.com/api/v1/session'
-        assert client.api_url == 'http://example.com/api/v1'
 
     def test_new_session_passes_additional_headers(self):
         headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
@@ -94,7 +76,7 @@ class TestInferenceClientHeaders:
             patch('positronic.offboard.client.connect') as mock_connect,
             patch('positronic.offboard.client.InferenceSession') as mock_session_cls,
         ):
-            client = InferenceClient('localhost', 8000, headers=headers)
+            client = InferenceClient('localhost:8000', headers=headers)
             client.new_session()
 
             mock_connect.assert_called_once()
@@ -106,7 +88,7 @@ class TestInferenceClientHeaders:
             patch('positronic.offboard.client.connect') as mock_connect,
             patch('positronic.offboard.client.InferenceSession'),
         ):
-            client = InferenceClient('localhost', 8000)
+            client = InferenceClient('localhost:8000')
             client.new_session()
 
             mock_connect.assert_called_once()
@@ -116,7 +98,7 @@ class TestInferenceClientHeaders:
         headers = {'Modal-Key': 'k', 'Modal-Secret': 's'}
         with patch('positronic.offboard.client.httpx.get') as mock_get:
             mock_get.return_value.json.return_value = {'models': ['m1']}
-            client = InferenceClient('localhost', 8000, headers=headers)
+            client = InferenceClient('localhost:8000', headers=headers)
 
             models = client.list_models()
 
@@ -126,19 +108,21 @@ class TestInferenceClientHeaders:
     def test_list_models_without_headers_passes_none(self):
         with patch('positronic.offboard.client.httpx.get') as mock_get:
             mock_get.return_value.json.return_value = {'models': []}
-            client = InferenceClient('localhost', 8000)
+            client = InferenceClient('localhost:8000')
             client.list_models()
 
             assert mock_get.call_args.kwargs['headers'] is None
 
 
-class TestInferenceClientParams:
+class TestSessionUri:
+    """The URI each session connects to: the model id as a path segment, then the query."""
+
     def test_params_forwarded_verbatim(self):
         with (
             patch('positronic.offboard.client.connect') as mock_connect,
             patch('positronic.offboard.client.InferenceSession'),
         ):
-            client = InferenceClient('localhost', 8000, params='codec.fps=10&pad=false')
+            client = InferenceClient('localhost:8000?codec.fps=10&pad=false')
             client.new_session()
 
             # A query string is not re-encoded: 'false' stays the JSON literal the caller wrote.
@@ -149,7 +133,7 @@ class TestInferenceClientParams:
             patch('positronic.offboard.client.connect') as mock_connect,
             patch('positronic.offboard.client.InferenceSession'),
         ):
-            client = InferenceClient('localhost', 8000)
+            client = InferenceClient('localhost:8000')
             client.new_session()
 
             assert '?' not in mock_connect.call_args.args[0]
@@ -159,82 +143,116 @@ class TestInferenceClientParams:
             patch('positronic.offboard.client.connect') as mock_connect,
             patch('positronic.offboard.client.InferenceSession'),
         ):
-            client = InferenceClient('localhost', 8000, params='fps=10')
+            client = InferenceClient('localhost:8000?fps=10')
             client.new_session(model_id='m1')
 
             assert mock_connect.call_args.args[0] == 'ws://localhost:8000/api/v1/session/m1?fps=10'
 
+    def test_url_model_id_serves_every_session(self):
+        with (
+            patch('positronic.offboard.client.connect') as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+        ):
+            client = InferenceClient('localhost:8000/api/v1/session/10000')
+            client.new_session()
 
-class TestRemotePolicyUrl:
+            assert mock_connect.call_args.args[0] == 'ws://localhost:8000/api/v1/session/10000'
+
+    def test_explicit_model_id_overrides_the_url(self):
+        with (
+            patch('positronic.offboard.client.connect') as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+        ):
+            client = InferenceClient('localhost:8000/api/v1/session/10000')
+            client.new_session(model_id='20000')
+
+            assert mock_connect.call_args.args[0] == 'ws://localhost:8000/api/v1/session/20000'
+
+    def test_url_model_id_reaches_the_wire_as_written(self):
+        """The URL's own encoding is what the server decodes, so the client neither re-encodes nor normalizes."""
+        with (
+            patch('positronic.offboard.client.connect') as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+        ):
+            client = InferenceClient('localhost:8000/api/v1/session/s3%3A//bucket/ckpt%231')
+            client.new_session()
+
+            assert mock_connect.call_args.args[0] == 'ws://localhost:8000/api/v1/session/s3%3A//bucket/ckpt%231'
+
+    def test_explicit_model_id_is_encoded_for_the_path(self):
+        """An id given as a Python string is raw, so the characters that would end the path are escaped."""
+        with (
+            patch('positronic.offboard.client.connect') as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+        ):
+            client = InferenceClient('localhost:8000')
+            client.new_session(model_id='s3://bucket/ckpt#1')
+
+            assert mock_connect.call_args.args[0] == 'ws://localhost:8000/api/v1/session/s3%3A//bucket/ckpt%231'
+
+
+class TestInferenceClientUrl:
     """One URL carries host, port, TLS, model id, and session params; headers stay their own argument."""
 
-    def test_bare_host_defaults(self):
-        policy = RemotePolicy('gpu-host')
-        client = policy._endpoint._client
-        assert client is not None
-        assert client.base_uri == 'ws://gpu-host:8000/api/v1/session'
-        assert client.headers is None
+    def test_bare_host_defaults_to_the_scheme_port(self):
+        client = InferenceClient('gpu-host')
+        assert client.base_uri == 'ws://gpu-host/api/v1/session'
+        assert client.api_url == 'http://gpu-host/api/v1'
         assert client._query is None
 
     def test_host_port_and_query_verbatim(self):
-        policy = RemotePolicy('gpu-host:9000?codec.fps=10&pad=false')
-        client = policy._endpoint._client
-        assert client is not None
+        client = InferenceClient('gpu-host:9000?codec.fps=10&pad=false')
         assert client.base_uri == 'ws://gpu-host:9000/api/v1/session'
+        assert client.api_url == 'http://gpu-host:9000/api/v1'
         assert client._query == 'codec.fps=10&pad=false'
 
     def test_full_url_with_model_id(self):
-        policy = RemotePolicy('https://gpu-host:8443/api/v1/session/10000?fps=2.5')
-        client = policy._endpoint._client
-        assert client is not None
+        client = InferenceClient('https://gpu-host:8443/api/v1/session/10000?fps=2.5')
         assert client.base_uri == 'wss://gpu-host:8443/api/v1/session'
-        assert policy._endpoint._model_id == '10000'
+        assert client.api_url == 'https://gpu-host:8443/api/v1'
+        assert client._model_segment == '10000'
         assert client._query == 'fps=2.5'
 
     def test_tls_scheme_defaults_to_443(self):
         """`https://` is the scheme a fronted endpoint hands out; `wss://` names the same connection."""
         for url in ('https://example.com', 'wss://example.com'):
-            client = RemotePolicy(url)._endpoint._client
-            assert client is not None
+            client = InferenceClient(url)
             assert client.base_uri == 'wss://example.com/api/v1/session'
-
-    def test_headers_forwarded_to_client(self):
-        headers = {'Modal-Key': 'k'}
-        client = RemotePolicy('https://example.com', headers=headers)._endpoint._client
-        assert client is not None
-        assert client.headers == headers
+            assert client.api_url == 'https://example.com/api/v1'
 
     @pytest.mark.parametrize('url', ['gpu-host/', 'http://gpu-host/api/v1/session', 'http://gpu-host/api/v1/session/'])
     def test_session_path_without_model_id(self, url):
-        policy = RemotePolicy(url)
-        client = policy._endpoint._client
-        assert client is not None
-        assert policy._endpoint._model_id is None
-        assert client.base_uri == 'ws://gpu-host:8000/api/v1/session'
+        client = InferenceClient(url)
+        assert client._model_segment is None
+        assert client.base_uri == 'ws://gpu-host/api/v1/session'
 
     def test_trailing_slash_belongs_to_the_model_id(self):
         """Sources advertise pinned checkpoint dirs verbatim, and `resolve` matches ids exactly."""
-        policy = RemotePolicy('http://gpu-host/api/v1/session/s3%3A//ckpt/checkpoint-500/')
-        assert policy._endpoint._model_id == 's3://ckpt/checkpoint-500/'
+        client = InferenceClient('http://gpu-host/api/v1/session/s3%3A//ckpt/checkpoint-500/')
+        assert client._model_segment == 's3%3A//ckpt/checkpoint-500/'
 
     def test_model_id_keeps_its_slashes(self):
-        policy = RemotePolicy('http://gpu-host:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID')
-        assert policy._endpoint._model_id == 'GEAR-Dreams/DreamZero-DROID'
-
-    def test_model_id_is_held_decoded(self):
-        """The client percent-encodes the id per session URL, so holding it encoded would double-encode."""
-        policy = RemotePolicy('http://gpu-host:8000/api/v1/session/s3%3A//bucket/ckpt%231')
-        assert policy._endpoint._model_id == 's3://bucket/ckpt#1'
+        client = InferenceClient('http://gpu-host:8000/api/v1/session/GEAR-Dreams/DreamZero-DROID')
+        assert client._model_segment == 'GEAR-Dreams/DreamZero-DROID'
 
     def test_unexpected_path_rejected(self):
         with pytest.raises(ValueError, match='/api/v1/session'):
-            RemotePolicy('gpu-host:8000/api/v2/other')
+            InferenceClient('gpu-host:8000/api/v2/other')
         with pytest.raises(ValueError, match='/api/v1/session'):
-            RemotePolicy('gpu-host:8000/api/v1/sessions/10000')
+            InferenceClient('gpu-host:8000/api/v1/sessions/10000')
 
     def test_unknown_scheme_rejected(self):
         with pytest.raises(ValueError, match='scheme'):
-            RemotePolicy('ftp://gpu-host:8000')
+            InferenceClient('ftp://gpu-host:8000')
+
+
+def test_remote_policy_hands_the_url_and_headers_to_the_client():
+    headers = {'Modal-Key': 'k'}
+    client = RemotePolicy('https://example.com/api/v1/session/10000', headers=headers)._endpoint._client
+    assert client is not None
+    assert client.base_uri == 'wss://example.com/api/v1/session'
+    assert client._model_segment == '10000'
+    assert client.headers == headers
 
 
 class TestActionHorizonWrapping:

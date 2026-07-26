@@ -206,18 +206,19 @@ PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()
 `PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named `PIPELINES` — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` shuts the server down after that many minutes without activity.
 
 ### `client.InferenceClient`
-A Python client for connecting to an inference server.
+A Python client for connecting to an inference server. One URL addresses it, in the same forms
+`RemotePolicy` accepts: an omitted port is the scheme's own, 443 for `https`/`wss` and 80 otherwise.
 
 ```python
 from positronic.offboard.client import InferenceClient
 
-client = InferenceClient('localhost', 8000)
-# Session params ride on every session URL as a query string, forwarded verbatim:
-# client = InferenceClient('localhost', 8000, params='codec.fps=10')
+client = InferenceClient('localhost:8000')
+# The query string rides on every session URL as session params, forwarded verbatim:
+# client = InferenceClient('localhost:8000?codec.fps=10')
 
-# Connect to default policy
+# Connect to the model the URL names, or the server's pinned checkpoint if it names none
 session = client.new_session()
-# OR connect to specific policy
+# OR name one per session, overriding the URL's
 # session = client.new_session('model_a')
 
 meta = session.metadata

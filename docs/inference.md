@@ -38,13 +38,13 @@ Check server: `curl http://localhost:8000/api/v1/models` returns available model
 # Simulation
 uv run positronic-inference sim \
   --policy=.remote \
-  --policy.url=localhost \
+  --policy.url=localhost:8000 \
   --output_dir=~/datasets/inference_logs/exp_v1
 
 # Hardware
 uv run positronic-inference real \
   --policy=.remote \
-  --policy.url=gpu-server \
+  --policy.url=gpu-server:8000 \
   --output_dir=~/datasets/inference_logs/franka_eval
 ```
 
@@ -56,7 +56,7 @@ uv run positronic-inference sim \
   --policy.url='https://gpu-server/api/v1/session/checkpoint-20000?codec.fps=10&local.pad_start=false'
 ```
 
-Accepted forms: `host`, `host:port`, and `https://host[:port][/api/v1/session[/<model_id>]]` (`http`, `ws` and `wss` work too), each with an optional query. `https`/`wss` enable TLS and default the port to 443; other forms default to 8000. Naming no model id serves the checkpoint the server pinned at startup.
+Accepted forms: `host`, `host:port`, and `https://host[:port][/api/v1/session[/<model_id>]]` (`http`, `ws` and `wss` work too), each with an optional query. `https`/`wss` enable TLS. An omitted port is the scheme's own — 443 for TLS and 80 otherwise — so name the port a server listens on (`:8000` for every vendor server's default). Naming no model id serves the checkpoint the server pinned at startup.
 
 **Session parameters** are the URL's query string: the server applies them as overrides to its pipeline config, so you can tune the served pipeline without restarting the server. Keys are dotted paths into that config and values are JSON literals, forwarded verbatim so they arrive exactly as written (`fps=10`, `pad=false`, `name="s3"`).
 

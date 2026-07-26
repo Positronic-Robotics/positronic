@@ -45,7 +45,7 @@ cd docker && docker compose run --rm --service-ports groot-server \
 # 4. Run inference
 uv run --locked positronic-inference sim \
   --policy=.remote \
-  --policy.url=localhost \
+  --policy.url=localhost:8000 \
   --show_gui=True
 ```
 
