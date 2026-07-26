@@ -9,19 +9,18 @@ from typing import Any
 
 import numpy as np
 
+import pimm
+from positronic import geom
+from positronic.drivers import HARDWARE_EXTRA_HINT
+
+from . import RobotStatus, State, command
+from .models import attach_robotiq_2f85
+
 try:
     import positronic_franka._franka as pf
     from positronic_franka.desk import Desk, SafetyControllerError
 except ImportError as e:
-    raise ImportError(
-        'Franka support is not installed. Re-run with the hardware extra:\n  uv run --locked --extra hardware ...\n'
-    ) from e
-
-import pimm
-from positronic import geom
-
-from . import RobotStatus, State, command
-from .models import attach_robotiq_2f85
+    raise ImportError(f'Franka support is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 
 def _check_error(is_error, was_error):

@@ -12,7 +12,7 @@ from pimm.core import ControlSystem
 def _optional_import(module: str, symbol: str) -> Any | None:
     try:
         return getattr(import_module(module), symbol)
-    except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    except ImportError:  # pragma: no cover - optional dependency; drivers re-raise as ImportError with an install hint
         return None
 
 

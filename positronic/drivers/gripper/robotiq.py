@@ -2,10 +2,14 @@
 
 from collections.abc import Iterator
 
-import pymodbus.client as ModbusClient
-
 import pimm
+from positronic.drivers import HARDWARE_EXTRA_HINT
 from positronic.drivers.roboarm.command import Trajectory, TrajectoryPlayer
+
+try:
+    import pymodbus.client as ModbusClient
+except ImportError as e:
+    raise ImportError(f'Gripper support is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 _REG_CMD = 0x03E8
 _REG_IN_POS = 0x07D2

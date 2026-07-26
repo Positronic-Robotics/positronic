@@ -4,9 +4,14 @@ import wave
 from collections.abc import Iterator
 
 import numpy as np
-import pyaudio
 
 import pimm
+from positronic.drivers import HARDWARE_EXTRA_HINT
+
+try:
+    import pyaudio
+except ImportError as e:
+    raise ImportError(f'Sound support is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 
 class SoundSystem(pimm.ControlSystem):

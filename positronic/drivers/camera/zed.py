@@ -3,10 +3,15 @@ from collections.abc import Iterator
 from typing import Literal
 
 import numpy as np
-import pyzed.sl as sl
 
 import pimm
 from pimm.shared_memory import NumpySMAdapter
+from positronic.drivers import HARDWARE_EXTRA_HINT
+
+try:
+    import pyzed.sl as sl
+except ImportError as e:
+    raise ImportError(f'ZED camera support is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 
 class SLCamera(pimm.ControlSystem):

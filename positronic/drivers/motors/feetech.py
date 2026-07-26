@@ -1,7 +1,13 @@
 """This code is adopted from https://github.com/huggingface/lerobot/blob/0878c6880fa4fbadf0742751cf7b015f2d63a769/src/lerobot/motors/feetech/feetech.py"""  # noqa: E501
 
 import numpy as np
-import scservo_sdk as scs
+
+from positronic.drivers import HARDWARE_EXTRA_HINT
+
+try:
+    import scservo_sdk as scs
+except ImportError as e:
+    raise ImportError(f'Feetech motor support is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 PROTOCOL_VERSION = 0
 TIMEOUT_MS = 1000

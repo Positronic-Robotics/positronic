@@ -3,9 +3,14 @@ from collections.abc import Iterator
 import av
 import cv2
 import numpy as np
-from linuxpy.video.device import Device, PixelFormat
 
 import pimm
+from positronic.drivers import HARDWARE_EXTRA_HINT
+
+try:
+    from linuxpy.video.device import Device, PixelFormat
+except ImportError as e:
+    raise ImportError(f'Linux video capture is not installed. {HARDWARE_EXTRA_HINT}') from e
 
 
 class LinuxVideo(pimm.ControlSystem):

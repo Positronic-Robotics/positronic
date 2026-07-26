@@ -1,8 +1,13 @@
 from collections.abc import Iterator
 
-import depthai as dai
-
 import pimm
+
+try:
+    import depthai as dai
+except ImportError as e:
+    # TODO: `depthai` is in no extra, so this driver has no supported install path. Add it to `hardware`
+    # (with the platform markers the SDK needs) or drop the driver.
+    raise ImportError('Luxonis camera support is not installed: `depthai` is in no extra of this project.') from e
 
 
 # TODO: make this configurable
