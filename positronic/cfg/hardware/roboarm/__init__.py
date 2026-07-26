@@ -9,6 +9,8 @@ import positronic.cfg.hardware.motors
     home_joints=[0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0],
     load=None,
     collision_coeff=2.0,
+    manage_desk=True,
+    reboot_on_safety_error=False,
 )
 def franka(
     ip: str,
@@ -16,6 +18,8 @@ def franka(
     home_joints: list[float],
     load: tuple | None = None,
     collision_coeff: float = 2.0,
+    manage_desk: bool = True,
+    reboot_on_safety_error: bool = False,
 ):
     from positronic.drivers.roboarm import franka  # noqa: F401
 
@@ -25,6 +29,8 @@ def franka(
         home_joints=home_joints,
         load=load,
         collision_coeff=collision_coeff,
+        manage_desk=manage_desk,
+        reboot_on_safety_error=reboot_on_safety_error,
     )
 
 
