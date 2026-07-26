@@ -1,7 +1,7 @@
 """Collection of commands that can be sent to the robot."""
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeAlias, TypeVar
 
 import numpy as np
 
@@ -56,6 +56,12 @@ class CartesianDelta:
 
 CommandType = Reset | CartesianPosition | JointPosition | JointDelta | CartesianDelta
 
+_T = TypeVar('_T')
+
+# The wire shape of every command channel: waypoints stamped with absolute clock ns. A single immediate
+# command is the one-waypoint trajectory ``[(clock.now_ns(), value)]``; ``[]`` cancels whatever is in flight.
+Trajectory: TypeAlias = list[tuple[int, _T]]
+
 
 def apply_cartesian_delta(current: geom.Transform3D, delta: geom.Transform3D) -> geom.Transform3D:
     """Compose a world-frame ``delta`` onto a measured ``current`` pose for the absolute target a driver drives to.
@@ -79,7 +85,7 @@ def _combine(acc: CommandType, cmd: CommandType) -> CommandType:
             return cmd
 
 
-def reduce(due: list[tuple[float, CommandType]]) -> CommandType:
+def reduce(due: Trajectory[CommandType]) -> CommandType:
     """Collapse the commands due in one control tick into the single command to execute.
 
     Folds the batch in timestamp order. A run of same-space deltas accumulates (their motion is summed, so a
@@ -93,7 +99,7 @@ def reduce(due: list[tuple[float, CommandType]]) -> CommandType:
     return result
 
 
-def _reduce_last(due: list[tuple[float, Any]]) -> Any:
+def _reduce_last(due: Trajectory[Any]) -> Any:
     """The trailing value wins -- the right collapse for absolute setpoints and gripper targets."""
     return due[-1][1]
 
@@ -121,18 +127,15 @@ class TrajectoryPlayer:
     """
 
     def __init__(self, reduce=_reduce_last):
-        self._trajectory: list[tuple[float, Any]] = []
+        self._trajectory: Trajectory[Any] = []
         self._index: int = 0
         self._reduce = reduce
 
-    def set(self, data):
-        if isinstance(data, list):
-            self._trajectory = data
-        else:
-            self._trajectory = [(0.0, data)]
+    def set(self, trajectory: Trajectory[Any]):
+        self._trajectory = trajectory
         self._index = 0
 
-    def advance(self, current_time: float):
+    def advance(self, current_time: int):
         """Collapse every waypoint whose timestamp <= current_time into the single value to apply, or None."""
         due = []
         while self._index < len(self._trajectory):

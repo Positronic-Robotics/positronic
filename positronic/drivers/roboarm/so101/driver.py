@@ -55,8 +55,12 @@ class Robot(pimm.ControlSystem):
         self.kinematic = Kinematics(_SO101_URDF_PATH, 'gripper_frame_joint')
         self.joint_limits = self.kinematic.joint_limits
         self.home_joints = home_joints if home_joints is not None else [0.0, 0.0, 0.0, 0.0, 0.0]
-        self.commands: pimm.SignalReceiver[roboarm_command.CommandType] = pimm.ControlSystemReceiver(self, default=None)
-        self.target_grip: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self, default=0.0)
+        self.commands: pimm.SignalReceiver[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
+            pimm.ControlSystemReceiver(self, default=[])
+        )
+        self.target_grip: pimm.SignalReceiver[roboarm_command.Trajectory[float]] = pimm.ControlSystemReceiver(
+            self, default=[]
+        )
         self._last_grip: float = 0.0
 
         self.grip: pimm.SignalEmitter[float] = pimm.ControlSystemEmitter(self)

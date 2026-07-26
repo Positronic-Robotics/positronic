@@ -35,7 +35,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._cleanup = ExitStack()
         self._conn: EnvConnection | None = None
 
-        self.commands: pimm.ReceiverDict = pimm.ReceiverDict(self, default=None)
+        self.commands: pimm.ReceiverDict = pimm.ReceiverDict(self, default=[])
         self.observations: pimm.EmitterDict = pimm.EmitterDict(self)
         self.privileged: pimm.EmitterDict = pimm.EmitterDict(self)
         self.robot_meta: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)

@@ -122,7 +122,7 @@ class FakeRobot(pimm.ControlSystem):
         self._q = INITIAL_Q.copy()
         self._status = RobotStatus.AVAILABLE
         self._error_pending = False
-        self.commands = pimm.ControlSystemReceiver(self, default=None)
+        self.commands = pimm.ControlSystemReceiver(self, default=[])
         self.state = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
 
@@ -145,7 +145,7 @@ class FakeRobot(pimm.ControlSystem):
         player = TrajectoryPlayer()
         while not should_stop.value:
             cmd_msg = self.commands.read()
-            if cmd_msg.updated and cmd_msg.data is not None:
+            if cmd_msg.updated:
                 player.set(cmd_msg.data)
             if self._status == RobotStatus.ERROR:
                 self._status = RobotStatus.AVAILABLE
@@ -167,14 +167,14 @@ class FakeGripper(pimm.ControlSystem):
 
     def __init__(self):
         self._grip = 0.0
-        self.target_grip = pimm.ControlSystemReceiver(self, default=0.0)
+        self.target_grip = pimm.ControlSystemReceiver(self, default=[])
         self.grip = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         player = TrajectoryPlayer()
         while not should_stop.value:
             msg = self.target_grip.read()
-            if msg.updated and msg.data is not None:
+            if msg.updated:
                 player.set(msg.data)
             grip = player.advance(clock.now_ns())
             if grip is not None:

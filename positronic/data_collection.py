@@ -159,9 +159,9 @@ class DataCollectionController(pimm.ControlSystem):
                         self.sound.emit(abort_wav_path)
                     tracker.turn_off()
                     recording = False
-                    self.robot_commands.emit(roboarm.command.Reset())
+                    self.robot_commands.emit([(clock.now_ns(), roboarm.command.Reset())])
 
-                self.target_grip.emit(button_handler.get_value('right_trigger'))
+                self.target_grip.emit([(clock.now_ns(), button_handler.get_value('right_trigger'))])
                 cp_msg = self.controller_positions.read()
                 if cp_msg.updated:
                     target_robot_pos = tracker.update(cp_msg.data['right'])
@@ -173,7 +173,8 @@ class DataCollectionController(pimm.ControlSystem):
                     if entered_error:
                         self.sound.emit(error_wav_path)
                     if not in_error and cp_msg.updated:
-                        self.robot_commands.emit(roboarm.command.CartesianPosition(target_robot_pos))
+                        cmd = roboarm.command.CartesianPosition(target_robot_pos)
+                        self.robot_commands.emit([(clock.now_ns(), cmd)])
 
                 yield pimm.Sleep(0.001)
 

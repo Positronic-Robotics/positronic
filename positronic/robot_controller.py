@@ -18,14 +18,15 @@ def main(robot):
 
             match text_command.split(' '):
                 case ['reset']:
-                    command_emmiter.emit(command.Reset())
+                    command_emmiter.emit([(world.clock.now_ns(), command.Reset())])
                 case ['move', x, y, z, qw, qx, qy, qz]:
                     pos = [float(x) for x in [x, y, z]]
                     quat = geom.Rotation.from_quat([float(qw), float(qx), float(qy), float(qz)])
-                    command_emmiter.emit(command.CartesianPosition(geom.Transform3D(translation=pos, rotation=quat)))
+                    move = command.CartesianPosition(geom.Transform3D(translation=pos, rotation=quat))
+                    command_emmiter.emit([(world.clock.now_ns(), move)])
                 case ['joint_move', *args]:
                     args = [float(x) for x in args]
-                    command_emmiter.emit(command.JointPosition(positions=args))
+                    command_emmiter.emit([(world.clock.now_ns(), command.JointPosition(positions=args))])
                 case ['info']:
                     print('Q', state_receiver.value.q)
                     print('DQ', state_receiver.value.dq)
