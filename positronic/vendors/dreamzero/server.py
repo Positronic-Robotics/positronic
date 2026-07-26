@@ -1,11 +1,11 @@
-"""DreamZero inference server: subprocess management + FastAPI bridge."""
+"""DreamZero inference server: the roboarena subprocess model source and its serving pipelines."""
 
-import asyncio
 import logging
 import os
 import socket
 import subprocess
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -13,12 +13,14 @@ import configuronic as cfn
 import numpy as np
 import pos3
 import websockets.sync.client
-from fastapi import WebSocket
 from huggingface_hub import snapshot_download
+from websockets.exceptions import ConnectionClosed
 
-from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
-from positronic.offboard.vendor_server import VendorServer
-from positronic.policy import Codec, Policy, Session
+from positronic.offboard.server import serve
+from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
+from positronic.policy import Codec, Policy, PolicyWrapper, Session
+from positronic.policy.codec import RestrictImageSize
+from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import get_latest_checkpoint
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialize, serialize
@@ -103,7 +105,7 @@ class RoboarenaClient:
         if session_id is not None:
             msg['session_id'] = session_id
         self._ws.send(serialize(msg))
-        self._ws.recv()  # Consume "reset successful" response
+        self._ws.recv(timeout=10.0)  # Consume "reset successful" response
 
     def close(self):
         if self._ws is not None:
@@ -165,10 +167,10 @@ class DreamZeroSubprocess:
         exit_code = self.process.poll()
         return exit_code is not None, exit_code
 
-    async def start_async(self, on_progress=None):
+    def start(self, on_progress: Callable[[str], None] | None = None):
         self._launch()
         client = RoboarenaClient(port=self.roboarena_port)
-        await wait_for_subprocess_ready(
+        wait_for_subprocess_ready(
             check_ready=client.ping,
             check_crashed=self._check_crashed,
             description='DreamZero subprocess',
@@ -201,138 +203,114 @@ class _DreamZeroSession(Session):
             return [{'action': action_array}]
         return [{'action': action_array[i]} for i in range(action_array.shape[0])]
 
+    def close(self):
+        try:
+            self._client.reset(session_id=self._session_id)
+        except (OSError, TimeoutError, ConnectionClosed):
+            logger.info('DreamZero session reset skipped: backend connection already gone')
+        finally:
+            self._client.close()
+
 
 class DreamZeroPolicy(Policy):
-    def __init__(self, client: RoboarenaClient):
-        self._client = client
-        self._prev_session_id: str | None = None
+    """Owns the DreamZero subprocess; every session talks to it over its own roboarena connection."""
 
-    def new_session(self, context=None):
-        if self._prev_session_id is not None:
-            self._client.reset(session_id=self._prev_session_id)
-        session_id = str(uuid.uuid4())
-        self._prev_session_id = session_id
-        return _DreamZeroSession(self._client, session_id)
+    def __init__(self, sp: DreamZeroSubprocess):
+        self._subprocess = sp
+
+    def new_session(self, context=None, now=None):
+        client = RoboarenaClient(port=self._subprocess.roboarena_port)
+        client.connect()
+        return _DreamZeroSession(client, str(uuid.uuid4()))
+
+    def close(self):
+        self._subprocess.stop()
 
 
-class InferenceServer(VendorServer):
+class DreamZeroSource(ModelSource):
+    """DreamZero checkpoints served through a torchrun subprocess speaking the roboarena protocol.
+
+    ``model_path`` is an ``s3://`` run directory (served at its latest ``checkpoint-N``), a pinned
+    checkpoint dir, a HuggingFace repo, or a local path.
+    """
+
     def __init__(
         self,
-        codec: Codec | None,
         model_path: str,
         dreamzero_venv: str = '/.venv/',
         backbone: str = 'wan2.1',
         num_gpus: int = 1,
-        host: str = '0.0.0.0',
-        port: int = 8000,
         roboarena_port: int = 1234,
         enable_dit_cache: bool = True,
-        recording_dir: str | None = None,
-        idle_timeout_min: float | None = None,
     ):
-        super().__init__(
-            codec=codec, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
+        self._model_path = model_path
+        self._dreamzero_venv = Path(dreamzero_venv)
+        self._backbone = backbone
+        self._num_gpus = num_gpus
+        self._roboarena_port = roboarena_port
+        self._enable_dit_cache = enable_dit_cache
+
+    def get_models(self) -> list[str]:
+        return [_resolve_checkpoint_path(self._model_path)]
+
+    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
+        local_path = run_with_progress(
+            lambda: _download_checkpoint(model_id), 'Downloading DreamZero checkpoint', on_progress
         )
-        self.model_path = _resolve_checkpoint_path(model_path)
-        self.dreamzero_venv = Path(dreamzero_venv)
-        self.backbone = backbone
-        self.num_gpus = num_gpus
-        self.roboarena_port = roboarena_port
-        self.enable_dit_cache = enable_dit_cache
-        self.subprocess: DreamZeroSubprocess | None = None
-        self._subprocess_lock = asyncio.Lock()
+        logger.info(f'Starting DreamZero subprocess with {self._num_gpus} GPUs')
+        sp = DreamZeroSubprocess(
+            model_path=str(local_path),
+            dreamzero_venv=self._dreamzero_venv,
+            backbone=self._backbone,
+            num_gpus=self._num_gpus,
+            roboarena_port=self._roboarena_port,
+            enable_dit_cache=self._enable_dit_cache,
+        )
+        try:
+            sp.start(on_progress)
+        except Exception:
+            sp.stop()
+            raise
+        return DreamZeroPolicy(sp)
 
-        self.metadata = {
-            'host': host,
-            'port': port,
-            'type': 'dreamzero',
-            'backbone': backbone,
-            'model_path': self.model_path,
-            'num_gpus': num_gpus,
-        }
-
-    async def resolve_model(self, model_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
-        if model_id is not None and model_id != self.model_path:
-            raise ValueError(f'Unknown model: {model_id}. Available: {self.model_path}')
-
-        send_progress = self._progress_sender(websocket)
-
-        async with self._subprocess_lock:
-            if self.subprocess is not None:
-                return self.subprocess, {}
-
-            download_task = asyncio.create_task(asyncio.to_thread(_download_checkpoint, self.model_path))
-            await monitor_async_task(
-                download_task, description='Downloading DreamZero checkpoint', on_progress=send_progress
-            )
-
-            logger.info(f'Starting DreamZero subprocess with {self.num_gpus} GPUs')
-            sp = DreamZeroSubprocess(
-                model_path=str(download_task.result()),
-                dreamzero_venv=self.dreamzero_venv,
-                backbone=self.backbone,
-                num_gpus=self.num_gpus,
-                roboarena_port=self.roboarena_port,
-                enable_dit_cache=self.enable_dit_cache,
-            )
-            await sp.start_async(on_progress=send_progress)
-            self.subprocess = sp
-            return sp, {}
-
-    def create_policy(self, model_handle: Any) -> Policy:
-        client = RoboarenaClient(port=model_handle.roboarena_port)
-        client.connect()
-        return DreamZeroPolicy(client)
-
-    async def get_models(self) -> dict:
-        return {'models': [self.model_path]}
-
-    def shutdown_model(self):
-        if self.subprocess is not None:
-            self.subprocess.stop()
+    def meta(self, model_id: str) -> dict[str, Any]:
+        return {'type': 'dreamzero', 'backbone': self._backbone, 'model_path': model_id, 'num_gpus': self._num_gpus}
 
 
-@cfn.config(
-    codec=codecs.joints,
-    dreamzero_venv='/.venv/',
-    backbone='wan2.1',
-    num_gpus=1,
-    port=8000,
-    enable_dit_cache=True,
-    recording_dir=None,
-    idle_timeout_min=None,
-)
-def server(
-    codec: Codec | None,
-    model_path: str,
-    dreamzero_venv: str,
-    backbone: str,
-    num_gpus: int,
-    port: int,
-    enable_dit_cache: bool,
-    recording_dir: str | None,
-    idle_timeout_min: float | None,
-):
-    """Starts the DreamZero inference server."""
-    with pos3.mirror():
-        InferenceServer(
-            codec=codec,
-            model_path=model_path,
-            dreamzero_venv=dreamzero_venv,
-            backbone=backbone,
-            num_gpus=num_gpus,
-            port=port,
-            enable_dit_cache=enable_dit_cache,
-            recording_dir=recording_dir,
-            idle_timeout_min=idle_timeout_min,
-        ).serve()
+dreamzero_source = cfn.Config(DreamZeroSource)
 
 
-# Public pretrained DROID checkpoint: wan2.1 backbone (the base server default) paired with the DROID
-# codec that feeds its required 320x180 frames.
-droid = server.override(model_path='GEAR-Dreams/DreamZero-DROID', codec=codecs.droid)
+@cfn.config(local=codecs.dreamzero_wrappers, codec=codecs.joints, source=dreamzero_source, width=320, height=176)
+def pipeline(local: PolicyWrapper, codec: Codec, source: ModelSource, width: int, height: int):
+    """One DreamZero serving pipeline: the rig-side AR video context, the codec, the subprocess-backed source.
+
+    ``width``/``height`` bound frames on the rig and follow the codec's own geometry.
+    """
+    return local | RestrictImageSize(width, height) | remote | codec | source
+
+
+joints = pipeline
+joints_traj = pipeline.override(codec=codecs.joints_traj)
+joints_ik = pipeline.override(codec=codecs.joints_ik)
+joints_ik_sim = pipeline.override(codec=codecs.joints_ik_sim)
+# The pretrained DROID model (wan2.1) asserts exactly 320x180 frames.
+droid = pipeline.override(codec=codecs.droid, height=180)
+
+
+# Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoint bound.
+COMMANDS = {
+    'serve': serve.override(pipeline=joints),
+    'joints': serve.override(pipeline=joints),
+    'joints_traj': serve.override(pipeline=joints_traj),
+    'joints_ik': serve.override(pipeline=joints_ik),
+    'joints_ik_sim': serve.override(pipeline=joints_ik_sim),
+    # Public pretrained DROID checkpoint: wan2.1 backbone (the base default) paired with the DROID
+    # pipeline whose codec feeds its required 320x180 frames.
+    'droid': serve.override(pipeline=droid.override(**{'source.model_path': 'GEAR-Dreams/DreamZero-DROID'})),
+}
 
 
 if __name__ == '__main__':
     init_logging()
-    cfn.cli({'serve': server, 'droid': droid})
+    with pos3.mirror():
+        cfn.cli(COMMANDS)

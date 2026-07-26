@@ -178,16 +178,17 @@ to `uv sync` and load the model.
 # (e.g. `demo`, `sim_stack`, `phail`). These are the source of truth; prefer them.
 bash workflows/nebius/serve.sh lerobot_0_3_3 my-act-demo demo
 
-# Explicit checkpoint dir (subcommand differs per vendor). Get <ckpt-dir> from the
-# vendor's server.py preset or `aws s3 ls` under the S3 convention — not memorized.
-bash workflows/nebius/serve.sh lerobot_0_3_3 act-server serve \
-  --checkpoints_dir=<ckpt-dir>
+# Explicit checkpoint dir (the subcommand is the pipeline name, one per vendor codec).
+# Get <ckpt-dir> from the vendor's server.py preset or `aws s3 ls` under the S3
+# convention — not memorized.
+bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
+  --pipeline.source.checkpoints_dir=<ckpt-dir>
 
-bash workflows/nebius/serve.sh openpi pi-server serve \
-  --checkpoints_dir=<ckpt-dir>
+bash workflows/nebius/serve.sh openpi pi-server ee \
+  --pipeline.source.checkpoints_dir=<ckpt-dir>
 
 bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d \
-  --checkpoints_dir=<ckpt-dir>
+  --pipeline.source.checkpoints_dir=<ckpt-dir>
 ```
 
 Sanity-check once warm:
@@ -221,7 +222,7 @@ Point the `positronic-inference` CLI at the endpoint IP:
 
 ```bash
 uv run --locked positronic-inference sim \
-  --policy=.remote --policy.host=<endpoint-ip> --policy.port=8000 \
+  --policy=.remote --policy.url=<endpoint-ip>:8000 \
   --output_dir=s3://inference/sim_stack_validation/<run_name>/<vendor>/
 ```
 
@@ -245,9 +246,10 @@ H100 (use the Nebius pipeline above).
 
 Run from `docker/`. Set `CACHE_ROOT=/home/<user>` when targeting a remote
 context from a Mac (the `${HOME}` volume path differs). `--service-ports`
-exposes the WebSocket API on port 8000. Servers take a subcommand: `serve` for
-a custom `--checkpoints_dir`, or a named preset (`phail`, `sim_stack`, …) —
-check the vendor's `server.py` for available presets.
+exposes the WebSocket API on port 8000. Servers take a subcommand: a pipeline
+name (`ee`, `ee_rot6d`, …) with a custom
+`--pipeline.source.checkpoints_dir`, or a named preset (`phail`, `sim_stack`, …)
+that already has one bound — check the vendor's `server.py` for both lists.
 
 ```bash
 # Named preset (desktop)
@@ -256,11 +258,11 @@ CACHE_ROOT=/home/<user> docker --context desktop compose run --rm --pull always 
 
 # Custom checkpoint
 CACHE_ROOT=/home/<user> docker --context desktop compose run --rm --pull always \
-  --service-ports lerobot-server serve --checkpoints_dir=<ckpt-dir>
+  --service-ports lerobot-server ee --pipeline.source.checkpoints_dir=<ckpt-dir>
 
 # GR00T inference — codec subcommand required
 CACHE_ROOT=/home/<user> docker --context notebook compose run --rm --pull always \
-  --service-ports groot-server ee_rot6d --checkpoints_dir=<ckpt-dir>
+  --service-ports groot-server ee_rot6d --pipeline.source.checkpoints_dir=<ckpt-dir>
 ```
 
 Run detached with `-d` for a background server; `docker --context <ctx> ps` /
@@ -269,7 +271,7 @@ hostname:
 
 ```bash
 uv run --locked positronic-inference sim \
-  --policy=.remote --policy.host=desktop --policy.port=8000 \
+  --policy=.remote --policy.url=desktop:8000 \
   --output_dir=<...>
 ```
 

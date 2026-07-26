@@ -1,9 +1,29 @@
-"""Unit tests for PolicyWrapper composition, ChunkedSchedule, and TemporalStack."""
+"""Unit tests for PolicyWrapper composition, ChunkedSchedule, TemporalStack, and the policy-pipeline algebra."""
+
+from typing import Any
 
 import numpy as np
+import pytest
 
+from positronic.policy import spec
+from positronic.policy.action import (
+    AbsoluteJointsAction,
+    AbsolutePositionAction,
+    IKJointsAction,
+    JointDeltaAction,
+    RelativePositionAction,
+)
 from positronic.policy.base import Policy, PolicyWrapper, Session
-from positronic.policy.codec import ActionTimestamp, Codec
+from positronic.policy.codec import (
+    ActionHorizon,
+    ActionTimestamp,
+    BinarizeGripInference,
+    BinarizeGripTraining,
+    Codec,
+    FlipGrip,
+    RestrictImageSize,
+)
+from positronic.policy.observation import ObservationCodec
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
 
 
@@ -35,7 +55,7 @@ class _ConstPolicy(Policy):
         self._actions = actions
         self._session: _ConstSession | None = None
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         self._session = _ConstSession(self._actions)
         return self._session
 
@@ -49,8 +69,8 @@ class TestChunkedSchedule:
         # Relative timestamps: trajectory of duration 0.5s
         clock = _FakeClock(t=1.0)
         inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
-        policy = ChunkedSchedule().wrap(inner, clock.now)
-        session = policy.new_session()
+        policy = ChunkedSchedule().wrap(inner)
+        session = policy.new_session(now=clock.now)
         result = session(_obs())
         assert result is not None
         assert len(result) == 2
@@ -62,8 +82,8 @@ class TestChunkedSchedule:
         # Trajectory starts at clock=1.0, ends at 1.0+0.5=1.5.
         clock = _FakeClock(t=1.0)
         inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
-        policy = ChunkedSchedule().wrap(inner, clock.now)
-        session = policy.new_session()
+        policy = ChunkedSchedule().wrap(inner)
+        session = policy.new_session(now=clock.now)
         session(_obs())
         clock.t = 1.2
         assert session(_obs()) is None
@@ -73,7 +93,7 @@ class TestChunkedSchedule:
     def test_re_infers_after_trajectory_consumed(self):
         clock = _FakeClock(t=1.0)
         inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
-        session = ChunkedSchedule().wrap(inner, clock.now).new_session()
+        session = ChunkedSchedule().wrap(inner).new_session(now=clock.now)
         session(_obs())  # trajectory ends at clock=1.5
         clock.t = 1.3
         assert session(_obs()) is None
@@ -85,8 +105,8 @@ class TestChunkedSchedule:
     def test_single_action_refires_immediately_after(self):
         """Single action at ts=0 → trajectory_end = now → next tick re-infers."""
         clock = _FakeClock(t=1.0)
-        policy = ChunkedSchedule().wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}]), clock.now)
-        session = policy.new_session()
+        policy = ChunkedSchedule().wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}]))
+        session = policy.new_session(now=clock.now)
         session(_obs())
         clock.t = 1.01
         result = session(_obs())
@@ -100,30 +120,19 @@ class TestPipelineComposition:
         clock = _FakeClock(t=1.0)
         pipeline = TemporalStack(keys=('v',), offsets_sec=(0.0,)) | ChunkedSchedule()
         assert isinstance(pipeline, PolicyWrapper)
-        policy = pipeline.wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}]), clock.now)
-        session = policy.new_session()
+        policy = pipeline.wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}]))
+        session = policy.new_session(now=clock.now)
         result = session({'obs_time_ns': int(1e9), 'v': np.array([5.0])})
         assert result is not None
         assert result[0]['v'] == 1
-
-    def test_wrapper_pipe_codec(self):
-        clock = _FakeClock(t=1.0)
-        codec = ActionTimestamp(fps=10.0)
-        pipeline = ChunkedSchedule() | codec
-        assert isinstance(pipeline, PolicyWrapper)
-        policy = pipeline.wrap(_ConstPolicy([{'action': 'test'}]), clock.now)
-        session = policy.new_session()
-        result = session(_obs())
-        assert result is not None
-        assert result[0].get('timestamp') is not None
 
     def test_codec_pipe_wrapper(self):
         clock = _FakeClock(t=1.0)
         codec = ActionTimestamp(fps=10.0)
         pipeline = codec | ChunkedSchedule()
         assert isinstance(pipeline, PolicyWrapper)
-        policy = pipeline.wrap(_ConstPolicy([{'action': 'test', 'timestamp': 0.0}]), clock.now)
-        session = policy.new_session()
+        policy = pipeline.wrap(_ConstPolicy([{'action': 'test', 'timestamp': 0.0}]))
+        session = policy.new_session(now=clock.now)
         result = session(_obs())
         assert result is not None
 
@@ -134,8 +143,8 @@ class TestPipelineComposition:
         assert isinstance(pipeline, PolicyWrapper)
         # 5 raw actions → codec stamps relative 0.0, 0.1, 0.2, 0.3, 0.4
         # → ChunkedSchedule shifts to 1.0, 1.1, 1.2, 1.3, 1.4 (clock=1.0).
-        policy = pipeline.wrap(_ConstPolicy([{'action': f'a{i}'} for i in range(5)]), clock.now)
-        session = policy.new_session()
+        policy = pipeline.wrap(_ConstPolicy([{'action': f'a{i}'} for i in range(5)]))
+        session = policy.new_session(now=clock.now)
         result = session(_obs())
         assert result is not None
         assert result[0]['timestamp'] == 1.0
@@ -164,7 +173,7 @@ class _CapturePolicy(Policy):
     def __init__(self):
         self.session = _CaptureSession()
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         return self.session
 
 
@@ -178,7 +187,7 @@ class TestTemporalStack:
     def test_pad_start_repeats_oldest(self):
         clock = _FakeClock(t=0.0)
         inner = _CapturePolicy()
-        session = TemporalStack(keys=('v',), offsets_sec=self.OFFSETS).wrap(inner, clock.now).new_session()
+        session = TemporalStack(keys=('v',), offsets_sec=self.OFFSETS).wrap(inner).new_session(now=clock.now)
         session(_stack_obs(0.0, 1.0))
         stack = inner.session.seen[0]['v']
         assert stack.shape == (3, 1)
@@ -188,7 +197,7 @@ class TestTemporalStack:
         clock = _FakeClock(t=0.0)
         inner = _CapturePolicy()
         wrapper = TemporalStack(keys=('v',), offsets_sec=self.OFFSETS, pad_start=False)
-        session = wrapper.wrap(inner, clock.now).new_session()
+        session = wrapper.wrap(inner).new_session(now=clock.now)
 
         session(_stack_obs(0.0, 1.0))
         assert inner.session.seen[0]['v'].shape == (1, 1)
@@ -208,9 +217,295 @@ class TestTemporalStack:
             clock = _FakeClock(t=0.0)
             inner = _CapturePolicy()
             wrapper = TemporalStack(keys=('v',), offsets_sec=offsets, pad_start=pad_start)
-            session = wrapper.wrap(inner, clock.now).new_session()
+            session = wrapper.wrap(inner).new_session(now=clock.now)
             for i in range(4):
                 session(_stack_obs(0.1 * i, float(i)))
             stacks[pad_start] = inner.session.seen[-1]['v']
         assert stacks[True].shape == stacks[False].shape == (3, 1)
         assert (stacks[True] == stacks[False]).all()
+
+
+class TestPipelineSpec:
+    """The (local, remote) pipeline split and the wire spec of the local half."""
+
+    def test_split_on_marker(self):
+        stack = TemporalStack(keys=('v',), offsets_sec=(0.0,))
+        sched = ChunkedSchedule()
+        codec = ActionTimestamp(fps=10.0)
+        local, border, rem = spec.split(stack | sched | spec.remote | codec)
+        assert local is not None and local._wrappers() == (stack, sched)
+        assert border is spec.remote
+        assert rem is codec
+
+    def test_split_empty_halves(self):
+        assert spec.split(spec.remote) == (None, spec.remote, None)
+        local, _, rem = spec.split(ChunkedSchedule() | spec.remote)
+        assert rem is None and isinstance(local, ChunkedSchedule)
+
+    def test_split_requires_exactly_one_marker(self):
+        with pytest.raises(ValueError, match='exactly one'):
+            spec.split(ChunkedSchedule() | ChunkedSchedule())
+        with pytest.raises(ValueError, match='exactly one'):
+            spec.split(spec.remote | spec.remote)
+
+    def test_split_recomposes_codec_half_as_codec(self):
+        rem = spec.split(spec.remote | ActionTimestamp(fps=10.0) | ActionTimestamp(fps=5.0))[2]
+        assert isinstance(rem, Codec)
+
+    def test_border_carries_the_wire_settings(self):
+        """``remote`` is the plain border; calling it describes the wire without changing the split."""
+        border = spec.split(ChunkedSchedule() | spec.remote(compress_images=True) | ActionTimestamp(fps=10.0))[1]
+        assert border.compress_images is True
+        assert spec.remote.compress_images is False
+
+    def test_marker_cannot_be_applied(self):
+        with pytest.raises(TypeError, match='border'):
+            spec.remote.wrap(_ConstPolicy([]))
+
+    def test_spec_round_trip(self):
+        stack = TemporalStack(keys=('a', 'b'), offsets_sec=(-0.5, 0.0), pad_start=False) | ChunkedSchedule()
+        rebuilt = spec.from_spec(stack.to_spec())
+        assert rebuilt is not None and rebuilt.to_spec() == stack.to_spec()
+
+    def test_codec_spec_round_trip(self):
+        obs = ObservationCodec(state={'observation.state': {'grip': 1}}, images={'left': ('image.wrist', (224, 224))})
+        local = ChunkedSchedule() | ActionTimestamp(fps=10.0) | (obs & AbsolutePositionAction('pose', 'grip'))
+        rebuilt = spec.from_spec(local.to_spec())
+        assert rebuilt is not None and rebuilt.to_spec() == local.to_spec()
+
+    def test_leaf_without_args_omits_args_key(self):
+        assert ChunkedSchedule().to_spec() == {'name': 'chunked_schedule'}
+
+    def test_par_topology_round_trips(self, monkeypatch):
+        class _WireCodec(Codec):
+            def __init__(self, tag=''):
+                self._tag = tag
+
+            def to_spec(self):
+                return {'name': 'wire_codec', 'args': {'tag': self._tag}}
+
+        monkeypatch.setitem(spec.WIRE_WRAPPERS, 'wire_codec', _WireCodec)
+        composed = _WireCodec('t') | (_WireCodec('a') & _WireCodec('b'))
+        rebuilt = spec.from_spec(composed.to_spec())
+        assert rebuilt is not None and rebuilt.to_spec() == composed.to_spec()
+        assert composed.to_spec() == {
+            'seq': [
+                {'name': 'wire_codec', 'args': {'tag': 't'}},
+                {'par': [{'name': 'wire_codec', 'args': {'tag': 'a'}}, {'name': 'wire_codec', 'args': {'tag': 'b'}}]},
+            ]
+        }
+
+    def test_par_of_non_codecs_is_rejected(self):
+        with pytest.raises(TypeError):
+            spec.from_spec({'par': [{'name': 'chunked_schedule'}, {'name': 'chunked_schedule'}]})
+
+    def test_empty_declaration_builds_nothing(self):
+        assert spec.from_spec({'seq': []}) is None
+
+    def test_unknown_name_lists_vocabulary(self):
+        with pytest.raises(ValueError, match='chunked_schedule'):
+            spec.from_spec({'name': 'not_a_wrapper'})
+
+    def test_unknown_arg_fails(self):
+        with pytest.raises(TypeError):
+            spec.from_spec({'name': 'temporal_stack', 'args': {'keys': ['v'], 'offsets_sec': [0.0], 'bogus': 1}})
+
+    def test_non_deliverable_wrapper_fails_loudly(self):
+        with pytest.raises(NotImplementedError, match='not deliverable'):
+            IKJointsAction(solver_cls=None).to_spec()
+
+    def test_wire_names_match_table(self):
+        instances = {
+            'chunked_schedule': ChunkedSchedule(),
+            'temporal_stack': TemporalStack(('v',), (0.0,)),
+            'action_timestamp': ActionTimestamp(fps=10.0),
+            'action_horizon': ActionHorizon(1.0),
+            'binarize_grip_training': BinarizeGripTraining(('grip',)),
+            'binarize_grip_inference': BinarizeGripInference(),
+            'flip_grip': FlipGrip(),
+            'restrict_image_size': RestrictImageSize(),
+            'observation_codec': ObservationCodec(state={}, images={}),
+            'absolute_position_action': AbsolutePositionAction('robot_command.pose', 'target_grip'),
+            'absolute_joints_action': AbsoluteJointsAction('robot_command.joints', 'target_grip'),
+            'relative_position_action': RelativePositionAction(),
+            'joint_delta_action': JointDeltaAction(),
+        }
+        assert set(instances) == set(spec.WIRE_WRAPPERS)
+        for name, instance in instances.items():
+            assert instance.to_spec()['name'] == name
+            assert type(instance) is spec.WIRE_WRAPPERS[name]
+
+
+class _ListSource(spec.ModelSource):
+    def __init__(self, models):
+        self._models = list(models)
+
+    def get_models(self):
+        return list(self._models)
+
+    def load(self, model_id, on_progress=None):
+        return _ConstPolicy([{'model': model_id}])
+
+
+class TestPipe:
+    """The source terminal: ``... | source`` closes a wrapper chain into a Pipeline."""
+
+    def test_wrapper_chain_terminates_into_pipe(self):
+        stack = TemporalStack(keys=('v',), offsets_sec=(0.0,))
+        sched = ChunkedSchedule()
+        codec = ActionTimestamp(fps=10.0)
+        source = spec.PolicySource(_ConstPolicy([]))
+        pipeline = stack | sched | spec.remote | codec | source
+        assert isinstance(pipeline, spec.Pipeline)
+        assert pipeline.components == (stack, sched, spec.remote, codec)
+        assert pipeline.source is source
+
+    def test_lone_codec_terminates_into_pipe(self):
+        codec = ActionTimestamp(fps=10.0)
+        pipeline = codec | spec.PolicySource(_ConstPolicy([]))
+        assert isinstance(pipeline, spec.Pipeline)
+        assert pipeline.components == (codec,)
+
+    def test_bare_marker_terminates_into_pipe(self):
+        pipeline = spec.remote | spec.PolicySource(_ConstPolicy([]))
+        assert isinstance(pipeline, spec.Pipeline)
+        assert pipeline.components == (spec.remote,)
+
+    def test_split_pipe(self):
+        sched = ChunkedSchedule()
+        codec = ActionTimestamp(fps=10.0)
+        local, border, rem = spec.split(sched | spec.remote | codec | spec.PolicySource(_ConstPolicy([])))
+        assert local is sched
+        assert border is spec.remote
+        assert rem is codec
+
+    def test_split_pipe_requires_exactly_one_marker(self):
+        with pytest.raises(ValueError, match='exactly one'):
+            spec.split(ChunkedSchedule() | spec.PolicySource(_ConstPolicy([])))
+
+    def test_pipe_composes_no_further(self):
+        pipeline: Any = ChunkedSchedule() | spec.remote | spec.PolicySource(_ConstPolicy([]))
+        with pytest.raises(TypeError):
+            _ = pipeline | ActionTimestamp(fps=10.0)
+        with pytest.raises(TypeError):
+            _ = ChunkedSchedule() | pipeline
+        with pytest.raises(TypeError):
+            _ = pipeline | spec.PolicySource(_ConstPolicy([]))
+
+    def test_inline_full_pipe(self):
+        clock = _FakeClock(t=1.0)
+        inner = _ConstPolicy([{'action': f'a{i}'} for i in range(5)])
+        policy = spec.inline(ChunkedSchedule() | spec.remote | ActionTimestamp(fps=10.0) | spec.PolicySource(inner))
+        assert isinstance(policy, Policy)
+        session = policy.new_session(now=clock.now)
+        result = session(_obs())
+        assert result is not None
+        assert result[0]['timestamp'] == 1.0
+        clock.t = 1.2
+        assert session(_obs()) is None
+
+    def test_inline_tolerates_marker_less_pipe(self):
+        clock = _FakeClock(t=1.0)
+        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}])
+        policy = spec.inline(ChunkedSchedule() | spec.PolicySource(inner))
+        session = policy.new_session(now=clock.now)
+        result = session(_obs())
+        assert result is not None and result[0]['timestamp'] == 1.0
+
+    def test_inline_bare_source_pipe_is_the_loaded_policy(self):
+        inner = _ConstPolicy([])
+        assert spec.inline(spec.remote | spec.PolicySource(inner)) is inner
+
+    def test_inline_loads_the_latest_model(self):
+        policy = spec.inline(spec.remote | _ListSource(['a', 'b']))
+        assert isinstance(policy, _ConstPolicy)
+        assert policy._actions == [{'model': 'b'}]
+
+    def test_resolve_defaults_to_latest(self):
+        source = _ListSource(['a', 'b', 'c'])
+        assert source.resolve(None) == 'c'
+        assert source.resolve('a') == 'a'
+        with pytest.raises(ValueError, match='nope'):
+            source.resolve('nope')
+
+    def test_source_equality_is_structural(self):
+        policy = _ConstPolicy([])
+        assert spec.PolicySource(policy) == spec.PolicySource(policy)
+        assert spec.PolicySource(policy, name='x') != spec.PolicySource(policy)
+        assert spec.PolicySource(policy) != spec.PolicySource(_ConstPolicy([]))
+        assert _ListSource(['a']) == _ListSource(['a'])
+        assert _ListSource(['a']) != _ListSource(['b'])
+        assert spec.PolicySource(policy) != _ListSource(['a'])
+
+        class _SubSource(spec.PolicySource):
+            pass
+
+        assert _SubSource(policy) != spec.PolicySource(policy)
+
+    def test_policy_source(self):
+        policy = _ConstPolicy([])
+        source = spec.PolicySource(policy, name='const')
+        assert source.get_models() == ['const']
+        assert source.resolve(None) == 'const'
+        progress = []
+        assert source.load('const', on_progress=progress.append) is policy
+        assert progress == []
+        assert source.meta('const') == {}
+        assert spec.PolicySource(policy).get_models() == ['default']
+
+
+def _image(h, w):
+    return np.zeros((h, w, 3), dtype=np.uint8)
+
+
+class TestRestrictImageSize:
+    def test_bounds_every_image(self):
+        result = RestrictImageSize(64, 48).encode({
+            'cam_a': _image(480, 640),
+            'cam_b': _image(240, 320),
+            'state': np.array([1.0]),
+        })
+        assert result['cam_a'].shape == (48, 64, 3)
+        assert result['cam_b'].shape == (48, 64, 3)
+        np.testing.assert_array_equal(result['state'], np.array([1.0]))
+
+    def test_defaults_to_the_standard_bound(self):
+        assert RestrictImageSize().encode({'cam': _image(1080, 1920)})['cam'].shape == (360, 640, 3)
+
+    def test_aspect_is_kept_and_images_only_shrink(self):
+        result = RestrictImageSize(160, 160).encode({'wide': _image(480, 640), 'small': _image(24, 32)})
+        assert result['wide'].shape == (120, 160, 3)
+        assert result['small'].shape == (24, 32, 3)
+
+    def test_image_within_bound_is_the_same_object(self):
+        img = _image(48, 64)
+        assert RestrictImageSize(64, 48).encode({'cam': img})['cam'] is img
+
+    def test_stacked_frames_are_bounded_per_frame(self):
+        stack = np.zeros((3, 480, 640, 3), dtype=np.uint8)
+        assert RestrictImageSize(64, 48).encode({'cam': stack})['cam'].shape == (3, 48, 64, 3)
+
+    def test_nested_images_are_reached(self):
+        result = RestrictImageSize(64, 48).encode({'video': {'cam': _image(480, 640)}, 'seq': [_image(480, 640)]})
+        assert result['video']['cam'].shape == (48, 64, 3)
+        assert result['seq'][0].shape == (48, 64, 3)
+
+    def test_non_image_values_pass_through(self):
+        obs = {'state': np.array([1.0, 2.0]), 'task': 'pick cube', 'flag': True}
+        result = RestrictImageSize(64, 48).encode(obs)
+        np.testing.assert_array_equal(result['state'], obs['state'])
+        assert result['task'] == 'pick cube'
+        assert result['flag'] is True
+
+    def test_actions_pass_through_untouched(self):
+        actions = [{'target_grip': 0.5}, {'target_grip': 1.0}]
+        assert RestrictImageSize(64, 48).decode(actions) == actions
+
+    def test_training_encoder_refuses(self):
+        with pytest.raises(NotImplementedError, match='full-resolution'):
+            _ = RestrictImageSize(64, 48).training_encoder
+
+    def test_survives_a_wire_round_trip(self):
+        rebuilt = spec.from_spec(RestrictImageSize(64, 48).to_spec())
+        assert isinstance(rebuilt, RestrictImageSize)
+        assert rebuilt.encode({'cam': _image(480, 640)})['cam'].shape == (48, 64, 3)

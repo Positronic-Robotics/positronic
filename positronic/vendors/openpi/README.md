@@ -22,7 +22,7 @@ OpenPI supports multiple codecs for different use cases:
 - **`ee`**: The primary codec. Handles both training data generation (LeRobot format) and inference (OpenPI format) automatically.
 - **`ee_joints`**: Same as `ee` but includes joint positions in the observation for richer state feedback.
 - **`_traj` variants**: Train on actual robot trajectory instead of commanded targets, with binarized grip signals.
-- **`droid`**: Inference-only codec for pretrained DROID checkpoints. The model predicts per-step joint velocities; the codec scales each into a `JointDelta` command (grip binarized) and truncates each chunk to DROID's 8-step open-loop horizon. The driver applies each delta to the live measured joints (`set_target_joints(st.q + delta)`), reproducing the DROID controller with no special client wrap. Serve with `droid` and run inference normally.
+- **`droid`**: Inference-only codec for pretrained DROID checkpoints. The model predicts per-step joint velocities; the codec scales each into a `JointDelta` command (grip binarized) and truncates each chunk to DROID's 8-step open-loop horizon. The driver applies each delta to the live measured joints (`set_target_joints(st.q + delta)`), reproducing the DROID controller. Serve with `droid` and run inference normally.
 - **`droid_jointpos`**: Inference-only codec for openpi's `*_droid_jointpos` checkpoints — the policies RoboLab's leaderboard evaluates. The model emits absolute joint-position chunks; the codec decodes each step into a `JointPosition` command (grip binarized at 0.5) and executes the whole chunk before replanning, matching RoboLab's client cadence (`open_loop_horizon` = the model's `action_horizon`). Serve with `droid_jointpos`.
 
 ## 1. Prepare Data
@@ -101,16 +101,15 @@ The OpenPI inference server wraps the OpenPI policy in a FastAPI server that pro
 ### Starting the Server
 
 ```bash
-# Default codec (ee)
-docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server serve \
-  --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
+# Default pipeline (ee codec)
+docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server ee \
+  --pipeline.source.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
 
 # With joint feedback
-docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server serve \
-  --codec=@positronic.vendors.openpi.codecs.ee_joints \
-  --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
+docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server ee_joints \
+  --pipeline.source.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
 
-# Pretrained DROID model (pi05_droid) — preset codec, config, and public checkpoint
+# Pretrained DROID model (pi05_droid) — preset pipeline (codec + config) and public checkpoint
 docker compose run --rm --service-ports openpi-server droid
 
 # DROID jointpos model (pi05_droid_jointpos) — the RoboLab leaderboard policy
@@ -120,20 +119,23 @@ docker compose run --rm --service-ports openpi-server droid_jointpos
 The `droid` config serves the public `pi05_droid` checkpoint from
 `s3://positronic-public/checkpoints/openpi/pi05_droid/` (downloaded on first request);
 no local checkpoint mount is needed. The server emits per-step `JointDelta` commands (grip
-binarized); the driver applies each delta to the live joints, so no special client wrap is needed.
+binarized); the driver applies each delta to the live joints.
 
 The `droid_jointpos` config serves openpi's `pi05_droid_jointpos` checkpoint from
 `gs://openpi-assets-simeval/pi05_droid_jointpos` (openpi fetches it itself on first request). The server
 emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence — see the codec note above.
 
 **Parameters:**
-- `--codec`: Codec for observation/action encoding (default: `@positronic.vendors.openpi.codecs.ee`).
-  Available: `ee`, `ee_joints`, `ee_traj`, `ee_joints_traj`, `joints_traj`, `droid`, `droid_jointpos`
-- `--checkpoints_dir`: Full path to the experiment directory containing checkpoints
-- `--checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
-- `--config_name`: (Optional) OpenPI config name (default: `pi05_positronic_lowmem`)
+- subcommand: Named policy pipeline (`serve` is `ee`). Picks the server-side codec and, for `droid` /
+  `droid_jointpos` / `libero`, the paired OpenPI config. Available: `ee`, `ee_joints`, `ee_traj`,
+  `ee_joints_traj`, `joints_traj`, `ee_flip_grip`, `droid`, `droid_jointpos`, `libero`
+- `--pipeline.source.checkpoints_dir`: Full path to the experiment directory containing checkpoints
+- `--pipeline.source.checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
+- `--pipeline.source.config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)
 - `--port`: (Optional) Port to serve on (default: 8000)
-- `--openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
+- `--pipeline.source.openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
+- `--recording_dir`: (Optional) Directory for server-side `.rrd` recordings (local or S3)
+- `--idle_timeout_min`: (Optional) Shut down after this many minutes without activity
 
 ### API Endpoints
 
@@ -151,6 +153,11 @@ The server exposes the following endpoints:
 **WebSocket `/api/v1/session/{checkpoint_id}`**
 - Session with specific checkpoint
 - Same protocol as default session
+
+**Session parameters:** query params on the session URL tune the serving pipeline per session — each key
+is a dotted path into the pipeline config, e.g. `ws://host:8000/api/v1/session?codec.fps=10`. Values must
+be JSON literals; the model source is fixed at launch, so `source.*` params are rejected. See
+[`positronic/offboard/README.md`](../../offboard/README.md) for the full rules.
 
 **Message Protocol:**
 1. Client connects to WebSocket
@@ -202,18 +209,15 @@ To evaluate the policy, run the inference client locally using the unified `.rem
 ```bash
 uv run --locked positronic-inference sim \
   --policy=.remote \
-  --policy.host=vm-h100 \
-  --policy.port=8000 \
+  --policy.url=vm-h100:8000 \
   --eval.timeout=20 \
   --show_gui=True \
   --output_dir=~/datasets/inference_logs
 ```
 
-- `--policy.host`: The machine that runs the inference server.
-- `--policy.port`: The port that the inference server exposes.
+- `--policy.url`: The inference server — `host`, `host:port`, or a full URL.
 
-A `droid` server emits `JointDelta` commands; the driver applies each to the live joints, so no
-special client wrap is needed.
+A `droid` server emits `JointDelta` commands; the driver applies each to the live joints.
 
 ## Troubleshooting
 
@@ -243,7 +247,7 @@ special client wrap is needed.
 
 **Solutions:**
 1. Run `curl http://localhost:8000/api/v1/models` to see available checkpoints
-2. Verify `--checkpoints_dir` path is correct (should end with experiment directory)
+2. Verify the `--pipeline.source.checkpoints_dir` path is correct (should end with experiment directory)
 3. Check checkpoint directory structure: `checkpoints/<checkpoint-id>/`
 4. If using specific checkpoint, verify the checkpoint ID exists
 

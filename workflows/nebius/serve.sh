@@ -39,20 +39,20 @@ Examples:
   bash workflows/nebius/serve.sh lerobot_0_3_3 my-act-demo demo
 
   # Your own ACT checkpoint
-  bash workflows/nebius/serve.sh lerobot_0_3_3 act-server serve \
-    --checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
+  bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
+    --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
 
   # SmolVLA / lerobot 0.4.x checkpoint
-  bash workflows/nebius/serve.sh lerobot smolvla-server serve \
-    --checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
+  bash workflows/nebius/serve.sh lerobot smolvla-server ee \
+    --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
 
   # OpenPI
-  bash workflows/nebius/serve.sh openpi pi-server serve \
-    --checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/
+  bash workflows/nebius/serve.sh openpi pi-server ee \
+    --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/
 
   # GR00T
   bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d_rel \
-    --checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
+    --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 EOF
   exit 1
 fi

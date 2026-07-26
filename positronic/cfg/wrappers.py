@@ -6,12 +6,6 @@ chunked_schedule = cfn.Config(ChunkedSchedule)
 temporal_stack = cfn.Config(TemporalStack)
 
 
-@cfn.config()
-def default_wrappers():
-    """Eval ``wrap`` default: chunked scheduling, no temporal stack."""
-    return ChunkedSchedule()
-
-
 def _frame_offsets_sec(history_frames: int, stride: int, fps: float) -> tuple[float, ...]:
     """Frame-stack offsets in ascending negative seconds for a strided video-context window.
 
@@ -32,7 +26,7 @@ def _frame_offsets_sec(history_frames: int, stride: int, fps: float) -> tuple[fl
 
 @cfn.config(keys=('image.wrist', 'image.exterior', 'robot_state.ee_pose', 'grip'), fps=15.0, pad_start=True)
 def video_context_wrappers(history_frames: int, stride: int, keys: tuple[str, ...], fps: float, pad_start: bool):
-    """Eval ``wrap`` for video-conditioned policies: strided temporal context, scheduling.
+    """The pipeline's local half for video-conditioned policies: strided temporal context, scheduling.
 
     The temporal stack sits outside the scheduler so it records the named ``keys`` every control tick and
     substitutes a stack sampled per ``history_frames``/``stride``; pair it with a codec whose ``horizon``

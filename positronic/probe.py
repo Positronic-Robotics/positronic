@@ -14,7 +14,7 @@ Usage::
 
     uv run --locked positronic-probe \\
         --dataset.path=<episode-or-dataset> --episode=0 --at=3.0 \\
-        --policy=.remote --policy.host=<host> --policy.port=<port> \\
+        --policy=.remote --policy.url=<host>:<port> \\
         --task='Pick ...' --output_dir=./probe_recordings
 """
 
@@ -133,7 +133,7 @@ def main(
     image_keys = [k for k in obs if k.startswith('image.')]
 
     rec = Recorder(pos3.sync(output_dir))
-    session = rec.tap(_TAP).wrap(policy).new_session({'task': task} if task else None)
+    session = rec.tap(_TAP).wrap(policy).new_session({'task': task} if task else None, time.time)
     meta = dict(session.meta)
     name = label or _recording_name(meta)
     try:

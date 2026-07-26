@@ -1,4 +1,8 @@
+import logging
+
 import pos3
+
+logger = logging.getLogger(__name__)
 
 
 def list_checkpoints(checkpoints_dir: str, prefix: str = '') -> list[str]:
@@ -26,3 +30,24 @@ def list_checkpoints(checkpoints_dir: str, prefix: str = '') -> list[str]:
 
 def get_latest_checkpoint(checkpoints_dir: str, prefix: str = '') -> str:
     return list_checkpoints(checkpoints_dir, prefix=prefix)[-1]
+
+
+def resolve_checkpoint(checkpoints_dir: str, configured: str | None, requested: str | None) -> str:
+    """Resolve a checkpoint ID from an explicit request, a configured default, or latest available."""
+    if requested:
+        available = list_checkpoints(checkpoints_dir)
+        if requested not in available:
+            raise ValueError(f'Checkpoint not found: {requested}. Available: {available}')
+        return requested
+
+    if configured:
+        checkpoint_id = str(configured).strip('/')
+        available = list_checkpoints(checkpoints_dir)
+        if checkpoint_id not in available:
+            raise ValueError(f'Configured checkpoint not found: {checkpoint_id}. Available: {available}')
+        logger.info(f'Using configured checkpoint: {checkpoint_id}')
+        return checkpoint_id
+
+    checkpoint_id = get_latest_checkpoint(checkpoints_dir)
+    logger.info(f'Using latest checkpoint: {checkpoint_id}')
+    return checkpoint_id

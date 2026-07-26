@@ -26,7 +26,7 @@ class _TrackingPolicy(Policy):
         self._actions = actions or [{'action': np.array([1.0, 2.0], dtype=np.float32), 'timestamp': 0.0}]
         self.session_count = 0
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         self.session_count += 1
         return _TrackingSession(self._actions, {'policy_key': 'policy_value'})
 
@@ -56,7 +56,7 @@ class _CapturingPolicy(Policy):
         self._actions = actions
         self.last_session = None
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         self.last_session = _CapturingSession(self._rec, self._actions)
         return self.last_session
 
@@ -145,7 +145,7 @@ def test_handles_none_actions(tmp_path):
             return None
 
     class _NonePolicy(Policy):
-        def new_session(self, context=None):
+        def new_session(self, context=None, now=None):
             return _NoneSession()
 
     session = Recorder(tmp_path).tap('t').wrap(_NonePolicy()).new_session()

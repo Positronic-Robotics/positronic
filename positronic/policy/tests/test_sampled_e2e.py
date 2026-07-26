@@ -55,7 +55,7 @@ class TargetPolicy(Policy):
         self._target = np.array(target, dtype=np.float32)
         self._name = name
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         return _TargetSession(self._target, self.meta)
 
     @property
@@ -199,3 +199,10 @@ def test_sampled_policy_e2e():
         pos_a = first_commands_by_policy['model_a']
         pos_b = first_commands_by_policy['model_b']
         assert not np.allclose(pos_a, pos_b, atol=1e-3), 'Different policies should produce different commands'
+
+
+def test_indistinguishable_policies_rejected():
+    """Two endpoints reporting one checkpoint path would let the sampler run only the first."""
+    policy = SampledPolicy(TargetPolicy([0.5, 0.0, 0.5], name='same'), TargetPolicy([0.3, 0.2, 0.3], name='same'))
+    with pytest.raises(ValueError, match='server.checkpoint_path'):
+        policy.new_session()

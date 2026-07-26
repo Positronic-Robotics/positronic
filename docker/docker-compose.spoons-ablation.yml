@@ -13,7 +13,7 @@ services:
     pull_policy: always
     command:
       - "ee_rot6d_rel"
-      - "--checkpoints_dir=s3://checkpoints/droid_spoons/groot/ee_rot6d_rel_100/"
+      - "--pipeline.source.checkpoints_dir=s3://checkpoints/droid_spoons/groot/ee_rot6d_rel_100/"
     ports: !override
       - "8000:8000"
 
@@ -25,7 +25,7 @@ services:
     pull_policy: always
     command:
       - "ee_rot6d_rel"
-      - "--checkpoints_dir=s3://checkpoints/droid_spoons/groot/ee_rot6d_rel_50_v2/"
+      - "--pipeline.source.checkpoints_dir=s3://checkpoints/droid_spoons/groot/ee_rot6d_rel_50_v2/"
     ports: !override
       - "8001:8000"
 
@@ -37,6 +37,6 @@ services:
     pull_policy: always
     command:
       - "ee_rot6d_rel"
-      - "--checkpoints_dir=s3://checkpoints/droid_spoons/groot/ee_rot6d_rel_25/"
+      - "--pipeline.source.checkpoints_dir=s3://checkpoints/droid_spoons/groot/ee_rot6d_rel_25/"
     ports: !override
       - "8002:8000"
