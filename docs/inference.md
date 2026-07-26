@@ -6,29 +6,26 @@ Deploy trained policies for evaluation and production use. Positronic supports l
 
 Positronic's unified WebSocket protocol connects any hardware to any model (LeRobot, GR00T, OpenPI). The key benefit is running heavy models on powerful GPU hardware (OpenPI needs ~62GB, GR00T ~8GB) separate from the robot/simulator machine.
 
-Each server carries a full **policy pipeline** — one chain naming the rig-side stack, the `remote` split marker, the server-side codec, and the model source that loads checkpoints (see `positronic.policy.spec`). The server runs the half right of the marker and declares the half left of it in its handshake; the client builds the declared stack automatically. Vendors ship their pipelines by name, and every name is a server subcommand — `groot-server ee_rot6d_joints` and `groot-server serve --pipeline=ee_rot6d_joints` are the same launch. The available names are listed in each vendor's README.
+Each server carries a full **policy pipeline** — one chain naming the rig-side stack, the `remote` split marker, the server-side codec, and the model source that loads checkpoints (see `positronic.policy.spec`). The server runs the half right of the marker and declares the half left of it in its handshake; the client builds the declared stack automatically. Vendors ship their pipelines by name, and every name is a server subcommand — `groot-server ee_rot6d_joints` launches that one. The available names are listed in each vendor's README.
 
 **Start inference server:**
 ```bash
+# The subcommand names the pipeline; everything the model is lives inside it
 # LeRobot (SmolVLA — 0.4.x)
-cd docker && docker compose run --rm --service-ports lerobot-server serve \
-  --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --pipeline=ee
+cd docker && docker compose run --rm --service-ports lerobot-server ee \
+  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
 
 # LeRobot (ACT — 0.3.3)
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve \
-  --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --pipeline=ee
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
+  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
 
-# GR00T, naming the pipeline as the subcommand
-cd docker && docker compose run --rm --service-ports groot-server \
-  ee_rot6d_joints \
-  --checkpoints_dir=~/checkpoints/groot/experiment_v1/
+# GR00T
+cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joints \
+  --pipeline.source.checkpoints_dir=~/checkpoints/groot/experiment_v1/
 
 # OpenPI
-cd docker && docker compose run --rm --service-ports openpi-server serve \
-  --checkpoints_dir=~/checkpoints/openpi/experiment_v1/ \
-  --pipeline=ee
+cd docker && docker compose run --rm --service-ports openpi-server ee \
+  --pipeline.source.checkpoints_dir=~/checkpoints/openpi/experiment_v1/
 ```
 
 Check server: `curl http://localhost:8000/api/v1/models` returns available model IDs.
@@ -60,7 +57,7 @@ Accepted forms: `host`, `host:port`, and `https://host[:port][/api/v1/session[/<
 
 **Session parameters** are the URL's query string: the server applies them as overrides to its pipeline config, so you can tune the served pipeline without restarting the server. Keys are dotted paths into that config and values are JSON literals, forwarded verbatim so they arrive exactly as written (`fps=10`, `pad=false`, `name="s3"`).
 
-The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server launch — `source.*` params are rejected; name a checkpoint in the URL path instead. Bad params fail at connect with a clear server error. The server CLI itself takes no deep overrides into the pipeline: the launch choice is a named pipeline, and everything inside it is tuned per session with params (or by adding a named pipeline variant to the vendor's `PIPELINES`). Full rules in the [Offboard README](../positronic/offboard/README.md).
+The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server launch — `source.*` params are rejected; name a checkpoint in the URL path instead. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).
 
 **Credentials stay out of the URL.** `--policy.headers='{"Modal-Key": "..."}'` passes auth headers for a fronted endpoint, so the URL itself is safe to paste around.
 

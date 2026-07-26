@@ -8,7 +8,8 @@ import pos3
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
-from positronic.offboard.server import PolicyServer
+from positronic.offboard.server import serve
+from positronic.offboard.server_utils import run_with_progress
 from positronic.policy import Codec, Policy
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
@@ -29,11 +30,12 @@ def act(checkpoint_path: str) -> PreTrainedPolicy:
 
 
 class LerobotSource(ModelSource):
-    """In-process LeRobot checkpoints from one experiment directory (its ``checkpoints/`` subdirectory).
+    """In-process LeRobot checkpoints from one experiment directory (its ``checkpoints/`` subdirectory),
+    which ``load`` downloads one at a time.
 
     ``policy_factory`` builds the backbone policy from a checkpoint path — that is its whole contract,
     so any callable returning a ``PreTrainedPolicy`` works. ``model_type`` names what it built, for the
-    handshake. Loads are synchronous and fast (<20s), so ``on_progress`` is unused.
+    handshake.
     """
 
     def __init__(
@@ -60,7 +62,10 @@ class LerobotSource(ModelSource):
     def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
         checkpoint_path = f'{self._checkpoints_dir}/{model_id}/pretrained_model'
         logger.info(f'Loading checkpoint from {checkpoint_path}')
-        policy = self._policy_factory(checkpoint_path)
+        local = run_with_progress(
+            lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {model_id}', on_progress
+        )
+        policy = self._policy_factory(str(local))
         meta = {'type': self._model_type, 'checkpoint_path': checkpoint_path}
         return LerobotPolicy(policy, self._device, extra_meta=meta)
 
@@ -86,58 +91,29 @@ joints_ik_sim = pipeline.override(codec=lerobot_codecs.joints_ik_sim)
 ee_flip = pipeline.override(codec=lerobot_codecs.ee.override(flip_grip=True))
 
 
-@cfn.config(
-    pipeline=ee,
-    policy_factory=act,
-    model_type='act',
-    checkpoint=None,
-    port=8000,
-    host='0.0.0.0',
-    recording_dir=None,
-    idle_timeout_min=None,
-)
-def main(
-    pipeline: cfn.Config,
-    policy_factory: Callable[[str], PreTrainedPolicy],
-    model_type: str,
-    checkpoints_dir: str,
-    checkpoint: str | None,
-    port: int,
-    host: str,
-    recording_dir: str | None,
-    idle_timeout_min: float | None,
-):
-    cfg = pipeline.override(**{
-        'source.policy_factory': policy_factory,
-        'source.model_type': model_type,
-        'source.checkpoints_dir': str(pos3.download(checkpoints_dir)),
-        'source.checkpoint': checkpoint,
-    })
-    PolicyServer(cfg, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
-
-
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
 # The sim_stack and demo checkpoints were trained on inverted-grip (1 = open) sim data, hence the flipped pipeline.
 COMMANDS = {
-    'serve': main,
-    'ee': main.override(pipeline=ee),
-    'joints': main.override(pipeline=joints),
-    'ee_traj': main.override(pipeline=ee_traj),
-    'joints_traj': main.override(pipeline=joints_traj),
-    'joints_ik': main.override(pipeline=joints_ik),
-    'joints_ik_sim': main.override(pipeline=joints_ik_sim),
-    'ee_flip': main.override(pipeline=ee_flip),
-    'phail': main.override(
-        checkpoints_dir='s3://checkpoints/phail_unified/lerobot/270226-ee/',
+    'serve': serve.override(pipeline=ee),
+    'ee': serve.override(pipeline=ee),
+    'joints': serve.override(pipeline=joints),
+    'ee_traj': serve.override(pipeline=ee_traj),
+    'joints_traj': serve.override(pipeline=joints_traj),
+    'joints_ik': serve.override(pipeline=joints_ik),
+    'joints_ik_sim': serve.override(pipeline=joints_ik_sim),
+    'ee_flip': serve.override(pipeline=ee_flip),
+    'phail': serve.override(
+        pipeline=ee.override(**{'source.checkpoints_dir': 's3://checkpoints/phail_unified/lerobot/270226-ee/'}),
         recording_dir='s3://inference/phail_unified/server_recordings/lerobot/270226-ee/',
     ),
-    'sim_stack': main.override(
-        pipeline=ee_flip,
-        checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/',
+    'sim_stack': serve.override(
+        pipeline=ee_flip.override(**{'source.checkpoints_dir': 's3://checkpoints/sim_stack/lerobot/230226-ee/'}),
         recording_dir='s3://inference/sim_stack/server_recordings/lerobot/230226-ee/',
     ),
-    'demo': main.override(
-        pipeline=ee_flip, checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'
+    'demo': serve.override(
+        pipeline=ee_flip.override(**{
+            'source.checkpoints_dir': 's3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'
+        })
     ),
 }
 

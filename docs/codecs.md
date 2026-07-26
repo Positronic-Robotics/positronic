@@ -55,7 +55,7 @@ Subclass `positronic.policy.codec.Codec` and implement `encode()` and/or `_decod
 
 These are the ready-made codecs each vendor ships. The standard composition is `[ActionHorizon] | ActionTimestamp | [BinarizeGrip…] | observation & action` (the bracketed stages are controlled by `compose`'s `horizon` and `binarize_grip=` arguments).
 
-At conversion time a codec is referenced by import path (`--dataset.codec=@positronic.vendors.<vendor>.codecs.<name>`). At serving time each vendor's server exposes its codecs as **named pipelines** — `--pipeline=<name>`, or the same name as a server subcommand — so the same name selects the same codec on both sides.
+At conversion time a codec is referenced by import path (`--dataset.codec=@positronic.vendors.<vendor>.codecs.<name>`). At serving time each vendor's server exposes its codecs as **named pipelines**, each one a server subcommand of the same name, so the same name selects the same codec on both sides.
 
 ### LeRobot (ACT — 0.3.3)
 
@@ -154,8 +154,7 @@ cd docker && docker compose run --rm lerobot-0_3_3-convert convert \
   --dataset.codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
 
 # Inference must match — serve the pipeline of the same name
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve \
-  --pipeline=ee
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee
 ```
 
 ## See Also

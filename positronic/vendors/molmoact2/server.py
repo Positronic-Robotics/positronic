@@ -4,7 +4,7 @@ from typing import Any
 
 import configuronic as cfn
 
-from positronic.offboard.server import PolicyServer
+from positronic.offboard.server import serve
 from positronic.policy import Codec, Policy
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
@@ -63,41 +63,9 @@ def pipeline(codec: Codec, source: ModelSource):
 droid = pipeline
 
 
-@cfn.config(
-    pipeline=droid,
-    hf_repo=DEFAULT_HF_REPO,
-    device_map='auto',
-    norm_tag='franka_droid',
-    num_steps=10,
-    port=8000,
-    host='0.0.0.0',
-    recording_dir=None,
-    idle_timeout_min=None,
-)
-def main(
-    pipeline: cfn.Config,
-    hf_repo: str,
-    device_map: str,
-    norm_tag: str,
-    num_steps: int,
-    port: int,
-    host: str,
-    recording_dir: str | None,
-    idle_timeout_min: float | None,
-):
-    """Starts the in-process MolmoAct2 inference server."""
-    cfg = pipeline.override(**{
-        'source.hf_repo': hf_repo,
-        'source.device_map': device_map,
-        'source.norm_tag': norm_tag,
-        'source.num_steps': num_steps,
-    })
-    PolicyServer(cfg, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
-
-
 # Every pipeline is a subcommand; MolmoAct2 pins one checkpoint, so there is no separate deployment.
 # The empty key is the default command, so a no-argument launch starts the server.
-COMMANDS = {'': main, 'serve': main, 'droid': main.override(pipeline=droid)}
+COMMANDS = {k: serve.override(pipeline=droid) for k in ('', 'serve', 'droid')}
 
 
 if __name__ == '__main__':

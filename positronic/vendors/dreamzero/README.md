@@ -14,7 +14,8 @@ autoregressive video context). Two backbones are wired up here:
 | `wan2.1` | 14B | 320×180 | Public pretrained `GEAR-Dreams/DreamZero-DROID` checkpoint (the `droid` server preset); DiT caching supported |
 | `wan2.2` | 5B | 320×160 | Causal chunked inference; what the Positronic fine-tunes below use |
 
-Pick the backbone with `--backbone` at both train and serve time; **it must match between the two**.
+Pick the backbone with `--backbone` at train time and `--pipeline.source.backbone` at serve time; **it must
+match between the two**.
 
 ## Hardware Requirements
 
@@ -130,15 +131,15 @@ Multi-GPU presets (`*_h100x8`) run `torchrun --nproc_per_node=8`, so use them on
 
 ### 3. Serve a checkpoint
 
-`dreamzero-server serve` downloads `--model_path` (an `s3://` checkpoint or HF repo), **needs `--backbone`
-to match training**, and serves the `joints` pipeline — pick another with `--pipeline` (see [Codecs](#codecs);
-config + defaults: [`server.py`](./server.py)). `--service-ports` publishes the WebSocket API on `8000`:
+`dreamzero-server <pipeline>` downloads `--pipeline.source.model_path` (an `s3://` checkpoint or HF repo) and
+**needs `--pipeline.source.backbone` to match training** (see [Codecs](#codecs); config + defaults:
+[`server.py`](./server.py)). `--service-ports` publishes the WebSocket API on `8000`:
 
 ```bash
 cd docker
-CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports dreamzero-server serve \
-  --model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
-  --backbone=wan2.2
+CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports dreamzero-server joints \
+  --pipeline.source.model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
+  --pipeline.source.backbone=wan2.2
 ```
 
 Sanity-check once warm: `curl http://<h100-host>:8000/api/v1/models` → `{"models": ["<model_path>"]}`.
@@ -179,10 +180,9 @@ that decodes to a `JointPosition` command. They differ only in how **training la
 | `joints_ik` | Joints solved from recorded EE-pose targets via IK (`dls_limits` solver) | EE-driven datasets |
 | `joints_ik_sim` | `joints_ik` with the `dm_control` IK solver | Sim datasets (used for `sim_stack_cubes`) |
 
-Each codec has a same-named serving pipeline (`PIPELINES` in [`server.py`](./server.py)), selected at serve time
-with `--pipeline`. Since the four `joints*` codecs decode inference identically, the default `--pipeline=joints`
-serves any of their checkpoints; the `droid` pipeline pairs the pretrained DROID model with its required
-320×180 frames.
+Each codec has a same-named serving pipeline (see [`server.py`](./server.py)), selected as the serve
+subcommand. Since the four `joints*` codecs decode inference identically, `joints` serves any of their
+checkpoints; the `droid` pipeline pairs the pretrained DROID model with its required 320×180 frames.
 
 ## Session parameters
 
@@ -239,9 +239,9 @@ bash workflows/nebius/train.sh dreamzero wan22_full_h100x1 \
   --max_steps=30000 --save_steps=2500 --gradient_accumulation_steps=4 --save_total_limit=9999
 
 # Serve (H100 endpoint; the public endpoint is exposed on :8000)
-bash workflows/nebius/serve.sh dreamzero <endpoint-name> serve \
-  --model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
-  --backbone=wan2.2
+bash workflows/nebius/serve.sh dreamzero <endpoint-name> joints \
+  --pipeline.source.model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
+  --pipeline.source.backbone=wan2.2
 # ... infer against the printed endpoint IP with --policy.url=<ip>:8000, then tear down:
 bash workflows/nebius/stop.sh <endpoint-name>
 ```

@@ -376,3 +376,14 @@ class PolicyServer:
             logger.info('Server stopped by user')
         finally:
             self._manager.close()
+
+
+@cfn.config(host='0.0.0.0', port=8000, recording_dir=None, idle_timeout_min=None)
+def serve(pipeline: cfn.Config, host: str, port: int, recording_dir: str | None, idle_timeout_min: float | None):
+    """The CLI entry point every vendor server exposes: bind ``pipeline``, and the commands are configs of this.
+
+    Only the socket and the recording taps are flags of their own; everything the served model is —
+    codec, source, checkpoint directory — is reached through the pipeline itself
+    (``--pipeline.source.checkpoints_dir=...``), so each of those values has exactly one name.
+    """
+    PolicyServer(pipeline, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()

@@ -6,7 +6,8 @@ from typing import Any
 import configuronic as cfn
 import pos3
 
-from positronic.offboard.server import PolicyServer
+from positronic.offboard.server import serve
+from positronic.offboard.server_utils import run_with_progress
 from positronic.policy import Codec, Policy
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, Pipeline, remote
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class LerobotSource(ModelSource):
-    """LeRobot 0.4.x checkpoints of one experiment directory.
+    """LeRobot 0.4.x checkpoints of one experiment directory, which ``load`` downloads one at a time.
 
     The policy type is auto-detected from each checkpoint's config, so this serves SmolVLA, ACT,
     Diffusion, or any other lerobot 0.4.x policy.
@@ -41,7 +42,10 @@ class LerobotSource(ModelSource):
     def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
         checkpoint_path = f'{self.checkpoints_dir}/{model_id}/pretrained_model'
         logger.info(f'Loading checkpoint from {checkpoint_path}')
-        return LerobotPolicy(checkpoint_path, self.device, extra_meta={'checkpoint_path': checkpoint_path})
+        local = run_with_progress(
+            lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {model_id}', on_progress
+        )
+        return LerobotPolicy(str(local), self.device, extra_meta={'checkpoint_path': checkpoint_path})
 
     def meta(self, model_id: str) -> dict[str, Any]:
         return {'device': self.device, 'experiment_name': self.experiment_name}
@@ -61,37 +65,15 @@ joints_ik = pipeline.override(codec=lerobot_codecs.joints_ik)
 joints_ik_sim = pipeline.override(codec=lerobot_codecs.joints_ik_sim)
 
 
-@cfn.config(
-    pipeline=ee, checkpoint=None, device=None, port=8000, host='0.0.0.0', recording_dir=None, idle_timeout_min=None
-)
-def main(
-    pipeline: cfn.Config,
-    checkpoints_dir: str,
-    checkpoint: str | None,
-    device: str | None,
-    port: int,
-    host: str,
-    recording_dir: str | None,
-    idle_timeout_min: float | None,
-):
-    checkpoints_dir = str(pos3.download(checkpoints_dir))
-    cfg = pipeline.override(**{
-        'source.checkpoints_dir': checkpoints_dir,
-        'source.checkpoint': checkpoint,
-        'source.device': device,
-    })
-    PolicyServer(cfg, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
-
-
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
 COMMANDS = {
-    'serve': main,
-    'ee': main.override(pipeline=ee),
-    'joints': main.override(pipeline=joints),
-    'joints_ik': main.override(pipeline=joints_ik),
-    'joints_ik_sim': main.override(pipeline=joints_ik_sim),
-    'phail': main.override(
-        checkpoints_dir='s3://checkpoints/phail_unified/smolvla/170316_ee/',
+    'serve': serve.override(pipeline=ee),
+    'ee': serve.override(pipeline=ee),
+    'joints': serve.override(pipeline=joints),
+    'joints_ik': serve.override(pipeline=joints_ik),
+    'joints_ik_sim': serve.override(pipeline=joints_ik_sim),
+    'phail': serve.override(
+        pipeline=ee.override(**{'source.checkpoints_dir': 's3://checkpoints/phail_unified/smolvla/170316_ee/'}),
         recording_dir='s3://inference/phail_unified/server_recordings/smolvla/170316_ee/',
     ),
 }

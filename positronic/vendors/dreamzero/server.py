@@ -16,7 +16,7 @@ import websockets.sync.client
 from huggingface_hub import snapshot_download
 from websockets.exceptions import ConnectionClosed
 
-from positronic.offboard.server import PolicyServer
+from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Codec, Policy, PolicyWrapper, Session
 from positronic.policy.codec import RestrictImageSize
@@ -297,54 +297,20 @@ joints_ik_sim = pipeline.override(codec=codecs.joints_ik_sim)
 droid = pipeline.override(codec=codecs.droid, height=180)
 
 
-@cfn.config(
-    pipeline=joints,
-    dreamzero_venv='/.venv/',
-    backbone='wan2.1',
-    num_gpus=1,
-    host='0.0.0.0',
-    port=8000,
-    enable_dit_cache=True,
-    recording_dir=None,
-    idle_timeout_min=None,
-)
-def main(
-    pipeline: cfn.Config,
-    model_path: str,
-    dreamzero_venv: str,
-    backbone: str,
-    num_gpus: int,
-    host: str,
-    port: int,
-    enable_dit_cache: bool,
-    recording_dir: str | None,
-    idle_timeout_min: float | None,
-):
-    """Starts the DreamZero inference server."""
-    cfg = pipeline.override(**{
-        'source.model_path': model_path,
-        'source.dreamzero_venv': dreamzero_venv,
-        'source.backbone': backbone,
-        'source.num_gpus': num_gpus,
-        'source.enable_dit_cache': enable_dit_cache,
-    })
-    with pos3.mirror():
-        PolicyServer(cfg, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
-
-
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoint bound.
 COMMANDS = {
-    'serve': main,
-    'joints': main.override(pipeline=joints),
-    'joints_traj': main.override(pipeline=joints_traj),
-    'joints_ik': main.override(pipeline=joints_ik),
-    'joints_ik_sim': main.override(pipeline=joints_ik_sim),
+    'serve': serve.override(pipeline=joints),
+    'joints': serve.override(pipeline=joints),
+    'joints_traj': serve.override(pipeline=joints_traj),
+    'joints_ik': serve.override(pipeline=joints_ik),
+    'joints_ik_sim': serve.override(pipeline=joints_ik_sim),
     # Public pretrained DROID checkpoint: wan2.1 backbone (the base default) paired with the DROID
     # pipeline whose codec feeds its required 320x180 frames.
-    'droid': main.override(pipeline=droid, model_path='GEAR-Dreams/DreamZero-DROID'),
+    'droid': serve.override(pipeline=droid.override(**{'source.model_path': 'GEAR-Dreams/DreamZero-DROID'})),
 }
 
 
 if __name__ == '__main__':
     init_logging()
-    cfn.cli(COMMANDS)
+    with pos3.mirror():
+        cfn.cli(COMMANDS)

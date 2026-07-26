@@ -165,15 +165,13 @@ The loop continues until the client closes the connection or the episode ends.
 **Unified API:** All vendors implement the same protocol, so swapping models is as simple as changing the server:
 
 ```bash
-# LeRobot server (SmolVLA — 0.4.x); --pipeline selects the named codec pipeline
-cd docker && docker compose run --rm --service-ports lerobot-server serve \
-  --checkpoints_dir=~/checkpoints/lerobot/exp_v1 \
-  --pipeline=ee
+# LeRobot server (SmolVLA — 0.4.x); the subcommand names the codec pipeline
+cd docker && docker compose run --rm --service-ports lerobot-server ee \
+  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/exp_v1
 
-# GR00T server (swap hardware code stays the same), naming the pipeline as the subcommand
-cd docker && docker compose run --rm --service-ports groot-server \
-  ee_rot6d_joints \
-  --checkpoints_dir=~/checkpoints/groot/exp_v1
+# GR00T server (swap hardware code stays the same)
+cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joints \
+  --pipeline.source.checkpoints_dir=~/checkpoints/groot/exp_v1
 
 # Client connects the same way
 uv run positronic-inference sim \
@@ -203,7 +201,10 @@ pipeline = ChunkedSchedule() | remote | PolicySource(my_policy)
 PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()
 ```
 
-`PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named `PIPELINES` — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` shuts the server down after that many minutes without activity.
+`PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` shuts the server down after that many minutes without activity.
+
+### `server.serve`
+The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--host`, `--port`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself; everything the served model is — codec, source, checkpoint directory — is reached through the pipeline (`--pipeline.source.checkpoints_dir=...`), which is also where a deployment preset binds it.
 
 ### `client.InferenceClient`
 A Python client for connecting to an inference server. One URL addresses it, in the same forms

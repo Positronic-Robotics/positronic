@@ -181,48 +181,44 @@ Start an inference server that exposes a unified WebSocket API. All vendors impl
 **LeRobot Server (SmolVLA — lerobot 0.4.x):**
 
 ```bash
-cd docker && docker compose run --rm --service-ports lerobot-server serve \
-  --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --pipeline=ee \
+cd docker && docker compose run --rm --service-ports lerobot-server ee \
+  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
   --port=8000
 ```
 
 **LeRobot Server (ACT — lerobot 0.3.3):**
 
 ```bash
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve \
-  --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --pipeline=ee \
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
+  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
   --port=8000
 ```
 
 **GR00T Server (naming the pipeline as the subcommand):**
 
 ```bash
-cd docker && docker compose run --rm --service-ports groot-server \
-  ee_rot6d_joints \
-  --checkpoints_dir=~/checkpoints/groot/experiment_v1/
+cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joints \
+  --pipeline.source.checkpoints_dir=~/checkpoints/groot/experiment_v1/
 ```
 
 **OpenPI Server:**
 
 ```bash
-cd docker && docker compose run --rm --service-ports openpi-server serve \
-  --checkpoints_dir=~/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
-  --pipeline=ee
+cd docker && docker compose run --rm --service-ports openpi-server ee \
+  --pipeline.source.checkpoints_dir=~/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
 ```
 
 ### Server Parameters
 
 | Parameter | Description | Example |
 |-----------|-------------|---------|
-| `--checkpoints_dir` | Path to experiment directory (contains checkpoint folders) | `~/checkpoints/lerobot/experiment_v1/` |
-| `--checkpoint` | (Optional) Specific checkpoint ID to load | `10000`, `20000` |
-| `--pipeline` | Named policy pipeline: the server-side codec (must match training). Each vendor lists its pipeline names in its README | `ee` |
+| subcommand | Named policy pipeline: the server-side codec (must match training). Each vendor lists its pipeline names in its README | `ee` |
+| `--pipeline.source.checkpoints_dir` | Path to experiment directory (contains checkpoint folders) | `~/checkpoints/lerobot/experiment_v1/` |
+| `--pipeline.source.checkpoint` | (Optional) Specific checkpoint ID to load | `10000`, `20000` |
 | `--port` | Server port | `8000` (default) |
 | `--host` | Server host | `0.0.0.0` (default, binds to all interfaces) |
 
-The launch choice is the named pipeline; its inner arguments are tuned per session via client query params (the `?...` on `--policy.url` — see the [Inference Guide](inference.md)) or by a new named pipeline entry in the vendor's `PIPELINES`.
+The subcommand picks the pipeline and `--pipeline.<path>` reaches anywhere inside it, so every value the served model is built from has exactly one name. The same paths are the per-session query params on the client's `--policy.url` (see the [Inference Guide](inference.md)), except `source.*`, which is fixed at launch.
 
 ### Checking Server Status
 
@@ -267,9 +263,8 @@ cd docker && docker compose run --rm lerobot-train expert_only \
   --num_train_steps=50000
 
 # 5. Evaluate
-cd docker && docker compose run --rm --service-ports lerobot-server serve \
-  --checkpoints_dir=~/checkpoints/lerobot/baseline_v1/ \
-  --pipeline=ee &
+cd docker && docker compose run --rm --service-ports lerobot-server ee \
+  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/baseline_v1/ &
 
 uv run positronic-inference sim \
   --policy=.remote \

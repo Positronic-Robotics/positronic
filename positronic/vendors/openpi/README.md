@@ -102,13 +102,12 @@ The OpenPI inference server wraps the OpenPI policy in a FastAPI server that pro
 
 ```bash
 # Default pipeline (ee codec)
-docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server serve \
-  --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
+docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server ee \
+  --pipeline.source.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
 
 # With joint feedback
-docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server serve \
-  --pipeline=ee_joints \
-  --checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
+docker compose run --rm --service-ports -v ~/checkpoints:/checkpoints openpi-server ee_joints \
+  --pipeline.source.checkpoints_dir=/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
 
 # Pretrained DROID model (pi05_droid) — preset pipeline (codec + config) and public checkpoint
 docker compose run --rm --service-ports openpi-server droid
@@ -127,14 +126,14 @@ The `droid_jointpos` config serves openpi's `pi05_droid_jointpos` checkpoint fro
 emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence — see the codec note above.
 
 **Parameters:**
-- `--pipeline`: Named policy pipeline (default: `ee`). Picks the server-side codec and, for `droid` /
+- subcommand: Named policy pipeline (`serve` is `ee`). Picks the server-side codec and, for `droid` /
   `droid_jointpos` / `libero`, the paired OpenPI config. Available: `ee`, `ee_joints`, `ee_traj`,
   `ee_joints_traj`, `joints_traj`, `ee_flip_grip`, `droid`, `droid_jointpos`, `libero`
-- `--checkpoints_dir`: Full path to the experiment directory containing checkpoints
-- `--checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
-- `--config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)
+- `--pipeline.source.checkpoints_dir`: Full path to the experiment directory containing checkpoints
+- `--pipeline.source.checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
+- `--pipeline.source.config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)
 - `--port`: (Optional) Port to serve on (default: 8000)
-- `--openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
+- `--pipeline.source.openpi_ws_port`: (Optional) Internal port for OpenPI subprocess (default: 8001)
 - `--recording_dir`: (Optional) Directory for server-side `.rrd` recordings (local or S3)
 - `--idle_timeout_min`: (Optional) Shut down after this many minutes without activity
 
@@ -248,7 +247,7 @@ A `droid` server emits `JointDelta` commands; the driver applies each to the liv
 
 **Solutions:**
 1. Run `curl http://localhost:8000/api/v1/models` to see available checkpoints
-2. Verify `--checkpoints_dir` path is correct (should end with experiment directory)
+2. Verify the `--pipeline.source.checkpoints_dir` path is correct (should end with experiment directory)
 3. Check checkpoint directory structure: `checkpoints/<checkpoint-id>/`
 4. If using specific checkpoint, verify the checkpoint ID exists
 

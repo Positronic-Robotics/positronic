@@ -34,9 +34,10 @@ class _DummyWebSocket:
         await self._close(**kwargs)
 
 
-def test_handshake_metadata_does_not_depend_on_the_factory():
+def test_handshake_metadata_does_not_depend_on_the_factory(monkeypatch):
     """A factory's whole contract is returning a policy, so a plain one carrying no extra attributes
     still yields complete metadata — ``checkpoint_path`` included, since sampling keys on it."""
+    monkeypatch.setattr(lerobot_server.pos3, 'download', lambda path: path)
     source = lerobot_server.LerobotSource(
         policy_factory=lambda _path: MagicMock(spec=lerobot_server.PreTrainedPolicy), checkpoints_dir='s3://bucket/exp'
     )

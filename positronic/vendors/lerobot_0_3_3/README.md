@@ -33,10 +33,9 @@ cd docker && docker compose run --rm lerobot-0_3_3-train \
   --num_train_steps=50000 \
   --save_freq=10000
 
-# 3. Serve
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve \
-  --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --pipeline=ee
+# 3. Serve (the subcommand selects the codec pipeline)
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
+  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/
 
 # 4. Run inference
 uv run positronic-inference sim \
@@ -91,9 +90,8 @@ See [Codecs Guide](../../docs/codecs.md) for comprehensive codec documentation.
 ### Inference Server Configuration
 
 ```bash
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve \
-  --checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
-  --pipeline=ee \
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
+  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/my_task_v1/ \
   --port=8000 \
   --host=0.0.0.0
 ```
@@ -102,11 +100,11 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve 
 
 | Parameter | Description | Default | Example |
 |-----------|-------------|---------|---------|
-| `--checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
-| `--checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
-| `--pipeline` | Named policy pipeline: the server-side codec (must match training) | `ee` | `joints` |
-| `--policy_factory` | Builds the backbone policy from a checkpoint path | `act` | `@my_module.factory` |
-| `--model_type` | Names what the factory builds, for the handshake metadata | `act` | `diffusion` |
+| subcommand | Named policy pipeline: the server-side codec (must match training) | `ee` | `joints` |
+| `--pipeline.source.checkpoints_dir` | Experiment directory (contains `checkpoints/` folder) | Required | `~/checkpoints/lerobot/my_task_v1/` |
+| `--pipeline.source.checkpoint` | Specific checkpoint step | Latest | `10000`, `20000` |
+| `--pipeline.source.policy_factory` | Builds the backbone policy from a checkpoint path | `act` | `@my_module.factory` |
+| `--pipeline.source.model_type` | Names what the factory builds, for the handshake metadata | `act` | `diffusion` |
 | `--port` | Server port | `8000` | `8001` |
 | `--host` | Server host | `0.0.0.0` | Binds to all interfaces |
 | `--recording_dir` | Directory for server-side inference recordings | `None` | `s3://inference/...` |
@@ -116,7 +114,7 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server serve 
 
 **Session params:** clients can tune pipeline arguments per session via query params on the session URL — e.g. `--policy.url='localhost:8000?codec.fps=10'` on the inference CLI. Values must be JSON literals, and the model source (checkpoints, device) is fixed at launch. See the [offboard README](../../offboard/README.md).
 
-**Subcommands:** Every pipeline name is one (`lerobot-0_3_3-server joints_ik`), as is `serve` with every flag open. `phail`, `sim_stack`, and `demo` are the same pipelines with their `checkpoints_dir`/`recording_dir` bound (e.g. `lerobot-0_3_3-server phail`).
+**Subcommands:** Every pipeline name is one (`lerobot-0_3_3-server joints_ik`), and `serve` is `ee`. `phail`, `sim_stack`, and `demo` are the same pipelines with their `checkpoints_dir`/`recording_dir` bound (e.g. `lerobot-0_3_3-server phail`).
 
 ## Troubleshooting
 

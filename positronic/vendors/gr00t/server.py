@@ -12,7 +12,7 @@ import numpy as np
 import pos3
 import zmq
 
-from positronic.offboard.server import PolicyServer
+from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Policy, Session
 from positronic.policy.codec import RestrictImageSize
@@ -328,60 +328,25 @@ sim_stack_pipe = pipeline.override(
 )
 
 
-@cfn.config(
-    pipeline=ee,
-    checkpoint=None,
-    host='0.0.0.0',
-    port=8000,
-    groot_venv_path='/.venv/',
-    modality_config=None,
-    recording_dir=None,
-    ready_timeout=120.0,
-    idle_timeout_min=None,
-)
-def main(
-    pipeline: cfn.Config,
-    checkpoints_dir: str,
-    checkpoint: str | None,
-    host: str,
-    port: int,
-    groot_venv_path: str,
-    modality_config: str | None,
-    recording_dir: str | None,
-    ready_timeout: float,
-    idle_timeout_min: float | None,
-):
-    """Serves the named GR00T policy pipeline; ``modality_config`` overrides the pipeline's paired one."""
-    overrides = {
-        'source.checkpoints_dir': checkpoints_dir,
-        'source.checkpoint': checkpoint,
-        'source.groot_venv_path': groot_venv_path,
-        'source.ready_timeout': ready_timeout,
-    }
-    if modality_config is not None:
-        overrides['source.modality_config'] = modality_config
-    cfg = pipeline.override(**overrides)
-    with pos3.mirror():
-        PolicyServer(cfg, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
-
-
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
 COMMANDS = {
-    'serve': main,
-    'ee': main.override(pipeline=ee),
-    'ee_joints': main.override(pipeline=ee_joints),
-    'ee_rot6d': main.override(pipeline=ee_rot6d),
-    'ee_rot6d_joints': main.override(pipeline=ee_rot6d_joints),
-    'ee_rot6d_rel': main.override(pipeline=ee_rot6d_rel),
-    'ee_rot6d_joints_rel': main.override(pipeline=ee_rot6d_joints_rel),
-    'phail': main.override(
-        pipeline=ee_rot6d_rel,
-        checkpoints_dir='s3://checkpoints/phail_unified/groot/270226-ee_rot6d_rel/',
+    'serve': serve.override(pipeline=ee),
+    'ee': serve.override(pipeline=ee),
+    'ee_joints': serve.override(pipeline=ee_joints),
+    'ee_rot6d': serve.override(pipeline=ee_rot6d),
+    'ee_rot6d_joints': serve.override(pipeline=ee_rot6d_joints),
+    'ee_rot6d_rel': serve.override(pipeline=ee_rot6d_rel),
+    'ee_rot6d_joints_rel': serve.override(pipeline=ee_rot6d_joints_rel),
+    'phail': serve.override(
+        pipeline=ee_rot6d_rel.override(**{
+            'source.checkpoints_dir': 's3://checkpoints/phail_unified/groot/270226-ee_rot6d_rel/'
+        }),
         recording_dir='s3://inference/phail_unified/server_recordings/groot/270226-ee_rot6d_rel/',
     ),
-    'sim_stack': main.override(
-        pipeline=sim_stack_pipe,
-        checkpoints_dir='s3://checkpoints/sim_stack/groot/ee_rot6d/230226/',
+    'sim_stack': serve.override(
+        pipeline=sim_stack_pipe.override(**{
+            'source.checkpoints_dir': 's3://checkpoints/sim_stack/groot/ee_rot6d/230226/'
+        }),
         recording_dir='s3://inference/sim_stack/server_recordings/groot/230226/',
     ),
 }
@@ -389,4 +354,5 @@ COMMANDS = {
 
 if __name__ == '__main__':
     init_logging()
-    cfn.cli(COMMANDS)
+    with pos3.mirror():
+        cfn.cli(COMMANDS)
