@@ -316,24 +316,20 @@ def pipeline(codec, source):
 
 
 # Each entry pairs the codec with the matching GR00T modality config; they must agree with training.
-PIPELINES = {
-    'ee': pipeline,
-    'ee_joints': pipeline.override(codec=codecs.ee_quat_joints, **{'source.modality_config': 'ee_q'}),
-    'ee_rot6d': pipeline.override(codec=codecs.ee_rot6d, **{'source.modality_config': 'ee_rot6d'}),
-    'ee_rot6d_joints': pipeline.override(codec=codecs.ee_rot6d_joints, **{'source.modality_config': 'ee_rot6d_q'}),
-    'ee_rot6d_rel': pipeline.override(codec=codecs.ee_rot6d, **{'source.modality_config': 'ee_rot6d_rel'}),
-    'ee_rot6d_joints_rel': pipeline.override(
-        codec=codecs.ee_rot6d_joints, **{'source.modality_config': 'ee_rot6d_q_rel'}
-    ),
-    # The sim_stack checkpoint was trained on inverted-grip (1 = open) sim data, hence flip_grip.
-    'sim_stack': pipeline.override(
-        codec=codecs.ee_rot6d.override(flip_grip=True), **{'source.modality_config': 'ee_rot6d'}
-    ),
-}
+ee = pipeline
+ee_joints = pipeline.override(codec=codecs.ee_quat_joints, **{'source.modality_config': 'ee_q'})
+ee_rot6d = pipeline.override(codec=codecs.ee_rot6d, **{'source.modality_config': 'ee_rot6d'})
+ee_rot6d_joints = pipeline.override(codec=codecs.ee_rot6d_joints, **{'source.modality_config': 'ee_rot6d_q'})
+ee_rot6d_rel = pipeline.override(codec=codecs.ee_rot6d, **{'source.modality_config': 'ee_rot6d_rel'})
+ee_rot6d_joints_rel = pipeline.override(codec=codecs.ee_rot6d_joints, **{'source.modality_config': 'ee_rot6d_q_rel'})
+# The sim_stack checkpoint was trained on inverted-grip (1 = open) sim data, hence flip_grip.
+sim_stack_pipe = pipeline.override(
+    codec=codecs.ee_rot6d.override(flip_grip=True), **{'source.modality_config': 'ee_rot6d'}
+)
 
 
 @cfn.config(
-    pipeline='ee',
+    pipeline=ee,
     checkpoint=None,
     host='0.0.0.0',
     port=8000,
@@ -344,7 +340,7 @@ PIPELINES = {
     idle_timeout_min=None,
 )
 def main(
-    pipeline: str,
+    pipeline: cfn.Config,
     checkpoints_dir: str,
     checkpoint: str | None,
     host: str,
@@ -364,23 +360,27 @@ def main(
     }
     if modality_config is not None:
         overrides['source.modality_config'] = modality_config
-    cfg = PIPELINES[pipeline].override(**overrides)
+    cfg = pipeline.override(**overrides)
     with pos3.mirror():
         PolicyServer(cfg, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
 
 
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
-# ``sim_stack`` names both, and the deployment wins: it is the same pipeline plus its checkpoints.
 COMMANDS = {
     'serve': main,
-    **{name: main.override(pipeline=name) for name in PIPELINES},
+    'ee': main.override(pipeline=ee),
+    'ee_joints': main.override(pipeline=ee_joints),
+    'ee_rot6d': main.override(pipeline=ee_rot6d),
+    'ee_rot6d_joints': main.override(pipeline=ee_rot6d_joints),
+    'ee_rot6d_rel': main.override(pipeline=ee_rot6d_rel),
+    'ee_rot6d_joints_rel': main.override(pipeline=ee_rot6d_joints_rel),
     'phail': main.override(
-        pipeline='ee_rot6d_rel',
+        pipeline=ee_rot6d_rel,
         checkpoints_dir='s3://checkpoints/phail_unified/groot/270226-ee_rot6d_rel/',
         recording_dir='s3://inference/phail_unified/server_recordings/groot/270226-ee_rot6d_rel/',
     ),
     'sim_stack': main.override(
-        pipeline='sim_stack',
+        pipeline=sim_stack_pipe,
         checkpoints_dir='s3://checkpoints/sim_stack/groot/ee_rot6d/230226/',
         recording_dir='s3://inference/sim_stack/server_recordings/groot/230226/',
     ),

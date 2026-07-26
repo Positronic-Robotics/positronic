@@ -60,11 +60,11 @@ def pipeline(codec: Codec, source: ModelSource):
     return ChunkedSchedule() | RestrictImageSize() | remote | codec | source
 
 
-PIPELINES = {'droid': pipeline}
+droid = pipeline
 
 
 @cfn.config(
-    pipeline='droid',
+    pipeline=droid,
     hf_repo=DEFAULT_HF_REPO,
     device_map='auto',
     norm_tag='franka_droid',
@@ -75,7 +75,7 @@ PIPELINES = {'droid': pipeline}
     idle_timeout_min=None,
 )
 def main(
-    pipeline: str,
+    pipeline: cfn.Config,
     hf_repo: str,
     device_map: str,
     norm_tag: str,
@@ -86,7 +86,7 @@ def main(
     idle_timeout_min: float | None,
 ):
     """Starts the in-process MolmoAct2 inference server."""
-    cfg = PIPELINES[pipeline].override(**{
+    cfg = pipeline.override(**{
         'source.hf_repo': hf_repo,
         'source.device_map': device_map,
         'source.norm_tag': norm_tag,
@@ -97,7 +97,7 @@ def main(
 
 # Every pipeline is a subcommand; MolmoAct2 pins one checkpoint, so there is no separate deployment.
 # The empty key is the default command, so a no-argument launch starts the server.
-COMMANDS = {'': main, 'serve': main, **{name: main.override(pipeline=name) for name in PIPELINES}}
+COMMANDS = {'': main, 'serve': main, 'droid': main.override(pipeline=droid)}
 
 
 if __name__ == '__main__':

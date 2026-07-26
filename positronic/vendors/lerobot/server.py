@@ -55,19 +55,17 @@ def pipeline(codec: Codec, source: ModelSource) -> Pipeline:
     return ChunkedSchedule() | RestrictImageSize(512, 512) | remote | codec | source
 
 
-PIPELINES = {
-    'ee': pipeline,
-    'joints': pipeline.override(codec=lerobot_codecs.joints),
-    'joints_ik': pipeline.override(codec=lerobot_codecs.joints_ik),
-    'joints_ik_sim': pipeline.override(codec=lerobot_codecs.joints_ik_sim),
-}
+ee = pipeline
+joints = pipeline.override(codec=lerobot_codecs.joints)
+joints_ik = pipeline.override(codec=lerobot_codecs.joints_ik)
+joints_ik_sim = pipeline.override(codec=lerobot_codecs.joints_ik_sim)
 
 
 @cfn.config(
-    pipeline='ee', checkpoint=None, device=None, port=8000, host='0.0.0.0', recording_dir=None, idle_timeout_min=None
+    pipeline=ee, checkpoint=None, device=None, port=8000, host='0.0.0.0', recording_dir=None, idle_timeout_min=None
 )
 def main(
-    pipeline: str,
+    pipeline: cfn.Config,
     checkpoints_dir: str,
     checkpoint: str | None,
     device: str | None,
@@ -77,7 +75,7 @@ def main(
     idle_timeout_min: float | None,
 ):
     checkpoints_dir = str(pos3.download(checkpoints_dir))
-    cfg = PIPELINES[pipeline].override(**{
+    cfg = pipeline.override(**{
         'source.checkpoints_dir': checkpoints_dir,
         'source.checkpoint': checkpoint,
         'source.device': device,
@@ -88,7 +86,10 @@ def main(
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
 COMMANDS = {
     'serve': main,
-    **{name: main.override(pipeline=name) for name in PIPELINES},
+    'ee': main.override(pipeline=ee),
+    'joints': main.override(pipeline=joints),
+    'joints_ik': main.override(pipeline=joints_ik),
+    'joints_ik_sim': main.override(pipeline=joints_ik_sim),
     'phail': main.override(
         checkpoints_dir='s3://checkpoints/phail_unified/smolvla/170316_ee/',
         recording_dir='s3://inference/phail_unified/server_recordings/smolvla/170316_ee/',

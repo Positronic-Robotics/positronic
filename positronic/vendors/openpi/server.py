@@ -243,22 +243,20 @@ def pipeline(codec: Codec, source: ModelSource):
     return ChunkedSchedule() | RestrictImageSize(224, 224) | remote | codec | source
 
 
-PIPELINES = {
-    'ee': pipeline,
-    'ee_joints': pipeline.override(codec=codecs.ee_joints),
-    'ee_traj': pipeline.override(codec=codecs.ee_traj),
-    'ee_joints_traj': pipeline.override(codec=codecs.ee_joints_traj),
-    'joints_traj': pipeline.override(codec=codecs.joints_traj),
-    # For checkpoints trained on inverted-grip (1 = open) data, e.g. the sim_stack recordings.
-    'ee_flip_grip': pipeline.override(**{'codec.flip_grip': True}),
-    'droid': pipeline.override(codec=codecs.droid, **{'source.config_name': 'pi05_droid'}),
-    'droid_jointpos': pipeline.override(codec=codecs.droid_jointpos, **{'source.config_name': 'pi05_droid_jointpos'}),
-    'libero': pipeline.override(codec=codecs.libero, **{'source.config_name': 'pi05_libero'}),
-}
+ee = pipeline
+ee_joints = pipeline.override(codec=codecs.ee_joints)
+ee_traj = pipeline.override(codec=codecs.ee_traj)
+ee_joints_traj = pipeline.override(codec=codecs.ee_joints_traj)
+joints_traj = pipeline.override(codec=codecs.joints_traj)
+# For checkpoints trained on inverted-grip (1 = open) data, e.g. the sim_stack recordings.
+ee_flip_grip = pipeline.override(**{'codec.flip_grip': True})
+droid_pipe = pipeline.override(codec=codecs.droid, **{'source.config_name': 'pi05_droid'})
+droid_jointpos_pipe = pipeline.override(codec=codecs.droid_jointpos, **{'source.config_name': 'pi05_droid_jointpos'})
+libero_pipe = pipeline.override(codec=codecs.libero, **{'source.config_name': 'pi05_libero'})
 
 
 @cfn.config(
-    pipeline='ee',
+    pipeline=ee,
     checkpoints_dir='',
     config_name=None,
     checkpoint=None,
@@ -269,7 +267,7 @@ PIPELINES = {
     idle_timeout_min=None,
 )
 def main(
-    pipeline: str,
+    pipeline: cfn.Config,
     checkpoints_dir: str,
     config_name: str | None,
     checkpoint: str | None,
@@ -282,8 +280,8 @@ def main(
     """OpenPI inference server.
 
     Args:
-        pipeline: Named policy pipeline from ``PIPELINES`` — picks the codec and, for droid/droid_jointpos/libero,
-            the paired OpenPI config.
+        pipeline: The policy pipeline to serve — picks the codec and, for droid/droid_jointpos/libero, the
+            paired OpenPI config.
         checkpoints_dir: Directory containing model checkpoints (``gs://`` serves a published openpi
             checkpoint as-is).
         config_name: OpenPI config name; overrides the pipeline's pairing (base pipelines use
@@ -302,34 +300,39 @@ def main(
     }
     if config_name is not None:
         overrides['source.config_name'] = config_name
-    cfg = PIPELINES[pipeline].override(**overrides)
+    cfg = pipeline.override(**overrides)
     PolicyServer(cfg, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
 
 
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
-# A name in both (``droid``, ``droid_jointpos``, ``libero``) resolves to the deployment.
+# ``droid``, ``droid_jointpos`` and ``libero`` are deployments: their pipeline plus the checkpoint it pairs with.
 COMMANDS = {
     'serve': main,
-    **{name: main.override(pipeline=name) for name in PIPELINES},
+    'ee': main.override(pipeline=ee),
+    'ee_joints': main.override(pipeline=ee_joints),
+    'ee_traj': main.override(pipeline=ee_traj),
+    'ee_joints_traj': main.override(pipeline=ee_joints_traj),
+    'joints_traj': main.override(pipeline=joints_traj),
+    'ee_flip_grip': main.override(pipeline=ee_flip_grip),
     'phail': main.override(
         checkpoints_dir='s3://checkpoints/phail_unified/openpi/pi05_positronic_lowmem/270226-ee/',
         recording_dir='s3://inference/phail_unified/server_recordings/openpi/270226-ee/',
     ),
     # The sim_stack checkpoint was trained on inverted-grip (1 = open) sim data, hence the flip-grip pipeline.
     'sim_stack': main.override(
-        pipeline='ee_flip_grip',
+        pipeline=ee_flip_grip,
         checkpoints_dir='s3://checkpoints/sim_stack/openpi/ee/pi05_positronic_lowmem/230226/',
         recording_dir='s3://inference/sim_stack/server_recordings/openpi/230226/',
     ),
     'droid': main.override(
-        pipeline='droid', checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/openpi/pi05_droid/'
+        pipeline=droid_pipe, checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/openpi/pi05_droid/'
     ),
     # The RoboLab leaderboard policy: openpi's DROID jointpos model, served from the checkpoint their
     # ``policies/pi0_family/README.md`` recipe pins (pass-through mode — openpi fetches gs:// itself).
     'droid_jointpos': main.override(
-        pipeline='droid_jointpos', checkpoints_dir='gs://openpi-assets-simeval/pi05_droid_jointpos'
+        pipeline=droid_jointpos_pipe, checkpoints_dir='gs://openpi-assets-simeval/pi05_droid_jointpos'
     ),
-    'libero': main.override(pipeline='libero', checkpoints_dir='gs://openpi-assets/checkpoints/pi05_libero'),
+    'libero': main.override(pipeline=libero_pipe, checkpoints_dir='gs://openpi-assets/checkpoints/pi05_libero'),
 }
 
 

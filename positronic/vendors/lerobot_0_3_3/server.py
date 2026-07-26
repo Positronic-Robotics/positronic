@@ -76,20 +76,18 @@ def pipeline(codec: Codec, source: ModelSource):
     return ChunkedSchedule() | RestrictImageSize(224, 224) | remote | codec | source
 
 
-PIPELINES = {
-    'ee': pipeline,
-    'joints': pipeline.override(codec=lerobot_codecs.joints),
-    'ee_traj': pipeline.override(codec=lerobot_codecs.ee_traj),
-    'joints_traj': pipeline.override(codec=lerobot_codecs.joints_traj),
-    'joints_ik': pipeline.override(codec=lerobot_codecs.joints_ik),
-    'joints_ik_sim': pipeline.override(codec=lerobot_codecs.joints_ik_sim),
-    # For checkpoints trained on inverted-grip (1 = open) sim data, which speak the flipped convention.
-    'ee_flip': pipeline.override(codec=lerobot_codecs.ee.override(flip_grip=True)),
-}
+ee = pipeline
+joints = pipeline.override(codec=lerobot_codecs.joints)
+ee_traj = pipeline.override(codec=lerobot_codecs.ee_traj)
+joints_traj = pipeline.override(codec=lerobot_codecs.joints_traj)
+joints_ik = pipeline.override(codec=lerobot_codecs.joints_ik)
+joints_ik_sim = pipeline.override(codec=lerobot_codecs.joints_ik_sim)
+# For checkpoints trained on inverted-grip (1 = open) sim data, which speak the flipped convention.
+ee_flip = pipeline.override(codec=lerobot_codecs.ee.override(flip_grip=True))
 
 
 @cfn.config(
-    pipeline='ee',
+    pipeline=ee,
     policy_factory=act,
     model_type='act',
     checkpoint=None,
@@ -99,7 +97,7 @@ PIPELINES = {
     idle_timeout_min=None,
 )
 def main(
-    pipeline: str,
+    pipeline: cfn.Config,
     policy_factory: Callable[[str], PreTrainedPolicy],
     model_type: str,
     checkpoints_dir: str,
@@ -109,7 +107,7 @@ def main(
     recording_dir: str | None,
     idle_timeout_min: float | None,
 ):
-    cfg = PIPELINES[pipeline].override(**{
+    cfg = pipeline.override(**{
         'source.policy_factory': policy_factory,
         'source.model_type': model_type,
         'source.checkpoints_dir': str(pos3.download(checkpoints_dir)),
@@ -122,18 +120,24 @@ def main(
 # The sim_stack and demo checkpoints were trained on inverted-grip (1 = open) sim data, hence the flipped pipeline.
 COMMANDS = {
     'serve': main,
-    **{name: main.override(pipeline=name) for name in PIPELINES},
+    'ee': main.override(pipeline=ee),
+    'joints': main.override(pipeline=joints),
+    'ee_traj': main.override(pipeline=ee_traj),
+    'joints_traj': main.override(pipeline=joints_traj),
+    'joints_ik': main.override(pipeline=joints_ik),
+    'joints_ik_sim': main.override(pipeline=joints_ik_sim),
+    'ee_flip': main.override(pipeline=ee_flip),
     'phail': main.override(
         checkpoints_dir='s3://checkpoints/phail_unified/lerobot/270226-ee/',
         recording_dir='s3://inference/phail_unified/server_recordings/lerobot/270226-ee/',
     ),
     'sim_stack': main.override(
-        pipeline='ee_flip',
+        pipeline=ee_flip,
         checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/',
         recording_dir='s3://inference/sim_stack/server_recordings/lerobot/230226-ee/',
     ),
     'demo': main.override(
-        pipeline='ee_flip', checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'
+        pipeline=ee_flip, checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'
     ),
 }
 

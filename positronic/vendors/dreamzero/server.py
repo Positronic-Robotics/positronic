@@ -289,18 +289,16 @@ def pipeline(local: PolicyWrapper, codec: Codec, source: ModelSource, width: int
     return local | RestrictImageSize(width, height) | remote | codec | source
 
 
-PIPELINES = {
-    'joints': pipeline,
-    'joints_traj': pipeline.override(codec=codecs.joints_traj),
-    'joints_ik': pipeline.override(codec=codecs.joints_ik),
-    'joints_ik_sim': pipeline.override(codec=codecs.joints_ik_sim),
-    # The pretrained DROID model (wan2.1) asserts exactly 320x180 frames.
-    'droid': pipeline.override(codec=codecs.droid, height=180),
-}
+joints = pipeline
+joints_traj = pipeline.override(codec=codecs.joints_traj)
+joints_ik = pipeline.override(codec=codecs.joints_ik)
+joints_ik_sim = pipeline.override(codec=codecs.joints_ik_sim)
+# The pretrained DROID model (wan2.1) asserts exactly 320x180 frames.
+droid = pipeline.override(codec=codecs.droid, height=180)
 
 
 @cfn.config(
-    pipeline='joints',
+    pipeline=joints,
     dreamzero_venv='/.venv/',
     backbone='wan2.1',
     num_gpus=1,
@@ -311,7 +309,7 @@ PIPELINES = {
     idle_timeout_min=None,
 )
 def main(
-    pipeline: str,
+    pipeline: cfn.Config,
     model_path: str,
     dreamzero_venv: str,
     backbone: str,
@@ -323,7 +321,7 @@ def main(
     idle_timeout_min: float | None,
 ):
     """Starts the DreamZero inference server."""
-    cfg = PIPELINES[pipeline].override(**{
+    cfg = pipeline.override(**{
         'source.model_path': model_path,
         'source.dreamzero_venv': dreamzero_venv,
         'source.backbone': backbone,
@@ -337,10 +335,13 @@ def main(
 # Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoint bound.
 COMMANDS = {
     'serve': main,
-    **{name: main.override(pipeline=name) for name in PIPELINES},
+    'joints': main.override(pipeline=joints),
+    'joints_traj': main.override(pipeline=joints_traj),
+    'joints_ik': main.override(pipeline=joints_ik),
+    'joints_ik_sim': main.override(pipeline=joints_ik_sim),
     # Public pretrained DROID checkpoint: wan2.1 backbone (the base default) paired with the DROID
     # pipeline whose codec feeds its required 320x180 frames.
-    'droid': main.override(pipeline='droid', model_path='GEAR-Dreams/DreamZero-DROID'),
+    'droid': main.override(pipeline=droid, model_path='GEAR-Dreams/DreamZero-DROID'),
 }
 
 

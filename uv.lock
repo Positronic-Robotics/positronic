@@ -1026,13 +1026,13 @@ wheels = [
 
 [[package]]
 name = "configuronic"
-version = "0.6.0"
+version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fire" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f4/e6/ff6933b532f9a0f1a26effc93a57a003adf82347197f109aa072dcb8c8f4/configuronic-0.6.0.tar.gz", hash = "sha256:f3897b1d532e410b7ecfd6c5e879a8df0d4ae35732e378e5a5410edb29cbb358", size = 47966, upload-time = "2026-07-25T16:45:17.303Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a1/b5/288ab3358065c6c55f5521de832352aa36a4c6bff4d934bf9c08944bb293/configuronic-0.7.0.tar.gz", hash = "sha256:bee32c187a61a7f2b8323dfd24cc1de65087d6e83fd8c0f9cc40b1d45ccf8b21", size = 77456, upload-time = "2026-07-26T12:43:31.384Z" }
 
 [[package]]
 name = "coverage"
@@ -4297,7 +4297,7 @@ requires-dist = [
     { name = "av" },
     { name = "basedpyright", marker = "extra == 'dev'" },
     { name = "coloredlogs", specifier = ">=15.0.1" },
-    { name = "configuronic", specifier = ">=0.6.0" },
+    { name = "configuronic", specifier = ">=0.7.0" },
     { name = "coverage", marker = "extra == 'dev'" },
     { name = "cvxopt" },
     { name = "dearpygui", marker = "platform_machine != 'aarch64'" },
