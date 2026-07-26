@@ -100,8 +100,7 @@ class _Endpoint(Policy):
     """
 
     def __init__(self, url: str, *, headers: dict[str, str] | None, infer_timeout: float, compress_images: bool | None):
-        self._client = InferenceClient(url, headers=headers)
-        self._infer_timeout = infer_timeout
+        self._client = InferenceClient(url, headers=headers, infer_timeout=infer_timeout)
         self._compress_override = compress_images
         # Both filled on first contact: the metadata via a throwaway session if ``meta`` is read before any
         # real one exists, the compression flag from that metadata.
@@ -110,7 +109,7 @@ class _Endpoint(Policy):
 
     def server_meta(self) -> dict[str, Any]:
         if self._server_meta is None:
-            ws_session = self._client.new_session(infer_timeout=self._infer_timeout)
+            ws_session = self._client.new_session()
             try:
                 self._server_meta = dict(ws_session.metadata)
             finally:
@@ -128,7 +127,7 @@ class _Endpoint(Policy):
     def new_session(self, context=None, now=None) -> RemoteSession:
         # Resolved before connecting, so a session that contradicts the declaration leaves no socket open.
         compress = self._compression()
-        ws_session = self._client.new_session(infer_timeout=self._infer_timeout)
+        ws_session = self._client.new_session()
         return RemoteSession(ws_session, compress_images=compress)
 
     @property

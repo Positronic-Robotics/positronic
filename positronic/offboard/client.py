@@ -120,9 +120,21 @@ class InferenceClient:
 
     ``headers`` carry auth for an endpoint behind a reverse proxy — credentials stay out of the URL, which
     is meant to be safe to hand around.
+
+    The timeouts describe this connection, not any one session: ``open_timeout`` bounds the TCP/TLS
+    handshake alone, ``connect_deadline`` how long a cold backend may take to answer across retries, and
+    ``infer_timeout`` one inference round trip.
     """
 
-    def __init__(self, url: str, *, headers: dict[str, str] | None = None):
+    def __init__(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        open_timeout: float = 10.0,
+        connect_deadline: float = 900.0,
+        infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+    ):
         split = urllib.parse.urlsplit(url if '://' in url else f'//{url}')
         if split.scheme not in ('', 'http', 'ws', 'https', 'wss'):
             raise ValueError(f'Unsupported scheme {split.scheme!r} in {url!r}')
@@ -142,25 +154,19 @@ class InferenceClient:
         self.session_url = f'{ws_scheme}://{netloc}{_session_path(split.path, url)}{query}'
         self.api_url = f'{http_scheme}://{netloc}/api/v1'
         self.headers = dict(headers) if headers else None
+        self.open_timeout = open_timeout
+        self.connect_deadline = connect_deadline
+        self.infer_timeout = infer_timeout
 
-    def new_session(
-        self, open_timeout: float = 10.0, connect_deadline: float = 900.0, infer_timeout: float = DEFAULT_INFER_TIMEOUT
-    ) -> InferenceSession:
-        """
-        Creates a new inference session on the model the URL names.
-
-        Args:
-            open_timeout: Timeout for initial WebSocket connection (default: 10s).
-                        This only covers TCP/HTTP handshake, not model loading.
-                        Model loading timeout is controlled by per-message timeout in handshake.
-        """
-        deadline = time.monotonic() + connect_deadline
+    def new_session(self) -> InferenceSession:
+        """Creates a new inference session on the model the URL names."""
+        deadline = time.monotonic() + self.connect_deadline
         backoff = 1.0
         while True:
             ws = None
             try:
-                ws = connect(self.session_url, open_timeout=open_timeout, additional_headers=self.headers)
-                return InferenceSession(ws, infer_timeout=infer_timeout)
+                ws = connect(self.session_url, open_timeout=self.open_timeout, additional_headers=self.headers)
+                return InferenceSession(ws, infer_timeout=self.infer_timeout)
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
             # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
             except ssl.SSLCertVerificationError as e:

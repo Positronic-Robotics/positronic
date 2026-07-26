@@ -226,6 +226,11 @@ class Gr00tPolicy(Policy):
         self._groot.stop()
 
 
+def _step_id(raw: str) -> str:
+    """The public id for a ``checkpoint-<raw>`` directory: its step number, free of any zero-padding."""
+    return str(int(raw)) if raw.isdigit() else raw
+
+
 class Gr00tSource(ModelSource):
     """GR00T checkpoints under ``checkpoints_dir``, each served through a dedicated ZMQ subprocess.
 
@@ -252,28 +257,30 @@ class Gr00tSource(ModelSource):
     def _raw_ids(self) -> list[str]:
         return [cp.removeprefix('checkpoint-') for cp in list_checkpoints(self.checkpoints_dir, prefix='checkpoint-')]
 
+    def _raw_for(self, model_id: str) -> str:
+        """The directory's own suffix for ``model_id``, which may be zero-padded where the advertised id is not."""
+        for r in self._raw_ids():
+            if r == model_id or (r.isdigit() and model_id.isdigit() and int(r) == int(model_id)):
+                return r
+        raise ValueError(f'Checkpoint not found: {model_id}. Available: {self.get_models()}')
+
     def get_models(self) -> list[str]:
-        return [str(int(r)) if r.isdigit() else r for r in self._raw_ids()]
+        return [_step_id(r) for r in self._raw_ids()]
 
     def resolve(self, model_id: str | None) -> str:
-        """Explicit id > the configured ``checkpoint`` > latest.
+        """Explicit id > the configured ``checkpoint`` > latest, always as the id ``get_models`` advertises.
 
-        Returns the raw ``checkpoint-<id>`` step suffix so ``load`` reconstructs an existing directory,
-        matching numeric requests against the directory's own (possibly zero-padded) names.
+        The zero-padding a directory may carry stays out of the public id; ``load`` puts it back to reach
+        the directory.
         """
         if model_id is None and self.checkpoint is not None:
             model_id = str(self.checkpoint).strip('/')
-        raw = self._raw_ids()
         if model_id is None:
-            return raw[-1]
-        for r in raw:
-            if r == model_id or (r.isdigit() and model_id.isdigit() and int(r) == int(model_id)):
-                return r
-        available = [str(int(r)) if r.isdigit() else r for r in raw]
-        raise ValueError(f'Checkpoint not found: {model_id}. Available: {available}')
+            return _step_id(self._raw_ids()[-1])
+        return _step_id(self._raw_for(model_id))
 
     def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
-        checkpoint_path = f'{self.checkpoints_dir}/checkpoint-{model_id}'
+        checkpoint_path = f'{self.checkpoints_dir}/checkpoint-{self._raw_for(model_id)}'
         logger.info(f'Downloading checkpoint {checkpoint_path}')
         checkpoint_dir = run_with_progress(
             lambda: pos3.download(checkpoint_path, exclude=['optimizer.pt']),
