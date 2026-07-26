@@ -22,7 +22,7 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import State as RoboarmState
 from positronic.drivers.webxr import WebXR
-from positronic.gui.dpg import DearpyguiUi
+from positronic.gui import dpg_ui
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path
@@ -292,7 +292,7 @@ def main_sim(
 
     sim = MujocoSim(mujoco_model_path, loaders, camera_fps=fps)
     cameras = {name: sim.cameras[orig_name] for name, orig_name in cameras.items()}
-    gui = DearpyguiUi()
+    gui = dpg_ui()
 
     static_meta = dict(wire.ROBOT_STATIC_META)
     if task is not None:

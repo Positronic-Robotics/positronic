@@ -15,7 +15,7 @@ from positronic.cfg.eval import placeholder
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.eval import Embodiment, Eval, Task
-from positronic.gui.dpg import DearpyguiUi
+from positronic.gui import dpg_ui
 from positronic.policy.base import SampledPolicy
 from positronic.policy.harness import Harness
 
@@ -79,7 +79,7 @@ def _run_world(
     exclusive per the caller. The shared ``policy`` is wrapped here per run, but its lifetime stays with ``main``.
     """
     harness = Harness(policy, embodiment, task=task, trials=trials, wrap=wrap, on_episode_complete=on_complete)
-    gui = driver.gui if driver is not None else (DearpyguiUi() if show_gui else None)
+    gui = driver.gui if driver is not None else (dpg_ui() if show_gui else None)
 
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)

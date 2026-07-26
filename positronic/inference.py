@@ -13,8 +13,7 @@ import positronic.cfg.wrappers as wrappers_cfg
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import Driver, main, run
 from positronic.dataset.local_dataset import load_all_datasets
-from positronic.gui.dpg import DearpyguiUi
-from positronic.gui.eval import EvalUI
+from positronic.gui import dpg_ui
 from positronic.gui.keyboard import KeyboardControl
 from positronic.gui.web import WebEvalUI
 from positronic.policy.harness import Directive
@@ -39,6 +38,8 @@ class KeyboardHandler:
 @cfn.config(ui_scale=1)
 def eval_ui(ui_scale):
     def make(output_dir: Path | None) -> Driver:
+        from positronic.gui.eval import EvalUI
+
         gui = EvalUI(output_dir, ui_scale=ui_scale)
         return Driver(gui, gui.directive, pimm.utils.identity, [])
 
@@ -52,7 +53,7 @@ def keyboard(show_gui, task):
         keyboard_handler = KeyboardHandler(task=task)
         print('Keyboard controls: [s]tart, sto[p], abo[r]t, [q]uit')
         return Driver(
-            None if not show_gui else DearpyguiUi(),
+            dpg_ui() if show_gui else None,
             keyboard.keyboard_inputs,
             pimm.map(keyboard_handler.harness_directive),
             [keyboard],

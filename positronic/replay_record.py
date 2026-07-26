@@ -18,7 +18,7 @@ from positronic.dataset.ds_writer_agent import DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers import roboarm
-from positronic.gui.dpg import DearpyguiUi
+from positronic.gui import dpg_ui
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path
@@ -127,7 +127,7 @@ def main(
             sim = MujocoSim(mujoco_model_path, loaders, camera_fps=fps)
             sim.load_state(episode.static)
             cameras_mapped = {name: sim.cameras[orig_name] for name, orig_name in cameras.items()}
-            gui = DearpyguiUi() if show_gui else None
+            gui = dpg_ui() if show_gui else None
 
             replay = Replay()
 
