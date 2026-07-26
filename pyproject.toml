@@ -141,8 +141,6 @@ pos3 = false
 positronic-franka = false
 
 [tool.uv.sources]
-# Track the unreleased Franka driver from git until 0.6.2 is published to the index, then drop this entry.
-positronic-franka = { git = "https://github.com/Positronic-Robotics/positronic-franka.git", branch = "desk-reboot-wait" }
 # ZED SDK ships one ABI-specific wheel per CPython version; pick by interpreter.
 pyzed = [
     { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp311-cp311-linux_x86_64.whl", marker = "python_full_version < '3.12'" },

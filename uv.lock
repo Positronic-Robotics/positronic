@@ -4323,7 +4323,7 @@ requires-dist = [
     { name = "placo", marker = "extra == 'hardware'" },
     { name = "plotly", specifier = ">=6.5.0" },
     { name = "pos3", specifier = ">=0.3.1" },
-    { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", git = "https://github.com/Positronic-Robotics/positronic-franka.git?branch=desk-reboot-wait" },
+    { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.6.2" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "protobuf", marker = "extra == 'molmoact2'" },
     { name = "pyarrow" },
@@ -4365,11 +4365,12 @@ provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2"
 [[package]]
 name = "positronic-franka"
 version = "0.6.2"
-source = { git = "https://github.com/Positronic-Robotics/positronic-franka.git?branch=desk-reboot-wait#66fbc7c407fcd766ff5997520c466db2c64fd597" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", marker = "sys_platform == 'linux' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2')" },
     { name = "requests", marker = "sys_platform == 'linux' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2')" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/e9/22/ceca0817ee0693d1c9b31ad12934e82c41fd39ee470f5765f264bfa3caec/positronic_franka-0.6.2.tar.gz", hash = "sha256:7f429c3bdd8624493a74e152051e0e43b325df7710cf42058be32fb0787affe4", size = 1805370, upload-time = "2026-07-26T21:23:16.754Z" }
 
 [[package]]
 name = "pre-commit"
