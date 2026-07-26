@@ -14,10 +14,7 @@ try:
     from positronic_franka.desk import Desk
 except ImportError as e:
     raise ImportError(
-        'Franka support is not installed. In a positronic checkout, install the hardware extra:\n'
-        '  uv sync --locked --extra hardware\n'
-        'or, into whichever environment is active:\n'
-        '  uv pip install "positronic[hardware]"\n'
+        'Franka support is not installed. Re-run with the hardware extra:\n  uv run --locked --extra hardware ...\n'
     ) from e
 
 import pimm
