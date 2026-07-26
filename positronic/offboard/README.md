@@ -176,7 +176,7 @@ cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joint
 # Client connects the same way
 uv run positronic-inference sim \
   --policy=.remote \
-  --policy.url=localhost
+  --policy.url=localhost:8000
 ```
 
 **Model Switching:** Compare multiple models without restarting the server by using specific session endpoints.
