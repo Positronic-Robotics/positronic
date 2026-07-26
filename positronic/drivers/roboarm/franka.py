@@ -16,7 +16,7 @@ from positronic.drivers import vendor_import
 from . import RobotStatus, State, command
 from .models import attach_robotiq_2f85
 
-with vendor_import('positronic_franka', 'Franka support'):
+with vendor_import('positronic_franka', 'Franka support', platforms=('linux',)):
     import positronic_franka._franka as pf
     from positronic_franka.desk import Desk, SafetyControllerError
 

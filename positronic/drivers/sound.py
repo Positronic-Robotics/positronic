@@ -8,7 +8,7 @@ import numpy as np
 import pimm
 from positronic.drivers import vendor_import
 
-with vendor_import('pyaudio', 'Sound support'):
+with vendor_import('pyaudio', 'Sound support', platforms=('linux',)):
     import pyaudio
 
 

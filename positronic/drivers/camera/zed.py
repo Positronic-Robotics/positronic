@@ -8,7 +8,7 @@ import pimm
 from pimm.shared_memory import NumpySMAdapter
 from positronic.drivers import vendor_import
 
-with vendor_import('pyzed', 'ZED camera support'):
+with vendor_import('pyzed', 'ZED camera support', platforms=('linux',)):
     import pyzed.sl as sl
 
 

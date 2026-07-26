@@ -7,7 +7,7 @@ import numpy as np
 import pimm
 from positronic.drivers import vendor_import
 
-with vendor_import('linuxpy', 'Linux video capture'):
+with vendor_import('linuxpy', 'Linux video capture', platforms=('linux',)):
     from linuxpy.video.device import Device, PixelFormat
 
 
