@@ -4,10 +4,9 @@ import numpy as np
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
-from positronic import geom, keys
+from positronic import keys
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.drivers.roboarm import yam as yam_driver
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 
 
@@ -71,23 +70,29 @@ def yam(robot_arm, cameras):
 @cfn.config(
     left_channel='can0',
     right_channel='can1',
+    # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
+    # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
+    mounts={'left': [0.30, 0.305, 0.311], 'right': [0.30, -0.305, 0.311]},
     cameras={
         'image.exterior': positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
         'image.wrist_left': positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
         'image.wrist_right': positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
     },
 )
-def yam_bimanual(left_channel: str, right_channel: str, cameras):
-    """Real bimanual i2rt YAM — channel names and static_meta match ``mujoco_yam_bimanual`` by convention.
+def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[float]], cameras):
+    """Real bimanual i2rt YAM on two CAN chains.
 
     Per-arm channels are the flat names the whole stack shares: ``robot_state.{side}`` expands into
     ``robot_state.{side}.q/.dq/.ee_pose`` on record, commands are ``robot_command.{side}`` +
-    ``target_grip.{side}``, and static_meta lists ``arms=[left, right]``. Per-side ``base_pose`` mounts
-    each arm at the sim world-frame mount, so real ``ee_pose`` lands in the training world frame.
+    ``target_grip.{side}``, and static_meta lists ``arms=[left, right]``. Each arm is mounted at
+    ``mounts[side]``, so real ``ee_pose`` lands in the world frame the training data uses; the mounts are
+    recorded in static_meta.
     """
-    mount_z = yam_driver.TABLE_Z + yam_driver.YAM_MOUNT_LIFT
+    from positronic import geom
+    from positronic.drivers.roboarm import yam as yam_driver
+
     arms = {
-        side: yam_driver.Robot(channel, base_pose=geom.Transform3D([*yam_driver.YAM_MOUNTS[side], mount_z]))
+        side: yam_driver.Robot(channel, base_pose=geom.Transform3D(mounts[side]))
         for side, channel in (('left', left_channel), ('right', right_channel))
     }
     observations = {
@@ -104,9 +109,9 @@ def yam_bimanual(left_channel: str, right_channel: str, cameras):
     }
     static_meta = {
         'joint_signals': [f'robot_state.{s}.q' for s in arms],
-        'pose_signals': [f'robot_state.{s}.ee_pose' for s in arms],
-        'command_pose_signals': [f'robot_command.{s}.pose' for s in arms],
+        'pose_signals': [f'robot_state.{s}.ee_pose' for s in arms] + [f'robot_command.{s}.pose' for s in arms],
         'arms': list(arms),
+        'mounts': mounts,
     }
     return Embodiment(
         descriptor='yam_bimanual',

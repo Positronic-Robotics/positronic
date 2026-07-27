@@ -2,8 +2,10 @@
 
 i2rt exposes joint-space position-PD with gravity compensation only (its own ~100 Hz control thread), so this
 driver solves FK/IK itself against the vendored MJCF (``assets/mujoco/i2rt_yam/yam.xml``) at ``grasp_site`` —
-the control frame the training data is expressed in. The gripper is the chain's 7th DOF, normalized
-0=closed/1=open — the inverse of positronic's grip convention — so grip values are inverted in both directions.
+the control frame the training data is expressed in. The upstream MJCF package is vendored whole
+(``scene.xml`` and meshes included); the driver itself loads only ``yam.xml``. The gripper is the chain's 7th
+DOF, normalized 0=closed/1=open — the inverse of positronic's grip convention — so grip values are inverted in
+both directions.
 
 Station bring-up is not verifiable off-hardware and must be re-checked on the rig: CAN interface up
 (``ip link set can0 up type can bitrate 1000000``), motor zero calibration, kp/kd gains, physical gripper
@@ -21,10 +23,10 @@ import numpy as np
 try:
     from i2rt.robots.get_robot import get_yam_robot
     from i2rt.robots.utils import GripperType
-except ImportError:
-    # i2rt is an optional extra (`pip install "positronic[yam]"`); fake and kinematics-only paths must import
-    # without it, so degrade to None here and raise from ``_connect`` only when a real arm is requested.
-    get_yam_robot = GripperType = None
+except ImportError as e:
+    raise ImportError(
+        'YAM support is not installed. Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'
+    ) from e
 
 import pimm
 from positronic import geom
@@ -33,16 +35,11 @@ from positronic.utils import package_assets_path
 from . import RobotStatus, State, command
 from .ik import qpos_from_site_pose
 
-# Duplicated from the yam-bimanual branch's simulator/mujoco/yam.py so driver and sim agree on frames without
-# a code dependency. TODO: converge on one module when the YAM sim lands on this branch.
+# The driver solves FK/IK itself, so its joint order and control frame must match the YAM sim's.
+# TODO(#517): centralise driver kinematics so driver and sim share one module.
 _JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
 # The menagerie "home" keyframe: arm folded up and back, out of the workspace.
 HOME_Q = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
-# Sim world-frame mount geometry the training data uses: table top z=0.30, arms at (0.30, ±0.305) facing +x,
-# base plate lifted 0.011 above the tabletop.
-YAM_MOUNTS = {'left': (0.30, 0.305), 'right': (0.30, -0.305)}
-TABLE_Z = 0.30
-YAM_MOUNT_LIFT = 0.011
 
 _MJCF_PATH = 'assets/mujoco/i2rt_yam/yam.xml'
 _IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limit clamping
@@ -59,8 +56,6 @@ def _reach_postures(x: float, y: float) -> list[np.ndarray]:
 
 def _connect(channel: str, sim: bool):
     """Open the i2rt chain in position-PD mode; ``sim=True`` runs i2rt's own MuJoCo sim instead of hardware."""
-    if get_yam_robot is None or GripperType is None:
-        raise ImportError('YAM support is not installed. Install the yam extra:\n  pip install "positronic[yam]"\n')
     return get_yam_robot(channel, gripper_type=GripperType.LINEAR_4310, zero_gravity_mode=False, sim=sim)
 
 
@@ -185,8 +180,10 @@ class Robot(pimm.ControlSystem):
         self._sim = sim
         self._connect = connect
 
-        self.commands: pimm.SignalReceiver[command.CommandType] = pimm.ControlSystemReceiver(self, default=None)
-        self.target_grip: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self, default=0.0)
+        self.commands: pimm.SignalReceiver[command.Trajectory[command.CommandType]] = pimm.ControlSystemReceiver(
+            self, default=[]
+        )
+        self.target_grip: pimm.SignalReceiver[command.Trajectory[float]] = pimm.ControlSystemReceiver(self, default=[])
         self.state: pimm.SignalEmitter[YamState] = pimm.ControlSystemEmitter(self)
         self.grip: pimm.SignalEmitter[float] = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
@@ -225,6 +222,10 @@ class Robot(pimm.ControlSystem):
                 if cmd is not None:
                     match cmd:
                         case command.Reset():
+                            # Drop the in-flight trajectories so the homed arm holds position rather than
+                            # resuming stale waypoints on the next tick.
+                            player.set([])
+                            grip_player.set([])
                             q_target = self._reset(arm, kin, robot_state)
                             grip_target = 0.0
                             obs = arm.get_observations()
@@ -275,7 +276,7 @@ class _FakeYam:
     """First-order-lag echo of the 7-DOF chain (6 joints + normalized gripper, 0=closed/1=open).
 
     Duck-types the slice of the runtime-checkable ``i2rt.robots.robot.Robot`` protocol the driver uses, so
-    the ``--fake`` smoke runs without i2rt installed.
+    the ``--fake`` smoke runs without hardware.
     """
 
     def __init__(self, alpha: float = 0.3):
@@ -318,7 +319,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='YAM driver smoke: drives a Cartesian square and checks round-trips.')
     parser.add_argument('--channel', default='can0')
-    parser.add_argument('--fake', action='store_true', help='in-process first-order-lag echo; needs no i2rt/hardware')
+    parser.add_argument('--fake', action='store_true', help='in-process first-order-lag echo; needs no hardware')
     parser.add_argument('--sim', action='store_true', help="i2rt's own MuJoCo sim instead of the CAN chain")
     args = parser.parse_args()
 
@@ -353,12 +354,12 @@ if __name__ == '__main__':
             assert home_err < 1e-4, home_err
 
             # Grip round-trip: polarity inverted on the way out (command) and on the way back (observation).
-            target_grip.emit(0.8)
+            target_grip.emit([(world.clock.now_ns(), 0.8)])
             pump(0.5)
             assert fake.last_command is not None
             assert abs(fake.last_command[6] - 0.2) < 1e-6, fake.last_command  # positronic 0.8 closed -> chain 0.2
             assert abs(grip.value - 0.8) < 0.02, grip.value
-            target_grip.emit(0.0)
+            target_grip.emit([(world.clock.now_ns(), 0.0)])
             pump(0.5)
             assert abs(fake.last_command[6] - 1.0) < 1e-6, fake.last_command
             assert abs(grip.value) < 0.02, grip.value
@@ -366,7 +367,7 @@ if __name__ == '__main__':
         # Unfold toward the workspace, then drive a Cartesian square through the driver's IK. The square
         # sits well inside the reach envelope, at the unfolded posture's wrist orientation.
         reach_q = np.array([0.0, 1.2, 1.2, 0.0, 0.6, 0.0])
-        commands.emit(command.JointPosition(reach_q))
+        commands.emit([(world.clock.now_ns(), command.JointPosition(reach_q))])
         pump(0.5)
         if fake is not None:
             assert np.allclose(state.value.q, reach_q, atol=0.02), state.value.q
@@ -380,7 +381,7 @@ if __name__ == '__main__':
             assert solution is not None, f'IK failed for {target}'
             ik_err = np.linalg.norm(kin.fk(solution).translation - target.translation)
             assert ik_err < 5e-3, ik_err  # FK↔IK consistency
-            commands.emit(command.CartesianPosition(target))
+            commands.emit([(world.clock.now_ns(), command.CartesianPosition(target))])
             pump(0.7)
             reached = np.linalg.norm(state.value.ee_pose.translation - target.translation)
             print(f'Moved to {target.translation}, error {reached * 1000:.2f} mm')
