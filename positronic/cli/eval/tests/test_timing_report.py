@@ -1,0 +1,144 @@
+import json
+
+import pytest
+
+from positronic.cli.eval.timing_report import _build_report, _parse_dmon, _read_spans_dir, _read_stats_dir
+
+_S = 1_000_000_000  # seconds -> ns
+
+
+def _span(name, start_s, end_s, span_id, parent_id=None, attrs=None):
+    encoded = {
+        'traceId': '0' * 32,
+        'spanId': span_id,
+        'name': name,
+        'startTimeUnixNano': str(int(start_s * _S)),
+        'endTimeUnixNano': str(int(end_s * _S)),
+        'attributes': [{'key': k, 'value': {'doubleValue': v}} for k, v in (attrs or {}).items()],
+    }
+    if parent_id is not None:
+        encoded['parentSpanId'] = parent_id
+    return {'resourceSpans': [{'scopeSpans': [{'spans': [encoded]}]}]}
+
+
+def _write_lines(path, docs):
+    path.write_text(''.join(json.dumps(doc) + '\n' for doc in docs))
+
+
+def _fixture(telemetry_dir):
+    """One pass, two identical episodes, each with reset/env.step(+materialize)/record.io/two infers, plus a
+    server env.step (physics/render) per episode in the env file, and a two-sample GPU stats stream."""
+    telemetry_dir.mkdir()
+    harness = [_span('eval.pass', 0, 100, 'pass0')]
+    env = []
+    for i, base in enumerate((0, 50)):
+        ep = f'ep{i}'
+        step = f'step{i}'
+        harness += [
+            _span('episode', base, base + 40, ep, 'pass0', {'episode.virtual_s': 20.0}),
+            _span('reset', base + 0, base + 5, f'reset{i}', ep),
+            _span('env.step', base + 10, base + 18, step, ep),
+            _span('materialize', base + 14, base + 16, f'mat{i}', step),
+            _span('record.io', base + 20, base + 24, f'io{i}', ep),
+            _span('policy.infer', base + 30, base + 33, f'inferA{i}', ep),
+            _span('policy.infer', base + 33, base + 34, f'inferB{i}', ep),
+        ]
+        # Server env.step: 5s, decomposed into physics 3s + render 1s (server_other residual = 1s). It parents
+        # to no episode (it lives in the env process's own file).
+        server = f'srv{i}'
+        env += [
+            _span('env.step', base + 10, base + 15, server),
+            _span('physics', base + 10, base + 13, f'phys{i}', server),
+            _span('render', base + 13, base + 14, f'rend{i}', server),
+        ]
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', harness)
+    _write_lines(telemetry_dir / 'env.spans.jsonl', env)
+    stats = [
+        {'t_ns': 1, 'gpus': [{'i': 0, 'util_pct': 50.0, 'mem_used_b': 2 * 1024**3, 'proc_mem_b': 1 * 1024**3}]},
+        {'t_ns': 2, 'gpus': [{'i': 0, 'util_pct': 100.0, 'mem_used_b': 4 * 1024**3, 'proc_mem_b': 2 * 1024**3}]},
+    ]
+    (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+
+
+def test_report_aggregates(tmp_path):
+    _fixture(tmp_path / 'telemetry')
+    spans = _read_spans_dir(tmp_path / 'telemetry')
+    report = _build_report(spans, _read_stats_dir(tmp_path / 'telemetry'), policy_gpu=None)
+
+    assert report.episodes == 2
+    assert report.wall_pass_s == pytest.approx(100.0)
+    assert report.real_time_factor == pytest.approx(0.40)  # 40 virtual-s / 100 wall-s
+    assert report.policy_busy_fraction == pytest.approx(0.08)  # 8 infer-s / 100
+    assert report.infer_calls == 4
+    assert report.infer_p50_ms == pytest.approx(2000.0)
+    assert report.infer_p95_ms == pytest.approx(3000.0)
+
+    split = report.wall_split
+    assert split.reset == pytest.approx(0.10)
+    assert split.env_step == pytest.approx(0.16)  # includes materialize
+    assert split.policy_wait == pytest.approx(0.08)
+    assert split.record_io == pytest.approx(0.08)
+    assert split.overhead == pytest.approx(0.38)
+    assert split.between_episodes == pytest.approx(0.20)
+    assert sum(vars(split).values()) == pytest.approx(1.0)
+
+    assert report.env_step_split is not None
+    env_split = report.env_step_split
+    assert env_split.phases['physics'] == pytest.approx(6 / 16)
+    assert env_split.phases['render'] == pytest.approx(2 / 16)
+    assert env_split.phases['server_other'] == pytest.approx(2 / 16)
+    assert env_split.materialize == pytest.approx(4 / 16)
+    assert env_split.wire == pytest.approx(2 / 16)
+    assert sum(env_split.phases.values()) + env_split.wire + env_split.materialize == pytest.approx(1.0)
+
+    assert report.gpu.sim is not None
+    assert report.gpu.sim.mean_util_pct == pytest.approx(75.0)
+    assert report.gpu.sim.peak_vram_gb == pytest.approx(4.0)
+    assert report.gpu.sim.peak_proc_vram_gb == pytest.approx(2.0)
+    assert report.gpu.policy is None
+
+
+def test_aborted_episode_excluded(tmp_path):
+    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir.mkdir()
+    docs = [
+        _span('eval.pass', 0, 100, 'pass0'),
+        _span('episode', 0, 40, 'ep0', 'pass0', {'episode.virtual_s': 20.0}),
+        _span('episode', 50, 60, 'ep1', 'pass0'),  # aborted: dropped from the count and the reduce
+    ]
+    docs[2]['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'].append({
+        'key': 'episode.aborted',
+        'value': {'boolValue': True},
+    })
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', docs)
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+    assert report.episodes == 1
+
+
+def test_native_sim_has_no_env_step_split(tmp_path):
+    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir.mkdir()
+    docs = [
+        _span('eval.pass', 0, 10, 'pass0'),
+        _span('episode', 0, 8, 'ep0', 'pass0', {'episode.virtual_s': 4.0}),
+        _span('env.step', 1, 3, 'step0', 'ep0'),  # client only; no server env.step in the file
+    ]
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', docs)
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+    assert report.env_step_split is None  # no env server reported a decomposition
+
+
+def test_parse_dmon_reads_sm_and_fb(tmp_path):
+    log = tmp_path / 'dmon.log'
+    log.write_text('# gpu    sm    fb\n#  Idx     %    MB\n    0    50  1024\n    0   100  2048\n')
+    summary = _parse_dmon(log)
+    assert summary.mean_util_pct == pytest.approx(75.0)
+    assert summary.peak_vram_gb == pytest.approx(2048 / 1024)
+    assert summary.peak_proc_vram_gb is None
+
+
+def test_parse_dmon_fails_loudly_without_fb(tmp_path):
+    log = tmp_path / 'dmon.log'
+    log.write_text('# gpu    sm\n#  Idx     %\n    0    50\n')
+    with pytest.raises(ValueError, match='fb'):
+        _parse_dmon(log)
