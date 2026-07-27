@@ -4,6 +4,18 @@ Handoff plan for a fresh agent. Covers: Sergey's 2026-07-24 review on PR #479, t
 work Vladimir asked for, and the review-loop infrastructure changes. Read this whole doc before
 touching code. Keep this file untracked — it is lane-local planning, not PR content.
 
+## CURRENT STATUS (2026-07-24, end of session) — canonical record is internal#55
+
+Phase 1 (steps 1–7) is DONE and pushed on `eval-timing` through `33a8464`. Everything below is
+history; the live state and next steps are in **internal#55** (https://github.com/Positronic-Robotics/internal/issues/55).
+- **UNPUSHED:** local HEAD `a977609` (GpuMonitor P2 fixes: wall-clock sampling + pimm `ControlSystem.run`
+  type widened `Iterator[Sleep]→Iterator[Command]`). Held on Vladimir's OK for the pimm change → then
+  push + Codex re-review. Verified green (682/7, basedpyright 0/no-SKIP, no baseline growth).
+- **Guard PR #510** (`baseline-ratchet-guard` @ `cd03967`) — baseline one-way ratchet; Codex round 5
+  (staged-rename) pending Vladimir: fix-and-stop vs call-done.
+- **8 thread replies drafted, HELD** for his OK to post (then update PR desc + STATUS, delete THIS doc).
+- Ball is Vladimir's on all three. Do NOT push a977609 or post replies without his go.
+
 ## Context and current state
 
 - **PR:** [#479 — Opt-in wall-clock telemetry for `positronic eval run` + `eval timing-report`](https://github.com/Positronic-Robotics/positronic/pull/479),
