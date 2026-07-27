@@ -14,7 +14,7 @@ from contextlib import AbstractContextManager, ExitStack
 from typing import Any
 
 import pimm
-from positronic import keys
+from positronic import keys, telemetry
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
@@ -105,13 +105,23 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                 if self._reset_pending:
                     # The reset is this turn's step: publish the env's frame-0 (no step) and clear the prior
                     # terminal, so the recorder samples it before any step advances the env.
+                    assert self._frame is not None  # reset() set the frame before arming reset_pending
                     self._reset_pending = False
                     self.robot_meta.emit(self._robot_meta)
-                    self._emit_payload(self._frame['obs'])
+                    # Frame-0 materialisation (allocating shared-memory image buffers and copying each camera
+                    # frame) is part of the reset cost, like the server-side render already timed under reset —
+                    # charge it to reset, not overhead.
+                    with telemetry.span('reset'):
+                        self._emit_payload(self._frame['obs'])
                     self.done.emit({})
                 elif self._active:
-                    self._frame = self._step_env(clock)
-                    self._emit_payload(self._frame['obs'])
+                    # ``env.step`` spans the whole client-observed step; ``materialize`` nests the client-side
+                    # observation assembly (shared-memory image allocation + camera copies) inside it, so the
+                    # reduce can split materialisation out of the wire cost.
+                    with telemetry.span('env.step'):
+                        self._frame = self._step_env(clock)
+                        with telemetry.span('materialize'):
+                            self._emit_payload(self._frame['obs'])
         finally:
             # Closes the connection then the server, in that order (reverse of acquisition); a no-op if no reset
             # ever connected.

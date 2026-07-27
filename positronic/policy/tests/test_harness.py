@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 import pimm
-from positronic import keys, wire
+from positronic import keys, telemetry, wire
 from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
@@ -1225,3 +1225,44 @@ def test_shutdown_cancels_trajectory_before_stop(world):
     assert cancels, 'shutdown did not cancel robot_command'
     assert stops, 'shutdown did not emit STOP_EPISODE'
     assert cancels[0] < stops[0], 'cancel must precede STOP_EPISODE on shutdown'
+
+
+@pytest.mark.timeout(5.0)
+def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
+    """Under ``telemetry.bind`` a self-driven episode writes the span taxonomy to the harness file: the
+    episode parents to the pass, and reset + policy.infer parent to the episode, with the episode carrying its
+    index, step count, and virtual duration. Read back from the file so the OTLP encoding is exercised."""
+    policy = StubPolicy()
+    task = Task(instruction='stack', timeout=0.05, reset=lambda context: None)
+    harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    # A latched observation set makes every step's inference fire (the harness reads the latest value).
+    producer = ManualDriver([
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.0)
+    ])
+
+    with telemetry.bind(tmp_path, 'harness', 'run-taxonomy'), telemetry.eval_pass(**{'run.id': 'run-taxonomy'}):
+        scheduler = world.start([harness, producer])
+        drive_scheduler(scheduler, steps=400)
+
+    spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
+    by_name: dict[str, list] = {}
+    for rec in spans:
+        by_name.setdefault(rec.name, []).append(rec)
+
+    assert len(by_name['eval.pass']) == 1
+    assert len(by_name['episode']) == 1
+    assert by_name['reset']  # the task's scene reset was timed
+    assert by_name['policy.infer']  # at least one real inference round-trip
+
+    pass_span = by_name['eval.pass'][0]
+    episode = by_name['episode'][0]
+    assert pass_span.parent_id is None
+    assert episode.parent_id == pass_span.span_id
+    assert all(r.parent_id == episode.span_id for r in by_name['reset'])
+    assert all(r.parent_id == episode.span_id for r in by_name['policy.infer'])
+
+    assert episode.attrs['episode.index'] == 0
+    assert episode.attrs['episode.steps'] == len(by_name['policy.infer'])
+    assert episode.attrs['episode.virtual_s'] >= 0.0
