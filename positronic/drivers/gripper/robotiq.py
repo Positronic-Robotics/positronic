@@ -2,10 +2,12 @@
 
 from collections.abc import Iterator
 
-import pymodbus.client as ModbusClient
-
 import pimm
+from positronic.drivers import vendor_import
 from positronic.drivers.roboarm.command import Trajectory, TrajectoryPlayer
+
+with vendor_import('pymodbus', 'Gripper support'):
+    import pymodbus.client as ModbusClient
 
 _REG_CMD = 0x03E8
 _REG_IN_POS = 0x07D2

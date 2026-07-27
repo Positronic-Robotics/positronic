@@ -3,9 +3,12 @@ from collections.abc import Iterator
 import av
 import cv2
 import numpy as np
-from linuxpy.video.device import Device, PixelFormat
 
 import pimm
+from positronic.drivers import vendor_import
+
+with vendor_import('linuxpy', 'Linux video capture', platforms=('linux',)):
+    from linuxpy.video.device import Device, PixelFormat
 
 
 class LinuxVideo(pimm.ControlSystem):

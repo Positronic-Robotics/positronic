@@ -4,9 +4,12 @@ import wave
 from collections.abc import Iterator
 
 import numpy as np
-import pyaudio
 
 import pimm
+from positronic.drivers import vendor_import
+
+with vendor_import('pyaudio', 'Sound support', platforms=('linux',)):
+    import pyaudio
 
 
 class SoundSystem(pimm.ControlSystem):

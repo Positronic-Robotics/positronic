@@ -1,10 +1,12 @@
 import time
 from ctypes import c_uint16
 
-import pymodbus.client as ModbusClient
-
 import pimm
+from positronic.drivers import vendor_import
 from positronic.drivers.roboarm.command import Trajectory, TrajectoryPlayer
+
+with vendor_import('pymodbus', 'Gripper support'):
+    import pymodbus.client as ModbusClient
 
 
 class DHGripper(pimm.ControlSystem):

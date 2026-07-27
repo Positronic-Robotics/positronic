@@ -3,10 +3,13 @@ from collections.abc import Iterator
 from typing import Literal
 
 import numpy as np
-import pyzed.sl as sl
 
 import pimm
 from pimm.shared_memory import NumpySMAdapter
+from positronic.drivers import vendor_import
+
+with vendor_import('pyzed', 'ZED camera support', platforms=('linux',)):
+    import pyzed.sl as sl
 
 
 class SLCamera(pimm.ControlSystem):
