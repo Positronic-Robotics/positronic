@@ -15,10 +15,12 @@ flagged if any diagnostic `code` occurs more times than at the base. That catche
 rule-kind, more entries of an existing kind, AND a swap of one code for a different one (which a bare
 per-file entry-count comparison would miss, since the total stays flat).
 
-Renames re-key the baseline (the entries move to the new path), so a rename map from
-`git diff --name-status -M -C <base> HEAD` routes each moved file's counts back to its base path;
-a pure rename/move of a file carrying existing entries is therefore not flagged. Rename detection
-fails open (empty map, every file compared under its own path) if the git call fails.
+Renames re-key the baseline (the entries move to the new path), so a rename map routes each moved
+file's counts back to its base path; a pure rename/move of a file carrying existing entries is
+therefore not flagged. The map unions committed renames (`base..HEAD`) with staged renames (`base`
+vs the index) — under pre-commit the rename is staged but not yet in HEAD, so `--cached` is what
+carries it. Rename detection fails open (empty map, every file compared under its own path) if the
+git calls fail.
 
 Residual: a swap WITHIN the same code — resolving one `reportReturnType` while introducing a different
 `reportReturnType` in the same file — leaves the multiset identical and cannot be caught by a static
@@ -74,21 +76,28 @@ def resolve_base_ref(arg: str | None, env: str | None) -> str:
     return arg or env or 'origin/main'
 
 
-def build_rename_map(base: str) -> dict[str, str]:
-    """Map new path -> base path for files renamed or copied between `base` and HEAD (git-style paths).
-
-    Fails open (empty map) if the git call fails, so rename-detection trouble never blocks a commit.
-    """
-    out = _run_git('diff', '--name-status', '-M', '-C', base, 'HEAD')
-    if out is None:
-        return {}
+def _parse_renames(out: str | None) -> dict[str, str]:
+    """Parse `git diff --name-status -M -C` output into new path -> base path (git-style)."""
     renames: dict[str, str] = {}
-    for line in out.splitlines():
+    for line in (out or '').splitlines():
         parts = line.split('\t')
         if len(parts) == 3 and parts[0][:1] in ('R', 'C'):
             _status, old, new = parts
             renames[new] = old
     return renames
+
+
+def build_rename_map(base: str) -> dict[str, str]:
+    """Map new path -> base path for files renamed/copied from `base` to the commit under check.
+
+    Unions committed renames (`base..HEAD`) with staged renames (`base` vs the index): under
+    pre-commit the rename is staged but not yet in HEAD, so `--cached` is what carries it; in CI
+    HEAD already holds it. Staged entries win on conflict, matching the tree being committed. Fails
+    open (empty map) if the git calls fail, so rename-detection trouble never blocks a commit.
+    """
+    committed = _parse_renames(_run_git('diff', '--name-status', '-M', '-C', base, 'HEAD'))
+    staged = _parse_renames(_run_git('diff', '--cached', '--name-status', '-M', '-C', base))
+    return {**committed, **staged}
 
 
 def _run_git(*args: str) -> str | None:

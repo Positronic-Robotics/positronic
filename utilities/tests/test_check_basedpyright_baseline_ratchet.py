@@ -1,8 +1,13 @@
+import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import check_basedpyright_baseline_ratchet as ratchet  # noqa: E402
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(['git', *args], cwd=repo, check=True, capture_output=True, text=True)
 
 
 def _entry(code: str, col: int = 1) -> dict[str, object]:
@@ -64,6 +69,23 @@ def test_rename_without_map_flags_every_entry_as_new():
     base = _baseline({'./positronic/old.py': ['reportReturnType']})
     current = _baseline({'./positronic/new.py': ['reportReturnType']})
     assert ratchet.grown_files(base, current) == [('positronic/new.py', 'reportReturnType', 0, 1)]
+
+
+def test_build_rename_map_includes_staged_rename(tmp_path, monkeypatch):
+    # Under pre-commit the rename is staged (in the index), not yet in HEAD. build_rename_map must
+    # still map it, or a moved baselined file reads as brand-new and the local commit is wrongly
+    # blocked while CI (where HEAD holds the rename) passes.
+    repo = tmp_path
+    _git(repo, 'init', '-q')
+    _git(repo, 'config', 'user.email', 't@t')
+    _git(repo, 'config', 'user.name', 't')
+    (repo / 'old.py').write_text('x = 1\n' * 20)
+    _git(repo, 'add', 'old.py')
+    _git(repo, 'commit', '-qm', 'base')
+    base = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=repo, capture_output=True, text=True).stdout.strip()
+    _git(repo, 'mv', 'old.py', 'new.py')  # staged, NOT committed
+    monkeypatch.chdir(repo)
+    assert ratchet.build_rename_map(base) == {'new.py': 'old.py'}
 
 
 def test_base_ref_arg_wins_then_env_then_default():
