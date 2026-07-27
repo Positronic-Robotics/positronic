@@ -331,6 +331,7 @@ class _Nvml:
         self._handles: list[Any] = []
         self._proc_mem_warned = False
         self._power_warned = False
+        self._device_warned: set[int] = set()
         self._ok = False
         try:
             pynvml.nvmlInit()
@@ -342,8 +343,16 @@ class _Nvml:
     def sample(self, tree_pids: set[int]) -> list[dict[str, Any]]:
         gpus: list[dict[str, Any]] = []
         for index, handle in enumerate(self._handles):
-            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-            memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            try:
+                util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            except pynvml.NVMLError as error:
+                # A device can refuse a query outright (MIG) or drop mid-run (transiently lost). Skip it and
+                # keep sampling — one device's failure must not kill the whole stats stream.
+                if index not in self._device_warned:
+                    logger.info('telemetry: GPU %d stats unavailable (%s); device skipped', index, error)
+                    self._device_warned.add(index)
+                continue
             gpus.append({
                 'i': index,
                 'util_pct': float(util.gpu),

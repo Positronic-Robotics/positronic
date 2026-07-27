@@ -116,6 +116,25 @@ def test_stats_sample_with_fake_gpu(tmp_path, monkeypatch):
     sampler._nvml.shutdown()
 
 
+def test_stats_sample_skips_failing_device(tmp_path, monkeypatch):
+    """A per-device NVML failure (a MIG device refusing utilisation, a transiently lost GPU) skips that device
+    but keeps the sample — the stats stream must degrade, never die."""
+    _install_fake_nvml(monkeypatch)
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetCount', lambda: 2)
+
+    def _util(handle):
+        if handle == 'handle-0':
+            raise pynvml.NVMLError(pynvml.NVML_ERROR_NOT_SUPPORTED)
+        return _FakeUtil()
+
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetUtilizationRates', _util)
+    sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
+    sample = sampler._sample()
+    assert [gpu['i'] for gpu in sample['gpus']] == [1]
+    assert isinstance(sample['cpu_sys_pct'], float)
+    sampler._nvml.shutdown()
+
+
 def test_stats_sample_without_gpu(tmp_path, monkeypatch):
     def _raise():
         raise pynvml.NVMLError(pynvml.NVML_ERROR_DRIVER_NOT_LOADED)
