@@ -83,11 +83,17 @@ def _process_tree_pids() -> set[int]:
 
 def _read_gpu_sample(device: str) -> _GpuSample | None:
     """One sample for ``device``: whole-box util+memory, plus this eval's process-tree memory. ``None`` when
-    the whole-box query fails (no GPU / driver error), so the caller records nothing this sample."""
+    the whole-box query fails (no GPU / driver error) or reports a metric as non-numeric — ``N/A`` /
+    ``[Not Supported]``, e.g. on some MIG configurations — so the caller records nothing this sample and the
+    daemon thread keeps sampling instead of dying on the conversion."""
     box = _run_nvidia_smi(['--query-gpu=utilization.gpu,memory.used', '--format=csv,noheader,nounits', '-i', device])
     if box is None:
         return None
     util_s, mem_s = (part.strip() for part in box.strip().splitlines()[0].split(','))
+    try:
+        util_pct, mem_mib = float(util_s), float(mem_s)
+    except ValueError:
+        return None
 
     pids = _process_tree_pids()
     proc_mib = 0.0
@@ -101,7 +107,7 @@ def _read_gpu_sample(device: str) -> _GpuSample | None:
                 proc_mib += float(used_s)  # ``[Not Supported]`` / permission strings raise and are skipped
         except ValueError:
             continue
-    return _GpuSample(util_pct=float(util_s), mem_mib=float(mem_s), proc_mem_mib=proc_mib, wall_ns=time.time_ns())
+    return _GpuSample(util_pct=util_pct, mem_mib=mem_mib, proc_mem_mib=proc_mib, wall_ns=time.time_ns())
 
 
 class GpuMonitor(pimm.ControlSystem):

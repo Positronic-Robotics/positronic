@@ -5,6 +5,7 @@ import pytest
 from positronic import eval_timing
 from positronic.cli.eval.timing_report import _load_episodes
 from positronic.dataset.local_dataset import LocalDatasetWriter
+from positronic.drivers import gpu_monitor
 from positronic.drivers.gpu_monitor import GpuMonitor, _GpuSample
 from positronic.eval_timing import FINISHED_AT_KEY, RESET_S_KEY, WALL_S_KEY
 
@@ -40,6 +41,14 @@ def test_gpu_monitor_retains_all_buffered_probes():
     assert [sample.ts for sample in batch] == [1000, 1001, 1002]
     assert monitor._buffer == []
     assert monitor._drain_batch(now_ns=1000) == []  # an empty buffer on the next tick emits nothing
+
+
+def test_gpu_sample_none_on_nonnumeric_metric(monkeypatch):
+    """A metric reported as `[Not Supported]` / `N/A` (some MIG configs) is a successful nvidia-smi call with
+    non-numeric output; it must yield None (skip the sample), not raise in the daemon thread and permanently
+    stop sampling (Codex P2)."""
+    monkeypatch.setattr(gpu_monitor, '_run_nvidia_smi', lambda args: '[Not Supported], 1024\n')
+    assert gpu_monitor._read_gpu_sample('0') is None
 
 
 def test_timing_report_splits_reused_output_dir_into_runs(tmp_path):
