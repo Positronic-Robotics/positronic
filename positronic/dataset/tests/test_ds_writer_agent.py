@@ -6,7 +6,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import pimm
-from positronic import geom
+from positronic import geom, keys
 from positronic.dataset import DatasetWriter, EpisodeWriter
 from positronic.dataset.ds_writer_agent import (
     DsWriterAgent,
@@ -400,10 +400,10 @@ def test_robot_state_serializer_drops_reset_and_emits_components(world):
     w = ds.created[-1]
     items = {name: val for (name, val, _, _) in w.appends}
     # Should not contain any data from RESETTING
-    assert set(items.keys()) == {'robot_state.q', 'robot_state.dq', 'robot_state.ee_pose'}
-    np.testing.assert_allclose(items['robot_state.q'], q)
-    np.testing.assert_allclose(items['robot_state.dq'], dq)
-    np.testing.assert_allclose(items['robot_state.ee_pose'], np.concatenate([t, geom.Rotation.identity.as_quat]))
+    assert set(items.keys()) == {keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE}
+    np.testing.assert_allclose(items[keys.JOINTS], q)
+    np.testing.assert_allclose(items[keys.JOINT_VEL], dq)
+    np.testing.assert_allclose(items[keys.EE_POSE], np.concatenate([t, geom.Rotation.identity.as_quat]))
 
 
 def test_robot_command_serializer_variants(world):

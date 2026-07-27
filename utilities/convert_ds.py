@@ -24,6 +24,7 @@ from pathlib import Path
 import configuronic as cfn
 import tqdm
 
+from positronic import keys
 from positronic.dataset import Dataset
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.signal import Kind
@@ -47,14 +48,14 @@ def update_v0_1_0(path: str):
             Derive(**{
                 'controller_positions.right': Concat('right_controller_translation', 'right_controller_quaternion'),
                 'robot_commands.pose': Concat('target_robot_position_translation', 'target_robot_position_quaternion'),
-                'robot_state.ee_pose': Concat('robot_position_translation', 'robot_position_quaternion'),
+                keys.EE_POSE: Concat('robot_position_translation', 'robot_position_quaternion'),
                 'task': FromValue('Pick up the green cube and place it on the red cube.'),
             }),
             Rename(**{
-                'robot_state.q': 'robot_state.joints',
-                'robot_state.dq': 'robot_state.joints_velocity',
-                'image.wrist': 'image.handcam_left',
-                'image.exterior': 'image.back_view',
+                keys.JOINTS: 'robot_state.joints',
+                keys.JOINT_VEL: 'robot_state.joints_velocity',
+                keys.WRIST_IMAGE: 'image.handcam_left',
+                keys.EXTERIOR_IMAGE: 'image.back_view',
             }),
             Identity(select=['grip', 'target_grip', 'mjSTATE_FULLPHYSICS', 'mjSTATE_INTEGRATION', 'mjSTATE_WARMSTART']),
         ),

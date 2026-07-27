@@ -7,6 +7,7 @@ import numpy as np
 import pos3
 
 import positronic.cfg.ds as base_cfg
+from positronic import keys
 from positronic.cfg.ds import internal
 from positronic.cfg.eval.real import tasks
 from positronic.dataset.episode import Episode
@@ -20,7 +21,7 @@ from positronic.utils.logging import init_logging
 def task_code(ep: Episode) -> str:
     if 'eval.object' in ep:
         return ep['eval.object']
-    match ep['task']:
+    match ep[keys.TASK]:
         case tasks.TOWELS_TASK:
             return 'Towels'
         case tasks.SPOONS_TASK:
@@ -340,9 +341,9 @@ def box_distance_progress(episode: Episode) -> float | None:
 
 
 def ee_pose_movement(episode: Episode) -> float | None:
-    if 'robot_state.ee_pose' not in episode:
+    if keys.EE_POSE not in episode:
         return None
-    signal_values = episode['robot_state.ee_pose'].values()
+    signal_values = episode[keys.EE_POSE].values()
     result = 0.0
     prev_translation = signal_values[0][:3]
     for ee_pose in signal_values[1:]:
@@ -486,20 +487,20 @@ FIXED_ITEM_COUNTS = {tasks.SCISSORS_TASK: 10, tasks.BATTERIES_TASK: 8}
 
 def calculate_units(episode: Episode) -> int:
     """Estimates the number of pick-and-place operations. Vibe-coded heuristic."""
-    if episode['task'] in FIXED_ITEM_COUNTS:
-        return FIXED_ITEM_COUNTS[episode['task']]
+    if episode[keys.TASK] in FIXED_ITEM_COUNTS:
+        return FIXED_ITEM_COUNTS[episode[keys.TASK]]
 
     if 'target_grip' in episode.signals:
         grip_sig = episode.signals['target_grip']
-    elif 'grip' in episode.signals:
-        grip_sig = episode.signals['grip']
+    elif keys.GRIP in episode.signals:
+        grip_sig = episode.signals[keys.GRIP]
     else:
         return 0
 
-    if 'robot_state.ee_pose' not in episode.signals:
+    if keys.EE_POSE not in episode.signals:
         return 0
 
-    pose_sig = episode.signals['robot_state.ee_pose']
+    pose_sig = episode.signals[keys.EE_POSE]
 
     # Sample signals at 10Hz to reduce noise and computation
     times = np.arange(episode.start_ts, episode.last_ts, int(1e8))

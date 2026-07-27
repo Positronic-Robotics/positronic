@@ -4,6 +4,7 @@ from typing import Any
 import numpy as np
 from PIL import Image as PilImage
 
+from positronic import keys
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
@@ -29,7 +30,7 @@ class ObservationCodec(Codec):
 
         self._derive_transforms = {k: partial(self._derive_state, k) for k in state.keys()}
         self._derive_transforms.update({k: partial(self._derive_image, k) for k in images.keys()})
-        self._derive_transforms['task'] = Get('task', '')
+        self._derive_transforms['task'] = Get(keys.TASK, '')
 
         lerobot_features: dict[str, Any] = {}
         for name, features in state.items():
@@ -53,8 +54,8 @@ class ObservationCodec(Codec):
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}
 
-        if 'task' in inputs:
-            obs[self._task_field] = inputs['task']
+        if keys.TASK in inputs:
+            obs[self._task_field] = inputs[keys.TASK]
 
         for out_name, (input_key, (width, height)) in self._image_configs.items():
             if input_key not in inputs:

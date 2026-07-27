@@ -15,6 +15,7 @@ from typing import Any, final
 import numpy as np
 from PIL import Image as PilImage
 
+from positronic import keys as obs_keys
 from positronic.dataset.transforms import Elementwise
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
 from positronic.policy.base import PAR, SEQ, DelegatingSession, PolicyWrapper, Session, _ComposedWrapper
@@ -379,8 +380,8 @@ class FlipGrip(Codec):
 
     def encode(self, data):
         # Copy: the original dict is also the decode ``context`` and the raw recording tap's input.
-        if 'grip' in data:
-            data = {**data, 'grip': 1.0 - data['grip']}
+        if obs_keys.GRIP in data:
+            data = {**data, obs_keys.GRIP: 1.0 - data[obs_keys.GRIP]}
         return data
 
     @property
