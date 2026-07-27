@@ -79,6 +79,12 @@ the `eval.scored` success verdict the episode already records — and prints a p
   that log with `nvidia-smi dmon -s um`, which emits the `fb` framebuffer column the reducer needs (a plain
   `dmon` log, lacking `fb`, is rejected).
 
+> **Caveat (known):** each episode's timing is sealed while its writer is open, so the writer-close flush
+> (parquet/video finalize) lands in `between_episodes` — and the final episode's close, with no next episode
+> to absorb it, falls outside `W_pass` entirely. This under-counts pass wall by one close flush: negligible
+> across a many-episode pass, but material for a single-episode run (flagged in the report output). A precise
+> fix needs a writer `flush()` seam separable from close — [internal#105](https://github.com/Positronic-Robotics/internal/issues/105).
+
 The report also lands as `timing_summary.json` next to the input (a sibling `<dataset_dir>.timing_summary.json`
 for an `s3://` input).
 

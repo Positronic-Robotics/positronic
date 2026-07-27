@@ -106,8 +106,13 @@ class WallSplit:
     inter-episode wall (episode writer close — parquet/video flush — plus session teardown, homing, world
     rebuild) between one simulated episode's finish and the next's start within a timed run, which a
     per-episode sum drops (a real eval that splits the runs is excluded, not counted here). An episode seals
-    its timing statics while its writer is open, so the writer-close flush lands here rather than in that
-    episode's ``record_io``; the final episode's close falls outside the pass span entirely.
+    its timing statics while its writer is open — they are statics written into the episode, so ``wall_s``
+    cannot be re-stamped after the close — so each writer-close flush lands in ``between_episodes`` rather than
+    its own ``record_io``, and the final episode's close, with no next episode to absorb it, falls outside the
+    pass span entirely. This under-counts pass wall by one close flush: negligible across a many-episode pass,
+    but material for a single- or short-episode run (surfaced then by the ``_render`` caveat). Accounting the
+    close flush precisely needs a writer ``flush()`` seam separable from close — deferred to
+    Positronic-Robotics/internal#105.
     """
 
     reset: float
@@ -466,6 +471,11 @@ def _render(report: PassReport) -> str:
             if summary.peak_proc_vram_gb is not None:
                 line += f'  (this eval {summary.peak_proc_vram_gb:.1f} GB)'
             lines.append(line)
+    if report.episodes == 1:
+        lines.append(
+            "note: W_pass omits the single episode's writer-close flush (parquet/video finalize), which runs "
+            'after its timing is sealed — a one-episode pass under-reports wall and record_io (internal#105).'
+        )
     return '\n'.join(lines)
 
 
