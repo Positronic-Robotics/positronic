@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from positronic import keys
 from positronic.policy import spec
 from positronic.policy.action import (
     AbsoluteJointsAction,
@@ -268,7 +269,9 @@ class TestPipelineSpec:
         assert rebuilt is not None and rebuilt.to_spec() == stack.to_spec()
 
     def test_codec_spec_round_trip(self):
-        obs = ObservationCodec(state={'observation.state': {'grip': 1}}, images={'left': ('image.wrist', (224, 224))})
+        obs = ObservationCodec(
+            state={'observation.state': {'grip': 1}}, images={'left': (keys.WRIST_IMAGE, (224, 224))}
+        )
         local = ChunkedSchedule() | ActionTimestamp(fps=10.0) | (obs & AbsolutePositionAction('pose', 'grip'))
         rebuilt = spec.from_spec(local.to_spec())
         assert rebuilt is not None and rebuilt.to_spec() == local.to_spec()
