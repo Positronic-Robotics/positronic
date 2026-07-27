@@ -213,14 +213,16 @@ def main(
                 for ev in evals:
                     _run_world(policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete)
     finally:
-        policy.close()
-        # A later invocation in the same process (a notebook, a test runner) must not inherit this run's
-        # telemetry environment and write env spans into its directory.
-        for name, value in env_snapshot.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
+        try:
+            policy.close()
+        finally:
+            # A later invocation in the same process (a notebook, a test runner) must not inherit this run's
+            # telemetry environment and write env spans into its directory — even when the close raised.
+            for name, value in env_snapshot.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
 
 
 @cfn.config(eval=placeholder, policy=policy_cfg.placeholder, show_gui=False)
