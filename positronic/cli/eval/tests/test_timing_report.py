@@ -7,7 +7,7 @@ from positronic.cli.eval.timing_report import _build_report, _parse_dmon, _read_
 _S = 1_000_000_000  # seconds -> ns
 
 
-def _span(name, start_s, end_s, span_id, parent_id=None, attrs=None):
+def _span(name, start_s, end_s, span_id, parent_id=None, attrs=None, process='harness'):
     encoded = {
         'traceId': '0' * 32,
         'spanId': span_id,
@@ -18,7 +18,14 @@ def _span(name, start_s, end_s, span_id, parent_id=None, attrs=None):
     }
     if parent_id is not None:
         encoded['parentSpanId'] = parent_id
-    return {'resourceSpans': [{'scopeSpans': [{'spans': [encoded]}]}]}
+    return {
+        'resourceSpans': [
+            {
+                'resource': {'attributes': [{'key': 'process.name', 'value': {'stringValue': process}}]},
+                'scopeSpans': [{'spans': [encoded]}],
+            }
+        ]
+    }
 
 
 def _write_lines(path, docs):
@@ -43,13 +50,13 @@ def _fixture(telemetry_dir):
             _span('policy.infer', base + 30, base + 33, f'inferA{i}', ep),
             _span('policy.infer', base + 33, base + 34, f'inferB{i}', ep),
         ]
-        # Server env.step: 5s, decomposed into physics 3s + render 1s (server_other residual = 1s). It parents
-        # to no episode (it lives in the env process's own file).
+        # Server env.step: 5s, decomposed into physics 3s + render 1s (server_other residual = 1s). It lives
+        # in the env process's own file, discriminated by its resource process name.
         server = f'srv{i}'
         env += [
-            _span('env.step', base + 10, base + 15, server),
-            _span('physics', base + 10, base + 13, f'phys{i}', server),
-            _span('render', base + 13, base + 14, f'rend{i}', server),
+            _span('env.step', base + 10, base + 15, server, process='env'),
+            _span('physics', base + 10, base + 13, f'phys{i}', server, process='env'),
+            _span('render', base + 13, base + 14, f'rend{i}', server, process='env'),
         ]
     _write_lines(telemetry_dir / 'harness.spans.jsonl', harness)
     _write_lines(telemetry_dir / 'env.spans.jsonl', env)
@@ -113,6 +120,48 @@ def test_aborted_episode_excluded(tmp_path):
     _write_lines(telemetry_dir / 'harness.spans.jsonl', docs)
     report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
     assert report.episodes == 1
+
+
+def test_env_step_split_ignores_aborted_episode(tmp_path):
+    """An aborted rollout's spans — its client env.step AND its server-side steps — stay out of the env-step
+    split: the denominator covers completed episodes only, so counting them made fractions exceed 1 and wire
+    go negative (Codex P2 on PR #531)."""
+    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir.mkdir()
+    harness = [
+        _span('eval.pass', 0, 100, 'pass0'),
+        _span('episode', 0, 40, 'ep0', 'pass0', {'episode.virtual_s': 20.0}),
+        _span('env.step', 10, 18, 'step0', 'ep0'),
+        _span('materialize', 14, 16, 'mat0', 'step0'),
+        _span('episode', 50, 60, 'ep1', 'pass0'),
+        _span('env.step', 51, 59, 'step1', 'ep1'),  # aborted episode's client step
+    ]
+    harness[4]['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'].append({
+        'key': 'episode.aborted',
+        'value': {'boolValue': True},
+    })
+    env = [
+        _span('env.step', 10, 15, 'srv0', process='env'),
+        _span('physics', 10, 13, 'phys0', 'srv0', process='env'),
+        _span('render', 13, 14, 'rend0', 'srv0', process='env'),
+        _span('env.step', 51, 56, 'srv1', process='env'),  # during the aborted rollout
+        _span('physics', 51, 54, 'phys1', 'srv1', process='env'),
+    ]
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', harness)
+    _write_lines(telemetry_dir / 'env.spans.jsonl', env)
+
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+
+    split = report.env_step_split
+    assert split is not None
+    # Only the completed episode's 8s client step and its 5s server step count: physics 3/8, render 1/8,
+    # server_other 1/8, materialize 2/8, wire (8-5-2)/8.
+    assert split.phases['physics'] == pytest.approx(3 / 8)
+    assert split.phases['render'] == pytest.approx(1 / 8)
+    assert split.phases['server_other'] == pytest.approx(1 / 8)
+    assert split.materialize == pytest.approx(2 / 8)
+    assert split.wire == pytest.approx(1 / 8)
+    assert sum(split.phases.values()) + split.wire + split.materialize == pytest.approx(1.0)
 
 
 def test_native_sim_has_no_env_step_split(tmp_path):

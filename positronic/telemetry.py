@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 
 _SCOPE = 'positronic'
 
+# The harness process's sidecar name — the discriminator between client-side spans (episode, client env.step)
+# and an env server's own file, which reduces rely on.
+HARNESS_PROCESS = 'harness'
+
 # The bound provider and the current pass/episode spans are process-global: the harness, env proxy and
 # recorder run as cooperative control systems in one thread and interleave their spans, so parenting is
 # resolved here rather than through OTel's ambient context (which does not survive the scheduler's generator
@@ -247,7 +251,8 @@ class _FileSpanExporter(SpanExporter):
 
 class SpanRec(NamedTuple):
     """One parsed span: hex ``span_id``/``parent_id`` (``parent_id`` is ``None`` for a root), wall-clock
-    epoch-ns bounds, and the flat attribute map."""
+    epoch-ns bounds, the flat attribute map, and the recording process's name (the ``process.name`` resource
+    attribute every sidecar writer stamps — ``''`` when a file carries none)."""
 
     name: str
     start_ns: int
@@ -255,6 +260,7 @@ class SpanRec(NamedTuple):
     attrs: dict[str, Any]
     span_id: str
     parent_id: str | None
+    process: str = ''
 
 
 def _decode_value(value: dict[str, Any]) -> Any:
@@ -288,6 +294,8 @@ def read_spans(path: Path | str) -> Iterator[SpanRec]:
             except json.JSONDecodeError:
                 continue
             for resource_spans in doc.get('resourceSpans', []):
+                resource_attrs = _decode_attrs(resource_spans.get('resource', {}).get('attributes', []))
+                process = str(resource_attrs.get('process.name', ''))
                 for scope_spans in resource_spans.get('scopeSpans', []):
                     for span_data in scope_spans.get('spans', []):
                         yield SpanRec(
@@ -297,6 +305,7 @@ def read_spans(path: Path | str) -> Iterator[SpanRec]:
                             attrs=_decode_attrs(span_data.get('attributes', [])),
                             span_id=span_data['spanId'],
                             parent_id=span_data.get('parentSpanId') or None,
+                            process=process,
                         )
 
 
