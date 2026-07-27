@@ -127,6 +127,10 @@ def _install_fake_nvml(monkeypatch):
     monkeypatch.setattr(
         pynvml, 'nvmlDeviceGetComputeRunningProcesses', lambda h: [_FakeProc(os.getpid(), 1234 * 1024**2)]
     )
+    # A renderer (Isaac's Vulkan/GL) holds its memory as a graphics context — attributed alongside compute.
+    monkeypatch.setattr(
+        pynvml, 'nvmlDeviceGetGraphicsRunningProcesses', lambda h: [_FakeProc(os.getpid(), 100 * 1024**2)]
+    )
 
 
 def test_stats_sample_with_fake_gpu(tmp_path, monkeypatch):
@@ -140,7 +144,7 @@ def test_stats_sample_with_fake_gpu(tmp_path, monkeypatch):
     assert gpu['util_pct'] == 42.0
     assert gpu['mem_used_b'] == 3 * 1024**3
     assert gpu['power_w'] == 150.0
-    assert gpu['proc_mem_b'] == 1234 * 1024**2  # this test's own pid is in the process tree
+    assert gpu['proc_mem_b'] == (1234 + 100) * 1024**2  # compute + graphics contexts of this process tree
     assert gpu['proc_util_pct'] is None
     sampler._nvml.shutdown()
 

@@ -387,8 +387,13 @@ class _Nvml:
             return None
 
     def _process_memory(self, handle: Any, tree_pids: set[int]) -> int | None:
+        # Compute AND graphics contexts: a renderer (Isaac's Vulkan/GL) holds its memory as a graphics
+        # context, so the compute list alone misses the sim's biggest GPU consumer.
         try:
-            procs = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
+            procs = [
+                *pynvml.nvmlDeviceGetComputeRunningProcesses(handle),
+                *pynvml.nvmlDeviceGetGraphicsRunningProcesses(handle),
+            ]
         except pynvml.NVMLError as error:
             if not self._proc_mem_warned:
                 logger.info('telemetry: per-process GPU memory unavailable (%s); proc_mem_b left null', error)

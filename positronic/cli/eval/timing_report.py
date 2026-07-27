@@ -120,15 +120,20 @@ def _read_stats_dir(telemetry_dir: Path) -> list[dict]:
     return samples
 
 
-def _gpu_summary_from_stats(stats: list[dict]) -> GpuSummary | None:
+def _gpu_summary_from_stats(stats: list[dict], pass_windows: list[tuple[int, int]]) -> GpuSummary | None:
     """The sim box's GPU summary from the machine-load stream: mean utilisation over every per-GPU reading,
     and peak VRAM as the box-wide total — each sample's devices summed first, then the max over samples, so a
-    multi-GPU box's peak is what the box held at one instant, not the largest single device. ``None`` when no
-    sample carried a GPU (a CPU sim box)."""
+    multi-GPU box's peak is what the box held at one instant, not the largest single device. Only samples
+    taken inside a completed pass's wall window count — a reused directory carries an earlier (possibly
+    killed) run's samples, the stats twin of the orphan-episode exclusion. ``None`` when no counted sample
+    carried a GPU (a CPU sim box)."""
     utils: list[float] = []
     mem: list[float] = []
     proc: list[float] = []
     for sample in stats:
+        t_ns = int(sample['t_ns'])
+        if not any(start <= t_ns <= end for start, end in pass_windows):
+            continue
         gpus = sample.get('gpus', [])
         utils.extend(float(gpu['util_pct']) for gpu in gpus)
         if gpus:
@@ -278,8 +283,9 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
 
     # W_pass is the pass span's wall (summed if several passes appended to one dir), so inter-episode teardown
     # counts in the denominator; the wall gap between two separate passes falls outside every pass span.
-    pass_ids = {p.span_id for p in spans if p.name == 'eval.pass'}
-    wall_pass = float(sum(_dur_s(p) for p in spans if p.name == 'eval.pass'))
+    passes = [p for p in spans if p.name == 'eval.pass']
+    pass_ids = {p.span_id for p in passes}
+    wall_pass = float(sum(_dur_s(p) for p in passes))
     # Only episodes under a completed pass reduce: a killed run flushes its episodes but never writes its
     # ``eval.pass`` span, and such orphans would inflate every pass-normalized figure when the directory is
     # reused for a later run.
@@ -317,7 +323,7 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
         infer_p95_ms=float(np.percentile(all_infer_ms, 95)) if all_infer_ms.size else 0.0,
         wall_split=wall_split,
         env_step_split=_env_step_split(spans, episodes, env_step_sum, materialize_sum),
-        gpu=GpuReport(sim=_gpu_summary_from_stats(stats), policy=policy_gpu),
+        gpu=GpuReport(sim=_gpu_summary_from_stats(stats, [(p.start_ns, p.end_ns) for p in passes]), policy=policy_gpu),
     )
 
 
