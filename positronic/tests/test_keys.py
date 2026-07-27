@@ -33,3 +33,16 @@ def test_no_raw_observation_key_literals():
     assert not offenders, (
         'Raw observation-key literals found — import the constant from `positronic.keys`:\n' + '\n'.join(offenders)
     )
+
+
+def test_keys_module_imports_nothing():
+    # `positronic.keys` must stay a dependency-free leaf so an out-of-repo consumer can depend on it
+    # alone, without dragging in the rest of positronic (or its optional torch/lerobot deps). Any
+    # import statement appearing here breaks that contract.
+    tree = ast.parse(_KEYS_MODULE.read_text(), filename=str(_KEYS_MODULE))
+    imports = [
+        f'{_KEYS_MODULE.relative_to(_PACKAGE_ROOT.parent)}:{node.lineno}'
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+    assert not imports, '`positronic.keys` must import nothing (dependency-free leaf module):\n' + '\n'.join(imports)
