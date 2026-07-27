@@ -1,7 +1,12 @@
+from datetime import UTC, datetime
+
 import pytest
 
 from positronic import eval_timing
+from positronic.cli.eval.timing_report import _load_episodes
+from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.drivers.gpu_monitor import GpuMonitor, _GpuSample
+from positronic.eval_timing import FINISHED_AT_KEY, RESET_S_KEY, WALL_S_KEY
 
 
 def test_record_env_phases_maps_each_key_to_a_timing_env_signal():
@@ -35,3 +40,28 @@ def test_gpu_monitor_retains_all_buffered_probes():
     assert [sample.ts for sample in batch] == [1000, 1001, 1002]
     assert monitor._buffer == []
     assert monitor._drain_batch(now_ns=1000) == []  # an empty buffer on the next tick emits nothing
+
+
+def test_timing_report_splits_reused_output_dir_into_runs(tmp_path):
+    """Two timed passes appended to one output_dir must not merge into one run — else the wall gap between them
+    counts as pass time and understates the real-time factor (Codex P1). Runs split at the invocation window
+    each episode was recorded in, read from the run_metadata_<ts>.yaml markers each invocation writes."""
+
+    def invocation_ns(hour):
+        return int(datetime(2026, 1, 1, hour, tzinfo=UTC).timestamp()) * 1_000_000_000
+
+    with LocalDatasetWriter(tmp_path) as writer:
+        for hour in (0, 2):  # two eval-run invocations, two hours apart, into the same dir
+            marker = datetime(2026, 1, 1, hour, tzinfo=UTC).strftime('%Y%m%d_%H%M%S')
+            (tmp_path / f'run_metadata_{marker}.yaml').write_text('')
+            for episode in range(2):
+                created = invocation_ns(hour) + (episode + 1) * 1_000_000_000
+                with writer.new_episode(created_ts_ns=created) as ep_writer:
+                    ep_writer.append('gpu_load', 0.0, ts_ns=created)
+                    ep_writer.set_static(WALL_S_KEY, 1.0)
+                    ep_writer.set_static(RESET_S_KEY, 0.1)
+                    ep_writer.set_static(FINISHED_AT_KEY, created / 1e9 + 1.0)
+
+    runs, facts = _load_episodes(tmp_path)
+    assert [len(run) for run in runs] == [2, 2]  # the two passes stay separate, not merged into one run
+    assert len(facts) == 4

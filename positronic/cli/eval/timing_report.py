@@ -10,7 +10,10 @@ dmon`` log.
 
 import json
 import logging
+import re
+from bisect import bisect_right
 from dataclasses import asdict, dataclass, fields
+from datetime import UTC, datetime
 from pathlib import Path
 
 import configuronic as cfn
@@ -217,18 +220,40 @@ def _rollout_duration_s(ep: Episode) -> float:
     return (max(sig.last_ts for sig in content) - max(sig.start_ts for sig in content)) / 1e9
 
 
+def _invocation_starts(dataset_dir: Path) -> list[int]:
+    """Wall-clock (epoch ns) start of each ``eval run`` invocation into this dir, parsed from the
+    ``run_metadata_<YYYYMMDD_HHMMSS>.yaml`` marker each invocation writes, sorted ascending.
+
+    Two timed passes appended to one ``output_dir`` are adjacent in dataset order with no untimed episode
+    between them, so ordering alone cannot tell them apart; these markers are the boundary that keeps them as
+    separate runs, so the wall gap between two independently appended passes is never counted as pass time.
+    """
+    starts = []
+    for path in dataset_dir.glob('run_metadata_*.yaml'):
+        match = re.fullmatch(r'run_metadata_(\d{8}_\d{6})\.yaml', path.name)
+        if match is not None:
+            started = datetime.strptime(match.group(1), '%Y%m%d_%H%M%S').replace(tzinfo=UTC)
+            starts.append(int(started.timestamp()) * 1_000_000_000)
+    return sorted(starts)
+
+
 def _load_episodes(dataset_dir: Path) -> tuple[list[list[_EpisodeTiming]], dict[str, _RecordedFacts]]:
     """One pass over the recorded episodes: the per-rollout timing records grouped into contiguous runs, and
     the recorded facts (duration/size/success) every episode contributes to the join, keyed by uid.
 
-    A run is a maximal sequence of timed episodes with no untimed one between them. An untimed (real) episode
-    carries no timing and splits the runs around it, so its wall stays out of the pass span — only the
-    simulated spans are reported, even in a mixed sim/real sweep.
+    A run is a maximal sequence of timed episodes from one ``eval run`` invocation with no untimed one between
+    them. An untimed (real) episode carries no timing and splits the runs around it, so its wall stays out of
+    the pass span — only the simulated spans are reported, even in a mixed sim/real sweep. A reused
+    ``output_dir`` holding a later timed pass splits there too (by the invocation window each episode's
+    ``created_ts_ns`` falls in), so the hours between two independently appended passes are never merged into
+    one run's wall.
     """
     dataset = load_all_datasets(dataset_dir)
+    starts = _invocation_starts(dataset_dir)
     runs: list[list[_EpisodeTiming]] = []
     facts: dict[str, _RecordedFacts] = {}
     split = True  # the next timed episode opens a fresh run (first one, or one after an untimed episode)
+    invocation = -1  # invocation window (index into `starts`) the current run belongs to
     for i, ep in enumerate(dataset):
         uid = str(ep.meta.get('uid', f'ts-{ep.meta.get("created_ts_ns", i)}'))
         # ``eval.success`` is the env's task-success verdict; ``eval.terminated`` only means the episode
@@ -248,6 +273,12 @@ def _load_episodes(dataset_dir: Path) -> tuple[list[list[_EpisodeTiming]], dict[
         if timing is None:
             split = True
             continue
+        # A timed episode recorded in a later invocation than the current run opens a fresh run, so a second
+        # timed pass into a reused output_dir is not merged into the first.
+        episode_invocation = bisect_right(starts, int(ep.meta.get('created_ts_ns', 0))) - 1
+        if episode_invocation != invocation:
+            split = True
+        invocation = episode_invocation
         if split:
             runs.append([])
             split = False
