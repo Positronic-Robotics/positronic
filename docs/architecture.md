@@ -133,3 +133,11 @@ rollout, many cheap criteria experiments. A stop-signal may end a trial early, a
 may report its own success at termination; both are captured as original data from where the
 ground truth lives, not as scores — analysis is free to use, recompute, or override them. A
 criterion baked into the run is bound too early: changing it would mean re-running the robot.
+
+**Telemetry is a producer like any other.** Wall-clock and GPU telemetry are not a privileged side
+channel: anything sampling the world over time is a control system whose output flows through the
+standard writer path (per-tick costs and GPU samples as signals), per-episode facts are statics, and
+every roll-up is an offline reduce over that recording — no side file, no ambient subprocess. Forced
+by *components are functions over flowing data* (a sampler is just a component, its telemetry just
+its output) and *every run produces a Positronic dataset* (the telemetry rides in the dataset the run
+already produces, so nothing exists outside it to lose or to keep in sync).

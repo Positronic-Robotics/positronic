@@ -3,7 +3,7 @@ import pytest
 
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.transforms import Elementwise, TransformedEpisode
-from positronic.dataset.transforms.episode import Concat, Derive, Group, Identity, Rename
+from positronic.dataset.transforms.episode import Concat, Derive, Get, Group, Identity, Rename
 
 from ...tests.utils import DummySignal, DummyTransform
 
@@ -290,3 +290,23 @@ def test_identity_transform_remove(sig_simple):
         _ = selected['note']
     with pytest.raises(KeyError):
         _ = selected['extra']
+
+
+def test_derive_projection_drops_unknown_signals(sig_simple):
+    """A training encoder is a pure projection (``Derive``): it yields only its declared keys, so a signal
+    the encoder never names is a no-op — the transformed output is identical with or without it. This is the
+    structural whitelist that makes a training-set conversion ignore any signal the codec did not declare."""
+    encoder = Derive(state=Get('s', None), label=Get('id', None))
+    base = EpisodeContainer(data={'s': sig_simple, 'id': 3})
+    with_unknown = EpisodeContainer(
+        data={'s': sig_simple, 'id': 3, 'unknown_signal': DummySignal([1500, 2500], [1, 2]), 'unknown_static': 'x'}
+    )
+
+    out_base = encoder(base)
+    out_unknown = encoder(with_unknown)
+
+    assert list(out_base.keys()) == list(out_unknown.keys()) == ['state', 'label']
+    assert 'unknown_signal' not in out_unknown
+    assert 'unknown_static' not in out_unknown
+    assert [v for v, _ in out_unknown['state']] == [v for v, _ in out_base['state']] == [v for v, _ in base['s']]
+    assert out_unknown['label'] == out_base['label'] == 3

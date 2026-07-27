@@ -9,10 +9,11 @@ import pos3
 
 import pimm
 import positronic.cfg.policy as policy_cfg
-from positronic import utils, wire
+from positronic import eval_timing, utils, wire
 from positronic.cfg.eval import placeholder
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
+from positronic.drivers.gpu_monitor import GpuMonitor
 from positronic.eval import Embodiment, Eval, Task
 from positronic.gui import dpg_ui
 from positronic.policy.base import SampledPolicy
@@ -69,6 +70,7 @@ def _run_world(
     output_dir: Path | None,
     show_gui: bool,
     on_complete,
+    timing: bool,
 ):
     """Wire one embodiment under a fresh Harness + World and run it to completion.
 
@@ -83,8 +85,18 @@ def _run_world(
     with writer_cm as dataset_writer, pimm.World(virtual_time=embodiment.simulated) as world:
         privileged = task.privileged if task is not None else {}
         done = task.done if task is not None else None
+        # Under --timing on a sim run, sample the box's GPU into the episodes as a foreground control
+        # system; a real run records in separate processes that never see the timer, so no GPU signal.
+        gpu_monitor = GpuMonitor() if timing and dataset_writer is not None and embodiment.simulated else None
         ds_agent = wire.wire_embodiment(
-            world, harness, embodiment, dataset_writer, time_mode, privileged=privileged, done=done
+            world,
+            harness,
+            embodiment,
+            dataset_writer,
+            time_mode,
+            privileged=privileged,
+            done=done,
+            gpu_monitor=gpu_monitor,
         )
         if gui is not None:
             # HACK: GUI cameras are matched to observations by the `image.` name prefix, which
@@ -110,10 +122,13 @@ def _run_world(
         # driver, and GUI placement is otherwise identical.
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         foreground = driver.control_systems if driver is not None else []
-        if embodiment.simulated:
-            world.run([*foreground, harness, ds_agent, *producers], gui)
-        else:
-            world.run([harness, *foreground], [*producers, ds_agent, gui])
+        # Start the GPU sampling thread before the World runs so it is already sampling during the
+        # harness's first synchronous reset (server startup + scene reset), and stop it after the run.
+        with gpu_monitor or nullcontext():
+            if embodiment.simulated:
+                world.run([*foreground, harness, ds_agent, gpu_monitor, *producers], gui)
+            else:
+                world.run([harness, *foreground], [*producers, ds_agent, gui])
 
 
 def main(
@@ -124,6 +139,7 @@ def main(
     driver: Callable[[Path | None], Driver] | None = None,
     output_dir: str | Path | None = None,
     show_gui: bool = False,
+    timing: bool = False,
 ):
     """Run inference for an embodiment, real or simulated.
 
@@ -134,6 +150,30 @@ def main(
     after the last World, so a multi-eval sweep reuses one live policy across the rebuilds.
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
+    # Timing is validated up front, before the policy warmup and the bind: a rejected sweep must fail
+    # before it spends anything.
+    if timing:
+        if output_dir is None:
+            raise ValueError('--timing needs --output_dir: the per-rollout telemetry is recorded into the dataset')
+        # Sim-only by construction: a real embodiment runs the recorder and producers as separate
+        # processes that do not inherit the timer context, so its episodes carry no timing signal. A
+        # mixed sweep still times its simulated evals; only a sweep with nothing to time fails.
+        if evals is not None:
+            simulated = [ev.embodiment.simulated for ev in evals]
+        else:
+            assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
+            simulated = [embodiment.simulated]
+        if not any(simulated):
+            raise ValueError(
+                'eval timing needs a simulated embodiment: a real embodiment carries no timing signal, and '
+                'this sweep has none to time. Drop --timing for a real run.'
+            )
+        if not all(simulated):
+            logger.warning(
+                'eval timing is sim-only: %d real embodiment(s) in this sweep run untimed; only the '
+                'simulated evals are timed.',
+                sum(not s for s in simulated),
+            )
 
     # Drive the policy's remote endpoints through their cold start before hardware and the operator
     # surface come up: opening a session blocks on the server handshake, which returns only once the
@@ -152,20 +192,34 @@ def main(
     # One completion sink — so one ``SampledPolicy`` counter — across every eval, keeping sampling balanced
     # over the whole sweep.
     on_complete = _completion_sink(policy)
+    # Bind one collector around the whole sweep, not per eval, so a mixed sweep's sim evals share one.
+    timing_cm = eval_timing.bind() if timing and output_dir is not None else nullcontext()
     try:
-        if driver is not None:
-            _run_world(policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete)
-        else:
-            for ev in evals:
-                _run_world(policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete)
+        with timing_cm:
+            if driver is not None:
+                assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
+                _run_world(
+                    policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete, timing
+                )
+            else:
+                assert evals is not None  # driver/evals XOR asserted up front
+                for ev in evals:
+                    _run_world(
+                        policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete, timing
+                    )
     finally:
         policy.close()
 
 
 @cfn.config(eval=placeholder, policy=policy_cfg.placeholder, show_gui=False)
-def run(eval: Eval, policy, show_gui, output_dir=None, inference_latency=False):
-    """Run a selected eval (embodiment + task + its trial sweep) through the shared inference harness."""
+def run(eval: Eval, policy, show_gui, output_dir=None, inference_latency=False, timing=False):
+    """Run a selected eval (embodiment + task + its trial sweep) through the shared inference harness.
+
+    ``timing`` records per-rollout wall-clock telemetry into the dataset under ``output_dir`` (a
+    ``timing.*`` signal + statics per episode); it needs an ``output_dir`` and applies to sim evals
+    only. Reduce it with ``positronic eval timing-report``.
+    """
     # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob
     # (sim inference-cost simulation). Overlay it onto every trial context, then self-drive the eval.
     eval = replace(eval, trials=[{**trial, 'inference_latency': inference_latency} for trial in eval.trials])
-    main(policy=policy, evals=[eval], show_gui=show_gui, output_dir=output_dir)
+    main(policy=policy, evals=[eval], show_gui=show_gui, output_dir=output_dir, timing=timing)

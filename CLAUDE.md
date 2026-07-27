@@ -25,11 +25,23 @@
   rather than adding to it
 
 # Design discipline
+- Land the correct design in the first PR. A change carrying a design or storage-model decision gets that decision
+  right up front — reject a wrong shape at design/review time; never merge a known-wrong approach and fix-forward or
+  revert it later
 - When a change has a design thesis ("World owns time", "Harness is name-free"), enumerate its consequences for
   every touched interface before coding, and implement the end state — old pathways (constructor args, public
   mutators, parallel flags) must not survive the refactor
 - Every value has one owner. When a value gains a new home, re-route consumers to it; don't plumb the new source
   into the old parameter
+- Persist through the existing dataset (signals, static, meta) for anything that fits it — per-step telemetry is a
+  time-series signal, per-episode facts are static/meta, and aggregates are an offline reduce/transform over that
+  raw data, never a stored record. Do not add a side storage or IO channel (a parallel file, a `*.jsonl`, a
+  separate serializer) unless the need fundamentally cannot be served by the dataset
+- A real-world signal (wall time, GPU/sensor load, latencies) is recorded raw at full fidelity — every sample with
+  its real timestamp — even under a virtual/simulated clock. That clock is a placement convenience, never a licence
+  to drop, downsample, or collapse real samples to fit the scheduler, nor to synthesize the timestamps that carry
+  their meaning: where the virtual timeline can't place a sample precisely, record its real time as data and let
+  consumers project it
 - When current code conflicts with the target design, resolve it now (rename + migrate) or bridge loudly with a
   TODO/HACK comment. Never bridge silently with an extra field, class, or indirection
 - Internal code breaks cleanly — no speculative compat shims. Before a migrate-everywhere change, grep for
