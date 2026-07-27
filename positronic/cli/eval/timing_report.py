@@ -286,6 +286,13 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
     passes = [p for p in spans if p.name == 'eval.pass']
     pass_ids = {p.span_id for p in passes}
     wall_pass = float(sum(_dur_s(p) for p in passes))
+    # A failed pass still reduces — its partial window, episodes and samples are real recorded data — but
+    # never silently: the mix is named so a skewed-looking split has its explanation on the console.
+    failed = sum(bool(p.attrs.get('pass.failed', False)) for p in passes)
+    if failed:
+        logger.warning(
+            '%d of %d pass(es) failed mid-run; their partial windows are included in the report', failed, len(passes)
+        )
     # Only episodes under a completed pass reduce: a killed run flushes its episodes but never writes its
     # ``eval.pass`` span, and such orphans would inflate every pass-normalized figure when the directory is
     # reused for a later run.
