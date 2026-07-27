@@ -96,6 +96,22 @@ def test_parse_renames_maps_renames_not_copies():
     assert ratchet._parse_renames(out) == {'moved.py': 'old.py'}
 
 
+def test_main_rejects_unreadable_working_baseline(monkeypatch):
+    # A PR that deletes or malforms the working baseline (while base still has it) must fail closed —
+    # otherwise the ratchet silently disables itself and the CI gate passes.
+    monkeypatch.setattr(ratchet, '_resolve_merge_base', lambda ref: 'basesha')
+    monkeypatch.setattr(ratchet, '_load_base_baseline', lambda base: {'files': {}})
+    monkeypatch.setattr(ratchet, '_load_working_baseline', lambda: None)
+    assert ratchet.main([]) == 1
+
+
+def test_main_fails_open_on_unresolvable_base(monkeypatch):
+    # An unresolvable base ref (offline, shallow history) stays fail-open so a local commit is never
+    # blocked; CI always has the base sha.
+    monkeypatch.setattr(ratchet, '_resolve_merge_base', lambda ref: None)
+    assert ratchet.main([]) == 0
+
+
 def test_base_ref_arg_wins_then_env_then_default():
     assert ratchet.resolve_base_ref('abc123', 'def456') == 'abc123'  # --base wins over env
     assert ratchet.resolve_base_ref(None, 'def456') == 'def456'  # RATCHET_BASE env used

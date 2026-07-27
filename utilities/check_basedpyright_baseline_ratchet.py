@@ -27,8 +27,12 @@ Residual: a swap WITHIN the same code — resolving one `reportReturnType` while
 baseline diff (entries re-anchor by column, so there is no stable position identity). Distinguishing
 it would require re-running basedpyright on both base and branch, out of scope for a fast guard.
 
-Fails open (exit 0, note on stderr) when the base ref or either baseline cannot be resolved, so an
-offline commit is never blocked; CI always has the base sha, where the gate holds.
+Fails open (exit 0, note on stderr) when the base ref cannot be resolved or the base baseline cannot
+be read (offline, shallow history, or the baseline being added for the first time), so an offline
+commit is never blocked and CI — which always has the base sha — is where the gate holds. But an
+unreadable *working* baseline fails closed (exit 1): reaching that check means the base baseline was
+readable, so a missing/malformed working copy means this change deleted or corrupted the guarded file
+and must not silently disable the ratchet.
 """
 
 import argparse
@@ -158,8 +162,12 @@ def main(argv: list[str]) -> int:
 
     current_baseline = _load_working_baseline()
     if current_baseline is None:
-        print(f'baseline-ratchet: could not read working-tree {BASELINE_PATH}; skipping check', file=sys.stderr)
-        return 0
+        # Reaching here means the base baseline WAS readable, so an unreadable working baseline means
+        # this change deleted or malformed it — a hole in the guarded file itself. Fail closed (unlike
+        # the fail-open base-ref/base-baseline cases above, which are legitimate offline/first-add).
+        print(f'baseline-ratchet: working-tree {BASELINE_PATH} is missing or malformed but exists at', file=sys.stderr)
+        print(f'{base} — the ratchet cannot run; restore or fix the baseline instead of removing it.', file=sys.stderr)
+        return 1
 
     grown = grown_files(base_baseline, current_baseline, build_rename_map(base))
     if not grown:
