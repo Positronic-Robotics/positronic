@@ -1,4 +1,6 @@
 import logging
+from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from typing import Any
@@ -162,11 +164,15 @@ class DsWriterAgent(pimm.ControlSystem):
         poll_hz: float = 1000.0,
         time_mode: TimeMode = TimeMode.CLOCK,
         virtual_time: bool = False,
+        io_span: Callable[[], AbstractContextManager[Any]] = nullcontext,
     ):
         self.ds_writer = ds_writer
         self._poll_hz = float(poll_hz)
         self._time_mode = time_mode
         self._virtual_time = virtual_time
+        # An opaque "time my IO" context factory wrapped around the writer's serialize+append work; the
+        # default is inert. The caller decides what it measures — the writer never learns.
+        self._io_span = io_span
         self.command = pimm.ControlSystemReceiver[DsWriterCommand](self, default=None)
 
         self._inputs: dict[str, pimm.ControlSystemReceiver[Any]] = {}
@@ -215,7 +221,7 @@ class DsWriterAgent(pimm.ControlSystem):
                         # normally.
                         after_start = not opened or msg.ts > cmd_msg.ts
                         before_stop = not closing or msg.ts <= cmd_msg.ts
-                        if msg.updated and after_start and before_stop:
+                        if msg is not None and msg.updated and after_start and before_stop:
                             world_time_ns, message_time_ns = clock.now_ns(), msg.ts
                             primary_ts = world_time_ns if self._time_mode == TimeMode.CLOCK else message_time_ns
 
@@ -224,18 +230,19 @@ class DsWriterAgent(pimm.ControlSystem):
                             if not isinstance(clock, pimm.world.SystemClock):
                                 extra_ts['world'] = world_time_ns
 
-                            serializer = self._serializers.get(name)
-                            value = msg.data
-                            if serializer is not None:
-                                value = serializer(value)
-                            # Gate on `Timestamped` so plain list-valued samples
-                            # (e.g. list-state vectors) still go through `_append`.
-                            # Empty list matches too — used as the cancel signal.
-                            if isinstance(value, list) and (not value or isinstance(value[0], Timestamped)):
-                                for sample in value:
-                                    _append(ep_writer, name, sample.value, sample.ts, None)
-                            else:
-                                _append(ep_writer, name, value, primary_ts, extra_ts)
+                            with self._io_span():
+                                serializer = self._serializers.get(name)
+                                value = msg.data
+                                if serializer is not None:
+                                    value = serializer(value)
+                                # Gate on `Timestamped` so plain list-valued samples
+                                # (e.g. list-state vectors) still go through `_append`.
+                                # Empty list matches too — used as the cancel signal.
+                                if isinstance(value, list) and (not value or isinstance(value[0], Timestamped)):
+                                    for sample in value:
+                                        _append(ep_writer, name, sample.value, sample.ts, None)
+                                else:
+                                    _append(ep_writer, name, value, primary_ts, extra_ts)
 
                 if closing:
                     ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts)
@@ -270,9 +277,10 @@ class DsWriterAgent(pimm.ControlSystem):
                     logger.warning('Episode already started, ignoring start command')
             case DsWriterCommandType.STOP_EPISODE:
                 if ep_writer is not None:
-                    for name, ser in self._serializers.items():
-                        for sample in ser.flush(now_ns):
-                            _append(ep_writer, name, sample.value, sample.ts, None)
+                    with self._io_span():
+                        for name, ser in self._serializers.items():
+                            for sample in ser.flush(now_ns):
+                                _append(ep_writer, name, sample.value, sample.ts, None)
                     for k, v in cmd.static_data.items():
                         ep_writer.set_static(k, v)
                     ep_writer.__exit__(None, None, None)
