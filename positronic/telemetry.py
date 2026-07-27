@@ -53,9 +53,14 @@ _current_pass: Span | None = None
 _current_episode: Span | None = None
 
 
+# The unbound fallback is a PRIVATE no-op, never ``trace.get_tracer``: a host application embedding this code
+# may have configured OTel's global provider, and an untimed run must not export spans through it.
+_NOOP_TRACER = trace.NoOpTracer()
+
+
 def _tracer() -> trace.Tracer:
-    """The bound provider's tracer while a run is timed, else the API default (a no-op tracer)."""
-    return _provider.get_tracer(_SCOPE) if _provider is not None else trace.get_tracer(_SCOPE)
+    """The bound provider's tracer while a run is timed, else a private no-op tracer."""
+    return _provider.get_tracer(_SCOPE) if _provider is not None else _NOOP_TRACER
 
 
 def _attr_value(value: Any) -> Any:
@@ -114,13 +119,18 @@ def force_flush() -> None:
 
 
 def _per_tick_parent() -> Any:
-    """The parent context for a per-tick span: the episode in flight (else the pass) when no OTel span is
-    currently active, so a span opened between scheduler hops parents to the episode; ``None`` while a span is
-    active, so a nested span parents to it through the ambient context."""
-    if trace.get_current_span().get_span_context().is_valid:
+    """The parent context for a per-tick span. A currently-active span of THIS provider's trace means a
+    genuinely nested span (materialize inside env.step) — ``None`` lets it parent ambiently. Otherwise the
+    span parents to the episode in flight (else the pass): between scheduler hops nothing of ours is current,
+    and a host application's unrelated current span must not adopt telemetry spans — they would leave the
+    trace the report reduces. With no pass or episode open there is nothing to anchor to; ambient stands."""
+    anchor = _current_episode if _current_episode is not None else _current_pass
+    if anchor is None:
         return None
-    parent = _current_episode if _current_episode is not None else _current_pass
-    return trace.set_span_in_context(parent) if parent is not None else None
+    current = trace.get_current_span().get_span_context()
+    if current.is_valid and current.trace_id == anchor.get_span_context().trace_id:
+        return None
+    return trace.set_span_in_context(anchor)
 
 
 def span(name: str, **attrs: Any):

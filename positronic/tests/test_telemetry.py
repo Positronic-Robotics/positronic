@@ -3,6 +3,7 @@ import os
 import time
 
 import pynvml
+from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
 
 from positronic import telemetry
 
@@ -85,6 +86,34 @@ class _FakeProc:
     def __init__(self, pid, used):
         self.pid = pid
         self.usedGpuMemory = used
+
+
+def test_unbound_span_never_touches_global_tracer(monkeypatch):
+    """Unbound telemetry is a PRIVATE no-op: a host application may have configured OTel's global tracer
+    provider, and an untimed run must not export spans (or trial attributes) through it."""
+
+    def _boom(*args, **kwargs):
+        raise AssertionError('unbound telemetry must not consult the global tracer provider')
+
+    monkeypatch.setattr(telemetry.trace, 'get_tracer', _boom)
+    with telemetry.span('reset', **{'episode.index': 0}):
+        pass
+
+
+def test_per_tick_span_ignores_foreign_ambient_span(tmp_path):
+    """A host application's current OTel span (a different provider, a different trace) must not adopt our
+    per-tick spans: they parent to the episode in flight, so the report still sees them."""
+    foreign = SdkTracerProvider()
+    with telemetry.bind(tmp_path, 'harness', 'run-foreign'):
+        episode = telemetry.begin_episode(**{'episode.index': 0})
+        with foreign.get_tracer('host-app').start_as_current_span('host-span'):
+            with telemetry.span('env.step'):
+                pass
+        telemetry.end_episode(episode, **{'episode.steps': 1, 'episode.virtual_s': 0.0})
+
+    spans = {s.name: s for s in telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl')}
+    assert 'host-span' not in spans  # the foreign span belongs to the host's provider, not our file
+    assert spans['env.step'].parent_id == spans['episode'].span_id
 
 
 def _install_fake_nvml(monkeypatch):
