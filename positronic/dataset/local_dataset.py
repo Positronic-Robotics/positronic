@@ -86,6 +86,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         on_close: Callable[[DiskEpisodeWriter], None] | None = None,
         created_ts_ns: int | None = None,
         uid: str | None = None,
+        video_options: dict[str, str] | None = None,
     ) -> None:
         """Initialize episode writer.
 
@@ -96,6 +97,7 @@ class DiskEpisodeWriter(EpisodeWriter):
                 Use this to preserve original creation time during migration.
             uid: Optional episode identity (defaults to a fresh uuid4 hex).
                 Use this to preserve identity when copying an existing recording.
+            video_options: Optional encoder options for video signals; None keeps the codec defaults.
         """
         self._path = directory
         assert not self._path.exists(), f'Writing to existing directory {self._path}'
@@ -109,6 +111,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._finished = False
         self._aborted = False
         self._on_close = on_close
+        self._video_options = video_options
 
         # Write system metadata immediately
         # NB: falsy created_ts_ns (including 0) defaults to current time — epoch 0 is not a valid episode timestamp
@@ -147,7 +150,9 @@ class DiskEpisodeWriter(EpisodeWriter):
                 # Image signal -> route to video writer
                 video_path = self._path / f'{signal_name}.mp4'
                 frames_index = self._path / f'{signal_name}.frames.parquet'
-                self._writers[signal_name] = VideoSignalWriter(video_path, frames_index)
+                self._writers[signal_name] = VideoSignalWriter(
+                    video_path, frames_index, codec_options=self._video_options
+                )
             else:
                 # Scalar/vector signal
                 self._writers[signal_name] = SimpleSignalWriter(self._path / f'{signal_name}.parquet')
@@ -494,10 +499,11 @@ class LocalDatasetWriter(DatasetWriter):
       DiskEpisodeWriter.
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, video_options: dict[str, str] | None = None) -> None:
         self.root = root.expanduser()
         self.root.mkdir(parents=True, exist_ok=True)
         self._next_episode_id = self._compute_next_episode_id()
+        self._video_options = video_options
 
     def _compute_next_episode_id(self) -> int:
         max_id = -1
@@ -529,7 +535,7 @@ class LocalDatasetWriter(DatasetWriter):
         # responsible for creating it and expects it to not exist yet.
         ep_dir = block_dir / f'{eid:012d}'
 
-        writer = DiskEpisodeWriter(ep_dir, created_ts_ns=created_ts_ns, uid=uid)
+        writer = DiskEpisodeWriter(ep_dir, created_ts_ns=created_ts_ns, uid=uid, video_options=self._video_options)
         return writer
 
     def __exit__(self, exc_type, exc, tb) -> None:
