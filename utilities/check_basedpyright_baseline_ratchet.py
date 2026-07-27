@@ -77,26 +77,32 @@ def resolve_base_ref(arg: str | None, env: str | None) -> str:
 
 
 def _parse_renames(out: str | None) -> dict[str, str]:
-    """Parse `git diff --name-status -M -C` output into new path -> base path (git-style)."""
+    """Parse `git diff --name-status -M` output into new path -> base path (git-style).
+
+    Only `R` (rename) is mapped, never `C` (copy): a rename moves a file's entries to a new key, so
+    the new path must inherit the base counts; a copy leaves the source in place and duplicates its
+    diagnostics into a genuinely new file, which must face the new-file check, not reuse the source's
+    grandfathered allowances.
+    """
     renames: dict[str, str] = {}
     for line in (out or '').splitlines():
         parts = line.split('\t')
-        if len(parts) == 3 and parts[0][:1] in ('R', 'C'):
+        if len(parts) == 3 and parts[0][:1] == 'R':
             _status, old, new = parts
             renames[new] = old
     return renames
 
 
 def build_rename_map(base: str) -> dict[str, str]:
-    """Map new path -> base path for files renamed/copied from `base` to the commit under check.
+    """Map new path -> base path for files renamed from `base` to the commit under check.
 
     Unions committed renames (`base..HEAD`) with staged renames (`base` vs the index): under
     pre-commit the rename is staged but not yet in HEAD, so `--cached` is what carries it; in CI
     HEAD already holds it. Staged entries win on conflict, matching the tree being committed. Fails
     open (empty map) if the git calls fail, so rename-detection trouble never blocks a commit.
     """
-    committed = _parse_renames(_run_git('diff', '--name-status', '-M', '-C', base, 'HEAD'))
-    staged = _parse_renames(_run_git('diff', '--cached', '--name-status', '-M', '-C', base))
+    committed = _parse_renames(_run_git('diff', '--name-status', '-M', base, 'HEAD'))
+    staged = _parse_renames(_run_git('diff', '--cached', '--name-status', '-M', base))
     return {**committed, **staged}
 
 
