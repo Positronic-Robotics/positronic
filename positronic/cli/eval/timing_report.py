@@ -121,17 +121,21 @@ def _read_stats_dir(telemetry_dir: Path) -> list[dict]:
 
 
 def _gpu_summary_from_stats(stats: list[dict]) -> GpuSummary | None:
-    """The sim box's GPU summary from the machine-load stream: mean utilisation, peak whole-box VRAM, and this
-    eval's peak process-tree VRAM. ``None`` when no sample carried a GPU (a CPU sim box)."""
+    """The sim box's GPU summary from the machine-load stream: mean utilisation over every per-GPU reading,
+    and peak VRAM as the box-wide total — each sample's devices summed first, then the max over samples, so a
+    multi-GPU box's peak is what the box held at one instant, not the largest single device. ``None`` when no
+    sample carried a GPU (a CPU sim box)."""
     utils: list[float] = []
     mem: list[float] = []
     proc: list[float] = []
     for sample in stats:
-        for gpu in sample.get('gpus', []):
-            utils.append(float(gpu['util_pct']))
-            mem.append(float(gpu['mem_used_b']))
-            if gpu.get('proc_mem_b') is not None:
-                proc.append(float(gpu['proc_mem_b']))
+        gpus = sample.get('gpus', [])
+        utils.extend(float(gpu['util_pct']) for gpu in gpus)
+        if gpus:
+            mem.append(sum(float(gpu['mem_used_b']) for gpu in gpus))
+        proc_per_gpu = [float(gpu['proc_mem_b']) for gpu in gpus if gpu.get('proc_mem_b') is not None]
+        if proc_per_gpu:
+            proc.append(sum(proc_per_gpu))
     if not utils and not mem:
         return None
     return GpuSummary(
