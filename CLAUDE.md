@@ -30,6 +30,9 @@
   mutators, parallel flags) must not survive the refactor
 - Every value has one owner. When a value gains a new home, re-route consumers to it; don't plumb the new source
   into the old parameter
+- The dataset records the robot's world (signals/static/meta). Operational telemetry — wall time, machine load,
+  latencies — is observability, not data: it lives in sidecar files owned by `positronic/telemetry.py`, is
+  wall-clock native, and is never a dataset signal; the pass report is an offline reduce over those raw files
 - When current code conflicts with the target design, resolve it now (rename + migrate) or bridge loudly with a
   TODO/HACK comment. Never bridge silently with an extra field, class, or indirection
 - Internal code breaks cleanly — no speculative compat shims. Before a migrate-everywhere change, grep for

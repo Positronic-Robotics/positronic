@@ -133,3 +133,13 @@ rollout, many cheap criteria experiments. A stop-signal may end a trial early, a
 may report its own success at termination; both are captured as original data from where the
 ground truth lives, not as scores — analysis is free to use, recompute, or override them. A
 criterion baked into the run is bound too early: changing it would mean re-running the robot.
+
+**Telemetry is observability, not data.** The dataset is the recording of the robot's world under the
+run's clock, which for a sim eval is virtual and may be slowed, frozen or replayed. Operational
+telemetry — the wall-clock cost of each phase, machine load, inference latency — describes the
+machinery around that world, and it only means something in wall time. Marrying the two forces a
+virtual clock onto wall-clock measurements (a slowed sim would report inflated compute cost) and
+leaks a timing vocabulary into the dataset core. Hence telemetry is a set of sidecar files, per
+process, next to the dataset but never inside it: nested spans for the phase split and a free-running
+machine-load sampler, wall-clock native, owned by `positronic/telemetry.py`. The pass report is an
+offline reduce over those raw files, so nothing is stored twice and the dataset stays clock-agnostic.
