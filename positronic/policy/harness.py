@@ -439,6 +439,10 @@ class Harness(pimm.ControlSystem):
 
         if self._running:
             self._finalize_recording()
+            # Let the recorder commit the queued STOP while the episode span is still open — the same close
+            # order as ``_end_episode`` — so its shutdown-flush record.io span parents to the episode, not
+            # the pass.
+            yield self._pace()
             self._end_episode_span(clock, abort=False)
         if self._session:
             self._session.close()

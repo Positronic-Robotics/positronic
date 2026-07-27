@@ -1,5 +1,6 @@
 from functools import partial
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -1228,6 +1229,64 @@ def test_shutdown_cancels_trajectory_before_stop(world):
 
 
 @pytest.mark.timeout(5.0)
+class _ManualClock:
+    """A self-advancing clock for driving ``Harness.run`` directly, without a world."""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def now(self) -> float:
+        self.t += 0.001
+        return self.t
+
+    def now_ns(self) -> int:
+        return int(self.now() * 1e9)
+
+
+@pytest.mark.timeout(3.0)
+def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(tmp_path):
+    """A stop arriving mid-episode winds down through the same close order as ``_end_episode``: the harness
+    yields a turn between queueing the recorder's STOP and closing the episode span, so the recorder's
+    shutdown-flush ``record.io`` span parents to the episode, not the pass. Driven straight through the
+    generator protocol: the yield after the queued STOP is the recorder's flush slot."""
+    policy = StubPolicy()
+    task = Task(instruction='stack', timeout=10.0, reset=lambda context: None)  # never ends within the drive
+    harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
+    ds_recorder = RecordingEmitter()
+    harness.ds_command._bind(ds_recorder)
+    stop = SimpleNamespace(value=False)
+    clock = _ManualClock()
+
+    with telemetry.bind(tmp_path, 'harness', 'run-stop'), telemetry.eval_pass(**{'run.id': 'run-stop'}):
+        gen = harness.run(cast(pimm.SignalReceiver, stop), cast(pimm.Clock, clock))
+        for _ in range(20):
+            next(gen)
+            if any(d.type == DsWriterCommandType.START_EPISODE for _, d in ds_recorder.emitted):
+                break
+        else:
+            pytest.fail('the self-driven trial never started')
+
+        stop.value = True
+        try:
+            next(gen)  # the post-STOP yield: the turn the recorder commits the queued STOP on
+        except StopIteration:
+            pytest.fail('harness must yield a recorder turn between queueing STOP and ending the episode span')
+        assert any(d.type == DsWriterCommandType.STOP_EPISODE for _, d in ds_recorder.emitted)
+        with telemetry.span('record.io'):  # the recorder's shutdown flush, emitted in that turn
+            pass
+        with pytest.raises(StopIteration):
+            while True:
+                next(gen)
+
+    spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
+    episodes = [s for s in spans if s.name == 'episode']
+    assert len(episodes) == 1
+    episode = episodes[0]
+    assert 'episode.steps' in episode.attrs  # sealed via end_episode, neither leaked open nor aborted
+    flushes = [s for s in spans if s.name == 'record.io']
+    assert flushes and all(s.parent_id == episode.span_id for s in flushes)
+
+
 def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     """Under ``telemetry.bind`` a self-driven episode writes the span taxonomy to the harness file: the
     episode parents to the pass, and reset + policy.infer parent to the episode, with the episode carrying its
