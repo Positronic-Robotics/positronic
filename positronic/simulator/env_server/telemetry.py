@@ -50,6 +50,20 @@ def _otlp_value(value: Any) -> dict[str, Any]:
     return {'stringValue': json.dumps(value)}
 
 
+def _seal_truncated_line(path: Path) -> None:
+    """Seal a predecessor's truncated final line (a killed run can die mid-write) with a newline before
+    appending, so the first new record does not merge into the fragment and get skipped along with it."""
+    try:
+        with open(path, 'rb') as file:
+            file.seek(-1, os.SEEK_END)
+            sealed = file.read(1) == b'\n'
+    except (FileNotFoundError, OSError):
+        return  # absent or empty: nothing to seal
+    if not sealed:
+        with open(path, 'ab') as file:
+            file.write(b'\n')
+
+
 def _otlp_attributes(attrs: dict[str, Any]) -> list[dict[str, Any]]:
     return [{'key': key, 'value': _otlp_value(value)} for key, value in attrs.items()]
 
@@ -79,6 +93,7 @@ def bind(telemetry_dir: Path | str, run_id: str):
     (directory / 'env.meta.json').write_text(json.dumps(meta, indent=2))
     _trace_id = os.urandom(16).hex()
     _resource_attrs = _otlp_attributes({'run.id': run_id, 'process.name': 'env', 'host.name': host})
+    _seal_truncated_line(directory / 'env.spans.jsonl')
     _file = open(directory / 'env.spans.jsonl', 'a')
     try:
         yield
