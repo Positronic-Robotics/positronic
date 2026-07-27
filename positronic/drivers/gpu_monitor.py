@@ -6,18 +6,20 @@ MiB) and ``timing.gpu_mem_proc`` (the memory attributed to this eval's process t
 *utilisation* is deliberately not attempted — it is unreliable under MPS / co-location — so only memory is
 attributed.
 
-``start`` spins a background daemon thread that does the blocking ``nvidia-smi`` reads at true wall cadence
-into a shared latest sample; it is started before the World runs so the thread is already sampling during
-the harness's first synchronous reset. The cooperative ``run`` loop drains that latest sample every
-scheduler tick and emits it when the thread has published a new one, stamped by the world clock. A sim eval
-runs on a virtual clock, so an async sample has no wall->virtual mapping — sampling in the thread and
-stamping with the world clock is what keeps the sample inside the episode bounds (the recorder also records
-the real epoch in ``extra_ts['system']``). With no ``nvidia-smi`` on PATH the system is inert (a CPU box):
-no thread starts, it emits nothing, and it keeps yielding so it never stops the eval.
+``start`` spins a background daemon thread that does the blocking ``nvidia-smi`` reads at true wall cadence,
+appending each probe to a buffer; it is started before the World runs so the thread is already sampling
+during the harness's first synchronous reset. The cooperative ``run`` loop drains the whole buffer every
+scheduler tick and emits the probes as one timestamped batch, so every probe is retained — a synchronous
+span longer than the sampling interval (a long reset or env step) no longer collapses to a single reading.
+Each probe carries its real capture wall-clock time as a ``timing.gpu_wall_ns`` value, so a reducer
+reconstructs the true load-over-time from that. With no ``nvidia-smi`` on PATH the system is inert (a CPU
+box): no thread starts, it emits nothing, and it keeps yielding so it never stops the eval.
 
-A GPU sample taken while the scheduler is blocked in a synchronous span (a long reset or env step) is
-captured by the thread but only emitted — collapsed to the latest — once the loop next runs, so the load is
-recorded but not finely placed on the virtual timeline (inherent to the cooperative scheduler).
+A sim eval runs on a virtual clock that is frozen while the scheduler is blocked in a synchronous span, so a
+batch's probes cannot each get a distinct virtual instant; they are placed at the drain instant with strictly
+increasing timestamps (which the signal writer requires) while their real capture times ride in the
+``timing.gpu_wall_ns`` values. The virtual placement is therefore coarse for a blocked span, but no probe and
+no value is lost.
 """
 
 import logging
@@ -25,22 +27,25 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pimm
+from positronic.dataset.serializers import Timestamped
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class _GpuSample:
-    """One box GPU reading: whole-box utilisation (%), whole-box memory used (MiB), and the memory used by
-    this eval's process tree (MiB)."""
+    """One box GPU reading: whole-box utilisation (%), whole-box memory used (MiB), the memory used by this
+    eval's process tree (MiB), and the real wall-clock time it was captured (epoch ns)."""
 
     util_pct: float
     mem_mib: float
     proc_mem_mib: float
+    wall_ns: int
 
 
 def _run_nvidia_smi(args: list[str]) -> str | None:
@@ -96,12 +101,13 @@ def _read_gpu_sample(device: str) -> _GpuSample | None:
                 proc_mib += float(used_s)  # ``[Not Supported]`` / permission strings raise and are skipped
         except ValueError:
             continue
-    return _GpuSample(util_pct=float(util_s), mem_mib=float(mem_s), proc_mem_mib=proc_mib)
+    return _GpuSample(util_pct=float(util_s), mem_mib=float(mem_s), proc_mem_mib=proc_mib, wall_ns=time.time_ns())
 
 
 class GpuMonitor(pimm.ControlSystem):
-    """Samples the box's GPU and emits a bundled ``timing.gpu`` sample the recorder fans out to
-    ``timing.gpu_*``. ``sampling_hz`` is the wall cadence of the underlying ``nvidia-smi`` reads."""
+    """Samples the box's GPU and emits the probes buffered since the last tick as one batch of ``timing.gpu``
+    samples the recorder fans out to ``timing.gpu_*`` (``_util``, ``_mem``, ``_mem_proc``, ``_wall_ns``).
+    ``sampling_hz`` is the wall cadence of the underlying ``nvidia-smi`` reads."""
 
     def __init__(self, sampling_hz: float = 1.0):
         self._interval = 1.0 / sampling_hz
@@ -109,8 +115,8 @@ class GpuMonitor(pimm.ControlSystem):
         # nvidia-smi reports every visible GPU and idle/unrelated devices would dilute the numbers.
         self._device = (os.environ.get('CUDA_VISIBLE_DEVICES', '') or '0').split(',')[0]
         self._lock = threading.Lock()
-        self._latest: _GpuSample | None = None
-        self._seq = 0
+        self._buffer: list[_GpuSample] = []
+        self._last_emit_ts = 0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.output = pimm.ControlSystemEmitter(self)
@@ -120,8 +126,7 @@ class GpuMonitor(pimm.ControlSystem):
             sample = _read_gpu_sample(self._device)
             if sample is not None:
                 with self._lock:
-                    self._latest = sample
-                    self._seq += 1
+                    self._buffer.append(sample)
             self._stop.wait(self._interval)
 
     def start(self) -> None:
@@ -149,17 +154,34 @@ class GpuMonitor(pimm.ControlSystem):
     def __exit__(self, *exc: object) -> None:
         self.stop()
 
+    def _drain_batch(self, now_ns: int) -> list[Timestamped]:
+        """Every probe buffered since the last tick as one timestamped batch, retaining all of them (a
+        blocked span's probes are not collapsed to the latest). The virtual clock is frozen during a blocked
+        span, so the probes share one instant; they are placed at ``now_ns`` with strictly increasing ts (what
+        the signal writer requires) while each carries its real capture wall-ns as ``timing.gpu_wall_ns`` data,
+        from which a reducer recovers the true load-over-time regardless of the coarse virtual placement."""
+        with self._lock:
+            batch, self._buffer = self._buffer, []
+        samples = []
+        for probe in batch:
+            ts = max(now_ns, self._last_emit_ts + 1)
+            self._last_emit_ts = ts
+            value = {
+                '_util': probe.util_pct,
+                '_mem': probe.mem_mib,
+                '_mem_proc': probe.proc_mem_mib,
+                '_wall_ns': probe.wall_ns,
+            }
+            samples.append(Timestamped(ts, value))
+        return samples
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        # Yield every scheduler round (not a Sleep(interval)): the wall cadence lives in the sampling
-        # thread, so the loop only drains the latest sample and emits it once per new seq. The sim
-        # simulator sleeps each step and paces the clock, so this Yield is a non-pacing participant.
-        emitted_seq = 0
+        # Yield every scheduler round (not a Sleep(interval)): the wall cadence lives in the sampling thread,
+        # so the loop drains every probe buffered since the last tick and emits them as one timestamped batch.
+        # Probes captured while the scheduler was blocked in a synchronous span are all retained, not collapsed
+        # to the latest. The sim simulator sleeps each step and paces the clock, so this Yield is non-pacing.
         while not should_stop.value:
-            with self._lock:
-                seq, sample = self._seq, self._latest
-            if sample is not None and seq != emitted_seq:
-                emitted_seq = seq
-                self.output.emit(
-                    {'_util': sample.util_pct, '_mem': sample.mem_mib, '_mem_proc': sample.proc_mem_mib}, clock.now_ns()
-                )
+            batch = self._drain_batch(clock.now_ns())
+            if batch:
+                self.output.emit(batch, clock.now_ns())
             yield pimm.Yield()

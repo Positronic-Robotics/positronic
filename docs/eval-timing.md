@@ -29,12 +29,14 @@ This records the telemetry into each episode of the dataset — no side files:
   disjoint step decomposition as `timing.env_*` phases) plus one `timing.infer_ms` sample per policy
   round-trip.
 - `timing.gpu_*` signals — the eval box's GPU, sampled ~1 Hz by a foreground control system: `timing.gpu_util`
-  (whole-box utilisation %), `timing.gpu_mem` (whole-box memory used, MiB), and `timing.gpu_mem_proc` (the
-  memory attributed to **this eval's process tree** — the harness and its env-server/Isaac children, MiB).
-  Absent on a box without `nvidia-smi`. A wall-cadence background thread does the sampling and the
-  cooperative loop emits the latest sample each tick, so GPU taken while the scheduler is blocked in a
-  synchronous span (a long reset or env step) is captured but only placed on the virtual timeline — collapsed
-  to the latest — once the loop next runs.
+  (whole-box utilisation %), `timing.gpu_mem` (whole-box memory used, MiB), `timing.gpu_mem_proc` (the memory
+  attributed to **this eval's process tree** — the harness and its env-server/Isaac children, MiB), and
+  `timing.gpu_wall_ns` (the real epoch each probe was captured at). Absent on a box without `nvidia-smi`. A
+  wall-cadence background thread does the sampling into a buffer and the cooperative loop drains every buffered
+  probe each tick, so GPU taken while the scheduler is blocked in a synchronous span (a long reset or env step)
+  is retained in full — the readings are all recorded, and `timing.gpu_wall_ns` carries each probe's true
+  capture time, so a reducer reconstructs the real load-over-time even though the virtual placement of a
+  blocked span's probes is coarse (they share the drain instant).
 - `timing.wall_s` / `timing.finished_at` / `timing.reset_s` statics — the once-per-episode wall scalars.
 
 **Concurrent-sim footgun:** `timing.gpu_util` and `timing.gpu_mem` are **whole-box** — they measure the whole
