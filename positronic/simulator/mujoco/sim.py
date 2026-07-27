@@ -7,7 +7,7 @@ import mujoco as mj
 import numpy as np
 
 import pimm
-from positronic import geom
+from positronic import geom, telemetry
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.ik import qpos_from_site_pose
@@ -176,7 +176,10 @@ class MujocoSim(pimm.ControlSystem):
                 # the recorder samples it before any step advances the sim. ``reset`` already loaded the scene.
                 self._reset_pending = False
                 self._emit_robot_meta()
-                self._publish_frame()
+                # Frame-0 rendering is part of the reset cost, not overhead: the remote path likewise charges
+                # its reset's rendered first observation to reset, so time this publish there too.
+                with telemetry.span('reset'):
+                    self._publish_frame()
                 continue
             now = clock.now()
             cmd_msg = self.commands.read()
@@ -199,16 +202,21 @@ class MujocoSim(pimm.ControlSystem):
                 self._last_grip = grip
             self._apply_grip(self._last_grip)
 
-            self.step()
-            self.fps_counter.tick()
-            if state_due(now):
-                self._emit_state()
-            if grip_due(now):
-                self._emit_grip()
-            if sim_state_due(now):
-                self._emit_sim_state()
-            if cameras_due(now):
-                self._emit_cameras()
+            # Charge the sim advance and the observation production it feeds (notably ``_emit_cameras`` ->
+            # rendering) to the env step: the remote env-server path times its whole step, which returns
+            # rendered observations, so an image-heavy native sim must count rendering here too or its wall
+            # split reads rendering as overhead and is not comparable to the remote path.
+            with telemetry.span('env.step'):
+                self.step()
+                self.fps_counter.tick()
+                if state_due(now):
+                    self._emit_state()
+                if grip_due(now):
+                    self._emit_grip()
+                if sim_state_due(now):
+                    self._emit_sim_state()
+                if cameras_due(now):
+                    self._emit_cameras()
 
         if self._renderer is not None:
             self._renderer.close()
