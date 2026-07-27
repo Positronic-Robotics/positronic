@@ -1368,22 +1368,6 @@
                     "endColumn": 41,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 31,
-                    "endColumn": 41,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalIterable",
-                "range": {
-                    "startColumn": 22,
-                    "endColumn": 27,
-                    "lineCount": 1
-                }
             }
         ],
         "./positronic/data_collection.py": [
@@ -9362,10 +9346,10 @@
         ],
         "./positronic/simulator/env_server/proxy.py": [
             {
-                "code": "reportOptionalSubscript",
+                "code": "reportIncompatibleMethodOverride",
                 "range": {
-                    "startColumn": 39,
-                    "endColumn": 50,
+                    "startColumn": 8,
+                    "endColumn": 11,
                     "lineCount": 1
                 }
             },

@@ -109,17 +109,31 @@ def force_flush() -> None:
         _provider.force_flush()
 
 
+def _per_tick_parent() -> Any:
+    """The parent context for a per-tick span: the episode in flight (else the pass) when no OTel span is
+    currently active, so a span opened between scheduler hops parents to the episode; ``None`` while a span is
+    active, so a nested span parents to it through the ambient context."""
+    if trace.get_current_span().get_span_context().is_valid:
+        return None
+    parent = _current_episode if _current_episode is not None else _current_pass
+    return trace.set_span_in_context(parent) if parent is not None else None
+
+
 def span(name: str, **attrs: Any):
     """A wall-clock span named ``name``, entered as the current span for the enclosed block. A per-tick span
     (no OTel span currently active) parents to the episode in flight; a span opened inside another parents to
     it. A no-op while unbound."""
-    context = None
-    current = trace.get_current_span()
-    if not current.get_span_context().is_valid:
-        parent = _current_episode if _current_episode is not None else _current_pass
-        if parent is not None:
-            context = trace.set_span_in_context(parent)
-    return _tracer().start_as_current_span(name, context=context, attributes=_encode_attrs(attrs))
+    return _tracer().start_as_current_span(name, context=_per_tick_parent(), attributes=_encode_attrs(attrs))
+
+
+def record_span(name: str, start_ns: int, end_ns: int, **attrs: Any) -> None:
+    """Record an already-elapsed span with explicit wall-clock bounds — for a phase whose emit is decided only
+    after it ran (a policy round-trip that turned out to be a real inference, not a scheduler replay). Parents
+    like a per-tick ``span``. A no-op while unbound."""
+    recorded = _tracer().start_span(
+        name, context=_per_tick_parent(), start_time=start_ns, attributes=_encode_attrs(attrs)
+    )
+    recorded.end(end_time=end_ns)
 
 
 @contextmanager

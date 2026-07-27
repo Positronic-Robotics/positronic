@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from opentelemetry.trace import Span
+
 import pimm
-from positronic import keys
+from positronic import keys, telemetry
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.eval import Embodiment, Task
@@ -110,6 +112,12 @@ class Harness(pimm.ControlSystem):
         # A trial with a task is bounded by ``task.timeout``, set per episode; a task-less attended
         # session has no deadline and is ended by directives.
         self._deadline: float | None = None
+        # Wall-clock telemetry for the live rollout (opened under ``--timing``, inert otherwise): the
+        # episode span, its 0-based index, its control-step count, and the virtual instant it began.
+        self._episode_span: Span | None = None
+        self._episode_index = -1
+        self._episode_steps = 0
+        self._episode_virtual_start = 0.0
 
         self._descriptor = embodiment.descriptor
         self.observations = pimm.ReceiverDict(self)
@@ -214,16 +222,25 @@ class Harness(pimm.ControlSystem):
         self.context = context
         # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
         self._inference_latency = self.context.get('inference_latency', False)
+        # Open the episode span before the reset so the per-tick spans (reset, env.step, policy.infer,
+        # record.io) parent to it; stamp the index and the flat trial-context keys.
+        self._episode_index += 1
+        self._episode_steps = 0
+        episode_attrs: dict[str, Any] = {'episode.index': self._episode_index}
+        episode_attrs.update({k: v for k, v in context.items() if isinstance(v, (bool, int, float, str))})
+        self._episode_span = telemetry.begin_episode(**episode_attrs)
         # Reset the scene before opening the session: a resettable task only learns its instruction on reset
         # (a remote env reports it then), so the session context — and the task-grouped sampling/counting it
         # drives — must read the instruction here, once it is known.
         if self._task is not None and self._task.reset is not None:
-            self._task.reset(self.context)
+            with telemetry.span('reset'):
+                self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
         self._session = self.policy.new_session(self.context, clock.now)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
+        self._episode_virtual_start = clock.now()
         self.ds_command.emit(DsWriterCommand.START())
 
     def _end_episode(
@@ -245,11 +262,28 @@ class Harness(pimm.ControlSystem):
             # without a tick between, last-value-wins would drop one) and before the home command, so
             # homing stays out of the recording.
             yield self._pace()
+            # End the episode span after that tick, so the recorder's STOP-time record.io span (which parents
+            # to the episode) is captured while it is still in flight.
+            self._end_episode_span(clock, abort=abort)
         if self._session:
             self._session.close()
             self._session = None
         self._home(clock)
         self._running = False
+
+    def _end_episode_span(self, clock: pimm.Clock, *, abort: bool) -> None:
+        """Close the live rollout's telemetry span: an abort is dropped, a finish is stamped with its step
+        count and virtual duration. Inert when no span is open (telemetry off)."""
+        if self._episode_span is None:
+            return
+        if abort:
+            telemetry.discard_episode(self._episode_span)
+        else:
+            virtual_s = max(clock.now() - self._episode_virtual_start, 0.0)
+            telemetry.end_episode(
+                self._episode_span, **{'episode.steps': self._episode_steps, 'episode.virtual_s': virtual_s}
+            )
+        self._episode_span = None
 
     def _handle_directive(self, directive: Directive, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         """Dispatch a directive to the episode lifecycle; updates ``_running``."""
@@ -326,9 +360,13 @@ class Harness(pimm.ControlSystem):
         # pre-sleep, so we post-shift it and also bump the scheduling wrapper's internal
         # ``_trajectory_end`` to stay consistent.
         wall_start = time.monotonic()
+        infer_start_ns = time.time_ns()
         actions = self._session(frozen_view(obs))
         if actions is None:
             return
+        # Only a chunk-producing call round-tripped the policy server; a ``None`` was the scheduler replaying
+        # a live chunk (no inference), so it is not a policy wait and gets no span.
+        telemetry.record_span('policy.infer', infer_start_ns, time.time_ns())
         delay = self._inference_delay(wall_start)
         if delay > 0.0:
             yield pimm.Sleep(delay)
@@ -341,6 +379,7 @@ class Harness(pimm.ControlSystem):
         if self._deadline is not None and clock.now() >= self._deadline:
             return
 
+        self._episode_steps += 1
         self._emit_commands(actions)
 
     def _trial_terminal(self, clock: pimm.Clock) -> dict[str, Any] | None:
@@ -400,6 +439,7 @@ class Harness(pimm.ControlSystem):
 
         if self._running:
             self._finalize_recording()
+            self._end_episode_span(clock, abort=False)
         if self._session:
             self._session.close()
         # The harness does not own the policy's lifetime: the caller may run several harnesses over
