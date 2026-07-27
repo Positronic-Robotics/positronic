@@ -28,10 +28,13 @@ dependencies = [
     "msgpack",
     "mujoco",
     "numpy",
+    "nvidia-ml-py",
     "opencv-python-headless",
+    "opentelemetry-sdk>=1.42",
     # openpi-client: optional, see [project.optional-dependencies] openpi
     "plotly>=6.5.0",
     "pos3>=0.3.1",
+    "psutil",
     "pyarrow",
     "pydantic",
     "pyturbojpeg<2",
