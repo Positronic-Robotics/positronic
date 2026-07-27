@@ -278,8 +278,16 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
 
     # W_pass is the pass span's wall (summed if several passes appended to one dir), so inter-episode teardown
     # counts in the denominator; the wall gap between two separate passes falls outside every pass span.
+    pass_ids = {p.span_id for p in spans if p.name == 'eval.pass'}
     wall_pass = float(sum(_dur_s(p) for p in spans if p.name == 'eval.pass'))
+    # Only episodes under a completed pass reduce: a killed run flushes its episodes but never writes its
+    # ``eval.pass`` span, and such orphans would inflate every pass-normalized figure when the directory is
+    # reused for a later run.
     episodes = [s for s in spans if s.name == 'episode' and not s.attrs.get('episode.aborted', False)]
+    orphans = sum(e.parent_id not in pass_ids for e in episodes)
+    if orphans:
+        logger.warning('%d episode(s) belong to no completed pass (a killed run?); excluded from the report', orphans)
+        episodes = [e for e in episodes if e.parent_id in pass_ids]
     timings = [_episode_timing(e, children) for e in episodes]
 
     episode_wall_sum = float(sum(t.wall_s for t in timings))

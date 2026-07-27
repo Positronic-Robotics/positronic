@@ -164,6 +164,25 @@ def test_env_step_split_ignores_aborted_episode(tmp_path):
     assert sum(split.phases.values()) + split.wire + split.materialize == pytest.approx(1.0)
 
 
+def test_orphan_episode_from_killed_run_excluded(tmp_path):
+    """A killed run flushes its episodes but never writes its ``eval.pass`` span; when the directory is reused,
+    those orphans must not reduce — they would inflate every pass-normalized figure."""
+    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir.mkdir()
+    _write_lines(
+        telemetry_dir / 'harness.spans.jsonl',
+        [
+            _span('episode', 0, 30, 'ghost-ep', 'ghost-pass', {'episode.virtual_s': 15.0}),  # killed earlier run
+            _span('eval.pass', 100, 200, 'pass0'),
+            _span('episode', 100, 140, 'ep0', 'pass0', {'episode.virtual_s': 20.0}),
+        ],
+    )
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+    assert report.episodes == 1
+    assert report.real_time_factor == pytest.approx(0.20)  # 20 virtual-s / 100 wall-s; the orphan's 15 don't count
+    assert report.wall_split.between_episodes == pytest.approx(0.60)
+
+
 def test_multi_gpu_peak_vram_sums_devices_per_sample(tmp_path):
     """Peak VRAM on a multi-GPU box is the box-wide total at one instant — each sample's devices summed, then
     the max over samples — not the largest single-device reading."""
