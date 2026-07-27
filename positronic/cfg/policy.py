@@ -1,6 +1,7 @@
 import configuronic as cfn
 import pos3
 
+from positronic import keys
 from positronic.cfg import codecs
 from positronic.policy import Codec, Policy, RemotePolicy, SampledPolicy
 from positronic.policy.sampler import Sampler
@@ -104,5 +105,5 @@ def phail_single(hostname, w_openpi=1.0, w_groot=1.0, w_act=1.0):
 phail_multiple = production.override(
     endpoints={'smolvla': 'notebook:8000', 'act': 'notebook:8001', 'groot': 'desktop:8000', 'openpi': 'vm-openpi:8000'},
     sampler=balanced,
-    group_fields=['task', 'eval.object', 'eval.tote_placement', 'eval.external_camera'],
+    group_fields=[keys.TASK, 'eval.object', 'eval.tote_placement', 'eval.external_camera'],
 )

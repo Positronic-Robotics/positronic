@@ -26,7 +26,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 import positronic.cfg.ds
-from positronic import utils
+from positronic import keys, utils
 from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import get_dataset_root, get_episodes_list, stream_episode_rrd
@@ -208,7 +208,7 @@ async def episode_viewer(request: Request, episode_id: int):
             'episode_id': episode_id,
             'num_episodes': len(ds),
             'rerun_version': rr.__version__,
-            'task': episode.static.get('task', None),
+            'task': episode.static.get(keys.TASK, None),
             'repo_id': app_state['root'],
             'episode_path': meta.get('path'),
             'episode_size_mb': size_mb_display,

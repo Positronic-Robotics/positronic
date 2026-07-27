@@ -22,10 +22,7 @@ class ObservationCodec(Codec):
     """
 
     def __init__(
-        self,
-        state: dict[str, dict[str, int]],
-        images: dict[str, tuple[str, tuple[int, int]]],
-        task_field: str = keys.TASK,
+        self, state: dict[str, dict[str, int]], images: dict[str, tuple[str, tuple[int, int]]], task_field: str = 'task'
     ):
         self._state = state
         self._image_configs = images

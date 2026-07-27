@@ -464,7 +464,7 @@ class EvalUI(pimm.ControlSystem):
             self._sel = max(0, min(idx, self._count - 1))
             ep = self._edited.overlay(self._base[self._sel])
             static = ep.static
-            dpg.set_value('ed_task', static.get('task', ''))
+            dpg.set_value('ed_task', static.get(keys.TASK, ''))
             dpg.set_value('ed_outcome', static.get('eval.outcome', OUTCOMES[0]))
             dpg.set_value('ed_total', static.get('eval.total_items', 1))
             dpg.set_value('ed_success', static.get('eval.successful_items', 0))
