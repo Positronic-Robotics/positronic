@@ -32,6 +32,11 @@
   time-series signal, per-episode facts are static/meta, and aggregates are an offline reduce/transform over that
   raw data, never a stored record. Do not add a side storage or IO channel (a parallel file, a `*.jsonl`, a
   separate serializer) unless the need fundamentally cannot be served by the dataset
+- A real-world signal (wall time, GPU/sensor load, latencies) is recorded raw at full fidelity — every sample with
+  its real timestamp — even under a virtual/simulated clock. That clock is a placement convenience, never a licence
+  to drop, downsample, or collapse real samples to fit the scheduler, nor to synthesize the timestamps that carry
+  their meaning: where the virtual timeline can't place a sample precisely, record its real time as data and let
+  consumers project it
 - When current code conflicts with the target design, resolve it now (rename + migrate) or bridge loudly with a
   TODO/HACK comment. Never bridge silently with an extra field, class, or indirection
 - Internal code breaks cleanly — no speculative compat shims. Before a migrate-everywhere change, grep for
