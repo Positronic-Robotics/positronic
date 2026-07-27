@@ -216,6 +216,26 @@ def test_multi_gpu_peak_vram_sums_devices_per_sample(tmp_path):
     assert sim.peak_proc_vram_gb == pytest.approx(1.0)  # only attributed devices count
 
 
+def test_gpu_samples_outside_pass_windows_excluded(tmp_path):
+    """Stats samples taken outside every completed pass's wall window (an earlier run in a reused directory)
+    stay out of the GPU summary — the stats twin of the orphan-episode exclusion."""
+    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir.mkdir()
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span('eval.pass', 100, 200, 'pass0')])
+    stats = [
+        {'t_ns': 50 * _S, 'gpus': [{'i': 0, 'util_pct': 100.0, 'mem_used_b': 8 * 1024**3}]},  # earlier run
+        {'t_ns': 150 * _S, 'gpus': [{'i': 0, 'util_pct': 40.0, 'mem_used_b': 2 * 1024**3}]},
+    ]
+    (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+
+    report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
+
+    sim = report.gpu.sim
+    assert sim is not None
+    assert sim.mean_util_pct == pytest.approx(40.0)  # the 100% sample predates the pass
+    assert sim.peak_vram_gb == pytest.approx(2.0)
+
+
 def test_native_sim_has_no_env_step_split(tmp_path):
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
