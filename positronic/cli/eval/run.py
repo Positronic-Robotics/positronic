@@ -137,8 +137,8 @@ def main(
     after the last World, so a multi-eval sweep reuses one live policy across the rebuilds.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + a machine-load stats
-    stream). It applies to simulated embodiments — a real run schedules the recorder and producers as
-    separate processes that never see the harness-process tracer — and needs an ``output_dir``.
+    stream). It needs an ``output_dir`` and an all-simulated sweep: everything under the bound tracer enters
+    the report, so a real embodiment in a timed sweep is rejected rather than allowed to pollute it.
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
     # Validate timing up front, before the policy warmup, so a rejected sweep fails before it spends anything.
@@ -150,15 +150,12 @@ def main(
         else:
             assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
             simulated = [embodiment.simulated]
-        if not any(simulated):
-            raise ValueError(
-                'eval timing needs a simulated embodiment: a real embodiment runs the recorder and producers '
-                'as separate processes with no shared tracer, so nothing here is timed. Drop --timing.'
-            )
         if not all(simulated):
-            logger.warning(
-                'eval timing is sim-only: %d real embodiment(s) in this sweep run untimed.',
-                sum(not s for s in simulated),
+            raise ValueError(
+                f'eval timing needs an all-simulated sweep, got {sum(not s for s in simulated)} real '
+                'embodiment(s): a real eval would run inside the same bound tracer and pass span, so its '
+                'episodes, wall time and machine samples would silently corrupt the report. Run real '
+                'embodiments in a separate untimed invocation.'
             )
 
     # Drive the policy's remote endpoints through their cold start before hardware and the operator
@@ -180,21 +177,27 @@ def main(
     on_complete = _completion_sink(policy)
 
     # Bind the harness-process telemetry (and the machine-load sampler) around the whole sweep, and bracket
-    # the trial loop in one ``eval.pass`` span; a mixed sweep's sim evals share them. All inert off --timing.
+    # the trial loop in one ``eval.pass`` span. All inert off --timing.
     run_id = uuid.uuid4().hex
-    timed = timing and output_dir is not None
-    if timing and output_dir is not None:
+    timed_dir = Path(output_dir) if timing and output_dir is not None else None
+    if timed_dir is not None:
         # A launched env server (e.g. RoboLab, positronic-free in its own interpreter) writes its own
         # telemetry sidecar; it reads these from the environment its launcher forwards to the subprocess.
-        os.environ['POSITRONIC_ENV_TELEMETRY_DIR'] = str(Path(output_dir) / 'telemetry')
+        os.environ['POSITRONIC_ENV_TELEMETRY_DIR'] = str(timed_dir / 'telemetry')
         os.environ['POSITRONIC_RUN_ID'] = run_id
-    telemetry_cm = telemetry.bind(output_dir, 'harness', run_id) if timing and output_dir is not None else nullcontext()
+    telemetry_cm = (
+        telemetry.bind(timed_dir, telemetry.HARNESS_PROCESS, run_id) if timed_dir is not None else nullcontext()
+    )
     stats_cm = (
-        telemetry.StatsSampler(Path(output_dir) / 'telemetry' / 'harness.stats.jsonl')
-        if timing and output_dir is not None
+        telemetry.StatsSampler(timed_dir / 'telemetry' / f'{telemetry.HARNESS_PROCESS}.stats.jsonl')
+        if timed_dir is not None
         else nullcontext()
     )
-    pass_cm = telemetry.eval_pass(**{'run.id': run_id, 'policy': type(policy).__name__}) if timed else nullcontext()
+    pass_cm = (
+        telemetry.eval_pass(**{'run.id': run_id, 'policy': type(policy).__name__})
+        if timed_dir is not None
+        else nullcontext()
+    )
     try:
         with telemetry_cm, stats_cm, pass_cm:
             if driver is not None:
