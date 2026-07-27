@@ -26,7 +26,7 @@ import math
 import sys
 
 import numpy as np
-import torch
+import torch  # pyright: ignore[reportMissingImports]
 
 # Importing ``env`` launches the Isaac app — a precondition for every isaaclab/robolab import below.
 from env import RobolabEnv, simulation_app

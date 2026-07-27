@@ -19,7 +19,7 @@ def placeholder():
 
 @cfn.config(checkpoint=None)
 def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None = None, device=None):
-    from lerobot.policies.act.modeling_act import ACTPolicy
+    from lerobot.policies.act.modeling_act import ACTPolicy  # pyright: ignore[reportMissingImports]
 
     from positronic.vendors.lerobot_0_3_3.backbone import register_all
     from positronic.vendors.lerobot_0_3_3.policy import LerobotPolicy
