@@ -22,7 +22,8 @@ path has no seed hook, so a recorded seed would only mislead.
 import argparse
 import os
 import tempfile
-from typing import Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import cv2  # noqa: F401 -- robolab requires cv2 imported before isaaclab
 import numpy as np
@@ -30,6 +31,13 @@ import torch
 from isaaclab.app import AppLauncher
 from protocol import decode
 from server import EnvProtocol, EnvServer
+
+# The positronic-free span writer: the type checker reads it as the package member, while at runtime the
+# robolab interpreter (positronic uninstalled, ``env_server`` on PYTHONPATH) imports it flat.
+if TYPE_CHECKING:
+    from positronic.simulator.env_server import telemetry
+else:
+    import telemetry
 
 # Isaac's rigid bring-up order: parse CLI args, launch the app, and only then import anything that touches the
 # omni/isaaclab runtime — which forces the second import block below and the module-level parse. ``validate.py``
@@ -111,6 +119,16 @@ class RobolabEnv(EnvProtocol):
         self._timeline = omni.timeline.get_timeline_interface()
         self._kit_app = omni.kit.app.get_app()
 
+    def _timed_phase(self, method: Callable[..., Any], name: str) -> Callable[..., Any]:
+        """``method`` wrapped to record a ``name`` span (parented to the in-flight ``env.step``/``env.reset``)
+        each call, so the sim's native physics/render cost decomposes the step under ``--timing``."""
+
+        def timed(*args: Any, **kwargs: Any) -> Any:
+            with telemetry.span(name):
+                return method(*args, **kwargs)
+
+        return timed
+
     def _build(self, task: str, instruction_type: str) -> None:
         if self._env is not None:
             self._env.close()  # release the prior task's env before create_env opens a fresh USD stage
@@ -122,6 +140,12 @@ class RobolabEnv(EnvProtocol):
             env_name, device=args.device, num_envs=1, instruction_type=instruction_type
         )
         self._control_dt = self._env_cfg.sim.dt * self._env_cfg.decimation
+        # The sim context's physics ``step`` and ``render`` are the two native phases inside ``env.step``;
+        # re-wrapped per build (a fresh env brings a fresh SimulationContext) so their spans nest under the
+        # step. Only under --timing — the wrapper is skipped otherwise so an untimed run pays nothing.
+        if telemetry.active():
+            self._env.sim.step = self._timed_phase(self._env.sim.step, 'physics')
+            self._env.sim.render = self._timed_phase(self._env.sim.render, 'render')
         # ``instruction`` is the resolved language goal (``create_env`` picks the variant); the rest is the
         # task identity the episode records.
         self._meta = {
@@ -141,56 +165,61 @@ class RobolabEnv(EnvProtocol):
         self._ik = DifferentialIKController(cfg, num_envs=1, device=self._env.device)
 
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
-        key = (token['task'], token['instruction_type'])
-        if key != self._key:
-            self._build(*key)
-            self._key = key
-        else:
-            self._env.reset_eval_state()  # unfreeze terminated envs so the next trial runs on the cached env
-        # RoboLab's own episode runner resets twice — the first randomizes, the second settles the freshly
-        # placed scene into the sensors (robolab/eval/episode.py).
-        self._env.reset()
-        obs, _extras = self._env.reset()
-        state = token.get('state')
-        if state is not None:
-            # Exact-state replay (a demo's own scene). RoboLab records states env-origin relative
-            # (``scene.get_state(is_relative=True)``), so restore them the same way. The recorded entries
-            # overlay the scene's own post-reset state: ``reset_to`` wants every scene entity, and a recording
-            # may predate entities that never move (e.g. the table joined the scene's rigid objects for
-            # contact sensing after the shipped demos were recorded).
-            merged = self._merged_state(self._env.scene.get_state(is_relative=True), state)
-            obs, _extras = self._env.reset_to(merged, None, is_relative=True)
-        # ``robot_meta`` carries the DROID rig's model (the launcher serialized it, since this server can't
-        # build it); ``meta`` carries the task identity and the resolved instruction. The reset frame's subtask
-        # progress is zeros: the recorder's infos refresh only after a step, so reading them here would replay
-        # the prior trial's final values.
-        return {
-            'obs': self._observe(obs, np.zeros(4, dtype=np.float32)),
-            'meta': self._meta,
-            'robot_meta': self._robot_meta,
-            'control_dt': self._control_dt,
-        }
+        with telemetry.span('env.reset'):
+            key = (token['task'], token['instruction_type'])
+            if key != self._key:
+                self._build(*key)
+                self._key = key
+            else:
+                assert self._env is not None  # the else runs only when a prior reset built the cached env
+                self._env.reset_eval_state()  # unfreeze terminated envs so the next trial runs on the cached env
+            assert self._env is not None  # built above (key change) or already live (cached)
+            # RoboLab's own episode runner resets twice — the first randomizes, the second settles the freshly
+            # placed scene into the sensors (robolab/eval/episode.py).
+            self._env.reset()
+            obs, _extras = self._env.reset()
+            state = token.get('state')
+            if state is not None:
+                # Exact-state replay (a demo's own scene). RoboLab records states env-origin relative
+                # (``scene.get_state(is_relative=True)``), so restore them the same way. The recorded entries
+                # overlay the scene's own post-reset state: ``reset_to`` wants every scene entity, and a
+                # recording may predate entities that never move (e.g. the table joined the scene's rigid
+                # objects for contact sensing after the shipped demos were recorded).
+                merged = self._merged_state(self._env.scene.get_state(is_relative=True), state)
+                obs, _extras = self._env.reset_to(merged, None, is_relative=True)
+            # ``robot_meta`` carries the DROID rig's model (the launcher serialized it, since this server can't
+            # build it); ``meta`` carries the task identity and the resolved instruction. The reset frame's
+            # subtask progress is zeros: the recorder's infos refresh only after a step, so reading them here
+            # would replay the prior trial's final values.
+            return {
+                'obs': self._observe(obs, np.zeros(4, dtype=np.float32)),
+                'meta': self._meta,
+                'robot_meta': self._robot_meta,
+                'control_dt': self._control_dt,
+            }
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
-        # Isaac pauses its timeline while assets stream in; stepping a paused sim stalls, so pump the kit
-        # update loop until it plays again (robolab's episode loop does the same before every step).
-        while not self._timeline.is_playing():
-            self._kit_app.update()
-        act = torch.zeros(1, 8, device=self._env.device)
-        act[0, :7] = self._joint_targets(action['command'])
-        # The binary gripper term closes above 0.5, so the wire grip ([0, 1], 1 = closed) feeds it as-is.
-        act[0, 7] = float(action['grip'])
-        obs, _reward, _term, _trunc, _info = self._env.step(act)
-        # ``done``/``success`` key off RoboLab's frozen-env accounting, not the raw term/trunc flags: a
-        # termination within the first two steps is a physics artifact its env resets in place and keeps
-        # running (never frozen, no verdict), while a real success/time-out freezes the env and records one.
-        done = self._env.all_terminated
-        return {
-            'obs': self._observe(obs, self._subtask_progress()),
-            'done': done,
-            'success': done and bool(self._env.get_env_results()[0]['success']),
-            'control_dt': self._control_dt,
-        }
+        assert self._env is not None  # step is only served after a reset built the env
+        with telemetry.span('env.step'):
+            # Isaac pauses its timeline while assets stream in; stepping a paused sim stalls, so pump the kit
+            # update loop until it plays again (robolab's episode loop does the same before every step).
+            while not self._timeline.is_playing():
+                self._kit_app.update()
+            act = torch.zeros(1, 8, device=self._env.device)
+            act[0, :7] = self._joint_targets(action['command'])
+            # The binary gripper term closes above 0.5, so the wire grip ([0, 1], 1 = closed) feeds it as-is.
+            act[0, 7] = float(action['grip'])
+            obs, _reward, _term, _trunc, _info = self._env.step(act)
+            # ``done``/``success`` key off RoboLab's frozen-env accounting, not the raw term/trunc flags: a
+            # termination within the first two steps is a physics artifact its env resets in place and keeps
+            # running (never frozen, no verdict), while a real success/time-out freezes the env and records one.
+            done = self._env.all_terminated
+            return {
+                'obs': self._observe(obs, self._subtask_progress()),
+                'done': done,
+                'success': done and bool(self._env.get_env_results()[0]['success']),
+                'control_dt': self._control_dt,
+            }
 
     def _joint_targets(self, command: dict[str, Any]) -> torch.Tensor:
         """The wire command as the 7 absolute joint targets the jointpos substrate steps."""
@@ -296,7 +325,10 @@ class RobolabEnv(EnvProtocol):
 def main() -> None:
     if args.port is None:
         parser.error('--port is required')
-    EnvServer(RobolabEnv(), args.host, args.port).serve_forever()
+    # Under --timing the parent forwards the telemetry dir + run id via the environment; the server then
+    # writes its own ``env.spans.jsonl`` sidecar. Inert otherwise.
+    with telemetry.bind_from_env():
+        EnvServer(RobolabEnv(), args.host, args.port).serve_forever()
     simulation_app.close()
 
 

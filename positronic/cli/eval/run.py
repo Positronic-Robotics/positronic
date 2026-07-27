@@ -1,4 +1,5 @@
 import logging
+import os
 import uuid
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -182,6 +183,11 @@ def main(
     # the trial loop in one ``eval.pass`` span; a mixed sweep's sim evals share them. All inert off --timing.
     run_id = uuid.uuid4().hex
     timed = timing and output_dir is not None
+    if timing and output_dir is not None:
+        # A launched env server (e.g. RoboLab, positronic-free in its own interpreter) writes its own
+        # telemetry sidecar; it reads these from the environment its launcher forwards to the subprocess.
+        os.environ['POSITRONIC_ENV_TELEMETRY_DIR'] = str(Path(output_dir) / 'telemetry')
+        os.environ['POSITRONIC_RUN_ID'] = run_id
     telemetry_cm = telemetry.bind(output_dir, 'harness', run_id) if timing and output_dir is not None else nullcontext()
     stats_cm = (
         telemetry.StatsSampler(Path(output_dir) / 'telemetry' / 'harness.stats.jsonl')

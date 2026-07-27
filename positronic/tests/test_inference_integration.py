@@ -9,7 +9,7 @@ import tqdm
 
 import pimm
 import positronic.cfg.simulator
-from positronic import keys
+from positronic import keys, telemetry
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
@@ -229,6 +229,45 @@ def test_countdown_records_frame0_every_trial(tmp_path):
     for i in range(2):
         first_value, _ts = ds[i].signals['value'][0]
         np.testing.assert_array_equal(first_value, np.zeros(7))
+
+
+@pytest.mark.timeout(30.0)
+def test_timing_writes_telemetry_sidecars(tmp_path):
+    """[harness + recorder + sim] under ``--timing``: the sweep writes the harness telemetry sidecars, the
+    span taxonomy nests (episode under pass; reset, policy.infer and the recorder's record.io under episode),
+    and the machine-load stats stream records at least one sample. record.io parenting proves the episode span
+    stays in flight while the recorder commits STOP."""
+    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2)
+    with pos3.mirror():
+        main(
+            policy=StubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0),
+            evals=[replace(ev, trials=[{'eval.trial_index': i} for i in range(2)])],
+            output_dir=str(tmp_path),
+            timing=True,
+        )
+
+    telemetry_dir = tmp_path / 'telemetry'
+    assert (telemetry_dir / 'harness.meta.json').exists()
+    spans = list(telemetry.read_spans(telemetry_dir / 'harness.spans.jsonl'))
+    by_name: dict[str, list] = {}
+    for rec in spans:
+        by_name.setdefault(rec.name, []).append(rec)
+
+    assert len(by_name['eval.pass']) == 1
+    assert len(by_name['episode']) == 2  # one per trial
+    assert by_name['reset'] and by_name['record.io'] and by_name['policy.infer']
+
+    pass_id = by_name['eval.pass'][0].span_id
+    episode_ids = {episode.span_id for episode in by_name['episode']}
+    assert all(episode.parent_id == pass_id for episode in by_name['episode'])
+    # The per-tick spans all parent to some episode — record.io most of all, since it is committed by a
+    # different control system after the harness emits STOP.
+    for name in ('reset', 'record.io', 'policy.infer'):
+        assert all(rec.parent_id in episode_ids for rec in by_name[name]), name
+
+    stats = list(telemetry.read_stats(telemetry_dir / 'harness.stats.jsonl'))
+    assert len(stats) >= 1
+    assert all('t_ns' in sample and 'gpus' in sample for sample in stats)
 
 
 @pytest.mark.timeout(30.0)
