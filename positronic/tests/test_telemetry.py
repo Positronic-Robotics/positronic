@@ -3,6 +3,7 @@ import os
 import time
 
 import pynvml
+import pytest
 from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
 
 from positronic import telemetry
@@ -86,6 +87,18 @@ class _FakeProc:
     def __init__(self, pid, used):
         self.pid = pid
         self.usedGpuMemory = used
+
+
+def test_failed_pass_exported_and_stamped(tmp_path):
+    """A sweep that dies mid-pass still exports its pass span — the partial window is real data — stamped
+    ``pass.failed`` so the reduce can name the mix instead of silently folding it in."""
+    with telemetry.bind(tmp_path, 'harness', 'run-fail'):
+        with pytest.raises(RuntimeError):
+            with telemetry.eval_pass(**{'run.id': 'run-fail'}):
+                raise RuntimeError('sim died')
+
+    spans = {s.name: s for s in telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl')}
+    assert spans['eval.pass'].attrs.get('pass.failed') is True
 
 
 def test_unbound_span_never_touches_global_tracer(monkeypatch):

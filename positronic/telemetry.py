@@ -153,12 +153,17 @@ def record_span(name: str, start_ns: int, end_ns: int, **attrs: Any) -> None:
 @contextmanager
 def eval_pass(**attrs: Any) -> Iterator[Span]:
     """The pass span bracketing a whole eval sweep; per-episode spans parent to it. Held as a module span
-    rather than the OTel-current one so it does not become the parent of the per-tick spans."""
+    rather than the OTel-current one so it does not become the parent of the per-tick spans. A sweep that
+    exits with an exception still exports its pass — the partial window is real recorded data — stamped
+    ``pass.failed`` so a reduce can see (and report) that it did not run to completion."""
     global _current_pass
     pass_span = _tracer().start_span('eval.pass', attributes=_encode_attrs(attrs))
     _current_pass = pass_span
     try:
         yield pass_span
+    except BaseException:
+        pass_span.set_attribute('pass.failed', True)
+        raise
     finally:
         pass_span.end()
         _current_pass = None
