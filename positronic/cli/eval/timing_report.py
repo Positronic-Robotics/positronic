@@ -19,7 +19,7 @@ import configuronic as cfn
 import numpy as np
 import pos3
 
-from positronic.telemetry import SpanRec, read_spans, read_stats
+from positronic.telemetry import HARNESS_PROCESS, SpanRec, read_spans, read_stats
 
 logger = logging.getLogger(__name__)
 
@@ -234,11 +234,19 @@ def _episode_timing(episode: SpanRec, children: dict[str, list[SpanRec]]) -> _Ep
     )
 
 
-def _env_step_split(spans: list[SpanRec], episode_ids: set[str], env_step_sum: float, materialize_sum: float):
-    """The env-step decomposition from the env server's own spans: a server ``env.step`` (parented to no
-    episode — it lives in the env process's file) with physics/render children. ``None`` when no such span
-    exists (a native sim reports no decomposition)."""
-    server_steps = [s for s in spans if s.name == 'env.step' and s.parent_id not in episode_ids]
+def _env_step_split(spans: list[SpanRec], episodes: list[SpanRec], env_step_sum: float, materialize_sum: float):
+    """The env-step decomposition from the env server's own spans: a server ``env.step`` (recorded in the env
+    process's own file, so ``process`` is not the harness) with physics/render children. Only server steps that
+    start inside a completed episode's wall window count — an aborted rollout's steps would otherwise skew
+    fractions whose denominator covers completed episodes only. ``None`` when no such span exists (a native sim
+    reports no decomposition)."""
+
+    def in_completed_episode(ts_ns: int) -> bool:
+        return any(e.start_ns <= ts_ns <= e.end_ns for e in episodes)
+
+    server_steps = [
+        s for s in spans if s.name == 'env.step' and s.process != HARNESS_PROCESS and in_completed_episode(s.start_ns)
+    ]
     server_step_sum = sum(_dur_s(s) for s in server_steps)
     if not server_step_sum or not env_step_sum:
         return None
@@ -268,7 +276,6 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
     # counts in the denominator; the wall gap between two separate passes falls outside every pass span.
     wall_pass = float(sum(_dur_s(p) for p in spans if p.name == 'eval.pass'))
     episodes = [s for s in spans if s.name == 'episode' and not s.attrs.get('episode.aborted', False)]
-    episode_ids = {e.span_id for e in episodes}
     timings = [_episode_timing(e, children) for e in episodes]
 
     episode_wall_sum = float(sum(t.wall_s for t in timings))
@@ -297,7 +304,7 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
         infer_p50_ms=float(np.percentile(all_infer_ms, 50)) if all_infer_ms.size else 0.0,
         infer_p95_ms=float(np.percentile(all_infer_ms, 95)) if all_infer_ms.size else 0.0,
         wall_split=wall_split,
-        env_step_split=_env_step_split(spans, episode_ids, env_step_sum, materialize_sum),
+        env_step_split=_env_step_split(spans, episodes, env_step_sum, materialize_sum),
         gpu=GpuReport(sim=_gpu_summary_from_stats(stats), policy=policy_gpu),
     )
 
