@@ -22,6 +22,10 @@ from positronic.policy.harness import Harness
 
 logger = logging.getLogger(__name__)
 
+# The environment a timed run hands a launched env server (read by ``env_server.telemetry.bind_from_env``);
+# snapshotted before a run and restored after it, so a later run in the same process inherits nothing.
+_ENV_TELEMETRY_VARS = ('POSITRONIC_ENV_TELEMETRY_DIR', 'POSITRONIC_RUN_ID')
+
 
 @dataclass
 class Driver:
@@ -180,6 +184,7 @@ def main(
     # the trial loop in one ``eval.pass`` span. All inert off --timing.
     run_id = uuid.uuid4().hex
     timed_dir = Path(output_dir) if timing and output_dir is not None else None
+    env_snapshot = {name: os.environ.get(name) for name in _ENV_TELEMETRY_VARS}
     if timed_dir is not None:
         # A launched env server (e.g. RoboLab, positronic-free in its own interpreter) writes its own
         # telemetry sidecar; it reads these from the environment its launcher forwards to the subprocess.
@@ -209,6 +214,13 @@ def main(
                     _run_world(policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete)
     finally:
         policy.close()
+        # A later invocation in the same process (a notebook, a test runner) must not inherit this run's
+        # telemetry environment and write env spans into its directory.
+        for name, value in env_snapshot.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 @cfn.config(eval=placeholder, policy=policy_cfg.placeholder, show_gui=False)

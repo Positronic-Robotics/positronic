@@ -1,3 +1,4 @@
+import os
 import xml.etree.ElementTree as ET
 from dataclasses import replace
 
@@ -245,6 +246,11 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
             output_dir=str(tmp_path),
             timing=True,
         )
+
+    # The env handed to a launched env server is restored after the run, so a later run in this process
+    # inherits nothing from this one.
+    assert 'POSITRONIC_ENV_TELEMETRY_DIR' not in os.environ
+    assert 'POSITRONIC_RUN_ID' not in os.environ
 
     telemetry_dir = tmp_path / 'telemetry'
     assert (telemetry_dir / 'harness.meta.json').exists()
