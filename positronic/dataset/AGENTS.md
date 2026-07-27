@@ -48,7 +48,7 @@ The core — `Signal`, `Episode`, `Dataset`, and the writer — is agnostic to t
 
 Two consumer classes read the raw recording, each supplying its own interpretation:
 
-- **Replay / debug** — code we control. It decides how to reconcile sparse and dense signals, and derives whatever boundary or alignment notion it needs directly from the raw signals.
+- **Replay / debug** — first-party code. It decides how to reconcile sparse and dense signals, and derives whatever boundary or alignment notion it needs directly from the raw signals.
 - **Training-set conversion** — codec-driven. `apply_codec` wraps the dataset in `TransformedDataset(codec.training_encoder)`, and every `training_encoder` is a pure **projection** (`Derive`) that yields only the keys the codec declares. An undeclared signal is a no-op *by construction* — it never reaches the training columns, and no whitelist is needed. Keep it so: a training encoder is a pure projection, so **never add an `Identity()` passthrough to one** (that would leak every raw signal into the training set).
 
 Bounds (`start_ts`, `last_ts`, `duration_ns`, `time`) are a **convenience projection over the signals, not semantics**: a consumer that needs a different episode extent derives it from the raw signals rather than expecting the core to carve one out. Today they are the plain intersection over all signals; after #508 they intersect only the non-defaulted signals, so a sparse stream that declares its pre-first-sample default stops pulling `start_ts` inward.
