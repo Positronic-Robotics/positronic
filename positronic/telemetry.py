@@ -234,12 +234,27 @@ def _encode_span(span_data: ReadableSpan) -> dict[str, Any]:
     return encoded
 
 
+def _seal_truncated_line(path: Path) -> None:
+    """Seal a predecessor's truncated final line (a killed run can die mid-write) with a newline before
+    appending, so the first new record does not merge into the fragment and get skipped along with it."""
+    try:
+        with open(path, 'rb') as file:
+            file.seek(-1, os.SEEK_END)
+            sealed = file.read(1) == b'\n'
+    except (FileNotFoundError, OSError):
+        return  # absent or empty: nothing to seal
+    if not sealed:
+        with open(path, 'ab') as file:
+            file.write(b'\n')
+
+
 class _FileSpanExporter(SpanExporter):
     """Writes each exported batch as one OTLP/JSON line to ``<process>.spans.jsonl``, flushed per line so a
     crash loses at most the batch in flight. The reader parses the same shape back."""
 
     def __init__(self, path: Path) -> None:
         self._lock = threading.Lock()
+        _seal_truncated_line(path)
         self._file = open(path, 'a')
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
@@ -482,6 +497,7 @@ class StatsSampler:
         }
 
     def _loop(self) -> None:
+        _seal_truncated_line(self._path)
         with open(self._path, 'a') as file:
             while not self._stop.is_set():
                 file.write(json.dumps(self._sample(), separators=(',', ':')) + '\n')
