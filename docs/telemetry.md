@@ -17,9 +17,10 @@ no telemetry and stays clock-agnostic. It is owned by `positronic/telemetry.py`.
 positronic eval run --eval <eval> --policy <policy> --output_dir <dir> --timing
 ```
 
-`--timing` needs `--output_dir` (the sidecars are written under it) and applies to **simulated** evals: a real
-embodiment runs the recorder and producers as separate processes with no shared tracer, so nothing there is
-timed. A mixed sweep still times its simulated evals; a sweep with nothing to time is rejected up front.
+`--timing` needs `--output_dir` (the sidecars are written under it) and an **all-simulated** sweep: everything
+under the bound tracer enters the report, so a sweep containing a real embodiment is rejected up front rather
+than allowed to pollute it. (A real eval runs its recorder and producers as separate processes with no shared
+tracer, so there is nothing to time there anyway — run real embodiments in a separate untimed invocation.)
 
 A normal eval (no `--timing`) pays nothing: the span helpers compile to no-ops and no sidecar is written.
 

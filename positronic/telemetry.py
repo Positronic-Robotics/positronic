@@ -330,6 +330,7 @@ class _Nvml:
     def __init__(self) -> None:
         self._handles: list[Any] = []
         self._proc_mem_warned = False
+        self._power_warned = False
         self._ok = False
         try:
             pynvml.nvmlInit()
@@ -348,13 +349,23 @@ class _Nvml:
                 'util_pct': float(util.gpu),
                 'mem_used_b': int(memory.used),
                 'mem_total_b': int(memory.total),
-                'power_w': pynvml.nvmlDeviceGetPowerUsage(handle) / 1000.0,
+                'power_w': self._power_w(handle),
                 'proc_mem_b': self._process_memory(handle, tree_pids),
                 # Per-process GPU utilisation is not reliably attributable under MPS / co-location, so it is
                 # left unmeasured (device util above is real); per-process memory is attributed.
                 'proc_util_pct': None,
             })
         return gpus
+
+    def _power_w(self, handle: Any) -> float | None:
+        try:
+            return pynvml.nvmlDeviceGetPowerUsage(handle) / 1000.0
+        except pynvml.NVMLError as error:
+            # Not every GPU supports the power query; a dead optional field must not kill the sampler thread.
+            if not self._power_warned:
+                logger.info('telemetry: GPU power unavailable (%s); power_w left null', error)
+                self._power_warned = True
+            return None
 
     def _process_memory(self, handle: Any, tree_pids: set[int]) -> int | None:
         try:
