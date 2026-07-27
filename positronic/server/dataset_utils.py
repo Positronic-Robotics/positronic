@@ -232,7 +232,7 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
 
 
 def _joint_signals(ep: Episode) -> set[str]:
-    names = set(ep.static.get('joint_signals', ()))
+    names: set[str] = set(ep.static.get('joint_signals', ()))
     if ep.static.get('joint_signal'):  # TODO(#511): drop the singular fallback once published datasets migrate.
         names.add(ep.static['joint_signal'])
     return names

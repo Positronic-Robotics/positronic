@@ -145,6 +145,8 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._last_ts = ts_ns
 
     def _encode_loop(self) -> None:
+        stream, container = self._stream, self._container
+        assert stream is not None and container is not None  # the thread starts only after encoder init
         try:
             while True:
                 item = self._frames.get()
@@ -153,8 +155,8 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
                 data, pts = item
                 frame = av.VideoFrame.from_ndarray(data, format='rgb24')
                 frame.pts = pts
-                for packet in self._stream.encode(frame):  # Every frame may produce 0, 1, or more packets
-                    self._container.mux(packet)
+                for packet in stream.encode(frame):  # Every frame may produce 0, 1, or more packets
+                    container.mux(packet)
         except Exception as e:
             self._encoder_error = e
             # Keep draining so a blocked ``append`` unblocks; the error surfaces on the caller thread.
