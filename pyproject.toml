@@ -115,14 +115,7 @@ dev = [
 [tool.uv]
 # lerobot_0_3_3 extra pulls in lerobot==0.3.3 which declares rerun-sdk<0.23,
 # but our usage of lerobot doesn't need rerun — override to unblock resolution.
-# i2rt (yam extra) exact-pins its environment (numpy==2.2.6, click<8.2.0, qpsolvers==4.7.1);
-# relax those to floors so an optional hardware extra doesn't downgrade the whole project.
-override-dependencies = [
-    "rerun-sdk==0.30.0",
-    "numpy>=2.2",
-    "click>=8.1",
-    "qpsolvers[daqp,quadprog]>=4.7",
-]
+override-dependencies = ["rerun-sdk==0.30.0"]
 # cmake 4.3.1 is missing x86_64 Linux wheels on PyPI.
 # evdev>=1.9 regenerates its C bindings from whatever input-event-codes.h is reachable on the
 # include path, so a newer header leaking in (stale build cache / CPATH) bakes in macros the
@@ -136,11 +129,14 @@ constraint-dependencies = ["cmake<4.3", "evdev<1.9"]
 # Our own packages (exclude-newer-package below) are exempt so they always
 # resolve to the latest release.
 exclude-newer = "2026-06-12T00:00:00Z"
+# i2rt (yam extra) exact-pins its environment (numpy==2.2.6, click<8.2.0, qpsolvers==4.7.1),
+# so yam resolves in its own fork and can't be installed together with the other extras here.
 conflicts = [
     [
         {extra = "lerobot"},
         {extra = "lerobot-0-3-3"},
         {extra = "molmoact2"},
+        {extra = "yam"},
     ],
 ]
 
