@@ -53,6 +53,9 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         # The robot model identity the env reports at ``reset`` (URDF / joint names) — emitted on the
         # ``robot_meta`` port into the episode; distinct from the scene ``meta`` above.
         self._robot_meta: dict[str, Any] | None = None
+        # The env's sim-enforced episode horizon in sim-seconds from the latest ``reset``, or ``None`` when the env
+        # enforces none — read by the client's ``Task`` so the harness can check its timeout stays strictly weaker.
+        self._horizon: float | None = None
         # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
         self._reset_pending = False
 
@@ -61,6 +64,12 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         """The env's scene meta from the latest ``reset`` (suite, task, …); a client reads its task from here."""
         assert self._meta is not None, 'meta read before the first reset'
         return self._meta
+
+    @property
+    def horizon(self) -> float | None:
+        """The env's sim-enforced episode horizon (sim-seconds) from the latest ``reset``, or ``None`` if it
+        enforces none. A client's ``Task`` exposes this so the harness can reject a timeout that isn't weaker."""
+        return self._horizon
 
     def reset(self, context: dict[str, Any]) -> None:
         """Re-randomize the env from the trial context and arm frame-0 publication for the next turn (the ``RUN`` hook).
@@ -82,6 +91,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._frame = self._conn.reset(self._adapter.reset_token(context))
         self._meta = self._frame['meta']
         self._robot_meta = self._frame['robot_meta']
+        self._horizon = self._frame.get('horizon')  # optional: only envs that enforce a horizon report one
         self._reset_pending = True
         self._active = True
         # Clear any terminal the previous trial left on the wire: the env can reach ``done`` while the proxy
