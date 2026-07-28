@@ -129,12 +129,12 @@ class ControlSystem(ABC):
       should shut down.
     - ``clock``: the ``Clock`` instance the world uses for timestamping messages.
 
-    Implementations must advance their internal work by yielding ``Sleep``
-    instances, allowing the ``World`` interleaver to sequence multiple systems.
+    Implementations must advance their internal work by yielding ``Sleep`` or
+    ``Yield``, allowing the ``World`` interleaver to sequence multiple systems.
     """
 
     @abstractmethod
-    def run(self, should_stop: SignalReceiver, clock: Clock) -> Iterator[Sleep]:
+    def run(self, should_stop: SignalReceiver, clock: Clock) -> Iterator[Command]:
         pass
 
 

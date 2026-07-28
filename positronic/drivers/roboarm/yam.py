@@ -15,25 +15,22 @@ on close (``zero_torque_mode``).
 
 import logging
 from collections.abc import Callable, Iterator
-from typing import Any
+from typing import Any, cast
 
 import mujoco as mj
 import numpy as np
 
-try:
-    from i2rt.robots.get_robot import get_yam_robot
-    from i2rt.robots.utils import GripperType
-except ImportError as e:
-    raise ImportError(
-        'YAM support is not installed. Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'
-    ) from e
-
 import pimm
 from positronic import geom
+from positronic.drivers import vendor_import
 from positronic.utils import package_assets_path
 
 from . import RobotStatus, State, command
 from .ik import qpos_from_site_pose
+
+with vendor_import('i2rt', 'YAM support', hint='Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'):
+    from i2rt.robots.get_robot import get_yam_robot
+    from i2rt.robots.utils import GripperType
 
 # The driver solves FK/IK itself, so its joint order and control frame must match the YAM sim's.
 # TODO(#517): centralise driver kinematics so driver and sim share one module.
@@ -180,15 +177,13 @@ class Robot(pimm.ControlSystem):
         self._sim = sim
         self._connect = connect
 
-        self.commands: pimm.SignalReceiver[command.Trajectory[command.CommandType]] = pimm.ControlSystemReceiver(
-            self, default=[]
-        )
-        self.target_grip: pimm.SignalReceiver[command.Trajectory[float]] = pimm.ControlSystemReceiver(self, default=[])
-        self.state: pimm.SignalEmitter[YamState] = pimm.ControlSystemEmitter(self)
-        self.grip: pimm.SignalEmitter[float] = pimm.ControlSystemEmitter(self)
-        self.robot_meta = pimm.ControlSystemEmitter(self)
+        self.commands = pimm.ControlSystemReceiver[command.Trajectory[command.CommandType]](self, default=[])
+        self.target_grip = pimm.ControlSystemReceiver[command.Trajectory[float]](self, default=[])
+        self.state = pimm.ControlSystemEmitter[YamState](self)
+        self.grip = pimm.ControlSystemEmitter[float](self)
+        self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         arm = self._connect(self._channel, self._sim)
         try:
             kin = _Kinematics()
@@ -204,11 +199,9 @@ class Robot(pimm.ControlSystem):
             grip_target = 0.0
 
             while not should_stop.value:
-                cmd_msg = self.commands.read()
-                if cmd_msg.updated:
+                if (cmd_msg := self.commands.read()) is not None and cmd_msg.updated:
                     player.set(cmd_msg.data)
-                grip_msg = self.target_grip.read()
-                if grip_msg.updated:
+                if (grip_msg := self.target_grip.read()) is not None and grip_msg.updated:
                     grip_player.set(grip_msg.data)
 
                 grip = grip_player.advance(clock.now_ns())
@@ -327,10 +320,12 @@ if __name__ == '__main__':
     robot = Robot(args.channel, sim=args.sim, connect=(lambda channel, sim: fake) if args.fake else _connect)
 
     with pimm.World() as world:
-        commands = world.pair(robot.commands)
-        target_grip = world.pair(robot.target_grip)
-        state = world.pair(robot.state)
-        grip = world.pair(robot.grip)
+        # `World.pair` cannot express that it returns the counterpart of the port it is given, so the four
+        # payload types are named here.
+        commands = cast(pimm.SignalEmitter[command.Trajectory[command.CommandType]], world.pair(robot.commands))
+        target_grip = cast(pimm.SignalEmitter[command.Trajectory[float]], world.pair(robot.target_grip))
+        state = cast(pimm.SignalReceiver[YamState], world.pair(robot.state))
+        grip = cast(pimm.SignalReceiver[float], world.pair(robot.grip))
 
         loop = world.start([robot])
 
