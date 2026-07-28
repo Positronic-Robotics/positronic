@@ -1357,7 +1357,9 @@ def test_failed_pass_seals_open_episode_span(tmp_path):
     episode = episodes[0]
     assert episode.attrs.get('episode.partial') is True  # flagged so the reduce sees it did not complete
     assert episode.attrs['episode.steps'] == 0  # stamped like a clean end — no step ran before the failure
-    assert episode.attrs['episode.virtual_s'] >= 0.0
+    # The rollout never started — reset raised before its virtual anchor was stamped — so its virtual duration
+    # is zero, not the garbage ``clock.now() - 0`` a never-stamped anchor would otherwise yield.
+    assert episode.attrs['episode.virtual_s'] == 0.0
     passes = [s for s in spans if s.name == 'eval.pass']
     assert len(passes) == 1
     assert episode.parent_id == passes[0].span_id  # parented to the pass, so the reduce does not drop it as an orphan
