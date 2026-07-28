@@ -14,7 +14,7 @@ from positronic.utils.serialization import encode_jpeg
 from .base import Policy, PolicyWrapper, Session
 from .codec import RestrictImageSize
 from .recording import Recorder
-from .spec import from_spec
+from .spec import DEFAULT_STRIP, from_spec
 from .wrappers import ChunkedSchedule
 
 logger = logging.getLogger(__name__)
@@ -53,21 +53,24 @@ def _legacy_bound(sizes: Any) -> RestrictImageSize | None:
         return None
     return RestrictImageSize(max(w for w, _ in pairs), max(h for _, h in pairs))
 
-# Client-only robot-model metadata the harness puts in the observation for client-side frame codecs
-# (``ChangeEEFrame``); it is never a model input, so it is dropped before an observation crosses the wire.
-_LOCAL_ONLY_KEYS = frozenset({'urdf', 'control_frame'})
-
 
 class RemoteSession(Session):
-    """Per-episode session that forwards observations to a remote inference server."""
+    """Per-episode session that forwards observations to a remote inference server.
 
-    def __init__(self, ws_session: InferenceSession, compress_images: bool = False):
+    ``strip`` are the rig-local keys the border keeps off the wire, ``compress_images`` whether frames go
+    out JPEG-encoded; both come from what the server declared (see ``RemoteMarker``).
+    """
+
+    def __init__(
+        self, ws_session: InferenceSession, compress_images: bool = False, strip: frozenset[str] = frozenset()
+    ):
         self._session = ws_session
         self._compress_images = compress_images
+        self._strip = strip
 
     def _prepare_obs(self, obs: dict[str, Any]) -> dict[str, Any]:
-        if _LOCAL_ONLY_KEYS & obs.keys():
-            obs = {key: value for key, value in obs.items() if key not in _LOCAL_ONLY_KEYS}
+        if self._strip & obs.keys():
+            obs = {key: value for key, value in obs.items() if key not in self._strip}
         if not self._compress_images:
             return obs
         return {key: self._prepare_value(key, value) for key, value in obs.items()}
@@ -111,7 +114,7 @@ class RemoteSession(Session):
 
 
 class _Endpoint(Policy):
-    """The wire connection to one inference server: sessions forward observations as-is.
+    """The wire connection to one inference server: sessions forward observations under the border's settings.
 
     ``InferenceClient`` reads the server, the model, and the session params off the URL.
     ``compress_images`` stands in for a server that declares no wire settings of its own.
@@ -142,11 +145,20 @@ class _Endpoint(Policy):
             self._compress = bool(self._compress_override if override else declared)
         return self._compress
 
+    def _strip(self) -> frozenset[str]:
+        """The rig-local keys that stay off the wire: what the server declared, or the standard set.
+
+        A server that declares nothing gets the standard set rather than an empty one, so a rig upgraded
+        ahead of its servers never starts shipping the robot model to one that never asked for it.
+        """
+        declared = self.server_meta().get('strip')
+        return frozenset(DEFAULT_STRIP if declared is None else declared)
+
     def new_session(self, context=None, now=None) -> RemoteSession:
         # Resolved before connecting, so a session that contradicts the declaration leaves no socket open.
-        compress = self._compression()
+        compress, strip = self._compression(), self._strip()
         ws_session = self._client.new_session()
-        return RemoteSession(ws_session, compress_images=compress)
+        return RemoteSession(ws_session, compress_images=compress, strip=strip)
 
     @property
     def meta(self) -> dict[str, Any]:

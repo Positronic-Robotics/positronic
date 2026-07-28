@@ -10,6 +10,7 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.remote import RemoteSession
+from positronic.policy.spec import DEFAULT_STRIP
 from positronic.policy.wrappers import ChunkedSchedule
 
 EMPTY_STACK = {'local_stack': {'seq': []}}
@@ -38,17 +39,16 @@ def _make_image(h, w):
 
 
 class TestPrepareObs:
-    """Tests for RemoteSession's optional JPEG compression. Image geometry is the declared
-    stack's business (see RestrictImageSize) — the session only compresses."""
+    """Tests for the border's own settings — the keys it strips and its optional JPEG compression. Image
+    geometry is the declared stack's business (see RestrictImageSize)."""
 
     def test_images_pass_through_untouched_by_default(self):
         session = RemoteSession(_mock_ws_session())
         obs = {'cam': _make_image(480, 640), 'state': np.array([1.0])}
         assert session._prepare_obs(obs) is obs
 
-    def test_drops_client_only_model_keys(self):
-        """The harness injects ``urdf``/``control_frame`` for client-side frame codecs; they must never wire out."""
-        session = RemoteSession(_mock_ws_session())
+    def test_strips_the_keys_it_is_given(self):
+        session = RemoteSession(_mock_ws_session(), strip=frozenset(DEFAULT_STRIP))
         result = session._prepare_obs({'state': np.array([1.0]), 'urdf': '<robot/>', 'control_frame': 'end_effector'})
         assert 'urdf' not in result and 'control_frame' not in result
         np.testing.assert_array_equal(result['state'], np.array([1.0]))
@@ -65,6 +65,19 @@ class TestPrepareObs:
         assert isinstance(result['video']['wrist'], dict)
         np.testing.assert_array_equal(result['state'], np.array([1.0, 2.0]))
         assert result[keys.TASK] == 'pick cube'
+
+
+class TestDeclaredStrip:
+    """What the border keeps off the wire is the server's declaration, with the standard set as the fallback."""
+
+    def test_server_declaration_is_obeyed(self):
+        policy, _ = _mock_remote_policy({**EMPTY_STACK, 'strip': []})
+        assert policy._endpoint._strip() == frozenset()
+
+    def test_silent_server_gets_the_standard_set(self):
+        """A server too old to declare must not start receiving the robot model when the rig upgrades."""
+        policy, _ = _mock_remote_policy(EMPTY_STACK)
+        assert policy._endpoint._strip() == frozenset(DEFAULT_STRIP)
 
 
 class TestInferenceClientHeaders:

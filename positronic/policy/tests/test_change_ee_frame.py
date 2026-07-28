@@ -7,6 +7,7 @@ from positronic.drivers.roboarm.ik import frame_transform
 from positronic.drivers.roboarm.models import bundled_franka_model
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.codec import ChangeEEFrame
+from positronic.policy.spec import from_spec
 
 QUAT = Rotation.Representation.QUAT
 # RoboLab's DROID end-effector control frame ``eef_frame`` = Robotiq_2F_85/base_link ∘ EEF_OFFSET_ROT with zero
@@ -69,6 +70,17 @@ def test_identity_when_target_equals_control_frame():
     obs = {'robot_state.ee_pose': pose_c.as_vector(QUAT), 'urdf': URDF, 'control_frame': CONTROL_FRAME}
     encoded = ChangeEEFrame(to=CONTROL_FRAME).encode(obs)
     np.testing.assert_allclose(encoded['robot_state.ee_pose'], pose_c.as_vector(QUAT), atol=1e-9)
+
+
+def test_survives_the_wire_spec_round_trip():
+    """A server declares the conversion in its handshake, so the rig must rebuild an equivalent codec from the
+    spec alone — the frame name is the server's to choose, the robot model the rig's."""
+    codec = ChangeEEFrame(to='droid_eef')
+    rebuilt = from_spec(codec.to_spec())
+    assert isinstance(rebuilt, ChangeEEFrame)
+    pose_c = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
+    obs = {'robot_state.ee_pose': pose_c.as_vector(QUAT), 'urdf': URDF, 'control_frame': CONTROL_FRAME}
+    np.testing.assert_array_equal(rebuilt.encode(obs)['robot_state.ee_pose'], codec.encode(obs)['robot_state.ee_pose'])
 
 
 def test_training_encoder_maps_both_poses_forward():

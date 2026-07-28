@@ -88,6 +88,7 @@ Upon connection, the server sends a ready packet with metadata:
       {"name": "restrict_image_size", "args": {"width": 224, "height": 224}}
     ]},
     "compress_images": false,
+    "strip": ["urdf", "control_frame"],
     "positronic_version": "0.2.1"
   }
 }
@@ -107,6 +108,10 @@ This metadata tells the client:
   absent the server declares nothing and the client falls back to the standard `ChunkedSchedule`.
 - `compress_images` — the `remote` marker's own wire setting: whether the rig JPEG-encodes frames before
   sending, for an endpoint behind a proxy with a message-size cap
+- `strip` — the marker's other wire setting: rig-local observation keys that do not cross. The default
+  holds back the robot model (`urdf`, `control_frame`) the harness supplies for frame codecs; a server
+  that converts frames itself declares `remote(strip=())` to receive it. Absent means the default, so a
+  rig never starts shipping the model to a server that never asked
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
 
 #### 2. Status Updates (Long Model Loading)

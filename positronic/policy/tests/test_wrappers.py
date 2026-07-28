@@ -20,6 +20,7 @@ from positronic.policy.codec import (
     ActionTimestamp,
     BinarizeGripInference,
     BinarizeGripTraining,
+    ChangeEEFrame,
     Codec,
     FlipGrip,
     RestrictImageSize,
@@ -332,6 +333,7 @@ class TestPipelineSpec:
             'absolute_joints_action': AbsoluteJointsAction('robot_command.joints', 'target_grip'),
             'relative_position_action': RelativePositionAction(),
             'joint_delta_action': JointDeltaAction(),
+            'change_ee_frame': ChangeEEFrame(to='droid_eef'),
         }
         assert set(instances) == set(spec.WIRE_WRAPPERS)
         for name, instance in instances.items():

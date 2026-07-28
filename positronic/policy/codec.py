@@ -475,16 +475,16 @@ class ChangeEEFrame(Codec):
     obs at inference — so a dataset mixing embodiments just yields a different ``T`` per episode. A pipeline without
     this codec is unchanged; ``to == control_frame`` makes ``T`` the identity.
 
-    Runs client-side, reading the robot model the harness injects into the local obs. That model is client-only and
-    never reaches a frame-agnostic server: ``RemoteSession`` drops it at the wire boundary.
+    Reads the robot model — ``urdf`` and ``control_frame`` — out of whatever it is handed: episode statics at
+    training, the observation at inference. Which side of the ``remote`` marker it is declared on decides who
+    converts: left of it the rig does, right of it the server, which then needs the model on the wire
+    (``remote(strip=())``)::
 
-    Composes with absolute-pose action codecs (``AbsolutePositionAction``). A decoder that reconstructs its command
-    from the observation pose in the decode context (``RelativePositionAction``) would read the canonical pose, not
-    the policy-frame one — such context-reading decoders need frame handling that is not yet wired here.
+        ChangeEEFrame(to='droid_eef') | ChunkedSchedule() | remote | codec | source
 
-    Compose to the left of the observation/action codecs::
-
-        ChangeEEFrame(to='droid_eef') | ee
+    Compose to the left of the observation/action codecs. Absolute-pose decoders (``AbsolutePositionAction``)
+    and context-reading ones (``RelativePositionAction``) both work: the observation a decoder reads its
+    context from has already crossed into ``to``, so its command comes back in the policy frame like any other.
     """
 
     def __init__(self, to: str, ee_pose_key: str = 'robot_state.ee_pose', command_pose_key: str = 'robot_command.pose'):
@@ -516,6 +516,12 @@ class ChangeEEFrame(Codec):
     def training_encoder(self) -> EpisodeTransform:
         return _ChangeEEFrameTraining(self._to, (self._ee_pose_key, self._command_pose_key), self._derive_pose)
 
+    def to_spec(self):
+        return {
+            'name': 'change_ee_frame',
+            'args': {'to': self._to, 'ee_pose_key': self._ee_pose_key, 'command_pose_key': self._command_pose_key},
+        }
+
 
 class _ChangeEEFrameTraining(EpisodeTransform):
     """Move the EE pose signals an episode has into ``to`` and relabel ``control_frame`` to match, so a later codec
@@ -529,7 +535,7 @@ class _ChangeEEFrameTraining(EpisodeTransform):
         self._derive_pose = derive_pose
 
     def __call__(self, episode):
-        derived = {'control_frame': FromValue(self._to)}
+        derived: dict[str, Any] = {'control_frame': FromValue(self._to)}
         derived.update({key: self._derive_pose(key) for key in self._pose_keys if key in episode})
         return Group(Derive(**derived), Identity())(episode)
 

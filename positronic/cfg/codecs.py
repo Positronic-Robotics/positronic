@@ -3,15 +3,9 @@
 import configuronic as cfn
 
 from positronic import geom, keys
-from positronic.policy.codec import ChangeEEFrame
 from positronic.policy.observation import ObservationCodec
 
 RotRep = geom.Rotation.Representation
-
-# The border codec that converts poses into a policy's own EE frame (e.g. DROID's ``droid_eef``). Applied
-# client-side at serving via ``remote(codec=change_ee_frame.override(to=...))``; the ``compose`` ``ee_frame``
-# param below folds it into the training pipeline so the recorded data is encoded in the same frame.
-change_ee_frame = cfn.Config(ChangeEEFrame)
 
 
 @cfn.config()
@@ -61,10 +55,10 @@ def compose(
 ):
     """Compose observation and action codecs with timing and optional grip binarization.
 
-    ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame``
-    converts poses into the policy's own EE frame (see ``ChangeEEFrame``); folded in for training so the recorded
-    data is encoded in that frame. At serving the frame conversion runs client-side instead (``change_ee_frame``),
-    so leave ``ee_frame`` unset on the server's frame-agnostic codec.
+    ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame`` is
+    the end-effector frame the checkpoint speaks (see ``ChangeEEFrame``): set it to re-express a dataset in that
+    frame for training, which is what makes the checkpoint speak it. Serving declares the conversion in the
+    pipeline instead, where the rig resolves the frame against its own robot model, so leave it unset there.
 
     Layout::
 
@@ -75,6 +69,7 @@ def compose(
         ActionTimestamp,
         BinarizeGripInference,
         BinarizeGripTraining,
+        ChangeEEFrame,
         FlipGrip,
     )
 
