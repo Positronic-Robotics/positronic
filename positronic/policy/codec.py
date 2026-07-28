@@ -486,8 +486,12 @@ class ChangeEEFrame(Codec):
         ChangeEEFrame(to='droid_eef') | ChunkedSchedule() | remote | codec | source
 
     Compose to the left of the observation/action codecs. Absolute-pose decoders (``AbsolutePositionAction``)
-    and context-reading ones (``RelativePositionAction``) both work: the observation a decoder reads its
-    context from has already crossed into ``to``, so its command comes back in the policy frame like any other.
+    always work. A decoder that rebuilds its command from the observation in its decode context
+    (``RelativePositionAction``) works only when this codec sits on the far side of the ``remote`` marker from
+    it, so the observation it reads has already crossed into ``to``. Inside one composed codec it does not:
+    ``_ComposedCodec.decode`` hands both halves the same pre-encode context, so the decoder would rebuild
+    around the canonical pose and this codec would then apply ``T⁻¹`` to it. TODO(#483): make composed decode
+    pass each half the context its own encode produced, and the placement stops mattering.
     """
 
     class _Training(EpisodeTransform):

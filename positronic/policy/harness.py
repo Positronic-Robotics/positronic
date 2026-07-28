@@ -222,10 +222,16 @@ class Harness(pimm.ControlSystem):
         # recording ``eval.terminated`` True plus that dict in the episode's static data.
         self.done = pimm.ControlSystemReceiver[dict](self, default={})
 
+    def _statics(self) -> dict[str, Any]:
+        """What is known about the rig before the episode runs, live values winning.
+
+        The robot model reaches it either way: a driver publishes it on ``robot_meta``, or an embodiment whose
+        env cannot build one carries it in ``static_meta`` (``cfg.eval.sim.libero``).
+        """
+        return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value
+
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
-        meta = dict(self._embodiment.static_meta)
-        meta.update(self._static_meta)
-        meta.update(self.robot_meta_in.value)
+        meta = self._statics()
         if self._task is not None:
             # The eval-identity block: which eval produced this episode.
             # TODO: also stamp the eval's catalog name and its resolved config — both need
@@ -406,12 +412,13 @@ class Harness(pimm.ControlSystem):
         inputs['wall_time_ns'] = time.time_ns()
         inputs['obs_time_ns'] = clock.now_ns()
         inputs.update(self.context)
-        if model := self.robot_meta_in.value:
+        statics = self._statics()
+        if 'control_frame' in statics:
             # Backs the codecs that resolve an EE frame against the robot model (``ChangeEEFrame``) — the same
             # ``urdf``/``control_frame`` pair training reads from episode statics. Whether it crosses the wire is
             # the border's call (``RemoteMarker.strip``).
-            inputs['urdf'] = model['urdf']
-            inputs['control_frame'] = model['control_frame']
+            inputs['urdf'] = statics['urdf']
+            inputs['control_frame'] = statics['control_frame']
         inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
         return inputs
 

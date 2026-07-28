@@ -48,7 +48,7 @@ def _eval_pass(run_id: str):
         telemetry.pop_anchor(span)
 
 
-def make_embodiment(descriptor: str = '', cameras=('image.cam',)) -> Embodiment:
+def make_embodiment(descriptor: str = '', cameras=('image.cam',), static_meta=None) -> Embodiment:
     """Minimal Franka-shaped embodiment for harness unit tests.
 
     The sources/dests are no-ops: these tests pair the harness ports directly
@@ -65,7 +65,7 @@ def make_embodiment(descriptor: str = '', cameras=('image.cam',)) -> Embodiment:
         'robot_command': Command(pimm.NoOpReceiver(), Reset(), Serializers.robot_command),
         'target_grip': Command(pimm.NoOpReceiver(), 0.0, None),
     }
-    return Embodiment(descriptor, observations, commands, {}, pimm.NoOpEmitter())
+    return Embodiment(descriptor, observations, commands, static_meta or {}, pimm.NoOpEmitter())
 
 
 class _SpySession(Session):
@@ -378,6 +378,37 @@ def test_harness_passes_descriptor_to_policy(world):
 
     assert policy.last_obs is not None
     assert policy.last_obs['descriptor'] == 'mujoco.franka'
+
+
+@pytest.mark.timeout(3.0)
+def test_robot_model_from_embodiment_statics_reaches_policy(world):
+    """An embodiment whose env cannot publish a model carries it in statics (``cfg.eval.sim.libero``); the frame
+    codecs must see it there as well as on the live ``robot_meta``."""
+    policy = SpyPolicy()
+    statics = {'urdf': '<robot/>', 'control_frame': 'end_effector'}
+    harness = Harness(policy, make_embodiment(static_meta=statics))
+    harness.commands['robot_command']._bind(RecordingEmitter())
+    harness.commands['target_grip']._bind(RecordingEmitter())
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (None, 0.05),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=20)
+
+    assert policy.last_obs is not None
+    assert policy.last_obs['urdf'] == '<robot/>'
+    assert policy.last_obs['control_frame'] == 'end_effector'
 
 
 @pytest.mark.timeout(3.0)
