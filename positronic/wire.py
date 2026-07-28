@@ -32,7 +32,9 @@ def wire(  # noqa: C901
 
     ds_agent = None
     if dataset_writer is not None:
-        ds_agent = DsWriterAgent(dataset_writer, time_mode=time_mode, io_context=lambda: telemetry.span('record.io'))
+        ds_agent = DsWriterAgent(
+            dataset_writer, time_mode=time_mode, telemetry_span=lambda: telemetry.span('record.io')
+        )
         for signal_name in cameras.keys():
             ds_agent.add_signal(signal_name, Serializers.camera_images)
         if robot_arm is not None:
@@ -93,7 +95,7 @@ def wire_embodiment(
             dataset_writer,
             time_mode=time_mode,
             virtual_time=embodiment.simulated,
-            io_context=lambda: telemetry.span('record.io'),
+            telemetry_span=lambda: telemetry.span('record.io'),
         )
         for name, obs in embodiment.observations.items():
             if isinstance(obs.serializer, StatefulSerializer):
