@@ -49,7 +49,7 @@ def yam(robot_arm, cameras):
     """Real single-arm i2rt YAM: the arm driver carries the gripper (they share one CAN chain)."""
     observations = {
         'robot_state': Observation(robot_arm.state, Serializers.robot_state),
-        'grip': Observation(robot_arm.grip, None),
+        keys.GRIP: Observation(robot_arm.grip, None),
         **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
     }
     commands = {
@@ -74,7 +74,7 @@ def yam(robot_arm, cameras):
     # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
     mounts={'left': [0.30, 0.305, 0.311], 'right': [0.30, -0.305, 0.311]},
     cameras={
-        'image.exterior': positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
+        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
         'image.wrist_left': positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
         'image.wrist_right': positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
     },
