@@ -22,8 +22,8 @@ from positronic.dataset import transforms
 def _ensure_site(spec, frame):
     """Ensure ``frame`` is a site in ``spec``, adding one at the body origin when it names a body.
 
-    Frames resolve against the model as a site or a body (e.g. the ``end_effector`` link the real URDF bakes in,
-    or the ``droid_eef`` frame graft) — the single registry every frame lookup uses.
+    The robot model is the frame registry: a name resolves as a site or a body — the ``end_effector`` link the
+    real URDF bakes in, the ``droid_eef`` graft — and nothing else.
     """
     all_sites = {s.name for b in spec.bodies for s in b.sites}
     if frame in all_sites:
@@ -36,8 +36,8 @@ def _ensure_site(spec, frame):
     raise ValueError(f'Frame {frame!r} not found as site or body in model')
 
 
-def _prepare_spec(urdf_xml, control_frame):
-    """Parse URDF or MJCF into an MjSpec, stripping meshes and resolving the control frame site."""
+def _prepare_spec(urdf_xml, frame):
+    """Parse URDF or MJCF into an MjSpec, stripping meshes and resolving ``frame`` to a site."""
     root = ET.fromstring(urdf_xml)
     if root.tag == 'robot':
         for link in root.findall('.//link'):
@@ -45,7 +45,7 @@ def _prepare_spec(urdf_xml, control_frame):
                 link.remove(elem)
         urdf_xml = ET.tostring(root, encoding='unicode')
     spec = mj.MjSpec.from_string(urdf_xml)
-    _ensure_site(spec, control_frame)
+    _ensure_site(spec, frame)
     return spec
 
 
@@ -61,8 +61,7 @@ def frame_transform(urdf_xml, from_frame, to_frame):
 
     A pose measured in ``from_frame`` (e.g. the recorded ``ee_pose`` at ``control_frame``) composes to
     ``to_frame`` via ``pose * frame_transform(...)``. Both frames must be rigidly connected (fixed joints) for the
-    result to be config-independent, so it is read from a single forward pass at the zero configuration; frames
-    resolve as sites or bodies, the same registry ``_prepare_spec`` uses for the control frame.
+    result to be config-independent, so it is read from a single forward pass at the zero configuration.
     """
     spec = _prepare_spec(urdf_xml, from_frame)
     _ensure_site(spec, to_frame)

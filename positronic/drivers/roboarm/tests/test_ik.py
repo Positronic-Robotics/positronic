@@ -135,13 +135,12 @@ def test_frame_transform_reproduces_droid_eef_across_configs():
     ``ChangeEEFrame`` codec applies to observations."""
     urdf = bundled_franka_model()['urdf']
     transform = frame_transform(urdf, 'end_effector', 'droid_eef')
+    quat = geom.Rotation.Representation.QUAT
     for q in TEST_CONFIGS:
-        ee = geom.Transform3D.from_vector(_fk_site(urdf, q, 'end_effector'), geom.Rotation.Representation.QUAT)
-        want = _fk_site(urdf, q, 'droid_eef')
-        got = (ee * transform).as_vector(geom.Rotation.Representation.QUAT)
-        np.testing.assert_allclose(got[:3], want[:3], atol=1e-9)
-        q_diff = min(np.linalg.norm(got[3:] - want[3:]), np.linalg.norm(got[3:] + want[3:]))
-        assert q_diff < 1e-9, f'rotation mismatch: {q_diff}'
+        got = geom.Transform3D.from_vector(_fk_site(urdf, q, 'end_effector'), quat) * transform
+        want = geom.Transform3D.from_vector(_fk_site(urdf, q, 'droid_eef'), quat)
+        np.testing.assert_allclose(got.translation, want.translation, atol=1e-9)
+        assert geom.quat_closest(got.rotation, want.rotation) == want.rotation
 
 
 def test_frame_transform_identity_when_frames_match():

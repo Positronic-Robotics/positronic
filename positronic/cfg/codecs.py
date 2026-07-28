@@ -3,6 +3,14 @@
 import configuronic as cfn
 
 from positronic import geom, keys
+from positronic.policy.codec import (
+    ActionHorizon,
+    ActionTimestamp,
+    BinarizeGripInference,
+    BinarizeGripTraining,
+    ChangeEEFrame,
+    FlipGrip,
+)
 from positronic.policy.observation import ObservationCodec
 
 RotRep = geom.Rotation.Representation
@@ -62,17 +70,9 @@ def compose(
 
     Layout::
 
-        [ActionHorizon] | ActionTimestamp | [BinarizeGrip*] | [FlipGrip] | [ChangeEEFrame] | obs & action
+        [ActionHorizon] | ActionTimestamp | [BinarizeGripTraining | BinarizeGripInference]
+            | [FlipGrip] | [ChangeEEFrame] | obs & action
     """
-    from positronic.policy.codec import (
-        ActionHorizon,
-        ActionTimestamp,
-        BinarizeGripInference,
-        BinarizeGripTraining,
-        ChangeEEFrame,
-        FlipGrip,
-    )
-
     result = obs & action
     if ee_frame is not None:
         result = ChangeEEFrame(to=ee_frame) | result

@@ -5,7 +5,7 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm.ik import frame_transform
 from positronic.drivers.roboarm.models import bundled_franka_model
-from positronic.geom import Rotation, Transform3D
+from positronic.geom import Rotation, Transform3D, quat_closest
 from positronic.policy.codec import ChangeEEFrame
 from positronic.policy.spec import from_spec
 
@@ -21,17 +21,13 @@ def _pose(t, euler):
     return Transform3D(np.asarray(t, dtype=np.float64), Rotation.from_euler(euler))
 
 
-def _quat_close(a, b, atol=1e-9):
-    # Quaternion double cover: q and -q are the same rotation.
-    return min(np.linalg.norm(a - b), np.linalg.norm(a + b)) < atol
-
-
 def test_droid_eef_matches_robolab_eef_frame():
     """``droid_eef`` relative to the flange is RoboLab's ``eef_frame``, measured from its DROID USD: 18.17mm along
     the flange Z and a +90deg Z rotation (``link8`` -> ``Robotiq_2F_85/base_link`` ∘ EEF_OFFSET_ROT)."""
     transform = frame_transform(URDF, 'link8', 'droid_eef')
+    expected = Rotation.from_euler([0.0, 0.0, np.pi / 2])
     np.testing.assert_allclose(transform.translation, [0.0, 0.0, 0.01817402261], atol=1e-9)
-    assert _quat_close(transform.rotation.as_quat, Rotation.from_euler([0.0, 0.0, np.pi / 2]).as_quat)
+    assert quat_closest(transform.rotation, expected) == expected
 
 
 def test_encode_maps_obs_to_policy_frame():
