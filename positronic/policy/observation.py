@@ -116,5 +116,10 @@ class ObservationCodec(Codec):
         images = {name: [key, list(size)] for name, (key, size) in self._image_configs.items()}
         return {
             'name': 'observation_codec',
-            'args': {'state': self._state, 'images': images, 'task_field': self._task_field},
+            'args': {
+                'state': self._state,
+                'images': images,
+                'task_field': self._task_field,
+                'lowercase_task': self._lowercase_task,
+            },
         }
