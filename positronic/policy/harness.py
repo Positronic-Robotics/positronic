@@ -408,11 +408,31 @@ class Harness(pimm.ControlSystem):
             return {'eval.terminated': False}
         return None
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:  # noqa: C901
+    def _seal_open_episode_span(self) -> None:
+        """Seal an episode span left open by a mid-rollout failure, marked partial, before the exception
+        reaches the provider's exit flush. Inert when no span is open (telemetry off, or the failure fell
+        outside an episode)."""
+        if self._episode_span is None:
+            return
+        telemetry.end_partial_episode(self._episode_span)
+        self._episode_span = None
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         # Home the embodiment before the first episode; each ``_end_episode`` re-homes for the next one, so
         # every episode begins from the home pose (a real arm gets the inter-episode gap to reach it).
         self._home(clock)
 
+        try:
+            yield from self._run(should_stop, clock)
+        except BaseException:
+            # A failure mid-rollout (task.reset / new_session / a session call raising after begin_episode
+            # opened the span) unwinds past the normal span close. Seal the open episode span here, before the
+            # exception reaches ``bind``'s exit flush, or the span never exports and its finished children
+            # orphan — losing their phases and charging the episode's wall to between_episodes.
+            self._seal_open_episode_span()
+            raise
+
+    def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:  # noqa: C901
         while not should_stop.value:
             # One action per round, mutually exclusive: handle a directive, start the next trial (or exit
             # when the plan is done), finish a self-driven trial that is out of budget or done, or step the

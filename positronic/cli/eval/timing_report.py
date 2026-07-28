@@ -315,6 +315,14 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
     # ``eval.pass`` span, and such orphans would inflate every pass-normalized figure when the directory is
     # reused for a later run.
     episodes = [s for s in spans if s.name == 'episode' and not s.attrs.get('episode.aborted', False)]
+    # A partial episode (its rollout failed mid-run) is kept, not dropped: its finished phases are real wall
+    # and must attribute rather than fall into ``between_episodes``. Named, like ``pass.failed``, so the split
+    # is read with its incomplete window in view.
+    partial = sum(bool(e.attrs.get('episode.partial', False)) for e in episodes)
+    if partial:
+        logger.warning(
+            '%d episode(s) did not run to completion (a failed pass?); their finished phases are included', partial
+        )
     orphans = sum(e.parent_id not in pass_ids for e in episodes)
     if orphans:
         logger.warning('%d episode(s) belong to no completed pass (a killed run?); excluded from the report', orphans)
