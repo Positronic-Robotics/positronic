@@ -49,7 +49,9 @@ class MolmoAdapter(WireCommandAdapter):
         return obs
 
     def privileged(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
-        return {}
+        # The env's full MuJoCo state — recorded as ground truth so success can be recomputed offline, never fed
+        # to the policy (mirrors the libero adapter).
+        return {'sim_state': raw_obs['sim_state']}
 
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
         # ``done`` covers termination and timeout; ``success`` is the task's judged success, so a timeout stays
