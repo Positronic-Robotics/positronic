@@ -34,6 +34,11 @@ _MOLMO_SRC = Path.home() / '.cache' / 'positronic' / 'molmospaces' / 'src'
 _MOLMO_PYTHON = '3.11'
 _MOLMO_EXTRA = 'mujoco'
 
+# ``env.py`` imports positronic's ``env_server`` off PYTHONPATH, which needs ``websockets`` (the wire server) and
+# ``msgpack`` (the frame codec). MolmoSpaces currently pulls both, but that is incidental to its own deps — install
+# them explicitly so env_server's wire contract holds even if MolmoSpaces drops them. Constraints mirror positronic's.
+_WIRE_DEPS = ('websockets>=15.0.1', 'msgpack')
+
 
 @contextmanager
 def _checkout_lock() -> Iterator[None]:
@@ -57,7 +62,7 @@ def _spawn(host: str, port: int, benchmark_dir: str) -> subprocess.Popen:
         if not venv.exists():
             subprocess.run(['uv', 'venv', '--python', _MOLMO_PYTHON, str(venv)], check=True)
         subprocess.run(
-            ['uv', 'pip', 'install', '-e', f'.[{_MOLMO_EXTRA}]'],
+            ['uv', 'pip', 'install', '-e', f'.[{_MOLMO_EXTRA}]', *_WIRE_DEPS],
             cwd=str(src),
             env={**os.environ, 'VIRTUAL_ENV': str(venv)},
             check=True,
