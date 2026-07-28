@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Generic, TypeVar, final
+from typing import Generic, TypeVar, cast, final
 
 T = TypeVar('T')
 U = TypeVar('U')
@@ -24,7 +24,7 @@ class Message(Generic[T]):
     If no timestamp is provided, the current system time is used.
     """
 
-    data: T | None
+    data: T
     ts: int = -1  # -1 means no value
     updated: bool = True
 
@@ -188,7 +188,8 @@ class ControlSystemReceiver(SignalReceiver[T]):
             if value is not None:
                 return value
         if self._default is not NODEFAULT:
-            return Message(self._default, -1, False)  # Default value is always not-updated
+            # Always not-updated; the check above excludes the sentinel, which `T | None` cannot express.
+            return Message(cast(T, self._default), -1, False)
         return None
 
 

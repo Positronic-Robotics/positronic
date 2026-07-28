@@ -13,6 +13,7 @@ from datetime import datetime
 import configuronic as cfn
 import pos3
 
+from positronic import keys
 from positronic.cfg.ds import group, local_all, transform
 from positronic.cfg.ds.internal import REAL_ROBOT_TRANSFORM
 from positronic.cfg.eval.real.tasks import UNIFIED_TASK
@@ -25,7 +26,7 @@ from positronic.utils.logging import init_logging
 
 # The PUBLIC@ profile selector resolves to anonymous (unsigned) access, so these URLs work
 # with no AWS credentials — a reader can pass a model URL straight to an inference server's
-# `--checkpoints_dir`.
+# `--pipeline.source.checkpoints_dir`.
 _ROOT = 's3://PUBLIC@positronic-public/phail/v1.0'
 
 ds = types.SimpleNamespace(
@@ -61,7 +62,7 @@ def episodes_table():
 def group_by_task():
     def group_fn(episodes: list[Episode]):
         duration = sum(ep.duration_ns / 1e9 / 3600 for ep in episodes)
-        return {'task': episodes[0]['task'], 'duration': duration, 'count': len(episodes)}
+        return {'task': episodes[0][keys.TASK], 'duration': duration, 'count': len(episodes)}
 
     format_table = {
         'task': C(label='Task'),

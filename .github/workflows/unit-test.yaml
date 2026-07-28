@@ -34,9 +34,7 @@ jobs:
       - name: "Run tests (coverage: term, html)"
         env:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
-        run: >-
-          uv run pytest --cov-report=html
-          --override-ini='testpaths=pimm/tests positronic/cfg/tests positronic/dataset/tests positronic/geom/tests positronic/offboard/tests positronic/policy/tests positronic/simulator/molmo_spaces/tests positronic/tests positronic/utils/tests'
+        run: uv run pytest --cov-report=html
 
       - name: Coverage summary (job summary)
         if: always()

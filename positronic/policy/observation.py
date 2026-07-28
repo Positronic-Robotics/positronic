@@ -4,6 +4,7 @@ from typing import Any
 import numpy as np
 from PIL import Image as PilImage
 
+from positronic import keys
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
@@ -57,7 +58,7 @@ class ObservationCodec(Codec):
         return image.resize_with_pad(width, height, signal=episode[input_key])
 
     def _derive_task(self, episode: Episode) -> Any:
-        task = episode['task'] if 'task' in episode else ''
+        task = episode[keys.TASK] if keys.TASK in episode else ''
         return task.lower() if self._lowercase_task else task
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
@@ -66,8 +67,8 @@ class ObservationCodec(Codec):
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         obs: dict[str, Any] = {}
 
-        if 'task' in inputs:
-            task = inputs['task']
+        if keys.TASK in inputs:
+            task = inputs[keys.TASK]
             obs[self._task_field] = task.lower() if self._lowercase_task else task
 
         for out_name, (input_key, (width, height)) in self._image_configs.items():
@@ -109,3 +110,11 @@ class ObservationCodec(Codec):
     @property
     def training_encoder(self):
         return Derive(meta=self._training_meta, **self._derive_transforms)
+
+    def to_spec(self):
+        # Normalized to lists so the spec is identical before and after a wire round-trip.
+        images = {name: [key, list(size)] for name, (key, size) in self._image_configs.items()}
+        return {
+            'name': 'observation_codec',
+            'args': {'state': self._state, 'images': images, 'task_field': self._task_field},
+        }

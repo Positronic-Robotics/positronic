@@ -2,6 +2,7 @@ from types import MappingProxyType
 
 import numpy as np
 
+from positronic import keys
 from positronic.drivers.roboarm.command import CartesianPosition, JointDelta, JointPosition, Reset
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceClient
@@ -11,7 +12,7 @@ from positronic.utils.serialization import deserialise, encode_jpeg, serialise
 def test_inference_client_connect_and_infer(inference_server, mock_policy):
     """Test standard client connection and inference flow."""
     host, port = inference_server
-    client = InferenceClient(host, port)
+    client = InferenceClient(f'{host}:{port}')
 
     session = client.new_session()
     try:
@@ -31,7 +32,7 @@ def test_inference_client_connect_and_infer(inference_server, mock_policy):
 def test_inference_client_new_session(inference_server, mock_policy):
     """Test that starting a new session calls new_session on the policy."""
     host, port = inference_server
-    client = InferenceClient(host, port)
+    client = InferenceClient(f'{host}:{port}')
 
     # First session
     session = client.new_session()
@@ -44,11 +45,11 @@ def test_inference_client_new_session(inference_server, mock_policy):
     assert mock_policy.new_session.call_count == 2
 
 
-def test_inference_client_selects_model_id(multi_policy_server):
+def test_session_url_selects_the_model(multi_policy_server):
     host, port, policies = multi_policy_server
-    client = InferenceClient(host, port)
+    endpoint = f'{host}:{port}'
 
-    default_session = client.new_session()
+    default_session = InferenceClient(endpoint).new_session()
     try:
         assert default_session.metadata['model_name'] == 'alpha'
         action = default_session.infer({'obs': 'default'})
@@ -56,7 +57,7 @@ def test_inference_client_selects_model_id(multi_policy_server):
     finally:
         default_session.close()
 
-    alpha_session = client.new_session('alpha')
+    alpha_session = InferenceClient(f'{endpoint}/api/v1/session/alpha').new_session()
     try:
         assert alpha_session.metadata['model_name'] == 'alpha'
         action = alpha_session.infer({'obs': 'alpha'})
@@ -64,7 +65,7 @@ def test_inference_client_selects_model_id(multi_policy_server):
     finally:
         alpha_session.close()
 
-    beta_session = client.new_session('beta')
+    beta_session = InferenceClient(f'{endpoint}/api/v1/session/beta').new_session()
     try:
         assert beta_session.metadata['model_name'] == 'beta'
         action = beta_session.infer({'obs': 'beta'})
@@ -91,14 +92,14 @@ def test_wire_serialisation_accepts_mappingproxy():
 def test_jpeg_round_trips_single_image_and_stack():
     """An ``encode_jpeg`` marker survives the wire and decodes back to the original shape and order."""
     single = np.full((16, 24, 3), 90, dtype=np.uint8)
-    restored_single = deserialise(serialise({'image.wrist': encode_jpeg(single)}))['image.wrist']
+    restored_single = deserialise(serialise({keys.WRIST_IMAGE: encode_jpeg(single)}))[keys.WRIST_IMAGE]
     assert isinstance(restored_single, np.ndarray)
     assert restored_single.shape == (16, 24, 3)
     assert restored_single.dtype == np.uint8
     np.testing.assert_allclose(restored_single, single, atol=4)
 
     stack = np.stack([np.full((16, 24, 3), (t + 1) * 60, dtype=np.uint8) for t in range(3)])
-    restored_stack = deserialise(serialise({'image.wrist': encode_jpeg(stack)}))['image.wrist']
+    restored_stack = deserialise(serialise({keys.WRIST_IMAGE: encode_jpeg(stack)}))[keys.WRIST_IMAGE]
     assert restored_stack.shape == (3, 16, 24, 3)
     # q90 JPEG on solid colors is near-lossless; this also verifies per-frame order is preserved.
     np.testing.assert_allclose(restored_stack, stack, atol=4)

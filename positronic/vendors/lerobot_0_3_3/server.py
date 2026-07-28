@@ -5,13 +5,16 @@ from typing import Any
 
 import configuronic as cfn
 import pos3
-from fastapi import WebSocket
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
-from positronic.offboard.vendor_server import PolicyManager, VendorServer, resolve_checkpoint
+from positronic.offboard.server import serve
+from positronic.offboard.server_utils import run_with_progress
 from positronic.policy import Codec, Policy
-from positronic.utils.checkpoints import list_checkpoints
+from positronic.policy.codec import RestrictImageSize
+from positronic.policy.spec import ModelSource, remote
+from positronic.policy.wrappers import ChunkedSchedule
+from positronic.utils.checkpoints import list_checkpoints, resolve_checkpoint
 from positronic.utils.logging import init_logging
 from positronic.vendors.lerobot_0_3_3 import codecs as lerobot_codecs
 from positronic.vendors.lerobot_0_3_3.backbone import register_all
@@ -22,144 +25,100 @@ register_all()
 logger = logging.getLogger(__name__)
 
 
-class InferenceServer(VendorServer):
-    """LeRobot inference server with singleton policy manager.
+def act(checkpoint_path: str) -> PreTrainedPolicy:
+    return ACTPolicy.from_pretrained(checkpoint_path, strict=True)
 
-    This server loads policies synchronously (in-process), which means checkpoint
-    loading should be reasonably fast (<20s) to avoid WebSocket keepalive timeouts.
 
-    The server enforces a single active policy at a time, queueing new requests
-    until the current policy is unloaded.
+class LerobotSource(ModelSource):
+    """In-process LeRobot checkpoints from one experiment directory (its ``checkpoints/`` subdirectory),
+    which ``load`` downloads one at a time.
+
+    ``policy_factory`` builds the backbone policy from a checkpoint path — that is its whole contract,
+    so any callable returning a ``PreTrainedPolicy`` works. ``model_type`` names what it built, for the
+    handshake.
     """
 
     def __init__(
         self,
         policy_factory: Callable[[str], PreTrainedPolicy],
-        codec: Codec | None,
         checkpoints_dir: str | Path,
         checkpoint: str | None = None,
-        host: str = '0.0.0.0',
-        port: int = 8000,
-        metadata: dict[str, Any] | None = None,
         device: str | None = None,
-        recording_dir: str | None = None,
-        idle_timeout_min: float | None = None,
+        model_type: str = 'act',
     ):
-        super().__init__(
-            codec=codec, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
-        )
-        self.policy_factory = policy_factory
-        self.checkpoints_dir = str(checkpoints_dir).rstrip('/') + '/checkpoints'
-        self.checkpoint = checkpoint
-        self.device = device or _detect_device()
+        self._policy_factory = policy_factory
+        self._checkpoints_dir = str(checkpoints_dir).rstrip('/') + '/checkpoints'
+        self._checkpoint = checkpoint
+        self._device = device or _detect_device()
+        self._model_type = model_type
+        self._experiment_name = str(checkpoints_dir).rstrip('/').split('/')[-1] or ''
 
-        self.metadata = metadata or {}
-        self.metadata.update(
-            host=host,
-            port=port,
-            device=self.device,
-            experiment_name=str(checkpoints_dir).rstrip('/').split('/')[-1] or '',
-        )
+    def get_models(self) -> list[str]:
+        return list_checkpoints(self._checkpoints_dir)
 
-        self.policy_manager = PolicyManager(self._load_policy)
+    def resolve(self, model_id: str | None) -> str:
+        return resolve_checkpoint(self._checkpoints_dir, self._checkpoint, model_id)
 
-    def _load_policy(self, checkpoint_id: str) -> Policy:
-        checkpoint_path = f'{self.checkpoints_dir}/{checkpoint_id}/pretrained_model'
+    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
+        checkpoint_path = f'{self._checkpoints_dir}/{model_id}/pretrained_model'
         logger.info(f'Loading checkpoint from {checkpoint_path}')
+        local = run_with_progress(
+            lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {model_id}', on_progress
+        )
+        policy = self._policy_factory(str(local))
+        meta = {'type': self._model_type, 'checkpoint_path': checkpoint_path}
+        return LerobotPolicy(policy, self._device, extra_meta=meta)
 
-        base_meta = {'checkpoint_id': checkpoint_id, 'checkpoint_path': checkpoint_path, **self.metadata}
-        policy = self.policy_factory(checkpoint_path)
-        if hasattr(policy, 'metadata') and policy.metadata:
-            base_meta.update(policy.metadata)
-
-        return LerobotPolicy(policy, self.device, extra_meta=base_meta)
-
-    async def resolve_model(self, model_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
-        resolved_id = resolve_checkpoint(self.checkpoints_dir, self.checkpoint, model_id)
-        policy = await self.policy_manager.get_policy(resolved_id, websocket)
-        return policy, {'checkpoint_id': resolved_id}
-
-    def create_policy(self, model_handle: Any) -> Policy:
-        return model_handle
-
-    async def get_models(self) -> dict:
-        try:
-            return {'models': list_checkpoints(self.checkpoints_dir)}
-        except Exception:
-            logger.exception('Failed to list checkpoints.')
-            return {'models': []}
-
-    async def release_policy(self, model_handle):
-        await self.policy_manager.release_session()
+    def meta(self, model_id: str) -> dict[str, Any]:
+        return {'device': self._device, 'experiment_name': self._experiment_name}
 
 
-def act(checkpoint_path: str) -> PreTrainedPolicy:
-    policy = ACTPolicy.from_pretrained(checkpoint_path, strict=True)
-    policy.metadata = {'type': 'act', 'checkpoint_path': checkpoint_path}
-    return policy
+lerobot_source = cfn.Config(LerobotSource, policy_factory=act)
 
 
-@cfn.config(
-    policy_factory=act,
-    codec=lerobot_codecs.ee,
-    checkpoint=None,
-    port=8000,
-    host='0.0.0.0',
-    recording_dir=None,
-    idle_timeout_min=None,
-)
-def main(
-    policy_factory: Callable[[str], PreTrainedPolicy],
-    checkpoints_dir: str,
-    checkpoint: str | None,
-    codec,
-    port: int,
-    host: str,
-    recording_dir: str | None,
-    idle_timeout_min: float | None,
-):
-    checkpoints_dir = str(pos3.download(checkpoints_dir))
-    InferenceServer(
-        policy_factory,
-        codec,
-        checkpoints_dir,
-        checkpoint,
-        host=host,
-        port=port,
-        recording_dir=recording_dir,
-        idle_timeout_min=idle_timeout_min,
-    ).serve()
+@cfn.config(codec=lerobot_codecs.ee, source=lerobot_source)
+def pipeline(codec: Codec, source: ModelSource):
+    return ChunkedSchedule() | RestrictImageSize(224, 224) | remote | codec | source
 
 
-phail = main.override(
-    checkpoints_dir='s3://checkpoints/phail_unified/lerobot/270226-ee/',
-    recording_dir='s3://inference/phail_unified/server_recordings/lerobot/270226-ee/',
-)
-# The sim_stack and demo checkpoints were trained on inverted-grip (1 = open) sim data, hence flip_grip.
-sim_stack = main.override(
-    checkpoints_dir='s3://checkpoints/sim_stack/lerobot/230226-ee/',
-    recording_dir='s3://inference/sim_stack/server_recordings/lerobot/230226-ee/',
-    **{'codec.flip_grip': True},
-)
-_DEMO_CHECKPOINT = 's3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'
+ee = pipeline
+joints = pipeline.override(codec=lerobot_codecs.joints)
+ee_traj = pipeline.override(codec=lerobot_codecs.ee_traj)
+joints_traj = pipeline.override(codec=lerobot_codecs.joints_traj)
+joints_ik = pipeline.override(codec=lerobot_codecs.joints_ik)
+joints_ik_sim = pipeline.override(codec=lerobot_codecs.joints_ik_sim)
+# For checkpoints trained on inverted-grip (1 = open) sim data, which speak the flipped convention.
+ee_flip = pipeline.override(codec=lerobot_codecs.ee.override(flip_grip=True))
 
 
-@cfn.config(
-    policy_factory=act,
-    codec=lerobot_codecs.ee.override(flip_grip=True),
-    checkpoint=None,
-    port=8000,
-    host='0.0.0.0',
-    idle_timeout_min=None,
-)
-def demo(policy_factory, checkpoint, codec, port, host, idle_timeout_min):
-    checkpoints_dir = str(pos3.download(_DEMO_CHECKPOINT))
-    InferenceServer(
-        policy_factory, codec, checkpoints_dir, checkpoint, host=host, port=port, idle_timeout_min=idle_timeout_min
-    ).serve()
+# Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
+# The sim_stack and demo checkpoints were trained on inverted-grip (1 = open) sim data, hence the flipped pipeline.
+COMMANDS = {
+    'serve': serve.override(pipeline=ee),
+    'ee': serve.override(pipeline=ee),
+    'joints': serve.override(pipeline=joints),
+    'ee_traj': serve.override(pipeline=ee_traj),
+    'joints_traj': serve.override(pipeline=joints_traj),
+    'joints_ik': serve.override(pipeline=joints_ik),
+    'joints_ik_sim': serve.override(pipeline=joints_ik_sim),
+    'ee_flip': serve.override(pipeline=ee_flip),
+    'phail': serve.override(
+        pipeline=ee.override(**{'source.checkpoints_dir': 's3://checkpoints/phail_unified/lerobot/270226-ee/'}),
+        recording_dir='s3://inference/phail_unified/server_recordings/lerobot/270226-ee/',
+    ),
+    'sim_stack': serve.override(
+        pipeline=ee_flip.override(**{'source.checkpoints_dir': 's3://checkpoints/sim_stack/lerobot/230226-ee/'}),
+        recording_dir='s3://inference/sim_stack/server_recordings/lerobot/230226-ee/',
+    ),
+    'demo': serve.override(
+        pipeline=ee_flip.override(**{
+            'source.checkpoints_dir': 's3://PUBLIC@positronic-public/checkpoints/sim_stack_cubes/act/'
+        })
+    ),
+}
 
 
 if __name__ == '__main__':
     init_logging()
     with pos3.mirror():
-        cfn.cli({'serve': main, 'phail': phail, 'sim_stack': sim_stack, 'demo': demo})
+        cfn.cli(COMMANDS)

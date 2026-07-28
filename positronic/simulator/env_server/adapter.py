@@ -116,7 +116,7 @@ class WireCommandAdapter(EnvAdapter):
     def action(self, commands: dict[str, pimm.Message], now_ns: int) -> dict[str, Any]:
         for name, msg in commands.items():
             player = self._players[name]
-            if msg.updated and msg.data is not None:
+            if msg.updated:
                 player.set(msg.data)
                 if not msg.data:  # an empty trajectory cancels: stop replaying the held waypoint
                     self._held.pop(name, None)

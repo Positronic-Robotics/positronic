@@ -6,27 +6,26 @@ Deploy trained policies for evaluation and production use. Positronic supports l
 
 Positronic's unified WebSocket protocol connects any hardware to any model (LeRobot, GR00T, OpenPI). The key benefit is running heavy models on powerful GPU hardware (OpenPI needs ~62GB, GR00T ~8GB) separate from the robot/simulator machine.
 
+Each server carries a full **policy pipeline** — one chain naming the rig-side stack, the `remote` split marker, the server-side codec, and the model source that loads checkpoints (see `positronic.policy.spec`). The server runs the half right of the marker and declares the half left of it in its handshake; the client builds the declared stack automatically. Vendors ship their pipelines by name, and every name is a server subcommand — `groot-server ee_rot6d_joints` launches that one. The available names are listed in each vendor's README.
+
 **Start inference server:**
 ```bash
+# The subcommand names the pipeline; everything the model is lives inside it
 # LeRobot (SmolVLA — 0.4.x)
-cd docker && docker compose run --rm --service-ports lerobot-server \
-  --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --codec=@positronic.vendors.lerobot.codecs.ee
+cd docker && docker compose run --rm --service-ports lerobot-server ee \
+  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
 
 # LeRobot (ACT — 0.3.3)
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
-  --checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
-  --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
+cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
+  --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/
 
-# GR00T (pre-configured variant)
-cd docker && docker compose run --rm --service-ports groot-server \
-  ee_rot6d_joints \
-  --checkpoints_dir=~/checkpoints/groot/experiment_v1/
+# GR00T
+cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joints \
+  --pipeline.source.checkpoints_dir=~/checkpoints/groot/experiment_v1/
 
 # OpenPI
-cd docker && docker compose run --rm --service-ports openpi-server \
-  --checkpoints_dir=~/checkpoints/openpi/experiment_v1/ \
-  --codec=@positronic.vendors.openpi.codecs.ee
+cd docker && docker compose run --rm --service-ports openpi-server ee \
+  --pipeline.source.checkpoints_dir=~/checkpoints/openpi/experiment_v1/
 ```
 
 Check server: `curl http://localhost:8000/api/v1/models` returns available model IDs.
@@ -36,21 +35,37 @@ Check server: `curl http://localhost:8000/api/v1/models` returns available model
 # Simulation
 uv run positronic-inference sim \
   --policy=.remote \
-  --policy.host=localhost \
+  --policy.url=localhost:8000 \
   --output_dir=~/datasets/inference_logs/exp_v1
 
 # Hardware
 uv run positronic-inference real \
   --policy=.remote \
-  --policy.host=gpu-server \
+  --policy.url=gpu-server:8000 \
   --output_dir=~/datasets/inference_logs/franka_eval
 ```
 
-**Remote policy parameters:** `--policy.host` (server hostname/IP), `--policy.port` (default 8000), `--policy.model_id` (specific checkpoint, default latest), `--policy.resize` (client-side image resize for bandwidth optimization).
+**One URL is the whole endpoint.** `--policy.url` carries the host, port, TLS, model id, and session params, so a server can be handed out as a single string:
 
-> **Recording inference I/O:** Pass `--policy.recording_dir=s3://bucket/path` to `.remote` or `.weighted_remote` to write a rerun `.rrd` file per episode capturing the raw and server-side observation/action boundaries. Useful for debugging codec behavior and visualizing what the policy actually received.
+```bash
+uv run positronic-inference sim \
+  --policy=.remote \
+  --policy.url='https://gpu-server/api/v1/session/checkpoint-20000?codec.fps=10&local.pad_start=false'
+```
 
-**Multi-checkpoint sampling:** To evaluate several models at once, sampling configs route each episode to a different policy. Use `--policy=@positronic.cfg.policy.production` to combine per-vendor `.weighted_remote` endpoints, optionally with a balanced sampler and grouping fields. The `phail` subcommand wires this up end-to-end, defaulting to the `phail_multiple` policy (a `production` preset) and the `eval_ui` driver.
+Accepted forms: `host`, `host:port`, and `https://host[:port][/api/v1/session[/<model_id>]]` (`http`, `ws` and `wss` work too), each with an optional query. `https`/`wss` enable TLS. An omitted port is the scheme's own — 443 for TLS and 80 otherwise — so name the port a server listens on (`:8000` for every vendor server's default). Naming no model id serves the checkpoint the server pinned at startup.
+
+**Session parameters** are the URL's query string: the server applies them as overrides to its pipeline config, so you can tune the served pipeline without restarting the server. Keys are dotted paths into that config and values are JSON literals, forwarded verbatim so they arrive exactly as written (`fps=10`, `pad=false`, `name="s3"`).
+
+The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server launch — `source.*` params are rejected; name a checkpoint in the URL path instead. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).
+
+**Credentials stay out of the URL.** `--policy.headers='{"Modal-Key": "..."}'` passes auth headers for a fronted endpoint, so the URL itself is safe to paste around.
+
+**What crosses the wire is the server's call, not the client's.** A server that wants smaller frames declares `RestrictImageSize` in its rig-side stack (640x640 by default); one behind a proxy with a message-size cap declares `remote(compress_images=True)` and the rig JPEG-encodes frames before sending. The client builds whatever the handshake declares — a server that declares nothing gets the standard `ChunkedSchedule`.
+
+`--policy.local=@...` and `--policy.compress_images` are deprecated stand-ins for a server too old to declare either; against a server that does declare, they raise rather than quietly winning. A server that declares no stack at all but still reports `image_sizes` gets a third stand-in: the client bounds frames to those sizes, logging what it did. All three go away once every server declares (see [#514](https://github.com/Positronic-Robotics/positronic/issues/514)).
+
+> **Recording inference I/O:** Pass `--policy.recording_dir=s3://bucket/path` to write a rerun `.rrd` file per episode capturing the raw and server-side observation/action boundaries. Useful for debugging codec behavior and visualizing what the policy actually received.
 
 ## Local Inference
 
@@ -83,7 +98,7 @@ Replay recorded runs: `uv run positronic-server --dataset.path=~/datasets/infere
 
 ## Evaluation Workflow
 
-Run inference with recording, review in Positronic server, score manually (success/partial/failure), repeat for 10-50 trials, calculate success rate and note common failure modes. Compare checkpoints by running inference with different `--policy.model_id` values. For batch evaluation, use [`utilities/validate_server.py`](../utilities/validate_server.py).
+Run inference with recording, review in Positronic server, score manually (success/partial/failure), repeat for 10-50 trials, calculate success rate and note common failure modes. Compare checkpoints by pointing `--policy.url` at different `/api/v1/session/<checkpoint>` paths. For batch evaluation, use [`utilities/validate_server.py`](../utilities/validate_server.py).
 
 **Iteration:** Evaluate checkpoint → identify failures in server → collect targeted demos for failure modes → append to dataset → retrain → re-evaluate. Convergence typically occurs after 3-5 iterations.
 

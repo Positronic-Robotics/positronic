@@ -1,20 +1,21 @@
-import asyncio
 import logging
 import os
 import socket
 import subprocess
-import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
 import pos3
-from fastapi import WebSocket
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
 
-from positronic.offboard.server_utils import monitor_async_task, wait_for_subprocess_ready
-from positronic.offboard.vendor_server import VendorServer
+from positronic.offboard.server import serve
+from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Codec, Policy, Session
+from positronic.policy.codec import RestrictImageSize
+from positronic.policy.spec import ModelSource, remote
+from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer
@@ -66,14 +67,13 @@ class OpenpiSubprocess:
             str(self.checkpoint_dir),
         ]
 
-    def start(self):
-        """Start the OpenPI serve_policy.py subprocess."""
+    def start(self, on_progress: Callable[[str], None] | None = None):
+        """Start the subprocess and block until it accepts connections, reporting progress."""
         command = self._build_command()
         logger.info(f'Starting OpenPI subprocess: {" ".join(command)}')
-        # Don't pipe stdout/stderr so we can see the output
+        # Don't pipeline stdout/stderr so we can see the output
         self.process = subprocess.Popen(command, env=os.environ.copy(), cwd=str(self.openpi_root))
-
-        self._wait_for_ready()
+        self._wait_for_ready(on_progress)
 
     def _check_ready(self) -> bool:
         """Check if OpenPI subprocess is ready by checking if port is accepting connections."""
@@ -83,49 +83,15 @@ class OpenpiSubprocess:
         except (ConnectionRefusedError, OSError, TimeoutError):
             return False
 
-    def _check_crashed(self) -> tuple[bool, int | None]:
-        """Check if subprocess has crashed."""
-        if self.process is None:
-            return False, None
-        exit_code = self.process.poll()
-        return exit_code is not None, exit_code
-
-    def _wait_for_ready(self, timeout: float = 300.0, poll_interval: float = 1.0):
-        """Wait for the OpenPI server to be ready by connecting to it."""
-        start_time = time.time()
-
-        while time.time() - start_time < timeout:
-            if self.process.poll() is not None:
-                # Process exited, try to read stderr
-                stderr = self.process.stderr.read().decode() if self.process.stderr else ''
-                raise RuntimeError(f'OpenPI subprocess exited with code {self.process.returncode}. stderr: {stderr}')
-
-            try:
-                # Try to connect
-                WebsocketClientPolicy(host='127.0.0.1', port=self.ws_port)
-                logger.info('OpenPI subprocess is ready')
-                return
-            except Exception:
-                time.sleep(poll_interval)
-
-        raise RuntimeError(f'OpenPI subprocess did not become ready within {timeout}s')
-
-    async def start_async(self, on_progress=None):
-        """Start the OpenPI subprocess asynchronously with optional progress reporting.
-
-        Args:
-            on_progress: Optional async callback for progress updates.
-        """
-        command = self._build_command()
-        logger.info(f'Starting OpenPI subprocess: {" ".join(command)}')
-        self.process = subprocess.Popen(command, env=os.environ.copy(), cwd=str(self.openpi_root))
-
-        await wait_for_subprocess_ready(
-            check_ready=self._check_ready,
-            check_crashed=self._check_crashed,
-            description='OpenPI subprocess',
-            on_progress=on_progress,
-            max_wait=300.0,
+    def _wait_for_ready(self, on_progress: Callable[[str], None] | None, timeout: float = 300.0):
+        assert self.process is not None
+        process = self.process
+        wait_for_subprocess_ready(
+            self._check_ready,
+            lambda: (process.poll() is not None, process.returncode),
+            'OpenPI subprocess',
+            on_progress,
+            max_wait=timeout,
         )
 
     @property
@@ -152,7 +118,7 @@ class OpenpiSubprocess:
 
 
 ###########################################################################################
-# Policy wrapper
+# Policy
 ###########################################################################################
 
 
@@ -167,224 +133,171 @@ class _OpenpiSession(Session):
 
 
 class OpenpiPolicy(Policy):
-    """Wraps an OpenPI WebsocketClientPolicy as a Policy."""
+    """A running OpenPI subprocess as a Policy; ``close()`` stops the subprocess."""
 
-    def __init__(self, client: WebsocketClientPolicy):
-        self._client = client
+    def __init__(self, subproc: OpenpiSubprocess):
+        self._subproc = subproc
 
-    def new_session(self, context=None):
-        self._client.reset()
-        return _OpenpiSession(self._client)
+    def new_session(self, context=None, now=None):
+        client = self._subproc.client
+        client.reset()
+        return _OpenpiSession(client)
+
+    def close(self):
+        self._subproc.stop()
 
 
 ###########################################################################################
-# FastAPI Inference Server
+# Model source
 ###########################################################################################
 
 
-class InferenceServer(VendorServer):
-    """FastAPI server that wraps OpenPI subprocess and provides unified API."""
+class OpenpiSource(ModelSource):
+    """OpenPI checkpoints under ``checkpoints_dir``; each load boots a serve_policy.py subprocess.
+
+    A ``gs://`` checkpoints_dir is a published openpi checkpoint served as-is: openpi fetches it
+    itself via fsspec[gcs] (pos3 handles only s3://), and there are no numeric-step subdirs to
+    resolve — the dir is the single model.
+    """
 
     def __init__(
         self,
-        codec: Codec | None,
-        checkpoints_dir: str | Path,
+        checkpoints_dir: str,
         config_name: str = 'pi05_positronic_lowmem',
         checkpoint: str | None = None,
-        host: str = '0.0.0.0',
-        port: int = 8000,
         openpi_ws_port: int = 8001,
-        metadata: dict[str, Any] | None = None,
-        recording_dir: str | None = None,
-        idle_timeout_min: float | None = None,
     ):
-        super().__init__(
-            codec=codec, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
-        )
         self.checkpoints_dir = str(checkpoints_dir).rstrip('/')
         self.config_name = config_name
         self.checkpoint = checkpoint
         self.openpi_ws_port = openpi_ws_port
 
-        self.metadata = metadata or {}
-        self.metadata.update(
-            type='openpi',
-            host=host,
-            port=port,
-            config_name=config_name,
-            checkpoint_path=str(checkpoints_dir),
-            experiment_name=str(checkpoints_dir).rstrip('/').split('/')[-1] or '',
-        )
-
-        self._subprocesses: dict[str, OpenpiSubprocess] = {}
-        self._subprocess_lock = asyncio.Lock()
-
     @property
     def _passthrough(self) -> bool:
-        # gs:// is a published openpi checkpoint that openpi fetches itself via fsspec[gcs]: pos3 handles only
-        # s3://, and there are no numeric-step subdirs to resolve — the dir is the single checkpoint.
         return self.checkpoints_dir.startswith('gs://')
 
-    def _resolve_checkpoint_id(self, checkpoint_id: str | None) -> str:
+    def get_models(self) -> list[str]:
+        if self._passthrough:
+            return [self.checkpoints_dir.rsplit('/', 1)[-1]]
+        checkpoints = list_checkpoints(self.checkpoints_dir)
+        return [str(n) for n in sorted(int(cp) for cp in checkpoints if cp.isdigit())]
+
+    def resolve(self, model_id: str | None) -> str:
+        """Digit ids match numerically ('5000' resolves to '005000'); ``None`` picks the configured
+        checkpoint, else the latest."""
         if self._passthrough:
             served = self.checkpoints_dir.rsplit('/', 1)[-1]
-            if checkpoint_id and checkpoint_id != served:
-                raise ValueError(
-                    f'Checkpoint not found or invalid ID: {checkpoint_id}. This server serves only {served}.'
-                )
+            if model_id and model_id != served:
+                raise ValueError(f'Checkpoint not found or invalid ID: {model_id}. This server serves only {served}.')
             return served
-        if checkpoint_id:
+        if model_id:
             available = list_checkpoints(self.checkpoints_dir)
-            if checkpoint_id.isdigit():
-                target_int = int(checkpoint_id)
+            if model_id.isdigit():
+                target = int(model_id)
                 for cp in available:
-                    if cp.isdigit() and int(cp) == target_int:
+                    if cp.isdigit() and int(cp) == target:
                         return cp
-            raise ValueError(f'Checkpoint not found or invalid ID: {checkpoint_id}.')
-
+            raise ValueError(f'Checkpoint not found or invalid ID: {model_id}.')
         if self.checkpoint:
             return self.checkpoint
-
         return get_latest_checkpoint(self.checkpoints_dir)
 
-    async def resolve_model(self, model_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
-        send_progress = self._progress_sender(websocket)
-        resolved_id = self._resolve_checkpoint_id(model_id)
-
-        async with self._subprocess_lock:
-            if resolved_id not in self._subprocesses:
-                if self._passthrough:
-                    checkpoint_dir = self.checkpoints_dir  # openpi's subprocess downloads it via fsspec
-                else:
-                    checkpoint_path = f'{self.checkpoints_dir}/{resolved_id}'
-                    download_task = asyncio.create_task(asyncio.to_thread(pos3.download, checkpoint_path))
-                    await monitor_async_task(
-                        download_task, description=f'Downloading checkpoint {resolved_id}', on_progress=send_progress
-                    )
-                    checkpoint_dir = download_task.result()
-
-                logger.info(f'Starting OpenPI subprocess for checkpoint {resolved_id}')
-                subprocess_obj = OpenpiSubprocess(
-                    checkpoint_dir=checkpoint_dir, config_name=self.config_name, ws_port=self.openpi_ws_port
-                )
-                await subprocess_obj.start_async(on_progress=send_progress)
-                self._subprocesses[resolved_id] = subprocess_obj
-
-            return self._subprocesses[resolved_id], {'checkpoint_id': resolved_id}
-
-    def create_policy(self, model_handle: Any) -> Policy:
-        return OpenpiPolicy(model_handle.client)
-
-    async def get_models(self) -> dict:
+    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
         if self._passthrough:
-            return {'models': [self._resolve_checkpoint_id(None)]}
+            checkpoint_dir = self.checkpoints_dir  # openpi's subprocess downloads gs:// itself
+        else:
+            path = f'{self.checkpoints_dir}/{model_id}'
+            checkpoint_dir = run_with_progress(
+                lambda: pos3.download(path), f'Downloading checkpoint {model_id}', on_progress
+            )
+        subproc = OpenpiSubprocess(
+            checkpoint_dir=str(checkpoint_dir), config_name=self.config_name, ws_port=self.openpi_ws_port
+        )
         try:
-            checkpoints = list_checkpoints(self.checkpoints_dir)
-            normalized = [int(cp) for cp in checkpoints if cp.isdigit()]
-            normalized.sort()
-            return {'models': [str(n) for n in normalized]}
+            subproc.start(on_progress)
         except Exception:
-            logger.exception('Failed to list checkpoints.')
-            return {'models': []}
+            subproc.stop()
+            raise
+        return OpenpiPolicy(subproc)
 
-    def shutdown_model(self):
-        for subprocess_obj in self._subprocesses.values():
-            subprocess_obj.stop()
-        self._subprocesses.clear()
+    def meta(self, model_id: str) -> dict[str, Any]:
+        return {
+            'type': 'openpi',
+            'config_name': self.config_name,
+            'checkpoint_path': self.checkpoints_dir if self._passthrough else f'{self.checkpoints_dir}/{model_id}',
+            'experiment_name': self.checkpoints_dir.rsplit('/', 1)[-1],
+        }
 
 
 ###########################################################################################
-# Server config
+# Server configs
 ###########################################################################################
 
 
-@cfn.config(
-    codec=codecs.ee,
-    checkpoints_dir='',
-    config_name='pi05_positronic_lowmem',
-    checkpoint=None,
-    host='0.0.0.0',
-    port=8000,
-    openpi_ws_port=8001,
-    recording_dir=None,
-    idle_timeout_min=None,
-)
-def server(
-    codec,
-    checkpoints_dir: str,
-    config_name: str,
-    checkpoint: str | None,
-    host: str,
-    port: int,
-    openpi_ws_port: int,
-    recording_dir: str | None,
-    idle_timeout_min: float | None,
-):
-    """OpenPI inference server.
-
-    Args:
-        codec: Codec config for observation encoding and action decoding.
-            Available codecs:
-            - @positronic.vendors.openpi.codecs.ee (default, EE pose + grip)
-            - @positronic.vendors.openpi.codecs.ee_joints (EE pose + grip + joints)
-            - @positronic.vendors.openpi.codecs.droid (for pretrained DROID models)
-        checkpoints_dir: Directory containing model checkpoints.
-        config_name: OpenPI config name (default: pi05_positronic_lowmem).
-        checkpoint: Specific checkpoint to load (optional, defaults to latest).
-        host: Server host address.
-        port: Server port.
-        openpi_ws_port: Internal WebSocket port for OpenPI subprocess.
-        recording_dir: Directory for recording .rrd files (optional, supports S3 paths).
-    """
-    InferenceServer(
-        codec=codec,
-        checkpoints_dir=checkpoints_dir,
-        config_name=config_name,
-        checkpoint=checkpoint,
-        host=host,
-        port=port,
-        openpi_ws_port=openpi_ws_port,
-        recording_dir=recording_dir,
-        idle_timeout_min=idle_timeout_min,
-    ).serve()
+openpi_source = cfn.Config(OpenpiSource)
 
 
-phail = server.override(
-    checkpoints_dir='s3://checkpoints/phail_unified/openpi/pi05_positronic_lowmem/270226-ee/',
-    recording_dir='s3://inference/phail_unified/server_recordings/openpi/270226-ee/',
-)
-# The sim_stack checkpoint was trained on inverted-grip (1 = open) sim data, hence flip_grip.
-sim_stack = server.override(
-    checkpoints_dir='s3://checkpoints/sim_stack/openpi/ee/pi05_positronic_lowmem/230226/',
-    recording_dir='s3://inference/sim_stack/server_recordings/openpi/230226/',
-    **{'codec.flip_grip': True},
-)
-droid = server.override(
-    codec=codecs.droid,
-    config_name='pi05_droid',
-    checkpoints_dir='s3://PUBLIC@positronic-public/checkpoints/openpi/pi05_droid/',
-)
-# The RoboLab leaderboard policy: openpi's DROID jointpos model, served from the checkpoint their
-# ``policies/pi0_family/README.md`` recipe pins (pass-through mode — openpi fetches gs:// itself).
-droid_jointpos = server.override(
-    codec=codecs.droid_jointpos,
-    config_name='pi05_droid_jointpos',
-    checkpoints_dir='gs://openpi-assets-simeval/pi05_droid_jointpos',
-)
-libero = server.override(
-    codec=codecs.libero, config_name='pi05_libero', checkpoints_dir='gs://openpi-assets/checkpoints/pi05_libero'
-)
+@cfn.config(codec=codecs.ee, source=openpi_source)
+def pipeline(codec: Codec, source: ModelSource):
+    """The OpenPI serving pipeline: rig-side chunk scheduling, the server-side codec, the checkpoint source."""
+    return ChunkedSchedule() | RestrictImageSize(224, 224) | remote | codec | source
+
+
+ee = pipeline
+ee_joints = pipeline.override(codec=codecs.ee_joints)
+ee_traj = pipeline.override(codec=codecs.ee_traj)
+ee_joints_traj = pipeline.override(codec=codecs.ee_joints_traj)
+joints_traj = pipeline.override(codec=codecs.joints_traj)
+# For checkpoints trained on inverted-grip (1 = open) data, e.g. the sim_stack recordings.
+ee_flip_grip = pipeline.override(**{'codec.flip_grip': True})
+droid_pipe = pipeline.override(codec=codecs.droid, **{'source.config_name': 'pi05_droid'})
+droid_jointpos_pipe = pipeline.override(codec=codecs.droid_jointpos, **{'source.config_name': 'pi05_droid_jointpos'})
+libero_pipe = pipeline.override(codec=codecs.libero, **{'source.config_name': 'pi05_libero'})
+
+
+# Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
+# ``droid``, ``droid_jointpos`` and ``libero`` are deployments: their pipeline plus the checkpoint it pairs with.
+COMMANDS = {
+    'serve': serve.override(pipeline=ee),
+    'ee': serve.override(pipeline=ee),
+    'ee_joints': serve.override(pipeline=ee_joints),
+    'ee_traj': serve.override(pipeline=ee_traj),
+    'ee_joints_traj': serve.override(pipeline=ee_joints_traj),
+    'joints_traj': serve.override(pipeline=joints_traj),
+    'ee_flip_grip': serve.override(pipeline=ee_flip_grip),
+    'phail': serve.override(
+        pipeline=ee.override(**{
+            'source.checkpoints_dir': 's3://checkpoints/phail_unified/openpi/pi05_positronic_lowmem/270226-ee/'
+        }),
+        recording_dir='s3://inference/phail_unified/server_recordings/openpi/270226-ee/',
+    ),
+    # The sim_stack checkpoint was trained on inverted-grip (1 = open) sim data, hence the flip-grip pipeline.
+    'sim_stack': serve.override(
+        pipeline=ee_flip_grip.override(**{
+            'source.checkpoints_dir': 's3://checkpoints/sim_stack/openpi/ee/pi05_positronic_lowmem/230226/'
+        }),
+        recording_dir='s3://inference/sim_stack/server_recordings/openpi/230226/',
+    ),
+    'droid': serve.override(
+        pipeline=droid_pipe.override(**{
+            'source.checkpoints_dir': 's3://PUBLIC@positronic-public/checkpoints/openpi/pi05_droid/'
+        })
+    ),
+    # The RoboLab leaderboard policy: openpi's DROID jointpos model, served from the checkpoint their
+    # ``policies/pi0_family/README.md`` recipe pins (pass-through mode — openpi fetches gs:// itself).
+    'droid_jointpos': serve.override(
+        pipeline=droid_jointpos_pipe.override(**{
+            'source.checkpoints_dir': 'gs://openpi-assets-simeval/pi05_droid_jointpos'
+        })
+    ),
+    'libero': serve.override(
+        pipeline=libero_pipe.override(**{'source.checkpoints_dir': 'gs://openpi-assets/checkpoints/pi05_libero'})
+    ),
+}
 
 
 if __name__ == '__main__':
     init_logging()
     ensure_paligemma_tokenizer()
     with pos3.mirror():
-        cfn.cli({
-            'serve': server,
-            'phail': phail,
-            'sim_stack': sim_stack,
-            'droid': droid,
-            'droid_jointpos': droid_jointpos,
-            'libero': libero,
-        })
+        cfn.cli(COMMANDS)

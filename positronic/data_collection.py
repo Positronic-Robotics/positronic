@@ -15,14 +15,14 @@ import positronic.cfg.hardware.roboarm
 import positronic.cfg.simulator
 import positronic.cfg.sound
 import positronic.cfg.webxr
-from positronic import geom, utils, wire
+from positronic import geom, keys, utils, wire
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import State as RoboarmState
 from positronic.drivers.webxr import WebXR
-from positronic.gui.dpg import DearpyguiUi
+from positronic.gui import dpg_ui
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path
@@ -159,9 +159,9 @@ class DataCollectionController(pimm.ControlSystem):
                         self.sound.emit(abort_wav_path)
                     tracker.turn_off()
                     recording = False
-                    self.robot_commands.emit(roboarm.command.Reset())
+                    self.robot_commands.emit([(clock.now_ns(), roboarm.command.Reset())])
 
-                self.target_grip.emit(button_handler.get_value('right_trigger'))
+                self.target_grip.emit([(clock.now_ns(), button_handler.get_value('right_trigger'))])
                 cp_msg = self.controller_positions.read()
                 if cp_msg.updated:
                     target_robot_pos = tracker.update(cp_msg.data['right'])
@@ -173,7 +173,8 @@ class DataCollectionController(pimm.ControlSystem):
                     if entered_error:
                         self.sound.emit(error_wav_path)
                     if not in_error and cp_msg.updated:
-                        self.robot_commands.emit(roboarm.command.CartesianPosition(target_robot_pos))
+                        cmd = roboarm.command.CartesianPosition(target_robot_pos)
+                        self.robot_commands.emit([(clock.now_ns(), cmd)])
 
                 yield pimm.Sleep(0.001)
 
@@ -237,7 +238,7 @@ def main(
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
     static_meta = {}
     if task is not None:
-        static_meta['task'] = task
+        static_meta[keys.TASK] = task
     if robot_arm is not None:
         static_meta.update(wire.ROBOT_STATIC_META)
     data_collection = DataCollectionController(operator_position.value, static_meta=static_meta)
@@ -250,7 +251,9 @@ def main(
         ds_agent = wire.wire(world, data_collection, dataset_writer, camera_emitters, robot_arm, gripper, None)
         _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
 
-        bg_cs = [webxr, *camera_instances.values(), ds_agent, robot_arm, gripper, sound]
+        # SO-101 fills both the arm and gripper slots with one object; a control system runs in exactly one process.
+        gripper_cs = [] if gripper is robot_arm else [gripper]
+        bg_cs = [webxr, *camera_instances.values(), ds_agent, robot_arm, *gripper_cs, sound]
 
         if stream_video_to_webxr is not None:
             world.connect(
@@ -266,8 +269,8 @@ def main(
     mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
     webxr=positronic.cfg.webxr.oculus,
     cameras={
-        'image.wrist': 'handcam_left_ph',
-        'image.exterior': 'back_view_ph',
+        keys.WRIST_IMAGE: 'handcam_left_ph',
+        keys.EXTERIOR_IMAGE: 'back_view_ph',
         'image.handcam_right': 'handcam_right_ph',
         'image.wrist_2': 'wrist_cam_ph',
     },
@@ -290,11 +293,11 @@ def main_sim(
 
     sim = MujocoSim(mujoco_model_path, loaders, camera_fps=fps)
     cameras = {name: sim.cameras[orig_name] for name, orig_name in cameras.items()}
-    gui = DearpyguiUi()
+    gui = dpg_ui()
 
     static_meta = dict(wire.ROBOT_STATIC_META)
     if task is not None:
-        static_meta['task'] = task
+        static_meta[keys.TASK] = task
 
     data_collection = DataCollectionController(
         operator_position.value,
@@ -362,8 +365,8 @@ droid = cfn.Config(
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
     cameras={
-        'image.wrist': positronic.cfg.hardware.camera.zed_m.override(view='left', resolution='hd720', fps=30),
-        'image.exterior': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='hd720', fps=30),
+        keys.WRIST_IMAGE: positronic.cfg.hardware.camera.zed_m.override(view='left', resolution='hd720', fps=30),
+        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='hd720', fps=30),
     },
     operator_position=OperatorPosition.BACK,
 )
@@ -375,7 +378,9 @@ human = cfn.Config(
     gripper=None,
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
-    cameras={'image.exterior': positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='hd720', fps=30)},
+    cameras={
+        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='hd720', fps=30)
+    },
     operator_position=OperatorPosition.BACK,
 )
 

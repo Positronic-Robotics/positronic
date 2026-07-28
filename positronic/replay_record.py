@@ -11,18 +11,25 @@ import tqdm
 import pimm
 import positronic.cfg.ds
 import positronic.cfg.simulator
-from positronic import geom, wire
+from positronic import geom, keys, wire
 from positronic.dataset import Dataset, Episode, transforms
 from positronic.dataset.ds_player_agent import DsPlayerAgent, DsPlayerStartCommand
 from positronic.dataset.ds_writer_agent import DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers import roboarm
-from positronic.gui.dpg import DearpyguiUi
+from positronic.gui import dpg_ui
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path
 from positronic.utils.logging import init_logging
+
+
+class _TrajectoryEmitter(pimm.ControlSystemEmitter):
+    """Sends each replayed value as the one-waypoint trajectory the command channels carry, at its playback time."""
+
+    def emit(self, data: Any, ts: int = -1) -> None:
+        super().emit([(ts, data)], ts)
 
 
 class Replay(DsPlayerAgent):
@@ -35,6 +42,8 @@ class Replay(DsPlayerAgent):
         self.gripper_state = pimm.FakeReceiver(self)
         self.robot_meta_in = pimm.FakeReceiver(self)
         self.frames = pimm.ReceiverDict(self, fake=True)
+        self.outputs['robot_commands'] = _TrajectoryEmitter(self)
+        self.outputs['target_grip'] = _TrajectoryEmitter(self)
 
     @property
     def robot_commands(self) -> pimm.ControlSystemEmitter:
@@ -82,7 +91,7 @@ def parse_episodes(episodes: int | list[int] | str, dataset: Dataset) -> list[in
 
 @cfn.config(
     dataset=positronic.cfg.ds.local_all,
-    cameras={'image.wrist': 'handcam_left_ph', 'image.wrist_2': 'wrist_cam_ph', 'image.exterior': 'back_view_ph'},
+    cameras={keys.WRIST_IMAGE: 'handcam_left_ph', 'image.wrist_2': 'wrist_cam_ph', keys.EXTERIOR_IMAGE: 'back_view_ph'},
     mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
 )
@@ -127,7 +136,7 @@ def main(
             sim = MujocoSim(mujoco_model_path, loaders, camera_fps=fps)
             sim.load_state(episode.static)
             cameras_mapped = {name: sim.cameras[orig_name] for name, orig_name in cameras.items()}
-            gui = DearpyguiUi() if show_gui else None
+            gui = dpg_ui() if show_gui else None
 
             replay = Replay()
 

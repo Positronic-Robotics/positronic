@@ -5,7 +5,7 @@ import numpy as np
 import pos3
 
 import pimm
-from positronic import geom
+from positronic import geom, keys
 from positronic.cfg.eval.real.tasks import SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
@@ -18,7 +18,7 @@ ACT_META = {
     'inference.observation.name': 'eepose',
     'inference.action.name': 'absolute_position',
     'inference.observation.lerobot_features': {
-        'observation.state': {'shape': (8,), 'names': ['robot_state.ee_pose', 'grip'], 'dtype': 'float32'},
+        'observation.state': {'shape': (8,), 'names': [keys.EE_POSE, 'grip'], 'dtype': 'float32'},
         'observation.images.left': {'shape': (240, 320, 3), 'names': ['height', 'width', 'channel'], 'dtype': 'video'},
         'observation.images.side': {'shape': (240, 320, 3), 'names': ['height', 'width', 'channel'], 'dtype': 'video'},
     },
@@ -220,14 +220,14 @@ def main(
         generator = FakeGenerator(num_episodes, fps, avg_run_per_item, meta, success_rate, min_items, max_items)
 
         # Wire generator to agent
-        agent.add_signal('image.wrist', Serializers.camera_images)
-        agent.add_signal('image.exterior', Serializers.camera_images)
+        agent.add_signal(keys.WRIST_IMAGE, Serializers.camera_images)
+        agent.add_signal(keys.EXTERIOR_IMAGE, Serializers.camera_images)
         agent.add_signal('robot_state')  # Already dict
         agent.add_signal('robot_command')  # Already dict
 
         world.connect(generator.command, agent.command)
-        world.connect(generator.image_wrist, agent.inputs['image.wrist'])
-        world.connect(generator.image_exterior, agent.inputs['image.exterior'])
+        world.connect(generator.image_wrist, agent.inputs[keys.WRIST_IMAGE])
+        world.connect(generator.image_exterior, agent.inputs[keys.EXTERIOR_IMAGE])
         world.connect(generator.robot_state, agent.inputs['robot_state'])
         world.connect(generator.robot_command, agent.inputs['robot_command'])
 

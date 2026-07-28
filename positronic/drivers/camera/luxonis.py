@@ -1,8 +1,12 @@
 from collections.abc import Iterator
 
-import depthai as dai
-
 import pimm
+from positronic.drivers import vendor_import
+
+# TODO: `depthai` is in no extra, so this driver has no supported install path. Add it to `hardware` (with the
+# platform markers the SDK needs) or drop the driver.
+with vendor_import('depthai', 'Luxonis camera support', '`depthai` is in no extra of this project.'):
+    import depthai as dai
 
 
 # TODO: make this configurable

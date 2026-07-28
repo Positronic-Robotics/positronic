@@ -30,9 +30,12 @@ Or from a checkout:
 uv run --python 3.13 --extra molmoact2 python -m positronic.vendors.molmoact2.server
 ```
 
-The server owns the codec, so clients send raw observations and receive decoded joint commands. Config and
-defaults (`hf_repo`, `num_steps`, `norm_tag`, `port`, …) are in [`server.py`](./server.py). Sanity-check once
-warm:
+The server serves a named policy pipeline — the codec plus the HuggingFace model source. MolmoAct2 ships one
+pipeline, `droid`, which is the default subcommand. The codec lives server-side, so clients send raw
+observations and receive decoded joint commands. `--host`, `--port`, `--recording_dir` and
+`--idle_timeout_min` are the server's flags; the model is reached through the pipeline
+(`--pipeline.source.hf_repo`, `.device_map`, `.norm_tag`, `.num_steps`), with defaults in
+[`server.py`](./server.py). Sanity-check once warm:
 
 ```bash
 curl http://localhost:8000/api/v1/models
@@ -45,13 +48,18 @@ Point the unified `.remote` client at the server (same client as every other ven
 
 ```bash
 uv run --locked positronic-inference sim \
-  --policy=.remote --policy.host=localhost --policy.port=8000 \
+  --policy=.remote --policy.url=localhost:8000 \
   --show_gui=True --output_dir=~/datasets/molmoact2_run
 ```
 
 The model is DROID-pretrained, so its native target is a real franka_droid-style robot. **Sim eval grips
 backwards** until the convention is unified ([#456](https://github.com/Positronic-Robotics/positronic/issues/456)).
 See the [Inference Guide](../../../docs/inference.md) for the remote-policy protocol and options.
+
+Codec arguments are tunable per session without restarting the server — the client passes them as query params
+on the session URL (e.g. `--policy.url='localhost:8000?codec.fps=10&codec.flip_grip=true'`). The model source
+(`hf_repo`, `device_map`, …) is fixed at launch and cannot be changed this way.
+See the [offboard README](../../offboard/README.md) for the session-param rules.
 
 ## Codec
 
@@ -68,5 +76,5 @@ ships one, `droid` (source: [`codecs.py`](./codecs.py)):
   command (no IK at runtime).
 - **Observation**: 3 cameras (2 exterior + 1 wrist) + 8-D state + language prompt.
 - **Inference**: `norm_tag='franka_droid'`, continuous action mode; the model emits a 15-step action chunk at
-  15 Hz, executed in full by the default client (no client-side `--wrap`).
+  15 Hz, executed in full by the client's declared `ChunkedSchedule`.
 - **Wire protocol**: Positronic's standard WebSocket protocol — see [Connect Your Model](../../../docs/connect-your-model.md).

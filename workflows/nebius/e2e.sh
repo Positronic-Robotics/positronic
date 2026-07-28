@@ -114,7 +114,7 @@ case "$VENDOR" in
       "--exp_name=$EXP_NAME" \
       "--output_dir=$CKPT_DIR" \
       --num_train_steps=200 --save_freq=100 2>&1)
-    SERVE_SUBCMD=(serve --checkpoints_dir="$CKPT_DIR$EXP_NAME/")
+    SERVE_SUBCMD=(ee --pipeline.source.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
     ;;
   lerobot)
     TRAIN_OUT=$(bash "$SCRIPT_DIR/train.sh" lerobot expert_only \
@@ -122,7 +122,7 @@ case "$VENDOR" in
       "--exp_name=$EXP_NAME" \
       "--output_dir=$CKPT_DIR" \
       --num_train_steps=200 --save_freq=100 2>&1)
-    SERVE_SUBCMD=(serve --checkpoints_dir="$CKPT_DIR$EXP_NAME/")
+    SERVE_SUBCMD=(ee --pipeline.source.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
     ;;
   openpi)
     TRAIN_OUT=$(bash "$SCRIPT_DIR/train.sh" openpi \
@@ -132,7 +132,7 @@ case "$VENDOR" in
       "--exp_name=$EXP_NAME" \
       --num_train_steps=500 2>&1)
     # openpi.train writes to <output_path>/<config_name>/<exp_name>/
-    SERVE_SUBCMD=(serve --checkpoints_dir="${CKPT_DIR%/}/pi05_positronic_lowmem/$EXP_NAME/")
+    SERVE_SUBCMD=(ee --pipeline.source.checkpoints_dir="${CKPT_DIR%/}/pi05_positronic_lowmem/$EXP_NAME/")
     ;;
   gr00t)
     TRAIN_OUT=$(bash "$SCRIPT_DIR/train.sh" gr00t \
@@ -141,7 +141,7 @@ case "$VENDOR" in
       "--exp_name=$EXP_NAME" \
       --num_train_steps=200 --save_steps=100 \
       --modality_config=ee_rot6d 2>&1)
-    SERVE_SUBCMD=(ee_rot6d --checkpoints_dir="$CKPT_DIR$EXP_NAME/")
+    SERVE_SUBCMD=(ee_rot6d --pipeline.source.checkpoints_dir="$CKPT_DIR$EXP_NAME/")
     ;;
 esac
 echo "$TRAIN_OUT" >> "$LOG"

@@ -5,6 +5,7 @@ from datetime import datetime
 import configuronic as cfn
 import pos3
 
+from positronic import keys
 from positronic.dataset import Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
 from positronic.server.positronic_server import ColumnConfig as C
@@ -87,7 +88,7 @@ def finetune_group_by_task():
             duration += ep.duration_ns / 1e9 / 3600
             units += ep['units']
 
-        result = {'task': episodes[0]['task']}
+        result = {'task': episodes[0][keys.TASK]}
         result.update({'duration': duration, 'count': len(episodes), 'uph': units / duration})
         return result
 

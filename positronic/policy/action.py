@@ -2,7 +2,7 @@ from functools import partial
 
 import numpy as np
 
-from positronic import geom
+from positronic import geom, keys
 from positronic.dataset import transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.signal import Signal
@@ -52,6 +52,16 @@ class AbsolutePositionAction(Codec):
     def training_encoder(self):
         return Derive(meta=self._training_meta, action=self._encode_episode)
 
+    def to_spec(self):
+        return {
+            'name': 'absolute_position_action',
+            'args': {
+                'tgt_ee_pose_key': self.tgt_ee_pose_key,
+                'tgt_grip_key': self.tgt_grip_key,
+                'rotation_rep': self.rot_rep.value,
+            },
+        }
+
 
 class AbsoluteJointsAction(Codec):
     def __init__(self, tgt_joints_key: str, tgt_grip_key: str, num_joints: int = 7):
@@ -80,6 +90,16 @@ class AbsoluteJointsAction(Codec):
     def training_encoder(self):
         return Derive(meta=self._training_meta, action=self._encode_episode)
 
+    def to_spec(self):
+        return {
+            'name': 'absolute_joints_action',
+            'args': {
+                'tgt_joints_key': self.tgt_joints_key,
+                'tgt_grip_key': self.tgt_grip_key,
+                'num_joints': self.num_joints,
+            },
+        }
+
 
 class IKJointsAction(Codec):
     """Signal-level codec that replaces EE pose targets with joint targets via IK.
@@ -94,7 +114,7 @@ class IKJointsAction(Codec):
         solver_cls,
         *,
         tgt_ee_pose_key='robot_command.pose',
-        current_q_key='robot_state.q',
+        current_q_key=keys.JOINTS,
         tgt_joints_key='robot_command.joints',
     ):
         self.solver_cls = solver_cls
@@ -120,7 +140,7 @@ class RelativePositionAction(Codec):
     def __init__(
         self,
         rotation_rep: RotRep | str = RotRep.QUAT,
-        robot_pose_key: str = 'robot_state.ee_pose',
+        robot_pose_key: str = keys.EE_POSE,
         target_pose_key: str = 'robot_command.pose',
         target_grip_key: str = 'target_grip',
     ):
@@ -141,7 +161,7 @@ class RelativePositionAction(Codec):
         q_diff = geom.Rotation.create_from(rotation, self.rot_rep)
         tr_diff = action_vector[self.rot_rep.size : self.rot_rep.size + 3]
 
-        robot_pose = context['robot_state.ee_pose']
+        robot_pose = context[keys.EE_POSE]
 
         rot_mul = geom.Rotation.from_quat(robot_pose[3:7]) * q_diff
         tr_add = robot_pose[0:3] + tr_diff
@@ -171,6 +191,17 @@ class RelativePositionAction(Codec):
     @property
     def training_encoder(self):
         return Derive(meta=self._training_meta, action=self._encode_episode)
+
+    def to_spec(self):
+        return {
+            'name': 'relative_position_action',
+            'args': {
+                'rotation_rep': self.rot_rep.value,
+                'robot_pose_key': self.robot_pose_key,
+                'target_pose_key': self.target_pose_key,
+                'target_grip_key': self.target_grip_key,
+            },
+        }
 
 
 class JointDeltaAction(Codec):
@@ -208,3 +239,6 @@ class JointDeltaAction(Codec):
         velocities = action_vector[: self.num_joints] * self.MAX_JOINT_DELTA
         grip = 1.0 if action_vector[self.num_joints].item() > 0.5 else 0.0
         return {'robot_command': command.JointDelta(velocities=velocities), 'target_grip': grip}
+
+    def to_spec(self):
+        return {'name': 'joint_delta_action', 'args': {'num_joints': self.num_joints}}

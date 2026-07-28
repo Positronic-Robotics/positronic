@@ -1,7 +1,11 @@
 """This code is adopted from https://github.com/huggingface/lerobot/blob/0878c6880fa4fbadf0742751cf7b015f2d63a769/src/lerobot/motors/feetech/feetech.py"""  # noqa: E501
 
 import numpy as np
-import scservo_sdk as scs
+
+from positronic.drivers import vendor_import
+
+with vendor_import('scservo_sdk', 'Feetech motor support'):
+    import scservo_sdk as scs
 
 PROTOCOL_VERSION = 0
 TIMEOUT_MS = 1000

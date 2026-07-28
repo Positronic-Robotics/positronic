@@ -24,7 +24,7 @@ The same command runs any benchmark — only the `--eval` target changes. Start 
 ```bash
 # LIBERO — the 40-task benchmark (four suites), in sim
 uv run positronic eval run --eval=.sim.libero.all \
-  --policy=.remote --policy.host=<gpu-host> \
+  --policy=.remote --policy.url=<gpu-host>:8000 \
   --eval.trial_count=10 --output_dir=~/evals/libero
 
 # RoboLab — NVIDIA Isaac Lab, 120 DROID tasks, in sim
@@ -32,7 +32,7 @@ uv run positronic eval run --eval=.sim.libero.all \
 # (L40S / L4 / RTX 40xx) — datacenter A100/H100 won't run it. One L40S fits
 # the sim and a pi0.5-size policy on the same card.
 uv run positronic eval run --eval=.sim.robolab.benchmark \
-  --policy=.remote --policy.host=<gpu-host> \
+  --policy=.remote --policy.url=<gpu-host>:8000 \
   --eval.trial_count=10 --output_dir=~/evals/robolab
 ```
 

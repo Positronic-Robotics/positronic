@@ -8,7 +8,7 @@ import os
 import sys
 import time
 import traceback
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Iterator
 from enum import IntEnum
 from multiprocessing import resource_tracker
@@ -698,12 +698,21 @@ class World:
         world wires control system emitters and receivers together using local
         queues or multiprocessing queues. Returns an iterator produced by
         ``interleave`` so callers can drive the cooperative scheduler.
+
+        A control system may appear only once across ``main_process`` and ``background``.
         """
         main_process = main_process if isinstance(main_process, list) else [main_process]
         main_process = [m for m in main_process if m is not None]
         background = background or []
         background = background if isinstance(background, list) else [background]
         background = [b for b in background if b is not None]
+
+        dupes = [cs for cs, n in Counter(main_process + background).items() if n > 1]
+        if dupes:
+            raise ValueError(
+                f'Control systems listed more than once: {[type(cs).__name__ for cs in dupes]}. '
+                'A control system owns its ports and runs exactly once — if one device fills two roles, list it once.'
+            )
 
         local_cs = set(main_process)
         all_cs = local_cs | set(background)

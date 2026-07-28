@@ -1,14 +1,18 @@
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
 import pos3
-from fastapi import WebSocket
 
-from positronic.offboard.vendor_server import PolicyManager, VendorServer, resolve_checkpoint
+from positronic.offboard.server import serve
+from positronic.offboard.server_utils import run_with_progress
 from positronic.policy import Codec, Policy
-from positronic.utils.checkpoints import list_checkpoints
+from positronic.policy.codec import RestrictImageSize
+from positronic.policy.spec import ModelSource, Pipeline, remote
+from positronic.policy.wrappers import ChunkedSchedule
+from positronic.utils.checkpoints import list_checkpoints, resolve_checkpoint
 from positronic.utils.logging import init_logging
 from positronic.vendors.lerobot import codecs as lerobot_codecs
 from positronic.vendors.lerobot.policy import LerobotPolicy, _detect_device
@@ -16,97 +20,66 @@ from positronic.vendors.lerobot.policy import LerobotPolicy, _detect_device
 logger = logging.getLogger(__name__)
 
 
-class InferenceServer(VendorServer):
-    """LeRobot 0.4.x inference server with singleton policy manager.
+class LerobotSource(ModelSource):
+    """LeRobot 0.4.x checkpoints of one experiment directory, which ``load`` downloads one at a time.
 
-    Auto-detects policy type from checkpoint config and creates the appropriate
-    preprocessor/postprocessor. Works with SmolVLA, ACT, Diffusion, or any
-    lerobot 0.4.x policy.
+    The policy type is auto-detected from each checkpoint's config, so this serves SmolVLA, ACT,
+    Diffusion, or any other lerobot 0.4.x policy.
     """
 
-    def __init__(
-        self,
-        codec: Codec | None,
-        checkpoints_dir: str | Path,
-        checkpoint: str | None = None,
-        host: str = '0.0.0.0',
-        port: int = 8000,
-        device: str | None = None,
-        recording_dir: str | None = None,
-        idle_timeout_min: float | None = None,
-    ):
-        super().__init__(
-            codec=codec, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min
-        )
+    def __init__(self, checkpoints_dir: str | Path, checkpoint: str | None = None, device: str | None = None):
         self.checkpoints_dir = str(checkpoints_dir).rstrip('/') + '/checkpoints'
         self.checkpoint = checkpoint
         self.device = device or _detect_device()
+        self.experiment_name = str(checkpoints_dir).rstrip('/').split('/')[-1] or ''
 
-        self.metadata = {
-            'host': host,
-            'port': port,
-            'device': self.device,
-            'experiment_name': str(checkpoints_dir).rstrip('/').split('/')[-1] or '',
-        }
+    def get_models(self) -> list[str]:
+        return list_checkpoints(self.checkpoints_dir)
 
-        self.policy_manager = PolicyManager(self._load_policy)
+    def resolve(self, model_id: str | None) -> str:
+        return resolve_checkpoint(self.checkpoints_dir, self.checkpoint, model_id)
 
-    def _load_policy(self, checkpoint_id: str) -> Policy:
-        checkpoint_path = f'{self.checkpoints_dir}/{checkpoint_id}/pretrained_model'
+    def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
+        checkpoint_path = f'{self.checkpoints_dir}/{model_id}/pretrained_model'
         logger.info(f'Loading checkpoint from {checkpoint_path}')
-        meta = {'checkpoint_id': checkpoint_id, 'checkpoint_path': checkpoint_path, **self.metadata}
-        return LerobotPolicy(checkpoint_path, self.device, extra_meta=meta)
+        local = run_with_progress(
+            lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {model_id}', on_progress
+        )
+        return LerobotPolicy(str(local), self.device, extra_meta={'checkpoint_path': checkpoint_path})
 
-    async def resolve_model(self, model_id: str | None, websocket: WebSocket | None) -> tuple[Any, dict]:
-        resolved_id = resolve_checkpoint(self.checkpoints_dir, self.checkpoint, model_id)
-        policy = await self.policy_manager.get_policy(resolved_id, websocket)
-        return policy, {'checkpoint_id': resolved_id}
-
-    def create_policy(self, model_handle: Any) -> Policy:
-        return model_handle
-
-    async def get_models(self) -> dict:
-        try:
-            return {'models': list_checkpoints(self.checkpoints_dir)}
-        except Exception:
-            logger.exception('Failed to list checkpoints.')
-            return {'models': []}
-
-    async def release_policy(self, model_handle):
-        await self.policy_manager.release_session()
+    def meta(self, model_id: str) -> dict[str, Any]:
+        return {'device': self.device, 'experiment_name': self.experiment_name}
 
 
-@cfn.config(
-    codec=lerobot_codecs.ee, checkpoint=None, port=8000, host='0.0.0.0', recording_dir=None, idle_timeout_min=None
-)
-def main(
-    checkpoints_dir: str,
-    checkpoint: str | None,
-    codec,
-    port: int,
-    host: str,
-    recording_dir: str | None,
-    idle_timeout_min: float | None,
-):
-    checkpoints_dir = str(pos3.download(checkpoints_dir))
-    InferenceServer(
-        codec,
-        checkpoints_dir,
-        checkpoint,
-        host=host,
-        port=port,
-        recording_dir=recording_dir,
-        idle_timeout_min=idle_timeout_min,
-    ).serve()
+lerobot_source = cfn.Config(LerobotSource, checkpoint=None, device=None)
 
 
-phail = main.override(
-    checkpoints_dir='s3://checkpoints/phail_unified/smolvla/170316_ee/',
-    recording_dir='s3://inference/phail_unified/server_recordings/smolvla/170316_ee/',
-)
+@cfn.config(codec=lerobot_codecs.ee, source=lerobot_source)
+def pipeline(codec: Codec, source: ModelSource) -> Pipeline:
+    return ChunkedSchedule() | RestrictImageSize(512, 512) | remote | codec | source
+
+
+ee = pipeline
+joints = pipeline.override(codec=lerobot_codecs.joints)
+joints_ik = pipeline.override(codec=lerobot_codecs.joints_ik)
+joints_ik_sim = pipeline.override(codec=lerobot_codecs.joints_ik_sim)
+
+
+# Every pipeline is a subcommand, and so is every deployment — a pipeline with its checkpoints bound.
+COMMANDS = {
+    'serve': serve.override(pipeline=ee),
+    'ee': serve.override(pipeline=ee),
+    'joints': serve.override(pipeline=joints),
+    'joints_ik': serve.override(pipeline=joints_ik),
+    'joints_ik_sim': serve.override(pipeline=joints_ik_sim),
+    'phail': serve.override(
+        pipeline=ee.override(**{'source.checkpoints_dir': 's3://checkpoints/phail_unified/smolvla/170316_ee/'}),
+        recording_dir='s3://inference/phail_unified/server_recordings/smolvla/170316_ee/',
+    ),
+}
 
 
 if __name__ == '__main__':
     init_logging()
     with pos3.mirror():
-        cfn.cli({'serve': main, 'phail': phail})
+        cfn.cli(COMMANDS)

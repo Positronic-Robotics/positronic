@@ -64,10 +64,6 @@ class TrajectoryOverrideSerializer(StatefulSerializer):
     only once a newer trajectory starting after it proves it final; the
     remainder is drained by :meth:`flush` at episode end.
 
-    Bare (non-trajectory) inputs — teleop single commands / scalar grip — pass
-    straight through ``inner`` at the agent timestamp (legacy behaviour), so the
-    shared ``wire.wire`` path keeps working for data collection and replay.
-
     HACK: lossy. Drops the notion of a *predicted* trajectory and cannot
     represent overlapping schedulers (RTC/temporal ensembling) that replan into
     the already-committed past — such points are dropped to keep timestamps
@@ -96,10 +92,7 @@ class TrajectoryOverrideSerializer(StatefulSerializer):
             self._last_ts = points[-1][0]
         return [Timestamped(ts, self._encode(v)) for ts, v in points]
 
-    def __call__(self, message: Any) -> Any | list[Timestamped]:
-        if not isinstance(message, list):
-            # Bare value (teleop Reset/Cartesian, scalar grip): one-shot, agent-timestamped.
-            return self._encode(message)
+    def __call__(self, message: list[tuple[int, Any]]) -> list[Timestamped]:
         if not message:
             # Empty trajectory is the cancel signal (the Harness emits it at episode end):
             # drop the buffered tail so flush() does not commit canceled waypoints.

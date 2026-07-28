@@ -1,5 +1,6 @@
 import numpy as np
 
+from positronic import keys
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
@@ -26,7 +27,7 @@ class _TrackingPolicy(Policy):
         self._actions = actions or [{'action': np.array([1.0, 2.0], dtype=np.float32), 'timestamp': 0.0}]
         self.session_count = 0
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         self.session_count += 1
         return _TrackingSession(self._actions, {'policy_key': 'policy_value'})
 
@@ -56,7 +57,7 @@ class _CapturingPolicy(Policy):
         self._actions = actions
         self.last_session = None
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         self.last_session = _CapturingSession(self._rec, self._actions)
         return self.last_session
 
@@ -109,11 +110,11 @@ def test_obs_log_filtering_uses_pure_tap_names(tmp_path):
     session = rec.tap('cam').wrap(_TrackingPolicy([{'v': 1.0, 'timestamp': 0.0}])).new_session()
     session({
         'wall_time_ns': 1_000_000,
-        'task': 'pick up the cube',
+        keys.TASK: 'pick up the cube',
         'camera': np.zeros((4, 4, 3), dtype=np.uint8),
         'joint_pos': np.array([1.0, 2.0], dtype=np.float32),
         'joints_list': [0.1, 0.2, 0.3],
-        'grip': 0.5,
+        keys.GRIP: 0.5,
     })
 
     assert 'cam/camera' in rec._image_paths
@@ -145,7 +146,7 @@ def test_handles_none_actions(tmp_path):
             return None
 
     class _NonePolicy(Policy):
-        def new_session(self, context=None):
+        def new_session(self, context=None, now=None):
             return _NoneSession()
 
     session = Recorder(tmp_path).tap('t').wrap(_NonePolicy()).new_session()

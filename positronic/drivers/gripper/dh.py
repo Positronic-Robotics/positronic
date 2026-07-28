@@ -1,17 +1,19 @@
 import time
 from ctypes import c_uint16
 
-import pymodbus.client as ModbusClient
-
 import pimm
-from positronic.drivers.roboarm.command import TrajectoryPlayer
+from positronic.drivers import vendor_import
+from positronic.drivers.roboarm.command import Trajectory, TrajectoryPlayer
+
+with vendor_import('pymodbus', 'Gripper support'):
+    import pymodbus.client as ModbusClient
 
 
 class DHGripper(pimm.ControlSystem):
     def __init__(self, port: str):
         self.port = port
         self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
-        self.target_grip: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=0)
+        self.target_grip: pimm.SignalReceiver[Trajectory[float]] = pimm.ControlSystemReceiver(self, default=[])
         self.force: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=100)
         self.speed: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=100)
 
@@ -76,7 +78,7 @@ if __name__ == '__main__':
         force.emit(100)
 
         for width in np.sin(np.linspace(0, 10 * np.pi, 60)) + 1:
-            target_grip.emit(width)
+            target_grip.emit([(world.clock.now_ns(), width)])
             time.sleep(0.5)
             try:
                 print(f'Real grip position: {grip.value}')

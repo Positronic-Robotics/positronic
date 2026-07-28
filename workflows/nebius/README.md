@@ -219,22 +219,22 @@ bash workflows/nebius/serve.sh lerobot_0_3_3 my-act-demo demo
 Or against your own trained checkpoint:
 
 ```bash
-bash workflows/nebius/serve.sh lerobot_0_3_3 act-server serve \
-  --checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
+bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
+  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/lerobot/<exp_name>/
 ```
 
-Same shape for the other vendors — replace the vendor token and point `--checkpoints_dir` at the
+Same shape for the other vendors — replace the vendor token and point `--pipeline.source.checkpoints_dir` at the
 matching checkpoint:
 
 ```bash
-bash workflows/nebius/serve.sh lerobot smolvla-server serve \
-  --checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
+bash workflows/nebius/serve.sh lerobot smolvla-server ee \
+  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
 
-bash workflows/nebius/serve.sh openpi my-openpi serve \
-  --checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/
+bash workflows/nebius/serve.sh openpi my-openpi ee \
+  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/
 
 bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d_rel \
-  --checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
+  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 ```
 
 `serve.sh` blocks until the public IP is allocated (typically <1 min), then prints a banner with
@@ -253,8 +253,7 @@ Run inference from your laptop or robot host using the existing `positronic-infe
 ```bash
 uv run positronic-inference sim \
   --policy=.remote \
-  --policy.host=<endpoint-ip> \
-  --policy.port=8000 \
+  --policy.url=<endpoint-ip>:8000 \
   --output_dir=.data/inference/<run-name>/
 ```
 
@@ -299,8 +298,7 @@ bash workflows/nebius/eval.sh \
   --eval=@positronic.cfg.eval.sim.robolab.banana_in_bowl \
   --eval.trial_count=10 \
   --policy=@positronic.cfg.policy.remote \
-  --policy.host=<endpoint-ip> \
-  --policy.resize=None \
+  --policy.url=<endpoint-ip>:8000 \
   --output_dir=s3://<your-bucket>/evals/robolab_banana/
 ```
 

@@ -4,6 +4,7 @@ import numpy as np
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
+from positronic import keys
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
@@ -13,10 +14,10 @@ from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
     robot_arm=positronic.cfg.hardware.roboarm.franka_droid,
     gripper=positronic.cfg.hardware.gripper.robotiq,
     cameras={
-        'image.wrist': positronic.cfg.hardware.camera.zed_m.override(
+        keys.WRIST_IMAGE: positronic.cfg.hardware.camera.zed_m.override(
             view='left', resolution='hd720', fps=30, image_enhancement=True
         ),
-        'image.exterior': positronic.cfg.hardware.camera.zed_2i.override(
+        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_2i.override(
             view='left', resolution='hd720', fps=30, image_enhancement=True
         ),
     },
@@ -25,7 +26,7 @@ def droid(robot_arm, gripper, cameras):
     """Real single-arm Franka (DROID) + Robotiq gripper + ZED cameras."""
     observations = {
         'robot_state': Observation(robot_arm.state, Serializers.robot_state),
-        'grip': Observation(gripper.grip, None),
+        keys.GRIP: Observation(gripper.grip, None),
         **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
     }
     commands = {
@@ -52,7 +53,7 @@ def mujoco_franka(sim, camera_dict):
     """
     observations = {
         'robot_state': Observation(sim.state, Serializers.robot_state),
-        'grip': Observation(sim.grip, None),
+        keys.GRIP: Observation(sim.grip, None),
         **{name: Observation(sim.cameras[orig], Serializers.camera_images) for name, orig in camera_dict.items()},
     }
     # Home to the scene's initial pose, not `Reset()`: in MujocoSim `Reset()` rebuilds the whole scene, wiping the

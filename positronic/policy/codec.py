@@ -9,13 +9,16 @@ Two composition operators:
   (e.g. observation encoder & action decoder).
 """
 
+import collections.abc as cabc
 from typing import Any, final
 
 import numpy as np
+from PIL import Image as PilImage
 
+from positronic import keys as obs_keys
 from positronic.dataset.transforms import Elementwise
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
-from positronic.policy.base import DelegatingSession, PolicyWrapper, Session, _Pipeline
+from positronic.policy.base import PAR, SEQ, DelegatingSession, PolicyWrapper, Session, _ComposedWrapper
 from positronic.utils import merge_dicts
 
 
@@ -44,13 +47,11 @@ class Codec(PolicyWrapper):
     (action decoding). The ``training_encoder`` property
     returns an ``EpisodeTransform`` used by the training pipeline to derive dataset columns.
 
-    Reserved ``meta`` key (part of the remote inference protocol):
+    Reserved ``meta`` key:
 
     ``image_sizes``
-        Expected image dimensions for raw observation inputs. Used by ``RemotePolicy``
-        to downscale images before sending them to the server, reducing bandwidth.
-        Either a ``(width, height)`` tuple (same size for all images) or a dict mapping
-        raw input keys to ``(width, height)`` tuples (per-image sizes).
+        The image dimensions this codec encodes to. Either a ``(width, height)`` tuple (same
+        size for all images) or a dict mapping raw input keys to ``(width, height)`` tuples.
     """
 
     def encode(self, data: dict) -> dict:
@@ -90,8 +91,8 @@ class Codec(PolicyWrapper):
         if isinstance(other, Codec):
             return _ComposedCodec(self, other)
         if isinstance(other, PolicyWrapper):
-            # Mixed Codec | non-Codec-wrapper → generic pipeline (no longer a Codec).
-            return _Pipeline((self, *other._pipeline_components()))
+            # Mixed Codec | non-Codec-wrapper → generic pipeline, not a Codec.
+            return _ComposedWrapper((self, *other._wrappers()))
         return NotImplemented
 
     @final
@@ -144,6 +145,9 @@ class _ComposedCodec(Codec):
         merge_dicts(result, self._right.meta)
         return result
 
+    def to_spec(self):
+        return {SEQ: [self._left.to_spec(), self._right.to_spec()]}
+
     def dummy_encoded(self, data=None):
         return self._right.dummy_encoded(self._left.dummy_encoded(data))
 
@@ -175,6 +179,9 @@ class _ParallelCodec(Codec):
         merge_dicts(result, self._left.meta)
         merge_dicts(result, self._right.meta)
         return result
+
+    def to_spec(self):
+        return {PAR: [self._left.to_spec(), self._right.to_spec()]}
 
     def dummy_encoded(self, data=None):
         return {**self._left.dummy_encoded(data), **self._right.dummy_encoded(data)}
@@ -232,6 +239,9 @@ class ActionTimestamp(Codec):
     def meta(self):
         return {'action_fps': self._fps}
 
+    def to_spec(self):
+        return {'name': 'action_timestamp', 'args': {'fps': self._fps}}
+
 
 class ActionHorizon(Codec):
     """Truncates action chunks to a time horizon.
@@ -272,6 +282,9 @@ class ActionHorizon(Codec):
     @property
     def meta(self):
         return {'action_horizon_sec': self._horizon_sec}
+
+    def to_spec(self):
+        return {'name': 'action_horizon', 'args': {'horizon_sec': self._horizon_sec}}
 
 
 def ActionTiming(*, fps: float, horizon_sec: float | None = None) -> Codec:
@@ -321,6 +334,9 @@ class BinarizeGripTraining(Codec):
         transforms = {k: _binarize_signal(k) for k in self._keys}
         return Group(Derive(**transforms), Identity())
 
+    def to_spec(self):
+        return {'name': 'binarize_grip_training', 'args': {'keys': list(self._keys), 'threshold': self._threshold}}
+
 
 class BinarizeGripInference(Codec):
     """Threshold grip in decoded actions at inference time.
@@ -346,6 +362,9 @@ class BinarizeGripInference(Codec):
             data[self._key] = 1.0 if data[self._key] > self._threshold else 0.0
         return data
 
+    def to_spec(self):
+        return {'name': 'binarize_grip_inference', 'args': {'threshold': self._threshold, 'key': self._key}}
+
 
 class FlipGrip(Codec):
     """Serve a checkpoint that speaks the inverted grip convention (1 = open) on the canonical
@@ -361,8 +380,8 @@ class FlipGrip(Codec):
 
     def encode(self, data):
         # Copy: the original dict is also the decode ``context`` and the raw recording tap's input.
-        if 'grip' in data:
-            data = {**data, 'grip': 1.0 - data['grip']}
+        if obs_keys.GRIP in data:
+            data = {**data, obs_keys.GRIP: 1.0 - data[obs_keys.GRIP]}
         return data
 
     @property
@@ -373,3 +392,61 @@ class FlipGrip(Codec):
         if 'target_grip' in data:
             data['target_grip'] = 1.0 - data['target_grip']
         return data
+
+    def to_spec(self):
+        return {'name': 'flip_grip'}
+
+
+def _scaled(image: np.ndarray, width: int, height: int) -> np.ndarray:
+    h, w = image.shape[:2]
+    scale = min(1.0, width / w, height / h)
+    tw, th = int(w * scale), int(h * scale)
+    if (tw, th) == (w, h):
+        return image
+    return np.array(PilImage.fromarray(image).resize((tw, th), resample=PilImage.Resampling.BILINEAR))
+
+
+class RestrictImageSize(Codec):
+    """Bounds image dimensions on the rig so full-resolution frames never reach the wire.
+
+    Images larger than ``width`` x ``height`` are scaled down to fit it, keeping aspect ratio; anything
+    already within it passes through untouched. This decides bandwidth, never geometry — the model's own
+    codec still resizes exactly, and serving without this codec differs only in bytes on the wire.
+
+    Declared left of the ``remote`` marker, so the rig applies it before sending::
+
+        ChunkedSchedule() | RestrictImageSize() | remote | codec | source
+    """
+
+    def __init__(self, width: int = 640, height: int = 640):
+        self._width = width
+        self._height = height
+
+    def encode(self, data):
+        return {key: self._restrict(key, value) for key, value in data.items()}
+
+    def _restrict(self, key: str, value: Any) -> Any:
+        # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
+        if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
+            # A TemporalStack emits a (T, H, W, 3) stack, so bound each frame rather than the stack's first axis.
+            if value.ndim == 4:
+                return np.stack([_scaled(frame, self._width, self._height) for frame in value])
+            return _scaled(value, self._width, self._height)
+        if isinstance(value, cabc.Mapping):
+            return {k: self._restrict(k, v) for k, v in value.items()}
+        if isinstance(value, list | tuple):
+            return type(value)(self._restrict(key, v) for v in value)
+        return value
+
+    def decode(self, data, *, context=None):
+        return data
+
+    @property
+    def training_encoder(self) -> EpisodeTransform:
+        raise NotImplementedError(
+            'RestrictImageSize bounds what goes on the wire and is not part of the model contract: '
+            'training derives its columns from full-resolution episodes.'
+        )
+
+    def to_spec(self):
+        return {'name': 'restrict_image_size', 'args': {'width': self._width, 'height': self._height}}

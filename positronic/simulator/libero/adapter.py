@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 
 import pimm
-from positronic import geom
+from positronic import geom, keys
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
@@ -42,7 +42,7 @@ class LiberoAdapter(WireCommandAdapter):
         ee_pose = geom.Transform3D(raw_obs['eef_pos'], geom.Rotation.from_quat_xyzw(raw_obs['eef_quat']))
         state = MujocoFrankaState()
         state.encode(raw_obs['joint_pos'], raw_obs['joint_vel'], ee_pose)
-        obs: dict[str, Any] = {'robot_state': state, 'grip': float(raw_obs['grip'])}
+        obs: dict[str, Any] = {'robot_state': state, keys.GRIP: float(raw_obs['grip'])}
         for logical, env_key in self._camera_dict.items():
             # robosuite renders bottom-up; flip to standard top-down orientation (LIBERO's own video path
             # flips the same way).

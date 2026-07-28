@@ -17,9 +17,9 @@ classifiers = [
 dependencies = [
     "av",
     "coloredlogs>=15.0.1",
-    "configuronic>=0.5.0",
+    "configuronic>=0.7.0",
     "cvxopt",
-    "dearpygui",
+    "dearpygui; platform_machine != 'aarch64'",
     "fastapi",
     "starlette>=1.0.0",
     "jinja2",
@@ -59,7 +59,7 @@ openpi = [
 ]
 hardware = [
     "feetech-servo-sdk", # for feetech motors
-    "positronic-franka>=0.5.0; sys_platform == 'linux'",
+    "positronic-franka>=0.6.2; sys_platform == 'linux'",
     # "kortex_api; sys_platform == 'linux'",  # Kinova: disabled, artifactory.kinovaapps.com is unreliable
     "linuxpy",  # For Linux video capture
     "placo",
@@ -150,27 +150,15 @@ pyzed = [
 openpi-client = { git = "https://github.com/Positronic-Robotics/openpi.git", rev = "main-positronic", subdirectory = "packages/openpi-client" }
 
 [tool.pytest.ini_options]
-testpaths = [
-    "pimm/tests",
-    "positronic/cfg/tests",
-    "positronic/dataset/tests",
-    "positronic/geom/tests",
-    "positronic/offboard/tests",
-    "positronic/policy/tests",
-    "positronic/simulator/env_server/tests",
-    "positronic/simulator/molmo_spaces/tests",
-    "positronic/tests",
-    "positronic/utils/tests",
-    "positronic/vendors/gr00t/tests",
-    "positronic/vendors/lerobot_0_3_3/tests",
-    "positronic/vendors/lerobot/tests",
-    "utilities/tests",
-]
+# Search roots, not a list of suites, so a new `tests/` directory is collected without being registered
+testpaths = ["pimm", "positronic", "utilities"]
 python_files = ["test_*.py", "*_test.py"]
 addopts = [
     "--cov=pimm",
     "--cov=positronic",
     "--cov-report=term-missing",
+    # Needs the `libero` extra and OSMesa; `libero-e2e.yaml` runs it by path, which `--ignore` allows.
+    "--ignore=positronic/simulator/libero/tests",
 ]
 filterwarnings = [
     "ignore:.*DISPLAY environment variable is missing:glfw.GLFWError",
@@ -197,6 +185,7 @@ select = [
     "B",   # flake8-bugbear
     "C4",  # flake8-comprehensions
     "UP",  # pyupgrade
+    "PLC0415",  # imports belong at the top of the file
 ]
 ignore = [
     "E203",  # whitespace before ':'
@@ -205,6 +194,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py files
+"positronic/cfg/**" = ["PLC0415"]  # Configs defer hardware imports into their `@cfn.config` bodies
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10

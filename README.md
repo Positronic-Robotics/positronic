@@ -262,15 +262,14 @@ uv run --locked positronic-inference sim \
 **Remote inference** (run policy on a different machine):
 
 ```bash
-# On inference server:
-cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server \
-    --checkpoints_dir=~/checkpoints/lerobot/<run_id> \
-    --codec=@positronic.vendors.lerobot_0_3_3.codecs.ee
+# On inference server (the subcommand selects the codec pipeline; must match training):
+cd docker && docker compose run --rm --service-ports lerobot-server ee \
+    --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/<run_id>
 
 # On the simulator machine:
 uv run --locked positronic-inference sim \
     --policy=.remote \
-    --policy.host=<server-ip>
+    --policy.url=<server-ip>:8000
 ```
 
 Monitor performance, collect edge cases, and iterate. See [Inference Guide](docs/inference.md) for details.
@@ -289,7 +288,7 @@ Monitor performance, collect edge cases, and iterate. See [Inference Guide](docs
 - [LeRobot ACT](positronic/vendors/lerobot_0_3_3/README.md) — Single-task transformer
 
 **Guides:**
-- [Architecture Invariants](docs/architecture.md) — who owns the control loop, and how foreign components plug in
+- [Architecture](docs/architecture.md) — the goals and principles behind the design, who owns the control loop, and how foreign components plug in
 - [Model Selection](docs/model-selection.md) | [Codecs](docs/codecs.md) | [Training](docs/training-workflow.md)
 - [Data Collection](docs/data-collection.md) | [Inference](docs/inference.md)
 

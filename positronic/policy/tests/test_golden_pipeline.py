@@ -32,7 +32,7 @@ import numpy as np
 import pytest
 
 import pimm
-from positronic import wire
+from positronic import keys, wire
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
@@ -60,12 +60,12 @@ ACTION_HORIZON_S = 0.5  # 8 of every 10-action chunk survives truncation
 CONTROL_PERIOD_S = 0.005  # fake robot/gripper sampling cadence (200 Hz)
 
 # State signals captured at the DsWriterAgent output and locked by the golden.
-CAPTURED_SIGNALS = ('robot_state.ee_pose', 'robot_state.q', 'grip')
+CAPTURED_SIGNALS = (keys.EE_POSE, keys.JOINTS, keys.GRIP)
 
 
 class _ScriptedSession(Session):
     def __call__(self, obs):
-        current = np.asarray(obs['robot_state.ee_pose'][:3], dtype=np.float32)
+        current = np.asarray(obs[keys.EE_POSE][:3], dtype=np.float32)
         delta = TARGET_POS - current
         chunk = []
         for i in range(10):
@@ -82,7 +82,7 @@ class ScriptedProportionalPolicy(Policy):
     clock, no images. Codec stamps/truncates; the harness anchors/schedules.
     """
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         return _ScriptedSession()
 
 
@@ -122,7 +122,7 @@ class FakeRobot(pimm.ControlSystem):
         self._q = INITIAL_Q.copy()
         self._status = RobotStatus.AVAILABLE
         self._error_pending = False
-        self.commands = pimm.ControlSystemReceiver(self, default=None)
+        self.commands = pimm.ControlSystemReceiver(self, default=[])
         self.state = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
 
@@ -145,7 +145,7 @@ class FakeRobot(pimm.ControlSystem):
         player = TrajectoryPlayer()
         while not should_stop.value:
             cmd_msg = self.commands.read()
-            if cmd_msg.updated and cmd_msg.data is not None:
+            if cmd_msg.updated:
                 player.set(cmd_msg.data)
             if self._status == RobotStatus.ERROR:
                 self._status = RobotStatus.AVAILABLE
@@ -167,14 +167,14 @@ class FakeGripper(pimm.ControlSystem):
 
     def __init__(self):
         self._grip = 0.0
-        self.target_grip = pimm.ControlSystemReceiver(self, default=0.0)
+        self.target_grip = pimm.ControlSystemReceiver(self, default=[])
         self.grip = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         player = TrajectoryPlayer()
         while not should_stop.value:
             msg = self.target_grip.read()
-            if msg.updated and msg.data is not None:
+            if msg.updated:
                 player.set(msg.data)
             grip = player.advance(clock.now_ns())
             if grip is not None:
@@ -194,7 +194,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
             descriptor='',
             observations={
                 'robot_state': Observation(robot.state, Serializers.robot_state),
-                'grip': Observation(gripper.grip, None),
+                keys.GRIP: Observation(gripper.grip, None),
             },
             commands={
                 'robot_command': Command(robot.commands, Reset(), Serializers.robot_command),
@@ -203,7 +203,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
             static_meta=dict(ROBOT_STATIC_META),
             meta_source=robot.robot_meta,
         )
-        harness = Harness(policy, embodiment, wrap=ChunkedSchedule())
+        harness = Harness(ChunkedSchedule().wrap(policy), embodiment)
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
         directive_em = world.pair(harness.directive)

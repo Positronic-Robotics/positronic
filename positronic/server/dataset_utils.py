@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import av
 import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
@@ -276,8 +277,6 @@ class _BinaryStreamDrainer:
 
 def _encode_frames_as_video(entity_path: str, sig) -> None:
     """Encode raw image frames into an H.265 video stream via pyav."""
-    import av
-
     codec = rr.VideoCodec.H265
     container = av.open('/dev/null', 'w', format='hevc')
 

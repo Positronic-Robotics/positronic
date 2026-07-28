@@ -1026,13 +1026,13 @@ wheels = [
 
 [[package]]
 name = "configuronic"
-version = "0.5.0"
+version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fire" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/70/b0/1dfdc3fa5e9b9b7a5eec6d533e61b657652ea3ab19a306362164f342a531/configuronic-0.5.0.tar.gz", hash = "sha256:d4a4ebd5e77f87d0677fbfd4884a05ae975c86a0ba451bcf2dbec420356ba959", size = 40565, upload-time = "2026-06-09T15:16:43.98Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a1/b5/288ab3358065c6c55f5521de832352aa36a4c6bff4d934bf9c08944bb293/configuronic-0.7.0.tar.gz", hash = "sha256:bee32c187a61a7f2b8323dfd24cc1de65087d6e83fd8c0f9cc40b1d45ccf8b21", size = 77456, upload-time = "2026-07-26T12:43:31.384Z" }
 
 [[package]]
 name = "coverage"
@@ -4207,7 +4207,7 @@ dependencies = [
     { name = "coloredlogs" },
     { name = "configuronic" },
     { name = "cvxopt" },
-    { name = "dearpygui" },
+    { name = "dearpygui", marker = "platform_machine != 'aarch64' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2')" },
     { name = "fastapi" },
     { name = "fire" },
     { name = "httpx" },
@@ -4297,10 +4297,10 @@ requires-dist = [
     { name = "av" },
     { name = "basedpyright", marker = "extra == 'dev'" },
     { name = "coloredlogs", specifier = ">=15.0.1" },
-    { name = "configuronic", specifier = ">=0.5.0" },
+    { name = "configuronic", specifier = ">=0.7.0" },
     { name = "coverage", marker = "extra == 'dev'" },
     { name = "cvxopt" },
-    { name = "dearpygui" },
+    { name = "dearpygui", marker = "platform_machine != 'aarch64'" },
     { name = "einops", marker = "extra == 'molmoact2'" },
     { name = "fastapi" },
     { name = "feetech-servo-sdk", marker = "extra == 'hardware'" },
@@ -4323,7 +4323,7 @@ requires-dist = [
     { name = "placo", marker = "extra == 'hardware'" },
     { name = "plotly", specifier = ">=6.5.0" },
     { name = "pos3", specifier = ">=0.3.1" },
-    { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.5.0" },
+    { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.6.2" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "protobuf", marker = "extra == 'molmoact2'" },
     { name = "pyarrow" },
@@ -4364,13 +4364,13 @@ provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2"
 
 [[package]]
 name = "positronic-franka"
-version = "0.5.0"
+version = "0.6.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", marker = "sys_platform == 'linux' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2')" },
     { name = "requests", marker = "sys_platform == 'linux' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/97/c7/ea8132fd80a7e064b462df39b87ec6b750874b54885bfe45162cc32af3b8/positronic_franka-0.5.0.tar.gz", hash = "sha256:0937c3654b6d026d6a87a2892094c20459980683d14ce19604f8a8b41d1d5e40", size = 1796271, upload-time = "2026-07-14T21:32:24.866Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e9/22/ceca0817ee0693d1c9b31ad12934e82c41fd39ee470f5765f264bfa3caec/positronic_franka-0.6.2.tar.gz", hash = "sha256:7f429c3bdd8624493a74e152051e0e43b325df7710cf42058be32fb0787affe4", size = 1805370, upload-time = "2026-07-26T21:23:16.754Z" }
 
 [[package]]
 name = "pre-commit"

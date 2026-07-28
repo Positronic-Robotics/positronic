@@ -9,6 +9,7 @@ import tqdm
 
 import pimm
 import positronic.cfg.simulator
+from positronic import keys
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
@@ -63,7 +64,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
 
     policy = StubPolicy()
 
-    camera_dict = {'image.wrist': 'handcam_left_ph'}
+    camera_dict = {keys.WRIST_IMAGE: 'handcam_left_ph'}
 
     with pos3.mirror():
         ev = stack_cubes(
@@ -75,10 +76,9 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
             timeout=0.4,
         )
         main(
-            policy=policy,
+            policy=ChunkedSchedule().wrap(policy),
             evals=[replace(ev, trials=[{'eval.trial_index': i, 'eval.seed': 100 + i} for i in range(2)])],
             output_dir=str(tmp_path),
-            wrap=ChunkedSchedule(),
         )
 
     ds = LocalDataset(tmp_path)
@@ -98,11 +98,11 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
     signals = episode.signals
     assert 'robot_command.pose' in signals
     assert 'target_grip' in signals
-    assert 'image.wrist' in signals
+    assert keys.WRIST_IMAGE in signals
     # Privileged ground truth: the full sim state is recorded as a time-series signal.
     assert 'sim_state.mjSTATE_INTEGRATION' in signals
 
-    camera_samples = list(signals['image.wrist'])
+    camera_samples = list(signals[keys.WRIST_IMAGE])
     assert camera_samples, 'Camera signal for handcam_left is empty'
     first_image, _ = camera_samples[0]
     assert isinstance(first_image, np.ndarray)
@@ -138,10 +138,10 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
 
     assert policy.observations, 'Policy did not receive any observations'
     last_obs = policy.observations[-1]
-    assert isinstance(last_obs['image.wrist'], np.ndarray)
-    assert 'robot_state.ee_pose' in last_obs
+    assert isinstance(last_obs[keys.WRIST_IMAGE], np.ndarray)
+    assert keys.EE_POSE in last_obs
     # The task's instruction is injected by the harness.
-    assert last_obs['task'] == 'integration-test'
+    assert last_obs[keys.TASK] == 'integration-test'
     assert last_obs['descriptor'] == 'mujoco.franka'
 
 
@@ -220,8 +220,8 @@ def test_countdown_records_frame0_every_trial(tmp_path):
         main(
             policy=StubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0),
             evals=[replace(ev, trials=[{'eval.trial_index': i, 'eval.seed': i} for i in range(2)])],
+            # the degenerate obs is not Franka-shaped, so run the policy unwrapped
             output_dir=str(tmp_path),
-            wrap=None,  # the degenerate obs is not Franka-shaped, so run the policy unwrapped
         )
 
     ds = LocalDataset(tmp_path)
@@ -241,7 +241,6 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
             policy=StubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0),
             evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
             output_dir=str(tmp_path),
-            wrap=None,
         )
 
     ds = LocalDataset(tmp_path)

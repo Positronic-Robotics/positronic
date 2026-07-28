@@ -9,6 +9,7 @@ import dearpygui.dearpygui as dpg
 import numpy as np
 
 import pimm
+from positronic import keys
 from positronic.cfg.eval.real.tasks import SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK, UNIFIED_TASK
 from positronic.dataset.edits import EditedDataset
 from positronic.dataset.local_dataset import LocalDataset
@@ -402,7 +403,7 @@ class EvalUI(pimm.ControlSystem):
 
         task_value = dpg.get_value('task_radio')
         task_name = dpg.get_value('custom_input') if task_value == 'Other' else task_value
-        context = {'task': task_name}
+        context = {keys.TASK: task_name}
 
         if task_value in TASK_TO_OBJECT or task_value == UNIFIED_TASK:
             obj_value = dpg.get_value('object_radio')
@@ -463,7 +464,7 @@ class EvalUI(pimm.ControlSystem):
             self._sel = max(0, min(idx, self._count - 1))
             ep = self._edited.overlay(self._base[self._sel])
             static = ep.static
-            dpg.set_value('ed_task', static.get('task', ''))
+            dpg.set_value('ed_task', static.get(keys.TASK, ''))
             dpg.set_value('ed_outcome', static.get('eval.outcome', OUTCOMES[0]))
             dpg.set_value('ed_total', static.get('eval.total_items', 1))
             dpg.set_value('ed_success', static.get('eval.successful_items', 0))

@@ -1,7 +1,10 @@
 import numpy as np
-import placo
 
 from positronic import geom
+from positronic.drivers import vendor_import
+
+with vendor_import('placo', 'Kinematics support'):
+    import placo
 
 
 class Kinematics:

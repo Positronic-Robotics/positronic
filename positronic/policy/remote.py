@@ -1,72 +1,79 @@
 import collections.abc as cabc
+import logging
 from typing import Any
 
 import numpy as np
-from PIL import Image as PilImage
+import pos3
 
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
-from .base import Policy, Session
+from .base import Policy, PolicyWrapper, Session
+from .codec import RestrictImageSize
+from .recording import Recorder
+from .spec import from_spec
+from .wrappers import ChunkedSchedule
+
+logger = logging.getLogger(__name__)
+
+
+def _operator_override(name: str, value: Any, declared: Any) -> bool:
+    """Whether the operator's ``value`` stands in for a ``name`` the server did not declare.
+
+    A server that declares its own ``name`` is the authority on it, so an override against one is a
+    contradiction rather than a preference and raises.
+
+    TODO(#514): drop the overrides and this helper once every server declares.
+    """
+    if value is None:
+        return False
+    if declared is not None:
+        raise ValueError(
+            f'--policy.{name} was given, but the server declares its own {name} ({declared!r}); drop the '
+            f'override, or change the pipeline the server serves'
+        )
+    logger.warning('--policy.%s is deprecated; it applies only because the server declares no %s', name, name)
+    return True
+
+
+def _legacy_bound(sizes: Any) -> RestrictImageSize | None:
+    """A wire bound read off the ``image_sizes`` a server reports, for one that declares no stack.
+
+    A ``(width, height)`` pair bounds every image directly; a per-camera mapping collapses to the widest
+    and tallest it names, so no camera is sent smaller than the server encodes it. A codec that encodes
+    no images names no geometry, and so bounds nothing.
+
+    TODO(#514): drop this and its caller once every server declares its own stack.
+    """
+    pairs = list(sizes.values()) if isinstance(sizes, cabc.Mapping) else [sizes]
+    if not pairs:
+        return None
+    return RestrictImageSize(max(w for w, _ in pairs), max(h for _, h in pairs))
 
 
 class RemoteSession(Session):
     """Per-episode session that forwards observations to a remote inference server."""
 
-    def __init__(self, ws_session: InferenceSession, resize: int | None, compress_images: bool = False):
+    def __init__(self, ws_session: InferenceSession, compress_images: bool = False):
         self._session = ws_session
-        self._resize = resize
         self._compress_images = compress_images
-        self._image_sizes: dict[str, tuple[int, int]] = {}
-        self._default_image_size: tuple[int, int] | None = None
-
-        sizes = ws_session.metadata.get('image_sizes')
-        if isinstance(sizes, dict):
-            self._image_sizes = {k: tuple(v) for k, v in sizes.items()}
-        elif isinstance(sizes, tuple | list):
-            self._default_image_size = tuple(sizes)
-
-    @staticmethod
-    def _resize_to(image: np.ndarray, width: int, height: int) -> np.ndarray:
-        h, w = image.shape[:2]
-        if w == width and h == height:
-            return image
-        return np.array(PilImage.fromarray(image).resize((width, height), resample=PilImage.Resampling.BILINEAR))
-
-    @staticmethod
-    def _fit(image: np.ndarray, tw: int, th: int) -> np.ndarray:
-        h, w = image.shape[:2]
-        scale = min(1.0, tw / w, th / h)
-        return RemoteSession._resize_to(image, int(w * scale), int(h * scale))
 
     def _prepare_obs(self, obs: dict[str, Any]) -> dict[str, Any]:
+        if not self._compress_images:
+            return obs
         return {key: self._prepare_value(key, value) for key, value in obs.items()}
 
     def _prepare_value(self, key: str, value: Any) -> Any:
-        # Client-side codecs (e.g. GR00T) nest images inside dicts/lists, so recurse to reach every
-        # image array rather than scanning the top level alone.
+        # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
         if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
-            return self._prepare_image(key, value)
+            # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's websocket message cap.
+            return encode_jpeg(value)
         if isinstance(value, cabc.Mapping):
             return {k: self._prepare_value(k, v) for k, v in value.items()}
         if isinstance(value, list | tuple):
             return type(value)(self._prepare_value(key, v) for v in value)
         return value
-
-    def _prepare_image(self, key: str, image: np.ndarray) -> np.ndarray | dict[bytes, Any]:
-        # Resize single RGB frames and temporal stacks of them alike (TemporalStack emits a
-        # (T, H, W, 3) stack), so a stack of hd720 frames isn't shipped full-resolution.
-        target = self._image_sizes.get(key, self._default_image_size)
-        r = self._resize or 0
-        tw, th = target or (r, r)
-        if tw > 0 and th > 0:
-            image = np.stack([self._fit(f, tw, th) for f in image]) if image.ndim == 4 else self._fit(image, tw, th)
-        # Optionally JPEG-compress before sending: a raw HD frame — and especially a (T, H, W, 3)
-        # stack — can exceed the ~2 MB websocket message cap of a Modal-fronted endpoint. Off by default.
-        if self._compress_images:
-            image = encode_jpeg(image)
-        return image
 
     def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
         """Forwards the observation to the remote server and returns the action trajectory.
@@ -88,58 +95,127 @@ class RemoteSession(Session):
         self._session.close()
 
 
-class RemotePolicy(Policy):
-    """Policy that creates sessions forwarding observations to a remote inference server.
+class _Endpoint(Policy):
+    """The wire connection to one inference server: sessions forward observations as-is.
 
-    Images are resized before sending to reduce bandwidth. The server reports
-    expected sizes via ``image_sizes`` in its metadata (see ``Codec.meta``).
-    The ``resize`` parameter acts as a fallback when the server does not report
-    sizes. Server-reported sizes always take precedence.
-
-    ``headers`` / ``secure`` are forwarded to the underlying ``InferenceClient``
-    for authenticated / TLS-fronted endpoints (e.g. Modal, behind a reverse proxy).
+    ``InferenceClient`` reads the server, the model, and the session params off the URL.
+    ``compress_images`` stands in for a server that declares no wire settings of its own.
     """
 
-    def __init__(
-        self,
-        host: str,
-        port: int,
-        resize: int | None = None,
-        model_id: str | None = None,
-        *,
-        headers: dict[str, str] | None = None,
-        secure: bool = False,
-        infer_timeout: float = DEFAULT_INFER_TIMEOUT,
-        compress_images: bool = False,
-    ):
-        self._client = InferenceClient(host, port, headers=headers, secure=secure)
-        self._resize = resize
-        self._model_id = model_id
-        self._infer_timeout = infer_timeout
-        self._compress_images = compress_images
-        # Server metadata cached after the first session is created or `meta`
-        # is read. Needed so consumers like ``SampledPolicy._get_keys`` see
-        # ``server.checkpoint_path`` etc. before any session exists.
+    def __init__(self, url: str, *, headers: dict[str, str] | None, infer_timeout: float, compress_images: bool | None):
+        self._client = InferenceClient(url, headers=headers, infer_timeout=infer_timeout)
+        self._compress_override = compress_images
+        # Both filled on first contact: the metadata via a throwaway session if ``meta`` is read before any
+        # real one exists, the compression flag from that metadata.
         self._server_meta: dict[str, Any] | None = None
+        self._compress: bool | None = None
 
-    def _ensure_server_meta(self) -> dict[str, Any]:
+    def server_meta(self) -> dict[str, Any]:
         if self._server_meta is None:
-            ws_session = self._client.new_session(model_id=self._model_id, infer_timeout=self._infer_timeout)
+            ws_session = self._client.new_session()
             try:
                 self._server_meta = dict(ws_session.metadata)
             finally:
                 ws_session.close()
         return self._server_meta
 
-    def new_session(self, context=None) -> RemoteSession:
-        ws_session = self._client.new_session(model_id=self._model_id, infer_timeout=self._infer_timeout)
-        if self._server_meta is None:
-            self._server_meta = dict(ws_session.metadata)
-        return RemoteSession(ws_session, self._resize, compress_images=self._compress_images)
+    def _compression(self) -> bool:
+        """Whether the rig JPEG-encodes frames: what the server declared, or the operator's stand-in."""
+        if self._compress is None:
+            declared = self.server_meta().get('compress_images')
+            override = _operator_override('compress_images', self._compress_override, declared)
+            self._compress = bool(self._compress_override if override else declared)
+        return self._compress
+
+    def new_session(self, context=None, now=None) -> RemoteSession:
+        # Resolved before connecting, so a session that contradicts the declaration leaves no socket open.
+        compress = self._compression()
+        ws_session = self._client.new_session()
+        return RemoteSession(ws_session, compress_images=compress)
 
     @property
     def meta(self) -> dict[str, Any]:
-        return flatten_dict({'type': 'remote', 'server': self._ensure_server_meta()})
+        return flatten_dict({'type': 'remote', 'server': self.server_meta()})
 
     def close(self):
         self._client = None
+
+
+class RemotePolicy(Policy):
+    """Policy running against a remote inference server, owning the stack in front of the connection.
+
+    One URL names the server, the model, and the session params — see ``InferenceClient`` for the forms
+    it takes. ``headers`` stay their own argument: they carry credentials, which a URL that gets pasted
+    around should not.
+
+    The server's ``ready`` handshake declares the local half of its policy pipeline (the
+    ``local_stack`` spec — see ``positronic.policy.spec``) along with the wire settings of the
+    ``remote`` marker. The declared wrappers are built here, once, and every session runs through
+    them. A server that declares no stack gets the standard ``ChunkedSchedule`` — or the operator's
+    ``local`` — with the ``image_sizes`` such a server reports bounding the wire either way.
+
+    ``local`` and ``compress_images`` stand in for a server that declares neither — see
+    ``_operator_override``. ``recording_dir`` taps the raw and wire boundaries around the stack.
+    """
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        local: PolicyWrapper | None = None,
+        recording_dir: str | None = None,
+        headers: dict[str, str] | None = None,
+        infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+        compress_images: bool | None = None,
+    ):
+        self._endpoint = _Endpoint(url, headers=headers, infer_timeout=infer_timeout, compress_images=compress_images)
+        self._local = local
+        self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
+        self._stacked: Policy | None = None
+
+    def _resolve_stack(self) -> PolicyWrapper | None:
+        meta = self._endpoint.server_meta()
+        declared = meta.get('local_stack')
+        # Settles the operator's stack against the declaration before either is built.
+        _operator_override('local', self._local, declared)
+        if declared is not None:
+            try:
+                return from_spec(declared)
+            except Exception as e:
+                version = meta.get('positronic_version', 'unknown')
+                raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
+        # The bound is a wire setting rather than part of the stack, so it outlives whichever stack runs.
+        stack = ChunkedSchedule() if self._local is None else self._local
+        bound = _legacy_bound(meta['image_sizes']) if 'image_sizes' in meta else None
+        if bound is None:
+            logger.info('Server declares no local stack and names no image geometry; frames go out unbounded')
+            return stack
+        logger.warning(
+            'Server declares no local stack; bounding frames to %r from the image_sizes %r it reports',
+            bound.to_spec()['args'],
+            meta['image_sizes'],
+        )
+        return stack | bound
+
+    def _policy(self) -> Policy:
+        if self._stacked is None:
+            stack = self._resolve_stack()
+            if self._recording_dir is not None:
+                rec = Recorder(self._recording_dir)
+                if stack is None:
+                    # With no stack the raw and wire boundaries coincide, so a single tap.
+                    stack = rec.tap('raw')
+                else:
+                    stack = rec.tap('raw') | stack | rec.tap('server')
+            self._stacked = stack.wrap(self._endpoint) if stack is not None else self._endpoint
+        return self._stacked
+
+    def new_session(self, context=None, now=None) -> Session:
+        return self._policy().new_session(context, now)
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self._policy().meta
+
+    def close(self):
+        self._endpoint.close()

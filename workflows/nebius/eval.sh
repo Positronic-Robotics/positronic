@@ -4,7 +4,7 @@
 # The job pulls `positro/robolab` and boots the benchmark's env server inside the
 # job container (Isaac Sim for RoboLab — needs an RTX-class GPU, so the platform
 # is L40S, not H100). The policy is remote: serve it first (e.g. `serve.sh openpi
-# ...`) and point `--policy.host` at the endpoint IP.
+# ...`) and point `--policy.url` at the endpoint IP.
 #
 # Cache: unlike the other scripts, the shared filesystem mounts at /root/.cache,
 # not /cache. The env-server launcher keeps its pinned checkout and venv at fixed
@@ -46,8 +46,7 @@ Forwards all arguments to `positronic eval run`. Serve the policy first
     --eval=@positronic.cfg.eval.sim.robolab.banana_in_bowl \
     --eval.trial_count=10 \
     --policy=@positronic.cfg.policy.remote \
-    --policy.host=<endpoint-ip> \
-    --policy.resize=None \
+    --policy.url=<endpoint-ip>:8000 \
     --output_dir=s3://<your-bucket>/evals/robolab_banana/
 EOF
   exit 1

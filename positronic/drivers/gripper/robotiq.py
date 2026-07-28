@@ -2,10 +2,12 @@
 
 from collections.abc import Iterator
 
-import pymodbus.client as ModbusClient
-
 import pimm
-from positronic.drivers.roboarm.command import TrajectoryPlayer
+from positronic.drivers import vendor_import
+from positronic.drivers.roboarm.command import Trajectory, TrajectoryPlayer
+
+with vendor_import('pymodbus', 'Gripper support'):
+    import pymodbus.client as ModbusClient
 
 _REG_CMD = 0x03E8
 _REG_IN_POS = 0x07D2
@@ -20,7 +22,7 @@ class Robotiq2F(pimm.ControlSystem):
     def __init__(self, port: str):
         self._port = port
         self.grip = pimm.ControlSystemEmitter(self)
-        self.target_grip = pimm.ControlSystemReceiver(self, default=None)
+        self.target_grip: pimm.ControlSystemReceiver[Trajectory[float]] = pimm.ControlSystemReceiver(self, default=[])
         self.force = pimm.ControlSystemReceiver(self, default=255)  # device scale 0..255
         self.speed = pimm.ControlSystemReceiver(self, default=255)  # device scale 0..255
 
@@ -79,7 +81,7 @@ if __name__ == '__main__':
 
         while True:
             if time.time() - start > i * 1.0:
-                tgt.emit(waypoints[i])
+                tgt.emit([(world.clock.now_ns(), waypoints[i])])
                 i += 1
                 if i >= len(waypoints):
                     break
