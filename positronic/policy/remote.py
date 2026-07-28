@@ -91,7 +91,7 @@ class RemoteSession(Session):
         try:
             result = self._session.infer(self._prepare_obs(obs))
         finally:
-            telemetry.record_span('policy.infer', infer_start_ns, time.time_ns())
+            telemetry.record_span(telemetry.SPAN_POLICY_INFER, infer_start_ns, time.time_ns())
         if isinstance(result, dict):
             return [result]
         return result

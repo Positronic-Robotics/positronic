@@ -33,7 +33,7 @@ def wire(
     ds_agent = None
     if dataset_writer is not None:
         ds_agent = DsWriterAgent(
-            dataset_writer, time_mode=time_mode, telemetry_span=lambda: telemetry.span('record.io')
+            dataset_writer, time_mode=time_mode, telemetry_span=lambda: telemetry.span(telemetry.SPAN_RECORD_IO)
         )
         for signal_name in cameras.keys():
             ds_agent.add_signal(signal_name, Serializers.camera_images)
@@ -95,7 +95,7 @@ def wire_embodiment(
             dataset_writer,
             time_mode=time_mode,
             virtual_time=embodiment.simulated,
-            telemetry_span=lambda: telemetry.span('record.io'),
+            telemetry_span=lambda: telemetry.span(telemetry.SPAN_RECORD_IO),
         )
         for name, obs in embodiment.observations.items():
             if isinstance(obs.serializer, StatefulSerializer):

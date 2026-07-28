@@ -3,6 +3,17 @@ import json
 import pytest
 
 from positronic.cli.eval.timing_report import _build_report, _parse_dmon, _read_spans_dir, _read_stats_dir
+from positronic.telemetry import (
+    ATTR_EPISODE_ABORTED,
+    ATTR_EPISODE_VIRTUAL_S,
+    SPAN_ENV_STEP,
+    SPAN_EPISODE,
+    SPAN_EVAL_PASS,
+    SPAN_MATERIALIZE,
+    SPAN_POLICY_INFER,
+    SPAN_RECORD_IO,
+    SPAN_RESET,
+)
 
 _S = 1_000_000_000  # seconds -> ns
 
@@ -36,25 +47,25 @@ def _fixture(telemetry_dir):
     """One pass, two identical episodes, each with reset/env.step(+materialize)/record.io/two infers, plus a
     server env.step (physics/render) per episode in the env file, and a two-sample GPU stats stream."""
     telemetry_dir.mkdir()
-    harness = [_span('eval.pass', 0, 100, 'pass0')]
+    harness = [_span(SPAN_EVAL_PASS, 0, 100, 'pass0')]
     env = []
     for i, base in enumerate((0, 50)):
         ep = f'ep{i}'
         step = f'step{i}'
         harness += [
-            _span('episode', base, base + 40, ep, 'pass0', {'episode.virtual_s': 20.0}),
-            _span('reset', base + 0, base + 5, f'reset{i}', ep),
-            _span('env.step', base + 10, base + 18, step, ep),
-            _span('materialize', base + 14, base + 16, f'mat{i}', step),
-            _span('record.io', base + 20, base + 24, f'io{i}', ep),
-            _span('policy.infer', base + 30, base + 33, f'inferA{i}', ep),
-            _span('policy.infer', base + 33, base + 34, f'inferB{i}', ep),
+            _span(SPAN_EPISODE, base, base + 40, ep, 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+            _span(SPAN_RESET, base + 0, base + 5, f'reset{i}', ep),
+            _span(SPAN_ENV_STEP, base + 10, base + 18, step, ep),
+            _span(SPAN_MATERIALIZE, base + 14, base + 16, f'mat{i}', step),
+            _span(SPAN_RECORD_IO, base + 20, base + 24, f'io{i}', ep),
+            _span(SPAN_POLICY_INFER, base + 30, base + 33, f'inferA{i}', ep),
+            _span(SPAN_POLICY_INFER, base + 33, base + 34, f'inferB{i}', ep),
         ]
         # Server env.step: 5s, decomposed into physics 3s + render 1s (server_other residual = 1s). It lives
         # in the env process's own file, discriminated by its resource process name.
         server = f'srv{i}'
         env += [
-            _span('env.step', base + 10, base + 15, server, process='env'),
+            _span(SPAN_ENV_STEP, base + 10, base + 15, server, process='env'),
             _span('physics', base + 10, base + 13, f'phys{i}', server, process='env'),
             _span('render', base + 13, base + 14, f'rend{i}', server, process='env'),
         ]
@@ -109,12 +120,12 @@ def test_aborted_episode_excluded(tmp_path):
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
     docs = [
-        _span('eval.pass', 0, 100, 'pass0'),
-        _span('episode', 0, 40, 'ep0', 'pass0', {'episode.virtual_s': 20.0}),
-        _span('episode', 50, 60, 'ep1', 'pass0'),  # aborted: dropped from the count and the reduce
+        _span(SPAN_EVAL_PASS, 0, 100, 'pass0'),
+        _span(SPAN_EPISODE, 0, 40, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+        _span(SPAN_EPISODE, 50, 60, 'ep1', 'pass0'),  # aborted: dropped from the count and the reduce
     ]
     docs[2]['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'].append({
-        'key': 'episode.aborted',
+        'key': ATTR_EPISODE_ABORTED,
         'value': {'boolValue': True},
     })
     _write_lines(telemetry_dir / 'harness.spans.jsonl', docs)
@@ -129,18 +140,18 @@ def test_aborted_episode_wall_excluded_from_between_episodes(tmp_path):
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
     harness = [
-        _span('eval.pass', 0, 100, 'pass0'),
-        _span('episode', 0, 40, 'ep0', 'pass0', {'episode.virtual_s': 20.0}),
-        _span('reset', 0, 5, 'reset0', 'ep0'),
-        _span('env.step', 10, 18, 'step0', 'ep0'),
-        _span('materialize', 14, 16, 'mat0', 'step0'),
-        _span('record.io', 20, 24, 'io0', 'ep0'),
-        _span('policy.infer', 30, 33, 'inferA0', 'ep0'),
-        _span('policy.infer', 33, 34, 'inferB0', 'ep0'),
-        _span('episode', 50, 90, 'ep1', 'pass0', {'episode.virtual_s': 20.0}),  # 40 s of real wall, aborted
+        _span(SPAN_EVAL_PASS, 0, 100, 'pass0'),
+        _span(SPAN_EPISODE, 0, 40, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+        _span(SPAN_RESET, 0, 5, 'reset0', 'ep0'),
+        _span(SPAN_ENV_STEP, 10, 18, 'step0', 'ep0'),
+        _span(SPAN_MATERIALIZE, 14, 16, 'mat0', 'step0'),
+        _span(SPAN_RECORD_IO, 20, 24, 'io0', 'ep0'),
+        _span(SPAN_POLICY_INFER, 30, 33, 'inferA0', 'ep0'),
+        _span(SPAN_POLICY_INFER, 33, 34, 'inferB0', 'ep0'),
+        _span(SPAN_EPISODE, 50, 90, 'ep1', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),  # 40 s of real wall, aborted
     ]
     harness[-1]['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'].append({
-        'key': 'episode.aborted',
+        'key': ATTR_EPISODE_ABORTED,
         'value': {'boolValue': True},
     })
     _write_lines(telemetry_dir / 'harness.spans.jsonl', harness)
@@ -170,22 +181,22 @@ def test_env_step_split_ignores_aborted_episode(tmp_path):
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
     harness = [
-        _span('eval.pass', 0, 100, 'pass0'),
-        _span('episode', 0, 40, 'ep0', 'pass0', {'episode.virtual_s': 20.0}),
-        _span('env.step', 10, 18, 'step0', 'ep0'),
-        _span('materialize', 14, 16, 'mat0', 'step0'),
-        _span('episode', 50, 60, 'ep1', 'pass0'),
-        _span('env.step', 51, 59, 'step1', 'ep1'),  # aborted episode's client step
+        _span(SPAN_EVAL_PASS, 0, 100, 'pass0'),
+        _span(SPAN_EPISODE, 0, 40, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+        _span(SPAN_ENV_STEP, 10, 18, 'step0', 'ep0'),
+        _span(SPAN_MATERIALIZE, 14, 16, 'mat0', 'step0'),
+        _span(SPAN_EPISODE, 50, 60, 'ep1', 'pass0'),
+        _span(SPAN_ENV_STEP, 51, 59, 'step1', 'ep1'),  # aborted episode's client step
     ]
     harness[4]['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'].append({
-        'key': 'episode.aborted',
+        'key': ATTR_EPISODE_ABORTED,
         'value': {'boolValue': True},
     })
     env = [
-        _span('env.step', 10, 15, 'srv0', process='env'),
+        _span(SPAN_ENV_STEP, 10, 15, 'srv0', process='env'),
         _span('physics', 10, 13, 'phys0', 'srv0', process='env'),
         _span('render', 13, 14, 'rend0', 'srv0', process='env'),
-        _span('env.step', 51, 56, 'srv1', process='env'),  # during the aborted rollout
+        _span(SPAN_ENV_STEP, 51, 56, 'srv1', process='env'),  # during the aborted rollout
         _span('physics', 51, 54, 'phys1', 'srv1', process='env'),
     ]
     _write_lines(telemetry_dir / 'harness.spans.jsonl', harness)
@@ -213,9 +224,9 @@ def test_orphan_episode_from_killed_run_excluded(tmp_path):
     _write_lines(
         telemetry_dir / 'harness.spans.jsonl',
         [
-            _span('episode', 0, 30, 'ghost-ep', 'ghost-pass', {'episode.virtual_s': 15.0}),  # killed earlier run
-            _span('eval.pass', 100, 200, 'pass0'),
-            _span('episode', 100, 140, 'ep0', 'pass0', {'episode.virtual_s': 20.0}),
+            _span(SPAN_EPISODE, 0, 30, 'ghost-ep', 'ghost-pass', {ATTR_EPISODE_VIRTUAL_S: 15.0}),  # killed earlier run
+            _span(SPAN_EVAL_PASS, 100, 200, 'pass0'),
+            _span(SPAN_EPISODE, 100, 140, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
         ],
     )
     report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
@@ -229,7 +240,7 @@ def test_multi_gpu_peak_vram_sums_devices_per_sample(tmp_path):
     the max over samples — not the largest single-device reading."""
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span('eval.pass', 0, 10, 'pass0')])
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
     stats = [
         {
             't_ns': 1,
@@ -264,7 +275,7 @@ def test_partial_per_gpu_proc_vram_excluded_from_peak(tmp_path):
     reported. Box-wide util and mem still count every reading (Codex on PR #531)."""
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span('eval.pass', 0, 10, 'pass0')])
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
     stats = [
         {  # incomplete: gpu1 unattributed -> must not add gpu0's 5 GB alone to the peak
             't_ns': 1,
@@ -297,7 +308,7 @@ def test_omitted_gpu_device_excluded_from_proc_vram_peak(tmp_path):
     reported ``proc_mem_b`` — its large lone reading must not win over a complete sample (Codex on PR #531)."""
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span('eval.pass', 0, 10, 'pass0')])
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
     stats = [
         {  # complete: both GPUs present -> establishes the box's full complement (2) and a 1+2 = 3 GB total
             't_ns': 1,
@@ -327,7 +338,7 @@ def test_gpu_samples_outside_pass_windows_excluded(tmp_path):
     stay out of the GPU summary — the stats twin of the orphan-episode exclusion."""
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span('eval.pass', 100, 200, 'pass0')])
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 100, 200, 'pass0')])
     stats = [
         {'t_ns': 50 * _S, 'gpus': [{'i': 0, 'util_pct': 100.0, 'mem_used_b': 8 * 1024**3}]},  # earlier run
         {'t_ns': 150 * _S, 'gpus': [{'i': 0, 'util_pct': 40.0, 'mem_used_b': 2 * 1024**3}]},
@@ -346,9 +357,9 @@ def test_native_sim_has_no_env_step_split(tmp_path):
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
     docs = [
-        _span('eval.pass', 0, 10, 'pass0'),
-        _span('episode', 0, 8, 'ep0', 'pass0', {'episode.virtual_s': 4.0}),
-        _span('env.step', 1, 3, 'step0', 'ep0'),  # client only; no server env.step in the file
+        _span(SPAN_EVAL_PASS, 0, 10, 'pass0'),
+        _span(SPAN_EPISODE, 0, 8, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 4.0}),
+        _span(SPAN_ENV_STEP, 1, 3, 'step0', 'ep0'),  # client only; no server env.step in the file
     ]
     _write_lines(telemetry_dir / 'harness.spans.jsonl', docs)
     report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)

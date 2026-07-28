@@ -262,16 +262,16 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     for rec in spans:
         by_name.setdefault(rec.name, []).append(rec)
 
-    assert len(by_name['eval.pass']) == 1
-    assert len(by_name['episode']) == 2  # one per trial
-    assert by_name['reset'] and by_name['record.io'] and by_name['policy.infer']
+    assert len(by_name[telemetry.SPAN_EVAL_PASS]) == 1
+    assert len(by_name[telemetry.SPAN_EPISODE]) == 2  # one per trial
+    assert by_name[telemetry.SPAN_RESET] and by_name[telemetry.SPAN_RECORD_IO] and by_name[telemetry.SPAN_POLICY_INFER]
 
-    pass_id = by_name['eval.pass'][0].span_id
-    episode_ids = {episode.span_id for episode in by_name['episode']}
-    assert all(episode.parent_id == pass_id for episode in by_name['episode'])
+    pass_id = by_name[telemetry.SPAN_EVAL_PASS][0].span_id
+    episode_ids = {episode.span_id for episode in by_name[telemetry.SPAN_EPISODE]}
+    assert all(episode.parent_id == pass_id for episode in by_name[telemetry.SPAN_EPISODE])
     # The per-tick spans all parent to some episode — record.io most of all, since it is committed by a
     # different control system after the harness emits STOP.
-    for name in ('reset', 'record.io', 'policy.infer'):
+    for name in (telemetry.SPAN_RESET, telemetry.SPAN_RECORD_IO, telemetry.SPAN_POLICY_INFER):
         assert all(rec.parent_id in episode_ids for rec in by_name[name]), name
 
     stats = list(telemetry.read_stats(telemetry_dir / 'harness.stats.jsonl'))

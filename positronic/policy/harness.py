@@ -227,7 +227,7 @@ class Harness(pimm.ControlSystem):
         # record.io) parent to it; stamp the index and the flat trial-context keys.
         self._episode_index += 1
         self._episode_steps = 0
-        episode_attrs: dict[str, Any] = {'episode.index': self._episode_index}
+        episode_attrs: dict[str, Any] = {telemetry.ATTR_EPISODE_INDEX: self._episode_index}
         episode_attrs.update({k: v for k, v in context.items() if isinstance(v, (bool, int, float, str))})
         self._episode_span = telemetry.begin_episode(**episode_attrs)
         # Cleared before the reset so a reset that raises leaves the rollout unanchored: the seal then reads
@@ -237,7 +237,7 @@ class Harness(pimm.ControlSystem):
         # (a remote env reports it then), so the session context — and the task-grouped sampling/counting it
         # drives — must read the instruction here, once it is known.
         if self._task is not None and self._task.reset is not None:
-            with telemetry.span('reset'):
+            with telemetry.span(telemetry.SPAN_RESET):
                 self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
@@ -292,7 +292,8 @@ class Harness(pimm.ControlSystem):
             assert self._episode_virtual_start is not None  # a clean finish is reached only after the anchor is stamped
             virtual_s = max(virtual_now - self._episode_virtual_start, 0.0)
             telemetry.end_episode(
-                self._episode_span, **{'episode.steps': self._episode_steps, 'episode.virtual_s': virtual_s}
+                self._episode_span,
+                **{telemetry.ATTR_EPISODE_STEPS: self._episode_steps, telemetry.ATTR_EPISODE_VIRTUAL_S: virtual_s},
             )
         self._episode_span = None
 
@@ -421,7 +422,8 @@ class Harness(pimm.ControlSystem):
         if self._episode_virtual_start is not None:
             virtual_s = max(clock.now() - self._episode_virtual_start, 0.0)
         telemetry.end_partial_episode(
-            self._episode_span, **{'episode.steps': self._episode_steps, 'episode.virtual_s': virtual_s}
+            self._episode_span,
+            **{telemetry.ATTR_EPISODE_STEPS: self._episode_steps, telemetry.ATTR_EPISODE_VIRTUAL_S: virtual_s},
         )
         self._episode_span = None
 

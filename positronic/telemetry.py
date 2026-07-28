@@ -37,9 +37,30 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Span
 
+from positronic.simulator.env_server.telemetry import SPAN_ENV_RESET as SPAN_ENV_RESET
+from positronic.simulator.env_server.telemetry import SPAN_ENV_STEP as SPAN_ENV_STEP
+
 logger = logging.getLogger(__name__)
 
 _SCOPE = 'positronic'
+
+# Span names and attribute keys are the producer↔consumer contract: a producer opens a span (or stamps an
+# attribute) by these literals, and the offline reduce (``positronic.cli.eval.timing_report``) matches on the
+# same ones. Owned here so both sides import one name. ``env.step``/``env.reset`` are owned by the stdlib-only
+# env-server writer (the isolated env interpreter cannot import this module) and re-exported above.
+SPAN_EVAL_PASS = 'eval.pass'
+SPAN_EPISODE = 'episode'
+SPAN_RESET = 'reset'
+SPAN_MATERIALIZE = 'materialize'
+SPAN_POLICY_INFER = 'policy.infer'
+SPAN_RECORD_IO = 'record.io'
+
+ATTR_EPISODE_INDEX = 'episode.index'
+ATTR_EPISODE_STEPS = 'episode.steps'
+ATTR_EPISODE_VIRTUAL_S = 'episode.virtual_s'
+ATTR_EPISODE_ABORTED = 'episode.aborted'
+ATTR_EPISODE_PARTIAL = 'episode.partial'
+ATTR_PASS_FAILED = 'pass.failed'
 
 # The harness process's sidecar name — the discriminator between client-side spans (episode, client env.step)
 # and an env server's own file, which reduces rely on.
@@ -182,12 +203,12 @@ def eval_pass(**attrs: Any) -> Generator[Span, None, None]:
     exits with an exception still exports its pass — the partial window is real recorded data — stamped
     ``pass.failed`` so a reduce can see (and report) that it did not run to completion."""
     global _current_pass
-    pass_span = _tracer().start_span('eval.pass', attributes=_encode_attrs(attrs))
+    pass_span = _tracer().start_span(SPAN_EVAL_PASS, attributes=_encode_attrs(attrs))
     _current_pass = pass_span
     try:
         yield pass_span
     except BaseException:
-        pass_span.set_attribute('pass.failed', True)
+        pass_span.set_attribute(ATTR_PASS_FAILED, True)
         raise
     finally:
         pass_span.end()
@@ -199,7 +220,7 @@ def begin_episode(**attrs: Any) -> Span:
     spans. A no-op while unbound returns an invalid span the caller ends harmlessly."""
     global _current_episode
     context = trace.set_span_in_context(_current_pass) if _current_pass is not None else None
-    episode = _tracer().start_span('episode', context=context, attributes=_encode_attrs(attrs))
+    episode = _tracer().start_span(SPAN_EPISODE, context=context, attributes=_encode_attrs(attrs))
     _current_episode = episode
     return episode
 
@@ -218,7 +239,7 @@ def end_episode(episode: Span, **attrs: Any) -> None:
 def discard_episode(episode: Span) -> None:
     """End an aborted episode's span, marked ``episode.aborted`` so the reduce can drop it."""
     global _current_episode
-    episode.set_attribute('episode.aborted', True)
+    episode.set_attribute(ATTR_EPISODE_ABORTED, True)
     episode.end()
     if _current_episode is episode:
         _current_episode = None
@@ -233,7 +254,7 @@ def end_partial_episode(episode: Span, **attrs: Any) -> None:
     global _current_episode
     if attrs:
         episode.set_attributes(_encode_attrs(attrs))
-    episode.set_attribute('episode.partial', True)
+    episode.set_attribute(ATTR_EPISODE_PARTIAL, True)
     episode.end()
     if _current_episode is episode:
         _current_episode = None

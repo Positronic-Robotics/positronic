@@ -38,6 +38,11 @@ class _NoopTelemetry:
     """Inert stand-in for the span writer when it is not bundled into this interpreter, so an uninstrumented
     run pays nothing and every span call site works without a telemetry-present check."""
 
+    # Read at decorator-application time by ``@telemetry.traced(telemetry.SPAN_ENV_STEP)``; the value is unused
+    # (``traced`` below ignores the name) but the names must resolve when the real writer is not bundled in.
+    SPAN_ENV_STEP = ''
+    SPAN_ENV_RESET = ''
+
     def active(self) -> bool:
         return False
 
@@ -183,7 +188,7 @@ class RobolabEnv(EnvProtocol):
         cfg = DifferentialIKControllerCfg(command_type='pose', use_relative_mode=False, ik_method='dls')
         self._ik = DifferentialIKController(cfg, num_envs=1, device=self._env.device)
 
-    @telemetry.traced('env.reset')
+    @telemetry.traced(telemetry.SPAN_ENV_RESET)
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
         key = (token['task'], token['instruction_type'])
         if key != self._key:
@@ -217,7 +222,7 @@ class RobolabEnv(EnvProtocol):
             'control_dt': self._control_dt,
         }
 
-    @telemetry.traced('env.step')
+    @telemetry.traced(telemetry.SPAN_ENV_STEP)
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         assert self._env is not None  # step is only served after a reset built the env
         # Isaac pauses its timeline while assets stream in; stepping a paused sim stalls, so pump the kit

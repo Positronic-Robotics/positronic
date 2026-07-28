@@ -1308,18 +1308,18 @@ def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(tmp_path):
         except StopIteration:
             pytest.fail('harness must yield a recorder turn between queueing STOP and ending the episode span')
         assert any(d.type == DsWriterCommandType.STOP_EPISODE for _, d in ds_recorder.emitted)
-        with telemetry.span('record.io'):  # the recorder's shutdown flush, emitted in that turn
+        with telemetry.span(telemetry.SPAN_RECORD_IO):  # the recorder's shutdown flush, emitted in that turn
             pass
         with pytest.raises(StopIteration):
             while True:
                 next(gen)
 
     spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
-    episodes = [s for s in spans if s.name == 'episode']
+    episodes = [s for s in spans if s.name == telemetry.SPAN_EPISODE]
     assert len(episodes) == 1
     episode = episodes[0]
-    assert 'episode.steps' in episode.attrs  # sealed via end_episode, neither leaked open nor aborted
-    flushes = [s for s in spans if s.name == 'record.io']
+    assert telemetry.ATTR_EPISODE_STEPS in episode.attrs  # sealed via end_episode, neither leaked open nor aborted
+    flushes = [s for s in spans if s.name == telemetry.SPAN_RECORD_IO]
     assert flushes and all(s.parent_id == episode.span_id for s in flushes)
 
 
@@ -1348,21 +1348,21 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     for rec in spans:
         by_name.setdefault(rec.name, []).append(rec)
 
-    assert len(by_name['eval.pass']) == 1
-    assert len(by_name['episode']) == 1
-    assert by_name['reset']  # the task's scene reset was timed
-    assert by_name['policy.infer']  # at least one real inference round-trip
+    assert len(by_name[telemetry.SPAN_EVAL_PASS]) == 1
+    assert len(by_name[telemetry.SPAN_EPISODE]) == 1
+    assert by_name[telemetry.SPAN_RESET]  # the task's scene reset was timed
+    assert by_name[telemetry.SPAN_POLICY_INFER]  # at least one real inference round-trip
 
-    pass_span = by_name['eval.pass'][0]
-    episode = by_name['episode'][0]
+    pass_span = by_name[telemetry.SPAN_EVAL_PASS][0]
+    episode = by_name[telemetry.SPAN_EPISODE][0]
     assert pass_span.parent_id is None
     assert episode.parent_id == pass_span.span_id
-    assert all(r.parent_id == episode.span_id for r in by_name['reset'])
-    assert all(r.parent_id == episode.span_id for r in by_name['policy.infer'])
+    assert all(r.parent_id == episode.span_id for r in by_name[telemetry.SPAN_RESET])
+    assert all(r.parent_id == episode.span_id for r in by_name[telemetry.SPAN_POLICY_INFER])
 
-    assert episode.attrs['episode.index'] == 0
-    assert episode.attrs['episode.steps'] == len(by_name['policy.infer'])
-    assert episode.attrs['episode.virtual_s'] >= 0.0
+    assert episode.attrs[telemetry.ATTR_EPISODE_INDEX] == 0
+    assert episode.attrs[telemetry.ATTR_EPISODE_STEPS] == len(by_name[telemetry.SPAN_POLICY_INFER])
+    assert episode.attrs[telemetry.ATTR_EPISODE_VIRTUAL_S] >= 0.0
 
 
 @pytest.mark.timeout(3.0)
@@ -1390,16 +1390,16 @@ def test_failed_pass_seals_open_episode_span(tmp_path):
                 pass
 
     spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
-    episodes = [s for s in spans if s.name == 'episode']
+    episodes = [s for s in spans if s.name == telemetry.SPAN_EPISODE]
     assert len(episodes) == 1  # the open span was sealed and exported, not lost with the failure
     episode = episodes[0]
-    assert episode.attrs.get('episode.partial') is True  # flagged so the reduce sees it did not complete
-    assert episode.attrs['episode.steps'] == 0  # stamped like a clean end — no step ran before the failure
+    assert episode.attrs.get(telemetry.ATTR_EPISODE_PARTIAL) is True  # flagged so the reduce sees it did not complete
+    assert episode.attrs[telemetry.ATTR_EPISODE_STEPS] == 0  # stamped like a clean end — no step ran before the failure
     # The rollout never started — reset raised before its virtual anchor was stamped — so its virtual duration
     # is zero, not the garbage ``clock.now() - 0`` a never-stamped anchor would otherwise yield.
-    assert episode.attrs['episode.virtual_s'] == 0.0
-    passes = [s for s in spans if s.name == 'eval.pass']
+    assert episode.attrs[telemetry.ATTR_EPISODE_VIRTUAL_S] == 0.0
+    passes = [s for s in spans if s.name == telemetry.SPAN_EVAL_PASS]
     assert len(passes) == 1
     assert episode.parent_id == passes[0].span_id  # parented to the pass, so the reduce does not drop it as an orphan
-    resets = [s for s in spans if s.name == 'reset']
+    resets = [s for s in spans if s.name == telemetry.SPAN_RESET]
     assert resets and all(r.parent_id == episode.span_id for r in resets)  # finished child attributes to its phase

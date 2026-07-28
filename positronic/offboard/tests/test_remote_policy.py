@@ -252,7 +252,7 @@ def test_records_infer_span_without_scheduling_wrapper(tmp_path):
     with telemetry.bind(tmp_path, 'harness', 'run-infer-span'):
         assert session({'obs_time_ns': 0}) is not None
     spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
-    assert [s.name for s in spans] == ['policy.infer']
+    assert [s.name for s in spans] == [telemetry.SPAN_POLICY_INFER]
 
 
 def test_records_infer_span_when_inference_raises(tmp_path):
@@ -265,7 +265,7 @@ def test_records_infer_span_when_inference_raises(tmp_path):
         with pytest.raises(TimeoutError):
             session({'obs_time_ns': 0})
     spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
-    assert [s.name for s in spans] == ['policy.infer']
+    assert [s.name for s in spans] == [telemetry.SPAN_POLICY_INFER]
 
 
 def test_remote_policy_meta_exposes_server_fields():

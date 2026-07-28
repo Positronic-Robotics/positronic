@@ -30,6 +30,12 @@ _SCOPE = 'positronic'
 ENV_TELEMETRY_DIR = 'POSITRONIC_ENV_TELEMETRY_DIR'
 ENV_RUN_ID = 'POSITRONIC_RUN_ID'
 
+# The two env-server phase span names. Owned here because the isolated env interpreter (robolab/env.py) imports
+# this stdlib-only module as ``telemetry`` and cannot reach ``positronic.telemetry``; the main process reduces
+# them through ``positronic.telemetry``, which re-exports these.
+SPAN_ENV_STEP = 'env.step'
+SPAN_ENV_RESET = 'env.reset'
+
 _lock = threading.Lock()
 _file = None
 _trace_id = ''

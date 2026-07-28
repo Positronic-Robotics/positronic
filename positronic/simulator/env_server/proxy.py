@@ -111,16 +111,16 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     # Frame-0 materialisation (allocating shared-memory image buffers and copying each camera
                     # frame) is part of the reset cost, like the server-side render already timed under reset —
                     # charge it to reset, not overhead.
-                    with telemetry.span('reset'):
+                    with telemetry.span(telemetry.SPAN_RESET):
                         self._emit_payload(self._frame['obs'])
                     self.done.emit({})
                 elif self._active:
                     # ``env.step`` spans the whole client-observed step; ``materialize`` nests the client-side
                     # observation assembly (shared-memory image allocation + camera copies) inside it, so the
                     # reduce can split materialisation out of the wire cost.
-                    with telemetry.span('env.step'):
+                    with telemetry.span(telemetry.SPAN_ENV_STEP):
                         self._frame = self._step_env(clock)
-                        with telemetry.span('materialize'):
+                        with telemetry.span(telemetry.SPAN_MATERIALIZE):
                             self._emit_payload(self._frame['obs'])
         finally:
             # Closes the connection then the server, in that order (reverse of acquisition); a no-op if no reset
