@@ -10,18 +10,17 @@ from positronic.simulator.molmo_spaces.adapter import MolmoAdapter
 from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
 
 
-def _episode_count(benchmark_dir: str) -> int:
+def _episode_count(benchmark_dir: Path) -> int:
     """The episode count of a MolmoSpaces benchmark dir, mirroring ``load_all_episodes``' two layouts.
 
     positronic cannot import ``molmo_spaces`` here (it lives in the env server's own venv), so this counts the
     benchmark files directly: a single ``benchmark.json`` (a JSON list of episode specs) when present, else the
     legacy ``house_*/episode_*.json`` layout the loader also accepts.
     """
-    base = Path(benchmark_dir)
-    manifest = base / 'benchmark.json'
+    manifest = benchmark_dir / 'benchmark.json'
     if manifest.exists():
         return len(json.loads(manifest.read_text()))
-    return sum(1 for _ in base.glob('house_*/episode_*.json'))
+    return sum(1 for _ in benchmark_dir.glob('house_*/episode_*.json'))
 
 
 @cfn.config(
@@ -43,10 +42,10 @@ def _molmo_eval(
     """A MolmoSpaces eval: the embodiment proxies a remote MolmoSpaces env, the task carries the scenario.
 
     MolmoSpaces (https://github.com/allenai/molmospaces) is AllenAI's MuJoCo manipulation benchmark on the DROID
-    rig (Franka arm + Robotiq 2F-85) across ProcTHOR scenes; a benchmark is a ``benchmark.json`` of episode specs
-    (house, task, exact object poses, cameras, language goal), so ``--eval.benchmark_dir`` names the benchmark to
-    run and ``--eval.episodes`` optionally pins a subset of episode indices (default: the whole benchmark). The
-    asset packs live under ``MLSPACES_ASSETS_DIR``.
+    rig (Franka arm + Robotiq 2F-85) across ProcTHOR scenes; a benchmark is a directory holding a ``benchmark.json``
+    (a JSON list of episode specs — house, task, exact object poses, cameras, language goal), so
+    ``--eval.benchmark_dir`` names that directory and ``--eval.episodes`` optionally pins a subset of episode
+    indices (default: the whole benchmark). The asset packs live under ``MLSPACES_ASSETS_DIR``.
 
     positronic launches a single task-agnostic env server in MolmoSpaces' own interpreter; the proxy drives it
     over the socket and the episode index rides each trial's reset token, so one embodiment serves every episode.
@@ -55,16 +54,17 @@ def _molmo_eval(
     """
     if benchmark_dir is None:
         raise ValueError('MolmoSpaces eval needs --eval.benchmark_dir pointing at a dir with benchmark.json')
+    base = Path(benchmark_dir)
     if episodes is None:
-        indices = list(range(_episode_count(benchmark_dir)))
+        indices = list(range(_episode_count(base)))
     else:
         indices = [episodes] if isinstance(episodes, int) else list(episodes)
     if not indices:
         raise ValueError(
-            f'no benchmark episodes found under {benchmark_dir!r}; expected a benchmark.json or a legacy '
+            f'no benchmark episodes found under {base}; expected a benchmark.json or a legacy '
             'house_*/episode_*.json layout (or pass --eval.episodes explicitly)'
         )
-    proxy = RemoteEnvControlSystem(MolmoAdapter(camera_dict), serve_molmo_spaces(benchmark_dir))
+    proxy = RemoteEnvControlSystem(MolmoAdapter(camera_dict), serve_molmo_spaces(base))
     # MolmoSpaces drives a Franka DROID rig; recordings carry the same model (URDF + meshes + joint names +
     # control frame) for the 3D viewer and offline IK, supplied here since the molmo server can't import
     # positronic to emit it via ``robot_meta``.

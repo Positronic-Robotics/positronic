@@ -50,7 +50,7 @@ def _checkout_lock() -> Iterator[None]:
         yield
 
 
-def _spawn(host: str, port: int, benchmark_dir: str) -> subprocess.Popen:
+def _spawn(host: str, port: int, benchmark_dir: Path) -> subprocess.Popen:
     venv = _MOLMO_SRC / '.venv'
     with _checkout_lock():
         src = ensure_pinned_checkout(_MOLMO_REPO, _MOLMO_COMMIT, _MOLMO_SRC)
@@ -87,7 +87,7 @@ def _spawn(host: str, port: int, benchmark_dir: str) -> subprocess.Popen:
     return subprocess.Popen(command, env=env)
 
 
-def serve_molmo_spaces(benchmark_dir: str, host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
+def serve_molmo_spaces(benchmark_dir: Path, host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
     """The MolmoSpaces env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
 
     ``benchmark_dir`` (a dir holding ``benchmark.json``) is fixed for the run; the reset token selects the
