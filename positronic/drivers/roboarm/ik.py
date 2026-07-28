@@ -55,22 +55,50 @@ def _site_transform(data, site_id):
     return geom.Transform3D(data.site_xpos[site_id].copy(), rotation)
 
 
+def _ancestry(model, body_id: int) -> list[int]:
+    """Body ids from ``body_id`` up to the world, inclusive."""
+    chain = [body_id]
+    while chain[-1] != 0:
+        chain.append(model.body_parentid[chain[-1]])
+    return chain
+
+
+def _assert_rigidly_connected(model, from_frame: str, to_frame: str, from_body: int, to_body: int) -> None:
+    """Raise unless every joint between the two bodies is fixed, which is what makes one transform stand for all.
+
+    Walks both bodies up to their lowest common ancestor; a joint on either leg means the frames move relative to
+    each other, so no single transform describes the pair.
+    """
+    up_from, up_to = _ancestry(model, from_body), _ancestry(model, to_body)
+    common = set(up_from) & set(up_to)
+    legs = [b for chain in (up_from, up_to) for b in chain[: min(i for i, x in enumerate(chain) if x in common)]]
+    movable = [b for b in legs if model.body_jntnum[b] > 0]
+    if movable:
+        names = sorted({mj.mj_id2name(model, mj.mjtObj.mjOBJ_BODY, b) for b in movable})
+        raise ValueError(
+            f'Frames {from_frame!r} and {to_frame!r} are separated by movable joints on {names}, so their relative '
+            f'pose changes with the configuration and no constant transform describes it'
+        )
+
+
 @lru_cache(maxsize=8)
 def frame_transform(urdf_xml, from_frame, to_frame):
     """The rigid transform expressing ``to_frame`` relative to ``from_frame`` in a robot model.
 
     A pose measured in ``from_frame`` (e.g. the recorded ``ee_pose`` at ``control_frame``) composes to
-    ``to_frame`` via ``pose * frame_transform(...)``. Both frames must be rigidly connected (fixed joints) for the
-    result to be config-independent, so it is read from a single forward pass at the zero configuration.
+    ``to_frame`` via ``pose * frame_transform(...)``. Read from a single forward pass at the zero configuration,
+    which stands for every configuration only while the two frames are rigidly connected — enforced here, so a
+    pair separated by a movable joint fails loudly instead of returning a transform good at one pose alone.
     """
     spec = _prepare_spec(urdf_xml, from_frame)
     _ensure_site(spec, to_frame)
     model = spec.compile()
     data = mj.MjData(model)
     mj.mj_forward(model, data)
-    from_pose = _site_transform(data, mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, from_frame))
-    to_pose = _site_transform(data, mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, to_frame))
-    return from_pose.inv * to_pose
+    from_site = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, from_frame)
+    to_site = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, to_frame)
+    _assert_rigidly_connected(model, from_frame, to_frame, model.site_bodyid[from_site], model.site_bodyid[to_site])
+    return _site_transform(data, from_site).inv * _site_transform(data, to_site)
 
 
 def _parse_target(target_ee_pose_vec):

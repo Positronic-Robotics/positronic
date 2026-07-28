@@ -414,9 +414,7 @@ class Harness(pimm.ControlSystem):
         inputs.update(self.context)
         statics = self._statics()
         if 'control_frame' in statics:
-            # Backs the codecs that resolve an EE frame against the robot model (``ChangeEEFrame``) — the same
-            # ``urdf``/``control_frame`` pair training reads from episode statics. Whether it crosses the wire is
-            # the border's call (``RemoteMarker.strip``).
+            # The robot model, for codecs that resolve a frame against it.
             inputs['urdf'] = statics['urdf']
             inputs['control_frame'] = statics['control_frame']
         inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it

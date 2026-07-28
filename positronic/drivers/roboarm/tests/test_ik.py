@@ -143,6 +143,13 @@ def test_frame_transform_reproduces_droid_eef_across_configs():
         assert geom.quat_closest(got.rotation, want.rotation) == want.rotation
 
 
+def test_frame_transform_rejects_frames_across_movable_joints():
+    """One transform can only stand for every configuration when the frames are rigidly connected; a pair spanning
+    the arm's revolute joints must say so rather than hand back the zero-configuration answer."""
+    with pytest.raises(ValueError, match='movable joints'):
+        frame_transform(bundled_franka_model()['urdf'], 'link0', 'end_effector')
+
+
 def test_frame_transform_identity_when_frames_match():
     transform = frame_transform(bundled_franka_model()['urdf'], 'end_effector', 'end_effector')
     np.testing.assert_allclose(transform.translation, 0.0, atol=1e-12)

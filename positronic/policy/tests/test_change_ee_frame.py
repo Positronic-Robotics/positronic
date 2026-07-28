@@ -68,6 +68,34 @@ def test_identity_when_target_equals_control_frame():
     np.testing.assert_allclose(encoded['robot_state.ee_pose'], pose_c.as_vector(QUAT), atol=1e-9)
 
 
+def test_converts_every_pose_key_present_and_skips_the_rest():
+    transform = frame_transform(URDF, CONTROL_FRAME, 'droid_eef')
+    a, b = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5]), _pose([0.1, 0.2, 0.3], [0.0, 0.1, -0.2])
+    obs = {'a': a.as_vector(QUAT), 'b': b.as_vector(QUAT), 'urdf': URDF, 'control_frame': CONTROL_FRAME}
+
+    encoded = ChangeEEFrame(to='droid_eef', pose_keys=('a', 'b', 'absent')).encode(obs)
+
+    np.testing.assert_allclose(encoded['a'], (a * transform).as_vector(QUAT), atol=1e-9)
+    np.testing.assert_allclose(encoded['b'], (b * transform).as_vector(QUAT), atol=1e-9)
+    assert 'absent' not in encoded
+
+
+def test_reads_the_model_from_the_configured_keys():
+    transform = frame_transform(URDF, CONTROL_FRAME, 'droid_eef')
+    pose = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
+    obs = {'robot_state.ee_pose': pose.as_vector(QUAT), 'model.urdf': URDF, 'model.frame': CONTROL_FRAME}
+
+    codec = ChangeEEFrame(to='droid_eef', urdf_key='model.urdf', control_frame_key='model.frame')
+
+    np.testing.assert_allclose(codec.encode(obs)['robot_state.ee_pose'], (pose * transform).as_vector(QUAT), atol=1e-9)
+
+
+def test_encode_passes_through_when_no_pose_key_is_present():
+    """A joint-only observation carries no pose, so the codec neither converts nor demands a robot model."""
+    obs = {'robot_state.q': np.zeros(7)}
+    assert ChangeEEFrame(to='droid_eef').encode(obs) is obs
+
+
 def test_advertises_the_frame_it_speaks():
     """The frame reaches episode meta both ways: through the codec at serving, its dual at conversion."""
     codec = ChangeEEFrame(to='droid_eef')
