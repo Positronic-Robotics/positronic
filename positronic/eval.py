@@ -99,10 +99,11 @@ class Task:
     trial ends. The Harness reads it to stop the trial early and records the payload into the
     episode's static data.
 
-    ``horizon`` is the optional sim-enforced episode deadline (sim-seconds), resolved live per trial like
-    ``instruction`` — a benchmark env reports it at reset (see the two-tier design above). The Harness reads it
-    once a trial is armed and rejects a ``timeout`` that is not strictly weaker (longer), so the safety net cannot
-    silently truncate a valid episode. ``None`` for real/attended tasks and envs that enforce no horizon.
+    ``horizon`` is the optional trial time budget (sim-seconds) — the sim-enforced episode horizon plus the env's
+    own framing overhead — resolved live per trial like ``instruction`` from what a benchmark env reports at reset
+    (see the two-tier design above). The Harness reads it once a trial is armed and rejects a ``timeout`` that is
+    not strictly longer, so the safety net cannot silently truncate a valid episode. ``None`` for real/attended
+    tasks and envs that enforce no horizon.
     """
 
     def __init__(
