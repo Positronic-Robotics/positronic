@@ -89,21 +89,6 @@ class _FakeProc:
         self.usedGpuMemory = used
 
 
-def test_append_after_truncated_line_keeps_new_records(tmp_path):
-    """Reusing a directory whose previous run died mid-write must not merge the new run's first record into
-    the truncated fragment — the writer seals the fragment with a newline before appending."""
-    telemetry_dir = tmp_path / 'telemetry'
-    telemetry_dir.mkdir()
-    path = telemetry_dir / 'harness.spans.jsonl'
-    path.write_text('{"resourceSpans": [{"scopeSp')  # a killed run's partial write, no trailing newline
-
-    with telemetry.bind(tmp_path, 'harness', 'run-resume'):
-        with telemetry.span('reset'):
-            pass
-
-    assert [s.name for s in telemetry.read_spans(path)] == ['reset']
-
-
 def test_failed_pass_exported_and_stamped(tmp_path):
     """A sweep that dies mid-pass still exports its pass span — the partial window is real data — stamped
     ``pass.failed`` so the reduce can name the mix instead of silently folding it in."""

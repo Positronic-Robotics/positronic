@@ -30,6 +30,7 @@ dependencies = [
     "numpy",
     "nvidia-ml-py",
     "opencv-python-headless",
+    "opentelemetry-exporter-otlp-json-file>=0.65b0",
     "opentelemetry-sdk>=1.42",
     # openpi-client: optional, see [project.optional-dependencies] openpi
     "plotly>=6.5.0",

@@ -4301,6 +4301,41 @@ wheels = [
 ]
 
 [[package]]
+name = "opentelemetry-exporter-otlp-json-common"
+version = "0.65b0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-proto-json" },
+    { name = "opentelemetry-sdk" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/23/a3/f4dbf87b48c2de020c17c937ba2e6ce2e66b3fbbf0ca90cb0ef7a6634350/opentelemetry_exporter_otlp_json_common-0.65b0.tar.gz", hash = "sha256:e5c2ae6b2f154b5804332074bf4ff14c8b55d9613e38687d355343adfc4a4abf", size = 22096, upload-time = "2026-07-16T15:25:36.308Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/fb/0fc0bd211cd3e3bb3995c4a2fb366bbba571b1e801c9c3bb60ca06609ff3/opentelemetry_exporter_otlp_json_common-0.65b0-py3-none-any.whl", hash = "sha256:2adc328b0cdc5bd960658f96378c2c5280a49468f08df63624e8aa6053f73890", size = 14596, upload-time = "2026-07-16T15:25:16.489Z" },
+]
+
+[[package]]
+name = "opentelemetry-exporter-otlp-json-file"
+version = "0.65b0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-exporter-otlp-json-common" },
+    { name = "opentelemetry-sdk" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/24/3a/5089e7bfd35a25c24051c228f360549fac31dcce8aa5b117905b0df34031/opentelemetry_exporter_otlp_json_file-0.65b0.tar.gz", hash = "sha256:66262e688f68a99bb6f552dc365a470104f4c4f06050c826adb62a489f8bf9f2", size = 12477, upload-time = "2026-07-16T15:25:37.06Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0b/69/06be4f988034ca4683df991c12ca2e7064dd7819438b69e2ecea12ee2bf6/opentelemetry_exporter_otlp_json_file-0.65b0-py3-none-any.whl", hash = "sha256:154020d0d3dfb76cfdfaafd39eb00ee5c97518eda076f812ba6c40eb4b6187b3", size = 11857, upload-time = "2026-07-16T15:25:17.373Z" },
+]
+
+[[package]]
+name = "opentelemetry-proto-json"
+version = "0.65b0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/fe/01/27a9f85068eb304b8bea4e1bc37957d79ae6c7650f6b864411704275662f/opentelemetry_proto_json-0.65b0.tar.gz", hash = "sha256:db903ce00980601088555a8d86027f3143f3eaa14b8c29388774ccf820a687a5", size = 18698, upload-time = "2026-07-16T18:04:57.282Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a8/4d/fcc56675b09009c867ad928d0c0e58381e678613c7d65d22514e112ef838/opentelemetry_proto_json-0.65b0-py3-none-any.whl", hash = "sha256:709582c02f145ccb75d95e6c15c4decc0495e9a7524f6de0b1f8045219c5b3cb", size = 32059, upload-time = "2026-07-16T18:04:54.931Z" },
+]
+
+[[package]]
 name = "opentelemetry-sdk"
 version = "1.44.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4852,6 +4887,7 @@ dependencies = [
     { name = "nvidia-ml-py" },
     { name = "opencv-python-headless", version = "4.11.0.86", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
     { name = "opencv-python-headless", version = "4.13.0.92", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra == 'extra-10-positronic-molmoact2' or extra == 'extra-10-positronic-yam' or extra != 'extra-10-positronic-lerobot'" },
+    { name = "opentelemetry-exporter-otlp-json-file" },
     { name = "opentelemetry-sdk" },
     { name = "plotly" },
     { name = "pos3" },
@@ -4962,6 +4998,7 @@ requires-dist = [
     { name = "opencv-python", marker = "extra == 'dev'" },
     { name = "opencv-python-headless" },
     { name = "openpi-client", marker = "extra == 'openpi'", git = "https://github.com/Positronic-Robotics/openpi.git?subdirectory=packages%2Fopenpi-client&rev=main-positronic" },
+    { name = "opentelemetry-exporter-otlp-json-file", specifier = ">=0.65b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.42" },
     { name = "pillow", marker = "extra == 'molmoact2'" },
     { name = "placo", marker = "extra == 'hardware'" },
