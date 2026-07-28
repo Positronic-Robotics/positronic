@@ -17,6 +17,8 @@ mesa software EGL — ``EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1``). Run
 import argparse
 from pathlib import Path
 
+import numpy as np
+
 from positronic import keys
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces.adapter import MolmoAdapter
@@ -25,11 +27,28 @@ from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
 _CAMERA_DICT = {keys.WRIST_IMAGE: 'wrist_camera', keys.EXTERIOR_IMAGE: 'exo_camera_1'}
 
 
-def run(benchmark_dir: Path, *, episodes: int = 1, steps: int = 5, camera_dict: dict[str, str] | None = None) -> None:
+def _check_sim_state(adapter: MolmoAdapter, raw_obs: dict) -> np.ndarray:
+    """The privileged full MuJoCo state must survive the wire and reach the recorder as a finite qpos+qvel vector."""
+    sim_state = adapter.privileged(raw_obs)['sim_state']
+    assert isinstance(sim_state, np.ndarray) and sim_state.ndim == 1 and sim_state.size > 0, (
+        f'privileged sim_state malformed: {type(sim_state)} shape={getattr(sim_state, "shape", None)}'
+    )
+    assert np.isfinite(sim_state).all(), 'privileged sim_state carries non-finite values'
+    return sim_state
+
+
+def run(
+    benchmark_dir: Path,
+    *,
+    episodes: int = 1,
+    steps: int = 5,
+    camera_dict: dict[str, str] | None = None,
+    task_horizon_steps: int | None = None,
+) -> None:
     """Reset + step the first ``episodes`` benchmark episodes over the socket, mapping each frame with the adapter."""
     camera_dict = camera_dict or _CAMERA_DICT
     adapter = MolmoAdapter(camera_dict)
-    with serve_molmo_spaces(benchmark_dir) as (host, port):
+    with serve_molmo_spaces(benchmark_dir, task_horizon_steps=task_horizon_steps) as (host, port):
         conn = EnvConnection(host, port)
         try:
             for i in range(episodes):
@@ -39,11 +58,16 @@ def run(benchmark_dir: Path, *, episodes: int = 1, steps: int = 5, camera_dict: 
                 assert all(logical in obs for logical in camera_dict), f'missing cameras: {sorted(obs)}'
                 q = obs['robot_state'].q
                 assert q.shape == (7,), f'unexpected joint shape {q.shape}'
-                print(f'  episode {i}: reset ok — task={frame["meta"]["task"]!r} grip={obs["grip"]:.3f} q0={q[0]:.4f}')
+                sim_state = _check_sim_state(adapter, frame['obs'])
+                print(
+                    f'  episode {i}: reset ok — task={frame["meta"]["task"]!r} grip={obs["grip"]:.3f} '
+                    f'q0={q[0]:.4f} sim_state={sim_state.size}d'
+                )
                 out = {'done': False}
                 for _ in range(steps):
                     out = conn.step({'command': {'type': 'hold'}, 'grip': 0.0})
                     adapter.observations(out['obs'])  # the mapping round-trips on step frames too
+                    _check_sim_state(adapter, out['obs'])
                 print(f'  episode {i}: {steps} steps ok (done={out["done"]})')
         finally:
             conn.close()
@@ -55,8 +79,11 @@ def main() -> None:
     parser.add_argument('--benchmark_dir', required=True, help='dir containing benchmark.json')
     parser.add_argument('--episodes', type=int, default=1)
     parser.add_argument('--steps', type=int, default=5)
+    parser.add_argument(
+        '--task_horizon_steps', type=int, default=None, help='override the benchmark horizon (steps per episode)'
+    )
     args = parser.parse_args()
-    run(Path(args.benchmark_dir), episodes=args.episodes, steps=args.steps)
+    run(Path(args.benchmark_dir), episodes=args.episodes, steps=args.steps, task_horizon_steps=args.task_horizon_steps)
 
 
 if __name__ == '__main__':
