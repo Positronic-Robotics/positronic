@@ -391,7 +391,10 @@ class _Nvml:
 class StatsSampler:
     """A daemon thread sampling host CPU/memory, this process tree's CPU/memory, and per-GPU load at ``hz``,
     writing one JSON line per sample to ``out_path`` (flushed per line, so a crash keeps every prior sample).
-    It free-runs on wall time — no span context, no episode boundary — so no sample is lost at a phase edge."""
+    It free-runs on wall time — no span context, no episode boundary — so no sample is lost at a phase edge.
+    It runs as an in-process daemon thread, not a subprocess: ``os.getpid()`` gives exact process-tree
+    attribution and the lifecycle stays trivial, at the cost of going blind if the harness itself hard-hangs —
+    load-of-a-hang forensics this profiling does not need."""
 
     def __init__(self, out_path: Path | str, hz: float = 1.0) -> None:
         self._path = Path(out_path)
