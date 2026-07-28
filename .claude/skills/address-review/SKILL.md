@@ -20,6 +20,9 @@ needs their call. A red build is never "done", no matter what the reviewer says.
 
 ## Principles
 
+- **Only submitted feedback exists.** A reviewer's in-progress review is theirs until they send
+  it; its comments are not input, not even to read. See Step 1 — the prescribed REST fetch hides
+  them, and the GraphQL workaround does not.
 - **Judge every comment on merit.** Agree or disagree; never auto-apply. A reviewer —
   especially a bot — can be wrong, stale, or missing project context. Check intent before
   deciding: `git show <sha>`, the surrounding code, and any design docs. The code may be
@@ -81,6 +84,22 @@ gh api repos/$REPO/issues/$PR/comments --paginate -q '.[] | {user:.user.login, b
 
 Ignore comments that are already your own replies, and comments on already-resolved threads
 (the GraphQL query in Step 5 reports `isResolved` per thread).
+
+**Only submitted feedback counts. Never read a reviewer's draft.** A review in progress is
+`PENDING` with `submitted_at: null`; its comments do not exist as far as this skill is concerned.
+The three REST fetches above enforce that for free — GitHub hides pending comments from them —
+which is exactly why they are the prescribed fetch. The danger is the workaround: when you are
+authenticated **as** the reviewer (a solo repo, your own PR), the GraphQL `reviewThreads` query
+**does** return your own unsubmitted drafts, indistinguishable from submitted ones. Acting on
+those means "fixing" half-written thoughts the human never sent, replying into their draft
+threads, and scrambling the review they are still composing.
+
+So: use GraphQL in Step 5 to resolve threads and, when needed, to reply — never to *discover*
+comments. If a REST reply is rejected with `user_id can only have one pending review per pull
+request`, that error is information: **a review is open, so this round's feedback is not ready.**
+Post nothing into those threads. Say so and wait — do not switch to GraphQL to read around it.
+Codex and other bots submit immediately, so their feedback is always fair game; only a human's
+in-progress review is invisible, and that is deliberate.
 
 ## Step 2: Triage (agree or disagree)
 
@@ -169,6 +188,11 @@ gh api -X POST repos/$REPO/issues/$PR/comments -F body=@reply.txt
 A combined review (e.g. one Codex body carrying several findings) arrives as a single
 conversation comment, not per-finding threads — answer it with one issue-level reply that
 addresses each finding; there is nothing to resolve in Step 5 for that surface.
+
+If a reply is rejected with `user_id can only have one pending review per pull request`, a review
+is open under your own account. Stop this pass and say so (Step 1) — do not reply at conversation
+level to route around it either, which leaves the thread looking unanswered and re-triggers the
+Step 7 watcher on every cycle.
 
 **Resolve** every thread you *fixed* (a concrete change landed) — this is mandatory, not
 optional: a fixed Codex thread you leave open keeps the PR looking unaddressed to human
