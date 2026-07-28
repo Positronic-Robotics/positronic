@@ -36,8 +36,8 @@ def test_env_span_inert_when_unbound(tmp_path):
 
 
 def test_bind_from_env_reads_env_vars(tmp_path, monkeypatch):
-    monkeypatch.setenv('POSITRONIC_ENV_TELEMETRY_DIR', str(tmp_path))
-    monkeypatch.setenv('POSITRONIC_RUN_ID', 'run-fromenv')
+    monkeypatch.setenv(telemetry.ENV_TELEMETRY_DIR, str(tmp_path))
+    monkeypatch.setenv(telemetry.ENV_RUN_ID, 'run-fromenv')
     with telemetry.bind_from_env():
         assert telemetry.active()
         with telemetry.span('env.reset'):

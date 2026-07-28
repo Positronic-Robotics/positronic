@@ -22,8 +22,11 @@ from pathlib import Path
 from typing import Any
 
 _SCOPE = 'positronic'
-_ENV_DIR = 'POSITRONIC_ENV_TELEMETRY_DIR'
-_ENV_RUN_ID = 'POSITRONIC_RUN_ID'
+
+# The env-var contract between this reader and the eval-CLI writer (``positronic.cli.eval.run``), which sets
+# them for a launched env server. Public so the writer imports them here rather than re-spelling the literals.
+ENV_TELEMETRY_DIR = 'POSITRONIC_ENV_TELEMETRY_DIR'
+ENV_RUN_ID = 'POSITRONIC_RUN_ID'
 
 _lock = threading.Lock()
 _file = None
@@ -107,8 +110,8 @@ def bind(telemetry_dir: Path | str, run_id: str):
 def bind_from_env():
     """Bind from the telemetry env vars the parent sets under ``--timing`` (the launcher forwards the whole
     environment to this subprocess); an inert context manager when they are absent."""
-    directory = os.environ.get(_ENV_DIR)
-    run_id = os.environ.get(_ENV_RUN_ID)
+    directory = os.environ.get(ENV_TELEMETRY_DIR)
+    run_id = os.environ.get(ENV_RUN_ID)
     if directory is None or run_id is None:
         return _inert()
     return bind(directory, run_id)

@@ -20,6 +20,7 @@ from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observ
 from positronic.inference import main
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.policy.wrappers import ChunkedSchedule
+from positronic.simulator.env_server import telemetry as env_telemetry
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import AddBox, SetBodyPosition
 from positronic.utils import package_assets_path
@@ -249,8 +250,8 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
 
     # The env handed to a launched env server is restored after the run, so a later run in this process
     # inherits nothing from this one.
-    assert 'POSITRONIC_ENV_TELEMETRY_DIR' not in os.environ
-    assert 'POSITRONIC_RUN_ID' not in os.environ
+    assert env_telemetry.ENV_TELEMETRY_DIR not in os.environ
+    assert env_telemetry.ENV_RUN_ID not in os.environ
 
     telemetry_dir = tmp_path / 'telemetry'
     assert (telemetry_dir / 'harness.meta.json').exists()

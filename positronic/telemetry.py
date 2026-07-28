@@ -43,6 +43,10 @@ _SCOPE = 'positronic'
 # and an env server's own file, which reduces rely on.
 HARNESS_PROCESS = 'harness'
 
+# The subdirectory under a run's output dir where every process's sidecars live. The eval CLI writer, a
+# launched env server (via the env-var it is handed) and the offline reduce all resolve to this same dir.
+TELEMETRY_SUBDIR = 'telemetry'
+
 # The bound provider and the current pass/episode spans are process-global: the harness, env proxy and
 # recorder run as cooperative control systems in one thread and interleave their spans, so parenting is
 # resolved here rather than through OTel's ambient context (which does not survive the scheduler's generator
@@ -83,7 +87,7 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Iterator[TracerProvi
     ``<process>.spans.jsonl``, and register the provider so ``span`` records. The batch processor is flushed
     and shut down on exit — an abrupt exit would otherwise lose its queued tail."""
     global _provider
-    telemetry_dir = Path(out_dir) / 'telemetry'
+    telemetry_dir = Path(out_dir) / TELEMETRY_SUBDIR
     telemetry_dir.mkdir(parents=True, exist_ok=True)
     host = socket.gethostname()
     meta = {
