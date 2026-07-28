@@ -47,6 +47,19 @@ A returned trajectory also needs timing — *when* each action runs. That is han
 
 These timestamps are **relative** — seconds from the start of the trajectory. The model and codecs never see wall-clock time; the real-time client anchors each offset to its own clock the moment inference returns (`now + timestamp`), so execution starts at inference-finish and the round-trip latency is absorbed. Stamping a per-action timestamp rather than a fixed rate is deliberate: it lets non-uniform timings and client-side scheduling strategies share one wire format. See [How inference works](connect-your-model.md#how-inference-works) for the full reasoning.
 
+## End-effector frames
+
+"EE pose" has no universal meaning: our rigs report the flange (`end_effector`), DROID and RoboLab report the gripper frame (`droid_eef`). A checkpoint speaks whichever frame its training data was in, so serving it on a rig with a different canonical frame misreads every pose and every command by one constant transform — silently.
+
+`ChangeEEFrame(to=...)` converts at that boundary: observations compose forward into the policy's frame, commands compose back. The frame name is a site in the rig's own robot model, and the transform is read from that model — so one checkpoint runs on any rig whose model defines the frame.
+
+It is declared in two places, for the two things it does:
+
+- **Training** — `compose(ee_frame='droid_eef')` re-expresses the dataset in that frame, which is what makes the resulting checkpoint speak it.
+- **Serving** — the vendor pipeline's `ee_frame=` puts the codec left of the `remote` marker, so the rig converts using its own model and the server stays frame-agnostic. Declared right of the marker instead, the server converts and needs the model on the wire (`remote(strip=())`).
+
+Leave it unset for a checkpoint trained in the rig's canonical frame or one that speaks joints — joints are unambiguous — and behavior is unchanged.
+
 ## Writing custom codecs
 
 Subclass `positronic.policy.codec.Codec` and implement `encode()` and/or `_decode_single()`. The base class returns `{}` from both — observation codecs override `encode()`, action codecs override `_decode_single()`. Middleware codecs that pass data through must explicitly `return data` (e.g. `BinarizeGripTraining`, a pure pass-through at decode that only binarizes via its `training_encoder`); middleware that transforms decoded actions modifies and returns `data` instead (e.g. `BinarizeGripInference`, which thresholds `target_grip` in `_decode_single`). Compose observation and action codecs with `&`, chain middleware with `|`. See the vendor codec files below for reference patterns.
