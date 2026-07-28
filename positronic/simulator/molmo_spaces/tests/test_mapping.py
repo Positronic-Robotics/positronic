@@ -103,9 +103,17 @@ def test_task_horizon_falls_back_to_task_dict():
 
 
 def test_task_horizon_missing_raises():
-    # No horizon at either level fails loud — the horizon is part of the task definition, never defaulted.
+    # No horizon at either level (and no override) fails loud — the horizon is part of the task definition.
     with pytest.raises(ValueError):
         mapping.resolve_task_horizon_steps(types.SimpleNamespace(task={}), 66.0)
+
+
+def test_task_horizon_override_wins():
+    # An explicit override pins the horizon, beating the benchmark field (mirrors --task_horizon_steps), and lets
+    # a run without any benchmark field still resolve.
+    ep = types.SimpleNamespace(task_horizon_sec=20, task={})
+    assert mapping.resolve_task_horizon_steps(ep, 66.0, override_steps=500) == 500
+    assert mapping.resolve_task_horizon_steps(types.SimpleNamespace(task={}), 66.0, override_steps=455) == 455
 
 
 def test_exterior_camera_variants_cover_light_randomization_and_randcam():
