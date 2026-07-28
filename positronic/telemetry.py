@@ -15,6 +15,7 @@ The span helpers no-op while unbound (a normal eval binds nothing), so a call si
 The pass-level report is an offline reduce over the raw files (``positronic.cli.eval.timing_report``).
 """
 
+import functools
 import json
 import logging
 import os
@@ -22,7 +23,7 @@ import platform
 import socket
 import threading
 import time
-from collections.abc import Generator, Iterator
+from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -143,6 +144,21 @@ def span(name: str, **attrs: Any):
     (no OTel span currently active) parents to the episode in flight; a span opened inside another parents to
     it. A no-op while unbound."""
     return _tracer().start_as_current_span(name, context=_per_tick_parent(), attributes=_encode_attrs(attrs))
+
+
+def traced(name: str, **attrs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Decorator form of ``span`` for a function whose whole body is one span: run the call inside a span
+    named ``name``. A no-op while unbound, like ``span``."""
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            with span(name, **attrs):
+                return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 def record_span(name: str, start_ns: int, end_ns: int, **attrs: Any) -> None:
