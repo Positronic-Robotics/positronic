@@ -68,6 +68,13 @@ def test_identity_when_target_equals_control_frame():
     np.testing.assert_allclose(encoded['robot_state.ee_pose'], pose_c.as_vector(QUAT), atol=1e-9)
 
 
+def test_advertises_the_frame_it_speaks():
+    """The frame reaches episode meta both ways: through the codec at serving, its dual at conversion."""
+    codec = ChangeEEFrame(to='droid_eef')
+    assert codec.meta == {'ee_frame': 'droid_eef'}
+    assert codec.training_encoder.meta == {'ee_frame': 'droid_eef'}
+
+
 def test_survives_the_wire_spec_round_trip():
     """A server declares the conversion in its handshake, so the rig must rebuild an equivalent codec from the
     spec alone — the frame name is the server's to choose, the robot model the rig's."""
