@@ -9,6 +9,12 @@ from positronic.dataset.serializers import Serializer
 # Embodiment-level static meta: how recorded signals map to the canonical robot fields.
 ROBOT_STATIC_META = {keys.JOINT_SIGNALS: [keys.JOINTS], keys.POSE_SIGNALS: [keys.EE_POSE, keys.TARGET_EE_POSE]}
 
+# Per-trial context keys the trial builders set and the sim adapters read from each trial's reset context.
+EVAL_SEED = 'eval.seed'
+EVAL_EPISODE_INDEX = 'eval.episode_index'
+EVAL_TRIAL_INDEX = 'eval.trial_index'
+EVAL_TRIAL_COUNT = 'eval.trial_count'
+
 
 @dataclass
 class Observation:

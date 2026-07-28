@@ -4,7 +4,7 @@ from pathlib import Path
 import configuronic as cfn
 
 from positronic.drivers.roboarm.models import bundled_franka_model
-from positronic.eval import Eval, Task
+from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED, EVAL_TRIAL_COUNT, EVAL_TRIAL_INDEX, Eval, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.molmo_spaces.adapter import MolmoAdapter
 from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
@@ -88,12 +88,12 @@ def _molmo_eval(
     # an explicit ``seed`` overrides it, sweeping ``seed .. seed + trial_count - 1``. (``build_trials`` injects a
     # random seed when ``seed`` is None, which would clobber the spec seed and make the run non-reproducible.)
     trials = [
-        {'eval.episode_index': i, **({'eval.seed': seed + t} if seed is not None else {})}
+        {EVAL_EPISODE_INDEX: i, **({EVAL_SEED: seed + t} if seed is not None else {})}
         for i in indices
         for t in range(trial_count)
     ]
     for j, ctx in enumerate(trials):
-        ctx.update({'eval.trial_index': j, 'eval.trial_count': len(trials)})
+        ctx.update({EVAL_TRIAL_INDEX: j, EVAL_TRIAL_COUNT: len(trials)})
     return Eval(embodiment, task, trials)
 
 
