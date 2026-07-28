@@ -229,6 +229,28 @@ def test_stats_sampler_thread_writes_lines(tmp_path, monkeypatch):
     assert all('t_ns' in sample for sample in samples)
 
 
+def test_bind_seals_truncated_predecessor_line(tmp_path):
+    """A killed run can leave ``<process>.spans.jsonl`` ending in a truncated fragment with no trailing newline.
+    The next bind into the same directory seals that line before its exporter appends, so the first new record
+    starts a fresh line instead of concatenating onto the fragment and being skipped along with it (Codex on
+    PR #531)."""
+    spans_path = tmp_path / 'telemetry' / 'harness.spans.jsonl'
+
+    with telemetry.bind(tmp_path, 'harness', 'run-1'):
+        with telemetry.span(telemetry.SPAN_RESET):
+            pass
+    with open(spans_path, 'a') as file:
+        file.write('{"resourceSpans": [{"scopeSpans": [{"spans": [{"nam')  # crash mid-write, no trailing newline
+
+    with telemetry.bind(tmp_path, 'harness', 'run-2'):
+        with telemetry.span(telemetry.SPAN_MATERIALIZE):
+            pass
+
+    names = [rec.name for rec in telemetry.read_spans(spans_path)]
+    assert telemetry.SPAN_MATERIALIZE in names  # pre-fix, the new record merges into the fragment and is skipped
+    assert telemetry.SPAN_RESET in names  # the pre-existing valid span still reads back
+
+
 def test_readers_tolerate_truncated_final_line(tmp_path):
     spans_path = tmp_path / 'telemetry' / 'harness.spans.jsonl'
     with telemetry.bind(tmp_path, 'harness', 'run-trunc'):

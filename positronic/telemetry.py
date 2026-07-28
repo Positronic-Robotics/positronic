@@ -132,7 +132,11 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator[TracerProv
 
     resource = Resource.create({'run.id': run_id, 'process.name': process, 'host.name': host})
     provider = TracerProvider(resource=resource)
-    provider.add_span_processor(BatchSpanProcessor(FileSpanExporter(telemetry_dir / f'{process}.spans.jsonl')))
+    spans_path = telemetry_dir / f'{process}.spans.jsonl'
+    # A killed predecessor can leave a truncated final line; seal it so the appending exporter starts a fresh
+    # line — otherwise read_spans merges the first new record into the fragment and skips both.
+    _seal_truncated_line(spans_path)
+    provider.add_span_processor(BatchSpanProcessor(FileSpanExporter(spans_path)))
     _provider = provider
     try:
         yield provider
