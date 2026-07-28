@@ -8,6 +8,7 @@ project.
 """
 
 import fcntl
+import functools
 import os
 import subprocess
 import tempfile
@@ -66,14 +67,10 @@ def _checkout_lock() -> Iterator[None]:
         yield
 
 
-def _spawn(host: str, port: int) -> subprocess.Popen:
-    with _checkout_lock():
-        src = _ensure_robolab_src()
-        # Install the dependency stack before spawning: a cold first install (~15 GB of Isaac wheels) far
-        # exceeds the client's connect deadline, which should only ever cover Isaac boot. Idempotent and fast
-        # when warm. The spawn below passes ``--no-sync`` (``uv run`` re-syncs by default), so no resolve or
-        # install ever runs outside this lock.
-        subprocess.run(['uv', 'sync', '--project', str(src), '--python', _ROBOLAB_PYTHON], check=True)
+def _env_command(src: Path, host: str, port: int, camera_resolution: tuple[int, int] | None) -> list[str]:
+    """The ``uv run ... env.py`` argv. A ``camera_resolution`` (WIDTH, HEIGHT) renders the policy cameras
+    smaller and drops the always-on Isaac persp viewport — the fleet-relevant low-res config, keyed by one
+    knob. Unset keeps RoboLab's stock 1280x720 render, so the served frames stay byte-for-byte the default."""
     command = [
         'uv',
         'run',
@@ -89,6 +86,21 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
         str(port),
         '--headless',
     ]
+    if camera_resolution is not None:
+        width, height = camera_resolution
+        command += ['--camera-res', str(width), str(height), '--disable-viewport']
+    return command
+
+
+def _spawn(host: str, port: int, camera_resolution: tuple[int, int] | None = None) -> subprocess.Popen:
+    with _checkout_lock():
+        src = _ensure_robolab_src()
+        # Install the dependency stack before spawning: a cold first install (~15 GB of Isaac wheels) far
+        # exceeds the client's connect deadline, which should only ever cover Isaac boot. Idempotent and fast
+        # when warm. The spawn below passes ``--no-sync`` (``uv run`` re-syncs by default), so no resolve or
+        # install ever runs outside this lock.
+        subprocess.run(['uv', 'sync', '--project', str(src), '--python', _ROBOLAB_PYTHON], check=True)
+    command = _env_command(src, host, port, camera_resolution)
     # The DROID rig's model (URDF + meshes + gripper) for the viewer and offline IK. env.py runs in RoboLab's
     # interpreter and cannot build it, so it is serialized here (wire codec) and env.py emits it as
     # ``robot_meta``. A fresh temp file per spawn, in the container-local tmpdir — never the shared cache
@@ -110,6 +122,11 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
     return subprocess.Popen(command, env=env)
 
 
-def serve_robolab(host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
-    """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract)."""
-    return serve_subprocess(_spawn, host)
+def serve_robolab(
+    host: str = 'localhost', camera_resolution: tuple[int, int] | None = None
+) -> AbstractContextManager[tuple[str, int]]:
+    """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
+
+    ``camera_resolution`` (WIDTH, HEIGHT) renders the policy cameras at that size and disables the Isaac
+    viewport; left unset the server renders RoboLab's stock 1280x720."""
+    return serve_subprocess(functools.partial(_spawn, camera_resolution=camera_resolution), host)
