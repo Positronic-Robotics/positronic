@@ -1332,8 +1332,9 @@ def test_failed_pass_seals_open_episode_span(tmp_path):
     """A ``task.reset`` raising after ``begin_episode`` opened the episode span must seal that span before the
     provider flushes on exit. Ending it is what exports it at all: an unended span never leaves the batch
     processor, so its finished ``reset`` child orphans (unknown parent) and the report loses that phase and
-    charges the episode's whole wall to ``between_episodes``. Sealed and marked ``episode.partial``, the span
-    exports parented to the (failed) pass, so the reduce keeps it and its phases attribute."""
+    charges the episode's whole wall to ``between_episodes``. Sealed and marked ``episode.partial`` — with its
+    step count and virtual duration stamped, like a clean end — the span exports parented to the (failed) pass,
+    so the reduce keeps it and its phases attribute."""
 
     def boom(context):
         raise RuntimeError('reset boom')
@@ -1355,6 +1356,8 @@ def test_failed_pass_seals_open_episode_span(tmp_path):
     assert len(episodes) == 1  # the open span was sealed and exported, not lost with the failure
     episode = episodes[0]
     assert episode.attrs.get('episode.partial') is True  # flagged so the reduce sees it did not complete
+    assert episode.attrs['episode.steps'] == 0  # stamped like a clean end — no step ran before the failure
+    assert episode.attrs['episode.virtual_s'] >= 0.0
     passes = [s for s in spans if s.name == 'eval.pass']
     assert len(passes) == 1
     assert episode.parent_id == passes[0].span_id  # parented to the pass, so the reduce does not drop it as an orphan

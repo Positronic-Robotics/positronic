@@ -204,13 +204,15 @@ def discard_episode(episode: Span) -> None:
         _current_episode = None
 
 
-def end_partial_episode(episode: Span) -> None:
+def end_partial_episode(episode: Span, **attrs: Any) -> None:
     """End an episode span left open by a failure mid-rollout (a raising ``reset`` / ``new_session`` / session
-    call), marked ``episode.partial`` and flushed. Ending it is what exports it: the batch processor never
-    emits an unended span, so an abandoned episode's finished children would orphan and the reduce would lose
-    their phases. Marked (not aborted) so the reduce keeps it — its finished phases attribute — while flagging
-    that it did not run to completion."""
+    call), stamping its end attributes (steps, virtual duration), marking it ``episode.partial``, and flushing.
+    Ending it is what exports it: the batch processor never emits an unended span, so an abandoned episode's
+    finished children would orphan and the reduce would lose their phases. Marked (not aborted) so the reduce
+    keeps it — its finished phases attribute — while flagging that it did not run to completion."""
     global _current_episode
+    if attrs:
+        episode.set_attributes(_encode_attrs(attrs))
     episode.set_attribute('episode.partial', True)
     episode.end()
     if _current_episode is episode:

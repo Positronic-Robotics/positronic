@@ -404,13 +404,16 @@ class Harness(pimm.ControlSystem):
             return {'eval.terminated': False}
         return None
 
-    def _seal_open_episode_span(self) -> None:
-        """Seal an episode span left open by a mid-rollout failure, marked partial, before the exception
-        reaches the provider's exit flush. Inert when no span is open (telemetry off, or the failure fell
-        outside an episode)."""
+    def _seal_open_episode_span(self, clock: pimm.Clock) -> None:
+        """Seal an episode span left open by a mid-rollout failure — marked partial and stamped with its step
+        count and virtual duration up to ``clock.now()`` — before the exception reaches the provider's exit
+        flush. Inert when no span is open (telemetry off, or the failure fell outside an episode)."""
         if self._episode_span is None:
             return
-        telemetry.end_partial_episode(self._episode_span)
+        virtual_s = max(clock.now() - self._episode_virtual_start, 0.0)
+        telemetry.end_partial_episode(
+            self._episode_span, **{'episode.steps': self._episode_steps, 'episode.virtual_s': virtual_s}
+        )
         self._episode_span = None
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
@@ -425,7 +428,7 @@ class Harness(pimm.ControlSystem):
             # opened the span) unwinds past the normal span close. Seal the open episode span here, before the
             # exception reaches ``bind``'s exit flush, or the span never exports and its finished children
             # orphan — losing their phases and charging the episode's wall to between_episodes.
-            self._seal_open_episode_span()
+            self._seal_open_episode_span(clock)
             raise
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
