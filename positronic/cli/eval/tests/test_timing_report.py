@@ -122,6 +122,47 @@ def test_aborted_episode_excluded(tmp_path):
     assert report.episodes == 1
 
 
+def test_aborted_episode_wall_excluded_from_between_episodes(tmp_path):
+    """An aborted rollout is dropped as invalid data, so its wall must leave W_pass entirely — not fall into
+    ``between_episodes`` and not deflate the policy-busy / real-time factors (Codex on PR #531). Here a 40 s
+    aborted episode sits beside a 40 s completed one in a 100 s pass, so the valid W_pass is 60 s."""
+    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir.mkdir()
+    harness = [
+        _span('eval.pass', 0, 100, 'pass0'),
+        _span('episode', 0, 40, 'ep0', 'pass0', {'episode.virtual_s': 20.0}),
+        _span('reset', 0, 5, 'reset0', 'ep0'),
+        _span('env.step', 10, 18, 'step0', 'ep0'),
+        _span('materialize', 14, 16, 'mat0', 'step0'),
+        _span('record.io', 20, 24, 'io0', 'ep0'),
+        _span('policy.infer', 30, 33, 'inferA0', 'ep0'),
+        _span('policy.infer', 33, 34, 'inferB0', 'ep0'),
+        _span('episode', 50, 90, 'ep1', 'pass0', {'episode.virtual_s': 20.0}),  # 40 s of real wall, aborted
+    ]
+    harness[-1]['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'].append({
+        'key': 'episode.aborted',
+        'value': {'boolValue': True},
+    })
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', harness)
+
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+
+    assert report.episodes == 1
+    assert report.wall_pass_s == pytest.approx(60.0)  # 100 s pass minus the 40 s aborted episode
+    split = report.wall_split
+    # between_episodes is the completed episode's real inter-episode idle only (60 - 40), NOT (100 - 40)/100
+    # with the aborted wall folded in.
+    assert split.between_episodes == pytest.approx(20 / 60)
+    assert split.reset == pytest.approx(5 / 60)
+    assert split.env_step == pytest.approx(8 / 60)
+    assert split.record_io == pytest.approx(4 / 60)
+    assert split.overhead == pytest.approx(19 / 60)
+    assert sum(vars(split).values()) == pytest.approx(1.0)
+    # The aborted wall no longer inflates the denominator of these figures.
+    assert report.policy_busy_fraction == pytest.approx(4 / 60)
+    assert report.real_time_factor == pytest.approx(20 / 60)
+
+
 def test_env_step_split_ignores_aborted_episode(tmp_path):
     """An aborted rollout's spans — its client env.step AND its server-side steps — stay out of the env-step
     split: the denominator covers completed episodes only, so counting them made fractions exceed 1 and wire
