@@ -7,7 +7,7 @@ _DATASET_ROOT = Path(positronic.dataset.__file__).parent
 
 def test_dataset_package_has_no_telemetry_dependency():
     """The dataset core stays agnostic to telemetry: no module under ``positronic/dataset`` imports
-    ``positronic.telemetry`` or ``opentelemetry``. Timing rides in as an opaque ``io_span`` context factory
+    ``positronic.telemetry`` or ``opentelemetry``. Timing rides in as an opaque ``io_context`` context factory
     (default inert), so no telemetry concept leaks into the dataset."""
     offenders = []
     for path in _DATASET_ROOT.rglob('*.py'):
