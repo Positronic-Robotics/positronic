@@ -28,9 +28,10 @@ from positronic.utils import package_assets_path
 from . import RobotStatus, State, command
 from .ik import qpos_from_site_pose
 
+# i2rt lives in the `yam` extra, which the type-check environment does not install.
 with vendor_import('i2rt', 'YAM support', hint='Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'):
-    from i2rt.robots.get_robot import get_yam_robot
-    from i2rt.robots.utils import GripperType
+    from i2rt.robots.get_robot import get_yam_robot  # pyright: ignore[reportMissingImports]
+    from i2rt.robots.utils import GripperType  # pyright: ignore[reportMissingImports]
 
 # The driver solves FK/IK itself, so its joint order and control frame must match the YAM sim's.
 # TODO(#517): centralise driver kinematics so driver and sim share one module.
@@ -98,12 +99,17 @@ class YamState(State, pimm.shared_memory.NumpySMAdapter):
 
 
 class _Kinematics:
-    """FK/IK on the vendored YAM MJCF at ``grasp_site``, in the arm-base frame."""
+    """FK/IK on the vendored YAM MJCF at ``grasp_site``, in the arm-base frame.
+
+    ``mujoco`` exports every symbol below from a compiled extension, so a type checker cannot see them.
+    """
 
     def __init__(self):
-        self._model = mj.MjModel.from_xml_path(package_assets_path(_MJCF_PATH))
-        self._data = mj.MjData(self._model)
-        self._site_id = mj.mj_name2id(self._model, mj.mjtObj.mjOBJ_SITE, 'grasp_site')
+        model_path = package_assets_path(_MJCF_PATH)
+        self._model = mj.MjModel.from_xml_path(model_path)  # pyright: ignore[reportAttributeAccessIssue]
+        self._data = mj.MjData(self._model)  # pyright: ignore[reportAttributeAccessIssue]
+        site = mj.mjtObj.mjOBJ_SITE  # pyright: ignore[reportAttributeAccessIssue]
+        self._site_id = mj.mj_name2id(self._model, site, 'grasp_site')  # pyright: ignore[reportAttributeAccessIssue]
         self._qpos_ids = np.array([self._model.joint(name).qposadr.item() for name in _JOINT_NAMES])
         self._dof_ids = np.array([self._model.joint(name).dofadr.item() for name in _JOINT_NAMES])
         ranges = np.array([self._model.joint(name).range for name in _JOINT_NAMES])
@@ -111,9 +117,9 @@ class _Kinematics:
 
     def fk(self, q: np.ndarray) -> geom.Transform3D:
         self._data.qpos[self._qpos_ids] = q
-        mj.mj_kinematics(self._model, self._data)
+        mj.mj_kinematics(self._model, self._data)  # pyright: ignore[reportAttributeAccessIssue]
         quat = np.empty(4)
-        mj.mju_mat2Quat(quat, self._data.site_xmat[self._site_id].copy())
+        mj.mju_mat2Quat(quat, self._data.site_xmat[self._site_id].copy())  # pyright: ignore[reportAttributeAccessIssue]
         return geom.Transform3D(self._data.site_xpos[self._site_id].copy(), geom.Rotation.from_quat(quat))
 
     def ik(self, target: geom.Transform3D, current_q: np.ndarray) -> np.ndarray | None:
