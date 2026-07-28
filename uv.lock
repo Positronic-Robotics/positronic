@@ -58,6 +58,7 @@ positronic-franka = false
 constraints = [
     { name = "cmake", specifier = "<4.3" },
     { name = "evdev", specifier = "<1.9" },
+    { name = "numpy", specifier = "<2.5" },
 ]
 overrides = [{ name = "rerun-sdk", specifier = "==0.30.0" }]
 build-constraints = [{ name = "scikit-build-core", specifier = "<0.10" }]
