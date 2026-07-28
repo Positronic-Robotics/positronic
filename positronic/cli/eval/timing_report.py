@@ -146,28 +146,21 @@ def _gpu_summary_from_stats(stats: list[dict], pass_windows: list[tuple[int, int
     killed) run's samples, the stats twin of the orphan-episode exclusion. ``None`` when no counted sample
     carried a GPU (a CPU sim box)."""
     in_window = [sample for sample in stats if any(start <= int(sample['t_ns']) <= end for start, end in pass_windows)]
-    # The box's full device count is the configured GPU count the sampler recorded (its NVML handle count),
-    # which is authoritative even for a device omitted from every sample after a mid-run query error. For a
-    # sample from before that field existed, fall back to the most GPUs any in-window sample carried — the best
-    # available signal when the true count was never recorded.
-    recorded_counts = [int(sample['gpu_count']) for sample in in_window if 'gpu_count' in sample]
-    recorded_complement = max(recorded_counts) if recorded_counts else None
-    observed_complement = max((len(sample.get('gpus', [])) for sample in in_window), default=0)
     utils: list[float] = []
     mem: list[float] = []
     proc: list[float] = []
     for sample in in_window:
         gpus = sample.get('gpus', [])
-        complement = recorded_complement if 'gpu_count' in sample else observed_complement
         utils.extend(float(gpu['util_pct']) for gpu in gpus)
         if gpus:
             mem.append(sum(float(gpu['mem_used_b']) for gpu in gpus))
         # Box-wide process VRAM needs every GPU attributed. A device whose NVML query errors mid-run is dropped
-        # from the sample entirely, not left ``None``, so a sample is complete only when it carries the full
-        # device count AND every device reported ``proc_mem_b``; an omitted device or a ``None`` reading each
-        # make the sum an undercount, so an incomplete sample contributes nothing. If no sample is complete,
-        # ``proc`` stays empty and the peak reads ``None``.
-        if gpus and len(gpus) == complement and all(gpu.get('proc_mem_b') is not None for gpu in gpus):
+        # from the sample entirely, not left ``None``, so a sample is complete only when its present device
+        # count equals the ``gpu_count`` the sampler recorded (its NVML handle count) AND every device reported
+        # ``proc_mem_b``; an omitted device or a ``None`` reading each make the sum an undercount, so an
+        # incomplete sample contributes nothing. If no sample is complete, ``proc`` stays empty and the peak
+        # reads ``None``.
+        if gpus and len(gpus) == sample['gpu_count'] and all(gpu.get('proc_mem_b') is not None for gpu in gpus):
             proc.append(sum(float(gpu['proc_mem_b']) for gpu in gpus))
     if not utils and not mem:
         return None
