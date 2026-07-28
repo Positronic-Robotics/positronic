@@ -1325,3 +1325,38 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     assert episode.attrs['episode.index'] == 0
     assert episode.attrs['episode.steps'] == len(by_name['policy.infer'])
     assert episode.attrs['episode.virtual_s'] >= 0.0
+
+
+@pytest.mark.timeout(3.0)
+def test_failed_pass_seals_open_episode_span(tmp_path):
+    """A ``task.reset`` raising after ``begin_episode`` opened the episode span must seal that span before the
+    provider flushes on exit. Ending it is what exports it at all: an unended span never leaves the batch
+    processor, so its finished ``reset`` child orphans (unknown parent) and the report loses that phase and
+    charges the episode's whole wall to ``between_episodes``. Sealed and marked ``episode.partial``, the span
+    exports parented to the (failed) pass, so the reduce keeps it and its phases attribute."""
+
+    def boom(context):
+        raise RuntimeError('reset boom')
+
+    policy = StubPolicy()
+    task = Task(instruction='stack', timeout=10.0, reset=boom)
+    harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
+    harness.ds_command._bind(RecordingEmitter())
+    stop = SimpleNamespace(value=False)
+    clock = _ManualClock()
+
+    with pytest.raises(RuntimeError, match='reset boom'):
+        with telemetry.bind(tmp_path, 'harness', 'run-fail'), telemetry.eval_pass(**{'run.id': 'run-fail'}):
+            for _ in harness.run(cast(pimm.SignalReceiver, stop), cast(pimm.Clock, clock)):
+                pass
+
+    spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
+    episodes = [s for s in spans if s.name == 'episode']
+    assert len(episodes) == 1  # the open span was sealed and exported, not lost with the failure
+    episode = episodes[0]
+    assert episode.attrs.get('episode.partial') is True  # flagged so the reduce sees it did not complete
+    passes = [s for s in spans if s.name == 'eval.pass']
+    assert len(passes) == 1
+    assert episode.parent_id == passes[0].span_id  # parented to the pass, so the reduce does not drop it as an orphan
+    resets = [s for s in spans if s.name == 'reset']
+    assert resets and all(r.parent_id == episode.span_id for r in resets)  # finished child attributes to its phase

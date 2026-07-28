@@ -199,6 +199,20 @@ def discard_episode(episode: Span) -> None:
         _current_episode = None
 
 
+def end_partial_episode(episode: Span) -> None:
+    """End an episode span left open by a failure mid-rollout (a raising ``reset`` / ``new_session`` / session
+    call), marked ``episode.partial`` and flushed. Ending it is what exports it: the batch processor never
+    emits an unended span, so an abandoned episode's finished children would orphan and the reduce would lose
+    their phases. Marked (not aborted) so the reduce keeps it — its finished phases attribute — while flagging
+    that it did not run to completion."""
+    global _current_episode
+    episode.set_attribute('episode.partial', True)
+    episode.end()
+    if _current_episode is episode:
+        _current_episode = None
+    force_flush()
+
+
 def _otlp_value(value: Any) -> dict[str, Any]:
     """One attribute value as an OTLP/JSON ``AnyValue``. ``bool`` is checked before ``int`` (it subclasses
     ``int``), and OTLP carries integers as strings."""
