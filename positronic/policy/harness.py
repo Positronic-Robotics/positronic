@@ -241,6 +241,16 @@ class Harness(pimm.ControlSystem):
                 self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
+            # The timeout is a safety net, not the benchmark deadline: a sim that reports its own horizon (bench
+            # env) owns the episode's end, so a timeout that is not strictly longer would silently truncate a valid
+            # episode. ``horizon`` is the trial's minimum budget (the sim horizon plus the env's own frame-0 tick),
+            # so the check is exact. Reject a too-short timeout loudly, rather than mis-scoring the run.
+            budget = self._task.horizon
+            if budget is not None and self._task.timeout <= budget:
+                raise ValueError(
+                    f'eval timeout {self._task.timeout}s must exceed the episode budget {budget}s (the sim horizon '
+                    f'plus its reset tick) — it is only a safety net; raise the timeout above the benchmark horizon'
+                )
         self._policy_session = self.policy.new_session(self.context, clock.now)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None

@@ -2,6 +2,34 @@
 
 This package implements the protocol and utilities for offboard policy inference, allowing robots or simulators to stream observations to a remote server and receive actions.
 
+## Separation of responsibilities: adapter vs codec vs wire client
+
+Three layers touch an observation on its way to a model, and each owns exactly one concern.
+When writing a new sim/rig adapter, check this table before adding any transform to it:
+
+| Layer | Owns | Examples |
+|---|---|---|
+| **Adapter** (per sim/rig, e.g. `simulator/molmo_spaces/adapter.py`) | Rig semantics ONLY: mapping the rig's observation/action vocabulary onto positronic's raw keys | Camera-key mapping, gripper qpos → `[0, 1]` closure, decoded commands → the rig's action format |
+| **Codec** (per model family, `policy/codec.py` subclasses) | Model preprocessing: everything the checkpoint's input distribution requires | Resize-with-pad to model resolution, prompt normalization (e.g. DROID lowercasing), state assembly |
+| **Wire client** (`InferenceClient` / `RemotePolicy`) | Transport optimization, negotiated — never semantics | Downscaling frames to the server-advertised `image_sizes` (aspect-preserving, never upscaling), optional JPEG compression |
+
+Consequences:
+
+- **An adapter never resizes, pads, normalizes prompts, or otherwise preprocesses for the model.**
+  It passes frames and text through at native fidelity. If the same transform appears in an adapter
+  and a codec, the adapter's copy is the bug: a drifted duplicate silently changes eval inputs.
+- **Bandwidth is not the adapter's problem.** The client already downsizes to what the server says
+  it needs: every `Codec` advertises its expected input sizes via the reserved `image_sizes` meta
+  key (see `Codec.meta`), the server returns it in the session handshake, and the client fits
+  frames to it before sending. This is default-on — an adapter that resizes "to keep the wire
+  payload small" is duplicating it.
+- **Codecs run on either side of the wire.** positronic-native evals compose the codec around
+  `RemotePolicy` on the client (`cfg/policy.py` — the wire then carries model-sized encoded inputs,
+  and the client-side resize is disabled since `codec.meta` already reports `image_sizes`).
+  Thin-client deployments (a sim adapter in a foreign venv talking to a serverless endpoint) host
+  the codec on the server — the wire carries raw positronic keys, downsized by the negotiation
+  above. Both placements are supported; pick by where the dependencies can live.
+
 ## Protocol v1
 
 The unified WebSocket protocol is built to enable ANY hardware to connect to ANY model. All Positronic inference servers (LeRobot, GR00T, OpenPI) implement this protocol, allowing a single `.remote` policy client to work across all vendors.

@@ -53,6 +53,9 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         # The robot model identity the env reports at ``reset`` (URDF / joint names) — emitted on the
         # ``robot_meta`` port into the episode; distinct from the scene ``meta`` above.
         self._robot_meta: dict[str, Any] | None = None
+        # The env's sim-enforced episode horizon in sim-seconds from the latest ``reset``, or ``None`` when the env
+        # enforces none — read by the client's ``Task`` so the harness can check its timeout stays strictly weaker.
+        self._horizon: float | None = None
         # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
         self._reset_pending = False
 
@@ -61,6 +64,14 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         """The env's scene meta from the latest ``reset`` (suite, task, …); a client reads its task from here."""
         assert self._meta is not None, 'meta read before the first reset'
         return self._meta
+
+    @property
+    def horizon(self) -> float | None:
+        """The trial's minimum time budget in sim-seconds from the latest ``reset``, or ``None`` if the env
+        enforces no horizon: the env's own horizon plus the one control period this proxy spends publishing
+        frame-0 before the first step. A client's ``Task`` exposes it so the harness can reject a timeout that is
+        not strictly longer — the frame-0 tick is included so that floor is exact, not one tick short."""
+        return self._horizon
 
     def reset(self, context: dict[str, Any]) -> None:
         """Re-randomize the env from the trial context and arm frame-0 publication for the next turn (the ``RUN`` hook).
@@ -82,6 +93,11 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._frame = self._conn.reset(self._adapter.reset_token(context))
         self._meta = self._frame['meta']
         self._robot_meta = self._frame['robot_meta']
+        # Optional: only envs that enforce a horizon report one. Fold in the one control period this proxy spends
+        # publishing frame-0 before the first step — the env reaches its horizon a tick after the harness arms the
+        # deadline, so the timeout floor must clear the horizon plus that tick, not the bare horizon.
+        sim_horizon = self._frame.get('horizon')
+        self._horizon = None if sim_horizon is None else sim_horizon + self._frame['control_dt']
         self._reset_pending = True
         self._active = True
         # Clear any terminal the previous trial left on the wire: the env can reach ``done`` while the proxy

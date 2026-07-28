@@ -11,7 +11,7 @@ re-randomizes it; ``control_dt`` rides every observation (``reset`` and each ``s
 may even vary its control period per step. Heavy construction is the env's own concern (cache it).
 
 Protocol (msgpack frames, see ``protocol``):
-  client ``{'cmd': 'reset', 'token': ...}``   -> server ``{'obs', 'meta', 'robot_meta', 'control_dt'}``
+  client ``{'cmd': 'reset', 'token': ...}``   -> server ``{'obs', 'meta', 'robot_meta', 'control_dt', 'horizon'?}``
   client ``{'cmd': 'step', 'action': {...}}`` -> server ``{'obs', 'done', 'control_dt'}``
   client ``{'cmd': 'close'}``                 -> server ``{'ok': True}``
 Any command whose handling raises returns ``{'error': str}`` instead, which the client re-raises.
@@ -51,6 +51,10 @@ class EnvProtocol(ABC):
         from (the language goal, scene ids); ``robot_meta`` is the robot model identity (URDF / joint names /
         control frame) recorded into the episode. Either is ``{}`` when the client owns that side — a static
         instruction, or an embodiment that ships its own model.
+
+        ``horizon`` (optional) is the sim-enforced episode deadline in sim-seconds — the env's own time limit, which
+        it delivers as a terminal ``done`` on expiry. An env that enforces a horizon reports it so the client can
+        check its safety-net timeout stays strictly weaker (longer); omit it when the env enforces none.
         """
 
     @abstractmethod
