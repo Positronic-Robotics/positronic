@@ -258,28 +258,34 @@ class Harness(pimm.ControlSystem):
                 self.ds_command.emit(DsWriterCommand.ABORT())
             else:
                 self._finalize_recording(payload)
+            # The rollout's virtual duration ends here — the flush tick below advances the sim clock, and that
+            # advance belongs to no rollout.
+            virtual_now = clock.now()
             # Let the recorder commit the STOP/ABORT before the next START (they share ``ds_command`` —
             # without a tick between, last-value-wins would drop one) and before the home command, so
             # homing stays out of the recording.
             yield self._pace()
             # End the episode span after that tick, so the recorder's STOP-time record.io span (which parents
-            # to the episode) is captured while it is still in flight.
-            self._end_episode_span(clock, abort=abort)
+            # to the episode) is captured while it is still in flight. Accepted skew: a producer that also
+            # steps during that shared tick charges one more span (≤ one control period per episode) to the
+            # closing episode — the cooperative scheduler cannot give the recorder a turn alone.
+            self._end_episode_span(virtual_now, abort=abort)
         if self._session:
             self._session.close()
             self._session = None
         self._home(clock)
         self._running = False
 
-    def _end_episode_span(self, clock: pimm.Clock, *, abort: bool) -> None:
+    def _end_episode_span(self, virtual_now: float, *, abort: bool) -> None:
         """Close the live rollout's telemetry span: an abort is dropped, a finish is stamped with its step
-        count and virtual duration. Inert when no span is open (telemetry off)."""
+        count and virtual duration up to ``virtual_now`` — captured when the rollout ended, before the flush
+        tick advances the sim clock. Inert when no span is open (telemetry off)."""
         if self._episode_span is None:
             return
         if abort:
             telemetry.discard_episode(self._episode_span)
         else:
-            virtual_s = max(clock.now() - self._episode_virtual_start, 0.0)
+            virtual_s = max(virtual_now - self._episode_virtual_start, 0.0)
             telemetry.end_episode(
                 self._episode_span, **{'episode.steps': self._episode_steps, 'episode.virtual_s': virtual_s}
             )
@@ -439,11 +445,12 @@ class Harness(pimm.ControlSystem):
 
         if self._running:
             self._finalize_recording()
+            virtual_now = clock.now()  # the flush tick's clock advance belongs to no rollout
             # Let the recorder commit the queued STOP while the episode span is still open — the same close
             # order as ``_end_episode`` — so its shutdown-flush record.io span parents to the episode, not
             # the pass.
             yield self._pace()
-            self._end_episode_span(clock, abort=False)
+            self._end_episode_span(virtual_now, abort=False)
         if self._session:
             self._session.close()
         # The harness does not own the policy's lifetime: the caller may run several harnesses over
