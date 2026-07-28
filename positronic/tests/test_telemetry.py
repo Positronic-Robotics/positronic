@@ -172,7 +172,9 @@ def test_stats_sample_with_fake_gpu(tmp_path, monkeypatch):
     assert gpu['util_pct'] == 42.0
     assert gpu['mem_used_b'] == 3 * 1024**3
     assert gpu['power_w'] == 150.0
-    assert gpu['proc_mem_b'] == (1234 + 100) * 1024**2  # compute + graphics contexts of this process tree
+    # The same pid in the compute and graphics lists merges by max — drivers commonly report the process
+    # total in each, so summing both entries would double-count.
+    assert gpu['proc_mem_b'] == 1234 * 1024**2
     assert gpu['proc_util_pct'] is None
     sampler._nvml.shutdown()
 

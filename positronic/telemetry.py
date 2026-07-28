@@ -419,11 +419,13 @@ class _Nvml:
                 logger.info('telemetry: per-process GPU memory unavailable (%s); proc_mem_b left null', error)
                 self._proc_mem_warned = True
             return None
-        used = 0
+        # A process with both context types (Isaac: CUDA + Vulkan) appears in BOTH lists, and drivers commonly
+        # report the process's total in each — merge by pid with max, which never double-counts.
+        used_by_pid: dict[int, int] = {}
         for proc in procs:
             if proc.pid in tree_pids and proc.usedGpuMemory is not None:
-                used += int(proc.usedGpuMemory)
-        return used
+                used_by_pid[proc.pid] = max(used_by_pid.get(proc.pid, 0), int(proc.usedGpuMemory))
+        return sum(used_by_pid.values())
 
     def shutdown(self) -> None:
         if self._ok:
