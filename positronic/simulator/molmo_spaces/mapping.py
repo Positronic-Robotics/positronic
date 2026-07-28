@@ -91,25 +91,29 @@ def resolve_camera_key(available: Any, key: str, default: str, variants: tuple[s
     raise KeyError(f'observation has none of {(*variants, key)}; available: {sorted(keys)}')
 
 
-def resolve_task_horizon_steps(episode: Any, policy_dt_ms: float) -> int:
-    """A benchmark episode's enforced horizon in policy steps, from its ``task_horizon_sec`` (sim-seconds).
+def resolve_task_horizon_steps(episode: Any, policy_dt_ms: float, override_steps: int | None = None) -> int:
+    """A benchmark episode's enforced horizon in policy steps, mirroring MolmoSpaces' own precedence.
 
-    Shipped MolmoSpaces DROID benchmarks carry ``task_horizon_sec`` as an **episode-level** field (a pydantic
-    extra on the loaded spec — DROID Pick = 20 s), so read it there first, falling back to the task dict for
-    layouts that nest it. Convert to steps at the eval's policy period with ``round(sec * 1000 / policy_dt_ms)``,
-    the conversion MolmoSpaces itself uses. The horizon is part of the task definition, so a benchmark carrying
-    none fails loud rather than defaulting.
+    An explicit ``override_steps`` wins — the way MolmoSpaces' ``--task_horizon_steps`` overrides the benchmark —
+    so an operator can pin the exact horizon a reference run used. Otherwise read the benchmark's own
+    ``task_horizon_sec`` (sim-seconds): shipped DROID benchmarks carry it as an **episode-level** field (a
+    pydantic extra on the loaded spec — DROID Pick = 20 s), so read it there first, falling back to the task dict
+    for layouts that nest it, and convert with ``round(sec * 1000 / policy_dt_ms)`` (MolmoSpaces' own conversion).
+    The horizon is part of the task definition, so a benchmark carrying none and no override fails loud.
 
-    MolmoSpaces' own ``determine_task_horizon`` reads only ``episode.task['task_horizon_sec']``, which is absent
-    on the shipped benchmarks, so it raises there and the native runner needs an explicit ``--task_horizon_steps``.
-    Reading the episode-level field reproduces the intended horizon without that override.
+    Discrepancy worth knowing: MolmoSpaces' own ``determine_task_horizon`` reads only ``episode.task``, which is
+    absent on the shipped benchmarks, so it raises there and a native run needs ``--task_horizon_steps`` (or a
+    ``patch_benchmarks`` pass that moves the field into ``task``, defaulting PickTask to 20 s). Reading the
+    episode-level field reproduces the benchmark's declared horizon without that override.
     """
+    if override_steps is not None:
+        return override_steps
     horizon_sec = getattr(episode, 'task_horizon_sec', None)
     if horizon_sec is None:
         horizon_sec = episode.task.get('task_horizon_sec')
     if horizon_sec is None:
         raise ValueError(
-            'benchmark episode carries no task_horizon_sec (neither episode-level nor in its task) — the horizon '
-            'is part of the task definition and the sim cannot default it; add task_horizon_sec to the benchmark'
+            'benchmark episode carries no task_horizon_sec (neither episode-level nor in its task) and no '
+            'task_horizon_steps override — the horizon is part of the task definition; add it or pass an override'
         )
     return round(horizon_sec * 1000.0 / policy_dt_ms)
