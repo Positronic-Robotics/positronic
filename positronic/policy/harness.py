@@ -113,11 +113,12 @@ class Harness(pimm.ControlSystem):
         # session has no deadline and is ended by directives.
         self._deadline: float | None = None
         # Wall-clock telemetry for the live rollout (opened under ``--timing``, inert otherwise): the
-        # episode span, its 0-based index, its control-step count, and the virtual instant it began.
+        # episode span, its 0-based index, its control-step count, and the virtual instant its rollout began
+        # (``None`` until the rollout starts — reset is excluded, and a reset that fails leaves it unstamped).
         self._episode_span: Span | None = None
         self._episode_index = -1
         self._episode_steps = 0
-        self._episode_virtual_start = 0.0
+        self._episode_virtual_start: float | None = None
 
         self._descriptor = embodiment.descriptor
         self.observations = pimm.ReceiverDict(self)
@@ -229,6 +230,9 @@ class Harness(pimm.ControlSystem):
         episode_attrs: dict[str, Any] = {'episode.index': self._episode_index}
         episode_attrs.update({k: v for k, v in context.items() if isinstance(v, (bool, int, float, str))})
         self._episode_span = telemetry.begin_episode(**episode_attrs)
+        # Cleared before the reset so a reset that raises leaves the rollout unanchored: the seal then reads
+        # zero virtual time rather than measuring from a prior episode's (or the initial) instant.
+        self._episode_virtual_start = None
         # Reset the scene before opening the session: a resettable task only learns its instruction on reset
         # (a remote env reports it then), so the session context — and the task-grouped sampling/counting it
         # drives — must read the instruction here, once it is known.
@@ -285,6 +289,7 @@ class Harness(pimm.ControlSystem):
         if abort:
             telemetry.discard_episode(self._episode_span)
         else:
+            assert self._episode_virtual_start is not None  # a clean finish is reached only after the anchor is stamped
             virtual_s = max(virtual_now - self._episode_virtual_start, 0.0)
             telemetry.end_episode(
                 self._episode_span, **{'episode.steps': self._episode_steps, 'episode.virtual_s': virtual_s}
@@ -410,7 +415,11 @@ class Harness(pimm.ControlSystem):
         flush. Inert when no span is open (telemetry off, or the failure fell outside an episode)."""
         if self._episode_span is None:
             return
-        virtual_s = max(clock.now() - self._episode_virtual_start, 0.0)
+        # A rollout that never started (a reset/new_session that raised before the anchor was stamped) has zero
+        # virtual duration; only an anchored rollout measures from its start.
+        virtual_s = 0.0
+        if self._episode_virtual_start is not None:
+            virtual_s = max(clock.now() - self._episode_virtual_start, 0.0)
         telemetry.end_partial_episode(
             self._episode_span, **{'episode.steps': self._episode_steps, 'episode.virtual_s': virtual_s}
         )
