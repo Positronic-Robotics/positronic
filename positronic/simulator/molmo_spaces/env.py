@@ -100,8 +100,11 @@ class MolmoSpacesEnv(EnvProtocol):
     and reports MolmoSpaces' ``is_done``/``judge_success``.
     """
 
-    def __init__(self, benchmark_dir: Path) -> None:
+    def __init__(self, benchmark_dir: Path, task_horizon_steps: int | None = None) -> None:
         self._episodes = load_all_episodes(benchmark_dir)
+        # An explicit per-run horizon override (steps), mirroring MolmoSpaces' ``--task_horizon_steps``; ``None``
+        # reads the benchmark's own ``task_horizon_sec``.
+        self._task_horizon_override = task_horizon_steps
         self._sampler: Any = None
         self._task: Any = None
         self._robot_view: Any = None
@@ -126,7 +129,7 @@ class MolmoSpacesEnv(EnvProtocol):
         # With ``task_horizon`` set, the task enforces it and ``is_done`` reports expiry, so a horizon-expired
         # trial ends with a terminal ``done`` exactly as the native benchmark scores it. The harness
         # ``Task.timeout`` is only a weaker safety net above this horizon.
-        cfg.task_horizon = mapping.resolve_task_horizon_steps(episode, cfg.policy_dt_ms)
+        cfg.task_horizon = mapping.resolve_task_horizon_steps(episode, cfg.policy_dt_ms, self._task_horizon_override)
         self._sampler = JsonEvalTaskSampler(cfg, episode)
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._robot_view = self._task.env.current_robot.robot_view
@@ -216,10 +219,14 @@ def main() -> None:
     parser.add_argument('--host', default='localhost')
     parser.add_argument('--port', type=int, required=True)
     parser.add_argument('--benchmark_dir', required=True, help='dir containing benchmark.json')
+    parser.add_argument(
+        '--task_horizon_steps', type=int, default=None, help='override the benchmark horizon (steps per episode)'
+    )
     args = parser.parse_args()
     if not os.environ.get('MLSPACES_ASSETS_DIR'):
         parser.error('MLSPACES_ASSETS_DIR must point at the MolmoSpaces asset packs')
-    EnvServer(MolmoSpacesEnv(Path(args.benchmark_dir)), args.host, args.port).serve_forever()
+    env = MolmoSpacesEnv(Path(args.benchmark_dir), args.task_horizon_steps)
+    EnvServer(env, args.host, args.port).serve_forever()
 
 
 if __name__ == '__main__':

@@ -84,7 +84,7 @@ def molmo_subprocess_env() -> dict[str, str]:
     }
 
 
-def _spawn(host: str, port: int, benchmark_dir: Path) -> subprocess.Popen:
+def _spawn(host: str, port: int, benchmark_dir: Path, task_horizon_steps: int | None) -> subprocess.Popen:
     python = ensure_molmo_venv()
     command = [
         str(python),
@@ -96,13 +96,18 @@ def _spawn(host: str, port: int, benchmark_dir: Path) -> subprocess.Popen:
         '--benchmark_dir',
         str(benchmark_dir),
     ]
+    if task_horizon_steps is not None:
+        command += ['--task_horizon_steps', str(task_horizon_steps)]
     return subprocess.Popen(command, env=molmo_subprocess_env())
 
 
-def serve_molmo_spaces(benchmark_dir: Path, host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
+def serve_molmo_spaces(
+    benchmark_dir: Path, host: str = 'localhost', task_horizon_steps: int | None = None
+) -> AbstractContextManager[tuple[str, int]]:
     """The MolmoSpaces env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
 
     ``benchmark_dir`` (a dir holding ``benchmark.json``) is fixed for the run; the reset token selects the
-    episode within it, so one task-agnostic server serves every trial.
+    episode within it, so one task-agnostic server serves every trial. ``task_horizon_steps`` optionally overrides
+    the benchmark's own horizon (mirroring MolmoSpaces' ``--task_horizon_steps``); ``None`` reads it per episode.
     """
-    return serve_subprocess(lambda host, port: _spawn(host, port, benchmark_dir), host)
+    return serve_subprocess(lambda host, port: _spawn(host, port, benchmark_dir, task_horizon_steps), host)
