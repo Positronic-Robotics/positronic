@@ -51,6 +51,11 @@ def _molmo_eval(
     over the socket and the episode index rides each trial's reset token, so one embodiment serves every episode.
     The instruction is never pinned: the task reads its language live from the env, which reports the episode's
     resolved goal in every reset's meta. Episodes are exact-pose deterministic, so ``trial_count`` defaults to 1.
+
+    ``timeout`` is not the benchmark horizon — the sim owns that (the per-episode ``task_horizon_sec``, enforced
+    env-side and delivered as a terminal ``done``). It is only a runaway-cost safety net for a sim that never
+    terminates, so it must stay comfortably longer than the sim's native horizon; being sim-time, the spare
+    budget costs nothing unless the sim misbehaves.
     """
     if benchmark_dir is None:
         raise ValueError('MolmoSpaces eval needs --eval.benchmark_dir pointing at a dir with benchmark.json')

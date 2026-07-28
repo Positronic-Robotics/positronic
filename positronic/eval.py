@@ -84,6 +84,13 @@ class Task:
     ground-truth source to capture (the sim's full ``save_state``, a real scale) — recorded but never fed to
     the policy.
 
+    Two tiers own the trial's end. For a benchmark sim the env owns the horizon — the task's native horizon is
+    part of its definition, and the env enforces it and reports expiry as a terminal ``done``; ``timeout`` is
+    then only a runaway-cost safety net, set deliberately longer than any healthy sim horizon so it fires solely
+    when the sim never terminates. For a real or attended eval there is no such terminal, so ``timeout`` is the
+    actual budget. A ``done`` within budget ends the trial and records ``eval.terminated`` True; the budget
+    lapsing records it False, distinguishing a safety-net cutoff from a genuine terminal.
+
     ``reset`` re-randomizes the scene for a new trial from the per-trial run context, reading the keys it
     needs (e.g. ``eval.seed``, and ``eval.task_id`` for a multi-task suite); ``None`` on real embodiments,
     where reset is physical/human.
