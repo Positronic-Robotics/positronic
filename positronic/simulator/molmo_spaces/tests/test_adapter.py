@@ -57,6 +57,14 @@ def test_observations_resolve_benchmark_variant_camera():
     assert wrist_mean[0] > wrist_mean[1]
 
 
+def test_privileged_forwards_sim_state():
+    # The full MuJoCo state is recorded as privileged ground truth (never fed to the policy), so success can be
+    # recomputed offline — regression: the adapter used to drop it entirely.
+    state = np.arange(10, dtype=np.float64)
+    out = MolmoAdapter(CAMERA_DICT).privileged({'sim_state': state})
+    assert list(out) == ['sim_state'] and out['sim_state'] is state
+
+
 def test_terminal_reports_success_only_when_done():
     adapter = MolmoAdapter(CAMERA_DICT)
     assert adapter.terminal({'done': True, 'success': True}) == {'eval.success': True}
