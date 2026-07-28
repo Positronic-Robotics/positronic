@@ -46,7 +46,7 @@ conflicts = [[
 ]]
 
 [options]
-exclude-newer = "2026-06-12T00:00:00Z"
+exclude-newer = "2026-07-21T00:00:00Z"
 
 [options.exclude-newer-package]
 configuronic = false
@@ -58,8 +58,10 @@ positronic-franka = false
 constraints = [
     { name = "cmake", specifier = "<4.3" },
     { name = "evdev", specifier = "<1.9" },
+    { name = "numpy", specifier = "<2.5" },
 ]
 overrides = [{ name = "rerun-sdk", specifier = "==0.30.0" }]
+build-constraints = [{ name = "scikit-build-core", specifier = "<0.10" }]
 
 [[package]]
 name = "absl-py"
