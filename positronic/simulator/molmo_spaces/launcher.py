@@ -28,6 +28,12 @@ _MOLMO_REPO = 'https://github.com/allenai/molmospaces.git'
 _MOLMO_COMMIT = 'c2f1b583f087e1d3994e1377574843b759d9d0f8'
 _MOLMO_SRC = Path.home() / '.cache' / 'positronic' / 'molmospaces' / 'src'
 
+# MolmoSpaces ships no lockfile, so a bare install re-resolves every transitive dep on each fresh box. This
+# constraints file pins the full resolution (a frozen known-good venv, minus molmo-spaces' own editable line),
+# fed to the install via ``-c`` so the pinned commit always builds the same environment. Regenerate it when
+# ``_MOLMO_COMMIT`` bumps — see the file header.
+_MOLMO_CONSTRAINTS = Path(__file__).parent / 'molmo_constraints.txt'
+
 # MolmoSpaces pins Python 3.11 and installs its MuJoCo renderer stack via the ``mujoco`` extra (classic renderer,
 # mujoco ~=3.5). ``mujoco-filament`` is the alternative for bench-v2 filament scenes; the classic renderer is the
 # eval default.
@@ -57,7 +63,7 @@ def ensure_molmo_venv() -> Path:
     should only cover the sim's boot. Install the ``mujoco`` extra explicitly into a venv the way MolmoSpaces'
     own image does, rather than ``uv sync`` — which also resolves the ``curobo`` extra, a CUDA build that needs a
     GPU toolchain and is not on the eval task path. Both steps are idempotent and fast when warm. MolmoSpaces
-    ships no uv.lock, so the install re-resolves on every fresh box.
+    ships no uv.lock, so ``molmo_constraints.txt`` pins the transitive resolution (``-c``) for a reproducible env.
     """
     venv = _MOLMO_SRC / '.venv'
     with _checkout_lock():
@@ -65,7 +71,7 @@ def ensure_molmo_venv() -> Path:
         if not venv.exists():
             subprocess.run(['uv', 'venv', '--python', _MOLMO_PYTHON, str(venv)], check=True)
         subprocess.run(
-            ['uv', 'pip', 'install', '-e', f'.[{_MOLMO_EXTRA}]', *_WIRE_DEPS],
+            ['uv', 'pip', 'install', '-c', str(_MOLMO_CONSTRAINTS), '-e', f'.[{_MOLMO_EXTRA}]', *_WIRE_DEPS],
             cwd=str(src),
             env={**os.environ, 'VIRTUAL_ENV': str(venv)},
             check=True,
