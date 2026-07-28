@@ -254,7 +254,41 @@ def test_multi_gpu_peak_vram_sums_devices_per_sample(tmp_path):
     assert sim is not None
     assert sim.mean_util_pct == pytest.approx(50.0)  # mean over the four per-GPU readings
     assert sim.peak_vram_gb == pytest.approx(5.0)  # sample 1's 2+3 GB total, not device 1's 3 GB
-    assert sim.peak_proc_vram_gb == pytest.approx(1.0)  # only attributed devices count
+    # Every sample has a GPU with no per-process attribution, so no sample can carry a box-wide process total.
+    assert sim.peak_proc_vram_gb is None
+
+
+def test_partial_per_gpu_proc_vram_excluded_from_peak(tmp_path):
+    """A sample where some GPU can't attribute process memory (``proc_mem_b`` None) is incomplete for the
+    box-wide process-VRAM peak and contributes nothing; the peak reflects only samples where every GPU
+    reported. Box-wide util and mem still count every reading (Codex on PR #531)."""
+    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir.mkdir()
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span('eval.pass', 0, 10, 'pass0')])
+    stats = [
+        {  # incomplete: gpu1 unattributed -> must not add gpu0's 5 GB alone to the peak
+            't_ns': 1,
+            'gpus': [
+                {'i': 0, 'util_pct': 40.0, 'mem_used_b': 2 * 1024**3, 'proc_mem_b': 5 * 1024**3},
+                {'i': 1, 'util_pct': 60.0, 'mem_used_b': 3 * 1024**3, 'proc_mem_b': None},
+            ],
+        },
+        {  # complete: box-wide process VRAM is 1+2 = 3 GB
+            't_ns': 2,
+            'gpus': [
+                {'i': 0, 'util_pct': 80.0, 'mem_used_b': 1 * 1024**3, 'proc_mem_b': 1 * 1024**3},
+                {'i': 1, 'util_pct': 20.0, 'mem_used_b': 3 * 1024**3, 'proc_mem_b': 2 * 1024**3},
+            ],
+        },
+    ]
+    (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+
+    report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
+
+    sim = report.gpu.sim
+    assert sim is not None
+    assert sim.peak_proc_vram_gb == pytest.approx(3.0)  # complete sample only; the incomplete 5 GB is dropped
+    assert sim.peak_vram_gb == pytest.approx(5.0)  # box-wide mem peak unaffected: sample 1's 2+3 GB
 
 
 def test_gpu_samples_outside_pass_windows_excluded(tmp_path):
