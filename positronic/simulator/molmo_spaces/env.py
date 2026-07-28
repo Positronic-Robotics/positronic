@@ -100,8 +100,8 @@ class MolmoSpacesEnv(EnvProtocol):
     and reports MolmoSpaces' ``is_done``/``judge_success``.
     """
 
-    def __init__(self, benchmark_dir: str) -> None:
-        self._episodes = load_all_episodes(Path(benchmark_dir))
+    def __init__(self, benchmark_dir: Path) -> None:
+        self._episodes = load_all_episodes(benchmark_dir)
         self._sampler: Any = None
         self._task: Any = None
         self._robot_view: Any = None
@@ -197,7 +197,7 @@ def main() -> None:
     args = parser.parse_args()
     if not os.environ.get('MLSPACES_ASSETS_DIR'):
         parser.error('MLSPACES_ASSETS_DIR must point at the MolmoSpaces asset packs')
-    EnvServer(MolmoSpacesEnv(args.benchmark_dir), args.host, args.port).serve_forever()
+    EnvServer(MolmoSpacesEnv(Path(args.benchmark_dir)), args.host, args.port).serve_forever()
 
 
 if __name__ == '__main__':
