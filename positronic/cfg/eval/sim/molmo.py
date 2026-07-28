@@ -55,8 +55,9 @@ def _molmo_eval(
     if benchmark_dir is None:
         raise ValueError('MolmoSpaces eval needs --eval.benchmark_dir pointing at a dir with benchmark.json')
     base = Path(benchmark_dir)
+    count = _episode_count(base)
     if episodes is None:
-        indices = list(range(_episode_count(base)))
+        indices = list(range(count))
     else:
         indices = [episodes] if isinstance(episodes, int) else list(episodes)
     if not indices:
@@ -64,6 +65,11 @@ def _molmo_eval(
             f'no benchmark episodes found under {base}; expected a benchmark.json or a legacy '
             'house_*/episode_*.json layout (or pass --eval.episodes explicitly)'
         )
+    # Reject explicit selectors outside the manifest before the costly server spawn: a negative index would
+    # silently run a from-the-end episode mislabeled by its own index, and an over-range one fails only after setup.
+    out_of_range = [i for i in indices if not 0 <= i < count]
+    if out_of_range:
+        raise ValueError(f'--eval.episodes {out_of_range} out of range for the {count} episodes under {base}')
     proxy = RemoteEnvControlSystem(MolmoAdapter(camera_dict), serve_molmo_spaces(base))
     # MolmoSpaces drives a Franka DROID rig; recordings carry the same model (URDF + meshes + joint names +
     # control frame) for the 3D viewer and offline IK, supplied here since the molmo server can't import
