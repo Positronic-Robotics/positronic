@@ -204,10 +204,21 @@ def observe_payload(robot_view: Any, env_obs: dict[str, Any], camera_names: list
         'eef_pos': eef_world[:3, 3].astype(np.float32),
         'eef_quat': eef_quat.astype(np.float32),
         'grip': np.float32(mapping.normalize_grip_qpos(env_obs['qpos']['gripper'])),
+        # The full MuJoCo generalized state (every body's pose + velocity, objects included) — privileged ground
+        # truth the adapter routes to the recorder, so success can be recomputed/audited offline (like libero's
+        # ``sim_state``), never fed to the policy.
+        'sim_state': _full_physics_state(robot_view),
     }
     for name in camera_names:
         payload[name] = np.ascontiguousarray(env_obs[name])
     return payload
+
+
+def _full_physics_state(robot_view: Any) -> np.ndarray:
+    """The scene's full generalized state — ``qpos`` (all positions) then ``qvel`` (all velocities) — a
+    deterministic MuJoCo sim replays from it, and object poses in ``qpos`` let analysis recompute success."""
+    data = robot_view.mj_data
+    return np.concatenate([np.asarray(data.qpos, dtype=np.float64), np.asarray(data.qvel, dtype=np.float64)])
 
 
 def _is_rgb_frame(value: Any) -> bool:

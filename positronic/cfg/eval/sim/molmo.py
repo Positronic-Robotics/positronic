@@ -5,7 +5,7 @@ import configuronic as cfn
 
 from positronic import keys
 from positronic.drivers.roboarm.models import bundled_franka_model
-from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED, EVAL_TRIAL_COUNT, EVAL_TRIAL_INDEX, Eval, Task
+from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED, EVAL_TRIAL_COUNT, EVAL_TRIAL_INDEX, Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.molmo_spaces.adapter import MolmoAdapter
 from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
@@ -100,11 +100,15 @@ def _molmo_eval(
     embodiment = remote_franka_embodiment(
         proxy, camera_dict, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model()
     )
-    # ``horizon`` lets the harness reject a timeout that isn't a strictly weaker safety net than the sim's own
-    # per-episode horizon (the env reports it at reset); ``timeout`` stays a runaway-cost backstop, not the deadline.
+    # The env's full MuJoCo state is the privileged ground truth (recorded, never fed to the policy), so success
+    # can be recomputed offline from a rollout. ``horizon`` lets the harness reject a timeout that isn't a strictly
+    # weaker safety net than the sim's own per-episode horizon (the env reports it at reset); ``timeout`` stays a
+    # runaway-cost backstop, not the deadline.
+    privileged = {'sim_state': Observation(proxy.privileged['sim_state'], None)}
     task = Task(
         instruction=lambda: proxy.meta['task'],
         timeout=timeout,
+        privileged=privileged,
         reset=proxy.reset,
         done=proxy.done,
         horizon=lambda: proxy.horizon,
