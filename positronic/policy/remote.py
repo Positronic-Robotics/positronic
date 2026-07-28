@@ -87,6 +87,8 @@ class RemoteSession(Session):
         # The real inference boundary: this round-trips the model, so ``policy.infer`` is timed here and traces
         # regardless of the wrappers in front. A ``ChunkedSchedule`` replay returns before reaching this session,
         # so every call here is a real inference; ``finally`` times a raising round-trip (a stalled server) too.
+        # ``policy.infer`` is recorded at this remote boundary only: remote/H100 inference is the cost that
+        # matters, so an in-process terminal (e.g. ``_LerobotSession``) is left uninstrumented.
         infer_start_ns = time.time_ns()
         try:
             result = self._session.infer(self._prepare_obs(obs))
