@@ -152,8 +152,9 @@ def _resolve_tasks(task) -> list[str]:
     instruction_type='default',
     trial_count=1,
     timeout=None,
+    camera_resolution=None,
 )
-def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
+def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict, camera_resolution):
     """A RoboLab eval: the embodiment proxies a remote RoboLab env, the task carries the scenario.
 
     RoboLab (https://github.com/NVLabs/RoboLab) is NVIDIA's Isaac Lab benchmark: 120 tabletop manipulation
@@ -173,13 +174,19 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
     per-trial seed: RoboLab's eval path exposes no seed hook, so trial contexts carry none. The env's live
     subtask progress ``[status, completed, total, score]`` is the privileged ground truth (recorded, never
     fed to the policy).
+
+    ``camera_resolution`` is a ``(width, height)`` render size for the policy cameras; unset keeps RoboLab's
+    stock 1280x720. The policy always receives its own 224x224 regardless, so a smaller render only trims the
+    wire image (and drops the always-on Isaac viewport) — a competition-design knob seen by every submission,
+    e.g. ``--eval.camera_resolution='(320, 180)'``. Keep it 16:9: the policies letterbox-pad to a square, so
+    an off-aspect render shifts the scene scale in the policy input.
     """
     names = _resolve_tasks(task)
     if timeout is None:
         # The env truncates itself at each task's episode_length_s; the harness deadline is a backstop above
         # the longest selected task.
         timeout = max(_TASKS[name][1] for name in names) + 10.0
-    proxy = RemoteEnvControlSystem(RobolabAdapter(camera_dict), serve_robolab())
+    proxy = RemoteEnvControlSystem(RobolabAdapter(camera_dict), serve_robolab(camera_resolution=camera_resolution))
     # The DROID rig's model (Franka arm + Robotiq 2F-85) rides the env's ``robot_meta`` — the launcher
     # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')

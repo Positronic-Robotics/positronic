@@ -69,6 +69,11 @@ except ImportError:
 parser = argparse.ArgumentParser(description='Serve RoboLab over the env-server protocol.')
 parser.add_argument('--host', default='localhost')
 parser.add_argument('--port', type=int)
+# Unset keeps RoboLab's stock 1280x720 policy-camera render; a WIDTH HEIGHT pair renders them smaller (the
+# codec still hands the policy its own 224x224, so this only trims the wire image). ``--disable-viewport``
+# turns off the always-on Isaac persp viewport that nothing here consumes; the launcher pairs them.
+parser.add_argument('--camera-res', type=int, nargs=2, default=None, metavar=('WIDTH', 'HEIGHT'))
+parser.add_argument('--disable-viewport', action='store_true')
 AppLauncher.add_app_launcher_args(parser)
 args, _ = parser.parse_known_args()
 args.enable_cameras = True  # not a CLI flag: every robolab runner forces it (the image obs need rendering)
@@ -77,6 +82,7 @@ simulation_app = AppLauncher(args).app
 import omni.kit.app  # noqa: E402
 import omni.timeline  # noqa: E402
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg  # noqa: E402
+from isaaclab.sensors import TiledCameraCfg  # noqa: E402  # pyright: ignore[reportMissingImports]
 from isaaclab.utils.math import (  # noqa: E402
     matrix_from_quat,
     quat_from_matrix,
@@ -84,13 +90,16 @@ from isaaclab.utils.math import (  # noqa: E402
     quat_mul,
     subtract_frame_transforms,
 )
+from omni.kit.viewport.utility import get_active_viewport  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 import robolab.constants  # noqa: E402
 from robolab.core.environments.factory import get_envs  # noqa: E402
 from robolab.core.environments.runtime import create_env  # noqa: E402
 from robolab.core.logging.results import get_all_env_subtask_infos  # noqa: E402
 from robolab.registrations.droid.auto_env_registrations_jointpos import auto_register_droid_envs  # noqa: E402
+from robolab.robots import droid  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.robots.droid import EEF_OFFSET_ROT  # noqa: E402
+from robolab.variations.camera import OverShoulderLeftCameraCfg  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 # Both flags gate recorder construction in the env cfg's ``__post_init__``, so they are set before any
 # ``create_env``: subtask progress feeds the wire ``subtask`` observation; per-step image recording only bloats
@@ -99,6 +108,27 @@ from robolab.robots.droid import EEF_OFFSET_ROT  # noqa: E402
 robolab.constants.ENABLE_SUBTASK_PROGRESS_CHECKING = True
 robolab.constants.RECORD_IMAGE_DATA = False
 robolab.constants.set_output_dir(tempfile.mkdtemp(prefix='robolab-env-'))
+
+# The policy cameras (RoboLab's WRIST_LEFT preset) render at a stock 1280x720 (16:9), but the ``ee`` codec
+# hands the policy its own 224x224, so most of that tile render is only wire bytes. ``--camera-res`` shrinks
+# the render; keep any override at 16:9, since the policies letterbox-pad each frame to a square and an
+# off-aspect render shifts the scene's scale/padding in the policy input. The override mutates the ORIGINAL
+# ``TiledCameraCfg`` objects: isaaclab's ``configclass`` strips class-level mutables into dataclass fields
+# whose ``default_factory`` deepcopies the captured original on every cfg instantiation, so writing the
+# originals before any registration reaches every task's scene. The wrist original is the ``droid`` module
+# global (``DroidCfg`` and ``WristCameraCfg`` both capture it); the over-shoulder original exists only inside
+# its factory's closure. Left unset, nothing here runs and the render stays byte-for-byte the stock 720p.
+if args.camera_res is not None:
+    _factory = OverShoulderLeftCameraCfg.__dataclass_fields__['over_shoulder_left_camera'].default_factory
+    _over_shoulder = _factory.__closure__[0].cell_contents
+    assert isinstance(_over_shoulder, TiledCameraCfg), _over_shoulder
+    for _camera in (droid._WRIST_CAM, _over_shoulder):
+        _camera.width, _camera.height = args.camera_res
+
+if args.disable_viewport:
+    # The default Isaac viewport ('/OmniverseKit_Persp', 1280x720) renders every render step even headless,
+    # and nothing in this server consumes it.
+    get_active_viewport().updates_enabled = False
 
 
 def _load_robot_meta() -> dict[str, Any]:
