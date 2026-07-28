@@ -7913,15 +7913,15 @@
                 "code": "reportOptionalCall",
                 "range": {
                     "startColumn": 18,
-                    "endColumn": 49,
+                    "endColumn": 56,
                     "lineCount": 1
                 }
             },
             {
                 "code": "reportArgumentType",
                 "range": {
-                    "startColumn": 32,
-                    "endColumn": 48,
+                    "startColumn": 39,
+                    "endColumn": 55,
                     "lineCount": 1
                 }
             },

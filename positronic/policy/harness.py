@@ -101,7 +101,7 @@ class Harness(pimm.ControlSystem):
         self.policy: Policy = policy
         self.context: dict[str, Any] = {}
         self._static_meta = static_meta or {}
-        self._session: Session | None = None
+        self._policy_session: Session | None = None
         # True between RUN and FINISH/ABORT: the trial is live — stepping and recording happen together.
         self._running = False
         # ``inference_latency`` is delivered on the RUN context (sim-only): ``True`` advances the
@@ -149,7 +149,7 @@ class Harness(pimm.ControlSystem):
         # ``policy.meta`` is the static baseline (the wrapped policy aggregates model +
         # codec meta); the session overlays per-episode specifics (e.g. the sampled
         # sub-policy) and wins on conflict.
-        session_meta = self.policy.meta | (self._session.meta if self._session else {})
+        session_meta = self.policy.meta | (self._policy_session.meta if self._policy_session else {})
         for k, v in flatten_dict(session_meta).items():
             meta[f'inference.policy.{k}'] = v
         meta.update(context)
@@ -179,7 +179,7 @@ class Harness(pimm.ControlSystem):
         must move forward too, or it will re-infer before the driver has actually played the (shifted)
         trajectory.
         """
-        s = self._session
+        s = self._policy_session
         while s is not None:
             if isinstance(s, ChunkedSchedule._Session) and s._trajectory_end is not None:
                 s._trajectory_end += delta_sec
@@ -198,14 +198,14 @@ class Harness(pimm.ControlSystem):
         is not held back by stale trajectory_end.
         """
         self._emit_commands([])
-        if self._session is not None:
-            self._session.cancel()
+        if self._policy_session is not None:
+            self._policy_session.cancel()
 
     def _finalize_recording(self, payload: dict[str, Any] | None = None) -> None:
         """Commit the live episode: tally completion, cancel the in-flight chunk, stop the recorder —
         stamping the episode's full static meta (plus any terminal payload) at finalize."""
-        if self._session:
-            self._on_complete(self._session, self.context)
+        if self._policy_session:
+            self._on_complete(self._policy_session, self.context)
         self._cancel_trajectories()
         self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(self.context), **(payload or {})}))
 
@@ -237,7 +237,7 @@ class Harness(pimm.ControlSystem):
                 self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
-        self._session = self.policy.new_session(self.context, clock.now)
+        self._policy_session = self.policy.new_session(self.context, clock.now)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
         self._episode_virtual_start = clock.now()
@@ -270,9 +270,9 @@ class Harness(pimm.ControlSystem):
             # steps during that shared tick charges one more span (≤ one control period per episode) to the
             # closing episode — the cooperative scheduler cannot give the recorder a turn alone.
             self._end_episode_span(virtual_now, abort=abort)
-        if self._session:
-            self._session.close()
-            self._session = None
+        if self._policy_session:
+            self._policy_session.close()
+            self._policy_session = None
         self._home(clock)
         self._running = False
 
@@ -366,7 +366,7 @@ class Harness(pimm.ControlSystem):
         # pre-sleep, so we post-shift it and also bump the scheduling wrapper's internal
         # ``_trajectory_end`` to stay consistent.
         wall_start = time.monotonic()
-        actions = self._session(frozen_view(obs))
+        actions = self._policy_session(frozen_view(obs))
         if actions is None:
             return
         delay = self._inference_delay(wall_start)
@@ -470,7 +470,7 @@ class Harness(pimm.ControlSystem):
             # the pass.
             yield self._pace()
             self._end_episode_span(virtual_now, abort=False)
-        if self._session:
-            self._session.close()
+        if self._policy_session:
+            self._policy_session.close()
         # The harness does not own the policy's lifetime: the caller may run several harnesses over
         # one policy (a multi-eval sweep), so it closes the policy once, after the last run.
