@@ -23,7 +23,8 @@ import argparse
 import os
 import tempfile
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from contextlib import AbstractContextManager, nullcontext
+from typing import Any
 
 import cv2  # noqa: F401 -- robolab requires cv2 imported before isaaclab
 import numpy as np
@@ -32,12 +33,30 @@ from isaaclab.app import AppLauncher
 from protocol import decode
 from server import EnvProtocol, EnvServer
 
-# The positronic-free span writer: the type checker reads it as the package member, while at runtime the
-# robolab interpreter (positronic uninstalled, ``env_server`` on PYTHONPATH) imports it flat.
-if TYPE_CHECKING:
-    from positronic.simulator.env_server import telemetry
-else:
+
+class _NoopTelemetry:
+    """Inert stand-in for the span writer when it is not bundled into this interpreter, so an uninstrumented
+    run pays nothing and every span call site works without a telemetry-present check."""
+
+    def active(self) -> bool:
+        return False
+
+    def span(self, name: str, **attrs: Any) -> AbstractContextManager[None]:
+        return nullcontext()
+
+    def traced(self, name: str, **attrs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        return lambda method: method
+
+    def bind_from_env(self) -> AbstractContextManager[None]:
+        return nullcontext()
+
+
+# The env server writes its spans through the positronic-free ``telemetry`` module copied flat alongside
+# ``server``/``protocol``; the no-op stand-in keeps every span call site inert when it is not bundled in.
+try:
     import telemetry
+except ImportError:
+    telemetry = _NoopTelemetry()
 
 # Isaac's rigid bring-up order: parse CLI args, launch the app, and only then import anything that touches the
 # omni/isaaclab runtime — which forces the second import block below and the module-level parse. ``validate.py``

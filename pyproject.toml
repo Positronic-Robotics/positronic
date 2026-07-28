@@ -236,6 +236,15 @@ exclude = [
 # still pulls their diagnostics. `ignore` suppresses those transitive vendor errors too.
 ignore = ["positronic/vendors"]
 
+# ``robolab/env.py`` runs in RoboLab's isolated interpreter with the env-server modules (``server``,
+# ``protocol``, ``telemetry``) copied flat onto PYTHONPATH, so it imports them top-level. Put ``env_server``
+# on the search path for that directory so those flat imports resolve for the type checker exactly as they
+# do at runtime; the project root stays on the path so the other robolab files' ``positronic.*`` imports
+# (an editable install the checker resolves by search path) keep resolving.
+[[tool.basedpyright.executionEnvironments]]
+root = "positronic/simulator/robolab"
+extraPaths = [".", "positronic/simulator/env_server"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = [
