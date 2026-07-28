@@ -22,7 +22,7 @@ import platform
 import socket
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -30,9 +30,10 @@ from typing import Any, NamedTuple
 import psutil
 import pynvml
 from opentelemetry import trace
+from opentelemetry.exporter.otlp.json.file import FileSpanExporter
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Span
 
 logger = logging.getLogger(__name__)
@@ -105,7 +106,7 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Iterator[TracerProvi
 
     resource = Resource.create({'run.id': run_id, 'process.name': process, 'host.name': host})
     provider = TracerProvider(resource=resource)
-    provider.add_span_processor(BatchSpanProcessor(_FileSpanExporter(telemetry_dir / f'{process}.spans.jsonl')))
+    provider.add_span_processor(BatchSpanProcessor(FileSpanExporter(telemetry_dir / f'{process}.spans.jsonl')))
     _provider = provider
     try:
         yield provider
@@ -217,41 +218,6 @@ def end_partial_episode(episode: Span) -> None:
     force_flush()
 
 
-def _otlp_value(value: Any) -> dict[str, Any]:
-    """One attribute value as an OTLP/JSON ``AnyValue``. ``bool`` is checked before ``int`` (it subclasses
-    ``int``), and OTLP carries integers as strings."""
-    if isinstance(value, bool):
-        return {'boolValue': value}
-    if isinstance(value, int):
-        return {'intValue': str(value)}
-    if isinstance(value, float):
-        return {'doubleValue': value}
-    if isinstance(value, str):
-        return {'stringValue': value}
-    if isinstance(value, (list, tuple)):
-        return {'arrayValue': {'values': [_otlp_value(item) for item in value]}}
-    return {'stringValue': json.dumps(value)}
-
-
-def _otlp_attributes(attrs: Any) -> list[dict[str, Any]]:
-    return [{'key': key, 'value': _otlp_value(value)} for key, value in attrs.items()]
-
-
-def _encode_span(span_data: ReadableSpan) -> dict[str, Any]:
-    context = span_data.context
-    encoded: dict[str, Any] = {
-        'traceId': f'{context.trace_id:032x}' if context is not None else '',
-        'spanId': f'{context.span_id:016x}' if context is not None else '',
-        'name': span_data.name,
-        'startTimeUnixNano': str(span_data.start_time or 0),
-        'endTimeUnixNano': str(span_data.end_time or 0),
-        'attributes': _otlp_attributes(span_data.attributes or {}),
-    }
-    if span_data.parent is not None:
-        encoded['parentSpanId'] = f'{span_data.parent.span_id:016x}'
-    return encoded
-
-
 def _seal_truncated_line(path: Path) -> None:
     """Seal a predecessor's truncated final line (a killed run can die mid-write) with a newline before
     appending, so the first new record does not merge into the fragment and get skipped along with it."""
@@ -264,37 +230,6 @@ def _seal_truncated_line(path: Path) -> None:
     if not sealed:
         with open(path, 'ab') as file:
             file.write(b'\n')
-
-
-class _FileSpanExporter(SpanExporter):
-    """Writes each exported batch as one OTLP/JSON line to ``<process>.spans.jsonl``, flushed per line so a
-    crash loses at most the batch in flight. The reader parses the same shape back."""
-
-    def __init__(self, path: Path) -> None:
-        self._lock = threading.Lock()
-        _seal_truncated_line(path)
-        self._file = open(path, 'a')
-
-    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        if not spans:
-            return SpanExportResult.SUCCESS
-        resource_attrs = _otlp_attributes(spans[0].resource.attributes)
-        doc = {
-            'resourceSpans': [
-                {
-                    'resource': {'attributes': resource_attrs},
-                    'scopeSpans': [{'scope': {'name': _SCOPE}, 'spans': [_encode_span(s) for s in spans]}],
-                }
-            ]
-        }
-        with self._lock:
-            self._file.write(json.dumps(doc, separators=(',', ':')) + '\n')
-            self._file.flush()
-        return SpanExportResult.SUCCESS
-
-    def shutdown(self) -> None:
-        with self._lock:
-            self._file.close()
 
 
 class SpanRec(NamedTuple):
