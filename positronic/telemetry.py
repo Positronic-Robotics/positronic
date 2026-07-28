@@ -366,6 +366,12 @@ class _Nvml:
         except pynvml.NVMLError as error:
             logger.info('telemetry: NVML unavailable (%s); GPU stats disabled', error)
 
+    @property
+    def device_count(self) -> int:
+        """The configured GPU count (the number of NVML device handles), authoritative even when a device is
+        omitted from a sample after a mid-run query error. ``0`` when NVML is unavailable."""
+        return len(self._handles)
+
     def sample(self, tree_pids: set[int]) -> list[dict[str, Any]]:
         gpus: list[dict[str, Any]] = []
         for index, handle in enumerate(self._handles):
@@ -503,6 +509,7 @@ class StatsSampler:
             'mem_sys_used_b': int(psutil.virtual_memory().used),
             'cpu_proc_pct': cpu_proc_pct,
             'rss_proc_b': rss_proc_b,
+            'gpu_count': self._nvml.device_count,
             'gpus': self._nvml.sample(tree_pids),
         }
 

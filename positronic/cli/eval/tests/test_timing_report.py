@@ -333,6 +333,39 @@ def test_omitted_gpu_device_excluded_from_proc_vram_peak(tmp_path):
     assert sim.peak_proc_vram_gb == pytest.approx(3.0)
 
 
+def test_device_omitted_from_every_sample_excluded_via_recorded_count(tmp_path):
+    """When a device is omitted from EVERY in-window sample, no sample carries the box's full complement, so
+    max-observed would wrongly infer the complement from the surviving device and count every sample complete.
+    The recorded ``gpu_count`` keeps the true count (2), so the one-device samples are incomplete and never
+    inflate the process-VRAM peak (Codex on PR #531)."""
+    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir.mkdir()
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
+    stats = [
+        # 2-GPU box, but device 1 is missing from both samples; each records the configured count of 2.
+        {
+            't_ns': 1,
+            'gpu_count': 2,
+            'gpus': [{'i': 0, 'util_pct': 40.0, 'mem_used_b': 2 * 1024**3, 'proc_mem_b': 5 * 1024**3}],
+        },
+        {
+            't_ns': 2,
+            'gpu_count': 2,
+            'gpus': [{'i': 0, 'util_pct': 80.0, 'mem_used_b': 1 * 1024**3, 'proc_mem_b': 7 * 1024**3}],
+        },
+    ]
+    (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+
+    report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
+
+    sim = report.gpu.sim
+    assert sim is not None
+    # No sample carries both GPUs, so none is complete: the peak is ``None``. Pre-fix, max-observed inferred a
+    # complement of 1 and both single-device samples counted, inflating the peak to 7 GB.
+    assert sim.peak_proc_vram_gb is None
+    assert sim.peak_vram_gb == pytest.approx(2.0)  # box-wide mem peak still counts every reading: sample 1's 2 GB
+
+
 def test_gpu_samples_outside_pass_windows_excluded(tmp_path):
     """Stats samples taken outside every completed pass's wall window (an earlier run in a reused directory)
     stay out of the GPU summary — the stats twin of the orphan-episode exclusion."""
