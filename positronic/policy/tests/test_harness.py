@@ -25,9 +25,11 @@ from positronic.drivers.roboarm.command import (
 )
 from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
+from positronic.offboard.client import InferenceSession
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import Directive, DirectiveType, Harness
+from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
@@ -151,6 +153,40 @@ class ChunkPolicy(StubPolicy):
         self.reset_calls += 1
         self.last_reset_context = context
         return _ChunkSession(self)
+
+
+class _FakeInferenceSession(InferenceSession):
+    """A stub ``InferenceSession`` returning a canned action, so a ``RemoteSession`` over it round-trips
+    ``RemoteSession.__call__`` — the real inference boundary that records the ``policy.infer`` span."""
+
+    def __init__(self, action: list[dict[str, Any]]) -> None:
+        self._action = action
+
+    def infer(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
+        return self._action
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return {}
+
+    def close(self) -> None:
+        pass
+
+
+class RemoteStubPolicy(Policy):
+    """A stub policy served through a real ``RemoteSession`` over a fake inference session, so its inference
+    round-trips ``RemoteSession.__call__`` and records the ``policy.infer`` span independent of any wrapper."""
+
+    def __init__(self, command: roboarm.command.CommandType | None = None, target_grip: float = 0.33) -> None:
+        if command is None:
+            pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+            command = CartesianPosition(pose=pose)
+        self.command = command
+        self.target_grip = float(target_grip)
+
+    def new_session(self, context=None, now=None) -> RemoteSession:
+        action = [{'robot_command': self.command, 'target_grip': self.target_grip, 'timestamp': 0.0}]
+        return RemoteSession(_FakeInferenceSession(action))
 
 
 class FakeRobotState:
@@ -1290,8 +1326,10 @@ def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(tmp_path):
 def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     """Under ``telemetry.bind`` a self-driven episode writes the span taxonomy to the harness file: the
     episode parents to the pass, and reset + policy.infer parent to the episode, with the episode carrying its
-    index, step count, and virtual duration. Read back from the file so the OTLP encoding is exercised."""
-    policy = ChunkedSchedule().wrap(StubPolicy())
+    index, step count, and virtual duration. Read back from the file so the OTLP encoding is exercised. The
+    ``policy.infer`` span is recorded at the remote inference boundary, so the terminal is a ``RemoteStubPolicy``
+    (a real ``RemoteSession`` over a fake inference session)."""
+    policy = ChunkedSchedule().wrap(RemoteStubPolicy())
     task = Task(instruction='stack', timeout=0.05, reset=lambda context: None)
     harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
     p = _pair_all(world, harness)
