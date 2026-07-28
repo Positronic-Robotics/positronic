@@ -3,6 +3,7 @@ from pathlib import Path
 
 import configuronic as cfn
 
+from positronic import keys
 from positronic.drivers.roboarm.models import bundled_franka_model
 from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED, EVAL_TRIAL_COUNT, EVAL_TRIAL_INDEX, Eval, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
@@ -24,7 +25,7 @@ def _episode_count(benchmark_dir: Path) -> int:
 
 
 @cfn.config(
-    camera_dict={'image.wrist': 'wrist_camera', 'image.exterior': 'exo_camera_1'},
+    camera_dict={keys.WRIST_IMAGE: 'wrist_camera', keys.EXTERIOR_IMAGE: 'exo_camera_1'},
     benchmark_dir=None,
     episodes=None,
     trial_count=1,
@@ -54,8 +55,9 @@ def _molmo_eval(
 
     ``timeout`` is not the benchmark horizon — the sim owns that (the per-episode ``task_horizon_sec``, enforced
     env-side and delivered as a terminal ``done``). It is only a runaway-cost safety net for a sim that never
-    terminates, so it must stay comfortably longer than the sim's native horizon; being sim-time, the spare
-    budget costs nothing unless the sim misbehaves.
+    terminates, so it must stay longer than the sim's native horizon; the env reports that horizon at reset and
+    the harness rejects a ``timeout`` that isn't strictly weaker, so a too-short budget fails loud instead of
+    silently truncating a valid episode. Being sim-time, the spare budget costs nothing unless the sim misbehaves.
     """
     if benchmark_dir is None:
         raise ValueError('MolmoSpaces eval needs --eval.benchmark_dir pointing at a dir with benchmark.json')
@@ -87,7 +89,15 @@ def _molmo_eval(
     embodiment = remote_franka_embodiment(
         proxy, camera_dict, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model()
     )
-    task = Task(instruction=lambda: proxy.meta['task'], timeout=timeout, reset=proxy.reset, done=proxy.done)
+    # ``horizon`` lets the harness reject a timeout that isn't a strictly weaker safety net than the sim's own
+    # per-episode horizon (the env reports it at reset); ``timeout`` stays a runaway-cost backstop, not the deadline.
+    task = Task(
+        instruction=lambda: proxy.meta['task'],
+        timeout=timeout,
+        reset=proxy.reset,
+        done=proxy.done,
+        horizon=lambda: proxy.horizon,
+    )
     # Benchmark episodes are exact-pose deterministic and carry their own seed. An unset ``seed`` leaves
     # ``eval.seed`` off the trial, so the env falls back to the episode's spec seed (reproducing the benchmark);
     # an explicit ``seed`` overrides it, sweeping ``seed .. seed + trial_count - 1``. (``build_trials`` injects a

@@ -87,6 +87,7 @@ def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out
         grip=np.array(fields['grip'], dtype=np.float32),
         camera_names=np.array(camera_names),
         native_horizon=native_horizon,
+        horizon_sec=native_horizon * (cfg.policy_dt_ms / 1000.0),  # the sim-seconds env.py reports at reset
         termination_step=step,
         final_success=success,
         # numpy's savez **kwds stub reads a dict-unpack as possibly supplying ``allow_pickle`` (as in make_fixture.py).
