@@ -366,13 +366,9 @@ class Harness(pimm.ControlSystem):
         # pre-sleep, so we post-shift it and also bump the scheduling wrapper's internal
         # ``_trajectory_end`` to stay consistent.
         wall_start = time.monotonic()
-        infer_start_ns = time.time_ns()
         actions = self._session(frozen_view(obs))
         if actions is None:
             return
-        # Only a chunk-producing call round-tripped the policy server; a ``None`` was the scheduler replaying
-        # a live chunk (no inference), so it is not a policy wait and gets no span.
-        telemetry.record_span('policy.infer', infer_start_ns, time.time_ns())
         delay = self._inference_delay(wall_start)
         if delay > 0.0:
             yield pimm.Sleep(delay)

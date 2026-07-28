@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from positronic import keys
+from positronic import keys, telemetry
 from positronic.policy import spec
 from positronic.policy.action import (
     AbsoluteJointsAction,
@@ -112,6 +112,29 @@ class TestChunkedSchedule:
         clock.t = 1.01
         result = session(_obs())
         assert result is not None
+
+    def test_records_infer_span_on_real_none_but_not_replay(self, tmp_path):
+        """The ``policy.infer`` span spans a real inference even when it returns None (keep executing the
+        current chunk), and a clock-gated replay — no inner call — records nothing."""
+        clock = _FakeClock(t=1.0)
+        # A real round-trip returning None: the inner ran, produced no new trajectory. One span.
+        real_none = ChunkedSchedule().wrap(_ConstPolicy(None)).new_session(now=clock.now)
+        with telemetry.bind(tmp_path / 'real_none', 'harness', 'run-real-none'):
+            assert real_none(_obs()) is None
+        spans = telemetry.read_spans(tmp_path / 'real_none' / 'telemetry' / 'harness.spans.jsonl')
+        assert [s.name for s in spans] == ['policy.infer']
+
+        # A chunk then a replay inside its window: the chunk is one real inference (one span); the replay
+        # calls no inner and adds none.
+        clock.t = 1.0
+        chunk = [{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}]
+        session = ChunkedSchedule().wrap(_ConstPolicy(chunk)).new_session(now=clock.now)
+        with telemetry.bind(tmp_path / 'replay', 'harness', 'run-replay'):
+            assert session(_obs()) is not None  # real inference → span
+            clock.t = 1.2  # inside the trajectory window
+            assert session(_obs()) is None  # replay → no span
+        spans = telemetry.read_spans(tmp_path / 'replay' / 'telemetry' / 'harness.spans.jsonl')
+        assert [s.name for s in spans] == ['policy.infer']
 
 
 class TestPipelineComposition:

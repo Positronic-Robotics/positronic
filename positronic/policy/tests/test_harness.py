@@ -1291,7 +1291,7 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     """Under ``telemetry.bind`` a self-driven episode writes the span taxonomy to the harness file: the
     episode parents to the pass, and reset + policy.infer parent to the episode, with the episode carrying its
     index, step count, and virtual duration. Read back from the file so the OTLP encoding is exercised."""
-    policy = StubPolicy()
+    policy = ChunkedSchedule().wrap(StubPolicy())
     task = Task(instruction='stack', timeout=0.05, reset=lambda context: None)
     harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
     p = _pair_all(world, harness)

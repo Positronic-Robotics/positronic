@@ -7,10 +7,12 @@ pre-inference observation stamp cannot give — so the harness passes ``now`` (a
 in seconds) to ``new_session`` and it reaches that one session.
 """
 
+import time
 from collections import deque
 
 import numpy as np
 
+from positronic import telemetry
 from positronic.policy.base import DelegatingSession, Now, PolicyWrapper, Session
 
 
@@ -45,7 +47,11 @@ class ChunkedSchedule(PolicyWrapper):
                 )
             if self._trajectory_end is not None and self._now() < self._trajectory_end:
                 return None
+            # After _inner, not the early return above: fires for every real inference — chunk or None —
+            # and never a replay.
+            infer_start_ns = time.time_ns()
             result = self._inner(obs)
+            telemetry.record_span('policy.infer', infer_start_ns, time.time_ns())
             if result is not None:
                 # A single-action session may return a bare dict, and a no-codec path may omit
                 # ``timestamp`` (servers can stamp/truncate themselves); normalize both so an
