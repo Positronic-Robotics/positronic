@@ -22,7 +22,7 @@ import platform
 import socket
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -83,7 +83,7 @@ def _encode_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
 
 
 @contextmanager
-def bind(out_dir: Path | str, process: str, run_id: str) -> Iterator[TracerProvider]:
+def bind(out_dir: Path | str, process: str, run_id: str) -> Generator[TracerProvider, None, None]:
     """Provider lifecycle for one process's telemetry: write ``<process>.meta.json``, stream spans to
     ``<process>.spans.jsonl``, and register the provider so ``span`` records. The batch processor is flushed
     and shut down on exit — an abrupt exit would otherwise lose its queued tail."""
@@ -156,7 +156,7 @@ def record_span(name: str, start_ns: int, end_ns: int, **attrs: Any) -> None:
 
 
 @contextmanager
-def eval_pass(**attrs: Any) -> Iterator[Span]:
+def eval_pass(**attrs: Any) -> Generator[Span, None, None]:
     """The pass span bracketing a whole eval sweep; per-episode spans parent to it. Held as a module span
     rather than the OTel-current one so it does not become the parent of the per-tick spans. A sweep that
     exits with an exception still exports its pass — the partial window is real recorded data — stamped
