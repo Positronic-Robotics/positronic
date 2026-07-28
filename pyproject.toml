@@ -125,7 +125,7 @@ constraint-dependencies = ["cmake<4.3", "evdev<1.9"]
 # it; bump the date and re-run `uv lock` in the same commit to refresh deps.
 # Our own packages (exclude-newer-package below) are exempt so they always
 # resolve to the latest release.
-exclude-newer = "2026-06-12T00:00:00Z"
+exclude-newer = "2026-07-21T00:00:00Z"
 conflicts = [
     [
         {extra = "lerobot"},

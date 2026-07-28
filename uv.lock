@@ -46,7 +46,7 @@ conflicts = [[
 ]]
 
 [options]
-exclude-newer = "2026-06-12T00:00:00Z"
+exclude-newer = "2026-07-21T00:00:00Z"
 
 [options.exclude-newer-package]
 configuronic = false
