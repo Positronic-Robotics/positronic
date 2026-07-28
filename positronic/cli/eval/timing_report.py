@@ -58,7 +58,8 @@ class WallSplit:
     ``overhead`` is the within-episode wall unattributed to a measured phase (including the recorder's
     parquet/video close flush, which runs after record IO); ``between_episodes`` is the inter-episode wall
     (session teardown, homing, world rebuild) inside the pass span between one episode's finish and the next's
-    start. The measured phases plus these two cover the whole pass span.
+    start. The measured phases plus these two cover the pass span minus any aborted-episode wall, which is
+    excluded from W_pass entirely.
     """
 
     reset: float
@@ -300,10 +301,20 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
             children[span.parent_id].append(span)
 
     # W_pass is the pass span's wall (summed if several passes appended to one dir), so inter-episode teardown
-    # counts in the denominator; the wall gap between two separate passes falls outside every pass span.
+    # counts in the denominator; the wall gap between two separate passes falls outside every pass span. An
+    # aborted episode's wall is subtracted out: the episode is dropped as invalid data (its virtual time, phases
+    # and infers never reduce), so its wall must also leave every W_pass-normalised figure rather than land in
+    # ``between_episodes`` and deflate the policy-busy / real-time factors.
     passes = [p for p in spans if p.name == 'eval.pass']
     pass_ids = {p.span_id for p in passes}
-    wall_pass = float(sum(_dur_s(p) for p in passes))
+    aborted_wall = float(
+        sum(
+            _dur_s(s)
+            for s in spans
+            if s.name == 'episode' and s.attrs.get('episode.aborted', False) and s.parent_id in pass_ids
+        )
+    )
+    wall_pass = float(sum(_dur_s(p) for p in passes)) - aborted_wall
     # A failed pass still reduces — its partial window, episodes and samples are real recorded data — but
     # never silently: the mix is named so a skewed-looking split has its explanation on the console.
     failed = sum(bool(p.attrs.get('pass.failed', False)) for p in passes)
