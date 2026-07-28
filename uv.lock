@@ -60,6 +60,7 @@ constraints = [
     { name = "evdev", specifier = "<1.9" },
 ]
 overrides = [{ name = "rerun-sdk", specifier = "==0.30.0" }]
+build-constraints = [{ name = "scikit-build-core", specifier = "<0.10" }]
 
 [[package]]
 name = "absl-py"

@@ -119,6 +119,11 @@ override-dependencies = ["rerun-sdk==0.30.0"]
 # ubuntu22.04 (kernel-5.15) compile headers lack and the build fails. 1.8.x reads the canonical
 # /usr/include and is structurally immune; pynput only needs evdev>=1.3.
 constraint-dependencies = ["cmake<4.3", "evdev<1.9"]
+# ruckig is source-only and its build backend is unpinned (`scikit-build-core`). ruckig 0.15.3's
+# `[tool.scikit-build] cmake.targets` is rejected by scikit-build-core>=0.10 ("Use build.targets
+# instead"), so a wider exclude-newer that admits 0.10+ into the isolated build env breaks the
+# wheel build. Constrain only the build backend, leaving runtime resolution untouched.
+build-constraint-dependencies = ["scikit-build-core<0.10"]
 # Pin third-party resolution to a fixed point in time so `uv sync --locked` is
 # reproducible across machines and CI regardless of contributors' personal uv
 # config. `uv lock` reads this date, so the lockfile can never drift ahead of
