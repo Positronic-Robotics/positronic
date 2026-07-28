@@ -118,12 +118,12 @@ class MolmoSpacesEnv(EnvProtocol):
         cfg = _DroidPickEvalConfig()
         # Determinism enters at sampler construction (seed_task_sampling); the token's seed overrides the spec's.
         cfg.seed = int(seed) if seed is not None else (episode.seed if episode.seed is not None else 42)
-        # positronic's harness owns the episode deadline (the eval's timeout), so disable MolmoSpaces' internal
-        # step horizon: JsonBenchmarkEvalConfig defaults it to 500 steps (~33s at the 66ms policy period), which
-        # would self-terminate the task before the harness timeout and truncate the score. ``None`` -> the task
-        # runs to an infinite horizon, so ``is_done`` reports only the task's own success/termination and the
-        # harness stops the trial at its timeout.
-        cfg.task_horizon = None
+        # The sim owns the episode horizon: it is part of the task definition, so resolve it the way MolmoSpaces'
+        # native runner does (``determine_task_horizon``) — the per-episode ``task_horizon_sec`` converted to
+        # steps at the eval's policy period. With ``task_horizon`` set, the task enforces it and ``is_done``
+        # reports expiry, so a horizon-expired trial ends with a terminal ``done`` exactly as the native
+        # benchmark scores it. The harness ``Task.timeout`` is only a weaker safety net above this horizon.
+        cfg.task_horizon = _resolve_task_horizon(episode, cfg.policy_dt_ms)
         self._sampler = JsonEvalTaskSampler(cfg, episode)
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._robot_view = self._task.env.current_robot.robot_view
@@ -146,11 +146,13 @@ class MolmoSpacesEnv(EnvProtocol):
         arm = mapping.wire_command_to_arm_action(action['command'], self._measured_arm_q())
         gripper = np.array([mapping.grip_command_to_actuator(action['grip'])], dtype=np.float32)
         obs, _reward, _term, _trunc, _infos = self._task.step({'arm': arm, 'gripper': gripper})
-        # positronic owns the deadline (the harness timeout), so the episode ends here on the task's own scored
-        # success — end-on-success, the benchmark's scoring semantics — or any MolmoSpaces terminal (a done
-        # action). The internal step horizon is disabled (see ``_build``), so ``is_done`` reports only
-        # ``is_terminal``, never a timeout; without terminating on success here a successful rollout that keeps
-        # sending joint commands would run to the harness timeout and be scored as a non-success.
+        # The trial ends on the task's judged success, on any MolmoSpaces terminal (a done action), or on native
+        # horizon expiry — ``is_done`` covers the latter two now that the horizon is enabled (see ``_build``).
+        # ``success`` is added explicitly for end-on-success, the benchmark's scoring semantics: without it a
+        # successful rollout that kept sending joint commands would idle to the horizon and still score success.
+        # ``success`` stays ``judge_success()`` alone, so a horizon expiry ends the trial with ``success=False``,
+        # matching native scoring. The harness reads this ``done`` as the trial's true end; its timeout is a
+        # safety net for a sim that never terminates.
         success = bool(self._task.judge_success())
         done = success or bool(self._task.is_done())
         return {'obs': self._observe(obs[0]), 'done': done, 'success': success, 'control_dt': self._control_dt}
@@ -159,30 +161,56 @@ class MolmoSpacesEnv(EnvProtocol):
         return np.asarray(self._robot_view.get_move_group('arm').joint_pos, dtype=np.float32)
 
     def _observe(self, env_obs: dict[str, Any]) -> dict[str, Any]:
-        # MolmoSpaces' obs carries the joint positions/velocities and camera frames; the eef *world* pose is read
-        # from the arm move group's grasp-site frame (obs only exposes a robot-relative tcp pose).
-        arm = self._robot_view.get_move_group('arm')
-        eef_world = np.asarray(arm.leaf_frame_to_world, dtype=np.float64)  # 4x4 grasp-site world transform
-        eef_quat = np.zeros(4)  # filled wxyz below
-        rot9 = np.ascontiguousarray(eef_world[:3, :3].reshape(9))
-        # mju_mat2Quat is a C binding absent from mujoco's type stubs, so pyright can't see the attribute.
-        mujoco.mju_mat2Quat(eef_quat, rot9)  # pyright: ignore[reportAttributeAccessIssue]
-        payload = {
-            'joint_pos': np.asarray(arm.joint_pos, dtype=np.float32),
-            'joint_vel': np.asarray(arm.joint_vel, dtype=np.float32),
-            'eef_pos': eef_world[:3, 3].astype(np.float32),
-            'eef_quat': eef_quat.astype(np.float32),
-            'grip': np.float32(mapping.normalize_grip_qpos(env_obs['qpos']['gripper'])),
-        }
-        for name in self._camera_names:
-            payload[name] = np.ascontiguousarray(env_obs[name])
-        return payload
+        return observe_payload(self._robot_view, env_obs, self._camera_names)
 
     def close(self) -> None:
         if self._sampler is not None:
             self._sampler.close()
             self._sampler = None
             self._task = None
+
+
+def observe_payload(robot_view: Any, env_obs: dict[str, Any], camera_names: list[str]) -> dict[str, Any]:
+    """The raw observation payload for one env frame: measured joints, the eef world pose, grip, camera frames.
+
+    MolmoSpaces' obs carries the joint positions/velocities and camera frames; the eef *world* pose is read from
+    the arm move group's grasp-site frame (obs only exposes a robot-relative tcp pose). The parity reference
+    (``parity_native.py``) shares this extraction so its comparison against the env-server path isolates the sim
+    rollout, not the observation mapping.
+    """
+    arm = robot_view.get_move_group('arm')
+    eef_world = np.asarray(arm.leaf_frame_to_world, dtype=np.float64)  # 4x4 grasp-site world transform
+    eef_quat = np.zeros(4)  # filled wxyz below
+    rot9 = np.ascontiguousarray(eef_world[:3, :3].reshape(9))
+    # mju_mat2Quat is a C binding absent from mujoco's type stubs, so pyright can't see the attribute.
+    mujoco.mju_mat2Quat(eef_quat, rot9)  # pyright: ignore[reportAttributeAccessIssue]
+    payload = {
+        'joint_pos': np.asarray(arm.joint_pos, dtype=np.float32),
+        'joint_vel': np.asarray(arm.joint_vel, dtype=np.float32),
+        'eef_pos': eef_world[:3, 3].astype(np.float32),
+        'eef_quat': eef_quat.astype(np.float32),
+        'grip': np.float32(mapping.normalize_grip_qpos(env_obs['qpos']['gripper'])),
+    }
+    for name in camera_names:
+        payload[name] = np.ascontiguousarray(env_obs[name])
+    return payload
+
+
+def _resolve_task_horizon(episode: Any, policy_dt_ms: float) -> int:
+    """The episode's native horizon in policy steps, mirroring MolmoSpaces' ``determine_task_horizon``.
+
+    The horizon lives in the episode's task spec as ``task_horizon_sec`` (sim-seconds) and converts to steps at
+    the eval's policy period — the same ``round(sec * 1000 / policy_dt_ms)`` the native runner applies. A
+    benchmark whose task carries no ``task_horizon_sec`` fails loud here, exactly as the native runner does
+    without an explicit override: the horizon is part of the task definition, not a value the sim may default.
+    """
+    horizon_sec = episode.task.get('task_horizon_sec')
+    if horizon_sec is None:
+        raise ValueError(
+            f'benchmark episode (house {episode.house_index}) carries no task_horizon_sec; the horizon is part '
+            'of the task definition and the sim cannot default it — add task_horizon_sec to the benchmark task'
+        )
+    return round(horizon_sec * 1000.0 / policy_dt_ms)
 
 
 def _is_rgb_frame(value: Any) -> bool:

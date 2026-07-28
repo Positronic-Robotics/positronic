@@ -148,3 +148,19 @@ leaks a timing vocabulary into the dataset core. Hence telemetry is a set of sid
 process, next to the dataset but never inside it: nested spans for the phase split and a free-running
 machine-load sampler, wall-clock native, owned by `positronic/telemetry.py`. The pass report is an
 offline reduce over those raw files, so nothing is stored twice and the dataset stays clock-agnostic.
+
+**Benchmarks are native; adoptions are faithful.** A benchmark is a set of tasks defined in real or
+in one particular simulator — object poses, success criteria, and horizons included — and there are
+no cross-sim tasks. The product contract is that one policy wrapper earns every supported benchmark:
+a customer implements a single Positronic policy interface and their model runs on all of them. That
+contract is only honest if a Positronic run of a benchmark reproduces the benchmark's native run —
+otherwise the score belongs to Positronic, not the benchmark, and is not comparable to the
+benchmark's published numbers. So an adoption of a sim env reproduces the native benchmark as closely
+as the env allows: a deterministic env to byte-identical outcomes (modulo wire format), a
+non-deterministic env to at least an identical sim/inference call sequence (same count, same order).
+Every sim-env integration ships a native-vs-Positronic parity test that drives one pinned episode
+through both stacks and asserts this, re-run on every bump of the sim's pinned version. Horizon
+ownership follows: the horizon is part of a task's behavior, so the sim×task owns it — enforces it
+and reports expiry through the same terminal `done` a success uses — while the harness `Task.timeout`
+is a strictly weaker safety net, guarding only against runaway cost when a sim fails to enforce a
+horizon or defines none.
