@@ -7,6 +7,8 @@ sim or a GPU.
 Run:  uv run --locked pytest positronic/simulator/molmo_spaces/tests/test_mapping.py --no-cov
 """
 
+import types
+
 import numpy as np
 import pytest
 
@@ -84,6 +86,26 @@ def test_camera_key_explicit_nondefault_read_as_is():
 def test_camera_key_miss_raises():
     with pytest.raises(KeyError):
         mapping.resolve_camera_key({'other': 1}, mapping.MOLMO_WRIST_CAMERA, mapping.MOLMO_WRIST_CAMERA, ())
+
+
+def test_task_horizon_from_episode_level_field():
+    # Shipped DROID benchmarks carry task_horizon_sec at the EPISODE level (a pydantic extra on the spec), NOT
+    # inside the task dict (regression: reading only episode.task missed it — verified against the real
+    # FrankaPickDroidMiniBench, which has episode.task_horizon_sec == 20 and an empty task-level field).
+    ep = types.SimpleNamespace(task_horizon_sec=20, task={})
+    assert mapping.resolve_task_horizon_steps(ep, 66.0) == 303  # round(20 * 1000 / 66)
+
+
+def test_task_horizon_falls_back_to_task_dict():
+    # A layout that nests the horizon inside the task dict still resolves.
+    ep = types.SimpleNamespace(task={'task_horizon_sec': 30})
+    assert mapping.resolve_task_horizon_steps(ep, 66.0) == 455  # round(30 * 1000 / 66)
+
+
+def test_task_horizon_missing_raises():
+    # No horizon at either level fails loud — the horizon is part of the task definition, never defaulted.
+    with pytest.raises(ValueError):
+        mapping.resolve_task_horizon_steps(types.SimpleNamespace(task={}), 66.0)
 
 
 def test_exterior_camera_variants_cover_light_randomization_and_randcam():

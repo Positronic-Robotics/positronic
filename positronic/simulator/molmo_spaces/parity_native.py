@@ -7,10 +7,11 @@ holding the arm every step, and records the per-step raw sim state, per-camera f
 horizon terminates the episode. ``parity.py`` drives the *same* episode through the positronic env-server path and
 asserts byte-identical outcomes against this reference.
 
-The horizon is resolved by MolmoSpaces' own ``determine_task_horizon`` and cross-checked here against ``env.py``'s
-``_resolve_task_horizon``, so the reference proves the two agree without any sim run. Everything except the horizon
-resolution and the rollout drive is shared with ``env.py`` (the eval config and the observation extraction), so the
-comparison isolates the sim rollout and its horizon, not the observation mapping.
+The horizon comes from ``mapping.resolve_task_horizon_steps`` (the benchmark's own ``task_horizon_sec``), the same
+resolver ``env.py`` uses — its correctness is covered by a unit test, not re-derived here (MolmoSpaces' own
+``determine_task_horizon`` reads the wrong field and raises on the shipped benchmarks, so it is not a usable
+reference). Everything except the rollout drive is shared with ``env.py`` (the eval config, the horizon resolver,
+the observation extraction), so the comparison isolates the sim rollout, not the observation mapping.
 
 Needs ``MLSPACES_ASSETS_DIR`` + a GL backend, like ``e2e.py``. Invoked by ``parity.py``; not run by hand.
 """
@@ -27,13 +28,11 @@ from pathlib import Path
 
 # env.py (imported flat off PYTHONPATH, like mapping/server) sets MUJOCO_GL and installs the CGL stub at import,
 # GL-safely pulling in the molmo_spaces stack — so import it before any other molmo_spaces import. It supplies the
-# shared observation extraction (observe_payload), the DROID eval config, and its own horizon resolver, which this
-# reference cross-checks against native. Reaching into env's private helpers is deliberate: the reference must use
-# the exact config + resolver env.py uses.
+# shared observation extraction (observe_payload), the DROID eval config, and (via ``env.mapping``) the horizon
+# resolver env.py uses. Reaching into env's private helpers is deliberate: the reference must use env.py's exact
+# config + resolver so the comparison isolates the rollout.
 import env  # noqa: E402
 import numpy as np
-
-from molmo_spaces.evaluation.eval_main import determine_task_horizon  # noqa: E402
 
 
 def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out_path: Path) -> None:
@@ -41,10 +40,7 @@ def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out
     episode = episodes[episode_index]
     cfg = env._DroidPickEvalConfig()
     cfg.seed = seed
-    native_horizon = determine_task_horizon([episode], None, cfg.policy_dt_ms)
-    resolved = env._resolve_task_horizon(episode, cfg.policy_dt_ms)
-    if native_horizon != resolved:
-        raise AssertionError(f'env.py resolved horizon {resolved} != native determine_task_horizon {native_horizon}')
+    native_horizon = env.mapping.resolve_task_horizon_steps(episode, cfg.policy_dt_ms)
     cfg.task_horizon = native_horizon
     sampler = env.JsonEvalTaskSampler(cfg, episode)
     task = sampler.sample_task(house_index=episode.house_index)

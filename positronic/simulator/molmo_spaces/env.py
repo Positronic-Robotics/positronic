@@ -121,12 +121,12 @@ class MolmoSpacesEnv(EnvProtocol):
         cfg = _DroidPickEvalConfig()
         # Determinism enters at sampler construction (seed_task_sampling); the token's seed overrides the spec's.
         cfg.seed = int(seed) if seed is not None else (episode.seed if episode.seed is not None else 42)
-        # The sim owns the episode horizon: it is part of the task definition, so resolve it the way MolmoSpaces'
-        # native runner does (``determine_task_horizon``) — the per-episode ``task_horizon_sec`` converted to
-        # steps at the eval's policy period. With ``task_horizon`` set, the task enforces it and ``is_done``
-        # reports expiry, so a horizon-expired trial ends with a terminal ``done`` exactly as the native
-        # benchmark scores it. The harness ``Task.timeout`` is only a weaker safety net above this horizon.
-        cfg.task_horizon = _resolve_task_horizon(episode, cfg.policy_dt_ms)
+        # The sim owns the episode horizon: it is part of the task definition, so resolve the benchmark's own
+        # ``task_horizon_sec`` into steps (``mapping.resolve_task_horizon_steps``; DROID Pick = 20 s -> 303 steps).
+        # With ``task_horizon`` set, the task enforces it and ``is_done`` reports expiry, so a horizon-expired
+        # trial ends with a terminal ``done`` exactly as the native benchmark scores it. The harness
+        # ``Task.timeout`` is only a weaker safety net above this horizon.
+        cfg.task_horizon = mapping.resolve_task_horizon_steps(episode, cfg.policy_dt_ms)
         self._sampler = JsonEvalTaskSampler(cfg, episode)
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._robot_view = self._task.env.current_robot.robot_view
@@ -205,23 +205,6 @@ def observe_payload(robot_view: Any, env_obs: dict[str, Any], camera_names: list
     for name in camera_names:
         payload[name] = np.ascontiguousarray(env_obs[name])
     return payload
-
-
-def _resolve_task_horizon(episode: Any, policy_dt_ms: float) -> int:
-    """The episode's native horizon in policy steps, mirroring MolmoSpaces' ``determine_task_horizon``.
-
-    The horizon lives in the episode's task spec as ``task_horizon_sec`` (sim-seconds) and converts to steps at
-    the eval's policy period — the same ``round(sec * 1000 / policy_dt_ms)`` the native runner applies. A
-    benchmark whose task carries no ``task_horizon_sec`` fails loud here, exactly as the native runner does
-    without an explicit override: the horizon is part of the task definition, not a value the sim may default.
-    """
-    horizon_sec = episode.task.get('task_horizon_sec')
-    if horizon_sec is None:
-        raise ValueError(
-            f'benchmark episode (house {episode.house_index}) carries no task_horizon_sec; the horizon is part '
-            'of the task definition and the sim cannot default it — add task_horizon_sec to the benchmark task'
-        )
-    return round(horizon_sec * 1000.0 / policy_dt_ms)
 
 
 def _is_rgb_frame(value: Any) -> bool:
