@@ -67,8 +67,10 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
 
     @property
     def horizon(self) -> float | None:
-        """The env's sim-enforced episode horizon (sim-seconds) from the latest ``reset``, or ``None`` if it
-        enforces none. A client's ``Task`` exposes this so the harness can reject a timeout that isn't weaker."""
+        """The trial's minimum time budget in sim-seconds from the latest ``reset``, or ``None`` if the env
+        enforces no horizon: the env's own horizon plus the one control period this proxy spends publishing
+        frame-0 before the first step. A client's ``Task`` exposes it so the harness can reject a timeout that is
+        not strictly longer — the frame-0 tick is included so that floor is exact, not one tick short."""
         return self._horizon
 
     def reset(self, context: dict[str, Any]) -> None:
@@ -91,7 +93,11 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._frame = self._conn.reset(self._adapter.reset_token(context))
         self._meta = self._frame['meta']
         self._robot_meta = self._frame['robot_meta']
-        self._horizon = self._frame.get('horizon')  # optional: only envs that enforce a horizon report one
+        # Optional: only envs that enforce a horizon report one. Fold in the one control period this proxy spends
+        # publishing frame-0 before the first step — the env reaches its horizon a tick after the harness arms the
+        # deadline, so the timeout floor must clear the horizon plus that tick, not the bare horizon.
+        sim_horizon = self._frame.get('horizon')
+        self._horizon = None if sim_horizon is None else sim_horizon + self._frame['control_dt']
         self._reset_pending = True
         self._active = True
         # Clear any terminal the previous trial left on the wire: the env can reach ``done`` while the proxy
