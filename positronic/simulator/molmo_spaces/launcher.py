@@ -50,15 +50,18 @@ def _checkout_lock() -> Iterator[None]:
         yield
 
 
-def _spawn(host: str, port: int, benchmark_dir: Path) -> subprocess.Popen:
+def ensure_molmo_venv() -> Path:
+    """The MolmoSpaces venv python, after ensuring the pinned checkout and its installed stack exist.
+
+    Install the stack before returning: a cold first install far exceeds any client's connect deadline, which
+    should only cover the sim's boot. Install the ``mujoco`` extra explicitly into a venv the way MolmoSpaces'
+    own image does, rather than ``uv sync`` — which also resolves the ``curobo`` extra, a CUDA build that needs a
+    GPU toolchain and is not on the eval task path. Both steps are idempotent and fast when warm. MolmoSpaces
+    ships no uv.lock, so the install re-resolves on every fresh box.
+    """
     venv = _MOLMO_SRC / '.venv'
     with _checkout_lock():
         src = ensure_pinned_checkout(_MOLMO_REPO, _MOLMO_COMMIT, _MOLMO_SRC)
-        # Install the stack before spawning: a cold first install far exceeds the client's connect deadline,
-        # which should only cover the sim's boot. Install the ``mujoco`` extra explicitly into a venv the way
-        # MolmoSpaces' own image does, rather than ``uv sync`` — which also resolves the ``curobo`` extra, a CUDA
-        # build that needs a GPU toolchain and is not on the eval task path. Both steps are idempotent and fast
-        # when warm. MolmoSpaces ships no uv.lock, so the install re-resolves on every fresh box.
         if not venv.exists():
             subprocess.run(['uv', 'venv', '--python', _MOLMO_PYTHON, str(venv)], check=True)
         subprocess.run(
@@ -67,8 +70,24 @@ def _spawn(host: str, port: int, benchmark_dir: Path) -> subprocess.Popen:
             env={**os.environ, 'VIRTUAL_ENV': str(venv)},
             check=True,
         )
+    return venv / 'bin' / 'python'
+
+
+def molmo_subprocess_env() -> dict[str, str]:
+    """The environment a molmo-venv script runs under: the positronic-free ``env_server``/``mapping`` on
+    PYTHONPATH and a GL backend. GPU OpenGL by default; a GPU-less box exports MUJOCO_GL=osmesa, or relies on
+    mesa's software EGL, for CPU rendering."""
+    return {
+        **os.environ,
+        'PYTHONPATH': os.pathsep.join([str(_ENV_SERVER_DIR), str(_MAPPING_DIR)]),
+        'MUJOCO_GL': os.environ.get('MUJOCO_GL', 'egl'),
+    }
+
+
+def _spawn(host: str, port: int, benchmark_dir: Path) -> subprocess.Popen:
+    python = ensure_molmo_venv()
     command = [
-        str(venv / 'bin' / 'python'),
+        str(python),
         str(_ENV_SCRIPT),
         '--host',
         host,
@@ -77,14 +96,7 @@ def _spawn(host: str, port: int, benchmark_dir: Path) -> subprocess.Popen:
         '--benchmark_dir',
         str(benchmark_dir),
     ]
-    env = {
-        **os.environ,
-        'PYTHONPATH': os.pathsep.join([str(_ENV_SERVER_DIR), str(_MAPPING_DIR)]),
-        # GPU OpenGL by default; a GPU-less box exports MUJOCO_GL=osmesa, or relies on mesa's software EGL, for
-        # CPU rendering.
-        'MUJOCO_GL': os.environ.get('MUJOCO_GL', 'egl'),
-    }
-    return subprocess.Popen(command, env=env)
+    return subprocess.Popen(command, env=molmo_subprocess_env())
 
 
 def serve_molmo_spaces(benchmark_dir: Path, host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
