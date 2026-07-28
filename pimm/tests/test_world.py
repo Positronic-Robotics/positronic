@@ -226,7 +226,10 @@ class TestWorld:
             # We have to set the private event manually, because out of the scope of the context manager
             # we can't access exit code of the process
             world._stop_event.set()
-            world.background_processes[0].join(timeout=0.5)
+            # The child is spawned, so it boots a fresh interpreter and imports this module before it can
+            # observe the stop event — on a slow runner that outlasts any tight deadline. `join` returns the
+            # moment it exits, so a generous ceiling costs a passing run nothing.
+            world.background_processes[0].join(timeout=30)
             assert not world.background_processes[0].is_alive()
             assert world.background_processes[0].exitcode == 0
 
