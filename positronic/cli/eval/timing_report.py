@@ -139,9 +139,11 @@ def _gpu_summary_from_stats(stats: list[dict], pass_windows: list[tuple[int, int
         utils.extend(float(gpu['util_pct']) for gpu in gpus)
         if gpus:
             mem.append(sum(float(gpu['mem_used_b']) for gpu in gpus))
-        proc_per_gpu = [float(gpu['proc_mem_b']) for gpu in gpus if gpu.get('proc_mem_b') is not None]
-        if proc_per_gpu:
-            proc.append(sum(proc_per_gpu))
+        # Box-wide process VRAM needs every GPU attributed; a sample missing any device's ``proc_mem_b`` is
+        # incomplete for the box total and contributes nothing, so the peak is never an undercount from a
+        # partial sum. If no sample is complete, ``proc`` stays empty and the peak reads ``None``.
+        if gpus and all(gpu.get('proc_mem_b') is not None for gpu in gpus):
+            proc.append(sum(float(gpu['proc_mem_b']) for gpu in gpus))
     if not utils and not mem:
         return None
     return GpuSummary(
