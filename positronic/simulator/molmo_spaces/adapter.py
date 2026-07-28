@@ -10,6 +10,7 @@ from typing import Any
 
 import pimm
 from positronic import geom
+from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.mujoco.sim import MujocoFrankaState
@@ -30,7 +31,7 @@ class MolmoAdapter(WireCommandAdapter):
     def _reset_token(self, context: dict[str, Any]) -> Any:
         # The benchmark episode selector rides the token: env.py loads the benchmark once and builds the task
         # for this episode index, seeding from the spec (``eval.seed`` overrides the spec's own seed when set).
-        return {'episode_index': context['eval.episode_index'], 'seed': context.get('eval.seed')}
+        return {'episode_index': context[EVAL_EPISODE_INDEX], 'seed': context.get(EVAL_SEED)}
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         # env.py reports the eef pose in the grasp-site world frame; ``eef_quat`` is scalar-first (wxyz, from
