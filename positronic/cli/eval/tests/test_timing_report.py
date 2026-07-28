@@ -258,6 +258,24 @@ def test_parse_dmon_reads_sm_and_fb(tmp_path):
     assert summary.peak_proc_vram_gb is None
 
 
+def test_parse_dmon_multi_gpu_sums_devices_per_cycle(tmp_path):
+    """A multi-GPU dmon log groups device rows into sampling cycles (the gpu index repeating opens the next),
+    and peak VRAM is the max over per-cycle device sums — the box total at one instant, not the largest single
+    device row."""
+    log = tmp_path / 'dmon.log'
+    log.write_text(
+        '# gpu    sm    fb\n'
+        '#  Idx     %    MB\n'
+        '    0    50  1024\n'
+        '    1    50  3072\n'  # cycle 1 total: 4096
+        '    0   100  2048\n'
+        '    1   100  1024\n'  # cycle 2 total: 3072
+    )
+    summary = _parse_dmon(log)
+    assert summary.mean_util_pct == pytest.approx(75.0)
+    assert summary.peak_vram_gb == pytest.approx(4096 / 1024)  # cycle 1's sum, not device 1's 3072 alone
+
+
 def test_parse_dmon_fails_loudly_without_fb(tmp_path):
     log = tmp_path / 'dmon.log'
     log.write_text('# gpu    sm\n#  Idx     %\n    0    50\n')
