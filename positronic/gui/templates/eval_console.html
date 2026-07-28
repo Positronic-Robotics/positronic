@@ -27,15 +27,16 @@
           <div id="stream-status" class="stream-status"></div>
         </figure>
         <aside class="jog" id="jog">
-          <!-- Legends are rendered from KEY_MAP so they cannot drift from the actual bindings. Side-view keys
-               sit above the gripper-view keys, mirroring the vertically-tiled camera stream next to them. -->
-          <section class="jog-section legend" data-camera="side">
-            <h2 class="jog-title">Side view — move</h2>
-            <div class="legend-rows" data-legend="side"></div>
-          </section>
+          <!-- Legends are rendered from KEY_MAP so they cannot drift from the actual bindings. Order mirrors
+               the vertically-tiled camera stream: the DROID embodiment tiles WRIST_IMAGE (gripper view) above
+               EXTERIOR_IMAGE (side view), so the gripper legend sits above the side-view legend. -->
           <section class="jog-section legend" data-camera="gripper">
             <h2 class="jog-title">Gripper view — rotate</h2>
             <div class="legend-rows" data-legend="gripper"></div>
+          </section>
+          <section class="jog-section legend" data-camera="side">
+            <h2 class="jog-title">Side view — move</h2>
+            <div class="legend-rows" data-legend="side"></div>
           </section>
           <section class="jog-section">
             <h2 class="jog-title">Gripper</h2>
@@ -193,6 +194,10 @@
 
       document.addEventListener('keydown', (event) => {
         if (running || isTyping(event.target)) return;
+        // Ignore Ctrl/Meta/Alt combos so browser shortcuts (Ctrl/Cmd+W, Alt+Left, …) never jog the real
+        // arm and we never swallow the intended browser action. Shift is NOT excluded — Shift+Space (open
+        // gripper) is a supported binding.
+        if (event.ctrlKey || event.metaKey || event.altKey) return;
 
         if (event.code === 'KeyF') {
           event.preventDefault();
