@@ -162,8 +162,19 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
     """
     sm_idx: int | None = None
     fb_idx: int | None = None
+    gpu_idx: int | None = None
     utils: list[float] = []
-    fb_mib: list[float] = []
+    # dmon prints one row per device per sampling interval; peak VRAM is the box-wide total at one instant,
+    # so rows group into cycles on the ``gpu`` index (a repeating index opens the next cycle) and the peak is
+    # the max over per-cycle sums — matching the sim summary's per-sample device sum.
+    cycle_fb: dict[str, float] = {}
+    cycle_totals: list[float] = []
+
+    def flush_cycle() -> None:
+        if cycle_fb:
+            cycle_totals.append(sum(cycle_fb.values()))
+            cycle_fb.clear()
+
     for line in log_path.read_text().splitlines():
         stripped = line.strip()
         if not stripped:
@@ -181,18 +192,25 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
                         f'`nvidia-smi dmon -s um` (u=utilisation, m=memory), which emits the `fb` column.'
                     )
                 sm_idx, fb_idx = names.index('sm'), names.index('fb')
+                gpu_idx = names.index('gpu') if 'gpu' in names else None
             continue
         if sm_idx is None or fb_idx is None:
             continue
         row = line.split()
         try:
-            utils.append(float(row[sm_idx]))
-            fb_mib.append(float(row[fb_idx]))
+            sm = float(row[sm_idx])
+            fb = float(row[fb_idx])
+            device = row[gpu_idx] if gpu_idx is not None else '0'
         except (IndexError, ValueError):
             continue
+        if device in cycle_fb:
+            flush_cycle()
+        cycle_fb[device] = fb
+        utils.append(sm)
+    flush_cycle()
     return GpuSummary(
         mean_util_pct=float(np.mean(utils)) if utils else 0.0,
-        peak_vram_gb=(max(fb_mib) / 1024.0) if fb_mib else 0.0,
+        peak_vram_gb=(max(cycle_totals) / 1024.0) if cycle_totals else 0.0,
         peak_proc_vram_gb=None,
     )
 
