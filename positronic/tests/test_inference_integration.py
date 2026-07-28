@@ -242,7 +242,9 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2)
     with pos3.mirror():
         main(
-            policy=StubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0),
+            policy=ChunkedSchedule().wrap(
+                StubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0)
+            ),
             evals=[replace(ev, trials=[{'eval.trial_index': i} for i in range(2)])],
             output_dir=str(tmp_path),
             timing=True,
