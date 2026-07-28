@@ -14,7 +14,7 @@ from positronic.utils.serialization import encode_jpeg
 from .base import Policy, PolicyWrapper, Session
 from .codec import RestrictImageSize
 from .recording import Recorder
-from .spec import DEFAULT_STRIP, from_spec
+from .spec import from_spec
 from .wrappers import ChunkedSchedule
 
 logger = logging.getLogger(__name__)
@@ -117,12 +117,21 @@ class _Endpoint(Policy):
     """The wire connection to one inference server: sessions forward observations under the border's settings.
 
     ``InferenceClient`` reads the server, the model, and the session params off the URL.
-    ``compress_images`` stands in for a server that declares no wire settings of its own.
+    ``compress_images`` and ``strip`` stand in for a server that declares no wire settings of its own.
     """
 
-    def __init__(self, url: str, *, headers: dict[str, str] | None, infer_timeout: float, compress_images: bool | None):
+    def __init__(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None,
+        infer_timeout: float,
+        compress_images: bool | None,
+        strip: tuple[str, ...],
+    ):
         self._client = InferenceClient(url, headers=headers, infer_timeout=infer_timeout)
         self._compress_override = compress_images
+        self._strip_fallback = frozenset(strip)
         # Both filled on first contact: the metadata via a throwaway session if ``meta`` is read before any
         # real one exists, the compression flag from that metadata.
         self._server_meta: dict[str, Any] | None = None
@@ -146,13 +155,9 @@ class _Endpoint(Policy):
         return self._compress
 
     def _strip(self) -> frozenset[str]:
-        """The rig-local keys that stay off the wire: what the server declared, or the standard set.
-
-        A server that declares nothing gets the standard set rather than an empty one, so a rig upgraded
-        ahead of its servers never starts shipping the robot model to one that never asked for it.
-        """
+        """The rig-local keys that stay off the wire: what the server declared, else the caller's stand-in."""
         declared = self.server_meta().get('strip')
-        return frozenset(DEFAULT_STRIP if declared is None else declared)
+        return self._strip_fallback if declared is None else frozenset(declared)
 
     def new_session(self, context=None, now=None) -> RemoteSession:
         # Resolved before connecting, so a session that contradicts the declaration leaves no socket open.
@@ -182,20 +187,24 @@ class RemotePolicy(Policy):
     ``local`` — with the ``image_sizes`` such a server reports bounding the wire either way.
 
     ``local`` and ``compress_images`` stand in for a server that declares neither — see
-    ``_operator_override``. ``recording_dir`` taps the raw and wire boundaries around the stack.
+    ``_operator_override``. ``strip`` names the rig-local observation keys held back from a server that
+    declares no ``strip`` of its own. ``recording_dir`` taps the raw and wire boundaries around the stack.
     """
 
     def __init__(
         self,
         url: str,
         *,
+        strip: tuple[str, ...],
         local: PolicyWrapper | None = None,
         recording_dir: str | None = None,
         headers: dict[str, str] | None = None,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
         compress_images: bool | None = None,
     ):
-        self._endpoint = _Endpoint(url, headers=headers, infer_timeout=infer_timeout, compress_images=compress_images)
+        self._endpoint = _Endpoint(
+            url, headers=headers, infer_timeout=infer_timeout, compress_images=compress_images, strip=strip
+        )
         self._local = local
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
         self._stacked: Policy | None = None

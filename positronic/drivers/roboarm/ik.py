@@ -19,7 +19,7 @@ from positronic import geom
 from positronic.dataset import transforms
 
 
-def _ensure_site(spec, frame):
+def _ensure_site(spec: mj.MjSpec, frame: str) -> None:
     """Ensure ``frame`` is a site in ``spec``, adding one at the body origin when it names a body.
 
     The robot model is the frame registry: a name resolves as a site or a body — the ``end_effector`` link the
@@ -36,7 +36,7 @@ def _ensure_site(spec, frame):
     raise ValueError(f'Frame {frame!r} not found as site or body in model')
 
 
-def _prepare_spec(urdf_xml, frame):
+def _prepare_spec(urdf_xml: str, frame: str) -> mj.MjSpec:
     """Parse URDF or MJCF into an MjSpec, stripping meshes and resolving ``frame`` to a site."""
     root = ET.fromstring(urdf_xml)
     if root.tag == 'robot':
@@ -49,13 +49,13 @@ def _prepare_spec(urdf_xml, frame):
     return spec
 
 
-def _site_transform(data, site_id):
+def _site_transform(data: mj.MjData, site_id: int) -> geom.Transform3D:
     """The world pose of a site as a ``Transform3D``."""
     rotation = geom.Rotation.from_rotation_matrix(data.site_xmat[site_id].reshape(3, 3))
     return geom.Transform3D(data.site_xpos[site_id].copy(), rotation)
 
 
-def _ancestry(model, body_id: int) -> list[int]:
+def _ancestry(model: mj.MjModel, body_id: int) -> list[int]:
     """Body ids from ``body_id`` up to the world, inclusive."""
     chain = [body_id]
     while chain[-1] != 0:
@@ -63,7 +63,7 @@ def _ancestry(model, body_id: int) -> list[int]:
     return chain
 
 
-def _assert_rigidly_connected(model, from_frame: str, to_frame: str, from_body: int, to_body: int) -> None:
+def _assert_rigidly_connected(model: mj.MjModel, from_frame: str, to_frame: str, from_body: int, to_body: int) -> None:
     """Raise unless every joint between the two bodies is fixed, which is what makes one transform stand for all.
 
     Walks both bodies up to their lowest common ancestor; a joint on either leg means the frames move relative to
@@ -82,7 +82,7 @@ def _assert_rigidly_connected(model, from_frame: str, to_frame: str, from_body: 
 
 
 @lru_cache(maxsize=8)
-def frame_transform(urdf_xml, from_frame, to_frame):
+def frame_transform(urdf_xml: str, from_frame: str, to_frame: str) -> geom.Transform3D:
     """The rigid transform expressing ``to_frame`` relative to ``from_frame`` in a robot model.
 
     A pose measured in ``from_frame`` (e.g. the recorded ``ee_pose`` at ``control_frame``) composes to

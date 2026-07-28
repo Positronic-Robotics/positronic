@@ -13,12 +13,6 @@ _FLANGE_LINK = 'link8'
 # (a +45deg Z, i.e. 90deg off the franka ``end_effector`` frame).
 _2F85_MOUNT_RPY = '0 0 0.7853981634'
 
-# The DROID/RoboLab end-effector control frame ``droid_eef``, relative to the franka flange (``link8``). RoboLab
-# reports and accepts Cartesian poses in it (``eef_frame`` = its ``Robotiq_2F_85/base_link`` ∘ ``EEF_OFFSET_ROT``).
-# Measured off RoboLab's DROID USD (``franka_robotiq_2f_85_flattened.usd``): 18.17mm along the flange Z, +90deg Z.
-_DROID_EEF_XYZ = '0 0 0.01817402261'
-_DROID_EEF_RPY = '0 0 1.5707963268'
-
 
 def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
     """One 2F-85 finger as URDF rows. ``sign`` mirrors the y-offsets and ``base_rpy`` (180deg Z on the
@@ -80,7 +74,10 @@ _ROBOTIQ_2F85 = [
     ('gripper_base', 'gripper_base_mount', None, '0 0 0.0038', '0 0 -1.5707963268', None, 'base.stl', None),
     *_2f85_finger('right', 1, '0 0 0'),
     *_2f85_finger('left', -1, '0 0 3.1415926536'),
-    ('droid_eef', _FLANGE_LINK, None, _DROID_EEF_XYZ, _DROID_EEF_RPY, None, None, None),
+    # The DROID/RoboLab end-effector control frame. RoboLab reports and accepts Cartesian poses in it
+    # (``eef_frame`` = its ``Robotiq_2F_85/base_link`` ∘ ``EEF_OFFSET_ROT``); measured off RoboLab's DROID USD
+    # (``franka_robotiq_2f_85_flattened.usd``) as 18.17mm along the flange Z and +90deg about it.
+    ('droid_eef', _FLANGE_LINK, None, '0 0 0.01817402261', '0 0 1.5707963268', None, None, None),
 ]
 _ROBOTIQ_2F85_JOINTS = [row[2] for row in _ROBOTIQ_2F85 if row[2]]
 

@@ -28,7 +28,7 @@ def _mock_remote_policy(metadata=None, infer_return=None, **kwargs):
     mock_ws = _mock_ws_session(metadata)
     if infer_return is not None:
         mock_ws.infer.return_value = infer_return
-    policy = RemotePolicy('localhost:0', **kwargs)
+    policy = RemotePolicy('localhost:0', strip=DEFAULT_STRIP, **kwargs)
     policy._endpoint._client = MagicMock()
     policy._endpoint._client.new_session.return_value = mock_ws
     return policy, mock_ws
@@ -211,7 +211,7 @@ class TestInferenceClientUrl:
 
 def test_remote_policy_hands_the_url_and_headers_to_the_client():
     headers = {'Modal-Key': 'k'}
-    client = RemotePolicy('https://example.com/api/v1/session/10000', headers=headers)._endpoint._client
+    client = RemotePolicy('https://example.com/api/v1/session/10000', strip=(), headers=headers)._endpoint._client
     assert client is not None
     assert client.session_url == 'wss://example.com/api/v1/session/10000'
     assert client.headers == headers
@@ -434,7 +434,7 @@ def test_remote_policy_lifecycle(inference_server, mock_policy):
     """RemotePolicy against a live server whose pipeline declares a chunked_schedule local stack."""
     host, port = inference_server
 
-    policy = RemotePolicy(f'{host}:{port}')
+    policy = RemotePolicy(f'{host}:{port}', strip=())
     session = policy.new_session(now=lambda: 0.0)
 
     meta = session.meta
@@ -457,7 +457,7 @@ def test_remote_policy_lifecycle(inference_server, mock_policy):
 def test_remote_session_meta(inference_server):
     """Session meta must include server metadata."""
     host, port = inference_server
-    policy = RemotePolicy(f'{host}:{port}')
+    policy = RemotePolicy(f'{host}:{port}', strip=())
     session = policy.new_session(now=lambda: 0.0)
 
     meta = session.meta

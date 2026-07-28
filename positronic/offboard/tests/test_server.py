@@ -248,7 +248,7 @@ def test_in_process_equals_remote_for_same_pipeline(start_server):
     clock = [100.0]
 
     host, port, _server = start_server(pipeline())
-    remote_session = RemotePolicy(f'{host}:{port}').new_session(now=lambda: clock[0])
+    remote_session = RemotePolicy(f'{host}:{port}', strip=()).new_session(now=lambda: clock[0])
 
     local_session = inline(pipeline()).new_session(now=lambda: clock[0])
 
