@@ -21,6 +21,11 @@ from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Grou
 from positronic.policy.base import PAR, SEQ, DelegatingSession, PolicyWrapper, Session, _ComposedWrapper
 from positronic.utils import merge_dicts
 
+# LeRobot's reserved dataset column for the language prompt, and the default model-input field the codecs
+# emit it under. Distinct from the raw wire key ``keys.TASK`` the prompt is read from — same string, different
+# namespace (a checkpoint may serve the prompt under another field, e.g. openpi's ``prompt``).
+LEROBOT_TASK = 'task'
+
 
 def lerobot_state(dim: int, names: list[str] | None = None) -> dict[str, Any]:
     """LeRobot feature descriptor for a state vector."""

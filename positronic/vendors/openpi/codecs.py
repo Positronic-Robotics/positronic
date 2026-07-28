@@ -29,7 +29,7 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
-from positronic.policy.codec import Codec, lerobot_image, lerobot_state
+from positronic.policy.codec import LEROBOT_TASK, Codec, lerobot_image, lerobot_state
 from positronic.policy.observation import ObservationCodec as GenericObservationCodec
 
 
@@ -52,7 +52,7 @@ class ObservationCodec(Codec):
             'observation.state': self._derive_state,
             'observation.images.left': partial(self._derive_image, wrist_camera),
             'observation.images.side': partial(self._derive_image, exterior_camera),
-            'task': Get(keys.TASK, ''),
+            LEROBOT_TASK: Get(keys.TASK, ''),
         }
 
         state_dim = sum(state_features.values())

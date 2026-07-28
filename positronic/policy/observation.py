@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from functools import partial
 from typing import Any
 
@@ -9,7 +10,7 @@ from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive
-from positronic.policy.codec import Codec, lerobot_image, lerobot_state
+from positronic.policy.codec import LEROBOT_TASK, Codec, lerobot_image, lerobot_state
 
 
 class ObservationCodec(Codec):
@@ -27,7 +28,7 @@ class ObservationCodec(Codec):
         self,
         state: dict[str, dict[str, int]],
         images: dict[str, tuple[str, tuple[int, int]]],
-        task_field: str = 'task',
+        task_field: str = LEROBOT_TASK,
         lowercase_task: bool = False,
     ):
         self._state = state
@@ -35,11 +36,13 @@ class ObservationCodec(Codec):
         self._task_field = task_field
         self._lowercase_task = lowercase_task
 
-        self._derive_transforms = {k: partial(self._derive_state, k) for k in state.keys()}
+        self._derive_transforms: dict[str, Callable[[Episode], Any]] = {
+            k: partial(self._derive_state, k) for k in state.keys()
+        }
         self._derive_transforms.update({k: partial(self._derive_image, k) for k in images.keys()})
         # Lowercase the training task the same way ``encode`` lowercases the served prompt, so a codec with
         # ``lowercase_task`` trains and infers on one text distribution (the ``Codec`` same-keys contract).
-        self._derive_transforms['task'] = self._derive_task
+        self._derive_transforms[LEROBOT_TASK] = self._derive_task
 
         lerobot_features: dict[str, Any] = {}
         for name, features in state.items():
@@ -57,9 +60,11 @@ class ObservationCodec(Codec):
         input_key, (width, height) = self._image_configs[out_name]
         return image.resize_with_pad(width, height, signal=episode[input_key])
 
-    def _derive_task(self, episode: Episode) -> Any:
-        task = episode[keys.TASK] if keys.TASK in episode else ''
+    def _normalize_task(self, task: str) -> str:
         return task.lower() if self._lowercase_task else task
+
+    def _derive_task(self, episode: Episode) -> Any:
+        return self._normalize_task(episode[keys.TASK] if keys.TASK in episode else '')
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
         return {}
@@ -68,8 +73,7 @@ class ObservationCodec(Codec):
         obs: dict[str, Any] = {}
 
         if keys.TASK in inputs:
-            task = inputs[keys.TASK]
-            obs[self._task_field] = task.lower() if self._lowercase_task else task
+            obs[self._task_field] = self._normalize_task(inputs[keys.TASK])
 
         for out_name, (input_key, (width, height)) in self._image_configs.items():
             if input_key not in inputs:
