@@ -18,46 +18,52 @@ def test_nested_spans_round_trip(tmp_path):
     under episode, episode under the pass), hex ids, and decoded attributes."""
     with telemetry.bind(tmp_path, 'harness', 'run-xyz'):
         with telemetry.eval_pass(**{'run.id': 'run-xyz', 'policy': 'stub'}):
-            episode = telemetry.begin_episode(**{'episode.index': 0})
-            with telemetry.span('reset'):
+            episode = telemetry.begin_episode(**{telemetry.ATTR_EPISODE_INDEX: 0})
+            with telemetry.span(telemetry.SPAN_RESET):
                 pass
-            with telemetry.span('env.step'):
-                with telemetry.span('materialize'):
+            with telemetry.span(telemetry.SPAN_ENV_STEP):
+                with telemetry.span(telemetry.SPAN_MATERIALIZE):
                     pass
-            telemetry.end_episode(episode, **{'episode.steps': 5, 'episode.virtual_s': 1.5})
+            telemetry.end_episode(episode, **{telemetry.ATTR_EPISODE_STEPS: 5, telemetry.ATTR_EPISODE_VIRTUAL_S: 1.5})
 
     spans_path = tmp_path / 'telemetry' / 'harness.spans.jsonl'
     spans = _spans_by_name(spans_path)
-    assert set(spans) == {'eval.pass', 'episode', 'reset', 'env.step', 'materialize'}
+    assert set(spans) == {
+        telemetry.SPAN_EVAL_PASS,
+        telemetry.SPAN_EPISODE,
+        telemetry.SPAN_RESET,
+        telemetry.SPAN_ENV_STEP,
+        telemetry.SPAN_MATERIALIZE,
+    }
 
     # Hex ids: 16 nibbles for a span id, and every id parses as hex.
     for rec in spans.values():
         assert len(rec.span_id) == 16
         int(rec.span_id, 16)
 
-    assert spans['eval.pass'].parent_id is None
-    assert spans['episode'].parent_id == spans['eval.pass'].span_id
-    assert spans['reset'].parent_id == spans['episode'].span_id
-    assert spans['env.step'].parent_id == spans['episode'].span_id
-    assert spans['materialize'].parent_id == spans['env.step'].span_id
+    assert spans[telemetry.SPAN_EVAL_PASS].parent_id is None
+    assert spans[telemetry.SPAN_EPISODE].parent_id == spans[telemetry.SPAN_EVAL_PASS].span_id
+    assert spans[telemetry.SPAN_RESET].parent_id == spans[telemetry.SPAN_EPISODE].span_id
+    assert spans[telemetry.SPAN_ENV_STEP].parent_id == spans[telemetry.SPAN_EPISODE].span_id
+    assert spans[telemetry.SPAN_MATERIALIZE].parent_id == spans[telemetry.SPAN_ENV_STEP].span_id
 
-    assert spans['eval.pass'].attrs['policy'] == 'stub'
-    assert spans['episode'].attrs['episode.steps'] == 5
-    assert spans['episode'].attrs['episode.virtual_s'] == 1.5
-    assert spans['episode'].end_ns >= spans['episode'].start_ns
+    assert spans[telemetry.SPAN_EVAL_PASS].attrs['policy'] == 'stub'
+    assert spans[telemetry.SPAN_EPISODE].attrs[telemetry.ATTR_EPISODE_STEPS] == 5
+    assert spans[telemetry.SPAN_EPISODE].attrs[telemetry.ATTR_EPISODE_VIRTUAL_S] == 1.5
+    assert spans[telemetry.SPAN_EPISODE].end_ns >= spans[telemetry.SPAN_EPISODE].start_ns
 
 
 def test_discarded_episode_marked_aborted(tmp_path):
     with telemetry.bind(tmp_path, 'harness', 'run-abort'):
-        episode = telemetry.begin_episode(**{'episode.index': 0})
+        episode = telemetry.begin_episode(**{telemetry.ATTR_EPISODE_INDEX: 0})
         telemetry.discard_episode(episode)
     spans = _spans_by_name(tmp_path / 'telemetry' / 'harness.spans.jsonl')
-    assert spans['episode'].attrs['episode.aborted'] is True
+    assert spans[telemetry.SPAN_EPISODE].attrs[telemetry.ATTR_EPISODE_ABORTED] is True
 
 
 def test_unbound_span_is_inert(tmp_path):
     """Off ``--timing`` nothing binds: the span helpers no-op, write no file, and raise nothing."""
-    with telemetry.span('reset'):
+    with telemetry.span(telemetry.SPAN_RESET):
         pass
     episode = telemetry.begin_episode()
     telemetry.end_episode(episode)
@@ -98,7 +104,7 @@ def test_failed_pass_exported_and_stamped(tmp_path):
                 raise RuntimeError('sim died')
 
     spans = {s.name: s for s in telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl')}
-    assert spans['eval.pass'].attrs.get('pass.failed') is True
+    assert spans[telemetry.SPAN_EVAL_PASS].attrs.get(telemetry.ATTR_PASS_FAILED) is True
 
 
 def test_unbound_span_never_touches_global_tracer(monkeypatch):
@@ -109,7 +115,7 @@ def test_unbound_span_never_touches_global_tracer(monkeypatch):
         raise AssertionError('unbound telemetry must not consult the global tracer provider')
 
     monkeypatch.setattr(telemetry.trace, 'get_tracer', _boom)
-    with telemetry.span('reset', **{'episode.index': 0}):
+    with telemetry.span(telemetry.SPAN_RESET, **{telemetry.ATTR_EPISODE_INDEX: 0}):
         pass
 
 
@@ -118,15 +124,15 @@ def test_per_tick_span_ignores_foreign_ambient_span(tmp_path):
     per-tick spans: they parent to the episode in flight, so the report still sees them."""
     foreign = SdkTracerProvider()
     with telemetry.bind(tmp_path, 'harness', 'run-foreign'):
-        episode = telemetry.begin_episode(**{'episode.index': 0})
+        episode = telemetry.begin_episode(**{telemetry.ATTR_EPISODE_INDEX: 0})
         with foreign.get_tracer('host-app').start_as_current_span('host-span'):
-            with telemetry.span('env.step'):
+            with telemetry.span(telemetry.SPAN_ENV_STEP):
                 pass
-        telemetry.end_episode(episode, **{'episode.steps': 1, 'episode.virtual_s': 0.0})
+        telemetry.end_episode(episode, **{telemetry.ATTR_EPISODE_STEPS: 1, telemetry.ATTR_EPISODE_VIRTUAL_S: 0.0})
 
     spans = {s.name: s for s in telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl')}
     assert 'host-span' not in spans  # the foreign span belongs to the host's provider, not our file
-    assert spans['env.step'].parent_id == spans['episode'].span_id
+    assert spans[telemetry.SPAN_ENV_STEP].parent_id == spans[telemetry.SPAN_EPISODE].span_id
 
 
 def _install_fake_nvml(monkeypatch):
@@ -226,12 +232,12 @@ def test_stats_sampler_thread_writes_lines(tmp_path, monkeypatch):
 def test_readers_tolerate_truncated_final_line(tmp_path):
     spans_path = tmp_path / 'telemetry' / 'harness.spans.jsonl'
     with telemetry.bind(tmp_path, 'harness', 'run-trunc'):
-        with telemetry.span('reset'):
+        with telemetry.span(telemetry.SPAN_RESET):
             pass
     with open(spans_path, 'a') as file:
         file.write('{"resourceSpans": [{"scopeSpans": [{"spans": [{"nam')  # crash mid-write
     names = [rec.name for rec in telemetry.read_spans(spans_path)]
-    assert names == ['reset']
+    assert names == [telemetry.SPAN_RESET]
 
     stats_path = tmp_path / 'stats.jsonl'
     stats_path.write_text('{"t_ns": 1, "gpus": []}\n{"t_ns": 2, "cpu_sy')

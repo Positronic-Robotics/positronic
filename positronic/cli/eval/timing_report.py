@@ -19,7 +19,24 @@ import configuronic as cfn
 import numpy as np
 import pos3
 
-from positronic.telemetry import HARNESS_PROCESS, TELEMETRY_SUBDIR, SpanRec, read_spans, read_stats
+from positronic.telemetry import (
+    ATTR_EPISODE_ABORTED,
+    ATTR_EPISODE_PARTIAL,
+    ATTR_EPISODE_VIRTUAL_S,
+    ATTR_PASS_FAILED,
+    HARNESS_PROCESS,
+    SPAN_ENV_STEP,
+    SPAN_EPISODE,
+    SPAN_EVAL_PASS,
+    SPAN_MATERIALIZE,
+    SPAN_POLICY_INFER,
+    SPAN_RECORD_IO,
+    SPAN_RESET,
+    TELEMETRY_SUBDIR,
+    SpanRec,
+    read_spans,
+    read_stats,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -243,23 +260,23 @@ class _EpisodeTiming:
 
 def _episode_timing(episode: SpanRec, children: dict[str, list[SpanRec]]) -> _EpisodeTiming:
     kids = children.get(episode.span_id, [])
-    reset_s = sum(_dur_s(k) for k in kids if k.name == 'reset')
-    env_step_s = sum(_dur_s(k) for k in kids if k.name == 'env.step')
-    record_io_s = sum(_dur_s(k) for k in kids if k.name == 'record.io')
-    infer_ms = [_dur_s(k) * 1000.0 for k in kids if k.name == 'policy.infer']
+    reset_s = sum(_dur_s(k) for k in kids if k.name == SPAN_RESET)
+    env_step_s = sum(_dur_s(k) for k in kids if k.name == SPAN_ENV_STEP)
+    record_io_s = sum(_dur_s(k) for k in kids if k.name == SPAN_RECORD_IO)
+    infer_ms = [_dur_s(k) * 1000.0 for k in kids if k.name == SPAN_POLICY_INFER]
     materialize_s = sum(
         _dur_s(child)
         for k in kids
-        if k.name == 'env.step'
+        if k.name == SPAN_ENV_STEP
         for child in children.get(k.span_id, [])
-        if child.name == 'materialize'
+        if child.name == SPAN_MATERIALIZE
     )
     policy_wait_s = sum(infer_ms) / 1000.0
     wall_s = _dur_s(episode)
     measured = reset_s + env_step_s + record_io_s + policy_wait_s
     return _EpisodeTiming(
         wall_s=wall_s,
-        virtual_s=float(episode.attrs.get('episode.virtual_s', 0.0)),
+        virtual_s=float(episode.attrs.get(ATTR_EPISODE_VIRTUAL_S, 0.0)),
         reset_s=reset_s,
         env_step_s=env_step_s,
         materialize_s=materialize_s,
@@ -281,7 +298,9 @@ def _env_step_split(spans: list[SpanRec], episodes: list[SpanRec], env_step_sum:
         return any(e.start_ns <= ts_ns <= e.end_ns for e in episodes)
 
     server_steps = [
-        s for s in spans if s.name == 'env.step' and s.process != HARNESS_PROCESS and in_completed_episode(s.start_ns)
+        s
+        for s in spans
+        if s.name == SPAN_ENV_STEP and s.process != HARNESS_PROCESS and in_completed_episode(s.start_ns)
     ]
     server_step_sum = sum(_dur_s(s) for s in server_steps)
     if not server_step_sum or not env_step_sum:
@@ -313,19 +332,19 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
     # aborted episode's wall is subtracted out: the episode is dropped as invalid data (its virtual time, phases
     # and infers never reduce), so its wall must also leave every W_pass-normalised figure rather than land in
     # ``between_episodes`` and deflate the policy-busy / real-time factors.
-    passes = [p for p in spans if p.name == 'eval.pass']
+    passes = [p for p in spans if p.name == SPAN_EVAL_PASS]
     pass_ids = {p.span_id for p in passes}
     aborted_wall = float(
         sum(
             _dur_s(s)
             for s in spans
-            if s.name == 'episode' and s.attrs.get('episode.aborted', False) and s.parent_id in pass_ids
+            if s.name == SPAN_EPISODE and s.attrs.get(ATTR_EPISODE_ABORTED, False) and s.parent_id in pass_ids
         )
     )
     wall_pass = float(sum(_dur_s(p) for p in passes)) - aborted_wall
     # A failed pass still reduces — its partial window, episodes and samples are real recorded data — but
     # never silently: the mix is named so a skewed-looking split has its explanation on the console.
-    failed = sum(bool(p.attrs.get('pass.failed', False)) for p in passes)
+    failed = sum(bool(p.attrs.get(ATTR_PASS_FAILED, False)) for p in passes)
     if failed:
         logger.warning(
             '%d of %d pass(es) failed mid-run; their partial windows are included in the report', failed, len(passes)
@@ -333,11 +352,11 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
     # Only episodes under a completed pass reduce: a killed run flushes its episodes but never writes its
     # ``eval.pass`` span, and such orphans would inflate every pass-normalized figure when the directory is
     # reused for a later run.
-    episodes = [s for s in spans if s.name == 'episode' and not s.attrs.get('episode.aborted', False)]
+    episodes = [s for s in spans if s.name == SPAN_EPISODE and not s.attrs.get(ATTR_EPISODE_ABORTED, False)]
     # A partial episode (its rollout failed mid-run) is kept, not dropped: its finished phases are real wall
     # and must attribute rather than fall into ``between_episodes``. Named, like ``pass.failed``, so the split
     # is read with its incomplete window in view.
-    partial = sum(bool(e.attrs.get('episode.partial', False)) for e in episodes)
+    partial = sum(bool(e.attrs.get(ATTR_EPISODE_PARTIAL, False)) for e in episodes)
     if partial:
         logger.warning(
             '%d episode(s) did not run to completion (a failed pass?); their finished phases are included', partial
@@ -422,7 +441,7 @@ def timing_report(run_dir: str, gpu_policy_log: str | None):
     root = Path(pos3.download(run_dir)) if '://' in run_dir else Path(run_dir)
     telemetry_dir = root / TELEMETRY_SUBDIR
     spans = _read_spans_dir(telemetry_dir) if telemetry_dir.is_dir() else []
-    if not any(s.name == 'eval.pass' for s in spans):
+    if not any(s.name == SPAN_EVAL_PASS for s in spans):
         raise ValueError(f'no telemetry under {telemetry_dir} (recorded without --timing?)')
 
     policy_gpu = _parse_dmon(Path(gpu_policy_log)) if gpu_policy_log is not None else None

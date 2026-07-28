@@ -178,7 +178,7 @@ class MujocoSim(pimm.ControlSystem):
                 self._emit_robot_meta()
                 # Frame-0 rendering is part of the reset cost, not overhead: the remote path likewise charges
                 # its reset's rendered first observation to reset, so time this publish there too.
-                with telemetry.span('reset'):
+                with telemetry.span(telemetry.SPAN_RESET):
                     self._publish_frame()
                 continue
             now = clock.now()
@@ -206,7 +206,7 @@ class MujocoSim(pimm.ControlSystem):
             # rendering) to the env step: the remote env-server path times its whole step, which returns
             # rendered observations, so an image-heavy native sim must count rendering here too or its wall
             # split reads rendering as overhead and is not comparable to the remote path.
-            with telemetry.span('env.step'):
+            with telemetry.span(telemetry.SPAN_ENV_STEP):
                 self.step()
                 self.fps_counter.tick()
                 if state_due(now):
