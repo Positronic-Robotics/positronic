@@ -134,12 +134,13 @@ constraint-dependencies = ["cmake<4.3", "evdev<1.9", "numpy<2.5"]
 # instead"), so a wider exclude-newer that admits 0.10+ into the isolated build env breaks the
 # wheel build. Constrain only the build backend, leaving runtime resolution untouched.
 build-constraint-dependencies = ["scikit-build-core<0.10"]
-# Pin third-party resolution to a fixed point in time so `uv sync --locked` is
-# reproducible across machines and CI regardless of contributors' personal uv
-# config. `uv lock` reads this date, so the lockfile can never drift ahead of
-# it; bump the date and re-run `uv lock` in the same commit to refresh deps.
-# Our own packages (exclude-newer-package below) are exempt so they always
-# resolve to the latest release.
+# Pin third-party resolution to a fixed point in time. This serves two ends. First, reproducibility:
+# `uv sync --locked` resolves identically across machines and CI regardless of contributors' personal uv config,
+# and because `uv lock` reads this date the lockfile can never drift ahead of it. Second, supply-chain safety: it
+# holds third-party deps to at least ~1 week old, so a compromised release has time to be caught and yanked before
+# we would pick it up. That week-long buffer is also why bumping this date to roughly one week before today is
+# generally safe at any time; do it and re-run `uv lock` in the same commit to refresh deps. Our own packages
+# (exclude-newer-package below) are exempt so they always resolve to the latest release.
 exclude-newer = "2026-07-21T00:00:00Z"
 conflicts = [
     [
