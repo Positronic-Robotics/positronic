@@ -291,6 +291,37 @@ def test_partial_per_gpu_proc_vram_excluded_from_peak(tmp_path):
     assert sim.peak_vram_gb == pytest.approx(5.0)  # box-wide mem peak unaffected: sample 1's 2+3 GB
 
 
+def test_omitted_gpu_device_excluded_from_proc_vram_peak(tmp_path):
+    """A device whose NVML query errors mid-run is dropped from the sample, so it carries fewer GPUs than the
+    box holds. Such a sample is incomplete for the box-wide process peak even though every GPU it *does* carry
+    reported ``proc_mem_b`` — its large lone reading must not win over a complete sample (Codex on PR #531)."""
+    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir.mkdir()
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span('eval.pass', 0, 10, 'pass0')])
+    stats = [
+        {  # complete: both GPUs present -> establishes the box's full complement (2) and a 1+2 = 3 GB total
+            't_ns': 1,
+            'gpus': [
+                {'i': 0, 'util_pct': 40.0, 'mem_used_b': 2 * 1024**3, 'proc_mem_b': 1 * 1024**3},
+                {'i': 1, 'util_pct': 60.0, 'mem_used_b': 3 * 1024**3, 'proc_mem_b': 2 * 1024**3},
+            ],
+        },
+        {  # gpu1 omitted (errored mid-run): only one device, so incomplete despite its large 9 GB reading
+            't_ns': 2,
+            'gpus': [{'i': 0, 'util_pct': 80.0, 'mem_used_b': 1 * 1024**3, 'proc_mem_b': 9 * 1024**3}],
+        },
+    ]
+    (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+
+    report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
+
+    sim = report.gpu.sim
+    assert sim is not None
+    # Peak reflects only the complete two-device sample; the omitted-device sample's 9 GB is dropped. Pre-fix,
+    # ``all(...)`` passed over the single present device and the 9 GB won.
+    assert sim.peak_proc_vram_gb == pytest.approx(3.0)
+
+
 def test_gpu_samples_outside_pass_windows_excluded(tmp_path):
     """Stats samples taken outside every completed pass's wall window (an earlier run in a reused directory)
     stay out of the GPU summary — the stats twin of the orphan-episode exclusion."""
