@@ -164,6 +164,21 @@ def test_stats_sample_with_fake_gpu(tmp_path, monkeypatch):
     sampler._nvml.shutdown()
 
 
+def test_stats_sample_treats_nvml_sentinel_as_unavailable(tmp_path, monkeypatch):
+    """A driver that cannot attribute a process's GPU memory returns NVML's uint64 sentinel (~18 EiB), not
+    ``None`` — recording it verbatim would publish garbage as the eval's peak process VRAM. The device reads
+    unavailable (``proc_mem_b`` None) instead (Codex on PR #531)."""
+    _install_fake_nvml(monkeypatch)
+    sentinel_proc = _FakeProc(os.getpid(), telemetry._NVML_VALUE_NOT_AVAILABLE)
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetComputeRunningProcesses', lambda h: [sentinel_proc])
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetGraphicsRunningProcesses', lambda h: [])
+    sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
+    sample = sampler._sample()
+    gpu = sample['gpus'][0]
+    assert gpu['proc_mem_b'] is None  # pre-fix, the sentinel was int()-cast and recorded as ~1.8e19 bytes
+    sampler._nvml.shutdown()
+
+
 def test_stats_sample_skips_failing_device(tmp_path, monkeypatch):
     """A per-device NVML failure (a MIG device refusing utilisation, a transiently lost GPU) skips that device
     but keeps the sample — the stats stream must degrade, never die."""

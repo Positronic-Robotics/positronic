@@ -63,6 +63,10 @@ _current_episode: Span | None = None
 # may have configured OTel's global provider, and an untimed run must not export spans through it.
 _NOOP_TRACER = trace.NoOpTracer()
 
+# NVML's uint64 "value not available" sentinel. On a driver that cannot attribute a process's GPU memory, the
+# query succeeds and pynvml surfaces this raw value in ``usedGpuMemory`` rather than ``None``.
+_NVML_VALUE_NOT_AVAILABLE = 2**64 - 1
+
 
 def _tracer() -> trace.Tracer:
     """The bound provider's tracer while a run is timed, else a private no-op tracer."""
@@ -394,8 +398,17 @@ class _Nvml:
         # report the process's total in each — merge by pid with max, which never double-counts.
         used_by_pid: dict[int, int] = {}
         for proc in procs:
-            if proc.pid in tree_pids and proc.usedGpuMemory is not None:
-                used_by_pid[proc.pid] = max(used_by_pid.get(proc.pid, 0), int(proc.usedGpuMemory))
+            if proc.pid not in tree_pids or proc.usedGpuMemory is None:
+                continue
+            # A driver that cannot attribute this process's memory returns NVML's uint64 sentinel (~18 EiB), not
+            # ``None``. Summing it would publish garbage, so treat it as unattributable: return ``None`` for the
+            # whole device — the same signal as an NVMLError — so the reduce counts the sample as incomplete.
+            if proc.usedGpuMemory == _NVML_VALUE_NOT_AVAILABLE:
+                if not self._proc_mem_warned:
+                    logger.info('telemetry: per-process GPU memory unavailable (NVML sentinel); proc_mem_b left null')
+                    self._proc_mem_warned = True
+                return None
+            used_by_pid[proc.pid] = max(used_by_pid.get(proc.pid, 0), int(proc.usedGpuMemory))
         return sum(used_by_pid.values())
 
     def shutdown(self) -> None:
