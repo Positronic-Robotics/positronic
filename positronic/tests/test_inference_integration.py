@@ -18,7 +18,7 @@ from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
 from positronic.inference import main
-from positronic.policy.tests.test_harness import StubPolicy
+from positronic.policy.tests.test_harness import RemoteStubPolicy, StubPolicy
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.simulator.env_server import telemetry as env_telemetry
 from positronic.simulator.mujoco.sim import MujocoSim
@@ -243,7 +243,7 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     with pos3.mirror():
         main(
             policy=ChunkedSchedule().wrap(
-                StubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0)
+                RemoteStubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0)
             ),
             evals=[replace(ev, trials=[{'eval.trial_index': i} for i in range(2)])],
             output_dir=str(tmp_path),

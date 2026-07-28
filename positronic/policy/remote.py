@@ -1,10 +1,12 @@
 import collections.abc as cabc
 import logging
+import time
 from typing import Any
 
 import numpy as np
 import pos3
 
+from positronic import telemetry
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
@@ -82,7 +84,14 @@ class RemoteSession(Session):
         Single-action server responses are wrapped into a 1-element list to honor
         the ``Session.__call__`` contract (``list[dict] | None``).
         """
-        result = self._session.infer(self._prepare_obs(obs))
+        # The real inference boundary: this round-trips the model, so ``policy.infer`` is timed here and traces
+        # regardless of the wrappers in front. A ``ChunkedSchedule`` replay returns before reaching this session,
+        # so every call here is a real inference; ``finally`` times a raising round-trip (a stalled server) too.
+        infer_start_ns = time.time_ns()
+        try:
+            result = self._session.infer(self._prepare_obs(obs))
+        finally:
+            telemetry.record_span('policy.infer', infer_start_ns, time.time_ns())
         if isinstance(result, dict):
             return [result]
         return result
