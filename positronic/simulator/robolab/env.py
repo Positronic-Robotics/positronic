@@ -183,62 +183,62 @@ class RobolabEnv(EnvProtocol):
         cfg = DifferentialIKControllerCfg(command_type='pose', use_relative_mode=False, ik_method='dls')
         self._ik = DifferentialIKController(cfg, num_envs=1, device=self._env.device)
 
+    @telemetry.traced('env.reset')
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
-        with telemetry.span('env.reset'):
-            key = (token['task'], token['instruction_type'])
-            if key != self._key:
-                self._build(*key)
-                self._key = key
-            else:
-                assert self._env is not None  # the else runs only when a prior reset built the cached env
-                self._env.reset_eval_state()  # unfreeze terminated envs so the next trial runs on the cached env
-            assert self._env is not None  # built above (key change) or already live (cached)
-            # RoboLab's own episode runner resets twice — the first randomizes, the second settles the freshly
-            # placed scene into the sensors (robolab/eval/episode.py).
-            self._env.reset()
-            obs, _extras = self._env.reset()
-            state = token.get('state')
-            if state is not None:
-                # Exact-state replay (a demo's own scene). RoboLab records states env-origin relative
-                # (``scene.get_state(is_relative=True)``), so restore them the same way. The recorded entries
-                # overlay the scene's own post-reset state: ``reset_to`` wants every scene entity, and a
-                # recording may predate entities that never move (e.g. the table joined the scene's rigid
-                # objects for contact sensing after the shipped demos were recorded).
-                merged = self._merged_state(self._env.scene.get_state(is_relative=True), state)
-                obs, _extras = self._env.reset_to(merged, None, is_relative=True)
-            # ``robot_meta`` carries the DROID rig's model (the launcher serialized it, since this server can't
-            # build it); ``meta`` carries the task identity and the resolved instruction. The reset frame's
-            # subtask progress is zeros: the recorder's infos refresh only after a step, so reading them here
-            # would replay the prior trial's final values.
-            return {
-                'obs': self._observe(obs, np.zeros(4, dtype=np.float32)),
-                'meta': self._meta,
-                'robot_meta': self._robot_meta,
-                'control_dt': self._control_dt,
-            }
+        key = (token['task'], token['instruction_type'])
+        if key != self._key:
+            self._build(*key)
+            self._key = key
+        else:
+            assert self._env is not None  # the else runs only when a prior reset built the cached env
+            self._env.reset_eval_state()  # unfreeze terminated envs so the next trial runs on the cached env
+        assert self._env is not None  # built above (key change) or already live (cached)
+        # RoboLab's own episode runner resets twice — the first randomizes, the second settles the freshly
+        # placed scene into the sensors (robolab/eval/episode.py).
+        self._env.reset()
+        obs, _extras = self._env.reset()
+        state = token.get('state')
+        if state is not None:
+            # Exact-state replay (a demo's own scene). RoboLab records states env-origin relative
+            # (``scene.get_state(is_relative=True)``), so restore them the same way. The recorded entries
+            # overlay the scene's own post-reset state: ``reset_to`` wants every scene entity, and a
+            # recording may predate entities that never move (e.g. the table joined the scene's rigid
+            # objects for contact sensing after the shipped demos were recorded).
+            merged = self._merged_state(self._env.scene.get_state(is_relative=True), state)
+            obs, _extras = self._env.reset_to(merged, None, is_relative=True)
+        # ``robot_meta`` carries the DROID rig's model (the launcher serialized it, since this server can't
+        # build it); ``meta`` carries the task identity and the resolved instruction. The reset frame's
+        # subtask progress is zeros: the recorder's infos refresh only after a step, so reading them here
+        # would replay the prior trial's final values.
+        return {
+            'obs': self._observe(obs, np.zeros(4, dtype=np.float32)),
+            'meta': self._meta,
+            'robot_meta': self._robot_meta,
+            'control_dt': self._control_dt,
+        }
 
+    @telemetry.traced('env.step')
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         assert self._env is not None  # step is only served after a reset built the env
-        with telemetry.span('env.step'):
-            # Isaac pauses its timeline while assets stream in; stepping a paused sim stalls, so pump the kit
-            # update loop until it plays again (robolab's episode loop does the same before every step).
-            while not self._timeline.is_playing():
-                self._kit_app.update()
-            act = torch.zeros(1, 8, device=self._env.device)
-            act[0, :7] = self._joint_targets(action['command'])
-            # The binary gripper term closes above 0.5, so the wire grip ([0, 1], 1 = closed) feeds it as-is.
-            act[0, 7] = float(action['grip'])
-            obs, _reward, _term, _trunc, _info = self._env.step(act)
-            # ``done``/``success`` key off RoboLab's frozen-env accounting, not the raw term/trunc flags: a
-            # termination within the first two steps is a physics artifact its env resets in place and keeps
-            # running (never frozen, no verdict), while a real success/time-out freezes the env and records one.
-            done = self._env.all_terminated
-            return {
-                'obs': self._observe(obs, self._subtask_progress()),
-                'done': done,
-                'success': done and bool(self._env.get_env_results()[0]['success']),
-                'control_dt': self._control_dt,
-            }
+        # Isaac pauses its timeline while assets stream in; stepping a paused sim stalls, so pump the kit
+        # update loop until it plays again (robolab's episode loop does the same before every step).
+        while not self._timeline.is_playing():
+            self._kit_app.update()
+        act = torch.zeros(1, 8, device=self._env.device)
+        act[0, :7] = self._joint_targets(action['command'])
+        # The binary gripper term closes above 0.5, so the wire grip ([0, 1], 1 = closed) feeds it as-is.
+        act[0, 7] = float(action['grip'])
+        obs, _reward, _term, _trunc, _info = self._env.step(act)
+        # ``done``/``success`` key off RoboLab's frozen-env accounting, not the raw term/trunc flags: a
+        # termination within the first two steps is a physics artifact its env resets in place and keeps
+        # running (never frozen, no verdict), while a real success/time-out freezes the env and records one.
+        done = self._env.all_terminated
+        return {
+            'obs': self._observe(obs, self._subtask_progress()),
+            'done': done,
+            'success': done and bool(self._env.get_env_results()[0]['success']),
+            'control_dt': self._control_dt,
+        }
 
     def _joint_targets(self, command: dict[str, Any]) -> torch.Tensor:
         """The wire command as the 7 absolute joint targets the jointpos substrate steps."""

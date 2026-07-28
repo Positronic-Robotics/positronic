@@ -11,12 +11,14 @@ flight — so no batch thread and no per-tick allocation churn. ``span`` nests t
 Unbound (no telemetry env vars), every helper is inert.
 """
 
+import functools
 import json
 import os
 import platform
 import socket
 import threading
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -137,6 +139,21 @@ def span(name: str, **attrs: Any):
     finally:
         _stack.pop()
         _write_span(name, span_id, parent_id, start_ns, time.time_ns(), attrs)
+
+
+def traced(name: str, **attrs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Decorator form of ``span`` for a function whose whole body is one span: run the call inside a span
+    named ``name``. Inert while unbound, like ``span``."""
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            with span(name, **attrs):
+                return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 def _write_span(name: str, span_id: str, parent_id: str | None, start_ns: int, end_ns: int, attrs: dict[str, Any]):
