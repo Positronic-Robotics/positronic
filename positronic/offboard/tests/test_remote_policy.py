@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from positronic import keys
+from positronic import keys, telemetry
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
@@ -242,6 +242,30 @@ def test_remote_session_passes_through_none():
 
     session = policy.new_session()
     assert session({}) is None
+
+
+def test_records_infer_span_without_scheduling_wrapper(tmp_path):
+    """The ``policy.infer`` span is recorded at the remote inference boundary even with no scheduling wrapper
+    in front (the server declares an empty stack, so the session is a bare ``RemoteSession``)."""
+    policy, _ = _mock_remote_policy(EMPTY_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}])
+    session = policy.new_session()
+    with telemetry.bind(tmp_path, 'harness', 'run-infer-span'):
+        assert session({'obs_time_ns': 0}) is not None
+    spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
+    assert [s.name for s in spans] == ['policy.infer']
+
+
+def test_records_infer_span_when_inference_raises(tmp_path):
+    """A raising round-trip (a stalled server surfaces ``TimeoutError``) still records its time-to-failure —
+    the span is timed in a ``finally`` — and the exception propagates."""
+    policy, mock_ws = _mock_remote_policy(EMPTY_STACK)
+    mock_ws.infer.side_effect = TimeoutError('server stalled')
+    session = policy.new_session()
+    with telemetry.bind(tmp_path, 'harness', 'run-infer-raise'):
+        with pytest.raises(TimeoutError):
+            session({'obs_time_ns': 0})
+    spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
+    assert [s.name for s in spans] == ['policy.infer']
 
 
 def test_remote_policy_meta_exposes_server_fields():
