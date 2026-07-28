@@ -19,7 +19,7 @@ import configuronic as cfn
 import numpy as np
 import pos3
 
-from positronic.telemetry import HARNESS_PROCESS, SpanRec, read_spans, read_stats
+from positronic.telemetry import HARNESS_PROCESS, TELEMETRY_SUBDIR, SpanRec, read_spans, read_stats
 
 logger = logging.getLogger(__name__)
 
@@ -401,7 +401,7 @@ def timing_report(run_dir: str, gpu_policy_log: str | None):
     the downloaded prefix) — and prints the report.
     """
     root = Path(pos3.download(run_dir)) if '://' in run_dir else Path(run_dir)
-    telemetry_dir = root / 'telemetry'
+    telemetry_dir = root / TELEMETRY_SUBDIR
     spans = _read_spans_dir(telemetry_dir) if telemetry_dir.is_dir() else []
     if not any(s.name == 'eval.pass' for s in spans):
         raise ValueError(f'no telemetry under {telemetry_dir} (recorded without --timing?)')

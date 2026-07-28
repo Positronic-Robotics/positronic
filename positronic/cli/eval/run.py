@@ -19,12 +19,13 @@ from positronic.eval import Embodiment, Eval, Task
 from positronic.gui import dpg_ui
 from positronic.policy.base import SampledPolicy
 from positronic.policy.harness import Harness
+from positronic.simulator.env_server.telemetry import ENV_RUN_ID, ENV_TELEMETRY_DIR
 
 logger = logging.getLogger(__name__)
 
 # The environment a timed run hands a launched env server (read by ``env_server.telemetry.bind_from_env``);
 # snapshotted before a run and restored after it, so a later run in the same process inherits nothing.
-_ENV_TELEMETRY_VARS = ('POSITRONIC_ENV_TELEMETRY_DIR', 'POSITRONIC_RUN_ID')
+_ENV_TELEMETRY_VARS = (ENV_TELEMETRY_DIR, ENV_RUN_ID)
 
 
 @dataclass
@@ -188,13 +189,13 @@ def main(
     if timed_dir is not None:
         # A launched env server (e.g. RoboLab, positronic-free in its own interpreter) writes its own
         # telemetry sidecar; it reads these from the environment its launcher forwards to the subprocess.
-        os.environ['POSITRONIC_ENV_TELEMETRY_DIR'] = str(timed_dir / 'telemetry')
-        os.environ['POSITRONIC_RUN_ID'] = run_id
+        os.environ[ENV_TELEMETRY_DIR] = str(timed_dir / telemetry.TELEMETRY_SUBDIR)
+        os.environ[ENV_RUN_ID] = run_id
     telemetry_cm = (
         telemetry.bind(timed_dir, telemetry.HARNESS_PROCESS, run_id) if timed_dir is not None else nullcontext()
     )
     stats_cm = (
-        telemetry.StatsSampler(timed_dir / 'telemetry' / f'{telemetry.HARNESS_PROCESS}.stats.jsonl')
+        telemetry.StatsSampler(timed_dir / telemetry.TELEMETRY_SUBDIR / f'{telemetry.HARNESS_PROCESS}.stats.jsonl')
         if timed_dir is not None
         else nullcontext()
     )
