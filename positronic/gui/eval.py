@@ -161,7 +161,7 @@ class EvalUI(pimm.ControlSystem):
                 dpg.add_spacer(width=self.size(5))
             dpg.add_spacer(width=self.size(5))
             self._register(
-                dpg.add_button(label='Reset', callback=self.reset, width=self.size(80), height=self.size(32)),
+                dpg.add_button(label='Discard & Home', callback=self.reset, width=self.size(140), height=self.size(32)),
                 [State.WAITING, State.RUNNING],
             )
             dpg.add_spacer(width=self.size(25))

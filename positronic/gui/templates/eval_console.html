@@ -11,8 +11,15 @@
     <div class="console">
       <div class="controls-bar">
         <button class="btn btn-primary" data-action="start">Start</button>
-        <button class="btn btn-ghost" data-action="finish">Finish</button>
-        <button class="btn btn-danger" data-action="abort">Abort</button>
+        <button class="btn btn-ghost" data-action="finish">Save &amp; Home</button>
+        <button class="btn btn-danger" data-action="abort">Discard &amp; Home</button>
+        <div class="mode-chip" title="Toggle with F">
+          <span class="mode-chip-label">Step (F)</span>
+          <div class="jog-toggle" id="scale">
+            <button class="btn btn-ghost jog-btn is-active" data-scale="fine">Fine</button>
+            <button class="btn btn-ghost jog-btn" data-scale="coarse">Coarse</button>
+          </div>
+        </div>
       </div>
       <div class="stage">
         <figure class="camera">
@@ -20,46 +27,19 @@
           <div id="stream-status" class="stream-status"></div>
         </figure>
         <aside class="jog" id="jog">
-          <section class="jog-section">
-            <h2 class="jog-title">Translation</h2>
-            <div class="jog-cross">
-              <button class="btn btn-ghost jog-btn jog-up" data-jog data-axis="x" data-sign="1">+X</button>
-              <button class="btn btn-ghost jog-btn jog-left" data-jog data-axis="y" data-sign="1">+Y</button>
-              <button class="btn btn-ghost jog-btn jog-right" data-jog data-axis="y" data-sign="-1">-Y</button>
-              <button class="btn btn-ghost jog-btn jog-down" data-jog data-axis="x" data-sign="-1">-X</button>
-            </div>
-            <div class="jog-z">
-              <button class="btn btn-ghost jog-btn" data-jog data-axis="z" data-sign="1">+Z</button>
-              <button class="btn btn-ghost jog-btn" data-jog data-axis="z" data-sign="-1">-Z</button>
-            </div>
+          <!-- Legends are rendered from KEY_MAP so they cannot drift from the actual bindings. Side-view keys
+               sit above the gripper-view keys, mirroring the vertically-tiled camera stream next to them. -->
+          <section class="jog-section legend" data-camera="side">
+            <h2 class="jog-title">Side view — move</h2>
+            <div class="legend-rows" data-legend="side"></div>
           </section>
-          <section class="jog-section">
-            <h2 class="jog-title">Rotation</h2>
-            <div class="jog-rot-row">
-              <span class="jog-label">Roll</span>
-              <button class="btn btn-ghost jog-btn" data-jog data-axis="rx" data-sign="-1">-</button>
-              <button class="btn btn-ghost jog-btn" data-jog data-axis="rx" data-sign="1">+</button>
-            </div>
-            <div class="jog-rot-row">
-              <span class="jog-label">Pitch</span>
-              <button class="btn btn-ghost jog-btn" data-jog data-axis="ry" data-sign="-1">-</button>
-              <button class="btn btn-ghost jog-btn" data-jog data-axis="ry" data-sign="1">+</button>
-            </div>
-            <div class="jog-rot-row">
-              <span class="jog-label">Yaw</span>
-              <button class="btn btn-ghost jog-btn" data-jog data-axis="rz" data-sign="-1">-</button>
-              <button class="btn btn-ghost jog-btn" data-jog data-axis="rz" data-sign="1">+</button>
-            </div>
-          </section>
-          <section class="jog-section">
-            <h2 class="jog-title">Scale</h2>
-            <div class="jog-toggle" id="scale">
-              <button class="btn btn-ghost jog-btn is-active" data-scale="fine">Fine</button>
-              <button class="btn btn-ghost jog-btn" data-scale="coarse">Coarse</button>
-            </div>
+          <section class="jog-section legend" data-camera="gripper">
+            <h2 class="jog-title">Gripper view — rotate</h2>
+            <div class="legend-rows" data-legend="gripper"></div>
           </section>
           <section class="jog-section">
             <h2 class="jog-title">Gripper</h2>
+            <div class="legend-rows" data-legend="grip"></div>
             <div class="jog-toggle" id="grip">
               <button class="btn btn-ghost jog-btn" data-grip="0">Open</button>
               <button class="btn btn-ghost jog-btn" data-grip="1">Close</button>
@@ -71,6 +51,40 @@
     </div>
 
     <script>
+      // ─── SCREEN → WORLD KEY MAP ──────────────────────────────────────────────────────────────────────
+      // The ONE place to calibrate manual teleop. Each keyboard `event.code` maps to a world-frame jog
+      // {axis, sign}; the step size comes from the active Fine/Coarse mode, not from here.
+      //
+      // The screen->world axis/sign assignment below is a BEST GUESS. It is only correct if each camera is
+      // mounted the way we assumed (world x = depth toward the wall, y = horizontal-left, z = up). Calibrate
+      // at the rig: press a key, watch the arm, and flip `axis`/`sign` on that one line until it matches.
+      // `glyph`/`label` drive the on-screen legend, so a fixed binding stays self-documenting.
+      const KEY_MAP = {
+        // Side-view camera -> world translation. WASD = the viewing plane, QE = depth.
+        side: {
+          KeyW: { axis: 'z', sign:  1, glyph: 'W', label: 'Up' },              // GUESS
+          KeyS: { axis: 'z', sign: -1, glyph: 'S', label: 'Down' },            // GUESS
+          KeyA: { axis: 'y', sign:  1, glyph: 'A', label: 'Left' },            // GUESS
+          KeyD: { axis: 'y', sign: -1, glyph: 'D', label: 'Right' },           // GUESS
+          KeyQ: { axis: 'x', sign:  1, glyph: 'Q', label: 'Toward wall' },     // GUESS
+          KeyE: { axis: 'x', sign: -1, glyph: 'E', label: 'Away from wall' },  // GUESS
+        },
+        // Gripper-view camera -> world rotation. Arrows = pitch/yaw, Z/X = roll.
+        gripper: {
+          ArrowUp:    { axis: 'ry', sign:  1, glyph: '↑', label: 'Tilt up' },          // GUESS
+          ArrowDown:  { axis: 'ry', sign: -1, glyph: '↓', label: 'Tilt down' },        // GUESS
+          ArrowLeft:  { axis: 'rz', sign:  1, glyph: '←', label: 'Turn left' },        // GUESS
+          ArrowRight: { axis: 'rz', sign: -1, glyph: '→', label: 'Turn right' },       // GUESS
+          KeyZ: { axis: 'rx', sign: -1, glyph: 'Z', label: 'Roll clockwise' },         // GUESS
+          KeyX: { axis: 'rx', sign:  1, glyph: 'X', label: 'Roll counter-clockwise' }, // GUESS
+        },
+      };
+      // Gripper open/close is a fixed convention (grip: 0 = open, 1 = closed), not a calibration guess.
+      const GRIP_KEYS = {
+        Space: { value: 1, glyph: 'Space', label: 'Close' },
+        ShiftSpace: { value: 0, glyph: '⇧ Space', label: 'Open' },
+      };
+
       const jog = document.getElementById('jog');
       let scale = 'fine';
       let running = false;
@@ -81,10 +95,11 @@
         for (const control of jog.querySelectorAll('button, input')) control.disabled = running;
       };
 
+      // ─── Episode control buttons ─────────────────────────────────────────────────────────────────────
       for (const button of document.querySelectorAll('button[data-action]')) {
         button.addEventListener('click', () => {
           fetch('/directive/' + button.dataset.action, { method: 'POST' });
-          // TODO: this re-enables the jog controls on the Finish/Abort click, but the harness stays busy until
+          // TODO: this re-enables the jog controls on the Save/Discard click, but the harness stays busy until
           // it finalizes the episode and the arm finishes homing. Gate the controls on a real idle signal
           // pushed from the harness instead of the button press.
           if (button.dataset.action === 'start') setRunning(true);
@@ -92,24 +107,25 @@
         });
       }
 
+      // ─── Fine/Coarse step toggle ─────────────────────────────────────────────────────────────────────
+      const setScale = (value) => {
+        scale = value;
+        for (const button of document.querySelectorAll('[data-scale]')) {
+          button.classList.toggle('is-active', button.dataset.scale === value);
+        }
+      };
       for (const button of document.querySelectorAll('[data-scale]')) {
-        button.addEventListener('click', () => {
-          scale = button.dataset.scale;
-          for (const other of document.querySelectorAll('[data-scale]')) {
-            other.classList.toggle('is-active', other === button);
-          }
-        });
+        button.addEventListener('click', () => setScale(button.dataset.scale));
       }
 
-      for (const button of document.querySelectorAll('[data-jog]')) {
-        button.addEventListener('click', () => {
-          fetch('/jog', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ axis: button.dataset.axis, sign: Number(button.dataset.sign), scale }),
-          });
+      // ─── Jog / grip actuators ────────────────────────────────────────────────────────────────────────
+      const sendJog = (axis, sign) => {
+        fetch('/jog', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ axis, sign, scale }),
         });
-      }
+      };
 
       const gripSlider = document.getElementById('grip-slider');
       const gripButtons = document.querySelectorAll('[data-grip]');
@@ -126,12 +142,12 @@
         for (const button of gripButtons) {
           button.classList.toggle('is-active', Number(button.dataset.grip) === value);
         }
+        gripSlider.value = value;
       };
 
       for (const button of gripButtons) {
         button.addEventListener('click', () => {
           const value = Number(button.dataset.grip);
-          gripSlider.value = value;
           reflectGrip(value);
           sendGrip(value);
         });
@@ -139,8 +155,81 @@
 
       gripSlider.addEventListener('input', () => reflectGrip(Number(gripSlider.value)));
       gripSlider.addEventListener('change', () => sendGrip(Number(gripSlider.value)));
-
       reflectGrip(Number(gripSlider.value));
+
+      // ─── Legends (rendered from KEY_MAP, so they can't drift from the bindings) ───────────────────────
+      const renderLegend = (name, entries) => {
+        const host = document.querySelector(`[data-legend="${name}"]`);
+        for (const [code, entry] of Object.entries(entries)) {
+          const row = document.createElement('div');
+          row.className = 'legend-row';
+          row.dataset.key = code;
+          const detail = entry.axis !== undefined ? `${entry.axis}${entry.sign > 0 ? '+' : '−'}` : 'grip';
+          row.innerHTML =
+            `<kbd class="legend-key">${entry.glyph}</kbd>` +
+            `<span class="legend-desc">${entry.label}</span>` +
+            `<span class="legend-axis">${detail}</span>`;
+          host.appendChild(row);
+        }
+      };
+      renderLegend('side', KEY_MAP.side);
+      renderLegend('gripper', KEY_MAP.gripper);
+      renderLegend('grip', GRIP_KEYS);
+
+      // ─── Keyboard teleop (FPS-style: hold to keep jogging) ────────────────────────────────────────────
+      // Manual commands are honoured by the harness only while it is idle, so keys are inert during a run.
+      const JOG_KEYS = { ...KEY_MAP.side, ...KEY_MAP.gripper };
+
+      const flashRow = (code) => {
+        const row = jog.querySelector(`.legend-row[data-key="${code}"]`);
+        if (row) row.classList.add('is-pressed');
+      };
+      const unflashRow = (code) => {
+        const row = jog.querySelector(`.legend-row[data-key="${code}"]`);
+        if (row) row.classList.remove('is-pressed');
+      };
+
+      const isTyping = (target) => target instanceof Element && target.matches('input, textarea, select');
+
+      document.addEventListener('keydown', (event) => {
+        if (running || isTyping(event.target)) return;
+
+        if (event.code === 'KeyF') {
+          event.preventDefault();
+          if (!event.repeat) setScale(scale === 'fine' ? 'coarse' : 'fine');
+          return;
+        }
+
+        if (event.code === 'Space') {
+          event.preventDefault();
+          if (event.repeat) return; // grip is an absolute setpoint — one press per intent
+          const shift = event.shiftKey;
+          const grip = shift ? GRIP_KEYS.ShiftSpace : GRIP_KEYS.Space;
+          flashRow(shift ? 'ShiftSpace' : 'Space');
+          reflectGrip(grip.value);
+          sendGrip(grip.value);
+          return;
+        }
+
+        const jogKey = JOG_KEYS[event.code];
+        if (jogKey) {
+          event.preventDefault(); // arrows would otherwise scroll the page
+          flashRow(event.code);
+          sendJog(jogKey.axis, jogKey.sign); // fires on auto-repeat too, so holding a key jogs continuously
+        }
+      });
+
+      document.addEventListener('keyup', (event) => {
+        unflashRow(event.code);
+        if (event.code === 'Space') {
+          unflashRow('Space');
+          unflashRow('ShiftSpace');
+        }
+      });
+      // A held key can miss its keyup (e.g. the window loses focus mid-press); clear every flash on blur.
+      window.addEventListener('blur', () => {
+        for (const row of jog.querySelectorAll('.legend-row.is-pressed')) row.classList.remove('is-pressed');
+      });
 
       startStream(document.getElementById('feed'));
 

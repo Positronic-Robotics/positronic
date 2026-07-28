@@ -15,7 +15,26 @@ body {
 .controls-bar {
   flex: 0 0 auto;
   display: flex;
+  align-items: center;
   gap: 0.5rem;
+}
+
+.mode-chip {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem 0.3rem 0.75rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.mode-chip-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
 }
 
 .stage {
@@ -96,7 +115,7 @@ body {
 
 .jog {
   flex: 0 0 auto;
-  width: 220px;
+  width: 260px;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -113,6 +132,13 @@ body {
   gap: 0.4rem;
 }
 
+.jog-section.legend {
+  padding: 0.6rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: rgba(15, 23, 42, 0.45);
+}
+
 .jog-title {
   margin: 0;
   font-size: 0.72rem;
@@ -126,34 +152,59 @@ body {
   font-size: 0.82rem;
 }
 
-.jog-cross {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  grid-template-rows: repeat(3, 1fr);
-  gap: 0.3rem;
+/* Legend rows — one per keybinding, generated from KEY_MAP. */
+.legend-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
 }
 
-.jog-up { grid-column: 2; grid-row: 1; }
-.jog-left { grid-column: 1; grid-row: 2; }
-.jog-right { grid-column: 3; grid-row: 2; }
-.jog-down { grid-column: 2; grid-row: 3; }
-
-.jog-z {
+.legend-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.3rem;
-}
-
-.jog-rot-row {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 0.3rem;
+  gap: 0.5rem;
+  padding: 0.2rem 0.35rem;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  transition: background 0.08s ease, border-color 0.08s ease;
 }
 
-.jog-label {
+.legend-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6rem;
+  padding: 0.1rem 0.4rem;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+}
+
+.legend-desc {
   font-size: 0.82rem;
   color: var(--text-secondary);
+}
+
+.legend-axis {
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+/* Held-key feedback; also doubles as calibration confirmation ("which key did I just press?"). */
+.legend-row.is-pressed {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.legend-row.is-pressed .legend-desc,
+.legend-row.is-pressed .legend-axis {
+  color: var(--accent);
 }
 
 .jog-toggle {
@@ -166,6 +217,7 @@ body {
   background: var(--accent);
   color: var(--text-invert);
   border-color: transparent;
+  box-shadow: 0 0 12px rgba(177, 231, 79, 0.45);
 }
 
 .jog-slider {
