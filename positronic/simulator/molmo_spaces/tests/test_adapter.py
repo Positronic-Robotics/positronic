@@ -11,11 +11,12 @@ from pathlib import Path
 
 import numpy as np
 
+from positronic import keys
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.adapter import MolmoAdapter
 
 FIXTURE = Path(__file__).parent / 'droid_obs.npz'
-CAMERA_DICT = {'image.wrist': mapping.MOLMO_WRIST_CAMERA, 'image.exterior': mapping.MOLMO_EXTERIOR_CAMERA}
+CAMERA_DICT = {keys.WRIST_IMAGE: mapping.MOLMO_WRIST_CAMERA, keys.EXTERIOR_IMAGE: mapping.MOLMO_EXTERIOR_CAMERA}
 
 
 def _payload() -> dict:
@@ -37,11 +38,11 @@ def test_observations_camera_passthrough_no_swap():
     payload = _payload()
     obs = MolmoAdapter(CAMERA_DICT).observations(payload)
     # Frames pass through untouched (no resize/flip — the codec/client own preprocessing/transport).
-    assert np.array_equal(obs['image.wrist'].array, payload['wrist_camera'])
-    assert np.array_equal(obs['image.exterior'].array, payload['exo_camera_1'])
+    assert np.array_equal(obs[keys.WRIST_IMAGE].array, payload['wrist_camera'])
+    assert np.array_equal(obs[keys.EXTERIOR_IMAGE].array, payload['exo_camera_1'])
     # Fixture marks wrist reddish, exterior greenish; a swap would flip the dominant channel.
-    wrist_mean = obs['image.wrist'].array.reshape(-1, 3).mean(axis=0)
-    exterior_mean = obs['image.exterior'].array.reshape(-1, 3).mean(axis=0)
+    wrist_mean = obs[keys.WRIST_IMAGE].array.reshape(-1, 3).mean(axis=0)
+    exterior_mean = obs[keys.EXTERIOR_IMAGE].array.reshape(-1, 3).mean(axis=0)
     assert wrist_mean[0] > wrist_mean[1]
     assert exterior_mean[1] > exterior_mean[0]
 
@@ -52,7 +53,7 @@ def test_observations_resolve_benchmark_variant_camera():
     payload = _payload()
     payload['wrist_camera_zed_mini'] = payload.pop('wrist_camera')
     obs = MolmoAdapter(CAMERA_DICT).observations(payload)
-    wrist_mean = obs['image.wrist'].array.reshape(-1, 3).mean(axis=0)
+    wrist_mean = obs[keys.WRIST_IMAGE].array.reshape(-1, 3).mean(axis=0)
     assert wrist_mean[0] > wrist_mean[1]
 
 

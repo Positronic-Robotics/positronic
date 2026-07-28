@@ -64,6 +64,7 @@ def _drive_positronic(benchmark_dir: Path, episode_index: int, seed: int, max_st
         conn = EnvConnection(host, port)
         try:
             frame = conn.reset({'episode_index': episode_index, 'seed': seed})
+            reported_horizon = frame['horizon']
             camera_names = [k for k, v in frame['obs'].items() if _is_rgb(v)]
             cam_hashes = {name: [] for name in camera_names}
             record(frame['obs'])
@@ -80,6 +81,7 @@ def _drive_positronic(benchmark_dir: Path, episode_index: int, seed: int, max_st
         'grip': np.array(fields['grip'], dtype=np.float32),
         'camera_names': camera_names,
         'cam_hashes': cam_hashes,
+        'reported_horizon': reported_horizon,
         'termination_step': step,
         'final_success': bool(out['success']),
     }
@@ -119,6 +121,11 @@ def _assert_parity(native: dict, positronic: dict, max_steps: int) -> None:
         f'terminating step differs: native {n_term}, horizon {horizon}, positronic {p_term}'
     )
     assert not bool(native['final_success']) and not positronic['final_success'], 'a held arm must not score success'
+    # The env reports its horizon at reset (in sim-seconds); it must match native's and equal timeout's yardstick.
+    n_horizon = float(native['horizon_sec'])
+    assert n_horizon == positronic['reported_horizon'], (
+        f'reported horizon differs: native {n_horizon}s, positronic {positronic["reported_horizon"]}s'
+    )
 
     assert list(native['camera_names']) == positronic['camera_names'], 'camera sets differ between the stacks'
     for field in (*_ARRAY_FIELDS, 'grip'):

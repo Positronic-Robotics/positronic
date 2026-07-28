@@ -17,11 +17,12 @@ mesa software EGL — ``EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1``). Run
 import argparse
 from pathlib import Path
 
+from positronic import keys
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces.adapter import MolmoAdapter
 from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
 
-_CAMERA_DICT = {'image.wrist': 'wrist_camera', 'image.exterior': 'exo_camera_1'}
+_CAMERA_DICT = {keys.WRIST_IMAGE: 'wrist_camera', keys.EXTERIOR_IMAGE: 'exo_camera_1'}
 
 
 def run(benchmark_dir: Path, *, episodes: int = 1, steps: int = 5, camera_dict: dict[str, str] | None = None) -> None:

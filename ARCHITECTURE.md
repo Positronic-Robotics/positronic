@@ -158,4 +158,6 @@ through both stacks and asserts this, re-run on every bump of the sim's pinned v
 ownership follows: the horizon is part of a task's behavior, so the sim×task owns it — enforces it
 and reports expiry through the same terminal `done` a success uses — while the harness `Task.timeout`
 is a strictly weaker safety net, guarding only against runaway cost when a sim fails to enforce a
-horizon or defines none.
+horizon or defines none. That "strictly weaker" is structural, not assumed: an env that enforces a
+horizon reports it at reset, and the harness rejects a `timeout` that is not longer, so a mis-set
+budget fails loud instead of silently truncating a valid episode.

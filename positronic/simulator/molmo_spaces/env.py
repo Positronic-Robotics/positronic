@@ -106,6 +106,9 @@ class MolmoSpacesEnv(EnvProtocol):
         self._task: Any = None
         self._robot_view: Any = None
         self._control_dt: float | None = None
+        # The episode's enforced horizon in sim-seconds (``task_horizon`` steps x the control period), reported at
+        # reset so positronic can check its safety-net timeout is strictly weaker.
+        self._horizon_sec: float | None = None
         self._meta: dict[str, Any] | None = None
         # The RGB camera keys the current episode renders — emitted every frame; the client's ``camera_dict``
         # selects which the policy sees.
@@ -128,6 +131,7 @@ class MolmoSpacesEnv(EnvProtocol):
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._robot_view = self._task.env.current_robot.robot_view
         self._control_dt = cfg.policy_dt_ms / 1000.0
+        self._horizon_sec = cfg.task_horizon * self._control_dt
         # The authoritative benchmark prompt, straight from the episode spec — not
         # ``task.get_task_description()``, which upstream reconstructs per task type (e.g. OpeningTask emits
         # "Open the ..." even for a close episode), so a reconstruction could diverge from the benchmark goal.
@@ -139,8 +143,15 @@ class MolmoSpacesEnv(EnvProtocol):
         env_obs = obs[0]
         self._camera_names = [k for k, v in env_obs.items() if _is_rgb_frame(v)]
         # robot_meta is empty: this venv cannot import positronic to emit the Franka model, so the eval supplies
-        # it via ``static_meta`` (``bundled_franka_model``). ``meta`` carries the scene/task identity.
-        return {'obs': self._observe(env_obs), 'meta': self._meta, 'robot_meta': {}, 'control_dt': self._control_dt}
+        # it via ``static_meta`` (``bundled_franka_model``). ``meta`` carries the scene/task identity; ``horizon``
+        # is the sim-enforced episode deadline the harness checks its timeout against.
+        return {
+            'obs': self._observe(env_obs),
+            'meta': self._meta,
+            'robot_meta': {},
+            'control_dt': self._control_dt,
+            'horizon': self._horizon_sec,
+        }
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         arm = mapping.wire_command_to_arm_action(action['command'], self._measured_arm_q())
