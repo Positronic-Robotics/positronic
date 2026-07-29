@@ -71,3 +71,20 @@ def test_rrd_cache_path_versions_and_drops_stale(tmp_path, monkeypatch):
     old.write_bytes(b'stale')
     assert positronic_server._get_rrd_cache_path(0) == path
     assert not old.exists()
+
+
+def test_cache_while_streaming_commits_only_complete_streams(tmp_path):
+    """A failed RRD stream leaves no cache entry (regression: a mid-build crash persisted an empty
+    file that was then served as a valid cache hit), and a complete stream commits atomically."""
+    cache_path = str(tmp_path / 'ep.rrd')
+
+    def failing():
+        yield b'partial'
+        raise RuntimeError('boom')
+
+    with pytest.raises(RuntimeError):
+        list(positronic_server._cache_while_streaming(failing(), cache_path))
+    assert list(tmp_path.iterdir()) == []
+
+    assert list(positronic_server._cache_while_streaming(iter([b'a', b'b']), cache_path)) == [b'a', b'b']
+    assert Path(cache_path).read_bytes() == b'ab'

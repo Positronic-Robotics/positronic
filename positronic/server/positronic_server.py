@@ -72,6 +72,28 @@ def require_dataset(func):
     return wrapper
 
 
+def _cache_while_streaming(chunks, cache_path: str):
+    """Yield chunks while writing them to the cache, committing the file only on completion.
+
+    The cache entry appears atomically via rename: a failed or abandoned stream leaves no entry
+    (a partial file served as a cache hit reads as a valid-but-empty recording), and a concurrent
+    request never sees a half-written file.
+    """
+    partial_path = cache_path + '.partial'
+    success = False
+    try:
+        with open(partial_path, 'wb') as cache_file:
+            for chunk in chunks:
+                cache_file.write(chunk)
+                yield chunk
+        success = True
+    finally:
+        if success:
+            os.replace(partial_path, cache_path)
+        else:
+            Path(partial_path).unlink(missing_ok=True)
+
+
 def _get_rrd_cache_path(episode_id: int) -> str:
     ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
     if ds is None:
@@ -86,7 +108,7 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     # served stale.
     uid = ds[episode_id].meta['uid']
     cache_path = os.path.join(episode_cache_dir, f'{uid}.v{RRD_FORMAT_VERSION}.rrd')
-    for stale in Path(episode_cache_dir).glob(f'{uid}*.rrd'):
+    for stale in Path(episode_cache_dir).glob(f'{uid}*.rrd*'):
         if str(stale) != cache_path:
             stale.unlink(missing_ok=True)
     return cache_path
@@ -509,20 +531,8 @@ async def api_episode_rrd(episode_id: int):
             headers={'Content-Disposition': f'attachment; filename=episode_{episode_id}.rrd'},
         )
 
-    def _stream_and_cache():
-        success = False
-        try:
-            with open(cache_path, 'wb') as cache_file:
-                for chunk in stream_episode_rrd(ds, episode_id):
-                    cache_file.write(chunk)
-                    yield chunk
-            success = True
-        finally:
-            if not success:
-                shutil.rmtree(cache_path, ignore_errors=True)
-
     return StreamingResponse(
-        _stream_and_cache(),
+        _cache_while_streaming(stream_episode_rrd(ds, episode_id), cache_path),
         media_type='application/octet-stream',
         headers={'Content-Disposition': f'attachment; filename=episode_{episode_id}.rrd'},
     )
