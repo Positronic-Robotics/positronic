@@ -1,7 +1,6 @@
 import io
 import os
 import time
-import urllib.parse
 from pathlib import Path
 
 import av
@@ -109,94 +108,63 @@ def test_cache_while_streaming_commits_only_complete_streams(tmp_path):
     assert Path(cache_path).read_bytes() == b'ab'
 
 
-def test_rrd_cache_sweep_leaves_other_uids(tmp_path, monkeypatch):
-    """The stale-entry sweep matches the exact uid only — a uid that extends another must survive."""
+def test_rrd_cache_sweep_keeps_current_generation_entries(tmp_path, monkeypatch):
+    """The sweep drops what the current generation cannot serve and keeps what it can: another
+    episode's current entry and a partial a builder is still streaming into both survive."""
     class _Ep:
-        meta = {'uid': 'ts-123'}
+        def __init__(self, uid):
+            self.meta = {'uid': uid}
 
-    monkeypatch.setitem(positronic_server.app_state, 'dataset', {0: _Ep()})
+    # 'foo.victim' extends 'foo' past a dot, the separator before '.v<N>.rrd' (regression: the sweep
+    # for 'foo' unlinked the sibling's entry).
+    episodes = {0: _Ep('foo'), 1: _Ep('foo.victim')}
+    monkeypatch.setitem(positronic_server.app_state, 'dataset', episodes)
     monkeypatch.setitem(positronic_server.app_state, 'cache_dir', str(tmp_path))
     monkeypatch.setitem(positronic_server.app_state, 'root', str(tmp_path / 'ds'))
 
     path = Path(positronic_server._get_rrd_cache_path(0))
-    sibling = path.parent / f'ts-1234.v{RRD_FORMAT_VERSION}.rrd'
+    sibling = Path(positronic_server._get_rrd_cache_path(1))
+    assert sibling != path
     sibling.write_bytes(b'other episode')
-    own_stale = path.parent / 'ts-123.rrd'
-    own_stale.write_bytes(b'stale')
+    previous_generation = path.parent / 'foo.rrd'
+    previous_generation.write_bytes(b'stale')
     live_partial = path.parent / f'{path.name}.deadbeef.partial'
     live_partial.write_bytes(b'streaming right now')
     abandoned = path.parent / f'{path.name}.cafe.partial'
     abandoned.write_bytes(b'crashed builder')
     old_ts = time.time() - 2 * positronic_server._ABANDONED_PARTIAL_AGE_S
     os.utime(abandoned, (old_ts, old_ts))
+
     positronic_server._get_rrd_cache_path(0)
     assert sibling.exists()
     assert live_partial.exists()
-    assert not own_stale.exists()
+    assert not previous_generation.exists()
     assert not abandoned.exists()
 
 
-def test_rrd_cache_path_handles_glob_chars_in_uid(tmp_path, monkeypatch):
-    """A uid carrying glob metacharacters sweeps only its own entries."""
+@pytest.mark.parametrize('uid', ['../shared', 'weird[uid]', 'foo.victim', 'é' * 100])
+def test_rrd_cache_key_bounds_hostile_uids(tmp_path, monkeypatch, uid):
+    """Uids reach the writer unvalidated, so every one of them has to key a single bounded filename
+    inside the cache directory (regressions: '../shared' traversed out of it, 'weird[uid]' globbed a
+    sibling away, 'foo.victim' shared a sweep prefix with 'foo', and percent-encoding a long
+    non-ASCII uid overflowed the 255-byte filename component limit)."""
     class _Ep:
-        meta = {'uid': 'weird[uid]'}
+        meta = {'uid': uid}
 
+    cache_root = tmp_path / 'cache'
     monkeypatch.setitem(positronic_server.app_state, 'dataset', {0: _Ep()})
-    monkeypatch.setitem(positronic_server.app_state, 'cache_dir', str(tmp_path))
+    monkeypatch.setitem(positronic_server.app_state, 'cache_dir', str(cache_root))
     monkeypatch.setitem(positronic_server.app_state, 'root', str(tmp_path / 'ds'))
 
-    path = Path(positronic_server._get_rrd_cache_path(0))
-    bystander = path.parent / 'u.rrd'
-    bystander.write_bytes(b'other')
-    own_stale = path.parent / (path.name.split('.v')[0] + '.rrd')
-    own_stale.write_bytes(b'stale')
-    positronic_server._get_rrd_cache_path(0)
-    assert bystander.exists()
-    assert not own_stale.exists()
-
-
-def test_rrd_cache_path_confines_uid_to_cache_dir(tmp_path, monkeypatch):
-    """A uid carrying path components cannot escape the episode cache directory (regression:
-    '../shared' traversed out of it, and the sweep could unlink foreign .rrd files)."""
-    class _Ep:
-        meta = {'uid': '../shared'}
-
-    monkeypatch.setitem(positronic_server.app_state, 'dataset', {0: _Ep()})
-    monkeypatch.setitem(positronic_server.app_state, 'cache_dir', str(tmp_path / 'cache'))
-    monkeypatch.setitem(positronic_server.app_state, 'root', str(tmp_path / 'ds'))
-
-    outside = tmp_path / 'cache' / f'shared.v{RRD_FORMAT_VERSION}.rrd'
+    outside = cache_root / f'shared.v{RRD_FORMAT_VERSION}.rrd'
     outside.parent.mkdir(parents=True, exist_ok=True)
     outside.write_bytes(b'foreign dataset entry')
 
     path = Path(positronic_server._get_rrd_cache_path(0))
-    assert path.parent.parent == tmp_path / 'cache'
-    assert path.resolve().is_relative_to((tmp_path / 'cache').resolve())
-    assert os.sep not in path.name
+    assert path.parent.parent == cache_root
+    assert path.resolve().is_relative_to(cache_root.resolve())
+    assert len(path.name.encode()) <= 255
     assert outside.exists()
-
-
-def test_rrd_cache_sweep_spares_uid_extended_by_a_dot(tmp_path, monkeypatch):
-    """A sibling uid that extends this one past a dot keeps its cache entry (regression: the sweep
-    for 'foo' matched 'foo.victim.v2.rrd')."""
-    class _Ep:
-        meta = {'uid': 'foo'}
-
-    monkeypatch.setitem(positronic_server.app_state, 'dataset', {0: _Ep()})
-    monkeypatch.setitem(positronic_server.app_state, 'cache_dir', str(tmp_path))
-    monkeypatch.setitem(positronic_server.app_state, 'root', str(tmp_path / 'ds'))
-
-    path = Path(positronic_server._get_rrd_cache_path(0))
-    for sibling_uid in ('foo.victim', 'foo.rrd-copy'):
-        key = urllib.parse.quote(sibling_uid, safe='').replace('.', '%2E')
-        sibling = path.parent / f'{key}.v{RRD_FORMAT_VERSION}.rrd'
-        sibling.write_bytes(b'sibling episode')
-    own_stale = path.parent / f'{path.name.split(".v")[0]}.rrd'
-    own_stale.write_bytes(b'stale')
-
-    positronic_server._get_rrd_cache_path(0)
-    assert not own_stale.exists()
-    assert len(list(path.parent.glob('*.v*.rrd'))) == 2
 
 
 def test_cache_while_streaming_concurrent_builders(tmp_path):

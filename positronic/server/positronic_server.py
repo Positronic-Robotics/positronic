@@ -1,7 +1,7 @@
 """A FastAPI web server for visualizing Positronic LocalDatasets using Rerun."""
 
 import atexit
-import glob
+import hashlib
 import logging
 import os
 import shutil
@@ -9,7 +9,6 @@ import subprocess
 import tempfile
 import threading
 import time
-import urllib.parse
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -111,31 +110,27 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     episode_cache_dir = os.path.join(cache_root, ds_id)
     os.makedirs(episode_cache_dir, exist_ok=True)
     # Key the cache by episode uid, not position: position is view-dependent, and datasets without a
-    # resolvable root (e.g. concatenated ones) all share the 'unknown_dataset' namespace. The RRD format
-    # version keys generation changes; entries from previous generations are dropped so they can't be
-    # served stale.
-    # Caller-provided uids are arbitrary strings; percent-encoding confines the key to one filename
-    # component (no separators survive), so a uid like '../shared' cannot escape the cache directory.
-    # '.' is escaped too — it is the separator before '.v<N>.rrd', so a key containing one would make
-    # the stale sweep of uid 'foo' match a sibling uid 'foo.victim'.
-    uid = urllib.parse.quote(ds[episode_id].meta['uid'], safe='').replace('.', '%2E')
-    cache_path = os.path.join(episode_cache_dir, f'{uid}.v{RRD_FORMAT_VERSION}.rrd')
-    # The '.' after the uid anchors the match: a different uid can never extend this one past it.
-    # A young .partial belongs to a builder streaming right now — deleting it would break that
-    # response's commit; only abandoned ones (a crashed builder's leftovers) are swept.
+    # resolvable root (e.g. concatenated ones) all share the 'unknown_dataset' namespace. Uids are
+    # arbitrary caller-provided strings, so the key is their digest: one bounded filename component,
+    # free of the path separators, glob metacharacters and dots a raw uid may carry.
+    uid_digest = hashlib.sha256(ds[episode_id].meta['uid'].encode()).hexdigest()
+    generation = f'.v{RRD_FORMAT_VERSION}.rrd'
+    cache_path = os.path.join(episode_cache_dir, f'{uid_digest}{generation}')
+    # The cache holds current-generation entries only, so a format bump reclaims every episode's
+    # previous entries instead of leaving them to be served stale. A young .partial belongs to a
+    # builder streaming right now — deleting it would break that response's commit; only abandoned
+    # ones (a crashed builder's leftovers) are swept.
     now = time.time()
-    uid_glob = glob.escape(uid)
-    for pattern in (f'{uid_glob}.rrd*', f'{uid_glob}.v*.rrd*'):
-        for stale in Path(episode_cache_dir).glob(pattern):
-            if str(stale) == cache_path:
-                continue
-            if stale.name.endswith('.partial'):
-                try:
-                    if now - stale.stat().st_mtime < _ABANDONED_PARTIAL_AGE_S:
-                        continue
-                except FileNotFoundError:
+    for stale in Path(episode_cache_dir).iterdir():
+        if stale.name.endswith(generation):
+            continue
+        if stale.name.endswith('.partial'):
+            try:
+                if now - stale.stat().st_mtime < _ABANDONED_PARTIAL_AGE_S:
                     continue
-            stale.unlink(missing_ok=True)
+            except FileNotFoundError:
+                continue
+        stale.unlink(missing_ok=True)
     return cache_path
 
 
