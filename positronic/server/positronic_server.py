@@ -78,6 +78,9 @@ def require_dataset(func):
 # An RRD build streams for seconds; a .partial this old has no live writer behind it.
 _ABANDONED_PARTIAL_AGE_S = 3600
 
+# What a cache entry of the generation this server can serve is named; anything else is unservable.
+_GENERATION_SUFFIX = f'.v{RRD_FORMAT_VERSION}.rrd'
+
 
 def _cache_while_streaming(chunks, cache_path: str):
     """Yield chunks while writing them to the cache, committing the file only on completion.
@@ -114,15 +117,21 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     # arbitrary caller-provided strings, so the key is their digest: one bounded filename component,
     # free of the path separators, glob metacharacters and dots a raw uid may carry.
     uid_digest = hashlib.sha256(ds[episode_id].meta['uid'].encode()).hexdigest()
-    generation = f'.v{RRD_FORMAT_VERSION}.rrd'
-    cache_path = os.path.join(episode_cache_dir, f'{uid_digest}{generation}')
-    # The cache holds current-generation entries only, so a format bump reclaims every episode's
-    # previous entries instead of leaving them to be served stale. A young .partial belongs to a
-    # builder streaming right now — deleting it would break that response's commit; only abandoned
-    # ones (a crashed builder's leftovers) are swept.
+    return os.path.join(episode_cache_dir, f'{uid_digest}{_GENERATION_SUFFIX}')
+
+
+def _drop_unservable_cache_entries(cache_path: str) -> None:
+    """Drop everything in this dataset's cache the current generation cannot serve.
+
+    A format bump reclaims every episode's previous entries instead of leaving them to be served
+    stale, which is why the whole directory is walked rather than one episode's entries. Callers run
+    this only when an entry has to be built, so a warm cache costs one stat per request instead of a
+    scan. A young .partial belongs to a builder streaming right now — deleting it would break that
+    response's commit; only abandoned ones (a crashed builder's leftovers) are swept.
+    """
     now = time.time()
-    for stale in Path(episode_cache_dir).iterdir():
-        if stale.name.endswith(generation):
+    for stale in Path(cache_path).parent.iterdir():
+        if stale.name.endswith(_GENERATION_SUFFIX):
             continue
         if stale.name.endswith('.partial'):
             try:
@@ -131,7 +140,6 @@ def _get_rrd_cache_path(episode_id: int) -> str:
             except FileNotFoundError:
                 continue
         stale.unlink(missing_ok=True)
-    return cache_path
 
 
 @asynccontextmanager
@@ -551,6 +559,7 @@ async def api_episode_rrd(episode_id: int):
             headers={'Content-Disposition': f'attachment; filename=episode_{episode_id}.rrd'},
         )
 
+    _drop_unservable_cache_entries(cache_path)
     return StreamingResponse(
         _cache_while_streaming(stream_episode_rrd(ds, episode_id), cache_path),
         media_type='application/octet-stream',
