@@ -333,7 +333,9 @@ def playable_video_bytes(video_path: Path) -> bytes:
     buf = io.BytesIO()
     with av.open(str(video_path)) as src, av.open(buf, mode='w', format='mp4') as dst:
         in_stream = src.streams.video[0]
-        out = dst.add_stream('h264', rate=in_stream.average_rate)
+        # Baseline profile carries no B-frames by construction and is what the viewer decodes most
+        # widely across browsers and hardware decoders.
+        out = dst.add_stream('h264', rate=in_stream.average_rate, options={'profile': 'baseline'})
         assert isinstance(out, av.video.stream.VideoStream)
         out.width = in_stream.codec_context.width
         out.height = in_stream.codec_context.height
@@ -341,10 +343,14 @@ def playable_video_bytes(video_path: Path) -> bytes:
         out.max_b_frames = 0
         out.bit_rate = in_stream.bit_rate or 4_000_000
         # Decoded frames carry the source's pts/time_base, which the fresh stream rejects at mux;
-        # rebuild each frame and index it sequentially, exactly as VideoSignalWriter encodes.
+        # rebuild each frame and index it sequentially, exactly as VideoSignalWriter encodes. Keyframes
+        # are re-forced where the source had them: seeking is keyframe-bounded, so an encoder's default
+        # keyframe interval (longer than a short episode) would leave the viewer a single seek point.
         for idx, frame in enumerate(src.decode(in_stream)):
             out_frame = av.VideoFrame.from_ndarray(frame.to_ndarray(format='rgb24'), format='rgb24')
             out_frame.pts = idx
+            if frame.key_frame:
+                out_frame.pict_type = av.video.frame.PictureType.I
             for packet in out.encode(out_frame):
                 dst.mux(packet)
         for packet in out.encode():

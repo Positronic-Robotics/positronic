@@ -50,6 +50,22 @@ def test_playable_video_bytes_strips_b_frames(tmp_path):
     assert len(out_types) == len(src_types)
 
 
+def test_playable_video_bytes_preserves_seek_points(tmp_path):
+    """The re-encode keeps the source's keyframes (regression: an encoder-default keyframe interval
+    longer than the clip left one seek point, so the viewer could not seek at all)."""
+    src = tmp_path / 'bframes.mp4'
+    _write_video(src, n_frames=90, max_b_frames=None)
+    if int(av.video.frame.PictureType.B) not in _pict_types(str(src)):
+        pytest.skip('host encoder emits no B-frames; nothing to re-encode')
+
+    with av.open(str(src)) as container:
+        src_keys = sum(1 for frame in container.decode(video=0) if frame.key_frame)
+
+    with av.open(io.BytesIO(playable_video_bytes(src))) as container:
+        out_keys = sum(1 for frame in container.decode(video=0) if frame.key_frame)
+    assert out_keys == src_keys
+
+
 def test_playable_video_bytes_passthrough(tmp_path):
     """A B-frame-free recording is served byte-identical."""
     src = tmp_path / 'plain.mp4'
