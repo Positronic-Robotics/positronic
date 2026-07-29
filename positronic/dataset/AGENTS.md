@@ -13,6 +13,8 @@ Every dataset read composes in this order:
 - **Transforms** compute lazy views over the curated episode. Transforms never persist.
 - **Consumers** (codecs, viewers, converters) see one `Dataset` interface and don't know which layers are present.
 
+**Consumers adapt; recordings don't.** The recorder writes what its libraries produce — codec defaults (profiles, B-frames, compression choices) are those libraries' own preferences and are presumed intentional. A consumer that cannot read some valid recording compensates at its own layer (e.g. the viewer re-encodes for its renderer at serve time); recording behavior is never constrained for a downstream consumer's convenience.
+
 The shape mirrors the systems that got this right — Lightroom catalogs over raw photos, video EDLs, git, Delta Lake logs over parquet: identity-keyed (uid, never path or position), time-addressed (absolute ns timestamps, never indices), append-only, dumb plain data with versioned records so a log replays forever.
 
 ## Episode data model

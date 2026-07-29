@@ -1,5 +1,6 @@
 """Dataset utilities for Positronic dataset visualization."""
 
+import io
 import logging
 import tempfile
 import warnings
@@ -312,12 +313,43 @@ def _encode_frames_as_video(entity_path: str, sig) -> None:
             rr.log(entity_path, rr.VideoStream.from_fields(sample=bytes(packet)))
 
 
+def playable_video_bytes(video_path: Path) -> bytes:
+    """Return the video's bytes, re-encoded without B-frames when the recording carries them.
+
+    Recordings keep whatever their encoder produced — codec defaults are the encoder library's own
+    choices, and the dataset is never constrained for a consumer's convenience. rerun's web viewer
+    cannot play B-frame H.264 (rerun #10090), so this consumer compensates here, at serve time; the
+    server's RRD cache makes the re-encode a one-time cost per episode.
+    """
+    with av.open(str(video_path)) as probe:
+        if probe.streams.video[0].codec_context.has_b_frames == 0:
+            return video_path.read_bytes()
+
+    buf = io.BytesIO()
+    with av.open(str(video_path)) as src, av.open(buf, mode='w', format='mp4') as dst:
+        in_stream = src.streams.video[0]
+        out = dst.add_stream('h264', rate=in_stream.average_rate)
+        assert isinstance(out, av.video.stream.VideoStream)
+        out.width = in_stream.codec_context.width
+        out.height = in_stream.codec_context.height
+        out.pix_fmt = 'yuv420p'
+        out.max_b_frames = 0
+        out.bit_rate = in_stream.bit_rate or 4_000_000
+        for frame in src.decode(in_stream):
+            frame.pts = None
+            for packet in out.encode(frame):
+                dst.mux(packet)
+        for packet in out.encode():
+            dst.mux(packet)
+    return buf.getvalue()
+
+
 def _log_video_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer) -> Iterator[bytes]:
     """Log video signals as AssetVideo + VideoFrameReference (columnar), or as individual images."""
     for name in signals.videos:
         sig = ep.signals[name]
         if isinstance(sig, VideoSignal):
-            video_bytes = sig.video_path.read_bytes()
+            video_bytes = playable_video_bytes(sig.video_path)
             asset = rr.AssetVideo(contents=video_bytes, media_type='video/mp4')
             rr.log(name, asset, static=True)
 
