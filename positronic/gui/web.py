@@ -323,18 +323,30 @@ class WebEvalUI(pimm.ControlSystem):
             # arm, and only THEN stop the World. Setting the event (not a signal) always works even under
             # a nohup launch where SIGINT is SIG_IGN.
             async def _wrap_up():
-                try:
-                    if (status_holder['value'] or {}).get('phase') != 'idle':
-                        self.directive.emit(Directive.FINISH(), clock.now_ns())
-                        for _ in range(int(_FINISH_FINALIZE_TIMEOUT_S / 0.1)):
-                            if (status_holder['value'] or {}).get('phase') == 'idle':
-                                break
-                            await asyncio.sleep(0.1)
+                if (status_holder['value'] or {}).get('phase') != 'idle':
+                    self.directive.emit(Directive.FINISH(), clock.now_ns())
+                    for _ in range(int(_FINISH_FINALIZE_TIMEOUT_S / 0.1)):
+                        if (status_holder['value'] or {}).get('phase') == 'idle':
+                            break
+                        await asyncio.sleep(0.1)
                     else:
-                        self.directive.emit(Directive.ABORT(), clock.now_ns())  # idle: nothing to save; ABORT homes
-                    await asyncio.sleep(_FINISH_HOME_SETTLE_S)  # let the commanded home reach the arm before stopping
-                finally:
-                    should_stop._event.set()  # always end the run, even if the clean path failed
+                        # Timed out: the episode did NOT finalize, so the harness is wedged. Do NOT force
+                        # the stop — that aborts the still-open recording (episode lost) and skips homing,
+                        # the exact failures this path exists to prevent. Leave the run up so the operator
+                        # can retry Finish (re-emits FINISH) or investigate; a wedged harness needs a human,
+                        # not a data-losing stop.
+                        print(
+                            f'finish_run: episode did not finalize within {_FINISH_FINALIZE_TIMEOUT_S:.0f}s; '
+                            'leaving the run up instead of force-stopping (a stop here would lose the open '
+                            'episode and skip homing). Retry Finish or investigate the harness.'
+                        )
+                        return
+                else:
+                    self.directive.emit(Directive.ABORT(), clock.now_ns())  # idle: nothing to save; ABORT homes
+                # Only reached on a clean finalize (idle) or the idle-ABORT path: let the commanded home
+                # reach the arm, then stop the World.
+                await asyncio.sleep(_FINISH_HOME_SETTLE_S)
+                should_stop._event.set()
 
             asyncio.create_task(_wrap_up())
             return {'wrapping_up': True}
