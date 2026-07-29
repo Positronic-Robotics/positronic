@@ -1,3 +1,4 @@
+import av
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
@@ -138,6 +139,18 @@ class TestVideoSignalWriter:
             w.append(frame, 1000)
         with pytest.raises(RuntimeError, match='Cannot append to a finished writer'):
             w.append(frame, 2000)
+
+    def test_no_b_frames_in_output(self, video_paths):
+        """The written video has no B-frames regardless of which encoder backs 'h264' (regression:
+        libx264 hosts emitted High-profile B-frame video that rerun's web viewer cannot play)."""
+        with VideoSignalWriter(video_paths['video'], video_paths['frames']) as w:
+            for i in range(60):
+                w.append(create_frame(i * 4), 1000 * (i + 1))
+
+        with av.open(str(video_paths['video'])) as container:
+            pict_types = {int(frame.pict_type) for frame in container.decode(video=0)}
+        b = int(av.video.frame.PictureType.B)
+        assert b not in pict_types, f'B-frames found in written video (pict types: {sorted(pict_types)})'
 
 
 class TestVideoSignalStartLastTs:
