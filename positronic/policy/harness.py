@@ -222,6 +222,49 @@ class Harness(pimm.ControlSystem):
         # Privileged stop-signal: a truthy value within a trial's time budget ends it,
         # recording ``eval.terminated`` True plus that dict in the episode's static data.
         self.done = pimm.ControlSystemReceiver[dict](self, default={})
+        # Live status for an operator surface (e.g. WebEvalUI): episode phase + whether the policy is
+        # currently producing actions. Additive and best-effort — left unconnected in sim/unattended.
+        self.status = pimm.ControlSystemEmitter(self)
+        self._last_action_ts: float | None = None
+        self._chunk_end_s: float | None = None  # last waypoint time of the current chunk = its drive horizon
+
+    def _emit_status(self, clock: pimm.Clock, phase: str | None = None) -> None:
+        """Best-effort live status for an operator surface. Never raises into the run loop."""
+        try:
+            phase = phase or ('running' if self._running else 'idle')
+            age = (time.monotonic() - self._last_action_ts) if (self._running and self._last_action_ts) else None
+            # "Driving" while the latest chunk still has horizon left to play (its last waypoint is in the
+            # future), plus a 0.5s grace so the brief inter-chunk inference gap doesn't flicker to "waiting".
+            # A chunked policy emits ONE chunk then plays it for its whole span, so timing "waiting" off the
+            # last emit (age) wrongly reads mid-chunk playback — the arm actively driving — as a stall.
+            driving = self._chunk_end_s is not None and clock.now() <= self._chunk_end_s + 0.5
+            self.status.emit(
+                {
+                    'phase': phase,
+                    'waiting_for_policy': bool(self._running and not driving),
+                    'last_action_age_s': age,
+                    # RobotStatus.ERROR: a safety reflex (e.g. cartesian_reflex) aborted the current
+                    # motion. The driver self-recovers each control cycle (franka.py recover_from_errors),
+                    # so this is momentary per trip — the operator surface decays it so REPEATED tripping
+                    # (which makes jog/policy feel dead as each command is dropped) shows as a steady flag.
+                    'robot_error': self._robot_in_error(),
+                },
+                clock.now_ns(),
+            )
+        except Exception:
+            pass
+
+    def _robot_in_error(self) -> bool:
+        """Best-effort read of the latest robot_state: True iff it reports ``RobotStatus.ERROR``.
+        Additive and safe — any gap (no observation yet, or a state without ``.status``) returns
+        False, so it never raises a false alarm and never breaks the status emit."""
+        try:
+            from positronic.drivers.roboarm import RobotStatus  # lazy: keep the status path driver-agnostic
+
+            state = self.observations['robot_state'].value
+            return state is not None and state.status == RobotStatus.ERROR
+        except Exception:
+            return False
 
     def _statics(self) -> dict[str, Any]:
         """What is known about the rig before the episode runs, live values winning."""
@@ -324,6 +367,12 @@ class Harness(pimm.ControlSystem):
                 self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
+        # Fresh episode: no policy action yet (-> "waiting for policy" until the first chunk). Emit the
+        # 'starting' phase BEFORE new_session, whose handshake blocks until the model is loaded — so an
+        # operator surface can show "loading policy" during that block.
+        self._last_action_ts = None
+        self._chunk_end_s = None
+        self._emit_status(clock, phase='starting')
         self._policy_session = self.policy.new_session(self.context, clock.now)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
@@ -456,6 +505,7 @@ class Harness(pimm.ControlSystem):
         actions = self._policy_session(frozen_view(obs))
         if actions is None:
             return
+        self._last_action_ts = time.monotonic()  # policy responded with a chunk -> it is communicating
         delay = self._inference_delay(wall_start)
         if delay > 0.0:
             yield pimm.Sleep(delay)
@@ -470,6 +520,9 @@ class Harness(pimm.ControlSystem):
 
         self._telemetry.step()
         self._emit_commands(actions)
+        # How far this chunk drives (its last waypoint time) — status uses it to read "driving" mid-chunk
+        # vs "waiting" once the horizon is spent and the next inference is overdue.
+        self._chunk_end_s = max((a['timestamp'] for a in actions), default=self._chunk_end_s)
 
     def _trial_terminal(self, clock: pimm.Clock) -> dict[str, Any] | None:
         """The terminal static payload if a self-driven trial has ended this round, else ``None``.
@@ -535,6 +588,7 @@ class Harness(pimm.ControlSystem):
                     yield from self._step(clock)
                 except pimm.NoValueException:
                     pass
+            self._emit_status(clock)
             yield self._pace()
 
         if self._running:

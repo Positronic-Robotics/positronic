@@ -104,6 +104,9 @@ def _run_world(
             world.connect(driver.directives, harness.directive, emitter_wrapper=driver.directive_wrapper)
             if driver.manual_commands is not None:
                 world.connect(driver.manual_commands, harness.manual_command)
+            # Feed live harness status to an operator surface that wants it (e.g. WebEvalUI's badge).
+            if driver.gui is not None and hasattr(driver.gui, 'status'):
+                world.connect(harness.status, driver.gui.status)
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)
 

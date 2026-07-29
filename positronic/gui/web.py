@@ -1,5 +1,7 @@
 import asyncio
+import os
 import queue
+import signal
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -216,12 +218,17 @@ class WebEvalUI(pimm.ControlSystem):
         self.cameras = pimm.ReceiverDict(self, default=None)
         self.directive = pimm.ControlSystemEmitter(self)
         self.manual_command = pimm.ControlSystemEmitter(self)
+        # Live harness/policy status for the badge (fed by Harness.status; may be unconnected).
+        self.status = pimm.ControlSystemReceiver(self, default=None)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         templates = Jinja2Templates(directory=_pkg_path('templates'))
         names = list(self.cameras)
         stream = _CameraStream(self.fps, self.keyframe_interval, self.bitrate)
         latest: dict[str, np.ndarray] = {}
+        # Latest harness status, refreshed in the run loop and served by GET /status (cross-thread:
+        # a single dict swap, safe under the GIL for this poll-and-render use).
+        status_holder: dict = {'value': None}
 
         app = FastAPI()
         app.mount('/static', StaticFiles(directory=_shared_static()), name='static')
@@ -283,6 +290,24 @@ class WebEvalUI(pimm.ControlSystem):
         async def grip(body: _GripBody):
             self.manual_command.emit({'target_grip': body.value}, clock.now_ns())
 
+        @app.get('/status')
+        async def status():
+            return status_holder['value'] or {'phase': 'idle'}
+
+        @app.get('/ping')
+        async def ping():  # tiny + no work, so its round-trip measures the browser<->robot-host link
+            return {}
+
+        @app.post('/finish_run')
+        async def finish_run():
+            # Wrap up the whole run from the browser (or `curl -X POST .../finish_run`), no terminal
+            # needed: set the World's shared stop event — the same thing a finished control loop does
+            # (pimm world.py:463). It unwinds the World -> finalizes + uploads the dataset -> closes the
+            # session -> homes the arm. Deliberately NOT a signal: a nohup/backgrounded launch has SIGINT
+            # set to SIG_IGN, so Ctrl+C-style signals never arrive; setting the event always works.
+            should_stop._event.set()
+            return {'wrapping_up': True}
+
         # The legacy asyncio `websockets` backend drains the transport from its reader and keepalive
         # coroutines concurrently with our send loop, tripping an assertion that kills the feed. The
         # sans-io backend serializes every write through the event-loop transport instead.
@@ -305,6 +330,9 @@ class WebEvalUI(pimm.ControlSystem):
                     if cam_msg.data is not None and cam_msg.updated:
                         latest[name] = cam_msg.data.array
                         changed = True
+                status_msg = self.status.read()
+                if status_msg.updated and status_msg.data is not None:
+                    status_holder['value'] = status_msg.data
                 if changed and len(latest) == len(names):
                     stream.push(_tile([latest[name] for name in names], self.width))
                 if not server_thread.is_alive():
