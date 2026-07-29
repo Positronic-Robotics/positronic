@@ -277,4 +277,7 @@ positronic = [
   "gui/templates/**",
   "server/static/**",
   "server/templates/**",
+  # The launcher feeds this to `uv pip install -c` when it builds the MolmoSpaces venv, so a packaged
+  # install needs it on disk just as much as a checkout does.
+  "simulator/molmo_spaces/molmo_constraints.txt",
 ]
