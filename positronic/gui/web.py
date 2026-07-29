@@ -312,12 +312,16 @@ class WebEvalUI(pimm.ControlSystem):
             # needed. Returns immediately (the browser shows the wrap-up overlay on this 200); the actual
             # shutdown runs as a background task so a live episode is ended CLEANLY first.
             #
-            # If an episode is active we must NOT just set the shared stop event: that bypasses
-            # Harness._end_episode, so the DsWriterAgent can abort the still-open recording (episode lost)
-            # and the arm is left un-homed in its task pose. Instead emit FINISH — the harness runs the
-            # normal episode-end path (commit the recording, then home) — wait for it to report idle, let
-            # the commanded home reach the arm, and only THEN stop the World. Setting the event (not a
-            # signal) always works even under a nohup launch where SIGINT is SIG_IGN.
+            # We must NOT just set the shared stop event: that bypasses Harness._end_episode (which
+            # finalizes the recording AND homes the arm), so the DsWriterAgent can abort a still-open
+            # recording (episode lost) and the arm is left wherever it was. Always route through the
+            # episode-end path so the arm homes as the button + overlay promise:
+            #   - active episode -> FINISH: commit the recording, then home;
+            #   - idle (possibly after manual jogging, so NOT necessarily at home) -> ABORT: nothing to
+            #     finalize, but it still runs _end_episode -> _home.
+            # Wait for the harness to report idle (episode committed), let the commanded home reach the
+            # arm, and only THEN stop the World. Setting the event (not a signal) always works even under
+            # a nohup launch where SIGINT is SIG_IGN.
             async def _wrap_up():
                 try:
                     if (status_holder['value'] or {}).get('phase') != 'idle':
@@ -326,9 +330,11 @@ class WebEvalUI(pimm.ControlSystem):
                             if (status_holder['value'] or {}).get('phase') == 'idle':
                                 break
                             await asyncio.sleep(0.1)
-                        await asyncio.sleep(_FINISH_HOME_SETTLE_S)  # let the commanded home reach the arm
+                    else:
+                        self.directive.emit(Directive.ABORT(), clock.now_ns())  # idle: nothing to save; ABORT homes
+                    await asyncio.sleep(_FINISH_HOME_SETTLE_S)  # let the commanded home reach the arm before stopping
                 finally:
-                    should_stop._event.set()  # always end the run, even if the clean-finalize path failed
+                    should_stop._event.set()  # always end the run, even if the clean path failed
 
             asyncio.create_task(_wrap_up())
             return {'wrapping_up': True}
