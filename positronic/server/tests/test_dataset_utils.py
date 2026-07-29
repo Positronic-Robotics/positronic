@@ -88,7 +88,7 @@ def test_rrd_cache_path_versions_and_drops_stale(tmp_path, monkeypatch):
     old = Path(path).parent / 'abc123.rrd'
     old.write_bytes(b'stale')
     assert positronic_server._get_rrd_cache_path(0) == path
-    positronic_server._drop_unservable_cache_entries(path)
+    positronic_server._drop_unservable_cache_entries(str(Path(path).parent))
     assert not old.exists()
 
 
@@ -136,7 +136,7 @@ def test_rrd_cache_sweep_keeps_current_generation_entries(tmp_path, monkeypatch)
     old_ts = time.time() - 2 * positronic_server._ABANDONED_PARTIAL_AGE_S
     os.utime(abandoned, (old_ts, old_ts))
 
-    positronic_server._drop_unservable_cache_entries(str(path))
+    positronic_server._drop_unservable_cache_entries(str(path.parent))
     assert sibling.exists()
     assert live_partial.exists()
     assert not previous_generation.exists()

@@ -104,33 +104,38 @@ def _cache_while_streaming(chunks, cache_path: str):
             Path(partial_path).unlink(missing_ok=True)
 
 
+def _episode_cache_dir() -> str:
+    """This dataset's own directory under the cache root, created if absent."""
+    ds_id = str(Path(str(app_state['root'])).resolve()).replace(os.sep, '_').replace(':', '')
+    episode_cache_dir = os.path.join(str(app_state['cache_dir']), ds_id)
+    os.makedirs(episode_cache_dir, exist_ok=True)
+    return episode_cache_dir
+
+
 def _get_rrd_cache_path(episode_id: int) -> str:
     ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
     if ds is None:
         raise RuntimeError('Dataset not loaded')
-    cache_root = str(app_state['cache_dir'])
-    ds_id = str(Path(str(app_state['root'])).resolve()).replace(os.sep, '_').replace(':', '')
-    episode_cache_dir = os.path.join(cache_root, ds_id)
-    os.makedirs(episode_cache_dir, exist_ok=True)
     # Key the cache by episode uid, not position: position is view-dependent, and datasets without a
     # resolvable root (e.g. concatenated ones) all share the 'unknown_dataset' namespace. Uids are
     # arbitrary caller-provided strings, so the key is their digest: one bounded filename component,
     # free of the path separators, glob metacharacters and dots a raw uid may carry.
     uid_digest = hashlib.sha256(ds[episode_id].meta['uid'].encode()).hexdigest()
-    return os.path.join(episode_cache_dir, f'{uid_digest}{_GENERATION_SUFFIX}')
+    return os.path.join(_episode_cache_dir(), f'{uid_digest}{_GENERATION_SUFFIX}')
 
 
-def _drop_unservable_cache_entries(cache_path: str) -> None:
+def _drop_unservable_cache_entries(episode_cache_dir: str) -> None:
     """Drop everything in this dataset's cache the current generation cannot serve.
 
     A format bump reclaims every episode's previous entries instead of leaving them to be served
-    stale, which is why the whole directory is walked rather than one episode's entries. Callers run
-    this only when an entry has to be built, so a warm cache costs one stat per request instead of a
-    scan. A young .partial belongs to a builder streaming right now — deleting it would break that
-    response's commit; only abandoned ones (a crashed builder's leftovers) are swept.
+    stale, which is why the whole directory is walked rather than one episode's entries. One walk at
+    startup covers the bump, because the generation is a constant of the running code: it cannot
+    change without a new process. A young .partial belongs to a builder streaming right now —
+    deleting it would break that response's commit; only abandoned ones (a crashed builder's
+    leftovers) are swept.
     """
     now = time.time()
-    for stale in Path(cache_path).parent.iterdir():
+    for stale in Path(episode_cache_dir).iterdir():
         if stale.name.endswith(_GENERATION_SUFFIX):
             continue
         if stale.name.endswith('.partial'):
@@ -559,7 +564,6 @@ async def api_episode_rrd(episode_id: int):
             headers={'Content-Disposition': f'attachment; filename=episode_{episode_id}.rrd'},
         )
 
-    _drop_unservable_cache_entries(cache_path)
     return StreamingResponse(
         _cache_while_streaming(stream_episode_rrd(ds, episode_id), cache_path),
         media_type='application/octet-stream',
@@ -684,6 +688,7 @@ def main(
 
     logging.info(f'Loading dataset from: {root}')
     logging.info(f'RRD cache directory: {os.path.abspath(cache_dir)}')
+    _drop_unservable_cache_entries(_episode_cache_dir())
 
     def load_dataset():
         try:
