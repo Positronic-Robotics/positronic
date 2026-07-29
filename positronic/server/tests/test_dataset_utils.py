@@ -5,7 +5,8 @@ import av
 import numpy as np
 import pytest
 
-from positronic.server.dataset_utils import playable_video_bytes
+from positronic.server import positronic_server
+from positronic.server.dataset_utils import RRD_FORMAT_VERSION, playable_video_bytes
 
 
 def _write_video(path, n_frames, max_b_frames):
@@ -56,16 +57,12 @@ def test_playable_video_bytes_passthrough(tmp_path):
 def test_rrd_cache_path_versions_and_drops_stale(tmp_path, monkeypatch):
     """A generation bump changes the cache key and removes the previous generation's entry
     (regression: RRDs cached before the B-frame re-encode were served stale forever)."""
-    from positronic.server import positronic_server
-
     class _Ep:
         meta = {'uid': 'abc123'}
 
     monkeypatch.setitem(positronic_server.app_state, 'dataset', {0: _Ep()})
     monkeypatch.setitem(positronic_server.app_state, 'cache_dir', str(tmp_path))
     monkeypatch.setitem(positronic_server.app_state, 'root', str(tmp_path / 'ds'))
-
-    from positronic.server.dataset_utils import RRD_FORMAT_VERSION
 
     path = positronic_server._get_rrd_cache_path(0)
     assert f'.v{RRD_FORMAT_VERSION}.rrd' in path
