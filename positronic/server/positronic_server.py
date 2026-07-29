@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.parse
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -113,7 +114,9 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     # resolvable root (e.g. concatenated ones) all share the 'unknown_dataset' namespace. The RRD format
     # version keys generation changes; entries from previous generations are dropped so they can't be
     # served stale.
-    uid = ds[episode_id].meta['uid']
+    # Caller-provided uids are arbitrary strings; percent-encoding confines the key to one filename
+    # component (no separators survive), so a uid like '../shared' cannot escape the cache directory.
+    uid = urllib.parse.quote(ds[episode_id].meta['uid'], safe='')
     cache_path = os.path.join(episode_cache_dir, f'{uid}.v{RRD_FORMAT_VERSION}.rrd')
     # The '.' after the uid anchors the match: a different uid can never extend this one past it.
     # A young .partial belongs to a builder streaming right now — deleting it would break that

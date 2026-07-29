@@ -131,11 +131,32 @@ def test_rrd_cache_path_handles_glob_chars_in_uid(tmp_path, monkeypatch):
     path = Path(positronic_server._get_rrd_cache_path(0))
     bystander = path.parent / 'u.rrd'
     bystander.write_bytes(b'other')
-    own_stale = path.parent / 'weird[uid].rrd'
+    own_stale = path.parent / (path.name.split('.v')[0] + '.rrd')
     own_stale.write_bytes(b'stale')
     positronic_server._get_rrd_cache_path(0)
     assert bystander.exists()
     assert not own_stale.exists()
+
+
+def test_rrd_cache_path_confines_uid_to_cache_dir(tmp_path, monkeypatch):
+    """A uid carrying path components cannot escape the episode cache directory (regression:
+    '../shared' traversed out of it, and the sweep could unlink foreign .rrd files)."""
+    class _Ep:
+        meta = {'uid': '../shared'}
+
+    monkeypatch.setitem(positronic_server.app_state, 'dataset', {0: _Ep()})
+    monkeypatch.setitem(positronic_server.app_state, 'cache_dir', str(tmp_path / 'cache'))
+    monkeypatch.setitem(positronic_server.app_state, 'root', str(tmp_path / 'ds'))
+
+    outside = tmp_path / 'cache' / f'shared.v{RRD_FORMAT_VERSION}.rrd'
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_bytes(b'foreign dataset entry')
+
+    path = Path(positronic_server._get_rrd_cache_path(0))
+    assert path.parent.parent == tmp_path / 'cache'
+    assert path.resolve().is_relative_to((tmp_path / 'cache').resolve())
+    assert os.sep not in path.name
+    assert outside.exists()
 
 
 def test_cache_while_streaming_concurrent_builders(tmp_path):
