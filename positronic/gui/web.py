@@ -35,6 +35,14 @@ class _GripBody(BaseModel):
 _TRANSLATION_AXES = {'x': 0, 'y': 1, 'z': 2}
 _ROTATION_AXES = {'rx': 0, 'ry': 1, 'rz': 2}
 
+# /finish_run, when an episode is live, ends it via the harness FINISH path (finalize + home) BEFORE
+# stopping the World; these bound that wait. FINALIZE_TIMEOUT caps how long we wait for the harness to
+# report idle (episode committed + home commanded); HOME_SETTLE then lets the commanded home motion
+# actually reach the arm before the World stops the robot. Tune HOME_SETTLE at the rig if a far pose
+# needs longer to home.
+_FINISH_FINALIZE_TIMEOUT_S = 30.0
+_FINISH_HOME_SETTLE_S = 5.0
+
 
 def _pkg_path(*parts: str) -> str:
     return str(Path(__file__).resolve().parent.joinpath(*parts))
@@ -301,11 +309,28 @@ class WebEvalUI(pimm.ControlSystem):
         @app.post('/finish_run')
         async def finish_run():
             # Wrap up the whole run from the browser (or `curl -X POST .../finish_run`), no terminal
-            # needed: set the World's shared stop event — the same thing a finished control loop does
-            # (pimm world.py:463). It unwinds the World -> finalizes + uploads the dataset -> closes the
-            # session -> homes the arm. Deliberately NOT a signal: a nohup/backgrounded launch has SIGINT
-            # set to SIG_IGN, so Ctrl+C-style signals never arrive; setting the event always works.
-            should_stop._event.set()
+            # needed. Returns immediately (the browser shows the wrap-up overlay on this 200); the actual
+            # shutdown runs as a background task so a live episode is ended CLEANLY first.
+            #
+            # If an episode is active we must NOT just set the shared stop event: that bypasses
+            # Harness._end_episode, so the DsWriterAgent can abort the still-open recording (episode lost)
+            # and the arm is left un-homed in its task pose. Instead emit FINISH — the harness runs the
+            # normal episode-end path (commit the recording, then home) — wait for it to report idle, let
+            # the commanded home reach the arm, and only THEN stop the World. Setting the event (not a
+            # signal) always works even under a nohup launch where SIGINT is SIG_IGN.
+            async def _wrap_up():
+                try:
+                    if (status_holder['value'] or {}).get('phase') != 'idle':
+                        self.directive.emit(Directive.FINISH(), clock.now_ns())
+                        for _ in range(int(_FINISH_FINALIZE_TIMEOUT_S / 0.1)):
+                            if (status_holder['value'] or {}).get('phase') == 'idle':
+                                break
+                            await asyncio.sleep(0.1)
+                        await asyncio.sleep(_FINISH_HOME_SETTLE_S)  # let the commanded home reach the arm
+                finally:
+                    should_stop._event.set()  # always end the run, even if the clean-finalize path failed
+
+            asyncio.create_task(_wrap_up())
             return {'wrapping_up': True}
 
         # The legacy asyncio `websockets` backend drains the transport from its reader and keepalive

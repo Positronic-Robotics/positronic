@@ -179,13 +179,37 @@
         ackTimer = setTimeout(() => { ackToast.hidden = true; }, 5000);  // 5s
       };
 
+      // Ack a directive from the harness's ACTUAL phase transition (via /status), NOT the HTTP 200: an
+      // out-of-phase directive (Start during an episode, Save/Discard while idle) still returns 200 but is
+      // silently ignored by Harness._handle_directive. pendingAck is resolved in renderStatus when the
+      // phase moves (recognized) or the window elapses without it (ignored).
+      let pendingAck = null;   // { label, ok:(phase)=>bool, deadline }
+      const isActivePhase = (p) => p === 'starting' || p === 'running';
+      const serverPhase = () => (lastStatus && typeof lastStatus === 'object' ? lastStatus.phase : undefined);
+
       for (const button of document.querySelectorAll('button[data-action]')) {
         button.addEventListener('click', () => {
           const action = button.dataset.action;
-          // The 200 from the harness IS the "recognized" signal — show it, don't assume.
+          const from = serverPhase();
+          // Predict whether the harness will act (Start only from idle; Save/Discard only from an active
+          // episode) so the ack reflects the real transition. The transport response only says the POST was
+          // received; recognized/ignored comes from the phase moving.
+          const willAct = action === 'start' ? !isActivePhase(from) : isActivePhase(from);
+          const target = action === 'start' ? isActivePhase : (p) => p === 'idle';
           fetch('/directive/' + action, { method: 'POST' })
-            .then((r) => showAck(`${ACK[action]} — ${r.ok ? 'recognized' : 'FAILED (' + r.status + ')'}`, r.ok))
-            .catch(() => showAck(`${ACK[action]} — no response`, false));
+            .then((r) => { if (!r.ok) { showAck(`${ACK[action]} — FAILED (${r.status})`, false); pendingAck = null; } })
+            .catch(() => { showAck(`${ACK[action]} — no response`, false); pendingAck = null; });
+          if (willAct) {
+            showAck(`${ACK[action]} — sent…`, true);
+            pendingAck = { label: ACK[action], ok: target, deadline: performance.now() + 5000 };
+          } else {
+            showAck(`${ACK[action]} — ignored (wrong phase)`, false);
+            pendingAck = null;
+          }
+          // The harness homes the gripper open (target_grip 0) on every episode boundary, but this
+          // browser-side setpoint is never updated by policy/homing — resync it so the next grip step
+          // starts from 0, not a stale pre-episode value (e.g. a full-close instead of a fine step).
+          reflectGrip(0);
           // TODO: this re-enables the jog controls on the Save/Discard click, but the harness stays busy until
           // it finalizes the episode and the arm finishes homing. Gate the controls on a real idle signal
           // pushed from the harness instead of the button press.
@@ -385,6 +409,14 @@
       let reflexErrorAt = null;     // client timestamp of the last robot_error=true (decays the reflex banner)
       const renderStatus = (s) => {
         lastStatus = s;
+        // Resolve a pending directive ack from the real phase (see the directive handler): recognized once
+        // the harness moves to the expected phase, ignored if the window elapses without it.
+        if (pendingAck && s && typeof s === 'object') {
+          if (pendingAck.ok(s.phase)) { showAck(`${pendingAck.label} — recognized`, true); pendingAck = null; }
+          else if (performance.now() > pendingAck.deadline) {
+            showAck(`${pendingAck.label} — no phase change (ignored?)`, false); pendingAck = null;
+          }
+        }
         const waiting = !!s && (s.phase === 'starting' || (s.phase === 'running' && s.waiting_for_policy));
         if (waiting) { if (waitSince === null) waitSince = performance.now(); }
         else { waitSince = null; }
@@ -438,13 +470,9 @@
       const wrapOverlay = document.getElementById('wrapup-overlay');
       const wrapTitle = document.getElementById('wrapup-title');
       const wrapSub = document.getElementById('wrapup-sub');
-      document.getElementById('finish-run').addEventListener('click', () => {
-        if (!confirm('Finish the WHOLE run? This finalizes + uploads everything, homes + locks the arm, ' +
-                     'releases control, and ends the session (a relaunch is needed to run again). ' +
-                     'Use Save & Home to just keep the current episode and continue.')) return;
-        fetch('/finish_run', { method: 'POST' }).catch(() => {});
+      // The UI server tears down during the upload, so /ping stops answering — that IS the progress signal.
+      const beginWrapup = () => {
         wrapOverlay.hidden = false;
-        // The UI server tears down during the upload, so /ping stops answering — that IS the progress signal.
         let gone = 0;
         const iv = setInterval(() => {
           fetch('/ping', { cache: 'no-store' })
@@ -454,6 +482,19 @@
               wrapSub.textContent = 'Console shut down; the final upload is completing on the robot host. ' +
                                     'Safe to close this tab.'; } });
         }, 1000);
+      };
+      document.getElementById('finish-run').addEventListener('click', () => {
+        if (!confirm('Finish the WHOLE run? This finalizes + uploads everything, homes + locks the arm, ' +
+                     'releases control, and ends the session (a relaunch is needed to run again). ' +
+                     'Use Save & Home to just keep the current episode and continue.')) return;
+        // Show the wrap-up overlay only once the server ACCEPTS the finish (200 — the handler schedules the
+        // clean shutdown and returns immediately). If the POST fails or the link drops, the stop event was
+        // never set, so keep the controls + surface a retry rather than hiding everything behind an overlay
+        // whose /ping-death would then falsely read as "shutdown succeeded, safe to leave".
+        fetch('/finish_run', { method: 'POST' })
+          .then((r) => { if (r.ok) beginWrapup();
+            else showAck(`Finish run — FAILED (${r.status}); run still active, try again`, false); })
+          .catch(() => showAck('Finish run — no response; run still active, try again', false));
       });
 
       startStream(document.getElementById('feed'));
