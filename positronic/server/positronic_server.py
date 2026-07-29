@@ -116,7 +116,9 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     # served stale.
     # Caller-provided uids are arbitrary strings; percent-encoding confines the key to one filename
     # component (no separators survive), so a uid like '../shared' cannot escape the cache directory.
-    uid = urllib.parse.quote(ds[episode_id].meta['uid'], safe='')
+    # '.' is escaped too — it is the separator before '.v<N>.rrd', so a key containing one would make
+    # the stale sweep of uid 'foo' match a sibling uid 'foo.victim'.
+    uid = urllib.parse.quote(ds[episode_id].meta['uid'], safe='').replace('.', '%2E')
     cache_path = os.path.join(episode_cache_dir, f'{uid}.v{RRD_FORMAT_VERSION}.rrd')
     # The '.' after the uid anchors the match: a different uid can never extend this one past it.
     # A young .partial belongs to a builder streaming right now — deleting it would break that

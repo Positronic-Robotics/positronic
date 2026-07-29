@@ -1,6 +1,7 @@
 import io
 import os
 import time
+import urllib.parse
 from pathlib import Path
 
 import av
@@ -157,6 +158,29 @@ def test_rrd_cache_path_confines_uid_to_cache_dir(tmp_path, monkeypatch):
     assert path.resolve().is_relative_to((tmp_path / 'cache').resolve())
     assert os.sep not in path.name
     assert outside.exists()
+
+
+def test_rrd_cache_sweep_spares_uid_extended_by_a_dot(tmp_path, monkeypatch):
+    """A sibling uid that extends this one past a dot keeps its cache entry (regression: the sweep
+    for 'foo' matched 'foo.victim.v2.rrd')."""
+    class _Ep:
+        meta = {'uid': 'foo'}
+
+    monkeypatch.setitem(positronic_server.app_state, 'dataset', {0: _Ep()})
+    monkeypatch.setitem(positronic_server.app_state, 'cache_dir', str(tmp_path))
+    monkeypatch.setitem(positronic_server.app_state, 'root', str(tmp_path / 'ds'))
+
+    path = Path(positronic_server._get_rrd_cache_path(0))
+    for sibling_uid in ('foo.victim', 'foo.rrd-copy'):
+        key = urllib.parse.quote(sibling_uid, safe='').replace('.', '%2E')
+        sibling = path.parent / f'{key}.v{RRD_FORMAT_VERSION}.rrd'
+        sibling.write_bytes(b'sibling episode')
+    own_stale = path.parent / f'{path.name.split(".v")[0]}.rrd'
+    own_stale.write_bytes(b'stale')
+
+    positronic_server._get_rrd_cache_path(0)
+    assert not own_stale.exists()
+    assert len(list(path.parent.glob('*.v*.rrd'))) == 2
 
 
 def test_cache_while_streaming_concurrent_builders(tmp_path):
