@@ -44,6 +44,14 @@
       .wrapup-overlay .box { max-width:34rem; }
       .wrapup-overlay h2 { color:#fbbf24; margin:0 0 0.8rem; }
       .wrapup-overlay p { margin:0.4rem 0; font-size:0.95rem; line-height:1.5; }
+      /* Tap targets for keyboardless / touch surfaces (a tablet at the rig): the jog + grip-step
+         legend rows are clickable — same actuator as the key — and hold-to-repeat mirrors holding
+         the key. Keyboard still works everywhere. */
+      .jog-hint { font-size:0.75rem; color:var(--text-secondary,#94a3b8); margin:0 0 0.5rem; line-height:1.35; }
+      .legend-row.is-tappable { cursor:pointer; user-select:none; -webkit-user-select:none;
+        touch-action:none; min-height:2.1rem; border-radius:0.35rem; }
+      .legend-row.is-tappable:hover { background:rgba(148,163,184,0.14); }
+      .jog.is-running .legend-row.is-tappable { opacity:0.5; pointer-events:none; }
     </style>
 </head>
 <body>
@@ -79,6 +87,7 @@
           <!-- Legends are rendered from KEY_MAP so they cannot drift from the actual bindings. Order mirrors
                the vertically-tiled camera stream: the DROID embodiment tiles WRIST_IMAGE (gripper view) above
                EXTERIOR_IMAGE (side view), so the gripper legend sits above the side-view legend. -->
+          <p class="jog-hint">Tap a row (or press its key); hold to keep moving. Everything works by keyboard too.</p>
           <section class="jog-section legend" data-camera="gripper">
             <h2 class="jog-title">Gripper view — rotate</h2>
             <div class="legend-rows" data-legend="gripper"></div>
@@ -256,8 +265,10 @@
       renderLegend('gripper', KEY_MAP.gripper);
       renderLegend('grip', GRIP_KEYS);
 
-      // ─── Keyboard teleop (FPS-style: hold to keep jogging) ────────────────────────────────────────────
-      // Manual commands are honoured by the harness only while it is idle, so keys are inert during a run.
+      // ─── Manual teleop: keyboard AND on-screen taps share ONE action path ─────────────────────────────
+      // Manual commands are honoured by the harness only while it is idle, so both paths are inert during a
+      // run. doJog / doGripStep are the single actuators; keydown and the tappable legend rows both call
+      // them, so a keyboardless / touch surface (a tablet at the rig) drives the arm identically.
       const JOG_KEYS = { ...KEY_MAP.side, ...KEY_MAP.gripper };
 
       const flashRow = (code) => {
@@ -268,6 +279,59 @@
         const row = jog.querySelector(`.legend-row[data-key="${code}"]`);
         if (row) row.classList.remove('is-pressed');
       };
+
+      const doJog = (code) => {
+        if (running) return;
+        const jogKey = JOG_KEYS[code];
+        if (!jogKey) return;
+        flashRow(code);
+        sendJog(jogKey.axis, jogKey.sign);   // fires per key-repeat / hold tick -> continuous jog
+      };
+      // dir: +1 = close a step (Space), -1 = open a step (Shift+Space). Steps from the LIVE setpoint so a
+      // slider drag in between is respected.
+      const doGripStep = (dir) => {
+        if (running) return;
+        const step = (scale === 'coarse' ? GRIP_STEP.coarse : GRIP_STEP.fine) * dir;
+        const next = Math.min(1, Math.max(0, grip + step));
+        flashRow(dir > 0 ? 'Space' : 'ShiftSpace');
+        reflectGrip(next);
+        sendGrip(next);
+      };
+
+      // Hold-to-repeat, shared by a held key (the OS auto-repeat drives keydown) and a held tap/press
+      // (this interval). Only one hold is ever active; any pointerup / cancel / blur ends it.
+      let hold = null;
+      const stopHold = () => {
+        if (!hold) return;
+        clearInterval(hold.timer);
+        unflashRow(hold.code);
+        if (hold.code === 'Space' || hold.code === 'ShiftSpace') { unflashRow('Space'); unflashRow('ShiftSpace'); }
+        hold = null;
+      };
+      const startHold = (code, fn) => {
+        stopHold();
+        fn();                                   // immediate: a quick tap = one step
+        hold = { code, timer: setInterval(fn, 120) };
+      };
+
+      // Wire every jog / grip-step legend row to the same actuator as its key (press-and-hold to repeat).
+      for (const row of jog.querySelectorAll('.legend-row')) {
+        const code = row.dataset.key;
+        const fn = code === 'Space' ? () => doGripStep(1)
+                 : code === 'ShiftSpace' ? () => doGripStep(-1)
+                 : JOG_KEYS[code] ? () => doJog(code)
+                 : null;
+        if (!fn) continue;
+        row.classList.add('is-tappable');
+        row.setAttribute('role', 'button');
+        row.addEventListener('pointerdown', (event) => {
+          if (running) return;
+          event.preventDefault();               // no text-select / scroll / synthetic click
+          startHold(code, fn);
+        });
+      }
+      window.addEventListener('pointerup', stopHold);
+      window.addEventListener('pointercancel', stopHold);
 
       // The range slider is not a text field — keys (Space/jog) must still work while it holds focus.
       const isTyping = (target) => target instanceof Element && target.matches('input:not([type="range"]), textarea, select');
@@ -287,21 +351,13 @@
 
         if (event.code === 'Space') {
           event.preventDefault();
-          const shift = event.shiftKey;                       // shift = open, plain = close
-          const key = shift ? GRIP_KEYS.ShiftSpace : GRIP_KEYS.Space;
-          const step = (scale === 'coarse' ? GRIP_STEP.coarse : GRIP_STEP.fine) * key.dir;
-          const next = Math.min(1, Math.max(0, grip + step));   // step from the live setpoint, incl. slider drags
-          flashRow(shift ? 'ShiftSpace' : 'Space');
-          reflectGrip(next);
-          sendGrip(next);
-          return;                                             // auto-repeat allowed: holding keeps stepping
+          doGripStep(event.shiftKey ? -1 : 1);   // shift = open, plain = close; auto-repeat keeps stepping
+          return;
         }
 
-        const jogKey = JOG_KEYS[event.code];
-        if (jogKey) {
-          event.preventDefault(); // arrows would otherwise scroll the page
-          flashRow(event.code);
-          sendJog(jogKey.axis, jogKey.sign); // fires on auto-repeat too, so holding a key jogs continuously
+        if (JOG_KEYS[event.code]) {
+          event.preventDefault();                // arrows would otherwise scroll the page
+          doJog(event.code);                     // fires on auto-repeat too, so holding a key jogs continuously
         }
       });
 
@@ -312,8 +368,10 @@
           unflashRow('ShiftSpace');
         }
       });
-      // A held key can miss its keyup (e.g. the window loses focus mid-press); clear every flash on blur.
+      // A held key/tap can miss its release (e.g. the window loses focus mid-press); stop any hold and
+      // clear every flash on blur.
       window.addEventListener('blur', () => {
+        stopHold();
         for (const row of jog.querySelectorAll('.legend-row.is-pressed')) row.classList.remove('is-pressed');
       });
 
