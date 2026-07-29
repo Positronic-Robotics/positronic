@@ -119,6 +119,25 @@ def test_rrd_cache_sweep_leaves_other_uids(tmp_path, monkeypatch):
     assert not abandoned.exists()
 
 
+def test_rrd_cache_path_handles_glob_chars_in_uid(tmp_path, monkeypatch):
+    """A uid carrying glob metacharacters sweeps only its own entries."""
+    class _Ep:
+        meta = {'uid': 'weird[uid]'}
+
+    monkeypatch.setitem(positronic_server.app_state, 'dataset', {0: _Ep()})
+    monkeypatch.setitem(positronic_server.app_state, 'cache_dir', str(tmp_path))
+    monkeypatch.setitem(positronic_server.app_state, 'root', str(tmp_path / 'ds'))
+
+    path = Path(positronic_server._get_rrd_cache_path(0))
+    bystander = path.parent / 'u.rrd'
+    bystander.write_bytes(b'other')
+    own_stale = path.parent / 'weird[uid].rrd'
+    own_stale.write_bytes(b'stale')
+    positronic_server._get_rrd_cache_path(0)
+    assert bystander.exists()
+    assert not own_stale.exists()
+
+
 def test_cache_while_streaming_concurrent_builders(tmp_path):
     """Two builders for the same episode never corrupt each other's partials; the committed
     file is one complete stream."""

@@ -1,6 +1,7 @@
 """A FastAPI web server for visualizing Positronic LocalDatasets using Rerun."""
 
 import atexit
+import glob
 import logging
 import os
 import shutil
@@ -118,7 +119,8 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     # A young .partial belongs to a builder streaming right now — deleting it would break that
     # response's commit; only abandoned ones (a crashed builder's leftovers) are swept.
     now = time.time()
-    for pattern in (f'{uid}.rrd*', f'{uid}.v*.rrd*'):
+    uid_glob = glob.escape(uid)
+    for pattern in (f'{uid_glob}.rrd*', f'{uid_glob}.v*.rrd*'):
         for stale in Path(episode_cache_dir).glob(pattern):
             if str(stale) == cache_path:
                 continue
