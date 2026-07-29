@@ -1,0 +1,139 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["numpy"]
+# ///
+"""Regenerate a deterministic-replay fixture from a recorded MolmoSpaces eval episode.
+
+``test_replay.py`` replays a real pi05 rollout open-loop against the sim and asserts it reproduces. This
+script distils one recorded episode into the fixture that replay needs: the commanded joint targets and grip
+per step, plus checkpoints of the recorded ``sim_state`` to compare the replayed trajectory against.
+
+Two properties make the distillation exact. The recorded commands are *absolute* joint targets, so the
+replay never reads the measured state back — it is genuinely open-loop, and the only thing under test is the
+sim rollout plus the env-server path. And the proxy applies whichever command was last received when it
+steps, so sampling the command signal at each observation frame's timestamp (``Signal.time`` — the same
+last-value-at-or-before semantics a pimm receiver has) reconstructs the stream the sim saw, unchanged
+commands included.
+
+It reconstructs that stream only as far as the recording pins it: an episode's command signals stop before
+its observations do (internal#130), so the fixture keeps the prefix up to the final recorded command and
+counts the rest as the recording's gap.
+
+Commands are stored as float32, the dtype ``env.py`` casts them to, so the fixture holds the bits the sim
+actually applied rather than the float64 the recorder wrote.
+
+Run (needs positronic, for the dataset reader — hence ``--locked``, not ``--no-project``)::
+
+    uv run --locked python positronic/simulator/molmo_spaces/tests/make_replay_fixture.py \
+        --dataset_dir ~/.cache/positronic/s3/_/inference/molmo_battle_test/2026-07-29/sweep_jp \
+        --episode_index 3 --episode_index 6
+
+Output: ``replay_ep<NN>.npz`` next to this script, one per episode (tens of KB — actions and checkpoints
+only, never the videos).
+"""
+
+import argparse
+import re
+from pathlib import Path
+
+import numpy as np
+
+from positronic.dataset.local_dataset import DiskEpisode
+from positronic.dataset.signal import Signal
+
+# Checkpoint stride over the replayed steps: dense enough that drift is caught early rather than only at the
+# end state, sparse enough to keep the fixture small. The final step is always included on top.
+CHECKPOINT_STRIDE = 8
+
+# The eval CLI records its full command line in the dataset's run metadata; the benchmark the episodes were
+# recorded against is the one argument the replay must resolve on the box it runs on.
+_BENCHMARK_ARG = re.compile(r'--eval\.benchmark_dir=(\S+)')
+
+
+def find_episode_dir(dataset_dir: Path, episode_index: int) -> Path:
+    """The recorded episode directory whose spec carries ``episode_index``."""
+    for path in sorted(dataset_dir.rglob('static.json')):
+        episode_dir = path.parent
+        if DiskEpisode(episode_dir).static.get('eval.episode_index') == episode_index:
+            return episode_dir
+    raise SystemExit(f'no recorded episode with eval.episode_index={episode_index} under {dataset_dir}')
+
+
+def read_benchmark_path(dataset_dir: Path) -> str:
+    """The evaluated benchmark's path under the asset packs' ``benchmarks/`` root, from the run metadata.
+
+    The path is kept from ``benchmarks/`` down — suite, scene dataset, task, benchmark — because the leaf
+    name alone is ambiguous: the same benchmark name exists under every scene dataset (ithor,
+    procthor-10k, ...) with different episodes, and replaying the wrong one silently replays a different
+    scene. Everything above ``benchmarks/`` is the box's own asset root and varies, so it is dropped.
+    """
+    metadata = sorted(dataset_dir.glob('run_metadata_*.yaml'))
+    if not metadata:
+        raise SystemExit(f'no run_metadata_*.yaml in {dataset_dir} — cannot tell which benchmark was evaluated')
+    match = _BENCHMARK_ARG.search(metadata[-1].read_text())
+    if match is None:
+        raise SystemExit(f'{metadata[-1]} records no --eval.benchmark_dir')
+    parts = Path(match.group(1)).parts
+    if 'benchmarks' not in parts:
+        raise SystemExit(f'evaluated benchmark {match.group(1)} is not under a benchmarks/ asset root')
+    return str(Path(*parts[parts.index('benchmarks') + 1 :]))
+
+
+def sample_at(signal: Signal, timestamps: list[int]) -> list:
+    """The signal's value at each timestamp — the last one at or before it, a pimm receiver's semantics."""
+    sampled = signal.time[timestamps]
+    assert isinstance(sampled, Signal)  # a sequence of timestamps samples a Signal, a single one a record
+    return [value for value, _ts in sampled]
+
+
+def build_fixture(episode_dir: Path, benchmark_path: str) -> dict[str, np.ndarray]:
+    episode = DiskEpisode(episode_dir)
+    states, commands, grips = episode['sim_state'], episode['robot_command.joints'], episode['target_grip']
+    # Frame 0 is the reset observation; every later frame is one step.
+    frame_ts = [ts for _value, ts in states]
+    step_ts = frame_ts[1:]
+    played = [np.asarray(value, dtype=np.float32) for value in sample_at(commands, step_ts)]
+    grip = [float(np.asarray(value).reshape(-1)[0]) for value in sample_at(grips, step_ts)]
+
+    # The recording's command signals stop before its observations do (internal#130), so only the steps up to
+    # and including the first one that reads the final recorded command are pinned by the recording; past that
+    # the commands the run actually applied were never written, and no substitute reproduces them. Replay that
+    # prefix and report the rest as the recording's gap rather than replaying commands it does not contain.
+    last_command_ts = commands[len(commands) - 1][1]
+    replayable = int(np.searchsorted(step_ts, last_command_ts, side='left')) + 1
+
+    steps = np.arange(1, replayable + 1)
+    checkpoints = np.unique(np.concatenate([steps[::CHECKPOINT_STRIDE], steps[-1:]]))
+    return {
+        'episode_index': np.asarray(episode.static['eval.episode_index'], dtype=np.int32),
+        'benchmark_path': np.asarray(benchmark_path),
+        'task': np.asarray(episode.static['task']),
+        'commands': np.stack(played[:replayable]),
+        'grips': np.array(grip[:replayable], dtype=np.float32),
+        'unreplayable_tail_steps': np.asarray(len(step_ts) - replayable, dtype=np.int32),
+        'checkpoint_steps': checkpoints.astype(np.int32),
+        'checkpoint_sim_state': np.stack([np.asarray(states[int(step)][0], dtype=np.float64) for step in checkpoints]),
+        'expected_success': np.asarray(episode.static['eval.success'], dtype=bool),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description='Distil recorded eval episodes into replay fixtures.')
+    parser.add_argument('--dataset_dir', type=Path, required=True, help='recorded eval run (holds run_metadata)')
+    parser.add_argument(
+        '--episode_index', type=int, action='append', required=True, help='benchmark episode to distil; repeatable'
+    )
+    args = parser.parse_args()
+
+    benchmark_path = read_benchmark_path(args.dataset_dir)
+    for episode_index in args.episode_index:
+        fixture = build_fixture(find_episode_dir(args.dataset_dir, episode_index), benchmark_path)
+        if not fixture['expected_success']:
+            raise SystemExit(f'episode {episode_index} did not succeed — replay fixtures pin successful rollouts')
+        out = Path(__file__).parent / f'replay_ep{episode_index:02d}.npz'
+        np.savez_compressed(out, **fixture)  # pyright: ignore[reportArgumentType] -- numpy's savez **kwds stub
+        print(f'Wrote {out} ({out.stat().st_size} bytes, {len(fixture["commands"])} steps, {benchmark_path})')
+
+
+if __name__ == '__main__':
+    main()
