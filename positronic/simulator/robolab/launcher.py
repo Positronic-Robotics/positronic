@@ -95,8 +95,8 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
     # filesystem, where a concurrent eval's rewrite could tear a reader mid-decode.
     # HACK: the model declares ``control_frame='end_effector'`` (the flange), but the RoboLab env reports and
     # accepts poses in DROID's eef frame (gripper base ∘ EEF_OFFSET_ROT), so episode statics mislabel the frame
-    # and offline IK over RoboLab episodes would solve the wrong target. Fixed by ``ChangeEEFrame`` + a
-    # ``droid_eef`` site: https://github.com/Positronic-Robotics/positronic/issues/483
+    # and offline IK over RoboLab episodes would solve the wrong target. Tracked in
+    # https://github.com/Positronic-Robotics/positronic/issues/483
     fd, meta_path = tempfile.mkstemp(prefix='robolab_robot_meta_', suffix='.bin')
     with os.fdopen(fd, 'wb') as meta_file:
         meta_file.write(encode(bundled_franka_model()))
