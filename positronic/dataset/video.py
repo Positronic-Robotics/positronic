@@ -82,9 +82,6 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._stream.height = self._height
         self._stream.pix_fmt = 'yuv420p'
         self._stream.gop_size = self.gop_size
-        # Which encoder backs 'h264' depends on the host ffmpeg (libx264 defaults to B-frames, openh264 to none),
-        # and rerun's web viewer stalls on B-frame video — pin the output so recordings play everywhere.
-        self._stream.max_b_frames = 0
 
     def append(self, data: np.ndarray, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:  # noqa: C901
         """Append a video frame with timestamp.
