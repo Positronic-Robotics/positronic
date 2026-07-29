@@ -340,9 +340,12 @@ def playable_video_bytes(video_path: Path) -> bytes:
         out.pix_fmt = 'yuv420p'
         out.max_b_frames = 0
         out.bit_rate = in_stream.bit_rate or 4_000_000
-        for frame in src.decode(in_stream):
-            frame.pts = None
-            for packet in out.encode(frame):
+        # Decoded frames carry the source's pts/time_base, which the fresh stream rejects at mux;
+        # rebuild each frame and index it sequentially, exactly as VideoSignalWriter encodes.
+        for idx, frame in enumerate(src.decode(in_stream)):
+            out_frame = av.VideoFrame.from_ndarray(frame.to_ndarray(format='rgb24'), format='rgb24')
+            out_frame.pts = idx
+            for packet in out.encode(out_frame):
                 dst.mux(packet)
         for packet in out.encode():
             dst.mux(packet)
