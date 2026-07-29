@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -73,6 +74,10 @@ def require_dataset(func):
     return wrapper
 
 
+# An RRD build streams for seconds; a .partial this old has no live writer behind it.
+_ABANDONED_PARTIAL_AGE_S = 3600
+
+
 def _cache_while_streaming(chunks, cache_path: str):
     """Yield chunks while writing them to the cache, committing the file only on completion.
 
@@ -110,10 +115,20 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     uid = ds[episode_id].meta['uid']
     cache_path = os.path.join(episode_cache_dir, f'{uid}.v{RRD_FORMAT_VERSION}.rrd')
     # The '.' after the uid anchors the match: a different uid can never extend this one past it.
+    # A young .partial belongs to a builder streaming right now — deleting it would break that
+    # response's commit; only abandoned ones (a crashed builder's leftovers) are swept.
+    now = time.time()
     for pattern in (f'{uid}.rrd*', f'{uid}.v*.rrd*'):
         for stale in Path(episode_cache_dir).glob(pattern):
-            if str(stale) != cache_path:
-                stale.unlink(missing_ok=True)
+            if str(stale) == cache_path:
+                continue
+            if stale.name.endswith('.partial'):
+                try:
+                    if now - stale.stat().st_mtime < _ABANDONED_PARTIAL_AGE_S:
+                        continue
+                except FileNotFoundError:
+                    continue
+            stale.unlink(missing_ok=True)
     return cache_path
 
 

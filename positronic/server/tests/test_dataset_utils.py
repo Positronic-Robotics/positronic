@@ -1,4 +1,6 @@
 import io
+import os
+import time
 from pathlib import Path
 
 import av
@@ -104,9 +106,17 @@ def test_rrd_cache_sweep_leaves_other_uids(tmp_path, monkeypatch):
     sibling.write_bytes(b'other episode')
     own_stale = path.parent / 'ts-123.rrd'
     own_stale.write_bytes(b'stale')
+    live_partial = path.parent / f'{path.name}.deadbeef.partial'
+    live_partial.write_bytes(b'streaming right now')
+    abandoned = path.parent / f'{path.name}.cafe.partial'
+    abandoned.write_bytes(b'crashed builder')
+    old_ts = time.time() - 2 * positronic_server._ABANDONED_PARTIAL_AGE_S
+    os.utime(abandoned, (old_ts, old_ts))
     positronic_server._get_rrd_cache_path(0)
     assert sibling.exists()
+    assert live_partial.exists()
     assert not own_stale.exists()
+    assert not abandoned.exists()
 
 
 def test_cache_while_streaming_concurrent_builders(tmp_path):
