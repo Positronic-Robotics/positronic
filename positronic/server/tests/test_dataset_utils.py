@@ -88,3 +88,36 @@ def test_cache_while_streaming_commits_only_complete_streams(tmp_path):
 
     assert list(positronic_server._cache_while_streaming(iter([b'a', b'b']), cache_path)) == [b'a', b'b']
     assert Path(cache_path).read_bytes() == b'ab'
+
+
+def test_rrd_cache_sweep_leaves_other_uids(tmp_path, monkeypatch):
+    """The stale-entry sweep matches the exact uid only — a uid that extends another must survive."""
+    class _Ep:
+        meta = {'uid': 'ts-123'}
+
+    monkeypatch.setitem(positronic_server.app_state, 'dataset', {0: _Ep()})
+    monkeypatch.setitem(positronic_server.app_state, 'cache_dir', str(tmp_path))
+    monkeypatch.setitem(positronic_server.app_state, 'root', str(tmp_path / 'ds'))
+
+    path = Path(positronic_server._get_rrd_cache_path(0))
+    sibling = path.parent / f'ts-1234.v{RRD_FORMAT_VERSION}.rrd'
+    sibling.write_bytes(b'other episode')
+    own_stale = path.parent / 'ts-123.rrd'
+    own_stale.write_bytes(b'stale')
+    positronic_server._get_rrd_cache_path(0)
+    assert sibling.exists()
+    assert not own_stale.exists()
+
+
+def test_cache_while_streaming_concurrent_builders(tmp_path):
+    """Two builders for the same episode never corrupt each other's partials; the committed
+    file is one complete stream."""
+    cache_path = str(tmp_path / 'ep.rrd')
+    a = positronic_server._cache_while_streaming(iter([b'a1', b'a2']), cache_path)
+    b = positronic_server._cache_while_streaming(iter([b'b1', b'b2']), cache_path)
+    assert next(a) == b'a1'
+    assert next(b) == b'b1'
+    assert list(a) == [b'a2']
+    assert list(b) == [b'b2']
+    assert Path(cache_path).read_bytes() in (b'a1a2', b'b1b2')
+    assert [p.name for p in tmp_path.iterdir()] == ['ep.rrd']

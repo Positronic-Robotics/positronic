@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
@@ -79,7 +80,7 @@ def _cache_while_streaming(chunks, cache_path: str):
     (a partial file served as a cache hit reads as a valid-but-empty recording), and a concurrent
     request never sees a half-written file.
     """
-    partial_path = cache_path + '.partial'
+    partial_path = f'{cache_path}.{uuid.uuid4().hex}.partial'
     success = False
     try:
         with open(partial_path, 'wb') as cache_file:
@@ -108,9 +109,11 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     # served stale.
     uid = ds[episode_id].meta['uid']
     cache_path = os.path.join(episode_cache_dir, f'{uid}.v{RRD_FORMAT_VERSION}.rrd')
-    for stale in Path(episode_cache_dir).glob(f'{uid}*.rrd*'):
-        if str(stale) != cache_path:
-            stale.unlink(missing_ok=True)
+    # The '.' after the uid anchors the match: a different uid can never extend this one past it.
+    for pattern in (f'{uid}.rrd*', f'{uid}.v*.rrd*'):
+        for stale in Path(episode_cache_dir).glob(pattern):
+            if str(stale) != cache_path:
+                stale.unlink(missing_ok=True)
     return cache_path
 
 
