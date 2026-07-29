@@ -313,6 +313,11 @@ def _encode_frames_as_video(entity_path: str, sig) -> None:
             rr.log(entity_path, rr.VideoStream.from_fields(sample=bytes(packet)))
 
 
+# Bump when RRD generation changes what an episode RRD contains (e.g. the B-frame re-encode below),
+# so episode RRDs cached under the previous generation are rebuilt instead of served stale.
+RRD_FORMAT_VERSION = 2
+
+
 def playable_video_bytes(video_path: Path) -> bytes:
     """Return the video's bytes, re-encoded without B-frames when the recording carries them.
 

@@ -29,7 +29,12 @@ import positronic.cfg.ds
 from positronic import keys, utils
 from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.server.dataset_utils import get_dataset_root, get_episodes_list, stream_episode_rrd
+from positronic.server.dataset_utils import (
+    RRD_FORMAT_VERSION,
+    get_dataset_root,
+    get_episodes_list,
+    stream_episode_rrd,
+)
 from positronic.utils.logging import init_logging
 
 # Response cache for api_groups and api_episodes (dataset is immutable once loaded)
@@ -76,8 +81,15 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     episode_cache_dir = os.path.join(cache_root, ds_id)
     os.makedirs(episode_cache_dir, exist_ok=True)
     # Key the cache by episode uid, not position: position is view-dependent, and datasets without a
-    # resolvable root (e.g. concatenated ones) all share the 'unknown_dataset' namespace.
-    return os.path.join(episode_cache_dir, f'{ds[episode_id].meta["uid"]}.rrd')
+    # resolvable root (e.g. concatenated ones) all share the 'unknown_dataset' namespace. The RRD format
+    # version keys generation changes; entries from previous generations are dropped so they can't be
+    # served stale.
+    uid = ds[episode_id].meta['uid']
+    cache_path = os.path.join(episode_cache_dir, f'{uid}.v{RRD_FORMAT_VERSION}.rrd')
+    for stale in Path(episode_cache_dir).glob(f'{uid}*.rrd'):
+        if str(stale) != cache_path:
+            stale.unlink(missing_ok=True)
+    return cache_path
 
 
 @asynccontextmanager

@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 
 import av
 import numpy as np
@@ -50,3 +51,26 @@ def test_playable_video_bytes_passthrough(tmp_path):
     src = tmp_path / 'plain.mp4'
     _write_video(src, n_frames=20, max_b_frames=0)
     assert playable_video_bytes(src) == src.read_bytes()
+
+
+def test_rrd_cache_path_versions_and_drops_stale(tmp_path, monkeypatch):
+    """A generation bump changes the cache key and removes the previous generation's entry
+    (regression: RRDs cached before the B-frame re-encode were served stale forever)."""
+    from positronic.server import positronic_server
+
+    class _Ep:
+        meta = {'uid': 'abc123'}
+
+    monkeypatch.setitem(positronic_server.app_state, 'dataset', {0: _Ep()})
+    monkeypatch.setitem(positronic_server.app_state, 'cache_dir', str(tmp_path))
+    monkeypatch.setitem(positronic_server.app_state, 'root', str(tmp_path / 'ds'))
+
+    from positronic.server.dataset_utils import RRD_FORMAT_VERSION
+
+    path = positronic_server._get_rrd_cache_path(0)
+    assert f'.v{RRD_FORMAT_VERSION}.rrd' in path
+
+    old = Path(path).parent / 'abc123.rrd'
+    old.write_bytes(b'stale')
+    assert positronic_server._get_rrd_cache_path(0) == path
+    assert not old.exists()
