@@ -216,11 +216,12 @@
           // setpoint would make the next fine close command 0.1 and OPEN a gripper the operator had just
           // closed by hand.
           if (willAct) reflectGrip(0);
-          // TODO: this re-enables the jog controls on the Save/Discard click, but the harness stays busy until
-          // it finalizes the episode and the arm finishes homing. Gate the controls on a real idle signal
-          // pushed from the harness instead of the button press.
-          if (action === 'start') setRunning(true);
-          else setRunning(false);
+          // A click may only ever DISABLE teleop, never enable it. Save/Discard leaves the harness busy:
+          // _end_episode yields before issuing _home, and a manual command sent in that gap sits in the
+          // last-value-wins channel and is applied on the first idle iteration AFTER the home — moving the
+          // arm back off home while the button claimed it homed. Re-enabling is renderStatus's job, off the
+          // harness's own phase, which turns idle only once _end_episode has issued the home.
+          if (willAct) setRunning(true);
         });
       }
 
@@ -423,6 +424,10 @@
             showAck(`${pendingAck.label} — no phase change (ignored?)`, false); pendingAck = null;
           }
         }
+        // Teleop follows the harness's phase, not the button: idle is the harness saying the
+        // episode-end path (including the home command) is done. A status we cannot read leaves the
+        // controls as they are — an unreadable status is not evidence the arm is parked.
+        if (s && typeof s === 'object' && typeof s.phase === 'string') setRunning(s.phase !== 'idle');
         const waiting = !!s && (s.phase === 'starting' || (s.phase === 'running' && s.waiting_for_policy));
         if (waiting) { if (waitSince === null) waitSince = performance.now(); }
         else { waitSince = null; }
