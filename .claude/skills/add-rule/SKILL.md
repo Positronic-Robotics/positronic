@@ -5,9 +5,8 @@ description: Author, calibrate, or retire a rule in CODE_RULES.md. Use when a re
 
 # Add Rule
 
-`CODE_RULES.md` is read by the Codex reviewer on every pull request, by Claude while implementing, and
-by `/check-rules`. Every rule in it spends attention on every review, so each one earns its place or
-comes out. This skill writes one, calibrates it against the repo, or retires one.
+Every rule in `CODE_RULES.md` spends attention on every review, so each one earns its place or comes
+out. This skill writes one, calibrates it against the repo, or retires one.
 
 Nothing is written to `CODE_RULES.md` without the user's explicit approval of the final wording.
 
@@ -95,10 +94,11 @@ The count sizes the sample; the sample decides. Report both, and the fork they i
 
 Report the sample honestly, including hits that make the rule look bad.
 
-## Step 6: Approve and append
+## Step 6: Approve and write
 
-Show the final wording, the id, the hit count, and the sample. On explicit approval, append the rule to
-`CODE_RULES.md` in its section, then commit following the repo's conventions.
+Show the final wording, the id, the hit count, and the sample. On explicit approval, write it to
+`CODE_RULES.md` — a new rule is appended, a revision of an existing id replaces that rule in place, so
+no id ever appears twice. Then commit following the repo's conventions.
 
 ## Retiring a rule
 

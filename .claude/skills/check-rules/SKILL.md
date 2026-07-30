@@ -15,12 +15,17 @@ what stops it from seeing a violation.
 ## Step 1: Scope the diff
 
 ```bash
-git diff --stat                                   # uncommitted work
-git diff $(git merge-base HEAD main)... --stat    # the whole branch
+BASE=$(git merge-base HEAD main)
+git diff $BASE --stat                # committed, staged and unstaged, against main
+git status --porcelain | grep '^??'  # untracked files, which no diff shows
 ```
 
-Use the uncommitted changes if there are any, the branch diff otherwise, or the files the user named.
-Say which scope you used — a clean report over the wrong scope is worse than no report.
+Everything not yet on `main` is in scope: committed, staged, unstaged, and untracked. Pass the untracked
+files' contents alongside the diff — a brand-new file is where rules bite hardest and is the one thing
+`git diff` cannot show.
+
+Narrow to the files the user named if they named any, and say which scope you used. A clean report over
+the wrong scope is worse than no report.
 
 ## Step 2: One agent per rule
 
@@ -36,28 +41,35 @@ One agent per rule, not one agent holding all of them — an agent given nine ru
 checks none. A narrow agent also fails visibly: reporting nothing is one rule cleanly checked, not
 nine rules half-checked.
 
-Each agent returns either the single word `none`, or findings in this form:
+Each agent returns two sections, either of which may be empty:
 
 ```
+FINDINGS
 Rule <rule-id> violated:
 <file>:<line>
 <what the code does, and the safe path>
+
+WAIVERS
+<file>:<line> — <the reason the waiver gives>
 ```
 
 Instruct every agent to:
 
 - report only what it can point at — a file, a line, and the text that breaks the rule;
-- skip code carrying `# rules-allow: <its-rule-id> — <reason>` on the line or its enclosing block, and
-  list what it skipped;
-- answer `none` plainly rather than reach for a marginal finding. A checker that always finds something
+- honour `# rules-allow: <its-rule-id> — <reason>` on the line or its enclosing block, and list every
+  waiver it honoured. A rule whose every match is waived returns an empty `FINDINGS` and a populated
+  `WAIVERS`, which is not the same as passing;
+- report the violation anyway when the waiver's reason does not say why that instance is correct.
+  `# rules-allow: hardcoded-keys — temporary` explains nothing and would silence a real finding;
+- leave `FINDINGS` empty rather than reach for a marginal one. A checker that always finds something
   gets ignored, which costs more than the violation it caught.
 
 ## Step 3: Report
 
-Aggregate every agent's findings into **one list**, ordered by file and line, each entry naming its own
+Aggregate every agent's `FINDINGS` into **one list**, ordered by file and line, each entry naming its own
 rule and keeping the agents' format so local output matches what Codex posts on the pull request. State
-the scope, the rules checked, and every waiver that was honoured — a rule silenced by a waiver must
-never look the same as a rule that passed.
+the scope and the rules checked, then list the collected `WAIVERS` separately — a rule silenced by a
+waiver must never look the same as a rule that passed.
 
 Report only. Fixing is a separate decision and the user makes it.
 
