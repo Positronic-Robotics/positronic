@@ -67,8 +67,8 @@
 - Comments wrap at 120 columns, same as code
 
 # Testing
-- A new test goes in the file that already covers its subject — a bug fix's regression test beside the other
-  tests of what broke, in the existing package `tests/`
+- A test goes in the file that already covers its subject. A test written for a bug is an ordinary test of the
+  thing that broke — it belongs beside the others and needs neither a file of its own nor "regression" framing
 - Look for that home by subject rather than by filename, and conclude there is none only after looking. A new
   test file claims the subject has no home yet, and that claim is usually wrong
 - When a test genuinely has nowhere to go, the file organization is what needs adjusting — that is a finding,
