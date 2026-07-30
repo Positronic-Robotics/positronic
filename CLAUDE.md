@@ -37,6 +37,8 @@
 - A new class, file, or field must earn its place: if existing structure already encodes the distinction (the dict
   an entry lives in, an enum, the calling context), don't reify the concept into a type. Extend an existing module
   rather than adding a file
+- That holds for a new file of any kind — module, test, or doc. Find the existing home first; when there is
+  genuinely none, surface it rather than restructuring on your own initiative (see Testing)
 - No `X | None` for logically required values — an Optional that is never None in practice lies about the contract
 - After every fix or refactor, re-read the resulting code as a whole, not the diff: fixes create new smells (e.g.
   two classes become structurally identical only after their serializers are unified — merge them)
@@ -65,7 +67,13 @@
 - Comments wrap at 120 columns, same as code
 
 # Testing
-- A bug fix may add a focused regression test to the existing package `tests/`; beyond that, don't add new test files or suites unless explicitly asked
+- A test goes in the file that already covers its subject. A test written for a bug is an ordinary test of the
+  thing that broke — it belongs beside the others and needs neither a file of its own nor "regression" framing
+- Look for that home by subject rather than by filename, and conclude there is none only after looking. A new
+  test file claims the subject has no home yet, and that claim is usually wrong
+- When a test genuinely has nowhere to go, the file organization is what needs adjusting — that is a finding,
+  not a licence to invent a home. Don't restructure on your own initiative: put the test in the least-wrong
+  existing home and say plainly that nothing fit, so the gap reaches a human instead of being absorbed
 
 # Commit messages
 - Short, imperative sentences (e.g., "Fix wrong type", not "Fixed wrong type")
