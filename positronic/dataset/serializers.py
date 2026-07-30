@@ -54,6 +54,16 @@ class StatefulSerializer:
     def __call__(self, value: Any) -> Any | dict[str, Any] | list['Timestamped']:
         raise NotImplementedError
 
+    def serialize(self, value: Any, now_ns: int) -> Any | dict[str, Any] | list['Timestamped']:
+        """Serialize one delivered sample, told when it was sent.
+
+        ``DsWriterAgent`` calls this rather than ``__call__``, so a serializer whose reading of
+        a sample depends on the moment it was sent has that moment; ``now_ns`` is the sample's
+        own message timestamp. The default ignores it, which is what a serializer that maps a
+        value to a value needs.
+        """
+        return self(value)
+
     def flush(self, now_ns: int | None = None) -> list['Timestamped']:
         """Drain any buffered samples up to ``now_ns`` (mirror of ``reset``).
 

@@ -107,6 +107,14 @@ class TrajectoryOverrideSerializer(StatefulSerializer):
         self._buffer = list(message)
         return committed
 
+    def serialize(self, value: list[tuple[int, Any]], now_ns: int) -> list[Timestamped]:
+        # An empty trajectory cancels the plan from the moment it was emitted, so drain on
+        # the same due/not-due split the episode end uses: the already-executed prefix is
+        # recorded, the un-executed tail dropped. Cutting at the message's own timestamp
+        # (not the recorder's clock) keeps waypoints scheduled in the delivery gap — which
+        # no driver played — out of the recording.
+        return self.flush(now_ns) if not value else self(value)
+
     def flush(self, now_ns: int | None = None) -> list[Timestamped]:
         # Commit only points already due (ts <= now_ns); the remaining
         # future-scheduled tail never executed, so drop it. ``now_ns`` is None
@@ -234,17 +242,7 @@ class DsWriterAgent(pimm.ControlSystem):
                                 serializer = self._serializers.get(name)
                                 value = msg.data
                                 if serializer is not None:
-                                    # An empty trajectory cancels the plan from the moment it was
-                                    # emitted, so drain the serializer on the same due/not-due split
-                                    # the episode end uses: the already-executed prefix is recorded,
-                                    # the un-executed tail dropped. Cutting at the message's own
-                                    # timestamp (not the recorder's clock) keeps waypoints scheduled
-                                    # in the delivery gap — which no driver played — out of the
-                                    # recording.
-                                    if isinstance(value, list) and not value:
-                                        value = serializer.flush(message_time_ns)
-                                    else:
-                                        value = serializer(value)
+                                    value = serializer.serialize(value, message_time_ns)
                                 # Gate on `Timestamped` so plain list-valued samples
                                 # (e.g. list-state vectors) still go through `_append`.
                                 # Empty list matches too — a serializer with nothing to emit yet.

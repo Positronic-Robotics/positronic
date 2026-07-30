@@ -586,6 +586,25 @@ def test_cancel_message_records_executed_prefix(world):
     assert w.exited is True
 
 
+def test_empty_list_reaches_a_non_trajectory_serializer(world):
+    """Only the trajectory serializer reads an empty list as a cancel.
+
+    Any other serializer is handed the value as it arrives, so one that maps an empty
+    sample to something recordable still records it.
+    """
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({'v': lambda seq: len(seq)}, ds, world)
+
+    script = [
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(emitters['v'].emit, []), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+    ]
+    run_scripted_agent(agent, script, world=world)
+
+    assert [(s, v) for (s, v, _, _) in ds.created[-1].appends] == [('v', 0)]
+
+
 def test_stop_commits_due_drops_future_trajectory(world):
     """A mid-trajectory STOP commits already-due samples and drops the un-executed tail."""
     ds = FakeDatasetWriter()
