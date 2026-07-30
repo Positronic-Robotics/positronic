@@ -34,11 +34,11 @@
   TODO/HACK comment. Never bridge silently with an extra field, class, or indirection
 - Internal code breaks cleanly — no speculative compat shims. Before a migrate-everywhere change, grep for
   consumers that need the old form; alias or migrate only the real ones
-- The same holds for a new file of any kind — module, test, or doc: find the existing home first, and when
-  there is none, surface that rather than restructuring on your own initiative (see Testing)
 - A new class, file, or field must earn its place: if existing structure already encodes the distinction (the dict
   an entry lives in, an enum, the calling context), don't reify the concept into a type. Extend an existing module
   rather than adding a file
+- That holds for a new file of any kind — module, test, or doc. Find the existing home first; when there is
+  genuinely none, surface it rather than restructuring on your own initiative (see Testing)
 - No `X | None` for logically required values — an Optional that is never None in practice lies about the contract
 - After every fix or refactor, re-read the resulting code as a whole, not the diff: fixes create new smells (e.g.
   two classes become structurally identical only after their serializers are unified — merge them)
@@ -67,10 +67,10 @@
 - Comments wrap at 120 columns, same as code
 
 # Testing
-- Tests are welcome — new test *files* are what to avoid. Add to the file that already covers the subject; a
-  bug fix's regression test belongs in the existing package `tests/`, beside the other tests of what broke
-- Search for that home by subject, not by filename, and only conclude there is none after looking. A new file
-  claims the subject has no home yet, and that claim is usually wrong
+- A new test goes in the file that already covers its subject — a bug fix's regression test beside the other
+  tests of what broke, in the existing package `tests/`
+- Look for that home by subject rather than by filename, and conclude there is none only after looking. A new
+  test file claims the subject has no home yet, and that claim is usually wrong
 - When a test genuinely has nowhere to go, the file organization is what needs adjusting — that is a finding,
   not a licence to invent a home. Don't restructure on your own initiative: put the test in the least-wrong
   existing home and say plainly that nothing fit, so the gap reaches a human instead of being absorbed
