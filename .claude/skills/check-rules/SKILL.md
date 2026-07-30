@@ -29,10 +29,12 @@ grep -n '^### ' CODE_RULES.md
 ```
 
 Spawn one agent per rule, in parallel. Each gets exactly: the full text of **its own rule and no
-other**, the diff, and the repository to read around the change.
+other**, the diff, and the repository to read around the change. Don't tell it what the other rules
+say, what the change was for, or what you expect it to find.
 
 One agent per rule, not one agent holding all of them — an agent given nine rules skims for nine and
-checks none. Per-rule agents also stay honest as the file grows.
+checks none. A narrow agent also fails visibly: reporting nothing is one rule cleanly checked, not
+nine rules half-checked.
 
 Each agent returns either the single word `none`, or findings in this form:
 
@@ -52,9 +54,10 @@ Instruct every agent to:
 
 ## Step 3: Report
 
-Group findings by rule, in the agents' own format so local output matches what Codex posts on the pull
-request. State the scope, the rules checked, and every waiver that was honoured — a rule silenced by a
-waiver must never look the same as a rule that passed.
+Aggregate every agent's findings into **one list**, ordered by file and line, each entry naming its own
+rule and keeping the agents' format so local output matches what Codex posts on the pull request. State
+the scope, the rules checked, and every waiver that was honoured — a rule silenced by a waiver must
+never look the same as a rule that passed.
 
 Report only. Fixing is a separate decision and the user makes it.
 
