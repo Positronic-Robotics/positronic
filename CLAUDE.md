@@ -34,6 +34,8 @@
   TODO/HACK comment. Never bridge silently with an extra field, class, or indirection
 - Internal code breaks cleanly — no speculative compat shims. Before a migrate-everywhere change, grep for
   consumers that need the old form; alias or migrate only the real ones
+- The same holds for a new file of any kind — module, test, or doc: find the existing home first, and when
+  there is none, surface that rather than restructuring on your own initiative (see Testing)
 - A new class, file, or field must earn its place: if existing structure already encodes the distinction (the dict
   an entry lives in, an enum, the calling context), don't reify the concept into a type. Extend an existing module
   rather than adding a file
@@ -65,7 +67,13 @@
 - Comments wrap at 120 columns, same as code
 
 # Testing
-- A bug fix may add a focused regression test to the existing package `tests/`; beyond that, don't add new test files or suites unless explicitly asked
+- Tests are welcome — new test *files* are what to avoid. Add to the file that already covers the subject; a
+  bug fix's regression test belongs in the existing package `tests/`, beside the other tests of what broke
+- Search for that home by subject, not by filename, and only conclude there is none after looking. A new file
+  claims the subject has no home yet, and that claim is usually wrong
+- When a test genuinely has nowhere to go, the file organization is what needs adjusting — that is a finding,
+  not a licence to invent a home. Don't restructure on your own initiative: put the test in the least-wrong
+  existing home and say plainly that nothing fit, so the gap reaches a human instead of being absorbed
 
 # Commit messages
 - Short, imperative sentences (e.g., "Fix wrong type", not "Fixed wrong type")
