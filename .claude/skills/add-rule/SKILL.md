@@ -106,14 +106,16 @@ Rules only accumulate unless something removes them, and a stale rule dilutes at
 whole file. Retire one when:
 
 - it has not fired in review for a long stretch, and a scan of the tree finds nothing it would catch;
-- it is waived more often than it is obeyed — count the `# rules-allow:` markers carrying its id:
+- its waivers are out of proportion to its compliant uses. Count the markers, but treat the count as a
+  prompt to look, never as the evidence itself:
 
   ```bash
   grep -rn 'rules-allow: <rule-id>' --include='*.py' .
   ```
 
-  A rule with several live waivers is describing an exception as if it were the norm. Either the rule
-  is wrong or the exception is the real rule; say which.
+  Five waivers against five hundred compliant sites is a healthy rule with real exceptions; five against
+  eight is a rule describing the exception as the norm. Sample both sides before concluding. If the
+  waivers win, either the rule is wrong or the exception is the real rule; say which.
 - a linter can now enforce it. Move it to `pyproject.toml` and delete it here.
 
 Deleting a rule needs the same explicit approval as adding one. Say what it was, why it is going, and

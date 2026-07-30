@@ -16,8 +16,8 @@ what stops it from seeing a violation.
 
 ```bash
 BASE=$(git merge-base HEAD main)
-git diff $BASE --stat                # committed, staged and unstaged, against main
-git status --porcelain | grep '^??'  # untracked files, which no diff shows
+git diff $BASE --stat                                      # committed, staged and unstaged
+git status --porcelain --untracked-files=all | grep '^??'  # untracked files, which no diff shows
 ```
 
 Everything not yet on `main` is in scope: committed, staged, unstaged, and untracked. Pass the untracked
