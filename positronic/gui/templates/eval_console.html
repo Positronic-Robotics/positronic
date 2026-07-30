@@ -37,6 +37,9 @@
       .lat-good { background:#052e16; color:#4ade80; border-color:#16a34a; }
       .lat-mid  { background:#3f2d00; color:#fbbf24; border-color:#ca8a04; }
       .lat-bad  { background:#450a0a; color:#f87171; border-color:#dc2626; }
+      .btn-resume { margin-left:0.5rem; background:#1e3a8a; color:#dbeafe; border:1px solid #3b82f6;
+        font-weight:600; }
+      .btn-resume[hidden] { display:none; }
       .btn-finish-run { margin-left:0.5rem; background:#7c2d12; color:#fed7aa; border:1px solid #ea580c; }
       .wrapup-overlay { position:fixed; inset:0; z-index:2000; display:flex; align-items:center;
         justify-content:center; background:rgba(2,6,23,0.93); color:#e2e8f0; text-align:center; padding:2rem; }
@@ -75,6 +78,10 @@
             <button class="btn btn-ghost jog-btn" data-scale="coarse">Coarse</button>
           </div>
         </div>
+        <button class="btn btn-resume" id="resume-teleop" hidden
+                title="The arm homes after Save/Discard; the console cannot sense when it is parked">
+          Arm parked — resume teleop
+        </button>
         <button class="btn btn-finish-run" id="finish-run"
                 title="End the whole run: upload, home, lock brakes, release control">Finish run &amp; upload</button>
       </div>
@@ -160,11 +167,25 @@
       let scale = 'fine';
       let running = false;
 
+      // Set while the arm is homing after a directive that homes. The console has no signal for
+      // "the arm reached home": the harness publishes idle as soon as it ISSUES the home, and the
+      // driver then executes the motion synchronously in its own process. So teleop stays disabled
+      // until the human watching the arm says it is parked — a jog queued during that motion
+      // executes after the reset and leaves the arm off-home. A harness-side homing phase would
+      // make this automatic; guessing a settle time in the browser would not.
+      let awaitingPark = false;
+      const resumeBtn = document.getElementById('resume-teleop');
+
       const setRunning = (value) => {
         running = value;
         jog.classList.toggle('is-running', running);
         for (const control of jog.querySelectorAll('button, input')) control.disabled = running;
       };
+
+      resumeBtn.addEventListener('click', () => {
+        awaitingPark = false;
+        resumeBtn.hidden = true;
+      });
 
       // ─── Episode control buttons + directive-ack toast ───────────────────────────────────────────────
       const ACK = { start: '▶ Start', finish: '💾 Save & Home', abort: '🗑 Discard & Home' };
@@ -214,7 +235,14 @@
             .then((r) => { if (!r.ok) { showAck(`${ACK[action]} — FAILED (${r.status})`, false); pendingAck = null; } })
             .catch(() => { showAck(`${ACK[action]} — no response`, false); pendingAck = null; });
           showAck(`${ACK[action]} — sent…`, true);
-          pendingAck = { label: ACK[action], ok: target, deadline: performance.now() + 5000 };
+          // `sentAt` is what stops a CACHED status resolving this: renderStatus also runs on a 200ms
+          // ticker over the last sample, which predates the click and would report "recognized"
+          // before the harness had seen the directive at all.
+          pendingAck = { label: ACK[action], ok: target, deadline: performance.now() + 5000, sentAt: performance.now() };
+          if (action !== 'start') {  // both Save & Home and Discard & Home end with the arm homing
+            awaitingPark = true;
+            resumeBtn.hidden = false;
+          }
           // The harness homes the gripper open (target_grip 0) on every episode boundary, but this
           // browser-side setpoint is never updated by policy/homing — resync it so the next grip step
           // starts from 0, not a stale pre-episode value (e.g. a full-close instead of a fine step).
@@ -418,13 +446,14 @@
       // The "waiting/loading" elapsed is timed CLIENT-SIDE (from waitSince) so it always ticks — the
       // server's last_action_age_s freezes whenever the harness is blocked and not re-emitting.
       let lastStatus = undefined;   // undefined = /status 404 (old backend); null = fetch error; else the object
+      let lastFetchAt = 0;          // when the last sample came off the wire — the 200ms re-render does not count
       let waitSince = null;         // client timestamp when the current waiting/loading stretch began
       let reflexErrorAt = null;     // client timestamp of the last robot_error=true (decays the reflex banner)
       const renderStatus = (s) => {
         lastStatus = s;
         // Resolve a pending directive ack from the real phase (see the directive handler): recognized once
         // the harness moves to the expected phase, ignored if the window elapses without it.
-        if (pendingAck && s && typeof s === 'object') {
+        if (pendingAck && s && typeof s === 'object' && lastFetchAt > pendingAck.sentAt) {
           if (pendingAck.ok(s.phase)) { showAck(`${pendingAck.label} — recognized`, true); pendingAck = null; }
           else if (performance.now() > pendingAck.deadline) {
             showAck(`${pendingAck.label} — no phase change (ignored?)`, false); pendingAck = null;
@@ -436,7 +465,7 @@
         // while our own directive is still in flight: the phase we are reading predates it (Start
         // blocks on the policy handshake before publishing 'starting'), so acting on it would
         // re-enable teleop for the whole model load, during which an episode is already beginning.
-        if (!pendingAck && s && typeof s === 'object' && typeof s.phase === 'string') {
+        if (!pendingAck && !awaitingPark && s && typeof s === 'object' && typeof s.phase === 'string') {
           setRunning(s.phase !== 'idle');
         }
         const waiting = !!s && (s.phase === 'starting' || (s.phase === 'running' && s.waiting_for_policy));
@@ -466,7 +495,7 @@
       const pollStatus = () => {
         fetch('/status')
           .then((r) => (r.ok ? r.json() : r.status === 404 ? undefined : null))
-          .then(renderStatus)
+          .then((s) => { lastFetchAt = performance.now(); renderStatus(s); })
           .catch(() => renderStatus(null));
       };
       setInterval(pollStatus, 500);
