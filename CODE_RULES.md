@@ -39,19 +39,9 @@ paths. Take them as parameters instead, with a default for the usual name.
 Exception: a name the component itself owns and defines, rather than one it reads from its input.
 
 ```python
-# Bad — only works on data that spells these three names exactly this way
-class ChangeEEFrame:
-    def encode(self, data):
-        transform = frame_transform(data['urdf'], data['control_frame'], self._to)
-        return {**data, 'robot_state.ee_pose': change_frame(data['robot_state.ee_pose'], transform)}
+# Bad
+return {**data, 'ee_pose': change_frame(data['ee_pose'])}
 
-
-# Good — a second dataset passes urdf_key='robot/urdf' and reuses the class
-class ChangeEEFrame:
-    def __init__(self, to, pose_key='robot_state.ee_pose', urdf_key='urdf', control_frame_key='control_frame'):
-        ...
-
-    def encode(self, data):
-        transform = frame_transform(data[self._urdf_key], data[self._control_frame_key], self._to)
-        return {**data, self._pose_key: change_frame(data[self._pose_key], transform)}
+# Good — pose_key is a constructor parameter defaulting to 'ee_pose'
+return {**data, self._pose_key: change_frame(data[self._pose_key])}
 ```
