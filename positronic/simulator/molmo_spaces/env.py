@@ -59,7 +59,6 @@ from typing import Any  # noqa: E402
 import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
-import protocol  # noqa: E402 -- the positronic-free wire contract, on PYTHONPATH beside ``server``
 
 # server resolves to a module without these symbols under positronic's deps (the real one is on the molmo
 # venv's PYTHONPATH), so the symbols read as unknown here.
@@ -166,9 +165,6 @@ class MolmoSpacesEnv(EnvProtocol):
             'robot_meta': {},
             'control_dt': self._control_dt,
             'horizon': self._horizon_sec,
-            # This adoption covers the canonical command contract in full: the rig natively takes joint-position
-            # targets alone, and ``wire_command_to_arm_action`` converts every other canonical type into one.
-            'command_types': list(protocol.CANONICAL_COMMAND_TYPES),
         }
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
