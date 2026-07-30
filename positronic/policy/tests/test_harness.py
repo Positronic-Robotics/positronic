@@ -8,8 +8,14 @@ import pytest
 
 import pimm
 from positronic import keys, telemetry, telemetry_keys, wire
-from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType
+from positronic.dataset.ds_writer_agent import (
+    DsWriterAgent,
+    DsWriterCommand,
+    DsWriterCommandType,
+    TrajectoryOverrideSerializer,
+)
 from positronic.dataset.serializers import Serializers
+from positronic.dataset.tests.test_ds_writer_agent import FakeDatasetWriter
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import (
@@ -935,12 +941,13 @@ def test_task_instruction_reaches_session_context_after_reset(world):
 
 @pytest.mark.timeout(3.0)
 def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
-    """FINISH must cancel the recording's trajectory tail *before* `STOP_EPISODE`.
+    """FINISH must cancel the in-flight chunk *before* `STOP_EPISODE`.
 
-    `STOP_EPISODE` calls `flush()` on `TrajectoryOverrideSerializer`, which
-    commits whatever is still buffered. The harness must emit `[]` on
-    `robot_command`/`target_grip` first, so the serializer drops its tail and
-    canceled waypoints are not recorded.
+    The `[]` on `robot_command`/`target_grip` is what stops the drivers: each
+    `TrajectoryPlayer` clears its buffer and the device holds position. It has to
+    land while the episode is still open, so the recorder drains its serializer at
+    the instant the drivers stopped rather than ignoring a cancel for a closed
+    episode.
     """
 
     class _LabeledRecorder(pimm.SignalEmitter):
@@ -986,6 +993,49 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
     assert cancels[0] < stops[0], (
         f'cancel ({cancels[0]}) must precede STOP_EPISODE ({stops[0]}); otherwise flush() commits canceled waypoints'
     )
+
+
+@pytest.mark.timeout(3.0)
+def test_recorded_commands_reach_the_episode_end(world):
+    """[harness + recorder] the recording keeps every command the drivers ran, up to the episode's end.
+
+    ``ChunkedSchedule`` re-infers only once a chunk has played out, so at FINISH the recorder's
+    ``TrajectoryOverrideSerializer`` still holds the whole in-flight chunk — no later trajectory
+    ever arrives to prove its executed prefix final. The cancel the harness emits before
+    ``STOP_EPISODE`` is what commits that prefix; dropping the buffer instead ends every
+    episode's command stream a chunk short of its observations.
+    """
+    policy = ChunkPolicy()
+    harness = Harness(ChunkedSchedule().wrap(policy), make_embodiment())
+
+    ds = FakeDatasetWriter()
+    agent = DsWriterAgent(ds)
+    agent.add_signal('target_grip', TrajectoryOverrideSerializer(None))
+    world.connect(harness.commands['target_grip'], agent.inputs['target_grip'])
+    world.connect(harness.ds_command, agent.command)
+    world.pair(harness.commands['robot_command'])
+
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations[keys.GRIP])
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    script = [
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.15),
+        (partial(directive_em.emit, Directive.FINISH()), 0.1),
+    ]
+    scheduler = world.start([harness, agent, ManualDriver(script)])
+    drive_scheduler(scheduler, steps=1000)
+
+    recorded = [v for (name, v, _, _) in ds.created[-1].appends if name == 'target_grip']
+    # ``ChunkPolicy`` encodes the chunk number in every grip value, so the last chunk is identifiable.
+    assert policy.counter >= 2, 'the policy must have run several chunks for one to still be in flight'
+    in_flight = [v for v in recorded if v >= policy.counter * 100.0]
+    assert in_flight, 'the chunk in flight at FINISH was dropped from the recording'
+    # Only the part that already played: a contiguous prefix of that chunk's waypoints.
+    assert in_flight == [policy.counter * 100.0 + i for i in range(len(in_flight))]
 
 
 @pytest.mark.timeout(3.0)
@@ -1232,9 +1282,9 @@ def test_robot_state_serializer_available_has_no_error_key():
 def test_shutdown_cancels_trajectory_before_stop(world):
     """Shutdown while recording must cancel buffered trajectories before STOP_EPISODE.
 
-    ``STOP_EPISODE`` flushes ``TrajectoryOverrideSerializer``; without a prior
-    cancel it would commit the unexecuted tail of an in-flight chunk (the
-    FINISH/RUN paths already cancel first).
+    The cancel clears each driver's ``TrajectoryPlayer`` so devices hold position,
+    and drains the recording's serializer at the moment they stopped. It must land
+    while the episode is still open (the FINISH/RUN paths already cancel first).
     """
     events: list[tuple[str, object]] = []
 

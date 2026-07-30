@@ -55,12 +55,12 @@ class StatefulSerializer:
         raise NotImplementedError
 
     def flush(self, now_ns: int | None = None) -> list['Timestamped']:
-        """Drain any buffered samples at episode end (mirror of ``reset``).
+        """Drain any buffered samples up to ``now_ns`` (mirror of ``reset``).
 
-        Called once on ``STOP_EPISODE`` before the episode is finalized. ``now_ns``
-        is the episode-end time; serializers that buffer future-scheduled samples
-        use it to drop the un-executed tail. The default keeps stateless
-        serializers a no-op.
+        Called on ``STOP_EPISODE`` before the episode is finalized, and whenever a
+        signal delivers the empty-list cancel. ``now_ns`` is the cutoff: serializers
+        that buffer future-scheduled samples commit what is already due and drop the
+        un-executed tail. The default keeps stateless serializers a no-op.
         """
         return []
 

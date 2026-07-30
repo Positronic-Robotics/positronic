@@ -67,7 +67,8 @@ class TrajectoryOverrideSerializer(StatefulSerializer):
     (last-writer-wins on the timeline): given ``1:[1..10]`` then ``2:[5..15]``
     the recorded stream is ``1@1..4`` then ``2@5..15``. A point is committed
     only once a newer trajectory starting after it proves it final; the
-    remainder is drained by :meth:`flush` at episode end.
+    remainder is drained by :meth:`flush`, which the writer calls both when a
+    trajectory is canceled and at episode end.
 
     HACK: lossy. Drops the notion of a *predicted* trajectory and cannot
     represent overlapping schedulers (RTC/temporal ensembling) that replan into
@@ -98,12 +99,6 @@ class TrajectoryOverrideSerializer(StatefulSerializer):
         return [Timestamped(ts, self._encode(v)) for ts, v in points]
 
     def __call__(self, message: list[tuple[int, Any]]) -> list[Timestamped]:
-        if not message:
-            # Empty trajectory is the cancel signal (the Harness emits it at episode end):
-            # drop the buffered tail so flush() does not commit canceled waypoints.
-            self._buffer = []
-            return []
-
         start = message[0][0]
         # Buffer is ts-sorted: everything before the new trajectory's start is
         # final; the rest is overridden and dropped by the reassignment below.
@@ -113,9 +108,9 @@ class TrajectoryOverrideSerializer(StatefulSerializer):
         return committed
 
     def flush(self, now_ns: int | None = None) -> list[Timestamped]:
-        # At episode end, commit only points already due (ts <= now_ns); the
-        # remaining future-scheduled tail never executed, so drop it. ``now_ns``
-        # is None only for callers wanting the legacy "commit everything".
+        # Commit only points already due (ts <= now_ns); the remaining
+        # future-scheduled tail never executed, so drop it. ``now_ns`` is None
+        # only for callers wanting the legacy "commit everything".
         points = self._buffer if now_ns is None else [(ts, v) for ts, v in self._buffer if ts <= now_ns]
         out = self._committable(points)
         self._buffer = []
@@ -239,10 +234,20 @@ class DsWriterAgent(pimm.ControlSystem):
                                 serializer = self._serializers.get(name)
                                 value = msg.data
                                 if serializer is not None:
-                                    value = serializer(value)
+                                    # An empty trajectory cancels the plan from the moment it was
+                                    # emitted, so drain the serializer on the same due/not-due split
+                                    # the episode end uses: the already-executed prefix is recorded,
+                                    # the un-executed tail dropped. Cutting at the message's own
+                                    # timestamp (not the recorder's clock) keeps waypoints scheduled
+                                    # in the delivery gap — which no driver played — out of the
+                                    # recording.
+                                    if isinstance(value, list) and not value:
+                                        value = serializer.flush(message_time_ns)
+                                    else:
+                                        value = serializer(value)
                                 # Gate on `Timestamped` so plain list-valued samples
                                 # (e.g. list-state vectors) still go through `_append`.
-                                # Empty list matches too — used as the cancel signal.
+                                # Empty list matches too — a serializer with nothing to emit yet.
                                 if isinstance(value, list) and (not value or isinstance(value[0], Timestamped)):
                                     for sample in value:
                                         _append(ep_writer, name, sample.value, sample.ts, None)

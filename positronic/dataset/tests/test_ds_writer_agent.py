@@ -1,6 +1,6 @@
 import pickle
 from functools import partial
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -77,9 +77,11 @@ def build_agent_with_pipes(
     agent = DsWriterAgent(ds_writer, time_mode=time_mode)
     for name, serializer in signals_spec.items():
         agent.add_signal(name, serializer)
-    emitters: dict[str, pimm.SignalEmitter[Any]] = {name: world.pair(agent.inputs[name]) for name in signals_spec}
+    # ``pair`` returns the counterpart of whatever it is given, so its static type is the
+    # emitter/receiver union; every port handed to it here is a receiver, so every peer is an emitter.
+    emitters = {name: cast(pimm.SignalEmitter[Any], world.pair(agent.inputs[name])) for name in signals_spec}
 
-    cmd_em = world.pair(agent.command)
+    cmd_em = cast(pimm.SignalEmitter[Any], world.pair(agent.command))
 
     return agent, cmd_em, emitters
 
@@ -525,17 +527,22 @@ def test_serializer_plain_list_value(world):
     assert [(s, v) for (s, v, _, _) in w.appends] == [('v', [1, 2, 3])]
 
 
-def test_trajectory_override_serializer_empty_cancels_buffer():
-    """Empty trajectory is the Harness STOP cancel signal: drop the buffered tail."""
+def test_drain_keeps_executed_prefix_of_overriding_trajectory():
+    """Draining an overriding chunk keeps its executed prefix and drops only the un-executed tail.
+
+    ``flush(now_ns)`` serves both the cancel and the episode end, so the second drain must
+    add nothing: the first one already took everything that ran.
+    """
     s = TrajectoryOverrideSerializer(None)
     s.reset()
 
-    # Buffer a trajectory (nothing committed yet).
-    assert s([(1, 'a'), (2, 'b'), (3, 'c')]) == []
-    # Empty trajectory = cancel: nothing committed AND buffer cleared.
-    assert s([]) == []
-    # Subsequent flush must not emit the canceled waypoints.
-    assert s.flush() == []
+    assert s([(i, f'A{i}') for i in range(10)]) == []
+    # The overriding chunk commits A0..A4 and buffers B5..B14.
+    assert [t.value for t in s([(i, f'B{i}') for i in range(5, 15)])] == [f'A{i}' for i in range(5)]
+
+    # Drained at ts=9: B5..B9 executed and survive, B10..B14 never ran.
+    assert [(t.ts, t.value) for t in s.flush(now_ns=9)] == [(i, f'B{i}') for i in range(5, 10)]
+    assert s.flush(now_ns=9) == []
 
 
 def test_trajectory_override_serializer_flush_cutoff():
@@ -553,6 +560,30 @@ def test_trajectory_override_serializer_flush_cutoff():
     s.reset()
     assert s([(1, 'a'), (2, 'b')]) == []
     assert [(t.ts, t.value) for t in s.flush()] == [(1, 'a'), (2, 'b')]
+
+
+def test_cancel_message_records_executed_prefix(world):
+    """The empty-trajectory cancel records the waypoints that already ran, not nothing.
+
+    The Harness emits it on every command channel right before ``STOP_EPISODE``, so a cancel
+    that dropped the whole buffer would end each episode's command stream a chunk short of
+    its observations.
+    """
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({'traj': TrajectoryOverrideSerializer(None)}, ds, world)
+
+    future = 10**18  # far beyond the test clock, so it stays an un-executed tail
+    script = [
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(emitters['traj'].emit, [(0, 'ran'), (future, 'tail')]), 0.001),
+        (partial(emitters['traj'].emit, []), 0.001),  # the Harness cancel
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+    ]
+    run_scripted_agent(agent, script, world=world)
+
+    w = ds.created[-1]
+    assert [(s, v) for (s, v, _, _) in w.appends] == [('traj', 'ran')]
+    assert w.exited is True
 
 
 def test_stop_commits_due_drops_future_trajectory(world):

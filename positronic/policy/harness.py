@@ -278,11 +278,12 @@ class Harness(pimm.ControlSystem):
 
         Emits ``[]`` on every command channel so each driver's
         ``TrajectoryPlayer`` clears its buffer (devices hold position) and
-        ``TrajectoryOverrideSerializer`` drops its uncommitted tail. Must
-        precede ``STOP_EPISODE``, which ``flush()``​es the recording's
-        serializers and would otherwise commit canceled waypoints. Also
-        cancels the active session's scheduling state so the next inference
-        is not held back by stale trajectory_end.
+        ``TrajectoryOverrideSerializer`` commits the prefix that already
+        executed while dropping the waypoints scheduled past the cancel. Must
+        precede ``STOP_EPISODE``, so the recording keeps the commands the
+        devices actually ran up to the episode's last instant. Also cancels the
+        active session's scheduling state so the next inference is not held back
+        by stale trajectory_end.
         """
         self._emit_commands([])
         if self._policy_session is not None:
