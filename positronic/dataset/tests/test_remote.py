@@ -40,7 +40,7 @@ def dataset_with_video(tmp_path):
                 # Video signal
                 video_path = ew.path / 'cam.mp4'
                 frames_path = ew.path / 'cam.frames.parquet'
-                with VideoSignalWriter(video_path, frames_path, fps=30) as vw:
+                with VideoSignalWriter(video_path, frames_path) as vw:
                     for i in range(3):
                         frame = np.full((64, 64, 3), (ep_idx + 1) * 50 + i * 10, dtype=np.uint8)
                         vw.append(frame, ts_ns=1000 + i * 100)

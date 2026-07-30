@@ -1,4 +1,6 @@
+import av
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -142,7 +144,7 @@ class TestVideoSignalWriter:
 
 class TestVideoSignalStartLastTs:
     def test_video_start_last_ts_basic(self, video_paths):
-        with VideoSignalWriter(video_paths['video'], video_paths['frames'], gop_size=5, fps=30) as writer:
+        with VideoSignalWriter(video_paths['video'], video_paths['frames'], gop_size=5) as writer:
             writer.append(create_frame(10), 1000)
             writer.append(create_frame(20), 2000)
             writer.append(create_frame(30), 4000)
@@ -210,7 +212,7 @@ class TestVideoExtraTimelines:
 
         # Read the frames index directly
         table = pq.read_table(video_paths['frames'])
-        assert {'ts_ns', 'ts_ns.consumer', 'ts_ns.producer'} == set(table.column_names)
+        assert {'ts_ns', 'pts', 'ts_ns.consumer', 'ts_ns.producer'} == set(table.column_names)
 
         # Verify the data
         assert table['ts_ns'].to_pylist() == [1000, 2000, 3000]
@@ -223,7 +225,7 @@ class TestVideoExtraTimelines:
             pass
 
         table = pq.read_table(video_paths['frames'])
-        assert {'ts_ns'} == set(table.column_names)
+        assert {'ts_ns', 'pts'} == set(table.column_names)
         assert len(table) == 0
 
     def test_video_inconsistent_extra_ts_keys_raises(self, video_paths):
@@ -246,3 +248,147 @@ class TestVideoExtraTimelines:
             with VideoSignalWriter(video_paths['video'], video_paths['frames']) as w:
                 w.append(create_frame(50), 1000)
                 w.append(create_frame(100), 2000, extra_ts={'producer': 1900})
+
+
+# Frames at ~15 Hz with jitter and a long gap: spacings a single frame rate could not describe.
+JITTERY_TS_NS = [
+    1_000_000_000,
+    1_066_700_000,
+    1_133_000_000,
+    1_201_400_000,
+    1_268_000_000,
+    1_600_000_000,
+    1_667_100_000,
+    1_733_000_000,
+    1_800_900_000,
+    1_866_000_000,
+    1_934_000_000,
+    2_000_000_000,
+]
+
+
+def decoded_pts(video_path):
+    """Presentation timestamps and time base a plain container reader sees, in decode order."""
+    with av.open(str(video_path)) as container:
+        stream = container.streams.video[0]
+        time_base = stream.time_base
+        assert time_base is not None
+        pts = []
+        for frame in container.decode(stream):
+            assert frame.pts is not None
+            pts.append(frame.pts)
+        return pts, time_base
+
+
+class TestVideoContainerTiming:
+    def test_container_timestamps_reproduce_recorded_span(self, video_paths):
+        sig = create_video_signal(video_paths, [(create_frame(10 + i * 20), ts) for i, ts in enumerate(JITTERY_TS_NS)])
+        assert len(sig) == len(JITTERY_TS_NS)
+
+        pts, time_base = decoded_pts(video_paths['video'])
+        assert len(pts) == len(JITTERY_TS_NS)
+        # An external player derives frame times from pts * time_base; they must match the recorded
+        # timestamps, to within the microsecond the container resolves.
+        offsets_ns = [int(p * time_base * 1_000_000_000) for p in pts]
+        expected_ns = [ts - JITTERY_TS_NS[0] for ts in JITTERY_TS_NS]
+        assert offsets_ns == pytest.approx(expected_ns, abs=1000)
+
+    def test_index_pts_are_what_the_container_carries(self, video_paths):
+        create_video_signal(video_paths, [(create_frame(10 + i * 20), ts) for i, ts in enumerate(JITTERY_TS_NS)])
+
+        indexed = pq.read_table(video_paths['frames'])['pts'].to_pylist()
+        pts, _ = decoded_pts(video_paths['video'])
+        assert indexed == pts
+
+    def test_random_access_with_jittery_timestamps(self, video_paths):
+        frames = [(create_frame(10 + i * 20), ts) for i, ts in enumerate(JITTERY_TS_NS)]
+        with VideoSignalWriter(video_paths['video'], video_paths['frames'], gop_size=3) as writer:
+            for frame, ts in frames:
+                writer.append(frame, ts)
+        sig = VideoSignal(video_paths['video'], video_paths['frames'], seek_threshold=2)
+
+        # Reverse and then scattered order, so every read has to seek rather than decode onwards.
+        for i in list(reversed(range(len(frames)))) + [0, 7, 3, 11, 5]:
+            frame, ts = sig[i]
+            assert ts == JITTERY_TS_NS[i]
+            assert_frames_equal(frame, frames[i][0], tolerance=8)
+
+    def test_search_by_time_lands_on_the_right_frame(self, video_paths):
+        sig = create_video_signal(video_paths, [(create_frame(10 + i * 20), ts) for i, ts in enumerate(JITTERY_TS_NS)])
+        # A time inside the long gap resolves to the frame that was current then, not to a frame
+        # position derived from an assumed constant rate.
+        frame, ts = sig.time[1_500_000_000]
+        assert ts == JITTERY_TS_NS[4]
+        assert_frames_equal(frame, create_frame(10 + 4 * 20), tolerance=8)
+
+
+class TestSubMicrosecondFrames:
+    def test_pts_stay_strictly_increasing_within_one_microsecond(self, video_paths):
+        # The first three land in the same microsecond once rounded; the last is well clear.
+        timestamps = [1_000_000_000, 1_000_000_100, 1_000_000_200, 1_000_500_000]
+        frames = [(create_frame(10 + i * 40), ts) for i, ts in enumerate(timestamps)]
+        sig = create_video_signal(video_paths, frames)
+
+        indexed = pq.read_table(video_paths['frames'])['pts'].to_pylist()
+        assert indexed == [0, 1, 2, 500]
+        assert np.all(np.diff(indexed) > 0)
+
+        pts, _ = decoded_pts(video_paths['video'])
+        assert pts == indexed
+        for i, (frame, ts) in enumerate(frames):
+            got_frame, got_ts = sig[i]
+            assert got_ts == ts
+            assert_frames_equal(got_frame, frame, tolerance=8)
+
+
+def write_legacy_video(video_paths, frames_with_timestamps, declared_fps=100, gop_size=30):
+    """Write a video the way it was written before the frames index carried presentation timestamps.
+
+    Presentation timestamps are the ordinal frame number against a fixed declared rate, and the index
+    holds timestamps only. Written out explicitly so the fallback is tested against the real old format
+    rather than against whatever the current writer produces.
+    """
+    container = av.open(str(video_paths['video']), mode='w')
+    stream = container.add_stream('h264', rate=declared_fps)
+    first_frame = frames_with_timestamps[0][0]
+    stream.height, stream.width = first_frame.shape[:2]
+    stream.pix_fmt = 'yuv420p'
+    stream.gop_size = gop_size
+
+    for i, (data, _ts) in enumerate(frames_with_timestamps):
+        frame = av.VideoFrame.from_ndarray(data, format='rgb24')
+        frame.pts = i
+        for packet in stream.encode(frame):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
+
+    timestamps = [ts for _data, ts in frames_with_timestamps]
+    pq.write_table(pa.table({'ts_ns': timestamps}, schema=pa.schema([('ts_ns', pa.int64())])), video_paths['frames'])
+    return VideoSignal(video_paths['video'], video_paths['frames'])
+
+
+class TestIndexWithoutPtsColumn:
+    def test_legacy_video_reads_through_declared_rate(self, video_paths):
+        frames = [(create_frame(10 + i * 20), ts) for i, ts in enumerate(JITTERY_TS_NS)]
+        sig = write_legacy_video(video_paths, frames, gop_size=3)
+
+        assert 'pts' not in pq.read_table(video_paths['frames']).column_names
+        assert len(sig) == len(frames)
+        assert sig.start_ts == JITTERY_TS_NS[0]
+        assert sig.last_ts == JITTERY_TS_NS[-1]
+
+        for i in list(range(len(frames))) + list(reversed(range(len(frames)))) + [0, 7, 3]:
+            frame, ts = sig[i]
+            assert ts == JITTERY_TS_NS[i]
+            assert_frames_equal(frame, frames[i][0], tolerance=8)
+
+    def test_legacy_video_ordinal_pts_are_left_alone(self, video_paths):
+        frames = [(create_frame(10 + i * 20), ts) for i, ts in enumerate(JITTERY_TS_NS)]
+        write_legacy_video(video_paths, frames)
+
+        # The fallback reads the file as written; it does not rewrite or reinterpret its timing.
+        pts, time_base = decoded_pts(video_paths['video'])
+        ticks_per_frame = round(1 / (100 * time_base))
+        assert pts == [i * ticks_per_frame for i in range(len(frames))]

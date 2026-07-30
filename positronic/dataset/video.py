@@ -1,3 +1,4 @@
+import fractions
 import queue
 import struct
 import threading
@@ -13,12 +14,26 @@ import pyarrow.parquet as pq
 
 from .signal import IndicesLike, Kind, RealNumericArrayLike, Signal, SignalMeta, SignalWriter, is_realnum_dtype
 
+# Presentation timestamps are muxed in microseconds since the first frame. Microseconds rather than
+# nanoseconds because some MP4 boxes carry a 32-bit timescale and duration.
+_TIME_BASE = fractions.Fraction(1, 1_000_000)
+_NS_PER_TICK = 1_000_000_000 // _TIME_BASE.denominator
+
+# Frames arrive at whatever rate the producer runs at, so the stream has no single rate. This one is
+# only the nominal figure encoders want for their bitrate and GOP heuristics; frame timing comes from
+# the per-frame presentation timestamps, never from here.
+_NOMINAL_ENCODER_RATE = 30
+
 
 class VideoSignalWriter(SignalWriter[np.ndarray]):
     """Writer for video signals.
 
     Stores video frames in a video file (e.g., MP4/MKV) with a Parquet index
     containing frame timestamps for fast random access.
+
+    Each frame is muxed with a presentation timestamp derived from its ``ts_ns``, so the container plays
+    back at the rate the frames were recorded at. The index records those presentation timestamps in a
+    ``pts`` column, which is what the reader maps back to frame indices.
     """
 
     def __init__(
@@ -27,7 +42,6 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         frames_index_path: Path,
         codec: str = 'h264',
         gop_size: int = 30,
-        fps: int = 100,
         codec_options: dict[str, str] | None = None,
     ):
         """Initialize VideoSignalWriter.
@@ -37,19 +51,16 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             frames_index_path: Path to frames.parquet index file
             codec: Video codec to use (default: 'h264')
             gop_size: Group of Pictures size - distance between keyframes (default: 30)
-            fps: Frame rate for encoding (default: 30)
             codec_options: Encoder options (e.g. x264 ``preset``/``tune``); None keeps the codec defaults.
         """
         self.video_path = video_path
         self.frames_index_path = frames_index_path
         self.codec = codec
         self.gop_size = gop_size
-        self.fps = fps
         self.codec_options = codec_options
 
         self._finished = False
         self._aborted = False
-        self._frame_count = 0
         self._last_ts = None
 
         self._container: av.container.OutputContainer | None = None
@@ -57,6 +68,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._width: int | None = None
         self._height: int | None = None
         self._frame_timestamps: list[int] = []
+        self._frame_pts: list[int] = []
         self._extra_timelines: dict[str, list[int]] = defaultdict(list)
 
         # Encoding runs on a per-writer thread (libav releases the GIL), so several writers — e.g. one per
@@ -77,11 +89,14 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._height, self._width = first_frame.shape[:2]
 
         self._container = av.open(str(self.video_path), mode='w')
-        self._stream = self._container.add_stream(self.codec, rate=self.fps, options=self.codec_options)
+        self._stream = self._container.add_stream(self.codec, rate=_NOMINAL_ENCODER_RATE, options=self.codec_options)
+        assert self._stream is not None
         self._stream.width = self._width
         self._stream.height = self._height
         self._stream.pix_fmt = 'yuv420p'
         self._stream.gop_size = self.gop_size
+        self._stream.time_base = _TIME_BASE
+        self._stream.codec_context.time_base = _TIME_BASE
 
     def append(self, data: np.ndarray, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:  # noqa: C901
         """Append a video frame with timestamp.
@@ -127,6 +142,13 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             raise RuntimeError('Video encoding failed') from self._encoder_error
 
         self._frame_timestamps.append(ts_ns)
+        # Presentation timestamps run from the first frame, rounded to the nearest tick, and are kept
+        # strictly increasing: two frames less than a tick apart round to the same value, which the
+        # muxer would reject.
+        pts = (ts_ns - self._frame_timestamps[0] + _NS_PER_TICK // 2) // _NS_PER_TICK
+        if self._frame_pts and pts <= self._frame_pts[-1]:
+            pts = self._frame_pts[-1] + 1
+        self._frame_pts.append(pts)
 
         # Handle extra timelines using defaultdict
         for timeline_name, timeline_ts in extra_ts.items():
@@ -139,9 +161,8 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             self._encoder_thread.start()
         # Copy before enqueueing: callers routinely pass views into shared memory that the producer
         # overwrites with the next frame.
-        self._frames.put((data.copy(), self._frame_count))
+        self._frames.put((data.copy(), pts))
 
-        self._frame_count += 1
         self._last_ts = ts_ns
 
     def _encode_loop(self) -> None:
@@ -184,9 +205,9 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
                 self._container.mux(packet)
             self._container.close()
 
-        # Write frame index with primary timestamp and extra timelines
-        data_dict = {'ts_ns': self._frame_timestamps if self._frame_timestamps else []}
-        fields = [('ts_ns', pa.int64())]
+        # Write frame index with primary timestamp, muxed presentation timestamps and extra timelines
+        data_dict = {'ts_ns': self._frame_timestamps, 'pts': self._frame_pts}
+        fields = [('ts_ns', pa.int64()), ('pts', pa.int64())]
 
         # Add extra timeline columns
         for timeline_name in sorted(self._extra_timelines.keys()):
@@ -222,15 +243,25 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
 
 
 class _VideoNavigator:
-    """Efficiently navigates video frames using buffering and smart seeking."""
+    """Efficiently navigates video frames using buffering and smart seeking.
 
-    def __init__(self, video_path: Path, seek_threshold: int):
+    ``frame_pts`` is the presentation timestamp of every frame, in stream time base units, taken from the
+    frames index — the index owns the mapping between frame position and container time. Videos written
+    before the index carried that column pass None, and the mapping is re-derived from the declared frame
+    rate, which is the convention they were written with.
+    """
+
+    def __init__(self, video_path: Path, seek_threshold: int, frame_pts: np.ndarray | None):
         self._container = av.open(str(video_path))
         self._stream = self._container.streams.video[0]
 
-        rate = self._stream.average_rate or self._stream.rate
-        ticks_per_frame = round(1.0 / (float(rate) * float(self._stream.time_base)))
-        self._ticks_per_frame = max(1, int(ticks_per_frame))
+        self._frame_pts = frame_pts
+        if frame_pts is None:
+            rate = self._stream.average_rate or self._stream.rate
+            time_base = self._stream.time_base
+            assert rate is not None and time_base is not None
+            ticks_per_frame = round(1.0 / (float(rate) * float(time_base)))
+            self._ticks_per_frame = max(1, int(ticks_per_frame))
         self._seek_threshold = seek_threshold
 
         self._frame_buffer: deque[tuple[int, av.VideoFrame]] = deque()
@@ -243,33 +274,62 @@ class _VideoNavigator:
         """Returns the index of the last decoded frame."""
         return self._last_idx
 
+    def _pts_of(self, frame_index: int) -> int:
+        if self._frame_pts is None:
+            return frame_index * self._ticks_per_frame
+        return int(self._frame_pts[frame_index])
+
+    def _index_of(self, pts: int) -> int:
+        """Frame index of a decoded frame. Decode order can't be counted: a seek restarts decoding at the
+        preceding keyframe, so the position is recovered from the timestamp the frame carries."""
+        if self._frame_pts is None:
+            return int(pts // self._ticks_per_frame)
+        return int(np.searchsorted(self._frame_pts, pts, side='right')) - 1
+
     def seek_if_needed(self, target_frame_index: int):
         """Seeks to target frame if distance exceeds threshold."""
-        target_pts = target_frame_index * self._ticks_per_frame
-
         if self._last_idx != -1 and 0 < target_frame_index - self._last_idx <= self._seek_threshold:
             return
 
-        self._container.seek(target_pts, stream=self._stream)
+        # Seeking is decode-timestamp based while the target is a presentation timestamp, so where a
+        # stream reorders frames a keyframe's decode timestamp can precede the target while its own
+        # presentation timestamp follows it — leaving the stream past the frame we asked for. Step the
+        # seek back a frame at a time until decoding actually resumes at or before the target.
+        seek_from = target_frame_index
+        while True:
+            self._restart_at(self._pts_of(seek_from))
+            if seek_from == 0:
+                return
+            try:
+                self._fill_buffer()
+            except StopIteration:
+                return
+            if self._frame_buffer[0][0] <= target_frame_index:
+                return
+            seek_from -= 1
+
+    def _restart_at(self, pts: int) -> None:
+        self._container.seek(pts, stream=self._stream)
         self._demux_iter = iter(self._container.demux(self._stream))
         self._frame_buffer.clear()
         self._last_idx = -1
+
+    def _fill_buffer(self) -> None:
+        """Decodes packets until at least one frame is buffered. Raises StopIteration at end of stream."""
+        while not self._frame_buffer:
+            packet = next(self._demux_iter)
+            for frame in packet.decode():
+                assert frame.pts is not None
+                self._last_idx = self._index_of(frame.pts)
+                self._frame_buffer.append((self._last_idx, frame))
 
     def __iter__(self) -> Iterator[tuple[int, av.VideoFrame]]:
         return self
 
     def __next__(self) -> tuple[int, av.VideoFrame]:
         """Returns next frame from buffer or decodes new packets."""
-        while self._frame_buffer:
-            return self._frame_buffer.popleft()
-
-        while not self._frame_buffer:
-            packet = next(self._demux_iter)
-            for frame in packet.decode():
-                assert frame.pts is not None
-                self._last_idx = int(frame.pts // self._ticks_per_frame)
-                self._frame_buffer.append((self._last_idx, frame))
-
+        if not self._frame_buffer:
+            self._fill_buffer()
         return self._frame_buffer.popleft()
 
 
@@ -278,6 +338,10 @@ class VideoSignal(Signal[np.ndarray]):
 
     Reads video frames from a video file (e.g., MP4/MKV) with a Parquet index
     containing frame timestamps for fast random access.
+
+    Random access maps a frame index to the presentation timestamp the index records for it. Videos
+    written before the index carried a ``pts`` column fall back to deriving that mapping from the
+    stream's declared frame rate, which is the convention they were written with.
     """
 
     def __init__(self, video_path: Path, frames_index_path: Path, seek_threshold: int | None = None):
@@ -296,6 +360,7 @@ class VideoSignal(Signal[np.ndarray]):
         self._seek_threshold = seek_threshold or 30
 
         self._timestamps = None
+        self._frame_pts = None
         self._navigator: _VideoNavigator | None = None
 
     def _load_timestamps(self):
@@ -303,11 +368,14 @@ class VideoSignal(Signal[np.ndarray]):
         if self._timestamps is None:
             frames_table = pq.read_table(self.frames_index_path)
             self._timestamps = frames_table['ts_ns'].to_numpy()
+            if 'pts' in frames_table.column_names:
+                self._frame_pts = frames_table['pts'].to_numpy()
 
     @property
     def _nav(self) -> _VideoNavigator:
         if self._navigator is None:
-            self._navigator = _VideoNavigator(self.video_path, self._seek_threshold)
+            self._load_timestamps()
+            self._navigator = _VideoNavigator(self.video_path, self._seek_threshold, self._frame_pts)
         return self._navigator
 
     def __len__(self) -> int:

@@ -388,7 +388,7 @@ def test_episode_writer_with_extra_timelines(tmp_path):
 
     # Verify video signal has extra timelines
     frames_table = pq.read_table(ep_dir / 'image.frames.parquet')
-    assert {'ts_ns', 'ts_ns.producer', 'ts_ns.consumer'} == set(frames_table.column_names)
+    assert {'ts_ns', 'ts_ns.producer', 'ts_ns.consumer'} <= set(frames_table.column_names)
     assert frames_table['ts_ns.producer'].to_pylist() == [1400, 2400]
     assert frames_table['ts_ns.consumer'].to_pylist() == [1600, 2600]
 
