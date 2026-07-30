@@ -1,19 +1,23 @@
-"""Validate the MolmoSpaces rig's Cartesian command transform against the live sim.
+"""Validate the MolmoSpaces rig's command transforms against the live sim.
 
-MolmoSpaces' Franka runs a joint-position controller, so a Cartesian command only reaches it through the
-differential IK in ``env.py``. That solver is arithmetic over the live MuJoCo model, which no unit test can
-reach (``mapping``'s tests cover the routing with a stub solver, not the kinematics), so it is checked here
-against a real benchmark scene — the same shape of check ``simulator/libero/validate.py`` runs for the LIBERO
-rig.
+MolmoSpaces' Franka runs a joint-position controller, so every other command reaches it only through the
+conversions in ``mapping``, the Cartesian pair among them through the differential IK in ``env.py``. That
+solver is arithmetic over the live MuJoCo model, which no unit test can reach (``mapping``'s tests cover the
+routing with a stub solver, not the kinematics), so it is checked here against a real benchmark scene — the
+same shape of check ``simulator/libero/validate.py`` runs for the LIBERO rig.
 
-Two properties, both on the arm's grasp site (the frame ``observe_payload`` reports, so command and observation
-share a frame):
+Four properties. The kinematic three read the arm's grasp site (the frame ``observe_payload`` reports, so
+command and observation share a frame); the fourth is the adoption's coverage of the command contract:
 
 - **FK identity** — the scratch-``MjData`` recompute of the measured joints reproduces the live grasp-site read,
   confirming the scratch evaluation is seeded correctly and reads the same frame.
 - **IK round-trip** — for reachable targets sampled by perturbing the measured joints, ``_fk(_ik(pose))``
   recovers the pose. This is the property a Cartesian policy depends on; the sampling stays near the measured
   configuration so every target is reachable and the check tests the solver, not the workspace.
+- **Cartesian hold** — commanding the pose the arm already holds resolves to the joints it already holds, which
+  is what makes an absolute Cartesian setpoint stable when a policy re-sends it.
+- **Command contract** — every canonical command type converts to joint targets through the live IK. The
+  contract is total, so this is where the adoption's coverage of it is verified rather than asserted.
 
 Runs in MolmoSpaces' venv, flat off ``PYTHONPATH`` like ``parity_native.py`` (positronic-free: ``molmo_spaces``
 plus this package's ``mapping``/``env``), so positronic's interpreter cannot import it. Needs the asset packs
@@ -42,6 +46,7 @@ from pathlib import Path
 # validates that exact solver, not a re-derivation of it.
 import env  # noqa: E402
 import numpy as np
+import protocol  # the positronic-free wire contract, flat on PYTHONPATH beside ``server`` — see ``launcher``
 
 # Sampled targets perturb each measured joint by up to this much (radians): far enough that the solver has real
 # work to do, near enough that every target stays reachable and away from the limits.
@@ -53,6 +58,10 @@ _ORI_ATOL = 1e-2  # radians
 # The live site is read after the sim has stepped, so it carries residual motion the scratch recompute of the
 # same joints cannot reproduce exactly; float precision, not float64, is the right bar for the identity.
 _FK_ATOL = 1e-5
+# The step the relative commands carry: small enough that the target stays reachable from the measured
+# configuration, large enough that the conversion is not the identity.
+_DELTA_POS = 0.01  # metres
+_DELTA_Q = 0.01  # radians
 
 
 def _ori_error(target_rot: np.ndarray, rot: np.ndarray) -> float:
@@ -89,6 +98,40 @@ def _check_cartesian_command_is_a_noop_at_the_measured_pose(sim_env) -> None:
     print(f'  cartesian hold: OK (max joint drift {drift.max():.2e} rad)')
 
 
+def _check_every_canonical_command_converts(sim_env) -> None:
+    """Drive every canonical command type through the real conversion — the adoption's whole obligation.
+
+    The command contract is total: MolmoSpaces' Franka natively takes joint-position targets alone, so each
+    canonical type has to reach it as one. ``mapping``'s unit tests pin that routing against a stub solver;
+    here each type runs through the live IK and the measured pose, so a type the rig cannot actually resolve
+    fails. The iteration is over ``protocol.CANONICAL_COMMAND_TYPES`` rather than a list written here, so a
+    type added to the wire fails this check until the rig converts it.
+    """
+    measured = np.asarray(sim_env._measured_arm_q(), dtype=np.float64)
+    pos, rot = sim_env._measured_eef_pose()
+    identity_rot = np.eye(3).reshape(-1)
+    payloads = {
+        protocol.CARTESIAN: {'pose': np.concatenate([pos, rot.reshape(-1)])},
+        protocol.CARTESIAN_DELTA: {'delta': np.concatenate([np.full(3, _DELTA_POS), identity_rot])},
+        protocol.JOINT_POS: {'q': measured},
+        protocol.JOINT_VEL: {'dq': np.full(measured.size, _DELTA_Q)},
+        protocol.HOLD: {},
+    }
+    unmapped = [kind for kind in protocol.CANONICAL_COMMAND_TYPES if kind not in payloads]
+    assert not unmapped, f'the rig has no wire payload for canonical command types {unmapped}'
+
+    for kind in protocol.CANONICAL_COMMAND_TYPES:
+        command = {'type': kind, **payloads[kind]}
+        target = env.mapping.wire_command_to_arm_action(
+            command, measured, ik=sim_env._ik, current_eef=sim_env._measured_eef_pose()
+        )
+        target = np.asarray(target, dtype=np.float64)
+        assert target.shape == measured.shape, f'{kind}: joint targets {target.shape} vs measured {measured.shape}'
+        assert np.all(np.isfinite(target)), f'{kind}: non-finite joint targets {target}'
+    covered = ', '.join(protocol.CANONICAL_COMMAND_TYPES)
+    print(f'  command contract: OK ({covered} -> {measured.size} joint targets)')
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate the MolmoSpaces rig's Cartesian command transform.")
     parser.add_argument('--benchmark_dir', required=True, help='dir containing benchmark.json')
@@ -108,6 +151,7 @@ def main() -> None:
         _check_fk_identity(sim_env)
         _check_ik_roundtrip(sim_env)
         _check_cartesian_command_is_a_noop_at_the_measured_pose(sim_env)
+        _check_every_canonical_command_converts(sim_env)
     finally:
         sim_env.close()
     print('all checks passed')

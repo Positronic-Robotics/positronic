@@ -194,8 +194,9 @@ def test_unknown_command_names_the_canonical_contract():
 
 @pytest.mark.parametrize('command_type', protocol.CANONICAL_COMMAND_TYPES)
 def test_every_canonical_command_type_converts_to_joint_targets(command_type):
-    """The rig declares full coverage of the canonical contract at reset (``env.py``); this is what makes that
-    declaration true — every canonical type converts to the joint targets MolmoSpaces natively steps."""
+    """The contract is total, so every canonical type converts to the joint targets MolmoSpaces natively steps.
+    This is the model-free half of that property — the routing, through a stub solver; ``validate.py`` drives
+    the same types through the real IK against a live scene."""
     pose = np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])
     payload = {
         protocol.JOINT_POS: {'q': np.zeros(mapping.NUM_ARM_JOINTS)},

@@ -9,7 +9,7 @@ back — so only raw arrays cross the boundary and the World's virtual clock adv
 ``control_dt`` is whatever the latest observation reports (``reset`` and every ``step``).
 """
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from contextlib import AbstractContextManager, ExitStack
 from typing import Any
 
@@ -18,33 +18,12 @@ from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
-from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
 
 # Pacing before the first reset, when the env's ``control_dt`` is still unknown. Only sets the instant
 # frame-0 lands at, then the env's reported ``control_dt`` takes over.
 _IDLE_DT = 0.1
-
-
-def _check_command_conformance(declared: Iterable[str] | None) -> None:
-    """Refuse an env adoption that covers less than the whole canonical command contract.
-
-    One contract carries every policy onto every embodiment, so an adoption converts all of
-    ``protocol.CANONICAL_COMMAND_TYPES`` into whatever its own controller natively takes — a platform that
-    drives only joint positions makes that conversion in its own env module. Reading the declaration at
-    ``reset`` fails at connect, before a sweep spends GPU time, and names exactly the conversions the
-    adoption still owes. An adoption that declares nothing is not yet held to the contract; closing that gap
-    means having it declare its coverage.
-    """
-    if declared is None:
-        return
-    missing = sorted(set(protocol.CANONICAL_COMMAND_TYPES) - set(declared))
-    if missing:
-        raise ValueError(
-            f'the env covers {sorted(declared)} of the canonical command contract and is missing {missing}. '
-            f'Every embodiment drives the whole contract: implement those conversions in the env adoption.'
-        )
 
 
 class RemoteEnvControlSystem(pimm.ControlSystem):
@@ -119,7 +98,6 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         # deadline, so the timeout floor must clear the horizon plus that tick, not the bare horizon.
         sim_horizon = self._frame.get('horizon')
         self._horizon = None if sim_horizon is None else sim_horizon + self._frame['control_dt']
-        _check_command_conformance(self._frame.get('command_types'))
         self._reset_pending = True
         self._active = True
         # Clear any terminal the previous trial left on the wire: the env can reach ``done`` while the proxy

@@ -55,11 +55,6 @@ class EnvProtocol(ABC):
         ``horizon`` (optional) is the sim-enforced episode deadline in sim-seconds — the env's own time limit, which
         it delivers as a terminal ``done`` on expiry. An env that enforces a horizon reports it so the client can
         check its safety-net timeout stays strictly weaker (longer); omit it when the env enforces none.
-
-        ``command_types`` (optional) is this adoption's coverage of ``protocol.CANONICAL_COMMAND_TYPES``, which it
-        is required to cover in full — the platform underneath may take only one kind of action, and converting
-        the rest into it is the adoption's job. The client refuses at reset when the declaration is short, naming
-        the conversions still owed. An adoption that omits it is not yet held to the contract.
         """
 
     @abstractmethod

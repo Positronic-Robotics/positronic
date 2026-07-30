@@ -16,9 +16,9 @@ import numpy as np
 
 # The canonical command contract: the tag on every arm command a client puts on the wire. It is total — one
 # contract carries every policy onto every embodiment — so an env adoption converts each of these into
-# whatever its own controller natively takes, and declares that coverage at ``reset`` for the proxy to check.
-# Owned here because both interpreters spell the tags: positronic's ``EnvAdapter`` writes them, an env venv's
-# own decoder reads them, and this is the module both sides import.
+# whatever its own controller natively takes. Owned here because both interpreters spell the tags:
+# positronic's ``EnvAdapter`` writes them, an env venv's own decoder reads them, and this is the module both
+# sides import.
 CARTESIAN = 'cartesian'
 CARTESIAN_DELTA = 'cartesian_delta'
 JOINT_POS = 'joint_pos'
