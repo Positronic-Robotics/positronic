@@ -56,6 +56,11 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         # The env's sim-enforced episode horizon in sim-seconds from the latest ``reset``, or ``None`` when the env
         # enforces none — read by the client's ``Task`` so the harness can check its timeout stays strictly weaker.
         self._horizon: float | None = None
+        # The wire command types the env accepts, advertised at ``reset``; ``None`` from an env that advertises
+        # none, which disables the check. Every action is screened against it before the wire round-trip, so a
+        # policy whose action space the env cannot drive fails here — naming both sets — instead of dying inside
+        # the env's own interpreter partway through a paid sweep.
+        self._command_types: frozenset[str] | None = None
         # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
         self._reset_pending = False
 
@@ -98,6 +103,8 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         # deadline, so the timeout floor must clear the horizon plus that tick, not the bare horizon.
         sim_horizon = self._frame.get('horizon')
         self._horizon = None if sim_horizon is None else sim_horizon + self._frame['control_dt']
+        advertised = self._frame.get('command_types')
+        self._command_types = None if advertised is None else frozenset(advertised)
         self._reset_pending = True
         self._active = True
         # Clear any terminal the previous trial left on the wire: the env can reach ``done`` while the proxy
@@ -143,9 +150,29 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
             # ever connected.
             self._cleanup.close()
 
+    def _check_command_type(self, action: dict[str, Any]) -> None:
+        """Refuse an action the env advertised it cannot drive, before it crosses the wire."""
+        if self._command_types is None:
+            return
+        kind = action.get('command', {}).get('type')
+        if kind is not None and kind not in self._command_types:
+            raise ValueError(
+                f'the env does not accept {kind!r} commands; it advertised '
+                f'{sorted(self._command_types)}. The policy emits an action space this env cannot drive — '
+                f'pair it with a matching env, or teach the env to map this command type.'
+            )
+
     def _step_env(self, clock: pimm.Clock) -> dict[str, Any]:
-        commands = {name: receiver.read() for name, receiver in self.commands.items()}
-        result = self._conn.step(self._adapter.action(commands, clock.now_ns()))
+        # Every command receiver is built with ``default=[]``, so ``read()`` is total here — it returns ``None``
+        # only for a receiver with no default.
+        commands: dict[str, pimm.Message] = {}
+        for name, receiver in self.commands.items():
+            message = receiver.read()
+            assert message is not None, f'{name} receiver carries a default, so its read cannot be empty'
+            commands[name] = message
+        action = self._adapter.action(commands, clock.now_ns())
+        self._check_command_type(action)
+        result = self._conn.step(action)
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues
             self.done.emit(payload)
