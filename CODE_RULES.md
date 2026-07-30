@@ -39,3 +39,21 @@ return {**data, 'ee_pose': change_frame(data['ee_pose'])}
 # Good — pose_key is a constructor parameter defaulting to 'ee_pose'
 return {**data, self._pose_key: change_frame(data[self._pose_key])}
 ```
+
+### overspecific
+
+Don't bake assumptions about how a component will be used into its interface. Before adding a
+parameter, a branch, or a category to a signature, ask what else the component could legitimately be
+asked to do — many keys instead of one, several value types instead of one, the same operation in
+reverse. Where handling those uniformly makes the code **shorter**, the specific version is wrong.
+
+Generalise until it simplifies, and stop there. A parameter, flag, or strategy object added for a case
+nobody has is the same mistake pointed the other way.
+
+```python
+# Bad — assumes every key belongs to exactly one category, and that the categories need different handling
+def __init__(self, pose_keys, command_keys): ...
+
+# Good — one list, handled the same way in both directions
+def __init__(self, keys): ...
+```
