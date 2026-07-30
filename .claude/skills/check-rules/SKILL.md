@@ -16,13 +16,17 @@ what stops it from seeing a violation.
 
 ```bash
 BASE=$(git merge-base HEAD main)
-git diff $BASE --stat                                      # committed, staged and unstaged
+git diff $BASE --stat                                      # base -> worktree
+git diff --cached $BASE --stat                             # base -> index, what a plain commit records
 git status --porcelain --untracked-files=all | grep '^??'  # untracked files, which no diff shows
 ```
 
 Everything not yet on `main` is in scope: committed, staged, unstaged, and untracked. Pass the untracked
 files' contents alongside the diff — a brand-new file is where rules bite hardest and is the one thing
 `git diff` cannot show.
+
+The two diffs are identical unless a file was staged and then edited again. When they differ, both are
+in scope: content can sit in the index, never appear in the worktree, and still be committed.
 
 Narrow to the files the user named if they named any, and say which scope you used. A clean report over
 the wrong scope is worse than no report.
