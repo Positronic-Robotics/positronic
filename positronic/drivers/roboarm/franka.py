@@ -212,7 +212,9 @@ class Robot(pimm.ControlSystem):
         else:
             robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
 
-    def _reset(self, robot, robot_state: FrankaState):
+    def _reset(self, robot, robot_state: FrankaState) -> bool:
+        """Home the arm. Returns whether a robot error interrupted the move and was cleared, in which
+        case the arm is short of home and the caller must drop what it was going to command next."""
         robot_state._start_reset()
         self.state.emit(robot_state)
 
@@ -222,6 +224,7 @@ class Robot(pimm.ControlSystem):
                 -np.asarray(self._home_joints_variation), np.asarray(self._home_joints_variation)
             )
             target = target + variation
+        recovered = False
         try:
             robot.set_target_joints(target, asynchronous=False)
         except RuntimeError:
@@ -234,11 +237,11 @@ class Robot(pimm.ControlSystem):
                 raise
             logging.warning(f'Robot error while homing: {state.error_message}')
             robot.recover_from_errors()
-            # The arm holds wherever the reflex stopped it, short of home. Homing again from here would drive it
-            # back into whatever tripped the reflex, so the operator re-issues the reset once the way is clear.
+            recovered = True
 
         robot_state._finish_reset()
         self.state.emit(robot_state)
+        return recovered
 
     @contextlib.contextmanager
     def _desk_session(self):
@@ -310,7 +313,11 @@ class Robot(pimm.ControlSystem):
                     if cmd is not None:
                         match cmd:
                             case command.Reset():
-                                self._reset(robot, robot_state)
+                                if self._reset(robot, robot_state):
+                                    # Homing was cut short by a reflex, so the arm is not where the rest of
+                                    # this trajectory was planned from. Drop it, the way the error branch
+                                    # above does, rather than driving on from an unexpected pose.
+                                    player.set([])
                             case command.CartesianPosition(pose):
                                 target_pose_wxyz = np.asarray([*pose.translation, *pose.rotation.as_quat])
                                 ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)

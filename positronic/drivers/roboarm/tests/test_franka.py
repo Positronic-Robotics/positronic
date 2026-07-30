@@ -209,3 +209,29 @@ def test_homing_failure_the_arm_does_not_report_is_not_swallowed(arm):
         with pytest.raises(RuntimeError, match='connection closed by robot'):
             for _ in range(5):
                 next(loop)
+
+
+def test_reflex_while_homing_drops_the_rest_of_the_trajectory(arm):
+    """Homing cut short leaves the arm somewhere the queued waypoints were not planned from."""
+    with pimm.World(virtual_time=True) as world:
+        robot = _driver()
+        commands = _bind_input(world, robot.commands)
+        _bind_output(world, robot.state)
+        _bind_output(world, robot.robot_meta)
+
+        loop = world.start([robot])
+        for _ in range(3):
+            next(loop)
+
+        # A Reset now, and a joint move a moment later in the SAME trajectory.
+        now = world.clock.now_ns()
+        queued = np.array([0.4] * 7)
+        commands.emit([(now, command.Reset()), (now + 10_000_000, command.JointPosition(positions=queued))])
+        arm.arm_reflex()
+        for _ in range(60):
+            next(loop)
+
+        commanded = [q for q, _ in arm.moves]
+        assert not any(np.allclose(q, queued) for q in commanded), (
+            'the queued waypoint was executed after the reflex cut homing short'
+        )
