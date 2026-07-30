@@ -21,7 +21,7 @@ BASE=$(git merge-base HEAD upstream/main 2>/dev/null || git merge-base HEAD orig
 git diff "$BASE" HEAD                                      # committed — what a push sends
 git diff "$BASE" --cached                                  # index — what a plain commit records
 git diff "$BASE"                                           # worktree — what you see in the files
-git status --porcelain --untracked-files=all | grep '^??'  # untracked — what no diff shows
+git status --porcelain --untracked-files=all | grep '^??' || true  # untracked — what no diff shows
 ```
 
 Git keeps three snapshots — HEAD, the index, the worktree — and a violation can sit in any one of them
