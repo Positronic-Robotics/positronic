@@ -15,7 +15,9 @@ what stops it from seeing a violation.
 ## Step 1: Scope the diff
 
 ```bash
-BASE=$(git merge-base HEAD main)
+BASE_REF=$(git rev-parse --verify --quiet upstream/main || git rev-parse --verify --quiet origin/main)
+[ -n "$BASE_REF" ] || { echo 'no upstream/main or origin/main — name the base explicitly'; exit 1; }
+BASE=$(git merge-base HEAD "$BASE_REF")
 git diff $BASE HEAD                                        # committed — what a push sends
 git diff $BASE --cached                                    # index — what a plain commit records
 git diff $BASE                                             # worktree — what you see in the files
@@ -33,6 +35,10 @@ report.
 
 In the ordinary case the three agree and it is one patch. Pass the untracked files' contents alongside
 it — a brand-new file is where rules bite hardest and is the one thing no diff shows.
+
+The base comes from a remote-tracking ref, not from local `main`, which goes stale the moment someone
+merges upstream and would silently widen the scope to changes already on the mainline. Fetch first if
+the remote ref itself may be behind, and stop rather than guess when neither ref exists.
 
 Narrow to the files the user named if they named any, and say which scope you used. A clean report over
 the wrong scope is worse than no report.
@@ -56,12 +62,16 @@ Each agent returns two sections, either of which may be empty:
 ```
 FINDINGS
 Rule <rule-id> violated:
-<file>:<line>
+<snapshot> <file>:<line>
 <what the code does, and the safe path>
 
 WAIVERS
-<file>:<line> — <the reason the waiver gives>
+<snapshot> <file>:<line> — <the reason the waiver gives>
 ```
+
+`<snapshot>` is `HEAD`, `index`, `worktree`, or `untracked` — which of the four the violating text lives
+in. Without it a finding against HEAD points at a line the reader opens and finds already clean, with
+nothing to say where the fix is owed.
 
 Instruct every agent to:
 
@@ -76,8 +86,8 @@ Instruct every agent to:
 
 ## Step 3: Report
 
-Aggregate every agent's `FINDINGS` into **one list**, ordered by file and line, each entry naming its own
-rule and keeping the agents' format so local output matches what Codex posts on the pull request. State
+Aggregate every agent's `FINDINGS` into **one list**, ordered by file and line, each entry keeping its
+own rule and snapshot and the agents' format, so local output matches what Codex posts on the PR. State
 the scope and the rules checked, then list the collected `WAIVERS` separately — a rule silenced by a
 waiver must never look the same as a rule that passed.
 
