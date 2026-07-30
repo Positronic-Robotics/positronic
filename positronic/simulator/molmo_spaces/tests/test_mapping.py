@@ -123,3 +123,75 @@ def test_exterior_camera_variants_cover_light_randomization_and_randcam():
     variants = mapping.MOLMO_EXTERIOR_CAMERA_VARIANTS
     for name in ('droid_shoulder_light_randomization', 'randomized_zed2_analogue_1'):
         assert mapping.resolve_camera_key({name: 1}, default, default, variants) == name
+
+
+def test_unpack_wire_pose_round_trips_translation_and_rotation():
+    # The client encodes a pose as Transform3D.as_vector(ROTATION_MATRIX): translation, then R row-major.
+    rot = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])  # +90 deg about z
+    pos, out = mapping.unpack_wire_pose(np.concatenate([[1.0, 2.0, 3.0], rot.reshape(-1)]))
+    assert np.array_equal(pos, [1.0, 2.0, 3.0])
+    assert np.array_equal(out, rot)
+
+
+def test_unpack_wire_pose_rejects_wrong_width():
+    with pytest.raises(ValueError):
+        mapping.unpack_wire_pose(np.zeros(7))  # a quaternion-encoded pose is not the wire form
+
+
+def test_compose_world_delta_adds_translation_and_left_multiplies_rotation():
+    # World-frame convention: goal_pos = ee_pos + dpos, goal_ori = R(delta) @ ee_ori. Left-multiplication is
+    # what keeps the delta world-framed; composing in the body frame would rotate the translation too.
+    cur_rot = np.eye(3)
+    delta_rot = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    pos, rot = mapping.compose_world_delta([1.0, 0.0, 0.0], cur_rot, [0.0, 2.0, 0.0], delta_rot)
+    assert np.allclose(pos, [1.0, 2.0, 0.0])
+    assert np.allclose(rot, delta_rot)
+
+
+def test_cartesian_command_resolves_through_the_supplied_ik():
+    # env.py owns the solver (it needs the live model); mapping only routes the target into it.
+    solved = np.arange(mapping.NUM_ARM_JOINTS, dtype=np.float64)
+    seen = {}
+
+    def ik(pos, rot):
+        seen['pos'], seen['rot'] = pos, rot
+        return solved
+
+    rot = np.eye(3)
+    cmd = {'type': 'cartesian', 'pose': np.concatenate([[0.4, 0.1, 0.3], rot.reshape(-1)])}
+    out = mapping.wire_command_to_arm_action(cmd, np.zeros(mapping.NUM_ARM_JOINTS), ik=ik)
+    assert out.dtype == np.float32 and np.allclose(out, solved)
+    assert np.allclose(seen['pos'], [0.4, 0.1, 0.3]) and np.allclose(seen['rot'], rot)
+
+
+def test_cartesian_delta_composes_onto_the_measured_eef_before_solving():
+    # The delta is relative to the *measured* pose, so the solver must see the composed absolute target.
+    seen = {}
+
+    def ik(pos, rot):
+        seen['pos'], seen['rot'] = pos, rot
+        return np.zeros(mapping.NUM_ARM_JOINTS)
+
+    cmd = {'type': 'cartesian_delta', 'delta': np.concatenate([[0.0, 0.1, 0.0], np.eye(3).reshape(-1)])}
+    mapping.wire_command_to_arm_action(
+        cmd, np.zeros(mapping.NUM_ARM_JOINTS), ik=ik, current_eef=(np.array([0.5, 0.0, 0.2]), np.eye(3))
+    )
+    assert np.allclose(seen['pos'], [0.5, 0.1, 0.2])
+
+
+def test_cartesian_without_an_ik_solver_raises():
+    # A caller that holds no model cannot resolve a Cartesian target — fail loud rather than silently holding.
+    cmd = {'type': 'cartesian', 'pose': np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])}
+    with pytest.raises(ValueError, match='ik solver'):
+        mapping.wire_command_to_arm_action(cmd, np.zeros(mapping.NUM_ARM_JOINTS))
+
+
+def test_unknown_command_names_the_accepted_set():
+    with pytest.raises(ValueError, match='cartesian'):  # the message lists what the rig does accept
+        mapping.wire_command_to_arm_action({'type': 'wrench'}, np.zeros(mapping.NUM_ARM_JOINTS))
+
+
+def test_accepted_command_types_cover_every_wire_command():
+    # The advertised set is what the proxy screens actions against, so it must match what the mapping handles:
+    # every type _wire_command can emit (positronic/simulator/env_server/adapter.py).
+    assert set(mapping.ACCEPTED_COMMAND_TYPES) == {'joint_pos', 'joint_vel', 'cartesian', 'cartesian_delta', 'hold'}

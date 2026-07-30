@@ -71,6 +71,12 @@ from molmo_spaces.evaluation.benchmark_schema import load_all_episodes  # noqa: 
 from molmo_spaces.evaluation.configs.evaluation_configs import JsonBenchmarkEvalConfig  # noqa: E402
 from molmo_spaces.tasks.json_eval_task_sampler import JsonEvalTaskSampler  # noqa: E402
 
+# Damped-least-squares differential IK, matching the LIBERO rig's solver (positronic/simulator/libero/env.py):
+# the same iteration budget, damping and convergence tolerance, on MuJoCo's own site/body Jacobian.
+_IK_ITERS = 100
+_IK_DAMPING = 0.05
+_IK_TOL = 1e-4
+
 
 class _DroidPickEvalConfig(JsonBenchmarkEvalConfig):
     """The minimal eval config to build a Franka DROID pick task standalone.
@@ -116,6 +122,10 @@ class MolmoSpacesEnv(EnvProtocol):
         # The RGB camera keys the current episode renders — emitted every frame; the client's ``camera_dict``
         # selects which the policy sees.
         self._camera_names: list[str] = []
+        # Scratch ``MjData`` the kinematics probes (``_fk``/``_ik``) run on, allocated once per episode and
+        # refreshed from the live buffer per call — a Cartesian policy solves IK every control step, so the
+        # allocation stays out of the loop. Rebuilt in ``_build``, since it is sized by the episode's model.
+        self._scratch: Any = None
 
     def _build(self, episode_index: int, seed: int | None) -> None:
         if self._sampler is not None:
@@ -133,6 +143,7 @@ class MolmoSpacesEnv(EnvProtocol):
         self._sampler = JsonEvalTaskSampler(cfg, episode)
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._robot_view = self._task.env.current_robot.robot_view
+        self._scratch = None  # sized by this episode's model; allocated on the first probe
         self._control_dt = cfg.policy_dt_ms / 1000.0
         self._horizon_sec = cfg.task_horizon * self._control_dt
         # The authoritative benchmark prompt, straight from the episode spec — not
@@ -154,10 +165,13 @@ class MolmoSpacesEnv(EnvProtocol):
             'robot_meta': {},
             'control_dt': self._control_dt,
             'horizon': self._horizon_sec,
+            'command_types': list(mapping.ACCEPTED_COMMAND_TYPES),
         }
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
-        arm = mapping.wire_command_to_arm_action(action['command'], self._measured_arm_q())
+        arm = mapping.wire_command_to_arm_action(
+            action['command'], self._measured_arm_q(), ik=self._ik, current_eef=self._measured_eef_pose()
+        )
         gripper = np.array([mapping.grip_command_to_actuator(action['grip'])], dtype=np.float32)
         obs, _reward, _term, _trunc, _infos = self._task.step({'arm': arm, 'gripper': gripper})
         # The trial ends on the task's judged success, on any MolmoSpaces terminal (a done action), or on native
@@ -173,6 +187,68 @@ class MolmoSpacesEnv(EnvProtocol):
 
     def _measured_arm_q(self) -> np.ndarray:
         return np.asarray(self._robot_view.get_move_group('arm').joint_pos, dtype=np.float32)
+
+    def _measured_eef_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        """The measured grasp-site world pose as ``(translation, 3x3 rotation)`` — the frame a Cartesian
+        command targets and the one ``observe_payload`` reports, so command and observation share a frame."""
+        eef_world = np.asarray(self._robot_view.get_move_group('arm').leaf_frame_to_world, dtype=np.float64)
+        return eef_world[:3, 3].copy(), eef_world[:3, :3].copy()
+
+    def _scratch_data(self, move_group: Any) -> Any:
+        """The scratch ``MjData``, refreshed from the live one, for off-sim kinematics probing.
+
+        A fresh ``MjData`` seeded with ``qpos`` alone is NOT equivalent: MolmoSpaces places the robot in a scene
+        whose pose also rides on state outside ``qpos`` (mocap bodies among it), which a fresh buffer resets to
+        the model defaults — the grasp site then resolves metres away from the live one. Copying the whole
+        struct keeps every such field, so the probe differs from the live scene only in the joints the caller
+        sets, and copying into a retained buffer keeps the per-step allocation out of the control loop.
+        """
+        if self._scratch is None:
+            self._scratch = mujoco.MjData(move_group.mj_model)  # pyright: ignore[reportAttributeAccessIssue]
+        mujoco.mj_copyData(self._scratch, move_group.mj_model, move_group.mj_data)  # pyright: ignore[reportAttributeAccessIssue]
+        return self._scratch
+
+    def _fk(self, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """The grasp-site world pose a candidate arm configuration reaches.
+
+        Evaluated on a scratch ``MjData`` seeded from the live scene (objects intact), so the live sim is never
+        perturbed: set the arm joints, propagate, read the leaf frame. The inverse of ``_ik``.
+        """
+        arm = self._robot_view.get_move_group('arm')
+        data = self._scratch_data(arm)
+        data.qpos[np.asarray(arm.joint_posadr)] = np.asarray(q, dtype=np.float64).reshape(-1)
+        mujoco.mj_forward(arm.mj_model, data)  # pyright: ignore[reportAttributeAccessIssue]
+        return _leaf_pose(arm, data)
+
+    def _ik(self, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray:
+        """Absolute world grasp-site target -> the arm joint targets that reach it.
+
+        Damped-least-squares differential IK on MuJoCo's own leaf-frame Jacobian, mirroring the LIBERO rig's
+        solver. It iterates on a scratch ``MjData`` seeded from the live scene (objects intact), so probing
+        candidate joint configurations never perturbs the sim being stepped. Joint targets stay inside the
+        move group's limits, and a target the arm cannot reach yields the closest configuration the iteration
+        reached rather than raising — an unreachable waypoint holds near the limit instead of aborting a trial.
+        """
+        arm = self._robot_view.get_move_group('arm')
+        model = arm.mj_model
+        posadr = np.asarray(arm.joint_posadr)
+        veladr = np.asarray(arm.joint_veladr)
+        limits = np.asarray(arm.joint_pos_limits, dtype=np.float64)
+        data = self._scratch_data(arm)
+        q = np.asarray(arm.joint_pos, dtype=np.float64).copy()
+        for _ in range(_IK_ITERS):
+            data.qpos[posadr] = q
+            mujoco.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]
+            cur_pos, cur_rot = _leaf_pose(arm, data)
+            err = _pose_error(target_pos, target_rot, cur_pos, cur_rot)
+            if np.linalg.norm(err) < _IK_TOL:
+                break
+            jac = np.zeros((6, model.nv))
+            _leaf_jacobian(arm, model, data, jac)
+            jac = jac[:, veladr]
+            dq = jac.T @ np.linalg.solve(jac @ jac.T + _IK_DAMPING**2 * np.eye(6), err)
+            q = np.clip(q + dq, limits[:, 0], limits[:, 1])
+        return q
 
     def _observe(self, env_obs: dict[str, Any]) -> dict[str, Any]:
         return observe_payload(self._robot_view, env_obs, self._camera_names)
@@ -212,6 +288,41 @@ def observe_payload(robot_view: Any, env_obs: dict[str, Any], camera_names: list
     for name in camera_names:
         payload[name] = np.ascontiguousarray(env_obs[name])
     return payload
+
+
+def _leaf_pose(move_group: Any, data: Any) -> tuple[np.ndarray, np.ndarray]:
+    """A move group's leaf-frame world pose read off *data* — which may be a scratch ``MjData``, unlike the
+    group's own ``leaf_frame_to_world``, so IK can probe candidate joints without touching the live sim."""
+    if move_group.leaf_frame_type == 'site':
+        pos, mat = data.site_xpos[move_group.leaf_frame_id], data.site_xmat[move_group.leaf_frame_id]
+    else:
+        pos, mat = data.xpos[move_group.leaf_frame_id], data.xmat[move_group.leaf_frame_id]
+    return np.array(pos, dtype=np.float64), np.array(mat, dtype=np.float64).reshape(3, 3)
+
+
+def _leaf_jacobian(move_group: Any, model: Any, data: Any, out: np.ndarray) -> None:
+    """The ``(6, nv)`` leaf-frame Jacobian into *out*, evaluated on *data*.
+
+    Mirrors the move group's own ``get_jacobian`` but against a caller-supplied ``MjData``, which the IK
+    iteration needs (the group's method is bound to the live one).
+    """
+    if move_group.leaf_frame_type == 'site':
+        mujoco.mj_jacSite(model, data, out[:3], out[3:], move_group.leaf_frame_id)  # pyright: ignore[reportAttributeAccessIssue]
+    else:
+        mujoco.mj_jacBody(model, data, out[:3], out[3:], move_group.leaf_frame_id)  # pyright: ignore[reportAttributeAccessIssue]
+
+
+def _pose_error(target_pos: np.ndarray, target_rot: np.ndarray, cur_pos: np.ndarray, cur_rot: np.ndarray) -> np.ndarray:
+    """The world-frame 6-vector error ``[translation, axis-angle rotation]`` from a measured to a target pose.
+
+    Both halves are expressed in the world frame, matching the world-frame leaf Jacobian the IK step solves
+    against. The rotation error is the axis-angle of ``R_target @ R_cur^T``, via MuJoCo's quaternion helpers.
+    """
+    quat = np.zeros(4)
+    mujoco.mju_mat2Quat(quat, np.ascontiguousarray((target_rot @ cur_rot.T).reshape(9)))  # pyright: ignore[reportAttributeAccessIssue]
+    rot_err = np.zeros(3)
+    mujoco.mju_quat2Vel(rot_err, quat, 1.0)  # pyright: ignore[reportAttributeAccessIssue]
+    return np.concatenate([np.asarray(target_pos, dtype=np.float64).reshape(3) - cur_pos, rot_err])
 
 
 def _full_physics_state(robot_view: Any) -> np.ndarray:

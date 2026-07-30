@@ -7,12 +7,22 @@ exercise it without either framework. The MuJoCo reads that need the live model 
 end-effector world pose) stay in ``env.py``; only the framework-independent arithmetic lives here.
 """
 
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeAlias
 
 import numpy as np
 
 # The DROID rig runs 7 Franka arm joints; the reset token's per-move-group action names them 'arm'/'gripper'.
 NUM_ARM_JOINTS = 7
+
+# The wire command types this rig accepts, advertised at reset so a policy emitting anything else is refused
+# before the sweep spends GPU time. The Cartesian pair resolves through the caller's IK (see
+# ``wire_command_to_arm_action``); the joint pair and ``hold`` need no model.
+ACCEPTED_COMMAND_TYPES = ('joint_pos', 'joint_vel', 'cartesian', 'cartesian_delta', 'hold')
+
+# An absolute world target ``(translation, 3x3 rotation)`` -> the arm joint targets that reach it. Supplied
+# by ``env.py``, which holds the model this module deliberately does not.
+IkSolver: TypeAlias = Callable[[np.ndarray, np.ndarray], Any]
 MOLMO_ARM_GROUP = 'arm'
 MOLMO_GRIPPER_GROUP = 'gripper'
 
@@ -50,13 +60,49 @@ def grip_command_to_actuator(grip: float) -> float:
     return float(np.clip(grip, 0.0, 1.0)) * ROBOTIQ_CLOSED
 
 
-def wire_command_to_arm_action(command: dict[str, Any], current_q: Any) -> np.ndarray:
+def unpack_wire_pose(vector: Any) -> tuple[np.ndarray, np.ndarray]:
+    """A wire pose ``[t(3), R(9)]`` -> ``(translation, 3x3 rotation)``.
+
+    The client encodes every pose with ``Transform3D.as_vector(ROTATION_MATRIX)``: translation first, then the
+    rotation matrix row-major.
+    """
+    vec = np.asarray(vector, dtype=np.float64).reshape(-1)
+    if vec.shape[0] != 12:
+        raise ValueError(f'wire pose must be [t(3), R(9)], got {vec.shape[0]} values')
+    return vec[:3].copy(), vec[3:].reshape(3, 3).copy()
+
+
+def compose_world_delta(cur_pos: Any, cur_rot: Any, delta_pos: Any, delta_rot: Any) -> tuple[np.ndarray, np.ndarray]:
+    """The absolute pose a world-frame ``cartesian_delta`` targets from a measured pose.
+
+    Translation adds in the world frame and rotation left-multiplies (``goal_ori = R(delta) @ ee_ori``) — the
+    convention positronic's ``apply_cartesian_delta`` and LIBERO's own delta bridging both use.
+    """
+    return (
+        np.asarray(cur_pos, dtype=np.float64).reshape(3) + np.asarray(delta_pos, dtype=np.float64).reshape(3),
+        np.asarray(delta_rot, dtype=np.float64).reshape(3, 3) @ np.asarray(cur_rot, dtype=np.float64).reshape(3, 3),
+    )
+
+
+def _require_ik(ik: IkSolver | None, kind: str) -> IkSolver:
+    """The caller's IK solver, or a loud failure — a Cartesian target is unresolvable without the live model."""
+    if ik is None:
+        raise ValueError(f'command {kind!r} needs an ik solver; none was supplied')
+    return ik
+
+
+def wire_command_to_arm_action(
+    command: dict[str, Any], current_q: Any, *, ik: IkSolver | None = None, current_eef: tuple[Any, Any] | None = None
+) -> np.ndarray:
     """A tagged wire command + the live measured arm joints -> the 7 absolute joint targets molmo steps.
 
     MolmoSpaces' Franka runs the joint-position controller, so every command resolves to absolute joint
     targets: ``joint_pos`` passes through, ``joint_vel`` integrates the per-step delta onto the measured
     joints (positronic applies ``JointDelta`` as ``q + dq``), and ``hold`` re-commands the measured joints.
-    Cartesian commands would need IK against the live model, which this jointpos substrate does not run.
+
+    The Cartesian pair needs the live model, which this module deliberately does not hold: the caller passes
+    ``ik`` (an absolute world target ``(pos, rot)`` -> joint targets) and, for ``cartesian_delta``, the measured
+    ``current_eef`` pose the delta composes onto. Both are supplied by ``env.py``, which owns the sim.
     """
     current = np.asarray(current_q, dtype=np.float32).reshape(-1)
     match command['type']:
@@ -69,8 +115,18 @@ def wire_command_to_arm_action(command: dict[str, Any], current_q: Any) -> np.nd
             target = current + dq
         case 'hold':
             target = current
+        case 'cartesian':
+            solver = _require_ik(ik, 'cartesian')
+            target = np.asarray(solver(*unpack_wire_pose(command['pose'])), dtype=np.float32).reshape(-1)
+        case 'cartesian_delta':
+            solver = _require_ik(ik, 'cartesian_delta')
+            if current_eef is None:
+                raise ValueError("command 'cartesian_delta' needs the measured eef pose; none was supplied")
+            delta_pos, delta_rot = unpack_wire_pose(command['delta'])
+            target_pos, target_rot = compose_world_delta(*current_eef, delta_pos, delta_rot)
+            target = np.asarray(solver(target_pos, target_rot), dtype=np.float32).reshape(-1)
         case other:
-            raise ValueError(f'MolmoSpaces jointpos substrate cannot map command {other!r}')
+            raise ValueError(f'MolmoSpaces rig cannot map command {other!r}; it accepts {list(ACCEPTED_COMMAND_TYPES)}')
     return target.astype(np.float32)
 
 
