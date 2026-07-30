@@ -15,12 +15,12 @@ what stops it from seeing a violation.
 ## Step 1: Scope the diff
 
 ```bash
-BASE_REF=$(git rev-parse --verify --quiet upstream/main || git rev-parse --verify --quiet origin/main)
-[ -n "$BASE_REF" ] || { echo 'no upstream/main or origin/main — name the base explicitly'; exit 1; }
-BASE=$(git merge-base HEAD "$BASE_REF")
-git diff $BASE HEAD                                        # committed — what a push sends
-git diff $BASE --cached                                    # index — what a plain commit records
-git diff $BASE                                             # worktree — what you see in the files
+BASE=$(git merge-base HEAD upstream/main 2>/dev/null || git merge-base HEAD origin/main 2>/dev/null)
+[ -n "$BASE" ] || { echo 'no merge base — fetch, deepen a shallow clone, or name the base commit'; exit 1; }
+
+git diff "$BASE" HEAD                                      # committed — what a push sends
+git diff "$BASE" --cached                                  # index — what a plain commit records
+git diff "$BASE"                                           # worktree — what you see in the files
 git status --porcelain --untracked-files=all | grep '^??'  # untracked — what no diff shows
 ```
 
@@ -36,9 +36,11 @@ report.
 In the ordinary case the three agree and it is one patch. Pass the untracked files' contents alongside
 it — a brand-new file is where rules bite hardest and is the one thing no diff shows.
 
-The base comes from a remote-tracking ref, not from local `main`, which goes stale the moment someone
-merges upstream and would silently widen the scope to changes already on the mainline. Fetch first if
-the remote ref itself may be behind, and stop rather than guess when neither ref exists.
+The base is a merge base against a remote-tracking ref, never local `main` — that one goes stale the
+moment someone merges upstream and would quietly widen the scope to changes already on the mainline.
+One emptiness check covers every way this can fail: ref missing, ancestry not fetched, shallow clone.
+`BASE` comes out empty and the run stops, rather than the expansion vanishing and each command
+degrading into a diff against HEAD that reports clean.
 
 Narrow to the files the user named if they named any, and say which scope you used. A clean report over
 the wrong scope is worse than no report.
