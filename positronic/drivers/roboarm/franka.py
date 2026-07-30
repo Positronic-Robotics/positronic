@@ -222,7 +222,20 @@ class Robot(pimm.ControlSystem):
                 -np.asarray(self._home_joints_variation), np.asarray(self._home_joints_variation)
             )
             target = target + variation
-        robot.set_target_joints(target, asynchronous=False)
+        try:
+            robot.set_target_joints(target, asynchronous=False)
+        except RuntimeError:
+            # The blocking move raises when the control thread stops before the target is reached, and a reflex
+            # stops it. `run`'s loop clears a reflex every time it sees one, but it is not running while this call
+            # blocks, so without this the reflex escapes as a RuntimeError and takes the whole driver down.
+            # Re-raise anything the robot does not report as an error: only a robot-side fault is ours to clear.
+            state = robot.state()
+            if not state.error:
+                raise
+            logging.warning(f'Robot error while homing: {state.error_message}')
+            robot.recover_from_errors()
+            # The arm holds wherever the reflex stopped it, short of home. Homing again from here would drive it
+            # back into whatever tripped the reflex, so the operator re-issues the reset once the way is clear.
 
         robot_state._finish_reset()
         self.state.emit(robot_state)
