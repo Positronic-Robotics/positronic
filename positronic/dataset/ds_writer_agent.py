@@ -183,7 +183,7 @@ class DsWriterAgent(pimm.ControlSystem):
     def inputs(self) -> dict[str, pimm.ControlSystemReceiver[Any]]:
         return frozen_keys_dict(self._inputs)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):  # noqa: C901
         """Main loop: process commands and append updated inputs to the episode."""
         limiter = pimm.utils.RateLimiter(clock, hz=self._poll_hz)
         pace = (lambda: pimm.Yield()) if self._virtual_time else limiter.wait
@@ -253,7 +253,7 @@ class DsWriterAgent(pimm.ControlSystem):
                     ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
 
-    def _handle_command(
+    def _handle_command(  # noqa: C901
         self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None, ep_counter: int, now_ns: int | None = None
     ):
         match cmd.type:

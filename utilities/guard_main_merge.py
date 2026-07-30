@@ -172,7 +172,7 @@ def _segments(cmd: str) -> list[list[str]]:
     return [s for s in segments if s]
 
 
-def _substitution_bodies(cmd: str) -> list[str]:
+def _substitution_bodies(cmd: str) -> list[str]:  # noqa: C901
     """Bodies of the command substitutions in `cmd` — backtick `` `…` `` and `$(…)`.
 
     Bash runs these in a subshell (same cwd) BEFORE the outer command, so an embedded
@@ -310,7 +310,7 @@ def _is_gh_pr_merge(words: list[str]) -> bool:
     return False
 
 
-def _push_dest_slug(inv_dir: str | None, rest: list[str], git: GitInfo) -> str:
+def _push_dest_slug(inv_dir: str | None, rest: list[str], git: GitInfo) -> str:  # noqa: C901
     """Destination slug of one push invocation, resolved from the repo it runs in.
 
     The `<repository>` positional (or `--repo=`) may be a URL (slugged directly), a local path
@@ -362,7 +362,7 @@ def _push_dest_slug(inv_dir: str | None, rest: list[str], git: GitInfo) -> str:
     return repo_slug(git.remote_url(inv_dir, remote))
 
 
-def analyze(cmd: str, cwd: str, guarded_slug: str, git: GitInfo, path_exists=os.path.isdir, _depth=0) -> str | None:
+def analyze(cmd: str, cwd: str, guarded_slug: str, git: GitInfo, path_exists=os.path.isdir, _depth=0) -> str | None:  # noqa: C901
     """The deny message for `cmd`, or None to allow it."""
     guarded_slug = guarded_slug.casefold()
     # A command substitution runs its own command (same cwd) before the outer command, so a git

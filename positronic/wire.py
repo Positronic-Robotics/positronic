@@ -8,7 +8,7 @@ from positronic.eval import ROBOT_STATIC_META, Embodiment, Observation
 __all__ = ['ROBOT_STATIC_META', 'wire', 'wire_embodiment']
 
 
-def wire(
+def wire(  # noqa: C901
     world: pimm.World,
     harness: pimm.ControlSystem,
     dataset_writer: DatasetWriter | None,

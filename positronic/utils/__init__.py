@@ -95,7 +95,7 @@ def find_uv_lock(start_dir: Path) -> Path | None:
     return None
 
 
-def get_docker_info() -> dict | None:
+def get_docker_info() -> dict | None:  # noqa: C901
     """Detect if running inside Docker and gather container metadata.
 
     Returns:
@@ -147,7 +147,7 @@ def get_docker_info() -> dict | None:
     return None
 
 
-def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, add_uv_lock: bool = True) -> dict:
+def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, add_uv_lock: bool = True) -> dict:  # noqa: C901
     """Capture script run metadata for maximum reproducibility.
 
     This function collects comprehensive information about the current script execution,

@@ -94,7 +94,7 @@ def _check_dest_empty(dest: str, profile=None):
 
 
 @cfn.config(dataset=analysis_cfg.phail_inference_prod_v1_0, force=False)
-def verify_inference(dataset: Dataset, force: bool):
+def verify_inference(dataset: Dataset, force: bool):  # noqa: C901
     """Verify inference episodes for consistency. Raises SystemExit on failure unless force=False."""
     issues = []
 

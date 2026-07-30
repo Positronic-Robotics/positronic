@@ -162,7 +162,7 @@ class MujocoSim(pimm.ControlSystem):
         # replays these states through it (``mj_setState`` + ``mj_forward``).
         self.sim_state: pimm.SignalEmitter[dict[str, np.ndarray]] = pimm.ControlSystemEmitter(self)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         self._emit_robot_meta()
         state_due = _Cadence(self._state_fps)
         grip_due = _Cadence(self._grip_fps)

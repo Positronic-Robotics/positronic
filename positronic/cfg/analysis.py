@@ -485,7 +485,7 @@ def sim_checkpoint_table():
 FIXED_ITEM_COUNTS = {tasks.SCISSORS_TASK: 10, tasks.BATTERIES_TASK: 8}
 
 
-def calculate_units(episode: Episode) -> int:
+def calculate_units(episode: Episode) -> int:  # noqa: C901
     """Estimates the number of pick-and-place operations. Vibe-coded heuristic."""
     if episode[keys.TASK] in FIXED_ITEM_COUNTS:
         return FIXED_ITEM_COUNTS[episode[keys.TASK]]

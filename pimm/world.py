@@ -685,7 +685,7 @@ class World:
             return emitter
         raise ValueError(f'Unsupported connector type: {type(connector)}.')
 
-    def start(
+    def start(  # noqa: C901
         self,
         main_process: ControlSystem | list[ControlSystem | None],
         background: ControlSystem | list[ControlSystem | None] | None = None,

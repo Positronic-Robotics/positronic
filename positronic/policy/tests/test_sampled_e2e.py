@@ -109,7 +109,7 @@ def _episode_metas(p):
 
 
 @pytest.mark.timeout(5.0)
-def test_sampled_policy_e2e():
+def test_sampled_policy_e2e():  # noqa: C901
     """Full harness e2e with SampledPolicy: 4 episodes, 2 policies, balanced sampling."""
     random.seed(0)
     robot_state = FakeRobotState()

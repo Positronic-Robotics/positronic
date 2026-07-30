@@ -363,7 +363,7 @@ class Harness(pimm.ControlSystem):
             return {'eval.terminated': False}
         return None
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:  # noqa: C901
         # Home the embodiment before the first episode; each ``_end_episode`` re-homes for the next one, so
         # every episode begins from the home pose (a real arm gets the inter-episode gap to reach it).
         self._home(clock)

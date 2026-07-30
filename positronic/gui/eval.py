@@ -662,7 +662,7 @@ class EvalUI(pimm.ControlSystem):
 
     # --- Control System Run Loop ---
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         self.clock = clock
         # Initialize DPG Context
         dpg.create_context()
