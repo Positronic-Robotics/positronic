@@ -259,7 +259,9 @@ class Harness(pimm.ControlSystem):
         Additive and safe — any gap (no observation yet, or a state without ``.status``) returns
         False, so it never raises a false alarm and never breaks the status emit."""
         try:
-            from positronic.drivers.roboarm import RobotStatus  # lazy: keep the status path driver-agnostic
+            # noqa: PLC0415 — lazy on purpose: the status path stays driver-agnostic, so a harness
+            # used with a non-roboarm embodiment never imports the driver package.
+            from positronic.drivers.roboarm import RobotStatus  # noqa: PLC0415
 
             state = self.observations['robot_state'].value
             return state is not None and state.status == RobotStatus.ERROR

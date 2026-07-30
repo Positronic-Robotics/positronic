@@ -1,7 +1,5 @@
 import asyncio
-import os
 import queue
-import signal
 import threading
 from collections.abc import Iterator
 from pathlib import Path
