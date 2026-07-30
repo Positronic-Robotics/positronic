@@ -232,6 +232,7 @@ def main(
     stream_video_to_webxr: str | None = None,
     operator_position: OperatorPosition = OperatorPosition.FRONT,
     task: str | None = None,
+    video_options: dict[str, str] | None = None,
 ):
     """Runs data collection in real hardware."""
     camera_instances = cameras or {}
@@ -246,7 +247,7 @@ def main(
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
         utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
-    writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext()
+    writer_cm = LocalDatasetWriter(output_dir, video_options=video_options) if output_dir is not None else nullcontext()
     with writer_cm as dataset_writer, pimm.World() as world:
         ds_agent = wire.wire(world, data_collection, dataset_writer, camera_emitters, robot_arm, gripper, None)
         _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
@@ -358,6 +359,21 @@ def so101cfg(robot_arm, **kwargs):
     main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
 
 
+@cfn.config(
+    robot_arm=positronic.cfg.hardware.roboarm.yam,
+    webxr=positronic.cfg.webxr.oculus,
+    sound=positronic.cfg.sound.sound,
+    operator_position=OperatorPosition.BACK,
+    cameras={},
+    # The YAM station records several cameras on a weak CPU; x264's default preset can't keep up with the
+    # camera rate, so trade ~2x bitrate for ~2.5x faster encoding.
+    video_options={'preset': 'ultrafast', 'tune': 'zerolatency'},
+)
+def yamcfg(robot_arm, **kwargs):
+    """Runs data collection on a real i2rt YAM arm (the arm driver carries the gripper)."""
+    main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
+
+
 droid = cfn.Config(
     main,
     robot_arm=positronic.cfg.hardware.roboarm.franka_droid,
@@ -391,6 +407,7 @@ def _internal_main():
     cfn.cli({
         'real': main_cfg,
         'so101': so101cfg,
+        'yam': yamcfg,
         'sim': main_sim,
         'sim_pnp': main_sim.override(loaders=positronic.cfg.simulator.multi_tote_loaders),
         'droid': droid,

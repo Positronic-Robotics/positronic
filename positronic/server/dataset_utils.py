@@ -180,9 +180,9 @@ def _group_signals_by_prefix(signals: EpisodeSignals) -> list[tuple[str, list[st
 def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
     image_views = [rrb.Spatial2DView(name=k, origin=f'/{k}') for k in signals.videos]
 
-    def _ts_view(name: str, sig: str) -> rrb.TimeSeriesView:
+    def _ts_view(sig: str) -> rrb.TimeSeriesView:
         return rrb.TimeSeriesView(
-            name=name,
+            name=sig,
             origin=f'/signals/{sig}',
             plot_legend=rrb.PlotLegend(visible=signals.dims.get(sig, 1) > 1),
             axis_y=rrb.ScalarAxis(zoom_lock=True),
@@ -192,9 +192,9 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
     series_views = []
     for group_name, sigs in _group_signals_by_prefix(signals):
         if len(sigs) == 1:
-            view = _ts_view(group_name, sigs[0])
+            view = _ts_view(sigs[0])
         else:
-            view = rrb.Tabs(*[_ts_view(sig[len(group_name) + 1 :], sig) for sig in sigs], name=group_name)
+            view = rrb.Tabs(*[_ts_view(sig) for sig in sigs], name=group_name)
         series_views.append(view)
 
     # Top row: images (big) + optional 3D (smaller)
@@ -231,16 +231,25 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
     )
 
 
+def _joint_signals(ep: Episode) -> set[str]:
+    names: set[str] = set(ep.static.get('joint_signals', ()))
+    if ep.static.get('joint_signal'):  # TODO(#511): drop the singular fallback once published datasets migrate.
+        names.add(ep.static['joint_signal'])
+    return names
+
+
 def _setup_series_names(signals: EpisodeSignals, ep: Episode) -> None:
-    joint_signal = ep.static.get('joint_signal')
+    joint_set = _joint_signals(ep)
     joint_names = ep.static.get('joint_names')
     pose_set = set(signals.poses)
     for key in signals.numerics:
         dim = signals.dims.get(key, 1)
-        if key == joint_signal and joint_names:
+        is_joint_vel = key.endswith('.dq') and f'{key[: -len(".dq")]}.q' in joint_set
+        if (key in joint_set or is_joint_vel) and joint_names:
             names = joint_names
         elif key in pose_set and dim == 7:
-            names = ['tx', 'ty', 'tz', 'qx', 'qy', 'qz', 'qw']
+            # ``Serializers.transform_3d`` is scalar-first: [tx, ty, tz, qw, qx, qy, qz].
+            names = ['tx', 'ty', 'tz', 'qw', 'qx', 'qy', 'qz']
         else:
             names = None
         if dim == 1:
@@ -329,9 +338,8 @@ def _log_numeric_signals(
 ) -> Generator[bytes, None, dict[str, tuple[np.ndarray, np.ndarray]]]:
     """Log numeric time-series via send_columns. Returns pose/joint data for 3D logging."""
     pose_set = set(signals.poses)
-    joint_signal = ep.static.get('joint_signal')
     gripper = ep.static.get('gripper')
-    stash_keys = pose_set | ({joint_signal} if joint_signal else set())
+    stash_keys = pose_set | _joint_signals(ep)
     if gripper:
         stash_keys.add(gripper['signal'])
     pose_data = {}
@@ -416,13 +424,13 @@ def _log_urdf_robot(
     ep: Episode, numeric_data: dict[str, tuple[np.ndarray, np.ndarray]], drainer: _BinaryStreamDrainer
 ) -> Generator[bytes, None, str | None]:
     """Log URDF robot model with animated joint angles. Returns root frame name."""
-    joint_signal = ep.static.get('joint_signal')
+    joint_sigs = sorted(_joint_signals(ep) & numeric_data.keys())
     joint_names = ep.static.get('joint_names')
     urdf_str = ep.static.get('urdf')
     meshes = ep.static.get('meshes')
-    if not all((joint_signal, joint_names, urdf_str, meshes)) or joint_signal not in numeric_data:
+    if not all((joint_sigs, joint_names, urdf_str, meshes)):
         return None
-    ts_arr, q_vals = numeric_data[joint_signal]
+    ts_arr, q_vals = numeric_data[joint_sigs[0]]
     if q_vals.shape[1] != len(joint_names):
         return None
 

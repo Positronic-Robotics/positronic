@@ -94,6 +94,9 @@ dreamzero = [
 lance = [
     "pylance",
 ]
+yam = [
+    "i2rt",  # i2rt YAM arm: joint-space position-PD + gravity-comp over CAN; not on PyPI, see [tool.uv.sources]
+]
 dev = [
     "ruff",
     "basedpyright",
@@ -140,6 +143,7 @@ conflicts = [
         {extra = "lerobot"},
         {extra = "lerobot-0-3-3"},
         {extra = "molmoact2"},
+        {extra = "yam"},
     ],
 ]
 
@@ -157,6 +161,7 @@ pyzed = [
     { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp313-cp313-linux_x86_64.whl", marker = "python_full_version >= '3.13'" },
 ]
 openpi-client = { git = "https://github.com/Positronic-Robotics/openpi.git", rev = "main-positronic", subdirectory = "packages/openpi-client" }
+i2rt = { git = "https://github.com/i2rt-robotics/i2rt.git", rev = "5d47b358bafb30c65e397f2ece506550a0db4594" }
 
 [tool.pytest.ini_options]
 # Search roots, not a list of suites, so a new `tests/` directory is collected without being registered

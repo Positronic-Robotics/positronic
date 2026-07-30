@@ -44,6 +44,85 @@ def droid(robot_arm, gripper, cameras):
     )
 
 
+@cfn.config(robot_arm=positronic.cfg.hardware.roboarm.yam, cameras={})
+def yam(robot_arm, cameras):
+    """Real single-arm i2rt YAM: the arm driver carries the gripper (they share one CAN chain)."""
+    observations = {
+        'robot_state': Observation(robot_arm.state, Serializers.robot_state),
+        keys.GRIP: Observation(robot_arm.grip, None),
+        **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
+    }
+    commands = {
+        'robot_command': Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
+        'target_grip': Command(robot_arm.target_grip, 0.0, None),
+    }
+    return Embodiment(
+        descriptor='yam',
+        observations=observations,
+        commands=commands,
+        static_meta=dict(ROBOT_STATIC_META),
+        meta_source=robot_arm.robot_meta,
+        control_systems=(*cameras.values(), robot_arm),
+        simulated=False,
+    )
+
+
+@cfn.config(
+    left_channel='can0',
+    right_channel='can1',
+    # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
+    # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
+    mounts={'left': [0.30, 0.305, 0.311], 'right': [0.30, -0.305, 0.311]},
+    cameras={
+        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
+        'image.wrist_left': positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
+        'image.wrist_right': positronic.cfg.hardware.camera.zed_x_one_right.override(resolution='svga', fps=30),
+    },
+)
+def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[float]], cameras):
+    """Real bimanual i2rt YAM on two CAN chains.
+
+    Per-arm channels are the flat names the whole stack shares: ``robot_state.{side}`` expands into
+    ``robot_state.{side}.q/.dq/.ee_pose`` on record and commands are ``robot_command.{side}`` +
+    ``target_grip.{side}``. Each arm is mounted at ``mounts[side]``, so real ``ee_pose`` lands in the world
+    frame the training data uses; static_meta records the mount of every arm built, naming the sides.
+    """
+    from positronic import geom
+    from positronic.drivers.roboarm import yam as yam_driver
+
+    arms = {
+        side: yam_driver.Robot(channel, base_pose=geom.Transform3D(mounts[side]))
+        for side, channel in (('left', left_channel), ('right', right_channel))
+    }
+    observations = {
+        **{f'robot_state.{s}': Observation(arm.state, Serializers.robot_state) for s, arm in arms.items()},
+        **{f'grip.{s}': Observation(arm.grip, None) for s, arm in arms.items()},
+        **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
+    }
+    commands = {
+        **{
+            f'robot_command.{s}': Command(arm.commands, roboarm_command.Reset(), Serializers.robot_command)
+            for s, arm in arms.items()
+        },
+        **{f'target_grip.{s}': Command(arm.target_grip, 0.0, None) for s, arm in arms.items()},
+    }
+    static_meta = {
+        'joint_signals': [f'robot_state.{s}.q' for s in arms],
+        'pose_signals': [f'robot_state.{s}.ee_pose' for s in arms] + [f'robot_command.{s}.pose' for s in arms],
+        'mounts': {side: mounts[side] for side in arms},
+    }
+    return Embodiment(
+        descriptor='yam_bimanual',
+        observations=observations,
+        commands=commands,
+        static_meta=static_meta,
+        # Both drivers emit the identical per-arm meta; record one copy.
+        meta_source=arms['left'].robot_meta,
+        control_systems=(*cameras.values(), *arms.values()),
+        simulated=False,
+    )
+
+
 def mujoco_franka(sim, camera_dict):
     """Mujoco single-arm Franka + gripper over a given sim — pure robot, no scene.
 
