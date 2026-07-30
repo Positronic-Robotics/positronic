@@ -2,9 +2,10 @@
 
 Imported from two interpreters: the client-side ``MolmoAdapter`` (positronic) resolves camera keys with
 it, and the molmo-venv ``env.py`` builds its raw observation payload and decodes wire commands with it. It
-imports only numpy, so it loads under a bare pytest and inside the molmo venv alike — the fixture tests
-exercise it without either framework. The MuJoCo reads that need the live model (joint velocities, the
-end-effector world pose) stay in ``env.py``; only the framework-independent arithmetic lives here.
+imports numpy plus the positronic-free ``protocol`` (which owns the wire command tags), so it loads under a
+bare pytest and inside the molmo venv alike — the fixture tests exercise it without either framework. The
+MuJoCo reads that need the live model (joint velocities, the end-effector world pose) stay in ``env.py``;
+only the framework-independent arithmetic lives here.
 """
 
 from collections.abc import Callable
@@ -12,13 +13,15 @@ from typing import Any, TypeAlias
 
 import numpy as np
 
+# ``protocol`` lands as a package on the positronic side and flat on ``PYTHONPATH`` inside the molmo venv,
+# where ``positronic`` is not installed — the same two-shape import ``server`` uses.
+try:
+    from positronic.simulator.env_server import protocol
+except ImportError:
+    import protocol  # pyright: ignore[reportMissingImports]
+
 # The DROID rig runs 7 Franka arm joints; the reset token's per-move-group action names them 'arm'/'gripper'.
 NUM_ARM_JOINTS = 7
-
-# The wire command types this rig accepts, advertised at reset so a policy emitting anything else is refused
-# before the sweep spends GPU time. The Cartesian pair resolves through the caller's IK (see
-# ``wire_command_to_arm_action``); the joint pair and ``hold`` need no model.
-ACCEPTED_COMMAND_TYPES = ('joint_pos', 'joint_vel', 'cartesian', 'cartesian_delta', 'hold')
 
 # An absolute world target ``(translation, 3x3 rotation)`` -> the arm joint targets that reach it. Supplied
 # by ``env.py``, which holds the model this module deliberately does not.
@@ -96,9 +99,10 @@ def wire_command_to_arm_action(
 ) -> np.ndarray:
     """A tagged wire command + the live measured arm joints -> the 7 absolute joint targets molmo steps.
 
-    MolmoSpaces' Franka runs the joint-position controller, so every command resolves to absolute joint
-    targets: ``joint_pos`` passes through, ``joint_vel`` integrates the per-step delta onto the measured
-    joints (positronic applies ``JointDelta`` as ``q + dq``), and ``hold`` re-commands the measured joints.
+    This is where the adoption covers the canonical command contract: MolmoSpaces' Franka natively takes only
+    joint-position targets, so every canonical type is converted into one. ``joint_pos`` passes through,
+    ``joint_vel`` integrates the per-step delta onto the measured joints (positronic applies ``JointDelta`` as
+    ``q + dq``), and ``hold`` re-commands the measured joints.
 
     The Cartesian pair needs the live model, which this module deliberately does not hold: the caller passes
     ``ik`` (an absolute world target ``(pos, rot)`` -> joint targets) and, for ``cartesian_delta``, the measured
@@ -106,27 +110,29 @@ def wire_command_to_arm_action(
     """
     current = np.asarray(current_q, dtype=np.float32).reshape(-1)
     match command['type']:
-        case 'joint_pos':
+        case protocol.JOINT_POS:
             target = np.asarray(command['q'], dtype=np.float32).reshape(-1)
-        case 'joint_vel':
+        case protocol.JOINT_VEL:
             dq = np.asarray(command['dq'], dtype=np.float32).reshape(-1)
             if dq.shape[0] != current.shape[0]:
                 raise ValueError(f'joint delta {dq.shape[0]} vs measured joints {current.shape[0]}')
             target = current + dq
-        case 'hold':
+        case protocol.HOLD:
             target = current
-        case 'cartesian':
-            solver = _require_ik(ik, 'cartesian')
+        case protocol.CARTESIAN:
+            solver = _require_ik(ik, protocol.CARTESIAN)
             target = np.asarray(solver(*unpack_wire_pose(command['pose'])), dtype=np.float32).reshape(-1)
-        case 'cartesian_delta':
-            solver = _require_ik(ik, 'cartesian_delta')
+        case protocol.CARTESIAN_DELTA:
+            solver = _require_ik(ik, protocol.CARTESIAN_DELTA)
             if current_eef is None:
-                raise ValueError("command 'cartesian_delta' needs the measured eef pose; none was supplied")
+                raise ValueError(f'command {protocol.CARTESIAN_DELTA!r} needs the measured eef pose; none supplied')
             delta_pos, delta_rot = unpack_wire_pose(command['delta'])
             target_pos, target_rot = compose_world_delta(*current_eef, delta_pos, delta_rot)
             target = np.asarray(solver(target_pos, target_rot), dtype=np.float32).reshape(-1)
         case other:
-            raise ValueError(f'MolmoSpaces rig cannot map command {other!r}; it accepts {list(ACCEPTED_COMMAND_TYPES)}')
+            raise ValueError(
+                f'{other!r} is not a canonical command type; the contract is {list(protocol.CANONICAL_COMMAND_TYPES)}'
+            )
     return target.astype(np.float32)
 
 

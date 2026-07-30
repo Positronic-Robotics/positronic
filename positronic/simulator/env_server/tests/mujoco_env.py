@@ -20,6 +20,7 @@ from pimm.world import LocalQueueEmitter, LocalQueueReceiver, VirtualClock
 from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Eval, Observation, Task
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.env_server.server import EnvProtocol
@@ -115,6 +116,8 @@ class MujocoEnv(EnvProtocol):
             'meta': {},
             'robot_meta': dict(self._robot_meta_recv.read().data),
             'control_dt': self._timestep,
+            # The reference adoption: ``step`` maps every canonical command type onto a ``roboarm`` command.
+            'command_types': list(protocol.CANONICAL_COMMAND_TYPES),
         }
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:

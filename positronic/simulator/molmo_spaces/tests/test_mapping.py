@@ -12,6 +12,7 @@ import types
 import numpy as np
 import pytest
 
+from positronic.simulator.env_server import protocol
 from positronic.simulator.molmo_spaces import mapping
 
 
@@ -186,12 +187,29 @@ def test_cartesian_without_an_ik_solver_raises():
         mapping.wire_command_to_arm_action(cmd, np.zeros(mapping.NUM_ARM_JOINTS))
 
 
-def test_unknown_command_names_the_accepted_set():
-    with pytest.raises(ValueError, match='cartesian'):  # the message lists what the rig does accept
+def test_unknown_command_names_the_canonical_contract():
+    with pytest.raises(ValueError, match='cartesian'):  # the message lists the contract the tag is not part of
         mapping.wire_command_to_arm_action({'type': 'wrench'}, np.zeros(mapping.NUM_ARM_JOINTS))
 
 
-def test_accepted_command_types_cover_every_wire_command():
-    # The advertised set is what the proxy screens actions against, so it must match what the mapping handles:
-    # every type _wire_command can emit (positronic/simulator/env_server/adapter.py).
-    assert set(mapping.ACCEPTED_COMMAND_TYPES) == {'joint_pos', 'joint_vel', 'cartesian', 'cartesian_delta', 'hold'}
+@pytest.mark.parametrize('command_type', protocol.CANONICAL_COMMAND_TYPES)
+def test_every_canonical_command_type_converts_to_joint_targets(command_type):
+    """The rig declares full coverage of the canonical contract at reset (``env.py``); this is what makes that
+    declaration true — every canonical type converts to the joint targets MolmoSpaces natively steps."""
+    pose = np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])
+    payload = {
+        protocol.JOINT_POS: {'q': np.zeros(mapping.NUM_ARM_JOINTS)},
+        protocol.JOINT_VEL: {'dq': np.zeros(mapping.NUM_ARM_JOINTS)},
+        protocol.HOLD: {},
+        protocol.CARTESIAN: {'pose': pose},
+        protocol.CARTESIAN_DELTA: {'delta': pose},
+    }[command_type]
+
+    target = mapping.wire_command_to_arm_action(
+        {'type': command_type, **payload},
+        np.zeros(mapping.NUM_ARM_JOINTS),
+        ik=lambda _pos, _rot: np.zeros(mapping.NUM_ARM_JOINTS),
+        current_eef=(np.zeros(3), np.eye(3)),
+    )
+
+    assert target.shape == (mapping.NUM_ARM_JOINTS,)

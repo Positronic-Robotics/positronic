@@ -15,6 +15,7 @@ from positronic.policy import Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.policy.wrappers import ChunkedSchedule
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import EnvAdapter, _in_env_control_frame, _wire_command
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
@@ -179,20 +180,24 @@ class _CountdownEnv(EnvProtocol):
     wrapper. Obs encodes the step count (``reset`` is step 0, each ``step`` increments) so a reader can
     tell whether the proxy stepped; ``done`` fires after ``done_after`` steps (``None`` → never)."""
 
-    def __init__(self, done_after: int | None = None, control_dt: float = 0.1):
+    def __init__(self, done_after: int | None = None, control_dt: float = 0.1, command_types: list[str] | None = None):
         self._done_after = done_after
         self._control_dt = control_dt
+        self._command_types = command_types
         self._steps = 0
 
     def reset(self, token):
         self._steps = 0
         meta = {'task': 'countdown'}  # scene meta the env reports only at reset; ``step`` omits it
-        return {
+        frame = {
             'obs': {'q': np.full(7, self._steps, dtype=np.float64)},
             'meta': meta,
             'robot_meta': {},
             'control_dt': self._control_dt,
         }
+        if self._command_types is not None:
+            frame['command_types'] = self._command_types
+        return frame
 
     def step(self, action):
         self._steps += 1
@@ -256,6 +261,50 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
         assert task.instruction == 'countdown'  # resolved live off the cached reset meta
         drive_scheduler(scheduler, steps=4)  # the env steps, each ``step`` omitting meta ...
         assert task.instruction == 'countdown'  # ... yet the reset-scoped cache holds
+
+
+def test_the_canonical_contract_is_exactly_what_a_client_can_emit():
+    """``protocol`` owns the contract and ``_wire_command`` is the only thing that writes it, so pinning the two
+    against each other keeps the set an env adoption must cover equal to the set a policy can actually emit."""
+    pose = geom.Transform3D(np.zeros(3), geom.Rotation.identity)
+    commands = [
+        roboarm_command.CartesianPosition(pose),
+        roboarm_command.CartesianDelta(pose),
+        roboarm_command.JointPosition(np.zeros(7)),
+        roboarm_command.JointDelta(np.zeros(7)),
+        None,  # nothing held: the arm holds where it is
+    ]
+    assert {_wire_command(command)['type'] for command in commands} == set(protocol.CANONICAL_COMMAND_TYPES)
+
+
+def _reset_countdown(command_types: list[str] | None) -> None:
+    """Connect a proxy to a ``_CountdownEnv`` declaring ``command_types`` and reset it once."""
+    with serve_env(_CountdownEnv(command_types=command_types)) as (host, port), pimm.World(virtual_time=True) as world:
+        proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
+        world.start([proxy])
+        proxy.reset({'eval.seed': 0})
+
+
+@pytest.mark.timeout(60.0)
+def test_reset_accepts_an_env_covering_the_whole_command_contract():
+    """The contract is total, so an adoption declaring every canonical type connects and runs."""
+    _reset_countdown(list(protocol.CANONICAL_COMMAND_TYPES))
+
+
+@pytest.mark.timeout(60.0)
+def test_reset_refuses_an_env_covering_only_part_of_the_command_contract():
+    """An incomplete adoption fails at connect — before a sweep spends GPU time — naming the conversions it
+    still owes, not the policy's action space: the contract is what the env must cover, not what it negotiates."""
+    with pytest.raises(ValueError) as excinfo:
+        _reset_countdown([protocol.JOINT_POS, protocol.HOLD])
+    message = str(excinfo.value)
+    assert protocol.CARTESIAN in message and protocol.CARTESIAN_DELTA in message and protocol.JOINT_VEL in message
+
+
+@pytest.mark.timeout(60.0)
+def test_reset_skips_the_check_for_an_env_declaring_no_coverage():
+    """An adoption predating the declaration is not yet held to the contract, so it still connects."""
+    _reset_countdown(None)
 
 
 @pytest.mark.timeout(60.0)
