@@ -1592,3 +1592,41 @@ def test_a_later_episode_waits_for_its_own_first_observation(world, tmp_path):
     episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     assert len(episodes) == 2
     assert episodes[1].attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S] < gap_s
+
+
+def test_begin_episode_yields_before_the_blocking_handshake():
+    """The 'starting' status must be observable while the policy loads.
+
+    The UI is a peer control system in the same cooperative loop and the status channel holds one
+    slot, so an emit with no scheduling point before a blocking call is never drained: the surface
+    sits on the previous phase for the whole handshake and then sees 'running'. With the console's
+    controls driven by that phase, "still idle" reads as "teleop is live" while an episode begins.
+    """
+    handshakes: list[str] = []
+
+    class _BlockingHandshakePolicy(Policy):
+        def new_session(self, context, clock_now):  # noqa: ARG002 — the block is the point
+            handshakes.append('new_session')
+            return StubPolicy().new_session(context, clock_now)
+
+    harness = Harness(_BlockingHandshakePolicy(), make_embodiment())
+    statuses = RecordingEmitter()
+    harness.status._bind(statuses)
+
+    gen = harness._begin_episode({}, pimm.world.SystemClock())
+    next(gen)  # runs up to the yield
+    assert handshakes == [], 'new_session ran before the UI could be scheduled'
+    assert [s['phase'] for _ts, s in statuses.emitted] == ['starting']
+
+    with pytest.raises(StopIteration):
+        next(gen)
+    assert handshakes == ['new_session']
+
+
+def test_begin_episode_does_not_yield_when_nobody_consumes_status():
+    """The tick is for a status consumer. Unattended sim binds no status port, and an extra
+    scheduling point there costs recorded samples — the golden pipeline catches exactly that."""
+    harness = Harness(StubPolicy(), make_embodiment())  # status left unbound, as in sim/unattended
+    gen = harness._begin_episode({}, pimm.world.SystemClock())
+    with pytest.raises(StopIteration):
+        next(gen)  # runs to completion without a yield

@@ -344,7 +344,7 @@ class Harness(pimm.ControlSystem):
         self._cancel_trajectories()
         self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(self.context), **(payload or {})}))
 
-    def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> None:
+    def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
 
         A resettable task's ``reset`` only arms the producer, which publishes frame-0 after the harness
@@ -375,6 +375,16 @@ class Harness(pimm.ControlSystem):
         self._last_action_ts = None
         self._chunk_end_s = None
         self._emit_status(clock, phase='starting')
+        # YIELD before the blocking handshake, or the emit above is unobservable: the surface is a
+        # peer control system in this same loop and the status channel holds one slot, so without a
+        # scheduling point it never runs, and 'starting' is overwritten by 'running' once setup ends.
+        # An operator surface would sit on the stale phase for the whole model load — reading, with
+        # the console's phase-driven controls, as "still idle, teleop live" while an episode begins.
+        # Only when something actually consumes status: an extra scheduling point costs the
+        # unattended sim path two recorded samples, and its status port is unbound by construction,
+        # so there is nobody the tick would serve.
+        if self.status.num_bound:
+            yield self._pace()
         self._policy_session = self.policy.new_session(self.context, clock.now)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
@@ -421,7 +431,7 @@ class Harness(pimm.ControlSystem):
         match directive.type:
             case DirectiveType.RUN:
                 if not self._running:  # a RUN mid-trial is ignored — the operator finishes before starting anew
-                    self._begin_episode(directive.payload or {}, clock)
+                    yield from self._begin_episode(directive.payload or {}, clock)
             case DirectiveType.FINISH:
                 if self._running:  # a FINISH while idle is ignored — nothing to finalize
                     yield from self._end_episode(clock, directive.payload)
@@ -582,7 +592,7 @@ class Harness(pimm.ControlSystem):
                     if trial is None:  # plan exhausted — let the recorder commit the final episode, then exit
                         yield pimm.Sleep(0.5)
                         break
-                    self._begin_episode(trial, clock)
+                    yield from self._begin_episode(trial, clock)
             elif self._deadline is not None and (terminal := self._trial_terminal(clock)) is not None:
                 yield from self._end_episode(clock, terminal)
             else:

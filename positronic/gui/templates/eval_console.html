@@ -426,8 +426,13 @@
         }
         // Teleop follows the harness's phase, not the button: idle is the harness saying the
         // episode-end path (including the home command) is done. A status we cannot read leaves the
-        // controls as they are — an unreadable status is not evidence the arm is parked.
-        if (s && typeof s === 'object' && typeof s.phase === 'string') setRunning(s.phase !== 'idle');
+        // controls as they are — an unreadable status is not evidence the arm is parked. And not
+        // while our own directive is still in flight: the phase we are reading predates it (Start
+        // blocks on the policy handshake before publishing 'starting'), so acting on it would
+        // re-enable teleop for the whole model load, during which an episode is already beginning.
+        if (!pendingAck && s && typeof s === 'object' && typeof s.phase === 'string') {
+          setRunning(s.phase !== 'idle');
+        }
         const waiting = !!s && (s.phase === 'starting' || (s.phase === 'running' && s.waiting_for_policy));
         if (waiting) { if (waitSince === null) waitSince = performance.now(); }
         else { waitSince = null; }
