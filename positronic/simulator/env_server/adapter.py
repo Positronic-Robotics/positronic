@@ -16,6 +16,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.simulator.env_server import protocol
 
 
 def fresh_command_players() -> defaultdict[str, roboarm_command.TrajectoryPlayer]:
@@ -79,22 +80,28 @@ def _in_env_control_frame(cmd: Any, env_control_frame: geom.Transform3D) -> Any:
 
 
 def _wire_command(cmd: Any) -> dict[str, Any]:
-    """The held command as a positronic-free payload the server decodes (no ``geom``/``roboarm`` on its side)."""
+    """The held command as a positronic-free payload the server decodes (no ``geom``/``roboarm`` on its side).
+
+    The tags come from ``protocol``, which owns the canonical command contract every env adoption covers.
+    """
     match cmd:
         case roboarm_command.CartesianPosition(pose):
-            return {'type': 'cartesian', 'pose': pose.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
+            return {'type': protocol.CARTESIAN, 'pose': pose.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
         case roboarm_command.JointPosition(positions):
-            return {'type': 'joint_pos', 'q': positions}
+            return {'type': protocol.JOINT_POS, 'q': positions}
         case roboarm_command.JointDelta(velocities):
-            return {'type': 'joint_vel', 'dq': velocities}
+            return {'type': protocol.JOINT_VEL, 'dq': velocities}
         case roboarm_command.CartesianDelta(delta, frame):
             # The env anchors a delta on the pose it measures, which is its control frame and nowhere else, so
             # a delta still expressed somewhere else has no faithful wire form.
             if not np.allclose(frame.as_matrix, np.eye(4)):
                 raise ValueError('CartesianDelta outside the env control frame cannot be sent to a remote env')
-            return {'type': 'cartesian_delta', 'delta': delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
+            return {
+                'type': protocol.CARTESIAN_DELTA,
+                'delta': delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX),
+            }
         case None:
-            return {'type': 'hold'}
+            return {'type': protocol.HOLD}
         case other:
             raise ValueError(f'no wire encoding for robot_command {type(other).__name__}')
 

@@ -9,7 +9,7 @@ back — so only raw arrays cross the boundary and the World's virtual clock adv
 ``control_dt`` is whatever the latest observation reports (``reset`` and every ``step``).
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import AbstractContextManager, ExitStack
 from typing import Any
 
@@ -18,12 +18,33 @@ from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
 
 # Pacing before the first reset, when the env's ``control_dt`` is still unknown. Only sets the instant
 # frame-0 lands at, then the env's reported ``control_dt`` takes over.
 _IDLE_DT = 0.1
+
+
+def _check_command_conformance(declared: Iterable[str] | None) -> None:
+    """Refuse an env adoption that covers less than the whole canonical command contract.
+
+    One contract carries every policy onto every embodiment, so an adoption converts all of
+    ``protocol.CANONICAL_COMMAND_TYPES`` into whatever its own controller natively takes — a platform that
+    drives only joint positions makes that conversion in its own env module. Reading the declaration at
+    ``reset`` fails at connect, before a sweep spends GPU time, and names exactly the conversions the
+    adoption still owes. An adoption that declares nothing is not yet held to the contract; closing that gap
+    means having it declare its coverage.
+    """
+    if declared is None:
+        return
+    missing = sorted(set(protocol.CANONICAL_COMMAND_TYPES) - set(declared))
+    if missing:
+        raise ValueError(
+            f'the env covers {sorted(declared)} of the canonical command contract and is missing {missing}. '
+            f'Every embodiment drives the whole contract: implement those conversions in the env adoption.'
+        )
 
 
 class RemoteEnvControlSystem(pimm.ControlSystem):
@@ -56,11 +77,6 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         # The env's sim-enforced episode horizon in sim-seconds from the latest ``reset``, or ``None`` when the env
         # enforces none — read by the client's ``Task`` so the harness can check its timeout stays strictly weaker.
         self._horizon: float | None = None
-        # The wire command types the env accepts, advertised at ``reset``; ``None`` from an env that advertises
-        # none, which disables the check. Every action is screened against it before the wire round-trip, so a
-        # policy whose action space the env cannot drive fails here — naming both sets — instead of dying inside
-        # the env's own interpreter partway through a paid sweep.
-        self._command_types: frozenset[str] | None = None
         # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
         self._reset_pending = False
 
@@ -103,8 +119,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         # deadline, so the timeout floor must clear the horizon plus that tick, not the bare horizon.
         sim_horizon = self._frame.get('horizon')
         self._horizon = None if sim_horizon is None else sim_horizon + self._frame['control_dt']
-        advertised = self._frame.get('command_types')
-        self._command_types = None if advertised is None else frozenset(advertised)
+        _check_command_conformance(self._frame.get('command_types'))
         self._reset_pending = True
         self._active = True
         # Clear any terminal the previous trial left on the wire: the env can reach ``done`` while the proxy
@@ -150,18 +165,6 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
             # ever connected.
             self._cleanup.close()
 
-    def _check_command_type(self, action: dict[str, Any]) -> None:
-        """Refuse an action the env advertised it cannot drive, before it crosses the wire."""
-        if self._command_types is None:
-            return
-        kind = action.get('command', {}).get('type')
-        if kind is not None and kind not in self._command_types:
-            raise ValueError(
-                f'the env does not accept {kind!r} commands; it advertised '
-                f'{sorted(self._command_types)}. The policy emits an action space this env cannot drive — '
-                f'pair it with a matching env, or teach the env to map this command type.'
-            )
-
     def _step_env(self, clock: pimm.Clock) -> dict[str, Any]:
         # Every command receiver is built with ``default=[]``, so ``read()`` is total here — it returns ``None``
         # only for a receiver with no default.
@@ -171,7 +174,6 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
             assert message is not None, f'{name} receiver carries a default, so its read cannot be empty'
             commands[name] = message
         action = self._adapter.action(commands, clock.now_ns())
-        self._check_command_type(action)
         result = self._conn.step(action)
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues
