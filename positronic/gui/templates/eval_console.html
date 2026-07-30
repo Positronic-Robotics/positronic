@@ -191,10 +191,13 @@
         button.addEventListener('click', () => {
           const action = button.dataset.action;
           const from = serverPhase();
-          // Predict whether the harness will act (Start only from idle; Save/Discard only from an active
-          // episode) so the ack reflects the real transition. The transport response only says the POST was
-          // received; recognized/ignored comes from the phase moving.
-          const willAct = action === 'start' ? !isActivePhase(from) : isActivePhase(from);
+          // Predict whether the harness will act, so the ack reflects the real transition rather than the
+          // transport response (which only says the POST was received). Mirror Harness._handle_directive
+          // exactly: RUN is guarded on idle, FINISH on an active episode, and ABORT is guarded on NOTHING —
+          // it homes the arm from any phase. Reporting "ignored" for a discard while idle told the operator
+          // nothing happened while the arm was in fact homing.
+          const willAct =
+            action === 'abort' ? true : action === 'start' ? !isActivePhase(from) : isActivePhase(from);
           const target = action === 'start' ? isActivePhase : (p) => p === 'idle';
           fetch('/directive/' + action, { method: 'POST' })
             .then((r) => { if (!r.ok) { showAck(`${ACK[action]} — FAILED (${r.status})`, false); pendingAck = null; } })
@@ -209,7 +212,10 @@
           // The harness homes the gripper open (target_grip 0) on every episode boundary, but this
           // browser-side setpoint is never updated by policy/homing — resync it so the next grip step
           // starts from 0, not a stale pre-episode value (e.g. a full-close instead of a fine step).
-          reflectGrip(0);
+          // Only when the harness actually acts: on an ignored directive nothing homes, so zeroing the
+          // setpoint would make the next fine close command 0.1 and OPEN a gripper the operator had just
+          // closed by hand.
+          if (willAct) reflectGrip(0);
           // TODO: this re-enables the jog controls on the Save/Discard click, but the harness stays busy until
           // it finalizes the episode and the arm finishes homing. Gate the controls on a real idle signal
           // pushed from the harness instead of the button press.
