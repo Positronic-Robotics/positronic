@@ -1,10 +1,6 @@
 # Code Rules
 
-Judgment rules for this repository — the checks a linter cannot make. Read by the Codex reviewer on
-pull requests, by Claude while implementing, and by the `check-rules` skill.
-
-Mechanical checks live in `pyproject.toml` (ruff, basedpyright), never here. A rule a linter could
-enforce is a rule that would be applied inconsistently.
+Judgment rules for this repository — the checks a linter cannot make.
 
 Every rule has an **id** — its heading. Cite it when reporting, fixing, or waiving a violation. Add,
 calibrate, and retire rules through the `add-rule` skill.
@@ -17,9 +13,7 @@ A violation is waived when the offending line or its enclosing block carries:
 # rules-allow: <rule-id> — <reason>
 ```
 
-The reason is required, and must say why this instance is correct — not that the rule is inconvenient.
-A waiver is as narrow as a `noqa`: one rule id, at the site. To retire a rule everywhere, delete it
-from this file.
+The reason must say why this instance is correct. One rule id, at the site — as narrow as a `noqa`.
 
 ## Rules
 
