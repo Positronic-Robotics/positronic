@@ -363,7 +363,7 @@ def _group_id(episode: Episode, group_keys: tuple[str, ...]) -> tuple[Any, ...]:
 
 @app.get('/api/groups/{suffix}')
 @require_dataset
-async def api_groups(request: Request, suffix: str):
+async def api_groups(request: Request, suffix: str):  # noqa: C901
     cache_key = ('groups', suffix, tuple(sorted(request.query_params.items())))
     if cache_key in _api_cache:
         return _api_cache[cache_key]

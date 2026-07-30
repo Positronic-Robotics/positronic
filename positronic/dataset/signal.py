@@ -214,7 +214,7 @@ class Signal(Sequence[tuple[T, int]], ABC, Generic[T]):
         return self._ts_at(slice(None))
 
     @final
-    def __getitem__(self, index_or_slice: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:
+    def __getitem__(self, index_or_slice: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:  # noqa: C901
         match index_or_slice:
             case int() | np.integer() as idx:
                 if idx < 0:
@@ -246,7 +246,7 @@ class _SignalViewTime(TimeIndexerLike[T], Generic[T]):
     def __init__(self, signal: Signal[T]):
         self._signal = signal
 
-    def __getitem__(self, ts_or_array: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:
+    def __getitem__(self, ts_or_array: int | IndicesLike) -> Union[tuple[T, int], 'Signal[T]']:  # noqa: C901
         match ts_or_array:
             case int() | float() | np.floating() as ts:
                 idx = int(self._signal._search_ts([ts])[0])

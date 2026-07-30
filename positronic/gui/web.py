@@ -217,7 +217,7 @@ class WebEvalUI(pimm.ControlSystem):
         self.directive = pimm.ControlSystemEmitter(self)
         self.manual_command = pimm.ControlSystemEmitter(self)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         templates = Jinja2Templates(directory=_pkg_path('templates'))
         names = list(self.cameras)
         stream = _CameraStream(self.fps, self.keyframe_interval, self.bitrate)

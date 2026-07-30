@@ -26,7 +26,7 @@ from positronic.utils import package_assets_path
 
 # This integration test exercises the unified `main` end-to-end on the sim embodiment.
 @pytest.mark.timeout(30.0)
-def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):
+def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa: C901
     class DummyTqdm:
         def __init__(self, *args, **kwargs):
             self.n = 0.0

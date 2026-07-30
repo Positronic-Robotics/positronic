@@ -83,7 +83,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._stream.pix_fmt = 'yuv420p'
         self._stream.gop_size = self.gop_size
 
-    def append(self, data: np.ndarray, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
+    def append(self, data: np.ndarray, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:  # noqa: C901
         """Append a video frame with timestamp.
 
         Args:

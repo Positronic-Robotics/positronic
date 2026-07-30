@@ -21,7 +21,7 @@ class LinuxVideo(pimm.ControlSystem):
         self.fps_counter = pimm.utils.RateCounter(f'LinuxVideo {device_path}')
         self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         codec_mapping = {
             PixelFormat.H264: 'h264',
             PixelFormat.HEVC: 'hevc',

@@ -200,6 +200,7 @@ select = [
     "C4",  # flake8-comprehensions
     "UP",  # pyupgrade
     "PLC0415",  # imports belong at the top of the file
+    "C90", # mccabe cyclomatic complexity (threshold below)
 ]
 ignore = [
     "E203",  # whitespace before ':'

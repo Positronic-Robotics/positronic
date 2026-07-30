@@ -253,7 +253,7 @@ class Robot(pimm.ControlSystem):
                     yield desk
                     return
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         with self._desk_session():
             robot = self._ensure_robot()
             try:

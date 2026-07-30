@@ -381,7 +381,7 @@ class _RecordingTapSession(DelegatingSession):
                 log_numeric_series(path, num)
                 self._rec._numeric_paths.append(path)
 
-    def _log_action_chunk(self, prefix: str, actions: list[dict], obs: dict) -> None:
+    def _log_action_chunk(self, prefix: str, actions: list[dict], obs: dict) -> None:  # noqa: C901
         """Log the action chunk as an enriched 3D trajectory + ``action_time`` time series."""
         # Skip validity sentinels: they carry no command to plot and would flip the ``all(... in a)`` checks below.
         actions = [a for a in actions if is_action(a)]

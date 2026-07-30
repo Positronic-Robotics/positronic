@@ -19,7 +19,7 @@ from positronic.dataset import Dataset
 
 
 @cfn.config(dataset=positronic.cfg.analysis.sim_episodes, output='eval_plots.html')
-def main(dataset: Dataset, output: str):
+def main(dataset: Dataset, output: str):  # noqa: C901
     """
     Generate evaluation plots for a given dataset.
 

@@ -179,7 +179,7 @@ class LiberoEnv(EnvProtocol):
         raw, _reward, done, _info = self._env.step(np.concatenate([arm, [grip]]).tolist())
         return {'obs': self._observe(raw), 'done': bool(done), 'control_dt': self._control_dt}
 
-    def _arm_action(self, command: dict[str, Any]) -> np.ndarray:
+    def _arm_action(self, command: dict[str, Any]) -> np.ndarray:  # noqa: C901
         # All-to-all: each command becomes the physical pre-scale quantity the active controller's set_goal adds to
         # the current setpoint, then ``_normalize`` inverts the controller's scaling. The pose<->joint cells use
         # FK/IK on the site Jacobian. ``dq`` is a per-step joint delta (positronic applies ``JointDelta`` as
