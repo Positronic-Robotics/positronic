@@ -1630,3 +1630,17 @@ def test_begin_episode_does_not_yield_when_nobody_consumes_status():
     gen = harness._begin_episode({}, pimm.world.SystemClock())
     with pytest.raises(StopIteration):
         next(gen)  # runs to completion without a yield
+
+
+def test_begin_episode_does_not_yield_in_sim_even_with_a_status_consumer():
+    """An ATTENDED sim run binds status, so the consumer check alone does not exclude it — and in
+    sim the tick is not free: producers are scheduled after the harness, so one would emit its
+    first observation before START, the recorder would drop it as pre-START, and inference would
+    begin from a later state. A loading badge is not worth moving the rollout."""
+    embodiment = make_embodiment()
+    object.__setattr__(embodiment, 'simulated', True)
+    harness = Harness(StubPolicy(), embodiment)
+    harness.status._bind(RecordingEmitter())  # attended: a surface IS consuming status
+    gen = harness._begin_episode({}, pimm.world.SystemClock())
+    with pytest.raises(StopIteration):
+        next(gen)

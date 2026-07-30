@@ -380,10 +380,13 @@ class Harness(pimm.ControlSystem):
         # scheduling point it never runs, and 'starting' is overwritten by 'running' once setup ends.
         # An operator surface would sit on the stale phase for the whole model load — reading, with
         # the console's phase-driven controls, as "still idle, teleop live" while an episode begins.
-        # Only when something actually consumes status: an extra scheduling point costs the
-        # unattended sim path two recorded samples, and its status port is unbound by construction,
-        # so there is nobody the tick would serve.
-        if self.status.num_bound:
+        # Never in sim, and only when something consumes status. In sim the tick is not free: the
+        # simulated producers are scheduled after the harness, so a yield here lets one emit its
+        # first observation BEFORE ds_command START — the recorder drops it as pre-START and
+        # inference begins from a later state, moving the rollout and the recorded alignment. An
+        # attended sim run binds status too, so `num_bound` alone does not exclude it. Sim
+        # handshakes are local and fast; the loading badge is not worth a perturbed rollout.
+        if self.status.num_bound and not self._embodiment.simulated:
             yield self._pace()
         self._policy_session = self.policy.new_session(self.context, clock.now)
         self._running = True

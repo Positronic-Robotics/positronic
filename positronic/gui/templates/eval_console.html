@@ -199,29 +199,35 @@
           const willAct =
             action === 'abort' ? true : action === 'start' ? !isActivePhase(from) : isActivePhase(from);
           const target = action === 'start' ? isActivePhase : (p) => p === 'idle';
+          if (!willAct) {
+            // Do NOT send a directive we are about to call ignored. The phase this decision rests
+            // on is up to one refresh stale, and the harness queues directives: click Save & Home
+            // during an episode, then Start before the refresh, and the harness processes the
+            // FINISH, goes idle, then finds the queued RUN valid — a new episode and a driving arm
+            // after the operator was told the click did nothing. Not sending cannot surprise
+            // anyone; the opposite race just costs a click the operator repeats.
+            showAck(`${ACK[action]} — not sent (phase is ${from ?? 'unknown'})`, false);
+            pendingAck = null;
+            return;  // nothing sent, so nothing about the arm changed — leave the controls alone
+          }
           fetch('/directive/' + action, { method: 'POST' })
             .then((r) => { if (!r.ok) { showAck(`${ACK[action]} — FAILED (${r.status})`, false); pendingAck = null; } })
             .catch(() => { showAck(`${ACK[action]} — no response`, false); pendingAck = null; });
-          if (willAct) {
-            showAck(`${ACK[action]} — sent…`, true);
-            pendingAck = { label: ACK[action], ok: target, deadline: performance.now() + 5000 };
-          } else {
-            showAck(`${ACK[action]} — ignored (wrong phase)`, false);
-            pendingAck = null;
-          }
+          showAck(`${ACK[action]} — sent…`, true);
+          pendingAck = { label: ACK[action], ok: target, deadline: performance.now() + 5000 };
           // The harness homes the gripper open (target_grip 0) on every episode boundary, but this
           // browser-side setpoint is never updated by policy/homing — resync it so the next grip step
           // starts from 0, not a stale pre-episode value (e.g. a full-close instead of a fine step).
-          // Only when the harness actually acts: on an ignored directive nothing homes, so zeroing the
-          // setpoint would make the next fine close command 0.1 and OPEN a gripper the operator had just
-          // closed by hand.
-          if (willAct) reflectGrip(0);
+          // Past the early return the harness WILL act, so the home is coming: an ignored directive
+          // homes nothing, and zeroing the setpoint there would make the next fine close command 0.1
+          // and OPEN a gripper the operator had just closed by hand.
+          reflectGrip(0);
           // A click may only ever DISABLE teleop, never enable it. Save/Discard leaves the harness busy:
           // _end_episode yields before issuing _home, and a manual command sent in that gap sits in the
           // last-value-wins channel and is applied on the first idle iteration AFTER the home — moving the
           // arm back off home while the button claimed it homed. Re-enabling is renderStatus's job, off the
           // harness's own phase, which turns idle only once _end_episode has issued the home.
-          if (willAct) setRunning(true);
+          setRunning(true);
         });
       }
 
