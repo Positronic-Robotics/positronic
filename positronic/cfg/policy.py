@@ -132,6 +132,6 @@ gyros_p497 = production.override(
 gyros_fm_act = production.override(
     endpoints={
         'actuni': 'wss://runway-pythagoras-dev--gyros-fm-actuni-gyrosserver-web.modal.run',
-        'tsu_act': 'wss://runway-pythagoras-dev--gyros-fm-tsu-act-gyrosserver-web.modal.run',
+        'tsu_actuni': 'wss://runway-pythagoras-dev--gyros-fm-tsu-actuni-gyrosserver-web.modal.run',
     }
 )
