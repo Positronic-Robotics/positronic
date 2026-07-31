@@ -116,7 +116,7 @@ phail_multiple = production.override(
     group_fields=EVAL_GROUP_FIELDS,
 )
 
-# These deployments sit behind the workspace's proxy, so pass --policy.headers with its token.
+# The gyros deployments sit behind the workspace's proxy, so pass --policy.headers with its token.
 gyros_p497 = production.override(
     endpoints={
         'nm167k_us': 'wss://runway-pythagoras-dev--gyros-p497-nm167k-us-gyrosserver-web.modal.run',
@@ -125,4 +125,13 @@ gyros_p497 = production.override(
     },
     sampler=balanced,
     group_fields=EVAL_GROUP_FIELDS,
+)
+
+# Naming no sampler leaves the uniform one, so each episode draws between the two independently: nothing
+# about the episodes so far narrows what runs next, which balancing by count would.
+gyros_fm_act = production.override(
+    endpoints={
+        'actuni': 'wss://runway-pythagoras-dev--gyros-fm-actuni-gyrosserver-web.modal.run',
+        'tsu_act': 'wss://runway-pythagoras-dev--gyros-fm-tsu-act-gyrosserver-web.modal.run',
+    }
 )
