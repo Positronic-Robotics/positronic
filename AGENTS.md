@@ -18,6 +18,4 @@ Rule {name} violated:
 the safe path out of it.
 
 Do not raise a violation when the offending line or its enclosing block carries a
-`# rules-allow: <rule-id> — <reason>` comment for that rule and the reason says why that instance is
-correct. Report the violation anyway when the reason does not: `# rules-allow: hardcoded-keys —
-temporary` explains nothing.
+`# rules-allow: <rule-id> — <reason>` comment for that rule.

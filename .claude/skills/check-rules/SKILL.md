@@ -63,8 +63,6 @@ Instruct every agent to:
 - honour `# rules-allow: <its-rule-id> — <reason>` on the line or its enclosing block, and list every
   waiver it honoured. A rule whose every match is waived returns an empty `FINDINGS` and a populated
   `WAIVERS`, which is not the same as passing;
-- report the violation anyway when the waiver's reason does not say why that instance is correct.
-  `# rules-allow: hardcoded-keys — temporary` explains nothing and would silence a real finding;
 - leave `FINDINGS` empty rather than reach for a marginal one. A checker that always finds something
   gets ignored, which costs more than the violation it caught.
 
