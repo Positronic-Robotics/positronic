@@ -28,6 +28,12 @@ from positronic.utils import merge_dicts
 _QUAT = geom.Rotation.Representation.QUAT
 
 
+def _carries_pose(value) -> bool:
+    """A value ``ChangeEEFrame`` re-expresses: a bare pose vector, or the Cartesian command holding one. A
+    command in another space — a joint target, a reset, a world-frame delta — has no pose to move."""
+    return isinstance(value, command.CartesianPosition) or not isinstance(value, command.CommandType)
+
+
 def _change_frame(pose_vec, transform: geom.Transform3D) -> np.ndarray:
     """Recompose a ``[tx,ty,tz,qw,qx,qy,qz]`` pose through ``pose * transform``."""
     pose = geom.Transform3D.from_vector(np.asarray(pose_vec, dtype=np.float64), _QUAT)
@@ -469,9 +475,10 @@ class ChangeEEFrame(Codec):
 
     A policy trained to speak a different end-effector frame (e.g. DROID's ``droid_eef``) is served on a rig whose
     canonical frame is whatever its model declares. This codec converts at that boundary by pure composition with
-    ``T`` = the fixed transform from the rig's frame to ``to``: ``pose_keys`` go ``pose * T`` into the policy
-    frame on the way in, the Cartesian commands on ``command_keys`` come back ``pose * T⁻¹`` on the way out. A key
-    absent from what it is handed is skipped, so one codec serves obs-only, command-only and joint-only paths
+    ``T`` = the fixed transform from the rig's frame to ``to``: every key in ``keys`` goes ``pose * T`` into the
+    policy frame on the way in and comes back ``pose * T⁻¹`` on the way out, whether it carries a bare pose vector
+    or a Cartesian command. A key absent from what it is handed is skipped, and a key carrying a command with no
+    pose in it (a joint target) passes through, so one codec serves obs-only, command-only and joint-only paths
     alike. ``T`` is read from the robot model the same way IK reads it — ``urdf_key``/``control_frame_key``,
     carried by episode statics at training and by the observation at inference — so a dataset mixing embodiments
     just yields a different ``T`` per episode. A pipeline without this codec is unchanged; naming the rig's own
@@ -511,7 +518,7 @@ class ChangeEEFrame(Codec):
         def __call__(self, episode):
             codec = self._codec
             derived: dict[str, Any] = {codec._control_frame_key: FromValue(codec._to)}
-            derived.update({key: partial(self._derive_pose, key) for key in codec._pose_keys if key in episode})
+            derived.update({key: partial(self._derive_pose, key) for key in codec._keys if key in episode})
             return Group(Derive(**derived), Identity())(episode)
 
         @property
@@ -521,14 +528,12 @@ class ChangeEEFrame(Codec):
     def __init__(
         self,
         to: str,
-        pose_keys: tuple[str, ...] = ('robot_state.ee_pose', 'robot_command.pose'),
-        command_keys: tuple[str, ...] = ('robot_command',),
-        urdf_key: str = 'urdf',
-        control_frame_key: str = 'control_frame',
+        keys: tuple[str, ...] = (obs_keys.EE_POSE, 'robot_command.pose', 'robot_command'),
+        urdf_key: str = obs_keys.URDF,
+        control_frame_key: str = obs_keys.CONTROL_FRAME,
     ):
         self._to = to
-        self._pose_keys = tuple(pose_keys)
-        self._command_keys = tuple(command_keys)
+        self._keys = tuple(keys)
         self._urdf_key = urdf_key
         self._control_frame_key = control_frame_key
 
@@ -536,20 +541,27 @@ class ChangeEEFrame(Codec):
         """``T`` from the robot model a source carries: an obs at inference, an episode at training."""
         return frame_transform(source[self._urdf_key], source[self._control_frame_key], self._to)
 
+    def _posed(self, data: dict) -> list[str]:
+        """The keys of ``data`` to move: those it holds that carry a pose. A joint-only action matches none, so
+        such a path never asks for the robot model."""
+        return [key for key in self._keys if key in data and _carries_pose(data[key])]
+
+    def _move(self, data: dict, keys: list[str], transform: geom.Transform3D) -> dict:
+        moved = {
+            key: command.CartesianPosition(pose=data[key].pose * transform)
+            if isinstance(data[key], command.CartesianPosition)
+            else _change_frame(data[key], transform)
+            for key in keys
+        }
+        return {**data, **moved}
+
     def encode(self, data):
-        present = [key for key in self._pose_keys if key in data]
-        if not present:
-            return data
-        transform = self._transform(data)
-        return {**data, **{key: _change_frame(data[key], transform) for key in present}}
+        keys = self._posed(data)
+        return self._move(data, keys, self._transform(data)) if keys else data
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
-        moved = {
-            key: command.CartesianPosition(pose=data[key].pose * self._transform(context).inv)
-            for key in self._command_keys
-            if isinstance(data.get(key), command.CartesianPosition)
-        }
-        return {**data, **moved} if moved else data
+        keys = self._posed(data)
+        return self._move(data, keys, self._transform(context).inv) if keys else data
 
     @property
     def training_encoder(self) -> EpisodeTransform:
@@ -565,8 +577,7 @@ class ChangeEEFrame(Codec):
             'name': 'change_ee_frame',
             'args': {
                 'to': self._to,
-                'pose_keys': list(self._pose_keys),
-                'command_keys': list(self._command_keys),
+                'keys': list(self._keys),
                 'urdf_key': self._urdf_key,
                 'control_frame_key': self._control_frame_key,
             },

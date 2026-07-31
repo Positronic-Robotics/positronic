@@ -413,10 +413,9 @@ class Harness(pimm.ControlSystem):
         inputs['obs_time_ns'] = clock.now_ns()
         inputs.update(self.context)
         statics = self._statics()
-        if 'control_frame' in statics:
-            # The robot model, for codecs that resolve a frame against it.
-            inputs['urdf'] = statics['urdf']
-            inputs['control_frame'] = statics['control_frame']
+        if keys.CONTROL_FRAME in statics:
+            inputs[keys.URDF] = statics[keys.URDF]
+            inputs[keys.CONTROL_FRAME] = statics[keys.CONTROL_FRAME]
         inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
         return inputs
 

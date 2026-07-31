@@ -13,3 +13,8 @@ GRIP = 'grip'
 TASK = 'task'
 WRIST_IMAGE = 'image.wrist'
 EXTERIOR_IMAGE = 'image.exterior'
+
+# The robot model, for codecs that resolve a frame against it (``ChangeEEFrame``). Rig-local: the harness puts
+# them in the observation, episode statics carry them at training, and a wire border strips them by default.
+URDF = 'urdf'
+CONTROL_FRAME = 'control_frame'

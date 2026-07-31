@@ -28,6 +28,7 @@ import operator
 from collections.abc import Callable
 from typing import Any
 
+from positronic import keys
 from positronic.policy.action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
@@ -50,7 +51,7 @@ from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
 # The rig-local observation keys a border keeps off the wire by default: the robot model the harness
 # puts in the observation for frame codecs (``ChangeEEFrame``). Nothing but such a codec reads them, and
 # a URDF is large, so they stay home unless a server that converts frames itself asks for them.
-DEFAULT_STRIP = ('urdf', 'control_frame')
+DEFAULT_STRIP = (keys.URDF, keys.CONTROL_FRAME)
 
 
 class RemoteMarker(PolicyWrapper):
