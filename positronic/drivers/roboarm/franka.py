@@ -246,6 +246,11 @@ class Robot(pimm.ControlSystem):
 
             st = robot.state()
             robot_state.encode(st)
+            # `encode` derives the status from the robot's error flag, so it reports AVAILABLE the
+            # moment nothing is wrong — but the arm is still on its way home. Consumers wait for
+            # RESETTING to clear to know homing finished, so re-mark it or the first tick releases
+            # them before the arm has moved.
+            robot_state._start_reset()
             self.state.emit(robot_state)
             if st.error != 0:
                 # Same policy as the main loop: the driver clears a recoverable error itself. It also
