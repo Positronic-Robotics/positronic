@@ -20,11 +20,7 @@ from positronic.dataset import transforms
 
 
 def _ensure_site(spec: mj.MjSpec, frame: str) -> None:
-    """Ensure ``frame`` is a site in ``spec``, adding one at the body origin when it names a body.
-
-    The robot model is the frame registry: a name resolves as a site or a body — the ``end_effector`` link the
-    real URDF bakes in, the ``droid_eef`` graft — and nothing else.
-    """
+    """Ensure ``frame`` is a site in ``spec``, adding one at the body origin when it names a body."""
     all_sites = {s.name for b in spec.bodies for s in b.sites}
     if frame in all_sites:
         return
@@ -64,11 +60,7 @@ def _ancestry(model: mj.MjModel, body_id: int) -> list[int]:
 
 
 def _assert_rigidly_connected(model: mj.MjModel, from_frame: str, to_frame: str, from_body: int, to_body: int) -> None:
-    """Raise unless every joint between the two bodies is fixed, which is what makes one transform stand for all.
-
-    Walks both bodies up to their lowest common ancestor; a joint on either leg means the frames move relative to
-    each other, so no single transform describes the pair.
-    """
+    """Raise unless every joint between the two bodies is fixed, which is what makes one transform stand for all."""
     up_from, up_to = _ancestry(model, from_body), _ancestry(model, to_body)
     common = set(up_from) & set(up_to)
     legs = [b for chain in (up_from, up_to) for b in chain[: min(i for i, x in enumerate(chain) if x in common)]]
@@ -85,10 +77,8 @@ def _assert_rigidly_connected(model: mj.MjModel, from_frame: str, to_frame: str,
 def frame_transform(urdf_xml: str, from_frame: str, to_frame: str) -> geom.Transform3D:
     """The rigid transform expressing ``to_frame`` relative to ``from_frame`` in a robot model.
 
-    A pose measured in ``from_frame`` (e.g. the recorded ``ee_pose`` at ``control_frame``) composes to
-    ``to_frame`` via ``pose * frame_transform(...)``. Read from a single forward pass at the zero configuration,
-    which stands for every configuration only while the two frames are rigidly connected — enforced here, so a
-    pair separated by a movable joint fails loudly instead of returning a transform good at one pose alone.
+    A pose measured in ``from_frame`` composes to ``to_frame`` via ``pose * frame_transform(...)``. Read at the
+    zero configuration, which stands for every configuration only while the two frames are rigidly connected.
     """
     spec = _prepare_spec(urdf_xml, from_frame)
     _ensure_site(spec, to_frame)

@@ -57,8 +57,7 @@ def _legacy_bound(sizes: Any) -> RestrictImageSize | None:
 class RemoteSession(Session):
     """Per-episode session that forwards observations to a remote inference server.
 
-    ``strip`` are the rig-local keys the border keeps off the wire, ``compress_images`` whether frames go
-    out JPEG-encoded; both come from what the server declared (see ``RemoteMarker``).
+    ``strip`` and ``compress_images`` come from what the server declared (see ``RemoteMarker``).
     """
 
     def __init__(
@@ -155,7 +154,6 @@ class _Endpoint(Policy):
         return self._compress
 
     def _strip(self) -> frozenset[str]:
-        """The rig-local keys that stay off the wire: what the server declared, else the caller's stand-in."""
         declared = self.server_meta().get('strip')
         return self._strip_fallback if declared is None else frozenset(declared)
 

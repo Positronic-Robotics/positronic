@@ -223,11 +223,7 @@ class Harness(pimm.ControlSystem):
         self.done = pimm.ControlSystemReceiver[dict](self, default={})
 
     def _statics(self) -> dict[str, Any]:
-        """What is known about the rig before the episode runs, live values winning.
-
-        The robot model reaches it either way: a driver publishes it on ``robot_meta``, or an embodiment whose
-        env cannot build one carries it in ``static_meta`` (``cfg.eval.sim.libero``).
-        """
+        """What is known about the rig before the episode runs, live values winning."""
         return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value
 
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:

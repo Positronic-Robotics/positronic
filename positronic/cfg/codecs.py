@@ -63,10 +63,9 @@ def compose(
 ):
     """Compose observation and action codecs with timing and optional grip binarization.
 
-    ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame`` is
-    the end-effector frame the checkpoint speaks (see ``ChangeEEFrame``): set it to re-express a dataset in that
-    frame for training, which is what makes the checkpoint speak it. Serving declares the conversion in the
-    pipeline instead, where the rig resolves the frame against its own robot model, so leave it unset there.
+    ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame``
+    re-expresses a dataset in that end-effector frame for training (see ``ChangeEEFrame``); serving declares the
+    conversion in the pipeline instead, so leave it unset there.
 
     Layout::
 

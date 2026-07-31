@@ -57,8 +57,7 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
     return SampledPolicy(*origins, weights=weights)
 
 
-# The rig-local observation keys held back from a server that declares no ``strip``; a server that converts
-# frames itself declares ``remote(strip=())`` and receives the robot model.
+# ``strip`` only applies to a server that declares none of its own.
 remote = cfn.Config(RemotePolicy, url='localhost:8000', strip=DEFAULT_STRIP)
 
 

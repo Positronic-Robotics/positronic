@@ -117,7 +117,6 @@ def test_ik_joints_from_episode():
 
 
 def _fk_site(urdf_xml, q, frame):
-    """FK a named frame (site or body) to [tx,ty,tz,w,x,y,z] through the ik spec preparation."""
     model = _prepare_spec(urdf_xml, frame).compile()
     data = mj.MjData(model)
     qpos_ids = [model.joint(n).qposadr.item() for n in JOINT_NAMES]
@@ -130,9 +129,6 @@ def _fk_site(urdf_xml, q, frame):
 
 
 def test_frame_transform_reproduces_droid_eef_across_configs():
-    """``frame_transform`` yields one config-independent transform such that the canonical ``end_effector`` pose
-    composed with it reproduces the ``droid_eef`` site pose at every joint configuration — the transform the
-    ``ChangeEEFrame`` codec applies to observations."""
     urdf = bundled_franka_model()['urdf']
     transform = frame_transform(urdf, 'end_effector', 'droid_eef')
     quat = geom.Rotation.Representation.QUAT
@@ -144,8 +140,6 @@ def test_frame_transform_reproduces_droid_eef_across_configs():
 
 
 def test_frame_transform_rejects_frames_across_movable_joints():
-    """One transform can only stand for every configuration when the frames are rigidly connected; a pair spanning
-    the arm's revolute joints must say so rather than hand back the zero-configuration answer."""
     with pytest.raises(ValueError, match='movable joints'):
         frame_transform(bundled_franka_model()['urdf'], 'link0', 'end_effector')
 

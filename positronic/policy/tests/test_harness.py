@@ -382,8 +382,7 @@ def test_harness_passes_descriptor_to_policy(world):
 
 @pytest.mark.timeout(3.0)
 def test_robot_model_from_embodiment_statics_reaches_policy(world):
-    """An embodiment whose env cannot publish a model carries it in statics (``cfg.eval.sim.libero``); the frame
-    codecs must see it there as well as on the live ``robot_meta``."""
+    """An embodiment whose env cannot publish a model carries it in statics instead (``cfg.eval.sim.libero``)."""
     policy = SpyPolicy()
     statics = {'urdf': '<robot/>', 'control_frame': 'end_effector'}
     harness = Harness(policy, make_embodiment(static_meta=statics))

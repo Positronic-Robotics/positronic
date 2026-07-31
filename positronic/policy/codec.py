@@ -29,8 +29,7 @@ _QUAT = geom.Rotation.Representation.QUAT
 
 
 def _carries_pose(value) -> bool:
-    """A value ``ChangeEEFrame`` re-expresses: a bare pose vector, or the Cartesian command holding one. A
-    command in another space — a joint target, a reset, a world-frame delta — has no pose to move."""
+    """A bare pose vector, or the Cartesian command holding one — as opposed to a command in another space."""
     return isinstance(value, command.CartesianPosition) or not isinstance(value, command.CommandType)
 
 
@@ -471,38 +470,22 @@ class RestrictImageSize(Codec):
 
 
 class ChangeEEFrame(Codec):
-    """Cross the border between the robot's canonical EE frame and a policy's own EE frame.
+    """Convert poses between the rig's canonical EE frame and the policy's ``to`` frame.
 
-    A policy trained to speak a different end-effector frame (e.g. DROID's ``droid_eef``) is served on a rig whose
-    canonical frame is whatever its model declares. This codec converts at that boundary by pure composition with
-    ``T`` = the fixed transform from the rig's frame to ``to``: every key in ``keys`` goes ``pose * T`` into the
-    policy frame on the way in and comes back ``pose * T⁻¹`` on the way out, whether it carries a bare pose vector
-    or a Cartesian command. A key absent from what it is handed is skipped, and a key carrying a command with no
-    pose in it (a joint target) passes through, so one codec serves obs-only, command-only and joint-only paths
-    alike. ``T`` is read from the robot model the same way IK reads it — ``urdf_key``/``control_frame_key``,
-    carried by episode statics at training and by the observation at inference — so a dataset mixing embodiments
-    just yields a different ``T`` per episode. A pipeline without this codec is unchanged; naming the rig's own
-    frame makes ``T`` the identity.
+    ``T`` is the transform between the two, read from the robot model under ``urdf_key``/``control_frame_key`` —
+    the observation at inference, episode statics at training. Keys in ``keys`` go ``pose * T`` on encode and
+    ``pose * T⁻¹`` on decode; absent keys and values with no pose are left alone.
 
-    Which side of the ``remote`` marker it is declared on decides who converts: left of it the rig does, right of
-    it the server, which then needs the model on the wire (``remote(strip=())``)::
-
-        ChangeEEFrame(to='droid_eef') | ChunkedSchedule() | remote | codec | source
-
-    Compose to the left of the observation/action codecs. Absolute-pose decoders (``AbsolutePositionAction``)
-    always work. A decoder that rebuilds its command from the observation in its decode context
-    (``RelativePositionAction``) works only when this codec sits on the far side of the ``remote`` marker from
-    it, so the observation it reads has already crossed into ``to``. Inside one composed codec it does not:
-    ``_ComposedCodec.decode`` hands both halves the same pre-encode context, so the decoder would rebuild
-    around the canonical pose and this codec would then apply ``T⁻¹`` to it. TODO(#483): make composed decode
-    pass each half the context its own encode produced, and the placement stops mattering.
+    Which side of the ``remote`` marker it sits on decides who converts, the rig or the server; a server that
+    converts needs the model on the wire (``remote(strip=())``). Compose it left of the observation/action
+    codecs. A decoder that rebuilds its command from the decode context (``RelativePositionAction``) needs this
+    codec on the far side of ``remote`` from it. TODO(#483): ``_ComposedCodec.decode`` hands both halves the
+    same pre-encode context, so within one composed codec that pairing is wrong.
     """
 
     class _Training(EpisodeTransform):
-        """Move the pose signals an episode has into ``to`` and relabel its frame to match, so a later codec that
-        reads the frame from statics (``IKJointsAction`` solving the command pose) resolves it against the right
-        site. A pose key the episode lacks — ``robot_command.pose`` under a joint-only action — is left
-        unregistered rather than dereferenced, so joint-only training still converts its observation pose.
+        """Move the episode's pose signals into ``to`` and relabel ``control_frame``, so a later codec solving
+        against the frame (``IKJointsAction``) resolves it to the right site.
 
         Separate from the codec because ``|`` and ``&`` mean codec composition on one and transform chaining on the
         other; one object cannot carry both.
@@ -538,12 +521,9 @@ class ChangeEEFrame(Codec):
         self._control_frame_key = control_frame_key
 
     def _transform(self, source) -> geom.Transform3D:
-        """``T`` from the robot model a source carries: an obs at inference, an episode at training."""
         return frame_transform(source[self._urdf_key], source[self._control_frame_key], self._to)
 
     def _posed(self, data: dict) -> list[str]:
-        """The keys of ``data`` to move: those it holds that carry a pose. A joint-only action matches none, so
-        such a path never asks for the robot model."""
         return [key for key in self._keys if key in data and _carries_pose(data[key])]
 
     def _move(self, data: dict, keys: list[str], transform: geom.Transform3D) -> dict:

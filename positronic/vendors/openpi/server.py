@@ -241,10 +241,8 @@ openpi_source = cfn.Config(OpenpiSource)
 def pipeline(codec: Codec, source: ModelSource, ee_frame: str | None):
     """The OpenPI serving pipeline: rig-side chunk scheduling, the server-side codec, the checkpoint source.
 
-    ``ee_frame`` names the end-effector frame this checkpoint's poses live in — a frame in the rig's own robot
-    model, e.g. ``droid_eef``. The rig converts its observations into it and the returned commands back out of
-    it, so the same checkpoint runs on any rig whose model defines that frame. Leave it unset for a checkpoint
-    trained in the rig's canonical frame, or one that speaks joints.
+    ``ee_frame`` names the end-effector frame this checkpoint's poses live in, resolved against the rig's own
+    robot model. Leave it unset for a checkpoint trained in the rig's canonical frame, or one that speaks joints.
     """
     local = ChunkedSchedule() | RestrictImageSize(224, 224)
     if ee_frame is not None:

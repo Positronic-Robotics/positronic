@@ -215,7 +215,6 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
 
 
 def test_border_can_ask_for_the_robot_model(start_server, make_mock_policy):
-    """A server that converts frames itself declares an empty strip, so the rig sends it the robot model."""
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     pipeline = ChunkedSchedule() | remote(strip=()) | _IdentityCodec() | _StubSource(stub)
     host, port, _server = start_server(pipeline)

@@ -39,8 +39,7 @@ def _make_image(h, w):
 
 
 class TestPrepareObs:
-    """Tests for the border's own settings — the keys it strips and its optional JPEG compression. Image
-    geometry is the declared stack's business (see RestrictImageSize)."""
+    """The border's own settings. Image geometry is the declared stack's business (see RestrictImageSize)."""
 
     def test_images_pass_through_untouched_by_default(self):
         session = RemoteSession(_mock_ws_session())
@@ -68,8 +67,6 @@ class TestPrepareObs:
 
 
 class TestDeclaredStrip:
-    """What the border keeps off the wire is the server's declaration, with the standard set as the fallback."""
-
     def test_server_declaration_is_obeyed(self):
         policy, _ = _mock_remote_policy({**EMPTY_STACK, 'strip': []})
         assert policy._endpoint._strip() == frozenset()
