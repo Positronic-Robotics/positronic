@@ -60,12 +60,18 @@
   suppress an error that actually fires — no blanket or speculative suppressions
 
 # Comments & docstrings
-- Write for a fresh reader: no references to past or future state ("no longer", "previously", "step N", "today").
-  Future work is a TODO, nothing else
+- Write for a colleague who knows this codebase but not the thing you are documenting: don't explain the domain,
+  the neighbouring modules, or vocabulary the repo already uses
+- No references to past or future state ("no longer", "previously", "step N", "today"). Future work is a TODO,
+  nothing else
 - Never write a comment justifying awkward code — the urge to justify is the signal to fix the design or mark it
   HACK/TODO
-- Don't restate the code; if there is nothing to say beyond it, stay silent. Docstrings are plain statements of
-  what the thing is
+- A docstring states what the thing is, and nothing else. Behaviour worth pinning down belongs in a test name,
+  a design decision in a TODO or a commit message, a usage example once in the module docstring
+- Leave a comment only for what the code cannot say: an invariant, a constraint from outside the file, a reason
+  the obvious alternative fails. Dry and factual. If it restates the code, delete it
+- Be economical: a class docstring runs a few lines, a method's one, and most methods need none. Past that it is
+  teaching rather than stating — cut it, or move the content to the home named above
 - Comments wrap at 120 columns, same as code
 - No empty intensifiers, in comments or in docs — "honestly", "load-bearing", "genuinely", "truly", "precisely".
   Delete the word; if the sentence still means the same thing, it was never doing any work
