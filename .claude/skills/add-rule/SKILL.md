@@ -40,12 +40,8 @@ The incident is also the source of the bad/good example pair in Step 3, so captu
 
 ## Step 2: Rule out the cheaper homes
 
-Two checks, both of which kill the rule if they hit:
-
-```bash
-sed -n '/\[tool.ruff/,/^\[tool\.setuptools/p' pyproject.toml   # is it already a lint rule?
-grep -n '^### ' CODE_RULES.md                                  # does an existing rule cover it?
-```
+Two checks, both of which kill the rule if they hit: whether ruff or basedpyright already covers it
+(`pyproject.toml`), and whether an existing rule does (`CODE_RULES.md`).
 
 If ruff or basedpyright could catch it, enable the check there instead and stop. If an existing rule
 covers it, sharpen that rule rather than adding a second one — overlapping rules make findings
