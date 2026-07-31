@@ -59,7 +59,7 @@ WAIVERS
 
 Instruct every agent to:
 
-- report only what it can point at — a file, a line, and the text that breaks the rule;
+- give every violation a file and a line, best effort — a finding with nowhere to point is not a finding;
 - honour `# rules-allow: <its-rule-id> — <reason>` on the line or its enclosing block, and list every
   waiver it honoured. A rule whose every match is waived returns an empty `FINDINGS` and a populated
   `WAIVERS`, which is not the same as passing;
