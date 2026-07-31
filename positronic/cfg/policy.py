@@ -131,6 +131,7 @@ gyros_fm_act = production.override(
     endpoints={
         'actuni': 'wss://runway-pythagoras-dev--gyros-fm-actuni-gyrosserver-web.modal.run',
         'tsu_actuni': 'wss://runway-pythagoras-dev--gyros-fm-tsu-actuni-gyrosserver-web.modal.run',
+        'n60': 'wss://runway-pythagoras-dev--gyros-p497-n60-gyrosserver-web.modal.run',
     },
     sampler=balanced,
     group_fields=EVAL_GROUP_FIELDS,
