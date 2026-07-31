@@ -27,8 +27,13 @@ has never heard of a policy.
 
 ### hardcoded-keys
 
-Don't write the names of data fields as literals inside your code — dict keys, signal names, field
-paths. Take them as parameters instead, with a default for the usual name.
+Don't write the names of shared data as bare literals — dict keys, signal names, field paths. The name
+is a contract between whoever writes the data and whoever reads it, and a literal leaves that contract
+invisible and repeated.
+
+Two remedies, by who owns the name. When callers may legitimately use different names, take it as a
+parameter with a default for the usual one. When everyone must agree on the same name, define it once
+as a named constant in a shared module.
 
 Exception: a name the component itself owns and defines, rather than one it reads from its input.
 
