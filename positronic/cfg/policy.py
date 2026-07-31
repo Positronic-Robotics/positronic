@@ -127,11 +127,11 @@ gyros_p497 = production.override(
     group_fields=EVAL_GROUP_FIELDS,
 )
 
-# Naming no sampler leaves the uniform one, so each episode draws between the two independently: nothing
-# about the episodes so far narrows what runs next, which balancing by count would.
 gyros_fm_act = production.override(
     endpoints={
         'actuni': 'wss://runway-pythagoras-dev--gyros-fm-actuni-gyrosserver-web.modal.run',
         'tsu_actuni': 'wss://runway-pythagoras-dev--gyros-fm-tsu-actuni-gyrosserver-web.modal.run',
-    }
+    },
+    sampler=balanced,
+    group_fields=EVAL_GROUP_FIELDS,
 )
