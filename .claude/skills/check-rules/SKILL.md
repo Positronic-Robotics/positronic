@@ -33,14 +33,10 @@ Say which scope you used. A clean report over the wrong scope is worse than no r
 grep -n '^### ' CODE_RULES.md
 ```
 
-Spawn one agent per rule, in parallel. Its prompt carries the task and the response format below, plus
-exactly two pieces of context:
+Spawn one agent per rule, in parallel. Give it the job, that one rule, and the change.
 
-1. the full text of that one rule, verbatim from `CODE_RULES.md`;
-2. the change from Step 1, as patch text.
-
-No other context goes in: not the other rules, not what the change was for, not what you expect it to
-find, not why the code looks the way it does. The agent reads the repository itself for anything more.
+Keep out anything that would tell it the answer: the other rules, what the change was for, why the code
+looks the way it does, what you expect it to find. It reads the repository itself for the rest.
 
 One agent per rule, not one agent holding all of them — an agent given nine rules skims for nine and
 checks none. A narrow agent also fails visibly: reporting nothing is one rule cleanly checked, not
