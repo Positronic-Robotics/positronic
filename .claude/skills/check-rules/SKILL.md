@@ -33,13 +33,11 @@ Say which scope you used. A clean report over the wrong scope is worse than no r
 grep -n '^### ' CODE_RULES.md
 ```
 
-Spawn one agent per rule, in parallel. Each needs its rule and a way to tell which code changed, and
-must deliberately not know how that code came to be: it is a cold-headed reviewer answering one
-question, not a colleague who sat through the reasoning.
-
-One agent per rule, not one agent holding all of them — an agent given nine rules skims for nine and
-checks none. A narrow agent also fails visibly: reporting nothing is one rule cleanly checked, not
-nine rules half-checked.
+Spawn them in parallel, one rule each rather than one agent holding all of them — an agent given nine
+rules skims for nine and checks none, and reporting nothing then means nine rules half-checked instead
+of one cleanly checked. Each needs its rule and a way to tell which code changed, and must deliberately
+not know how that code came to be: a cold-headed reviewer answering one question, not a colleague who
+sat through the reasoning.
 
 Each agent returns two sections, either of which may be empty:
 
