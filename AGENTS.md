@@ -1,6 +1,6 @@
 # Positronic
 
-Python-native stack for real-life ML robotics: recording, datasets, policy training and on-robot inference.
+Python-native stack for real-life ML robotics.
 
 ## Code Review Rules
 
