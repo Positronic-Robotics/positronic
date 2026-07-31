@@ -19,17 +19,13 @@ the agent inherits.
 
 ## Step 1: Scope the diff
 
-Collect the patches for everything not yet on the mainline: HEAD, the index, the worktree, and the
-contents of untracked files. A violation can sit in any one of them while the others look clean —
-staged and then reverted, or committed and then fixed only in the index — and that set is closed, so
-there is no fifth place for code to hide.
+The caller owns the scope. Check whatever they name — a branch, a commit range, a set of files — and
+nothing else.
 
-Take the base from a merge base against a remote-tracking ref, never local `main`, which goes stale the
-moment someone merges upstream. Stop if there is no merge base rather than falling back to a comparison
-against HEAD, which reports clean while checking nothing.
+With nothing named, check the whole change as it would land if merged as it stands. Work out what that
+means here; it is a judgement about this checkout, not a fixed recipe.
 
-Narrow to the files the user named if they named any, and say which scope you used. A clean report over
-the wrong scope is worse than no report.
+Say which scope you used. A clean report over the wrong scope is worse than no report.
 
 ## Step 2: One agent per rule
 
@@ -40,7 +36,7 @@ grep -n '^### ' CODE_RULES.md
 Spawn one agent per rule, in parallel. Its prompt contains exactly two things:
 
 1. the full text of that one rule, verbatim from `CODE_RULES.md`;
-2. the Step 1 patches, plus the contents of any untracked files.
+2. the Step 1 change, as patch text.
 
 Nothing else goes in: not the other rules, not what the change was for, not what you expect it to find,
 not why the code looks the way it does. The agent reads the repository itself for anything more.
@@ -54,16 +50,12 @@ Each agent returns two sections, either of which may be empty:
 ```
 FINDINGS
 Rule <rule-id> violated:
-<snapshot> <file>:<line>
+<file>:<line>
 <what the code does, and the safe path>
 
 WAIVERS
-<snapshot> <file>:<line> — <the reason the waiver gives>
+<file>:<line> — <the reason the waiver gives>
 ```
-
-`<snapshot>` is `HEAD`, `index`, `worktree`, or `untracked` — which of the four the violating text lives
-in. Without it a finding against HEAD points at a line the reader opens and finds already clean, with
-nothing to say where the fix is owed.
 
 Instruct every agent to:
 
@@ -79,7 +71,7 @@ Instruct every agent to:
 ## Step 3: Report
 
 Aggregate every agent's `FINDINGS` into **one list**, ordered by file and line, each entry keeping its
-own rule and snapshot and the agents' format, so local output matches what Codex posts on the PR. State
+own rule and the agents' format, so local output matches what Codex posts on the PR. State
 the scope and the rules checked, then list the collected `WAIVERS` separately — a rule silenced by a
 waiver must never look the same as a rule that passed.
 
