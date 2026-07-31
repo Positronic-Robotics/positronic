@@ -77,6 +77,6 @@ Report only. Fixing is a separate decision and the user makes it.
 
 ## When a finding is wrong
 
-A false positive is information about the rule, not just about the code. If a rule produces findings
-you disagree with, take it to the `add-rule` skill and recalibrate or reword it there. Arguing with the
-same rule twice means the rule is broken.
+A false positive is information about the rule, not just about the code. Say so in the report and stop
+there: only a human changes `CODE_RULES.md`, through the `add-rule` skill and with their explicit
+approval. This skill never edits a rule, however wrong the rule looks from here.
