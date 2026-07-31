@@ -33,10 +33,9 @@ Say which scope you used. A clean report over the wrong scope is worse than no r
 grep -n '^### ' CODE_RULES.md
 ```
 
-Spawn one agent per rule, in parallel. Give it the job, that one rule, and the change.
-
-Keep out anything that would tell it the answer: the other rules, what the change was for, why the code
-looks the way it does, what you expect it to find. It reads the repository itself for the rest.
+Spawn one agent per rule, in parallel. Each needs its rule and a way to tell which code changed, and
+must deliberately not know how that code came to be: it is a cold-headed reviewer answering one
+question, not a colleague who sat through the reasoning.
 
 One agent per rule, not one agent holding all of them — an agent given nine rules skims for nine and
 checks none. A narrow agent also fails visibly: reporting nothing is one rule cleanly checked, not
