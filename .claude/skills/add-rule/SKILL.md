@@ -36,7 +36,7 @@ Not a rule:
 Ask what real code triggered this, and read it — the review comment, the commit, the function. A rule
 with no incident behind it is a preference; say so and stop.
 
-The incident is also the source of the bad/good example pair in Step 3, so capture it before it's lost.
+The incident is also where the rule's example comes from, so capture it before it's lost.
 
 ## Step 2: Rule out the cheaper homes
 
@@ -49,33 +49,17 @@ ambiguous about which one was violated.
 
 ## Step 3: Draft it
 
-```markdown
-### <rule-id>
-
-Don't <the thing>. <Do this instead>.
-
-Exception: <where it is legitimately fine>.
-```
-
-Then a bad/good code pair whenever the rule is about code shape rather than a naming or comment habit.
-Keep both halves to a few lines and take them from the Step 1 incident, stripped of anything
-repo-specific that will rot.
+Read the rules already in `CODE_RULES.md` and write one like them — same shape, same length, same
+plainness. Be concise and stay on the essence of the issue.
 
 `<rule-id>` is kebab-case and names the violation, not the remedy — it appears in review comments as
 `Rule <rule-id> violated:` and in waivers as `# rules-allow: <rule-id> — <reason>`, so it must read as
 the thing that went wrong.
 
-## Step 4: Cold-read test
+The rule will be applied by people who were not in the conversation that produced it. If it only makes
+sense to someone who was, reword it.
 
-The rule will be applied by readers with no access to this conversation. Test that directly with a
-subagent, which starts empty unless you fill it in. It needs the draft rule and two snippets, one
-violating and one clean, and must deliberately not know which is which, where they came from, or what
-you hope it will say. Ask which snippet violates the rule, and why.
-
-If it picks wrong, or its reasoning is not the reasoning you intended, the rule is unclear. Reword and
-repeat. Do not proceed on a rule that needed the conversation to be understood.
-
-## Step 5: Approve and write
+## Step 4: Approve and write
 
 Show the final wording and the id. On explicit approval, write it to
 `CODE_RULES.md` — a new rule is appended, a revision of an existing id replaces that rule in place, so
