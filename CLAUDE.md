@@ -65,6 +65,8 @@
 - Don't restate the code; if there is nothing to say beyond it, stay silent. Docstrings are plain statements of
   what the thing is
 - Comments wrap at 120 columns, same as code
+- No empty intensifiers, in comments or in docs — "honestly", "load-bearing", "genuinely", "truly", "precisely".
+  Delete the word; if the sentence still means the same thing, it was never doing any work
 
 # Testing
 - A test goes in the file that already covers its subject. A test written for a bug is an ordinary test of the

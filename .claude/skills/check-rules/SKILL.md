@@ -14,7 +14,7 @@ which inherits the parent conversation, so never use one here.
 
 What the platform cannot guarantee is the prompt you write, and that is the only channel into the agent.
 You are the worst possible author for it: you know why every line looks the way it does, and that
-knowledge is precisely what stops you seeing the violation. Whatever of it you write into the prompt,
+knowledge is what stops you seeing the violation. Whatever of it you write into the prompt,
 the agent inherits.
 
 ## Step 1: Scope the diff
