@@ -8,9 +8,14 @@ description: Check the current changes against CODE_RULES.md and report violatio
 Checks a diff against `CODE_RULES.md`. Nothing else — not a code review, not a style pass, not a bug
 hunt. A finding that does not name a rule is out of scope, however good it is.
 
-The check runs in fresh subagents with no access to this conversation. That isolation is the point: the
-session that wrote the code knows why every line looks the way it does, and that knowledge is exactly
-what stops it from seeing a violation.
+Each rule is checked by a subagent that starts empty — no conversation history, no files this session
+has read, no other rule. That much the platform guarantees; the one thing that would undo it is a fork,
+which inherits the parent conversation, so never use one here.
+
+What the platform cannot guarantee is the prompt you write, and that is the only channel into the agent.
+You are the worst possible author for it: you know why every line looks the way it does, and that
+knowledge is precisely what stops you seeing the violation. Whatever of it you write into the prompt,
+the agent inherits.
 
 ## Step 1: Scope the diff
 
@@ -51,9 +56,13 @@ the wrong scope is worse than no report.
 grep -n '^### ' CODE_RULES.md
 ```
 
-Spawn one agent per rule, in parallel. Each gets exactly: the full text of **its own rule and no
-other**, the diff, and the repository to read around the change. Don't tell it what the other rules
-say, what the change was for, or what you expect it to find.
+Spawn one agent per rule, in parallel. Its prompt contains exactly two things:
+
+1. the full text of that one rule, verbatim from `CODE_RULES.md`;
+2. the Step 1 patches, plus the contents of any untracked files.
+
+Nothing else goes in: not the other rules, not what the change was for, not what you expect it to find,
+not why the code looks the way it does. The agent reads the repository itself for anything more.
 
 One agent per rule, not one agent holding all of them — an agent given nine rules skims for nine and
 checks none. A narrow agent also fails visibly: reporting nothing is one rule cleanly checked, not
