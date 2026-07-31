@@ -2,8 +2,8 @@
 
 Judgment rules for this repository — the checks a linter cannot make.
 
-Every rule has an **id** — its heading. Cite it when reporting, fixing, or waiving a violation. Add,
-calibrate, and retire rules through the `add-rule` skill.
+Every rule has an **id** — its heading. Cite it when reporting, fixing, or waiving a violation. Add and
+recalibrate rules through the `add-rule` skill.
 
 ## Waiving a rule
 

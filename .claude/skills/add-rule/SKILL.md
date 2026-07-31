@@ -68,9 +68,10 @@ the thing that went wrong.
 ## Step 4: Cold-read test
 
 The rule will be applied by readers with no access to this conversation. Test that directly with a
-subagent, which starts empty unless you fill it in. Its prompt contains exactly two things: the draft
-rule, and two unlabelled code snippets — one violating, one clean. Not which is which, not the incident
-behind the rule, not what you hope it will say. Ask which snippet violates the rule, and why.
+subagent, which starts empty unless you fill it in. Its prompt asks which snippet violates the rule and
+why, and carries exactly two pieces of context: the draft rule, and two unlabelled code snippets — one
+violating, one clean. Nothing else: not which is which, not the incident behind the rule, not what you
+hope it will say.
 
 If it picks wrong, or its reasoning is not the reasoning you intended, the rule is unclear. Reword and
 repeat. Do not proceed on a rule that needed the conversation to be understood.
