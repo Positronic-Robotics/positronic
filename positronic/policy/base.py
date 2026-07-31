@@ -3,6 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections import Counter
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from operator import attrgetter
 from typing import Any
 
 from positronic.policy.sampler import EpisodeCounter, Sampler, UniformSampler
@@ -258,7 +260,12 @@ class SampledPolicy(Policy):
 
     def _get_keys(self) -> tuple[str, ...]:
         if self._keys is None:
-            keys = tuple(p.meta.get(self._key_field, str(i)) for i, p in enumerate(self._policies))
+            # A sub-policy's meta can cost a whole model load to read: a remote one holds a session open
+            # until its backend answers. Read them at once, so the first ``new_session`` waits out the
+            # slowest sub-policy rather than the sum of all of them.
+            with ThreadPoolExecutor(max_workers=len(self._policies)) as pool:
+                metas = list(pool.map(attrgetter('meta'), self._policies))
+            keys = tuple(meta.get(self._key_field, str(i)) for i, meta in enumerate(metas))
             duplicates = sorted(k for k, n in Counter(keys).items() if n > 1)
             if duplicates:
                 raise ValueError(

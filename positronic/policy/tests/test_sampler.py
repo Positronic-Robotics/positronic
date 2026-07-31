@@ -1,3 +1,4 @@
+import threading
 from typing import Any
 
 from positronic.policy.base import Policy, SampledPolicy, Session
@@ -29,6 +30,23 @@ class StubPolicy(Policy):
 
     @property
     def meta(self):
+        return self._meta
+
+
+class BarrierPolicy(StubPolicy):
+    """Stands in for a cold remote endpoint: the first ``meta`` read returns only once every peer is also
+    inside its own first read. Later reads are free, as they are once an endpoint has its server metadata."""
+
+    def __init__(self, barrier: threading.Barrier, meta: dict[str, Any]):
+        super().__init__(meta=meta)
+        self._barrier = barrier
+        self._cold = True
+
+    @property
+    def meta(self):
+        if self._cold:
+            self._cold = False
+            self._barrier.wait()
         return self._meta
 
 
@@ -156,6 +174,16 @@ def test_sampled_policy_discovers_keys_from_meta():
     sampled = SampledPolicy(p1, p2, key_field='ckpt')
     sampled.new_session({})
     assert sampled._keys == ('/path/a', '/path/b')
+
+
+def test_key_discovery_reads_every_sub_policy_meta_at_once():
+    """Reading N cold sub-policies costs one model load, not N: each ``meta`` here blocks until all are in."""
+    barrier = threading.Barrier(3, timeout=5)
+    sampled = SampledPolicy(*(BarrierPolicy(barrier, {'ckpt': k}) for k in 'abc'), key_field='ckpt')
+
+    sampled.new_session({})
+
+    assert sampled._keys == ('a', 'b', 'c')
 
 
 def test_sampled_policy_delegates_to_sampler():
