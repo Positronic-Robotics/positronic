@@ -79,27 +79,19 @@ behind the rule, not what you hope it will say. Ask which snippet violates the r
 If it picks wrong, or its reasoning is not the reasoning you intended, the rule is unclear. Reword and
 repeat. Do not proceed on a rule that needed the conversation to be understood.
 
-## Step 5: Calibrate against the repo
+## Step 5: Approve and write
 
-A rule that has never fired is a guess. Scan the existing tree — not just the recent diff — for code
-the rule would flag, then **read a sample of the hits** (five, or all of them if fewer) and judge each
-one yourself.
-
-The count sizes the sample; the sample decides. Report both, and the fork they imply:
-
-- **Hits you agree with, few.** Calibrated. Land it.
-- **Hits you agree with, many.** The rule is right and the repo has a backlog. Land it, and raise
-  separately whether to clean up now or let it bite on future changes — a rule that flags a lot of
-  existing code will make the next few reviews noisy, and the user should know that going in.
-- **Hits you disagree with.** The rule is too broad. Narrow it, or drop it.
-
-Report the sample honestly, including hits that make the rule look bad.
-
-## Step 6: Approve and write
-
-Show the final wording, the id, the hit count, and the sample. On explicit approval, write it to
+Show the final wording and the id. On explicit approval, write it to
 `CODE_RULES.md` — a new rule is appended, a revision of an existing id replaces that rule in place, so
 no id ever appears twice. Then commit following the repo's conventions.
+
+## Calibrating a noisy rule
+
+Run this when a rule starts producing findings people argue with — not on every rule that lands.
+Search the tree for what it would flag, read a sample of the hits, and judge each one yourself. Hits
+you agree with mean the rule is right and the repo has a backlog; hits you disagree with mean it is too
+broad and needs narrowing or dropping. Say how large the sample was, so a thin one cannot read as a
+clean sweep.
 
 ## Retiring a rule
 
