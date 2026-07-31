@@ -50,10 +50,16 @@ return {**data, self._pose_key: change_frame(data[self._pose_key])}
 Don't bake assumptions about how a component will be used into its interface. Before adding a
 parameter, a branch, or a category to a signature, ask what else the component could legitimately be
 asked to do — many keys instead of one, several value types instead of one, the same operation in
-reverse. Where handling those uniformly makes the code **shorter**, the specific version is wrong.
+reverse.
 
-Generalise until it simplifies, and stop there. A parameter, flag, or strategy object added for a case
-nobody has is the same mistake pointed the other way.
+Handling those uniformly usually comes out simpler and easier for a human to read: fewer branches,
+often fewer lines, and every use falling into place without deliberation. When it does, the specific
+version was wrong.
+
+Generalise until it simplifies, and stop there. Past that point the signature stops having an opinion
+and the caller must read the implementation to know what to pass — the same mistake pointed the other
+way. This is a matter of taste and does not reduce to a measurement: judge the result as a reader, not
+by counting.
 
 ```python
 # Bad — assumes every key belongs to exactly one category, and that the categories need different handling
