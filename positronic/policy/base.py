@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from collections import Counter
 from collections.abc import Callable
@@ -8,6 +9,8 @@ from operator import attrgetter
 from typing import Any
 
 from positronic.policy.sampler import EpisodeCounter, Sampler, UniformSampler
+
+logger = logging.getLogger(__name__)
 
 Now = Callable[[], float]
 
@@ -278,7 +281,11 @@ class SampledPolicy(Policy):
     def new_session(self, context=None, now=None):
         keys = self._get_keys()
         ctx = context or {}
-        key = self.sampler.sample(keys, ctx, self.counter.counts(keys, ctx))
+        counts = self.counter.counts(keys, ctx)
+        key = self.sampler.sample(keys, ctx, counts)
+        # Which sub-policy ran is the same fact whichever strategy picked it, so it is reported here rather
+        # than per sampler. It names the episode's policy, so a blinded operator must not watch this log.
+        logger.info('Sampled %r; completed so far: %s', key, counts)
         policy = self._policies[keys.index(key)]
         session = policy.new_session(context, now)
         return _KeyedSession(session, policy.meta, self._key_field, key)
