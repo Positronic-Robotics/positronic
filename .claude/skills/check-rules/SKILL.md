@@ -19,33 +19,14 @@ the agent inherits.
 
 ## Step 1: Scope the diff
 
-```bash
-BASE=$(git merge-base HEAD upstream/main 2>/dev/null || git merge-base HEAD origin/main 2>/dev/null)
-[ -n "$BASE" ] || { echo 'no merge base — fetch, deepen a shallow clone, or name the base commit'; exit 1; }
+Collect the patches for everything not yet on the mainline: HEAD, the index, the worktree, and the
+contents of untracked files. A violation can sit in any one of them while the others look clean —
+staged and then reverted, or committed and then fixed only in the index — and that set is closed, so
+there is no fifth place for code to hide.
 
-git diff "$BASE" HEAD                                      # committed — what a push sends
-git diff "$BASE" --cached                                  # index — what a plain commit records
-git diff "$BASE"                                           # worktree — what you see in the files
-git status --porcelain --untracked-files=all | grep '^??' || true  # untracked — what no diff shows
-```
-
-Git keeps three snapshots — HEAD, the index, the worktree — and a violation can sit in any one of them
-while the others look clean: staged and then reverted, or committed and then fixed only in the index.
-Check all three, plus untracked files. That set is closed; there is no fourth place for code to hide.
-
-These commands produce patches, not summaries. The agents need the patch text: when the snapshots
-disagree, the violating lines exist in one of them and nowhere in the files on disk, so an agent that
-only reads the repository cannot see them. Add `--stat` separately if you want a file list for your own
-report.
-
-In the ordinary case the three agree and it is one patch. Pass the untracked files' contents alongside
-it — a brand-new file is where rules bite hardest and is the one thing no diff shows.
-
-The base is a merge base against a remote-tracking ref, never local `main` — that one goes stale the
-moment someone merges upstream and would quietly widen the scope to changes already on the mainline.
-One emptiness check covers every way this can fail: ref missing, ancestry not fetched, shallow clone.
-`BASE` comes out empty and the run stops, rather than the expansion vanishing and each command
-degrading into a diff against HEAD that reports clean.
+Take the base from a merge base against a remote-tracking ref, never local `main`, which goes stale the
+moment someone merges upstream. Stop if there is no merge base rather than falling back to a comparison
+against HEAD, which reports clean while checking nothing.
 
 Narrow to the files the user named if they named any, and say which scope you used. A clean report over
 the wrong scope is worse than no report.
