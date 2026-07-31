@@ -1,12 +1,12 @@
 ---
 name: add-rule
-description: Author, calibrate, or retire a rule in CODE_RULES.md. Use when a review comment or a recurring code smell should become a durable repo rule, or when an existing rule is noisy, never fires, or keeps getting waived.
+description: Author or recalibrate a rule in CODE_RULES.md. Use when a review comment or a recurring code smell should become a durable repo rule, or when an existing rule produces findings people argue with.
 ---
 
 # Add Rule
 
-Every rule in `CODE_RULES.md` spends attention on every review, so each one earns its place or comes
-out. This skill writes one, calibrates it against the repo, or retires one.
+Every rule in `CODE_RULES.md` spends attention on every review, so each one earns its place. This skill
+writes one, or recalibrates one that has gone noisy.
 
 Nothing is written to `CODE_RULES.md` without the user's explicit approval of the final wording.
 
@@ -92,24 +92,3 @@ Search the tree for what it would flag, read a sample of the hits, and judge eac
 you agree with mean the rule is right and the repo has a backlog; hits you disagree with mean it is too
 broad and needs narrowing or dropping. Say how large the sample was, so a thin one cannot read as a
 clean sweep.
-
-## Retiring a rule
-
-Rules only accumulate unless something removes them, and a stale rule dilutes attention across the
-whole file. Retire one when:
-
-- it has not fired in review for a long stretch, and a scan of the tree finds nothing it would catch;
-- its waivers are out of proportion to its compliant uses. Count the markers, but treat the count as a
-  prompt to look, never as the evidence itself:
-
-  ```bash
-  grep -rn 'rules-allow: <rule-id>' --include='*.py' .
-  ```
-
-  Five waivers against five hundred compliant sites is a healthy rule with real exceptions; five against
-  eight is a rule describing the exception as the norm. Sample both sides before concluding. If the
-  waivers win, either the rule is wrong or the exception is the real rule; say which.
-- a linter can now enforce it. Move it to `pyproject.toml` and delete it here.
-
-Deleting a rule needs the same explicit approval as adding one. Say what it was, why it is going, and
-what replaces it if anything does.
