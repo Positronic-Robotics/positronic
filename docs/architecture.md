@@ -93,7 +93,7 @@ both invariants — the run produces no dataset, and execution is scheduled by c
 
 ## Derived decisions
 
-The load-bearing consequences of the goals and principles. Each is stated with what forces it —
+What the goals and principles force. Each is stated with what forces it —
 revisit a decision only by revisiting its premises.
 
 **Time is an observation.** A policy that cannot tell sim from real cannot be allowed to read the

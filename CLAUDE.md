@@ -1,10 +1,12 @@
 # Contributor behavior
+- Read `CODE_RULES.md` before writing code here — the named rules it carries govern authoring, not only
+  review, and `check-rules` is how you check a change against them
 - Don't restore code that you wrote and I deleted
 - Don't hide errors with try-catch blocks; let failures surface until asked otherwise
 - Stay scoped: no features beyond the request. Structure of the code you touch is governed by Design
   discipline below — bringing it to the end state is in scope, refactoring unrelated code is not
 - Don't add comments, docstrings, or type annotations to code you didn't change
-- Ask clarifying questions only when requirements are genuinely ambiguous and investigation can't resolve them
+- Ask clarifying questions only when requirements are ambiguous and investigation can't resolve them
 
 # Commands
 - Every Python execution goes through `uv run --locked --extra dev` — bare `python`/`pytest` bypasses the locked
@@ -38,14 +40,14 @@
   an entry lives in, an enum, the calling context), don't reify the concept into a type. Extend an existing module
   rather than adding a file
 - That holds for a new file of any kind — module, test, or doc. Find the existing home first; when there is
-  genuinely none, surface it rather than restructuring on your own initiative (see Testing)
+  none, surface it rather than restructuring on your own initiative (see Testing)
 - No `X | None` for logically required values — an Optional that is never None in practice lies about the contract
 - After every fix or refactor, re-read the resulting code as a whole, not the diff: fixes create new smells (e.g.
   two classes become structurally identical only after their serializers are unified — merge them)
 
 # Code style
 - No imports inside functions/methods; always place imports at the top of the file
-- Exception: circular dependencies or truly unavoidable cases
+- Exception: circular dependencies or cases with no other resolution
 - No `hasattr`/`getattr` hacks for type dispatch; use `isinstance` with proper base classes or protocols
 - Judge names at the call site (`ds`, `teleop` — not `dataset`, `teleoperation`) and against the roadmap
   (`mujoco_franka`, not `sim` — more sims will exist)
@@ -73,7 +75,7 @@
   thing that broke — it belongs beside the others and needs neither a file of its own nor "regression" framing
 - Look for that home by subject rather than by filename, and conclude there is none only after looking. A new
   test file claims the subject has no home yet, and that claim is usually wrong
-- When a test genuinely has nowhere to go, the file organization is what needs adjusting — that is a finding,
+- When a test has nowhere to go, the file organization is what needs adjusting — that is a finding,
   not a licence to invent a home. Don't restructure on your own initiative: put the test in the least-wrong
   existing home and say plainly that nothing fit, so the gap reaches a human instead of being absorbed
 
