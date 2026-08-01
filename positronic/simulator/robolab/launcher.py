@@ -16,7 +16,7 @@ from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
 from positronic import keys
-from positronic.drivers.roboarm.models import bundled_franka_model
+from positronic.drivers.roboarm.models import DROID_EEF_LINK, bundled_franka_model
 from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess
 from positronic.simulator.env_server.protocol import encode
 
@@ -96,7 +96,7 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
     # filesystem, where a concurrent eval's rewrite could tear a reader mid-decode.
     # RoboLab reports and accepts poses in ``droid_eef``, not the flange the model defaults to, so the canonical
     # ``control_frame`` is overridden to match what the env actually uses.
-    robot_meta = {**bundled_franka_model(), keys.CONTROL_FRAME: 'droid_eef'}
+    robot_meta = {**bundled_franka_model(), keys.CONTROL_FRAME: DROID_EEF_LINK}
     fd, meta_path = tempfile.mkstemp(prefix='robolab_robot_meta_', suffix='.bin')
     with os.fdopen(fd, 'wb') as meta_file:
         meta_file.write(encode(robot_meta))

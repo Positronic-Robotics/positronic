@@ -9,6 +9,7 @@ from pathlib import Path
 from positronic import keys
 
 _FLANGE_LINK = 'link8'
+DROID_EEF_LINK = 'droid_eef'
 # Seat the gripper on the flange, rotated about the approach axis to match the real 2F-85 coupler
 # (a +45deg Z, i.e. 90deg off the franka ``end_effector`` frame).
 _2F85_MOUNT_RPY = '0 0 0.7853981634'
@@ -76,7 +77,7 @@ _ROBOTIQ_2F85 = [
     *_2f85_finger('left', -1, '0 0 3.1415926536'),
     # RoboLab's ``eef_frame`` (``Robotiq_2F_85/base_link`` ∘ ``EEF_OFFSET_ROT``), measured off its DROID USD
     # ``franka_robotiq_2f_85_flattened.usd`` as 18.17mm along the flange Z and +90deg about it.
-    ('droid_eef', _FLANGE_LINK, None, '0 0 0.01817402261', '0 0 1.5707963268', None, None, None),
+    (DROID_EEF_LINK, _FLANGE_LINK, None, '0 0 0.01817402261', '0 0 1.5707963268', None, None, None),
 ]
 _ROBOTIQ_2F85_JOINTS = [row[2] for row in _ROBOTIQ_2F85 if row[2]]
 
