@@ -85,7 +85,7 @@ def _parse_renames(out: str | None) -> dict[str, str]:
 
     Only `R` (rename) is mapped, never `C` (copy): a rename moves a file's entries to a new key, so
     the new path must inherit the base counts; a copy leaves the source in place and duplicates its
-    diagnostics into a genuinely new file, which must face the new-file check, not reuse the source's
+    diagnostics into a new file, which must face the new-file check, not reuse the source's
     grandfathered allowances.
     """
     renames: dict[str, str] = {}

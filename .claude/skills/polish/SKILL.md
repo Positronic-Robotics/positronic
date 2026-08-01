@@ -15,7 +15,7 @@ questions.
   classes, moving ownership, renaming + migrating). Do NOT present findings and wait.
 - **Ask only when** (a) an action is irreversible beyond the working tree — dataset/data
   migrations, deleting files you didn't create whose purpose is unclear, anything touching
-  remote state; or (b) two designs are genuinely defensible and externally visible — then ask
+  remote state; or (b) two designs are defensible and externally visible — then ask
   with a recommendation. Everything else: decide, fix, report.
 - **Review code as a whole, never as a diff.** The diff only tells you *which* files to look
   at. Read each touched file (and the immediate neighbors it interacts with) in its entirety
@@ -142,7 +142,7 @@ For **every** comment and docstring in the touched files (not just new ones in t
 ## Step 5: Iterate to a fixed point
 
 Re-run Steps 2–4 on the **resulting state** of the touched code. Repeat until a full round
-produces no findings. In practice 2–3 rounds; the second round exists precisely to catch
+produces no findings. In practice 2–3 rounds; the second round exists to catch
 what the first round's fixes created (structural twins, dead parameters, orphaned helpers,
 stale comments describing the pre-fix code).
 
@@ -400,7 +400,7 @@ comment, rewrite the code instead.
 - **No `**kwargs` propagation** — name every parameter explicitly.
 - **The constructor defines the initialization contract** — if a value is part of what the
   object *is* (configuration, identity), it belongs in the constructor, not set afterwards.
-  Reserve direct attribute mutation for truly dynamic state. Knowing the concrete type
+  Reserve direct attribute mutation for dynamic state. Knowing the concrete type
   doesn't justify bypassing the constructor:
   ```python
   # BAD — known at construction, but set after
