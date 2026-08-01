@@ -411,6 +411,35 @@ def test_robot_model_from_embodiment_statics_reaches_policy(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_model_keys_forwarded_independently(world):
+    """A rig that names its control frame but ships no URDF (``yam``) still builds observations."""
+    policy = SpyPolicy()
+    harness = Harness(policy, make_embodiment(static_meta={'control_frame': 'grasp_site'}))
+    harness.commands['robot_command']._bind(RecordingEmitter())
+    harness.commands['target_grip']._bind(RecordingEmitter())
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (None, 0.05),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=20)
+
+    assert policy.last_obs is not None
+    assert policy.last_obs['control_frame'] == 'grasp_site'
+    assert 'urdf' not in policy.last_obs
+
+
+@pytest.mark.timeout(3.0)
 def test_harness_waits_for_complete_inputs(world):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)

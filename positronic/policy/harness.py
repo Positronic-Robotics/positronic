@@ -409,9 +409,7 @@ class Harness(pimm.ControlSystem):
         inputs['obs_time_ns'] = clock.now_ns()
         inputs.update(self.context)
         statics = self._statics()
-        if keys.CONTROL_FRAME in statics:
-            inputs[keys.URDF] = statics[keys.URDF]
-            inputs[keys.CONTROL_FRAME] = statics[keys.CONTROL_FRAME]
+        inputs.update({k: statics[k] for k in (keys.URDF, keys.CONTROL_FRAME) if k in statics})
         inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
         return inputs
 
