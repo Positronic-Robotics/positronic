@@ -19,7 +19,7 @@ from positronic import geom
 from positronic.dataset import transforms
 
 
-def _ensure_site(spec: mj.MjSpec, frame: str) -> None:
+def _ensure_site(spec: mj.MjSpec, frame: str) -> None:  # pyright: ignore[reportAttributeAccessIssue]
     """Ensure ``frame`` is a site in ``spec``, adding one at the body origin when it names a body."""
     all_sites = {s.name for b in spec.bodies for s in b.sites}
     if frame in all_sites:
@@ -32,8 +32,8 @@ def _ensure_site(spec: mj.MjSpec, frame: str) -> None:
     raise ValueError(f'Frame {frame!r} not found as site or body in model')
 
 
-def _prepare_spec(urdf_xml: str, frame: str) -> mj.MjSpec:
-    """Parse URDF or MJCF into an MjSpec, stripping meshes and resolving ``frame`` to a site."""
+def _prepare_spec(urdf_xml: str, *frames: str) -> mj.MjSpec:  # pyright: ignore[reportAttributeAccessIssue]
+    """Parse URDF or MJCF into an MjSpec, stripping meshes and resolving each of ``frames`` to a site."""
     root = ET.fromstring(urdf_xml)
     if root.tag == 'robot':
         for link in root.findall('.//link'):
@@ -41,17 +41,18 @@ def _prepare_spec(urdf_xml: str, frame: str) -> mj.MjSpec:
                 link.remove(elem)
         urdf_xml = ET.tostring(root, encoding='unicode')
     spec = mj.MjSpec.from_string(urdf_xml)
-    _ensure_site(spec, frame)
+    for frame in frames:
+        _ensure_site(spec, frame)
     return spec
 
 
-def _site_transform(data: mj.MjData, site_id: int) -> geom.Transform3D:
+def _site_transform(data: mj.MjData, site_id: int) -> geom.Transform3D:  # pyright: ignore[reportAttributeAccessIssue]
     """The world pose of a site as a ``Transform3D``."""
     rotation = geom.Rotation.from_rotation_matrix(data.site_xmat[site_id].reshape(3, 3))
     return geom.Transform3D(data.site_xpos[site_id].copy(), rotation)
 
 
-def _ancestry(model: mj.MjModel, body_id: int) -> list[int]:
+def _ancestry(model: mj.MjModel, body_id: int) -> list[int]:  # pyright: ignore[reportAttributeAccessIssue]
     """Body ids from ``body_id`` up to the world, inclusive."""
     chain = [body_id]
     while chain[-1] != 0:
@@ -59,14 +60,23 @@ def _ancestry(model: mj.MjModel, body_id: int) -> list[int]:
     return chain
 
 
-def _assert_rigidly_connected(model: mj.MjModel, from_frame: str, to_frame: str, from_body: int, to_body: int) -> None:
+def _assert_rigidly_connected(
+    model: mj.MjModel,  # pyright: ignore[reportAttributeAccessIssue]
+    from_frame: str,
+    to_frame: str,
+    from_body: int,
+    to_body: int,
+) -> None:
     """Raise unless every joint between the two bodies is fixed, which is what makes one transform stand for all."""
     up_from, up_to = _ancestry(model, from_body), _ancestry(model, to_body)
     common = set(up_from) & set(up_to)
     legs = [b for chain in (up_from, up_to) for b in chain[: min(i for i, x in enumerate(chain) if x in common)]]
     movable = [b for b in legs if model.body_jntnum[b] > 0]
     if movable:
-        names = sorted({mj.mj_id2name(model, mj.mjtObj.mjOBJ_BODY, b) for b in movable})
+        names = sorted({
+            mj.mj_id2name(model, mj.mjtObj.mjOBJ_BODY, b)  # pyright: ignore[reportAttributeAccessIssue]
+            for b in movable
+        })
         raise ValueError(
             f'Frames {from_frame!r} and {to_frame!r} are separated by movable joints on {names}, so their relative '
             f'pose changes with the configuration and no constant transform describes it'
@@ -80,13 +90,11 @@ def frame_transform(urdf_xml: str, from_frame: str, to_frame: str) -> geom.Trans
     A pose measured in ``from_frame`` composes to ``to_frame`` via ``pose * frame_transform(...)``. Read at the
     zero configuration, which stands for every configuration only while the two frames are rigidly connected.
     """
-    spec = _prepare_spec(urdf_xml, from_frame)
-    _ensure_site(spec, to_frame)
-    model = spec.compile()
-    data = mj.MjData(model)
-    mj.mj_forward(model, data)
-    from_site = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, from_frame)
-    to_site = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, to_frame)
+    model = _prepare_spec(urdf_xml, from_frame, to_frame).compile()
+    data = mj.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]
+    mj.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]
+    from_site = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, from_frame)  # pyright: ignore[reportAttributeAccessIssue]
+    to_site = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, to_frame)  # pyright: ignore[reportAttributeAccessIssue]
     _assert_rigidly_connected(model, from_frame, to_frame, model.site_bodyid[from_site], model.site_bodyid[to_site])
     return _site_transform(data, from_site).inv * _site_transform(data, to_site)
 
