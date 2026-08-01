@@ -483,7 +483,7 @@ class ChangeEEFrame(Codec):
     same pre-encode context, so within one composed codec that pairing is wrong.
     """
 
-    class _Training(EpisodeTransform):
+    class _ChangeEpisodeFrames(EpisodeTransform):
         """Move the episode's pose signals into ``to`` and relabel ``control_frame``, so a later codec solving
         against the frame (``IKJointsAction``) resolves it to the right site.
 
@@ -545,7 +545,7 @@ class ChangeEEFrame(Codec):
 
     @property
     def training_encoder(self) -> EpisodeTransform:
-        return ChangeEEFrame._Training(self)
+        return ChangeEEFrame._ChangeEpisodeFrames(self)
 
     @property
     def meta(self):
