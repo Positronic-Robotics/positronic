@@ -150,7 +150,7 @@ def _check_obs_encoding(env: LiberoEnv, token: dict) -> None:
 
     # Gripper: drive to both stops to read the finger qpos endpoints, then the codec's linear reconstruction
     # CLOSED + (1 - grip) * (OPEN - CLOSED) recovers the true qpos from the closure scalar (q_open/q_closed are
-    # the load-bearing, non-circular measurement; the sweep checks the linear model holds).
+    # the non-circular measurement; the sweep checks the linear model holds).
     env.reset(token)
     for _ in range(40):
         wire = env.step({'command': {'type': 'hold'}, 'grip': 0.0})['obs']

@@ -65,7 +65,7 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   # objects, so the runs are at `.[].check_runs[]`. ghr surfaces an unreadable API as exit 50
   # rather than a fake "no checks" reading (total=0 would block both exit 40 and ci_green, so the
   # persisting loop would spin forever); a readable-but-empty response is still valid JSON, so a
-  # commit with genuinely no checks yet stays in the loop.
+  # commit with no checks yet stays in the loop.
   cr=$(ghr api "repos/$REPO/commits/$SHA/check-runs?per_page=100" --paginate --slurp) || fail50 "cannot read check runs for $SHA"
   # Any completed check whose conclusion is outside the passing set counts as failed — this
   # covers failure/timed_out plus cancelled/action_required/stale/startup_failure, so a

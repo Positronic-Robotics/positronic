@@ -15,7 +15,7 @@ The `push-pr` skill delegates here when review comments arrive. After each push 
 watches **both CI (GitHub Actions on the pushed commit) and the reviewer's asynchronous
 re-review** in the background, and loops itself through another pass for each new comment
 round or CI failure (Step 7) — so the user can walk away instead of babysitting the cycle,
-and gets pinged only when it truly converges (CI green **and** the reviewer signs off) or
+and gets pinged only when it converges (CI green **and** the reviewer signs off) or
 needs their call. A red build is never "done", no matter what the reviewer says.
 
 ## Principles
@@ -35,7 +35,7 @@ needs their call. A red build is never "done", no matter what the reviewer says.
   resolving them closes a conversation that is the human's to close (especially a reviewer's
   "why…?" or "should we…?", which is an invitation to discuss, not a change request). Never
   resolve a thread just to clear the queue, and never leave a thread you fixed unresolved.
-  When a comment is genuinely on the fence, leave it open.
+  When a comment is on the fence, leave it open.
 - **Stay scoped** to the feedback. Don't sprawl into unrelated refactors.
 - **Follow the repo's commit conventions** (see the `push-pr` skill). CRITICAL: never add
   `Co-Authored-By` or any AI / Claude / assistant attribution to commits, replies, or PRs.
@@ -100,7 +100,7 @@ Present the triage as a short numbered list: comment → verdict → planned fix
 
 **Autonomy:** invoking this skill authorizes the cycle. Act on clear-cut fixes and clear
 declines without prompting. Pause and confirm only when a fix is risky, large, or whether
-to agree is genuinely unclear. The user may drop or override any item.
+to agree is unclear. The user may drop or override any item.
 
 ## Step 3: Fix
 
@@ -222,7 +222,7 @@ blocks until something actionable happens, then loop on how it exits:
 
 - exit **10** → a new round of reviewer comments landed (Codex or a human) → run another full
   pass (Steps 1–6), which ends right back here and relaunches the watcher;
-- exit **20** → truly converged: **CI green on the pushed commit AND** a reviewer sign-off
+- exit **20** → converged: **CI green on the pushed commit AND** a reviewer sign-off
   (Codex 👍 newer than the push, or a human approval) → give the final report, **notify the
   user**, and **stop**;
 - exit **30** → a quiet interval elapsed → **relaunch the watcher and keep waiting** (don't

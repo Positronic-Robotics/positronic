@@ -90,7 +90,7 @@ def test_build_rename_map_includes_staged_rename(tmp_path, monkeypatch):
 
 def test_parse_renames_maps_renames_not_copies():
     # A rename (R) moves entries to a new key and must map back; a copy (C) leaves the source in
-    # place and duplicates its diagnostics into a genuinely new file, which must face the new-file
+    # place and duplicates its diagnostics into a new file, which must face the new-file
     # check rather than reuse the source's grandfathered allowances — so C must NOT be mapped.
     out = 'R100\told.py\tmoved.py\nC100\tkept.py\tcopy.py\n'
     assert ratchet._parse_renames(out) == {'moved.py': 'old.py'}
