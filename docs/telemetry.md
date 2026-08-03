@@ -13,8 +13,8 @@ no telemetry and stays clock-agnostic.
 
 `positronic/telemetry.py` owns the mechanism, and it is domain-blind: spans, anchors and sidecar files, with
 no notion of an episode, a pass or an inference call. An **anchor** is a long-running span its owner holds
-open; the per-tick spans an instrumented call site emits parent to the innermost one, which is how a phase
-span emitted by one control system lands under the rollout another control system is running (OTel's ambient
+open; the spans an instrumented call site emits parent to the innermost one, which is how a phase span
+emitted by one control system lands under the rollout another control system is running (OTel's ambient
 context does not survive the scheduler's generator hops). Ownership follows the phase: the harness opens,
 stamps and closes the `episode` span, the eval CLI the `eval.pass` span. The vocabulary both sides and the
 reduce agree on — every span name and attribute key in the tables below — is defined once in
@@ -44,7 +44,7 @@ Everything lands under `<output_dir>/telemetry/`, one set of files per process:
 
 | File | Written by | Contents |
 |---|---|---|
-| `harness.spans.jsonl` | the eval process | OTLP/JSON-lines spans: the pass, each episode, and its per-tick phases |
+| `harness.spans.jsonl` | the eval process | OTLP/JSON-lines spans: the pass, each episode, and its phase spans |
 | `harness.stats.jsonl` | the eval process | one machine-load sample per line |
 | `env.spans.jsonl` | a launched env server (e.g. RoboLab) | the server's own step decomposition, in its own file |
 

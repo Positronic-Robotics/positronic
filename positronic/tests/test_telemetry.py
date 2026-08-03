@@ -48,7 +48,7 @@ def test_span_surface_survives_without_the_telemetry_extra(without_telemetry_ext
     """Every instrumented call site sits on the OTel API alone, so an install carrying no telemetry extra runs
     a normal eval — the helpers no-op exactly as they do while unbound."""
     with _anchored('outer'):
-        with telemetry.span('tick'):
+        with telemetry.span('probe'):
             pass
 
 
@@ -63,13 +63,13 @@ def test_recording_without_the_telemetry_extra_names_the_extra(tmp_path, without
 
 
 def test_nested_spans_round_trip(tmp_path):
-    """A bound run's spans parse back with anchor parenting — a per-tick span under the innermost anchor, an
+    """A bound run's spans parse back with anchor parenting — an unnested span under the innermost anchor, an
     anchor under the anchor enclosing it, one opened inside another under that one — plus hex ids and decoded
     attributes."""
     with telemetry.bind(tmp_path, 'harness', 'run-xyz'):
         with _anchored('outer', policy='stub'):
             with _anchored('inner', index=0) as inner:
-                with telemetry.span('tick'):
+                with telemetry.span('probe'):
                     pass
                 with telemetry.span('phase'):
                     with telemetry.span('sub-phase'):
@@ -78,7 +78,7 @@ def test_nested_spans_round_trip(tmp_path):
 
     spans_path = tmp_path / 'telemetry' / 'harness.spans.jsonl'
     spans = _spans_by_name(spans_path)
-    assert set(spans) == {'outer', 'inner', 'tick', 'phase', 'sub-phase'}
+    assert set(spans) == {'outer', 'inner', 'probe', 'phase', 'sub-phase'}
 
     # Hex ids: 16 nibbles for a span id, and every id parses as hex.
     for rec in spans.values():
@@ -87,7 +87,7 @@ def test_nested_spans_round_trip(tmp_path):
 
     assert spans['outer'].parent_id is None
     assert spans['inner'].parent_id == spans['outer'].span_id
-    assert spans['tick'].parent_id == spans['inner'].span_id
+    assert spans['probe'].parent_id == spans['inner'].span_id
     assert spans['phase'].parent_id == spans['inner'].span_id
     assert spans['sub-phase'].parent_id == spans['phase'].span_id
 
@@ -99,7 +99,7 @@ def test_nested_spans_round_trip(tmp_path):
 
 def test_anchor_popped_out_of_order_stops_parenting(tmp_path):
     """An owner closing an anchor that is no longer the innermost — a failure path unwinding several at once —
-    drops it from wherever it sits, so no finished span goes on adopting later per-tick spans."""
+    drops it from wherever it sits, so no finished span goes on adopting later spans."""
     with telemetry.bind(tmp_path, 'harness', 'run-unwind'):
         outer = telemetry.start_span('outer')
         telemetry.push_anchor(outer)
@@ -108,7 +108,7 @@ def test_anchor_popped_out_of_order_stops_parenting(tmp_path):
 
         telemetry.pop_anchor(outer)  # the enclosing anchor closes first
         outer.end()
-        with telemetry.span('tick'):
+        with telemetry.span('probe'):
             pass
         inner.end()
         telemetry.pop_anchor(inner)
@@ -116,14 +116,14 @@ def test_anchor_popped_out_of_order_stops_parenting(tmp_path):
             pass
 
     spans = _spans_by_name(tmp_path / 'telemetry' / 'harness.spans.jsonl')
-    assert spans['tick'].parent_id == spans['inner'].span_id  # the innermost anchor still stands
+    assert spans['probe'].parent_id == spans['inner'].span_id  # the innermost anchor still stands
     assert spans['after'].parent_id is None  # nothing anchored: the span roots rather than adopting a corpse
 
 
 def test_unbound_span_is_inert(tmp_path):
     """Off ``--timing`` nothing binds: the span helpers no-op, write no file, and raise nothing."""
     with _anchored('outer'):
-        with telemetry.span('tick'):
+        with telemetry.span('probe'):
             pass
     assert not (tmp_path / 'telemetry').exists()
 
@@ -132,7 +132,7 @@ def test_resource_carries_process_identity(tmp_path):
     """Every span document's resource block names the run and the writing process, so a sidecar identifies
     itself without a second file."""
     with telemetry.bind(tmp_path, 'env', 'run-1'):
-        with telemetry.span('tick'):
+        with telemetry.span('probe'):
             pass
 
     line = json.loads((tmp_path / 'telemetry' / 'env.spans.jsonl').read_text().splitlines()[0])
@@ -165,23 +165,23 @@ def test_unbound_span_never_touches_global_tracer(monkeypatch):
         raise AssertionError('unbound telemetry must not consult the global tracer provider')
 
     monkeypatch.setattr(telemetry.trace, 'get_tracer', _boom)
-    with telemetry.span('tick', index=0):
+    with telemetry.span('probe', index=0):
         pass
 
 
-def test_per_tick_span_ignores_foreign_ambient_span(tmp_path):
+def test_anchored_span_ignores_foreign_ambient_span(tmp_path):
     """A host application's current OTel span (a different provider, a different trace) must not adopt our
-    per-tick spans: they parent to the innermost anchor, so the report still sees them."""
+    spans opened under an anchor: they parent to it, so the report still sees them."""
     foreign = SdkTracerProvider()
     with telemetry.bind(tmp_path, 'harness', 'run-foreign'):
         with _anchored('outer'):
             with foreign.get_tracer('host-app').start_as_current_span('host-span'):
-                with telemetry.span('tick'):
+                with telemetry.span('probe'):
                     pass
 
     spans = _spans_by_name(tmp_path / 'telemetry' / 'harness.spans.jsonl')
     assert 'host-span' not in spans  # the foreign span belongs to the host's provider, not our file
-    assert spans['tick'].parent_id == spans['outer'].span_id
+    assert spans['probe'].parent_id == spans['outer'].span_id
 
 
 def _install_fake_nvml(monkeypatch):
@@ -303,12 +303,12 @@ def test_bind_seals_truncated_predecessor_line(tmp_path):
 def test_readers_tolerate_truncated_final_line(tmp_path):
     spans_path = tmp_path / 'telemetry' / 'harness.spans.jsonl'
     with telemetry.bind(tmp_path, 'harness', 'run-trunc'):
-        with telemetry.span('tick'):
+        with telemetry.span('probe'):
             pass
     with open(spans_path, 'a') as file:
         file.write('{"resourceSpans": [{"scopeSpans": [{"spans": [{"nam')  # crash mid-write
     names = [rec.name for rec in telemetry.read_spans(spans_path)]
-    assert names == ['tick']
+    assert names == ['probe']
 
     stats_path = tmp_path / 'stats.jsonl'
     stats_path.write_text('{"t_ns": 1, "gpus": []}\n{"t_ns": 2, "cpu_sy')

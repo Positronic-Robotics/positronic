@@ -58,9 +58,9 @@ TELEMETRY_SUBDIR = 'telemetry'
 # The bound provider and the anchor stack are process-global: the harness, env proxy and recorder run as
 # cooperative control systems in one thread and interleave their spans, so parenting is resolved here rather
 # than through OTel's ambient context (which does not survive the scheduler's generator hops). An anchor is a
-# long-running span its owner holds open (a pass, a rollout); ``span`` parents a per-tick span to the
-# innermost one, while a nested span (materialize inside env.step) still parents to whatever OTel span is
-# current within its own ``with`` block.
+# long-running span its owner holds open (a pass, a rollout); ``span`` parents a span opened outside any
+# active span of the bound trace to the innermost anchor, while a nested span (materialize inside env.step)
+# still parents to whatever OTel span is current within its own ``with`` block.
 _provider: 'TracerProvider | None' = None
 _anchors: list[Span] = []
 
@@ -138,7 +138,7 @@ def force_flush() -> None:
 
 
 def push_anchor(anchor: Span) -> None:
-    """Make ``anchor`` the innermost anchor: per-tick spans opened from now on parent to it."""
+    """Make ``anchor`` the innermost anchor: spans opened outside it from now on parent to it."""
     _anchors.append(anchor)
 
 
@@ -153,9 +153,9 @@ def _anchor_context() -> Any:
     return trace.set_span_in_context(_anchors[-1]) if _anchors else None
 
 
-def _per_tick_parent() -> Any:
-    """The parent context for a per-tick span. A currently-active span of THIS provider's trace means a
-    genuinely nested span (materialize inside env.step) — ``None`` lets it parent ambiently. Otherwise the
+def _anchor_parent() -> Any:
+    """The parent context for a span that is not nested in an active one. A currently-active span of THIS
+    provider's trace means a genuinely nested span — ``None`` lets it parent ambiently. Otherwise the
     span parents to the innermost anchor: between scheduler hops nothing of ours is current, and a host
     application's unrelated current span must not adopt telemetry spans — they would leave the trace the
     report reduces. With nothing anchored there is nothing to anchor to; ambient stands."""
@@ -170,7 +170,7 @@ def _per_tick_parent() -> Any:
 def start_span(name: str, **attrs: Any) -> Span:
     """Start a span its caller holds and ends itself, without entering it as the OTel-current span — so it
     never becomes the ambient parent of the enclosed code's spans. It parents to the innermost anchor, and
-    roots when nothing is anchored. Anchor it (``push_anchor``) to collect the per-tick spans opened under it.
+    roots when nothing is anchored. Anchor it (``push_anchor``) to collect the spans opened under it.
     A no-op while unbound returns an invalid span the caller ends harmlessly."""
     return _tracer().start_span(name, context=_anchor_context(), attributes=_encode_attrs(attrs))
 
@@ -181,10 +181,10 @@ def set_attrs(span: Span, **attrs: Any) -> None:
 
 
 def span(name: str, **attrs: Any):
-    """A wall-clock span named ``name``, entered as the current span for the enclosed block. A per-tick span
-    (no OTel span currently active) parents to the innermost anchor; a span opened inside another parents to
+    """A wall-clock span named ``name``, entered as the current span for the enclosed block. A span opened
+    while no OTel span is active parents to the innermost anchor; a span opened inside another parents to
     it. A no-op while unbound."""
-    return _tracer().start_as_current_span(name, context=_per_tick_parent(), attributes=_encode_attrs(attrs))
+    return _tracer().start_as_current_span(name, context=_anchor_parent(), attributes=_encode_attrs(attrs))
 
 
 def traced(name: str, **attrs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -205,9 +205,9 @@ def traced(name: str, **attrs: Any) -> Callable[[Callable[..., Any]], Callable[.
 def record_span(name: str, start_ns: int, end_ns: int, **attrs: Any) -> None:
     """Record an already-elapsed span with explicit wall-clock bounds — for a phase whose emit is decided only
     after it ran (a policy round-trip that turned out to be a real inference, not a scheduler replay). Parents
-    like a per-tick ``span``. A no-op while unbound."""
+    like ``span``. A no-op while unbound."""
     recorded = _tracer().start_span(
-        name, context=_per_tick_parent(), start_time=start_ns, attributes=_encode_attrs(attrs)
+        name, context=_anchor_parent(), start_time=start_ns, attributes=_encode_attrs(attrs)
     )
     recorded.end(end_time=end_ns)
 

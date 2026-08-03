@@ -6,7 +6,7 @@ The env server runs in a benchmark's isolated interpreter (RoboLab's Isaac venv)
 so the env process's spans land in its own ``env.spans.jsonl`` sidecar next to the harness's file.
 
 It is synchronous (one span per line, flushed per line) — the server is single-client lockstep, one request in
-flight — so no batch thread and no per-tick allocation churn. ``span`` nests through a module span stack: the
+flight — so no batch thread and no per-span allocation churn. ``span`` nests through a module span stack: the
 ``env.step``/``env.reset`` span is active while the sim's physics/render calls open their own spans under it.
 Unbound (no telemetry env vars), every helper is inert.
 """

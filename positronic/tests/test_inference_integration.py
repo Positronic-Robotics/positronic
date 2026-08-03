@@ -273,7 +273,7 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     pass_id = by_name[telemetry_keys.SPAN_EVAL_PASS][0].span_id
     episode_ids = {episode.span_id for episode in by_name[telemetry_keys.SPAN_EPISODE]}
     assert all(episode.parent_id == pass_id for episode in by_name[telemetry_keys.SPAN_EPISODE])
-    # The per-tick spans all parent to some episode — record.io most of all, since it is committed by a
+    # The phase spans all parent to some episode — record.io most of all, since it is committed by a
     # different control system after the harness emits STOP.
     for name in (telemetry_keys.SPAN_RESET, telemetry_keys.SPAN_RECORD_IO, telemetry_keys.SPAN_POLICY_INFER):
         assert all(rec.parent_id in episode_ids for rec in by_name[name]), name

@@ -146,7 +146,7 @@ def _validate_timing(evals: list[Eval] | None, embodiment: Embodiment | None, ou
 @contextmanager
 def _pass_span(**attrs) -> Generator[None, None, None]:
     """The span bracketing a whole eval sweep; the harness's episode spans parent to it, so it is anchored
-    rather than entered as the OTel-current span — it must not become the parent of the per-tick spans. A
+    rather than entered as the OTel-current span — it must not become the parent of the rollout's phase spans. A
     sweep that exits with an exception still exports its pass — the partial window is real recorded data —
     stamped ``pass.failed`` so a reduce can see (and report) that it did not run to completion."""
     span = telemetry.start_span(telemetry_keys.SPAN_EVAL_PASS, **attrs)

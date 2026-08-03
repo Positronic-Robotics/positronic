@@ -52,7 +52,7 @@ class _EpisodeTelemetry:
     and the virtual instant its rollout began. Every method is inert while telemetry is unbound (a normal eval
     binds nothing), so the harness calls them unconditionally.
 
-    The span is anchored while it is open, so the per-tick spans the rollout's control systems emit (reset,
+    The span is anchored while it is open, so the phase spans the rollout's control systems emit (reset,
     env.step, policy.infer, record.io) parent to it rather than to the pass.
     """
 
@@ -84,7 +84,7 @@ class _EpisodeTelemetry:
 
     def end(self, virtual_now: float) -> None:
         """Close a finished rollout, stamped with its step count and its virtual duration up to
-        ``virtual_now`` — captured when the rollout ended, before the flush tick advances the sim clock."""
+        ``virtual_now`` — captured when the rollout ended, before the flush round advances the sim clock."""
         if self._span is None:
             return
         assert self._virtual_start is not None  # a clean finish is reached only after the anchor is stamped
@@ -298,7 +298,7 @@ class Harness(pimm.ControlSystem):
         self.context = context
         # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
         self._inference_latency = self.context.get('inference_latency', False)
-        # Open the episode span before the reset, so the per-tick spans (reset, env.step, policy.infer,
+        # Open the episode span before the reset, so the phase spans (reset, env.step, policy.infer,
         # record.io) parent to it.
         self._telemetry.begin(context)
         # Reset the scene before opening the session: a resettable task only learns its instruction on reset
@@ -330,16 +330,16 @@ class Harness(pimm.ControlSystem):
                 self.ds_command.emit(DsWriterCommand.ABORT())
             else:
                 self._finalize_recording(payload)
-            # The rollout's virtual duration ends here — the flush tick below advances the sim clock, and that
+            # The rollout's virtual duration ends here — the flush round below advances the sim clock, and that
             # advance belongs to no rollout.
             virtual_now = clock.now()
             # Let the recorder commit the STOP/ABORT before the next START (they share ``ds_command`` —
-            # without a tick between, last-value-wins would drop one) and before the home command, so
+            # without a round between, last-value-wins would drop one) and before the home command, so
             # homing stays out of the recording.
             yield self._pace()
-            # End the episode span after that tick, so the recorder's STOP-time record.io span (which parents
+            # End the episode span after that round, so the recorder's STOP-time record.io span (which parents
             # to the episode) is captured while it is still in flight. Accepted skew: a producer that also
-            # steps during that shared tick charges one more span (≤ one control period per episode) to the
+            # steps during that shared round charges one more span (≤ one control period per episode) to the
             # closing episode — the cooperative scheduler cannot give the recorder a turn alone.
             if abort:
                 self._telemetry.abort()
@@ -512,7 +512,7 @@ class Harness(pimm.ControlSystem):
 
         if self._running:
             self._finalize_recording()
-            virtual_now = clock.now()  # the flush tick's clock advance belongs to no rollout
+            virtual_now = clock.now()  # the flush round's clock advance belongs to no rollout
             # Let the recorder commit the queued STOP while the episode span is still open — the same close
             # order as ``_end_episode`` — so its shutdown-flush record.io span parents to the episode, not
             # the pass.
