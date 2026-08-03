@@ -41,6 +41,16 @@ class JointDelta:
     velocities: np.ndarray
 
 
+def _compose_delta(base: geom.Transform3D, delta: geom.Transform3D) -> geom.Transform3D:
+    """Compose a world-frame ``delta`` onto ``base``.
+
+    Translation adds in the world frame and rotation left-multiplies (``goal_ori = R(Δrot) @ ee_ori``), the
+    robosuite OSC convention. This is not ``Transform3D.__mul__``, which composes in the body frame and would
+    rotate the translation.
+    """
+    return geom.Transform3D(base.translation + delta.translation, delta.rotation * base.rotation)
+
+
 @dataclass
 class CartesianDelta:
     """Move the end-effector by a world-frame pose delta from its current measured pose.
@@ -73,16 +83,6 @@ _T = TypeVar('_T')
 # The wire shape of every command channel: waypoints stamped with absolute clock ns. A single immediate
 # command is the one-waypoint trajectory ``[(clock.now_ns(), value)]``; ``[]`` cancels whatever is in flight.
 Trajectory: TypeAlias = list[tuple[int, _T]]
-
-
-def _compose_delta(base: geom.Transform3D, delta: geom.Transform3D) -> geom.Transform3D:
-    """Compose a world-frame ``delta`` onto ``base``.
-
-    Translation adds in the world frame and rotation left-multiplies (``goal_ori = R(Δrot) @ ee_ori``), the
-    robosuite OSC convention. This is not ``Transform3D.__mul__``, which composes in the body frame and would
-    rotate the translation.
-    """
-    return geom.Transform3D(base.translation + delta.translation, delta.rotation * base.rotation)
 
 
 def _combine(acc: CommandType, cmd: CommandType) -> CommandType:

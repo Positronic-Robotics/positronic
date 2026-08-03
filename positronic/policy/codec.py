@@ -469,7 +469,7 @@ class ChangeEEFrame(Codec):
 
     Which side of the ``remote`` marker it sits on decides who converts, the rig or the server. Compose it left
     of the observation/action codecs. A decoder that rebuilds its command from the decode context
-    (``RelativePositionAction``) needs this codec on the far side of ``remote`` from it. TODO(#483):
+    (``RelativePositionAction``) needs this codec on the far side of ``remote`` from it. TODO(#553):
     ``_ComposedCodec.decode`` hands both halves the same pre-encode context, so within one composed codec that
     pairing is wrong.
     """

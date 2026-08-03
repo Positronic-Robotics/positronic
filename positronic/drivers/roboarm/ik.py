@@ -49,12 +49,6 @@ def _prepare_spec(urdf_xml: str, *frames: str) -> mj.MjSpec:  # pyright: ignore[
     return spec
 
 
-def _site_transform(data: mj.MjData, site_id: int) -> geom.Transform3D:  # pyright: ignore[reportAttributeAccessIssue]
-    """The world pose of a site as a ``Transform3D``."""
-    rotation = geom.Rotation.from_rotation_matrix(data.site_xmat[site_id].reshape(3, 3))
-    return geom.Transform3D(data.site_xpos[site_id].copy(), rotation)
-
-
 def _ancestry(model: mj.MjModel, body_id: int) -> list[int]:  # pyright: ignore[reportAttributeAccessIssue]
     """Body ids from ``body_id`` up to the world, inclusive."""
     chain = [body_id]
@@ -84,6 +78,12 @@ def _assert_rigidly_connected(
             f'Frames {from_frame!r} and {to_frame!r} are separated by movable joints on {names}, so their relative '
             f'pose changes with the configuration and no constant transform describes it'
         )
+
+
+def _site_transform(data: mj.MjData, site_id: int) -> geom.Transform3D:  # pyright: ignore[reportAttributeAccessIssue]
+    """The world pose of a site as a ``Transform3D``."""
+    rotation = geom.Rotation.from_rotation_matrix(data.site_xmat[site_id].reshape(3, 3))
+    return geom.Transform3D(data.site_xpos[site_id].copy(), rotation)
 
 
 @lru_cache(maxsize=8)
