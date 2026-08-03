@@ -237,7 +237,7 @@ class Robot(pimm.ControlSystem):
                         case command.CartesianPosition(pose):
                             q_target = self._ik_or_hold(kin, pose, q, q_target)
                         case command.CartesianDelta() as delta_cmd:
-                            target = command.apply_cartesian_delta(self._base_pose * kin.fk(q), delta_cmd)
+                            target = delta_cmd.apply(self._base_pose * kin.fk(q))
                             q_target = self._ik_or_hold(kin, target, q, q_target)
                         case _:
                             raise NotImplementedError(f'Unsupported command {cmd}')

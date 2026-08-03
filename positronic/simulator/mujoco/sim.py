@@ -346,7 +346,7 @@ class MujocoSim(pimm.ControlSystem):
                     logger.warning(f'IK failed for ee_pose: {pose}')
                     self._error = True
             case roboarm_command.CartesianDelta() as delta_cmd:
-                target = roboarm_command.apply_cartesian_delta(self._ee_pose, delta_cmd)
+                target = delta_cmd.apply(self._ee_pose)
                 q = self._recalculate_ik(target)
                 if q is not None:
                     self._set_actuator_values(q)

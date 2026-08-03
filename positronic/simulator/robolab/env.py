@@ -260,7 +260,7 @@ class RobolabEnv(EnvProtocol):
             case 'cartesian_delta':
                 cur_pos, cur_quat = self._eef_pose()
                 delta_pos, delta_quat = self._wire_pose(command['delta'])
-                # The world-frame compose of positronic's ``apply_cartesian_delta``: translation adds and
+                # The world-frame compose of positronic's ``CartesianDelta.apply``: translation adds and
                 # rotation left-multiplies onto the measured eef pose.
                 return self._solve_ik(cur_pos + delta_pos, quat_mul(delta_quat, cur_quat))
             case other:

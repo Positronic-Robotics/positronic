@@ -45,8 +45,8 @@ Current placements:
 2. Declare `default` in that URDF — `models.add_default_frame` attaches it to a link you name.
 3. Set `control_frame` to `models.DEFAULT_FRAME`.
 4. Report `robot_state.ee_pose` at that frame and drive `CartesianPosition` to it.
-5. For `CartesianDelta`, compose through `command.apply_cartesian_delta`, which applies the command's own
-   `frame` before anchoring on the measured pose.
+5. For `CartesianDelta`, compose through `CartesianDelta.apply`, which applies the command's own `frame`
+   before anchoring on the measured pose.
 
 A remote benchmark env that measures somewhere else is wrapped, not excused: give `WireCommandAdapter` the
 constant `control_frame` from `default` to what the env uses, and it converts both paths (`RobolabAdapter`).

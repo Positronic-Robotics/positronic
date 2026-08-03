@@ -20,7 +20,6 @@ from positronic.drivers.roboarm.command import (
     Reset,
     TrajectoryPlayer,
     _compose_delta,
-    apply_cartesian_delta,
     from_wire,
     reduce,
     to_wire,
@@ -1210,10 +1209,10 @@ def test_cartesian_delta_without_a_frame_reads_as_the_receivers_own():
     np.testing.assert_allclose(out.frame.as_matrix, np.eye(4), atol=1e-12)
 
 
-def test_apply_cartesian_delta_composes_in_world_frame():
+def test_cartesian_delta_applies_in_world_frame():
     current = Transform3D(np.array([0.5, 0.1, 0.3]), Rotation.from_rotvec(np.array([0.2, 0.1, 0.4])))
     delta = Transform3D(np.array([0.02, -0.01, 0.05]), Rotation.from_rotvec(np.array([0.1, 0.0, 0.0])))
-    target = apply_cartesian_delta(current, CartesianDelta(delta))
+    target = CartesianDelta(delta).apply(current)
     # World frame: translation adds directly (not rotated by current, as Transform3D.__mul__ would) and the
     # rotation left-multiplies.
     np.testing.assert_allclose(target.translation, current.translation + delta.translation)

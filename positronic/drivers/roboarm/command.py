@@ -50,13 +50,20 @@ class CartesianDelta:
     space.
 
     A delta has no anchor pose of its own, so it carries the frame it is expressed in instead: ``frame``
-    places that frame relative to the receiver's ``default``, and the driver measures there before composing
-    (see ``apply_cartesian_delta``).
+    places that frame relative to the receiver's ``default``, and ``apply`` measures there before composing.
     """
 
     TYPE = 'cartesian_delta'
     delta: geom.Transform3D
     frame: geom.Transform3D = geom.Transform3D.identity
+
+    def apply(self, current: geom.Transform3D) -> geom.Transform3D:
+        """The absolute target to drive to, given the pose measured at the receiver's ``default`` frame.
+
+        ``frame`` carries the delta into the frame it was expressed in and the result back out, so a policy
+        speaking a different end-effector frame moves the arm as it intended.
+        """
+        return _compose_delta(current * self.frame, self.delta) * self.frame.inv
 
 
 CommandType = Reset | CartesianPosition | JointPosition | JointDelta | CartesianDelta
@@ -76,15 +83,6 @@ def _compose_delta(base: geom.Transform3D, delta: geom.Transform3D) -> geom.Tran
     rotate the translation.
     """
     return geom.Transform3D(base.translation + delta.translation, delta.rotation * base.rotation)
-
-
-def apply_cartesian_delta(current: geom.Transform3D, cmd: CartesianDelta) -> geom.Transform3D:
-    """The absolute target a driver drives to, given the pose it measures at its ``default`` frame.
-
-    ``cmd.frame`` carries the delta into the frame it was expressed in and the result back out, so a policy
-    that speaks a different end-effector frame moves the arm as it intended.
-    """
-    return _compose_delta(current * cmd.frame, cmd.delta) * cmd.frame.inv
 
 
 def _combine(acc: CommandType, cmd: CommandType) -> CommandType:

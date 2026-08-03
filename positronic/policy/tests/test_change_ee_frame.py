@@ -69,7 +69,7 @@ def test_a_delta_moves_the_arm_where_the_policy_meant():
     delta = _pose([0.01, 0.0, -0.02], [0.0, 0.0, 0.1])
 
     decoded = ChangeEEFrame(TO_DROID)._decode_single({'robot_command': cmd_module.CartesianDelta(delta)}, context=None)
-    target = cmd_module.apply_cartesian_delta(measured, decoded['robot_command'])
+    target = decoded['robot_command'].apply(measured)
 
     before, after = measured * TO_DROID, target * TO_DROID
     np.testing.assert_allclose(after.translation, before.translation + delta.translation, atol=1e-12)

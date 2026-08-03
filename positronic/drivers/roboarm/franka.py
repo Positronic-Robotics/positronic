@@ -324,7 +324,7 @@ class Robot(pimm.ControlSystem):
                                 ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
                                 robot.set_target_joints(ik_solution)
                             case command.CartesianDelta() as delta_cmd:
-                                target = command.apply_cartesian_delta(robot_state.ee_pose, delta_cmd)
+                                target = delta_cmd.apply(robot_state.ee_pose)
                                 target_pose_wxyz = np.asarray([*target.translation, *target.rotation.as_quat])
                                 ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
                                 robot.set_target_joints(ik_solution)
