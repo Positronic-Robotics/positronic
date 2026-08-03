@@ -30,10 +30,9 @@ Everything lands under `<output_dir>/telemetry/`, one set of files per process:
 
 | File | Written by | Contents |
 |---|---|---|
-| `harness.meta.json` | the eval process | process identity (schema, run id, host, pid, start times, python, platform) |
 | `harness.spans.jsonl` | the eval process | OTLP/JSON-lines spans: the pass, each episode, and its per-tick phases |
 | `harness.stats.jsonl` | the eval process | one machine-load sample per line |
-| `env.meta.json` / `env.spans.jsonl` | a launched env server (e.g. RoboLab) | the server's own step decomposition, in its own file |
+| `env.spans.jsonl` | a launched env server (e.g. RoboLab) | the server's own step decomposition, in its own file |
 
 A launched env server writes its own files because it runs in its own interpreter (RoboLab's Isaac venv, where
 positronic cannot be imported); it is handed the telemetry dir and run id through the environment its launcher
@@ -42,7 +41,9 @@ forwards, and writes the same OTLP/JSON-lines shape with a stdlib-only writer. N
 ### Span schema (`*.spans.jsonl`)
 
 OTLP/JSON, one document per line (`resourceSpans → scopeSpans → spans`). Ids are hex; `startTimeUnixNano` /
-`endTimeUnixNano` are epoch-nanosecond strings. `read_spans` parses it back, tolerating a truncated final line.
+`endTimeUnixNano` are epoch-nanosecond strings. Each document's resource block carries the writing process's
+identity (`run.id`, `process.name`, `process.pid`, `host.name`). `read_spans` parses it back, tolerating a
+truncated final line.
 
 The span names are the contract:
 
@@ -105,9 +106,8 @@ missing rather than under-reporting peak VRAM as 0.
 Not implemented here — recorded so the design is legible:
 
 - **Perfetto / Chrome-trace view.** The spans (as `X` duration events) and the stats (as `C` counter events)
-  open on one timeline in `ui.perfetto.dev` for interactive inspection; separate process files merge via each
-  meta file's start offset. The report reads the raw JSONL directly and needs no converter, so this is a
-  convenience view, deferred.
+  open on one timeline in `ui.perfetto.dev` for interactive inspection. The report reads the raw JSONL directly
+  and needs no converter, so this is a convenience view, deferred.
 - **H100 / server-side serving telemetry.** The policy-serving images could emit their own sidecar: startup
   spans (entrypoint → weights loaded → listening → first request), CUDA-event stage timing, per-request peak
   VRAM, and Cristian's-algorithm min-RTT clock probes to reconcile the policy box's wall clock with the eval

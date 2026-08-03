@@ -70,14 +70,18 @@ def test_unbound_span_is_inert(tmp_path):
     assert not (tmp_path / 'telemetry').exists()
 
 
-def test_meta_written(tmp_path):
+def test_resource_carries_process_identity(tmp_path):
+    """Every span document's resource block names the run and the writing process, so a sidecar identifies
+    itself without a second file."""
     with telemetry.bind(tmp_path, 'env', 'run-1'):
-        pass
-    meta = json.loads((tmp_path / 'telemetry' / 'env.meta.json').read_text())
-    assert meta['schema'] == 1
-    assert meta['run_id'] == 'run-1'
-    assert meta['process'] == 'env'
-    assert meta['pid'] == os.getpid()
+        with telemetry.span(telemetry.SPAN_RESET):
+            pass
+
+    line = json.loads((tmp_path / 'telemetry' / 'env.spans.jsonl').read_text().splitlines()[0])
+    attrs = telemetry._decode_attrs(line['resourceSpans'][0]['resource']['attributes'])
+    assert attrs['run.id'] == 'run-1'
+    assert attrs['process.name'] == 'env'
+    assert attrs['process.pid'] == os.getpid()
 
 
 class _FakeUtil:

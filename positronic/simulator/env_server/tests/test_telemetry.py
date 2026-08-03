@@ -1,4 +1,5 @@
 import json
+import os
 
 from positronic import telemetry as positronic_telemetry
 from positronic.simulator.env_server import telemetry
@@ -23,9 +24,11 @@ def test_env_spans_parse_with_positronic_reader(tmp_path):
         assert len(rec.span_id) == 16
         assert rec.end_ns >= rec.start_ns
 
-    meta = json.loads((tmp_path / 'env.meta.json').read_text())
-    assert meta['process'] == 'env'
-    assert meta['run_id'] == 'run-env'
+    line = json.loads((tmp_path / 'env.spans.jsonl').read_text().splitlines()[0])
+    attrs = positronic_telemetry._decode_attrs(line['resourceSpans'][0]['resource']['attributes'])
+    assert attrs['run.id'] == 'run-env'
+    assert attrs['process.name'] == 'env'
+    assert attrs['process.pid'] == os.getpid()
 
 
 def test_env_span_inert_when_unbound(tmp_path):

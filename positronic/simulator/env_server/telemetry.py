@@ -14,7 +14,6 @@ Unbound (no telemetry env vars), every helper is inert.
 import functools
 import json
 import os
-import platform
 import socket
 import threading
 import time
@@ -81,29 +80,21 @@ def _otlp_attributes(attrs: dict[str, Any]) -> list[dict[str, Any]]:
 
 @contextmanager
 def bind(telemetry_dir: Path | str, run_id: str):
-    """Open ``env.spans.jsonl`` under ``telemetry_dir`` and write ``env.meta.json``; a second bind is a no-op
-    so a nested/duplicate call cannot reopen the file."""
+    """Open ``env.spans.jsonl`` under ``telemetry_dir``, stamping this process's identity into every span's
+    resource block; a second bind is a no-op so a nested/duplicate call cannot reopen the file."""
     global _file, _trace_id, _resource_attrs
     if _file is not None:
         yield
         return
     directory = Path(telemetry_dir)
     directory.mkdir(parents=True, exist_ok=True)
-    host = socket.gethostname()
-    meta = {
-        'schema': 1,
-        'run_id': run_id,
-        'host': host,
-        'process': 'env',
-        'pid': os.getpid(),
-        'started_wall_ns': time.time_ns(),
-        'started_mono_ns': time.monotonic_ns(),
-        'python': platform.python_version(),
-        'platform': platform.platform(),
-    }
-    (directory / 'env.meta.json').write_text(json.dumps(meta, indent=2))
     _trace_id = os.urandom(16).hex()
-    _resource_attrs = _otlp_attributes({'run.id': run_id, 'process.name': 'env', 'host.name': host})
+    _resource_attrs = _otlp_attributes({
+        'run.id': run_id,
+        'process.name': 'env',
+        'process.pid': os.getpid(),
+        'host.name': socket.gethostname(),
+    })
     _seal_truncated_line(directory / 'env.spans.jsonl')
     _file = open(directory / 'env.spans.jsonl', 'a')
     try:

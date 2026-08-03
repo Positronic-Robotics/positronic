@@ -6,9 +6,9 @@ compute it cost. This module captures that operational signal — nested spans f
 sidecar files next to the recorded dataset, never mixed into it. The dataset records the robot's world; these
 files describe the machinery around it, in wall time.
 
-Storage is one set of files per process under ``<out_dir>/telemetry/``: ``<process>.meta.json`` (process
-identity), ``<process>.spans.jsonl`` (OTLP/JSON-lines spans), ``<process>.stats.jsonl`` (one machine-load
-sample per line). The env server writes its own set; nothing rides over the wire.
+Storage is one set of files per process under ``<out_dir>/telemetry/``: ``<process>.spans.jsonl``
+(OTLP/JSON-lines spans, whose resource block carries the process identity) and ``<process>.stats.jsonl`` (one
+machine-load sample per line). The env server writes its own set; nothing rides over the wire.
 
 Instrumented code sees one seam: ``from positronic import telemetry`` then ``with telemetry.span('reset'):``.
 The span helpers no-op while unbound (a normal eval binds nothing), so a call site carries no ``None`` check.
@@ -19,7 +19,6 @@ import functools
 import json
 import logging
 import os
-import platform
 import socket
 import threading
 import time
@@ -110,27 +109,18 @@ def _encode_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
 
 @contextmanager
 def bind(out_dir: Path | str, process: str, run_id: str) -> Generator[TracerProvider, None, None]:
-    """Provider lifecycle for one process's telemetry: write ``<process>.meta.json``, stream spans to
-    ``<process>.spans.jsonl``, and register the provider so ``span`` records. The batch processor is flushed
-    and shut down on exit — an abrupt exit would otherwise lose its queued tail."""
+    """Provider lifecycle for one process's telemetry: stream spans to ``<process>.spans.jsonl`` under a
+    resource block carrying this process's identity, and register the provider so ``span`` records. The batch
+    processor is flushed and shut down on exit — an abrupt exit would otherwise lose its queued tail."""
     global _provider
     telemetry_dir = Path(out_dir) / TELEMETRY_SUBDIR
     telemetry_dir.mkdir(parents=True, exist_ok=True)
-    host = socket.gethostname()
-    meta = {
-        'schema': 1,
-        'run_id': run_id,
-        'host': host,
-        'process': process,
-        'pid': os.getpid(),
-        'started_wall_ns': time.time_ns(),
-        'started_mono_ns': time.monotonic_ns(),
-        'python': platform.python_version(),
-        'platform': platform.platform(),
-    }
-    (telemetry_dir / f'{process}.meta.json').write_text(json.dumps(meta, indent=2))
-
-    resource = Resource.create({'run.id': run_id, 'process.name': process, 'host.name': host})
+    resource = Resource.create({
+        'run.id': run_id,
+        'process.name': process,
+        'process.pid': os.getpid(),
+        'host.name': socket.gethostname(),
+    })
     provider = TracerProvider(resource=resource)
     spans_path = telemetry_dir / f'{process}.spans.jsonl'
     # A killed predecessor can leave a truncated final line; seal it so the appending exporter starts a fresh

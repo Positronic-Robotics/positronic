@@ -256,8 +256,8 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     assert env_telemetry.ENV_RUN_ID not in os.environ
 
     telemetry_dir = tmp_path / 'telemetry'
-    assert (telemetry_dir / 'harness.meta.json').exists()
     spans = list(telemetry.read_spans(telemetry_dir / 'harness.spans.jsonl'))
+    assert {rec.process for rec in spans} == {telemetry.HARNESS_PROCESS}
     by_name: dict[str, list] = {}
     for rec in spans:
         by_name.setdefault(rec.name, []).append(rec)
