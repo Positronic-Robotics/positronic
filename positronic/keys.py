@@ -21,6 +21,6 @@ URDF = 'urdf'
 CONTROL_FRAME = 'control_frame'
 JOINT_NAMES = 'joint_names'
 
-# Where the episode's poses sit relative to ``CONTROL_FRAME``, as a ``[tx,ty,tz,qw,qx,qy,qz]`` transform.
-# Absent means they are in ``CONTROL_FRAME`` itself; ``ChangeEEFrame`` writes it when it moves them.
+# Where the episode's poses sit relative to ``models.DEFAULT_FRAME``, as a ``[tx,ty,tz,qw,qx,qy,qz]``
+# transform. Absent means they are in that frame itself; ``ChangeEEFrame`` writes it when it moves them.
 EE_FRAME = 'ee_frame'

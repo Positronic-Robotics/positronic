@@ -26,6 +26,10 @@ A checkpoint's frame transform is measured from `default` and travels with the c
 portable while every embodiment puts `default` at the same physical place. Today's placements do not — the
 FR3 and the sim panda sit 45 mm apart along the approach axis — which is what [#550](https://github.com/Positronic-Robotics/positronic/issues/550) closes.
 
+Recordings predating this contract name their own tool frame instead of `default`, and `ik.default_frame` reads
+them there. That stands in for `default` only while the two coincide, which nothing in such a recording states —
+`test_default_frame_still_coincides_with_the_franka_tool_frame` is what fails when the placement moves.
+
 **Put `default` at the flange when the gripper can be swapped.** Recorded data outlives grippers. An episode
 anchored to a gripper frame becomes unplaceable the moment that gripper comes off — nothing in the dataset
 says where that frame was — while one anchored to the flange stays valid for the life of the arm.

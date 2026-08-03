@@ -13,6 +13,7 @@ from positronic.drivers.roboarm.ik import (
     DLSIKSolverWithLimits,
     LMIKSolver,
     _prepare_spec,
+    default_frame,
     frame_transform,
     ik_joints_from_episode,
 )
@@ -123,7 +124,7 @@ def test_ik_joints_from_episode():
 
 
 def test_ik_joints_from_episode_solves_targets_a_codec_moved():
-    """Targets re-expressed in a policy's frame come back to ``control_frame`` before the solve."""
+    """Targets re-expressed in a policy's frame come back to the episode's anchor frame before the solve."""
     n_steps = 3
     ts = np.arange(n_steps, dtype=np.int64) * 100_000_000
     q_traj = np.linspace(TEST_CONFIGS[0], TEST_CONFIGS[1], n_steps)
@@ -174,6 +175,23 @@ def test_frame_transform_reproduces_droid_eef_across_configs():
 def test_bundled_model_declares_the_frame_it_reports_in(model):
     assert model[keys.CONTROL_FRAME] == DEFAULT_FRAME
     frame_transform(model[keys.URDF], DEFAULT_FRAME, DEFAULT_FRAME)
+
+
+def test_default_frame_still_coincides_with_the_franka_tool_frame():
+    """Two things rest on this and neither is reachable from the data: recordings predating ``DEFAULT_FRAME``
+    are read at ``end_effector`` (see ``default_frame``), and ``DROID_EE_FRAME`` is stated from where
+    ``DEFAULT_FRAME`` sits. TODO(#550): moving it to the flange invalidates both, so re-express those
+    recordings and re-measure the constant in the same change.
+    """
+    transform = frame_transform(bundled_franka_model()[keys.URDF], DEFAULT_FRAME, EE_LINK)
+    np.testing.assert_allclose(transform.as_matrix, np.eye(4), atol=1e-12)
+
+
+def test_default_frame_falls_back_to_the_name_a_legacy_model_declares():
+    legacy = EpisodeContainer(data={keys.URDF: URDF, keys.CONTROL_FRAME: CONTROL_FRAME})
+    bundled = bundled_franka_model()
+    assert default_frame(legacy) == CONTROL_FRAME
+    assert default_frame(EpisodeContainer(data=dict(bundled))) == DEFAULT_FRAME
 
 
 def test_frame_transform_rejects_frames_across_movable_joints():
