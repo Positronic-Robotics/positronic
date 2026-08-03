@@ -108,29 +108,29 @@ def change_frame(pose_vec, transform: geom.Transform3D) -> np.ndarray:
 
 
 @lru_cache(maxsize=8)
-def _frame_names(urdf_xml: str) -> frozenset[str]:
-    """The sites and bodies a model declares, which is what a frame name resolves to."""
+def declares_default(urdf_xml: str) -> bool:
+    """Whether a model carries ``DEFAULT_FRAME``, as a site or a body — recordings predating the contract do not."""
     spec = _prepare_spec(urdf_xml)
-    return frozenset({b.name for b in spec.bodies} | {s.name for b in spec.bodies for s in b.sites})
-
-
-def default_frame(episode) -> str:
-    """The frame in an episode's model that its poses are anchored in, and that ``EE_FRAME`` is measured from.
-
-    TODO(#550): a recording predating ``DEFAULT_FRAME`` names its own tool frame instead, which stands in for it
-    only while the two coincide. Moving ``DEFAULT_FRAME`` to the flange ends that, so those recordings have to
-    be re-expressed before it lands.
-    """
-    if DEFAULT_FRAME in _frame_names(episode[keys.URDF]):
-        return DEFAULT_FRAME
-    return episode[keys.CONTROL_FRAME]
+    return DEFAULT_FRAME in ({b.name for b in spec.bodies} | {s.name for b in spec.bodies for s in b.sites})
 
 
 def ee_frame(episode) -> geom.Transform3D:
-    """Where an episode's poses sit relative to its ``default_frame`` — identity unless a codec moved them."""
+    """Where an episode's poses sit relative to ``DEFAULT_FRAME`` — identity unless a codec moved them."""
     if keys.EE_FRAME not in episode:
         return geom.Transform3D.identity
     return geom.Transform3D.from_vector(np.asarray(episode[keys.EE_FRAME], dtype=np.float64), _QUAT)
+
+
+def pose_anchor(episode) -> tuple[str, geom.Transform3D]:
+    """The model frame an episode's poses are anchored in, and where they sit relative to it.
+
+    TODO(#550): a recording predating ``EE_FRAME`` states the anchor as a frame name and nothing else. Solving at
+    that name is exact — ``DEFAULT_FRAME`` was added alongside those frames, not in place of them — so the branch
+    lives until those datasets are re-expressed, not longer.
+    """
+    if keys.EE_FRAME in episode:
+        return DEFAULT_FRAME, ee_frame(episode)
+    return episode[keys.CONTROL_FRAME], geom.Transform3D.identity
 
 
 def _parse_target(target_ee_pose_vec):
@@ -444,10 +444,11 @@ class DLSIKSolverWithLimits(_SolverBase):
 def ik_joints_from_episode(episode, solver_cls, tgt_ee_pose_key, current_q_key):
     """Episode -> Signal. Computes target joints from EE targets via IK.
 
-    Reads the robot model from episode statics and solves at its ``default_frame``, so targets a codec has
-    moved elsewhere (``ee_frame``) come back to that frame first.
+    Reads the robot model from episode statics and solves at the frame the poses are anchored in, so targets a
+    codec has moved elsewhere come back to that frame first.
     """
-    solver = solver_cls(episode[keys.URDF], episode[keys.JOINT_NAMES], default_frame(episode))
-    move = partial(change_frame, transform=ee_frame(episode).inv)
+    frame, offset = pose_anchor(episode)
+    solver = solver_cls(episode[keys.URDF], episode[keys.JOINT_NAMES], frame)
+    move = partial(change_frame, transform=offset.inv)
     targets = transforms.Elementwise(episode[tgt_ee_pose_key], transforms.lazy_sequence(move))
     return transforms.pairwise(episode[current_q_key], targets, solver.solve)

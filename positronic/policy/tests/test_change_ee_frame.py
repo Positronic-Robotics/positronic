@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 import positronic.drivers.roboarm.command as cmd_module
 from positronic import keys
@@ -155,6 +156,17 @@ def test_training_encoder_maps_both_poses_forward():
     np.testing.assert_allclose(out['robot_command.pose'][0][0], (cmd_pose * TO_DROID).as_vector(QUAT), atol=1e-9)
     np.testing.assert_allclose(out[keys.EE_FRAME], TO_DROID.as_vector(QUAT), atol=1e-9)
     assert keys.GRIP in out, 'unrelated signals pass through'
+
+
+def test_training_encoder_rejects_a_model_that_predates_the_frame():
+    """Without ``default`` there is nothing to state the moved poses against, and guessing is a silent 10cm."""
+    legacy = bundled_franka_model()[keys.URDF].replace(f'"{DEFAULT_FRAME}"', '"tool"')
+    episode = EpisodeContainer(
+        data={keys.URDF: legacy, keys.CONTROL_FRAME: 'tool', keys.EE_POSE: DummySignal([1000, 2000], np.zeros((2, 7)))}
+    )
+
+    with pytest.raises(ValueError, match='declares no'):
+        ChangeEEFrame(TO_DROID).training_encoder(episode)
 
 
 def test_training_encoder_skips_absent_command_pose():

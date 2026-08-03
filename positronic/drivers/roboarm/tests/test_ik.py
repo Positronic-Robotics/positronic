@@ -13,9 +13,10 @@ from positronic.drivers.roboarm.ik import (
     DLSIKSolverWithLimits,
     LMIKSolver,
     _prepare_spec,
-    default_frame,
+    declares_default,
     frame_transform,
     ik_joints_from_episode,
+    pose_anchor,
 )
 from positronic.drivers.roboarm.models import (
     DEFAULT_FRAME,
@@ -129,23 +130,26 @@ def test_ik_joints_from_episode_solves_targets_a_codec_moved():
     ts = np.arange(n_steps, dtype=np.int64) * 100_000_000
     q_traj = np.linspace(TEST_CONFIGS[0], TEST_CONFIGS[1], n_steps)
     quat = geom.Rotation.Representation.QUAT
+    urdf = bundled_panda_model()[keys.URDF]
     offset = geom.Transform3D(np.array([0.0, 0.0, 0.05]), geom.Rotation.from_euler([0.0, 0.0, np.pi / 4]))
-    moved = np.array([(geom.Transform3D.from_vector(_fk(URDF, q), quat) * offset).as_vector(quat) for q in q_traj])
+    anchored = [geom.Transform3D.from_vector(_fk_site(urdf, q, DEFAULT_FRAME), quat) for q in q_traj]
+    moved = np.array([(pose * offset).as_vector(quat) for pose in anchored])
 
     episode = EpisodeContainer(
         data={
             keys.JOINTS: DummySignal(ts, q_traj),
             'robot_command.pose': DummySignal(ts, moved),
-            keys.URDF: URDF,
+            keys.URDF: urdf,
             keys.JOINT_NAMES: JOINT_NAMES,
-            keys.CONTROL_FRAME: CONTROL_FRAME,
+            keys.CONTROL_FRAME: DEFAULT_FRAME,
             keys.EE_FRAME: offset.as_vector(quat),
         }
     )
     result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, 'robot_command.pose', keys.JOINTS)
 
     for i in range(n_steps):
-        np.testing.assert_allclose(_fk(URDF, result[i][0])[:3], _fk(URDF, q_traj[i])[:3], atol=1e-3)
+        solved = _fk_site(urdf, result[i][0], DEFAULT_FRAME)
+        np.testing.assert_allclose(solved[:3], anchored[i].translation, atol=1e-3)
 
 
 def _fk_site(urdf_xml, q, frame):
@@ -178,8 +182,8 @@ def test_bundled_model_declares_the_frame_it_reports_in(model):
 
 
 def test_default_frame_still_coincides_with_the_franka_tool_frame():
-    """Two things rest on this and neither is reachable from the data: recordings predating ``DEFAULT_FRAME``
-    are read at ``end_effector`` (see ``default_frame``), and ``DROID_EE_FRAME`` is stated from where
+    """Two things rest on this and neither is reachable from the data: recordings predating ``EE_FRAME`` are
+    solved at ``end_effector`` (see ``pose_anchor``), and ``DROID_EE_FRAME`` is stated from where
     ``DEFAULT_FRAME`` sits. TODO(#550): moving it to the flange invalidates both, so re-express those
     recordings and re-measure the constant in the same change.
     """
@@ -187,11 +191,21 @@ def test_default_frame_still_coincides_with_the_franka_tool_frame():
     np.testing.assert_allclose(transform.as_matrix, np.eye(4), atol=1e-12)
 
 
-def test_default_frame_falls_back_to_the_name_a_legacy_model_declares():
-    legacy = EpisodeContainer(data={keys.URDF: URDF, keys.CONTROL_FRAME: CONTROL_FRAME})
-    bundled = bundled_franka_model()
-    assert default_frame(legacy) == CONTROL_FRAME
-    assert default_frame(EpisodeContainer(data=dict(bundled))) == DEFAULT_FRAME
+def test_pose_anchor_reads_a_stated_frame_and_falls_back_to_the_name():
+    offset = geom.Transform3D(np.array([0.0, 0.0, 0.05]), geom.Rotation.identity)
+    quat = geom.Rotation.Representation.QUAT
+    stated = EpisodeContainer(data={keys.CONTROL_FRAME: CONTROL_FRAME, keys.EE_FRAME: offset.as_vector(quat)})
+    legacy = EpisodeContainer(data={keys.CONTROL_FRAME: CONTROL_FRAME})
+
+    assert pose_anchor(stated)[0] == DEFAULT_FRAME
+    np.testing.assert_allclose(pose_anchor(stated)[1].as_vector(quat), offset.as_vector(quat), atol=1e-12)
+    assert pose_anchor(legacy)[0] == CONTROL_FRAME
+    np.testing.assert_allclose(pose_anchor(legacy)[1].as_matrix, np.eye(4), atol=1e-12)
+
+
+def test_declares_default_separates_bundled_models_from_legacy_ones():
+    assert declares_default(bundled_franka_model()[keys.URDF])
+    assert not declares_default(URDF)
 
 
 def test_frame_transform_rejects_frames_across_movable_joints():
