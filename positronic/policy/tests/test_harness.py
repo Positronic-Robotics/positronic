@@ -485,7 +485,7 @@ def test_episode_meta_stamped_at_finalize(world):
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
-        (partial(p['meta_em'].emit, {'urdf': '<robot/>', 'joint_names': ['j1']}), 0.0),
+        (partial(p['meta_em'].emit, {keys.URDF: '<robot/>', keys.JOINT_NAMES: ['j1']}), 0.0),
         (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.01),
         (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),
         (None, 0.02),
@@ -498,8 +498,8 @@ def test_episode_meta_stamped_at_finalize(world):
     assert len(stops) == 1
     meta = stops[0].static_data
     assert meta['joint_signal'] == keys.JOINTS
-    assert meta['urdf'] == '<robot/>'
-    assert meta['joint_names'] == ['j1']
+    assert meta[keys.URDF] == '<robot/>'
+    assert meta[keys.JOINT_NAMES] == ['j1']
     assert meta['inference.policy.type'] == 'stub'
     assert meta['inference.policy.checkpoint'] == 'v1'
     assert meta[keys.TASK] == 'test'

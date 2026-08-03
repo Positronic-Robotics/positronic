@@ -175,7 +175,7 @@ class Robot(pimm.ControlSystem):
         add_default_frame(root, EE_LINK)
         return {
             keys.URDF: ET.tostring(root, encoding='unicode'),
-            'joint_names': _revolute_joint_names(urdf_xml),
+            keys.JOINT_NAMES: _revolute_joint_names(urdf_xml),
             'meshes': meshes,
             keys.CONTROL_FRAME: DEFAULT_FRAME,
             'gripper': gripper,

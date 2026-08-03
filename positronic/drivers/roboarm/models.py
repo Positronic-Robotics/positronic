@@ -162,7 +162,7 @@ def bundled_franka_model() -> dict:
     return {
         keys.URDF: ET.tostring(arm_root, encoding='unicode'),
         'meshes': meshes,
-        'joint_names': [f'joint{i}' for i in range(1, 8)],
+        keys.JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
         keys.CONTROL_FRAME: DEFAULT_FRAME,
         'gripper': gripper,
     }
@@ -184,7 +184,7 @@ def bundled_panda_model() -> dict:
     return {
         keys.URDF: ET.tostring(root, encoding='unicode'),
         'meshes': {name: (mesh_dir / name).read_bytes() for name in sorted(mesh_files)},
-        'joint_names': [f'joint{i}' for i in range(1, 8)],
+        keys.JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
         keys.CONTROL_FRAME: DEFAULT_FRAME,
         # ``grip`` is recorded in [0, 1] (open→closed); each finger slides 0..0.04 m along its axis.
         'gripper': {'signal': keys.GRIP, 'joints': ['finger_joint1', 'finger_joint2'], 'travel': 0.04},

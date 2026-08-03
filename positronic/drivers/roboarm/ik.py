@@ -427,7 +427,7 @@ def ik_joints_from_episode(episode, solver_cls, tgt_ee_pose_key, current_q_key):
     Reads the robot model from episode statics and solves at its ``control_frame``, so targets a codec has
     moved elsewhere (``ee_frame``) come back to that frame first.
     """
-    solver = solver_cls(episode[keys.URDF], episode['joint_names'], episode[keys.CONTROL_FRAME])
+    solver = solver_cls(episode[keys.URDF], episode[keys.JOINT_NAMES], episode[keys.CONTROL_FRAME])
     move = partial(change_frame, transform=ee_frame(episode).inv)
     targets = transforms.Elementwise(episode[tgt_ee_pose_key], transforms.lazy_sequence(move))
     return transforms.pairwise(episode[current_q_key], targets, solver.solve)

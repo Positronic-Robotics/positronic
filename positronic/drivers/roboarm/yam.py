@@ -194,7 +194,7 @@ class Robot(pimm.ControlSystem):
         arm = self._connect(self._channel, self._sim)
         try:
             kin = _Kinematics()
-            meta = {'robot': 'i2rt_yam', 'joint_names': list(_JOINT_NAMES), keys.CONTROL_FRAME: DEFAULT_FRAME}
+            meta = {'robot': 'i2rt_yam', keys.JOINT_NAMES: list(_JOINT_NAMES), keys.CONTROL_FRAME: DEFAULT_FRAME}
             self.robot_meta.emit(meta)
 
             robot_state = YamState()

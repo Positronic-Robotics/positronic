@@ -19,6 +19,7 @@ EXTERIOR_IMAGE = 'image.exterior'
 # declares it as ``models.DEFAULT_FRAME``, and datasets recorded before that convention name their own frame.
 URDF = 'urdf'
 CONTROL_FRAME = 'control_frame'
+JOINT_NAMES = 'joint_names'
 
 # Where the episode's poses sit relative to ``CONTROL_FRAME``, as a ``[tx,ty,tz,qw,qx,qy,qz]`` transform.
 # Absent means they are in ``CONTROL_FRAME`` itself; ``ChangeEEFrame`` writes it when it moves them.

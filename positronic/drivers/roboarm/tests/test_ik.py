@@ -44,7 +44,7 @@ def _fk(urdf_xml, q):
     qpos_ids = [model.joint(n).qposadr.item() for n in JOINT_NAMES]
     data.qpos[qpos_ids] = q
     mj.mj_forward(model, data)
-    site_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, 'end_effector')
+    site_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, CONTROL_FRAME)
     pos = data.site_xpos[site_id].copy()
     quat = np.empty(4)
     mj.mju_mat2Quat(quat, data.site_xmat[site_id])
@@ -109,9 +109,9 @@ def test_ik_joints_from_episode():
         data={
             keys.JOINTS: DummySignal(ts, q_traj),
             'robot_command.pose': DummySignal(ts, ee_poses),
-            'urdf': URDF,
-            'joint_names': JOINT_NAMES,
-            'control_frame': CONTROL_FRAME,
+            keys.URDF: URDF,
+            keys.JOINT_NAMES: JOINT_NAMES,
+            keys.CONTROL_FRAME: CONTROL_FRAME,
         }
     )
     result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, 'robot_command.pose', keys.JOINTS)
@@ -136,7 +136,7 @@ def test_ik_joints_from_episode_solves_targets_a_codec_moved():
             keys.JOINTS: DummySignal(ts, q_traj),
             'robot_command.pose': DummySignal(ts, moved),
             keys.URDF: URDF,
-            'joint_names': JOINT_NAMES,
+            keys.JOINT_NAMES: JOINT_NAMES,
             keys.CONTROL_FRAME: CONTROL_FRAME,
             keys.EE_FRAME: offset.as_vector(quat),
         }

@@ -393,7 +393,7 @@ def test_recorded_urdf_matches_sim_kinematics():
         model = spec.compile()
         return model, mj.MjData(model)
 
-    root = ET.fromstring(bundled_panda_model()['urdf'])  # drop meshes so the URDF compiles file-free
+    root = ET.fromstring(bundled_panda_model()[keys.URDF])  # drop meshes so the URDF compiles file-free
     for link in root.findall('.//link'):
         for el in link.findall('visual') + link.findall('collision'):
             link.remove(el)

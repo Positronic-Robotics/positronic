@@ -79,7 +79,7 @@ class Robot(pimm.ControlSystem):
         add_default_frame(urdf, 'gripper_frame_link')
         self.robot_meta.emit({
             keys.URDF: ET.tostring(urdf, encoding='unicode'),
-            'joint_names': _SO101_JOINT_NAMES,
+            keys.JOINT_NAMES: _SO101_JOINT_NAMES,
             keys.CONTROL_FRAME: DEFAULT_FRAME,
         })
 
