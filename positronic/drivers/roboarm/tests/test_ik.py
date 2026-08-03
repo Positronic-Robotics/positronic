@@ -124,6 +124,18 @@ def test_ik_joints_from_episode():
         np.testing.assert_allclose(reconstructed_pose[:3], ee_poses[i, :3], atol=1e-3)
 
 
+def _fk_site(urdf_xml, q, frame):
+    model = _prepare_spec(urdf_xml, frame).compile()
+    data = mj.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]
+    qpos_ids = [model.joint(n).qposadr.item() for n in JOINT_NAMES]
+    data.qpos[qpos_ids] = q
+    mj.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]
+    sid = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, frame)  # pyright: ignore[reportAttributeAccessIssue]
+    quat = np.empty(4)
+    mj.mju_mat2Quat(quat, data.site_xmat[sid])  # pyright: ignore[reportAttributeAccessIssue]
+    return np.concatenate([data.site_xpos[sid].copy(), quat])
+
+
 def test_ik_joints_from_episode_solves_targets_a_codec_moved():
     """Targets re-expressed in a policy's frame come back to the episode's anchor frame before the solve."""
     n_steps = 3
@@ -150,18 +162,6 @@ def test_ik_joints_from_episode_solves_targets_a_codec_moved():
     for i in range(n_steps):
         solved = _fk_site(urdf, result[i][0], DEFAULT_FRAME)
         np.testing.assert_allclose(solved[:3], anchored[i].translation, atol=1e-3)
-
-
-def _fk_site(urdf_xml, q, frame):
-    model = _prepare_spec(urdf_xml, frame).compile()
-    data = mj.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]
-    qpos_ids = [model.joint(n).qposadr.item() for n in JOINT_NAMES]
-    data.qpos[qpos_ids] = q
-    mj.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]
-    sid = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, frame)  # pyright: ignore[reportAttributeAccessIssue]
-    quat = np.empty(4)
-    mj.mju_mat2Quat(quat, data.site_xmat[sid])  # pyright: ignore[reportAttributeAccessIssue]
-    return np.concatenate([data.site_xpos[sid].copy(), quat])
 
 
 def test_frame_transform_reproduces_droid_eef_across_configs():
