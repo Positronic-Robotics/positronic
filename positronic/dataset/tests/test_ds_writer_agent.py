@@ -1,3 +1,4 @@
+import pickle
 from functools import partial
 from typing import Any
 
@@ -6,7 +7,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import pimm
-from positronic import geom, keys
+from positronic import geom, keys, telemetry
 from positronic.dataset import DatasetWriter, EpisodeWriter
 from positronic.dataset.ds_writer_agent import (
     DsWriterAgent,
@@ -465,6 +466,26 @@ def test_multiple_timelines_recorded(world):
     assert isinstance(extra_ts['message'], int) and extra_ts['message'] > 0
     assert isinstance(extra_ts['system'], int) and extra_ts['system'] > 0
     assert isinstance(extra_ts['world'], int) and extra_ts['world'] > 0
+
+
+def test_pickles_with_every_constructor_argument_filled():
+    """``World.start_in_subprocess`` spawns a background control system through plain pickle, so an agent
+    carrying every argument the wiring fills — telemetry span factory included — has to survive a round-trip."""
+    agent = DsWriterAgent(
+        FakeDatasetWriter(),
+        poll_hz=500.0,
+        time_mode=TimeMode.MESSAGE,
+        virtual_time=True,
+        telemetry_span=partial(telemetry.span, telemetry.SPAN_RECORD_IO),
+    )
+    agent.add_signal('robot_command', TrajectoryOverrideSerializer(Serializers.robot_command))
+    agent.add_signal('robot_state', Serializers.robot_state)
+
+    loaded = pickle.loads(pickle.dumps(agent))
+
+    assert set(loaded.inputs) == {'robot_command', 'robot_state'}
+    with loaded._telemetry_span():
+        pass
 
 
 def test_trajectory_override_serializer():

@@ -1,3 +1,5 @@
+import functools
+
 import pimm
 from positronic import keys, telemetry
 from positronic.dataset import DatasetWriter
@@ -32,8 +34,12 @@ def wire(  # noqa: C901
 
     ds_agent = None
     if dataset_writer is not None:
+        # A partial, never a lambda: the recorder may be spawned as a background process, and `World`
+        # pickles a background control system whole.
         ds_agent = DsWriterAgent(
-            dataset_writer, time_mode=time_mode, telemetry_span=lambda: telemetry.span(telemetry.SPAN_RECORD_IO)
+            dataset_writer,
+            time_mode=time_mode,
+            telemetry_span=functools.partial(telemetry.span, telemetry.SPAN_RECORD_IO),
         )
         for signal_name in cameras.keys():
             ds_agent.add_signal(signal_name, Serializers.camera_images)
@@ -95,7 +101,7 @@ def wire_embodiment(
             dataset_writer,
             time_mode=time_mode,
             virtual_time=embodiment.simulated,
-            telemetry_span=lambda: telemetry.span(telemetry.SPAN_RECORD_IO),
+            telemetry_span=functools.partial(telemetry.span, telemetry.SPAN_RECORD_IO),
         )
         for name, obs in embodiment.observations.items():
             if isinstance(obs.serializer, StatefulSerializer):
