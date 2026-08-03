@@ -6,21 +6,17 @@ import positronic.dataset
 _DATASET_ROOT = Path(positronic.dataset.__file__).parent
 
 
+_TELEMETRY_ROOTS = ('telemetry', 'opentelemetry', 'positronic.telemetry', 'positronic.telemetry_keys')
+
+
 def _is_telemetry_path(path: str) -> bool:
-    """True if a dotted import path names a telemetry module: ``positronic.telemetry``, a bare
+    """True if a dotted import path names a telemetry module — the mechanism, its vocabulary, a bare
     ``telemetry``, or ``opentelemetry`` (or a submodule of any)."""
-    return (
-        path == 'telemetry'
-        or path.startswith('telemetry.')
-        or path == 'opentelemetry'
-        or path.startswith('opentelemetry.')
-        or path == 'positronic.telemetry'
-        or path.startswith('positronic.telemetry.')
-    )
+    return any(path == root or path.startswith(f'{root}.') for root in _TELEMETRY_ROOTS)
 
 
 def _imports_telemetry(source: str) -> bool:
-    """True if the module imports ``positronic.telemetry``, a bare ``telemetry``, or ``opentelemetry``."""
+    """True if the module imports a telemetry module, a bare ``telemetry``, or ``opentelemetry``."""
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
             if any(_is_telemetry_path(alias.name) for alias in node.names):
@@ -36,8 +32,9 @@ def _imports_telemetry(source: str) -> bool:
 
 def test_dataset_package_has_no_telemetry_dependency():
     """The dataset core stays agnostic to telemetry: no module under ``positronic/dataset`` imports
-    ``positronic.telemetry`` or ``opentelemetry``. Timing rides in as an opaque ``telemetry_span`` context
-    factory (default inert) — naming the injected span a telemetry span is fine; importing telemetry is not."""
+    ``positronic.telemetry``, its vocabulary, or ``opentelemetry``. Timing rides in as an opaque
+    ``telemetry_span`` context factory (default inert) — naming the injected span a telemetry span is fine;
+    importing telemetry, or naming one of its spans, is not."""
     offenders = []
     for path in _DATASET_ROOT.rglob('*.py'):
         if 'tests' in path.parts:

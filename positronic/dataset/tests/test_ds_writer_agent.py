@@ -7,7 +7,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import pimm
-from positronic import geom, keys, telemetry
+from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.dataset import DatasetWriter, EpisodeWriter
 from positronic.dataset.ds_writer_agent import (
     DsWriterAgent,
@@ -476,7 +476,7 @@ def test_pickles_with_every_constructor_argument_filled():
         poll_hz=500.0,
         time_mode=TimeMode.MESSAGE,
         virtual_time=True,
-        telemetry_span=partial(telemetry.span, telemetry.SPAN_RECORD_IO),
+        telemetry_span=partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
     )
     agent.add_signal('robot_command', TrajectoryOverrideSerializer(Serializers.robot_command))
     agent.add_signal('robot_state', Serializers.robot_state)

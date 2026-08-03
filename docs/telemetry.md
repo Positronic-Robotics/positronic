@@ -9,7 +9,16 @@ actually spent.
 It is **observability, not data** (see `architecture.md`, "Telemetry is observability, not data"). The dataset
 records the robot's world under the run's (possibly virtual) clock; telemetry describes the machinery around it
 in wall time. So it lives in **sidecar files next to the dataset, never inside it** — the dataset core imports
-no telemetry and stays clock-agnostic. It is owned by `positronic/telemetry.py`.
+no telemetry and stays clock-agnostic.
+
+`positronic/telemetry.py` owns the mechanism, and it is domain-blind: spans, anchors and sidecar files, with
+no notion of an episode, a pass or an inference call. An **anchor** is a long-running span its owner holds
+open; the per-tick spans an instrumented call site emits parent to the innermost one, which is how a phase
+span emitted by one control system lands under the rollout another control system is running (OTel's ambient
+context does not survive the scheduler's generator hops). Ownership follows the phase: the harness opens,
+stamps and closes the `episode` span, the eval CLI the `eval.pass` span. The vocabulary both sides and the
+reduce agree on — every span name and attribute key in the tables below — is defined once in
+`positronic/telemetry_keys.py`.
 
 ## Collecting
 
@@ -25,7 +34,9 @@ tracer, so there is nothing to time there anyway — run real embodiments in a s
 A normal eval (no `--timing`) pays nothing: the span helpers compile to no-ops and no sidecar is written. That
 is also why the recording stack is not a default dependency — `--timing` needs the `telemetry` extra
 (`uv sync --extra telemetry`, or `pip install positronic[telemetry]`), and says so if it is missing. An install
-without it carries only the OTel API the no-op helpers sit on.
+without it carries only the OTel API the no-op helpers sit on. The RoboLab image ships the repo and resolves
+its dependencies at run time, so a timed eval inside it names the extra on the invocation itself:
+`uv run --extra telemetry positronic eval run … --timing`.
 
 ## File layout
 

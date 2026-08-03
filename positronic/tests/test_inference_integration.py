@@ -10,7 +10,7 @@ import tqdm
 
 import pimm
 import positronic.cfg.simulator
-from positronic import keys, telemetry
+from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
@@ -257,21 +257,25 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
 
     telemetry_dir = tmp_path / 'telemetry'
     spans = list(telemetry.read_spans(telemetry_dir / 'harness.spans.jsonl'))
-    assert {rec.process for rec in spans} == {telemetry.HARNESS_PROCESS}
+    assert {rec.process for rec in spans} == {telemetry_keys.HARNESS_PROCESS}
     by_name: dict[str, list] = {}
     for rec in spans:
         by_name.setdefault(rec.name, []).append(rec)
 
-    assert len(by_name[telemetry.SPAN_EVAL_PASS]) == 1
-    assert len(by_name[telemetry.SPAN_EPISODE]) == 2  # one per trial
-    assert by_name[telemetry.SPAN_RESET] and by_name[telemetry.SPAN_RECORD_IO] and by_name[telemetry.SPAN_POLICY_INFER]
+    assert len(by_name[telemetry_keys.SPAN_EVAL_PASS]) == 1
+    assert len(by_name[telemetry_keys.SPAN_EPISODE]) == 2  # one per trial
+    assert (
+        by_name[telemetry_keys.SPAN_RESET]
+        and by_name[telemetry_keys.SPAN_RECORD_IO]
+        and by_name[telemetry_keys.SPAN_POLICY_INFER]
+    )
 
-    pass_id = by_name[telemetry.SPAN_EVAL_PASS][0].span_id
-    episode_ids = {episode.span_id for episode in by_name[telemetry.SPAN_EPISODE]}
-    assert all(episode.parent_id == pass_id for episode in by_name[telemetry.SPAN_EPISODE])
+    pass_id = by_name[telemetry_keys.SPAN_EVAL_PASS][0].span_id
+    episode_ids = {episode.span_id for episode in by_name[telemetry_keys.SPAN_EPISODE]}
+    assert all(episode.parent_id == pass_id for episode in by_name[telemetry_keys.SPAN_EPISODE])
     # The per-tick spans all parent to some episode — record.io most of all, since it is committed by a
     # different control system after the harness emits STOP.
-    for name in (telemetry.SPAN_RESET, telemetry.SPAN_RECORD_IO, telemetry.SPAN_POLICY_INFER):
+    for name in (telemetry_keys.SPAN_RESET, telemetry_keys.SPAN_RECORD_IO, telemetry_keys.SPAN_POLICY_INFER):
         assert all(rec.parent_id in episode_ids for rec in by_name[name]), name
 
     stats = list(telemetry.read_stats(telemetry_dir / 'harness.stats.jsonl'))

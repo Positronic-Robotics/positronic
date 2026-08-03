@@ -1,10 +1,14 @@
 """Wall-clock telemetry sidecars for ``positronic eval run --timing``.
 
 A sim eval runs on a virtual clock, so the virtual time a rollout advances says nothing about the real
-compute it cost. This module captures that operational signal — nested spans for the wall-clock phase split
-(reset, env step, inference, record IO) and a free-running machine-load sampler (CPU, memory, GPU) — as
-sidecar files next to the recorded dataset, never mixed into it. The dataset records the robot's world; these
-files describe the machinery around it, in wall time.
+compute it cost. This module captures that operational signal — nested wall-clock spans and a free-running
+machine-load sampler (CPU, memory, GPU) — as sidecar files next to the recorded dataset, never mixed into it.
+The dataset records the robot's world; these files describe the machinery around it, in wall time.
+
+The mechanism is domain-blind: it knows spans, anchors and files, and nothing about episodes, passes or
+inference. The vocabulary its producers and the reduce agree on lives in ``positronic.telemetry_keys``, and a
+long-running span's lifecycle belongs to whoever owns that phase — the harness opens and closes the rollout's
+span, the eval CLI the pass's.
 
 Storage is one set of files per process under ``<out_dir>/telemetry/``: ``<process>.spans.jsonl``
 (OTLP/JSON-lines spans, whose resource block carries the process identity) and ``<process>.stats.jsonl`` (one
@@ -34,9 +38,6 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from opentelemetry import trace
 from opentelemetry.trace import Span
 
-from positronic.simulator.env_server.telemetry import SPAN_ENV_RESET as SPAN_ENV_RESET
-from positronic.simulator.env_server.telemetry import SPAN_ENV_STEP as SPAN_ENV_STEP
-
 if TYPE_CHECKING:
     import psutil
     import pynvml
@@ -50,40 +51,18 @@ _MISSING_EXTRA = (
     '--timing needs the telemetry extra: `uv sync --extra telemetry` (or `pip install positronic[telemetry]`)'
 )
 
-# Span names and attribute keys are the producer↔consumer contract: a producer opens a span (or stamps an
-# attribute) by these literals, and the offline reduce (``positronic.cli.eval.timing_report``) matches on the
-# same ones. Owned here so both sides import one name. ``env.step``/``env.reset`` are owned by the stdlib-only
-# env-server writer (the isolated env interpreter cannot import this module) and re-exported above.
-SPAN_EVAL_PASS = 'eval.pass'
-SPAN_EPISODE = 'episode'
-SPAN_RESET = 'reset'
-SPAN_MATERIALIZE = 'materialize'
-SPAN_POLICY_INFER = 'policy.infer'
-SPAN_RECORD_IO = 'record.io'
-
-ATTR_EPISODE_INDEX = 'episode.index'
-ATTR_EPISODE_STEPS = 'episode.steps'
-ATTR_EPISODE_VIRTUAL_S = 'episode.virtual_s'
-ATTR_EPISODE_ABORTED = 'episode.aborted'
-ATTR_EPISODE_PARTIAL = 'episode.partial'
-ATTR_PASS_FAILED = 'pass.failed'
-
-# The harness process's sidecar name — the discriminator between client-side spans (episode, client env.step)
-# and an env server's own file, which reduces rely on.
-HARNESS_PROCESS = 'harness'
-
 # The subdirectory under a run's output dir where every process's sidecars live. The eval CLI writer, a
 # launched env server (via the env-var it is handed) and the offline reduce all resolve to this same dir.
 TELEMETRY_SUBDIR = 'telemetry'
 
-# The bound provider and the current pass/episode spans are process-global: the harness, env proxy and
-# recorder run as cooperative control systems in one thread and interleave their spans, so parenting is
-# resolved here rather than through OTel's ambient context (which does not survive the scheduler's generator
-# hops). ``span`` reads these to parent a per-tick span to the episode in flight; a nested span (materialize
-# inside env.step) still parents to whatever OTel span is current within its own ``with`` block.
+# The bound provider and the anchor stack are process-global: the harness, env proxy and recorder run as
+# cooperative control systems in one thread and interleave their spans, so parenting is resolved here rather
+# than through OTel's ambient context (which does not survive the scheduler's generator hops). An anchor is a
+# long-running span its owner holds open (a pass, a rollout); ``span`` parents a per-tick span to the
+# innermost one, while a nested span (materialize inside env.step) still parents to whatever OTel span is
+# current within its own ``with`` block.
 _provider: 'TracerProvider | None' = None
-_current_pass: Span | None = None
-_current_episode: Span | None = None
+_anchors: list[Span] = []
 
 
 # The unbound fallback is a PRIVATE no-op, never ``trace.get_tracer``: a host application embedding this code
@@ -151,30 +130,59 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
 
 
 def force_flush() -> None:
-    """Flush the batch processor's queue so a crash after this point loses no already-ended span; called at
-    each episode end so a mid-pass crash loses at most one episode's tail. Inert while unbound."""
+    """Flush the batch processor's queue so a crash after this point loses no already-ended span; the owner of
+    a long-running span flushes as it closes, so a later crash loses at most that span's tail. Inert while
+    unbound."""
     if _provider is not None:
         _provider.force_flush()
+
+
+def push_anchor(anchor: Span) -> None:
+    """Make ``anchor`` the innermost anchor: per-tick spans opened from now on parent to it."""
+    _anchors.append(anchor)
+
+
+def pop_anchor(anchor: Span) -> None:
+    """Drop ``anchor`` from the stack, wherever in it it sits — a failure path can close anchors out of order,
+    and a stale one would go on parenting later spans into a finished span's trace."""
+    _anchors[:] = [held for held in _anchors if held is not anchor]
+
+
+def _anchor_context() -> Any:
+    """The context parenting a span to the innermost anchor; ``None`` (ambient) when nothing is anchored."""
+    return trace.set_span_in_context(_anchors[-1]) if _anchors else None
 
 
 def _per_tick_parent() -> Any:
     """The parent context for a per-tick span. A currently-active span of THIS provider's trace means a
     genuinely nested span (materialize inside env.step) — ``None`` lets it parent ambiently. Otherwise the
-    span parents to the episode in flight (else the pass): between scheduler hops nothing of ours is current,
-    and a host application's unrelated current span must not adopt telemetry spans — they would leave the
-    trace the report reduces. With no pass or episode open there is nothing to anchor to; ambient stands."""
-    anchor = _current_episode if _current_episode is not None else _current_pass
-    if anchor is None:
+    span parents to the innermost anchor: between scheduler hops nothing of ours is current, and a host
+    application's unrelated current span must not adopt telemetry spans — they would leave the trace the
+    report reduces. With nothing anchored there is nothing to anchor to; ambient stands."""
+    if not _anchors:
         return None
     current = trace.get_current_span().get_span_context()
-    if current.is_valid and current.trace_id == anchor.get_span_context().trace_id:
+    if current.is_valid and current.trace_id == _anchors[-1].get_span_context().trace_id:
         return None
-    return trace.set_span_in_context(anchor)
+    return _anchor_context()
+
+
+def start_span(name: str, **attrs: Any) -> Span:
+    """Start a span its caller holds and ends itself, without entering it as the OTel-current span — so it
+    never becomes the ambient parent of the enclosed code's spans. It parents to the innermost anchor, and
+    roots when nothing is anchored. Anchor it (``push_anchor``) to collect the per-tick spans opened under it.
+    A no-op while unbound returns an invalid span the caller ends harmlessly."""
+    return _tracer().start_span(name, context=_anchor_context(), attributes=_encode_attrs(attrs))
+
+
+def set_attrs(span: Span, **attrs: Any) -> None:
+    """Stamp attributes on a span the caller holds, coerced to what OTel accepts."""
+    span.set_attributes(_encode_attrs(attrs))
 
 
 def span(name: str, **attrs: Any):
     """A wall-clock span named ``name``, entered as the current span for the enclosed block. A per-tick span
-    (no OTel span currently active) parents to the episode in flight; a span opened inside another parents to
+    (no OTel span currently active) parents to the innermost anchor; a span opened inside another parents to
     it. A no-op while unbound."""
     return _tracer().start_as_current_span(name, context=_per_tick_parent(), attributes=_encode_attrs(attrs))
 
@@ -202,71 +210,6 @@ def record_span(name: str, start_ns: int, end_ns: int, **attrs: Any) -> None:
         name, context=_per_tick_parent(), start_time=start_ns, attributes=_encode_attrs(attrs)
     )
     recorded.end(end_time=end_ns)
-
-
-@contextmanager
-def eval_pass(**attrs: Any) -> Generator[Span, None, None]:
-    """The pass span bracketing a whole eval sweep; per-episode spans parent to it. Held as a module span
-    rather than the OTel-current one so it does not become the parent of the per-tick spans. A sweep that
-    exits with an exception still exports its pass — the partial window is real recorded data — stamped
-    ``pass.failed`` so a reduce can see (and report) that it did not run to completion."""
-    global _current_pass
-    pass_span = _tracer().start_span(SPAN_EVAL_PASS, attributes=_encode_attrs(attrs))
-    _current_pass = pass_span
-    try:
-        yield pass_span
-    except BaseException:
-        pass_span.set_attribute(ATTR_PASS_FAILED, True)
-        raise
-    finally:
-        pass_span.end()
-        _current_pass = None
-
-
-def begin_episode(**attrs: Any) -> Span:
-    """Open the episode span (parented to the pass) and register it as the parent for this episode's per-tick
-    spans. A no-op while unbound returns an invalid span the caller ends harmlessly."""
-    global _current_episode
-    context = trace.set_span_in_context(_current_pass) if _current_pass is not None else None
-    episode = _tracer().start_span(SPAN_EPISODE, context=context, attributes=_encode_attrs(attrs))
-    _current_episode = episode
-    return episode
-
-
-def end_episode(episode: Span, **attrs: Any) -> None:
-    """Stamp the episode's end attributes (steps, virtual duration), end the span, and flush."""
-    global _current_episode
-    if attrs:
-        episode.set_attributes(_encode_attrs(attrs))
-    episode.end()
-    if _current_episode is episode:
-        _current_episode = None
-    force_flush()
-
-
-def discard_episode(episode: Span) -> None:
-    """End an aborted episode's span, marked ``episode.aborted`` so the reduce can drop it."""
-    global _current_episode
-    episode.set_attribute(ATTR_EPISODE_ABORTED, True)
-    episode.end()
-    if _current_episode is episode:
-        _current_episode = None
-
-
-def end_partial_episode(episode: Span, **attrs: Any) -> None:
-    """End an episode span left open by a failure mid-rollout (a raising ``reset`` / ``new_session`` / session
-    call), stamping its end attributes (steps, virtual duration), marking it ``episode.partial``, and flushing.
-    Ending it is what exports it: the batch processor never emits an unended span, so an abandoned episode's
-    finished children would orphan and the reduce would lose their phases. Marked (not aborted) so the reduce
-    keeps it — its finished phases attribute — while flagging that it did not run to completion."""
-    global _current_episode
-    if attrs:
-        episode.set_attributes(_encode_attrs(attrs))
-    episode.set_attribute(ATTR_EPISODE_PARTIAL, True)
-    episode.end()
-    if _current_episode is episode:
-        _current_episode = None
-    force_flush()
 
 
 def _seal_truncated_line(path: Path) -> None:

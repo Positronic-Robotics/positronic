@@ -1,7 +1,7 @@
 import logging
 import os
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -11,7 +11,7 @@ import pos3
 
 import pimm
 import positronic.cfg.policy as policy_cfg
-from positronic import telemetry, utils, wire
+from positronic import telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import placeholder
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
@@ -144,6 +144,24 @@ def _validate_timing(evals: list[Eval] | None, embodiment: Embodiment | None, ou
 
 
 @contextmanager
+def _pass_span(**attrs) -> Generator[None, None, None]:
+    """The span bracketing a whole eval sweep; the harness's episode spans parent to it, so it is anchored
+    rather than entered as the OTel-current span — it must not become the parent of the per-tick spans. A
+    sweep that exits with an exception still exports its pass — the partial window is real recorded data —
+    stamped ``pass.failed`` so a reduce can see (and report) that it did not run to completion."""
+    span = telemetry.start_span(telemetry_keys.SPAN_EVAL_PASS, **attrs)
+    telemetry.push_anchor(span)
+    try:
+        yield
+    except BaseException:
+        telemetry.set_attrs(span, **{telemetry_keys.ATTR_PASS_FAILED: True})
+        raise
+    finally:
+        span.end()
+        telemetry.pop_anchor(span)
+
+
+@contextmanager
 def _timed_pass(output_dir: str | Path | None, timing: bool, policy):
     """Bracket a sweep in the harness-process telemetry: the bound tracer, the machine-load sampler and one
     ``eval.pass`` span, with the environment a launched env server reads set around them. Inert without
@@ -159,11 +177,12 @@ def _timed_pass(output_dir: str | Path | None, timing: bool, policy):
     os.environ[ENV_TELEMETRY_DIR] = str(timed_dir / telemetry.TELEMETRY_SUBDIR)
     os.environ[ENV_RUN_ID] = run_id
     try:
+        stats_path = timed_dir / telemetry.TELEMETRY_SUBDIR / f'{telemetry_keys.HARNESS_PROCESS}.stats.jsonl'
         # The pass span closes before the tracer it is bound to shuts its provider down.
         with (
-            telemetry.bind(timed_dir, telemetry.HARNESS_PROCESS, run_id),
-            telemetry.StatsSampler(timed_dir / telemetry.TELEMETRY_SUBDIR / f'{telemetry.HARNESS_PROCESS}.stats.jsonl'),
-            telemetry.eval_pass(**{'run.id': run_id, 'policy': type(policy).__name__}),
+            telemetry.bind(timed_dir, telemetry_keys.HARNESS_PROCESS, run_id),
+            telemetry.StatsSampler(stats_path),
+            _pass_span(**{'run.id': run_id, 'policy': type(policy).__name__}),
         ):
             yield
     finally:

@@ -7,7 +7,7 @@ from typing import Any
 from opentelemetry.trace import Span
 
 import pimm
-from positronic import keys, telemetry
+from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.eval import Embodiment, Task
@@ -45,6 +45,86 @@ class Directive:
     def ABORT(cls) -> 'Directive':
         """Discard the live recording and home the devices."""
         return cls(DirectiveType.ABORT)
+
+
+class _EpisodeTelemetry:
+    """The live rollout's wall-clock telemetry: the episode span, its 0-based index, its control-step count
+    and the virtual instant its rollout began. Every method is inert while telemetry is unbound (a normal eval
+    binds nothing), so the harness calls them unconditionally.
+
+    The span is anchored while it is open, so the per-tick spans the rollout's control systems emit (reset,
+    env.step, policy.infer, record.io) parent to it rather than to the pass.
+    """
+
+    def __init__(self) -> None:
+        self._span: Span | None = None
+        self._index = -1
+        self._steps = 0
+        # The virtual instant the rollout began — ``None`` until it starts, so the reset is excluded and a
+        # reset that fails leaves it unstamped.
+        self._virtual_start: float | None = None
+
+    def begin(self, context: dict[str, Any]) -> None:
+        """Open the episode span, stamped with the index and the flat trial-context keys. Called before the
+        scene reset, so the reset is timed inside the rollout it belongs to."""
+        self._index += 1
+        self._steps = 0
+        self._virtual_start = None
+        attrs: dict[str, Any] = {telemetry_keys.ATTR_EPISODE_INDEX: self._index}
+        attrs.update({k: v for k, v in context.items() if isinstance(v, (bool, int, float, str))})
+        self._span = telemetry.start_span(telemetry_keys.SPAN_EPISODE, **attrs)
+        telemetry.push_anchor(self._span)
+
+    def start_rollout(self, virtual_now: float) -> None:
+        """Anchor the rollout's virtual duration at ``virtual_now``: the reset is done and stepping begins."""
+        self._virtual_start = virtual_now
+
+    def step(self) -> None:
+        self._steps += 1
+
+    def end(self, virtual_now: float) -> None:
+        """Close a finished rollout, stamped with its step count and its virtual duration up to
+        ``virtual_now`` — captured when the rollout ended, before the flush tick advances the sim clock."""
+        if self._span is None:
+            return
+        assert self._virtual_start is not None  # a clean finish is reached only after the anchor is stamped
+        self._close(virtual_now)
+        telemetry.force_flush()
+
+    def abort(self) -> None:
+        """Close an aborted rollout, marked ``episode.aborted`` so the reduce drops it."""
+        if self._span is None:
+            return
+        telemetry.set_attrs(self._span, **{telemetry_keys.ATTR_EPISODE_ABORTED: True})
+        self._end_span()
+
+    def seal(self, virtual_now: float) -> None:
+        """Close a rollout abandoned by a failure mid-flight (a raising ``reset`` / ``new_session`` / session
+        call), stamped like a clean end and marked ``episode.partial``. Ending it is what exports it: the batch
+        processor never emits an unended span, so the abandoned rollout's finished children would orphan and
+        the reduce would lose their phases. Marked (not aborted) so the reduce keeps it — its finished phases
+        attribute — while flagging that it did not run to completion. Inert when no span is open (telemetry
+        off, or the failure fell outside a rollout)."""
+        if self._span is None:
+            return
+        telemetry.set_attrs(self._span, **{telemetry_keys.ATTR_EPISODE_PARTIAL: True})
+        self._close(virtual_now)
+        telemetry.force_flush()
+
+    def _close(self, virtual_now: float) -> None:
+        # A rollout that never started (a reset that raised before the anchor was stamped) has zero virtual
+        # duration; only an anchored rollout measures from its start.
+        virtual_s = max(virtual_now - self._virtual_start, 0.0) if self._virtual_start is not None else 0.0
+        assert self._span is not None
+        attrs = {telemetry_keys.ATTR_EPISODE_STEPS: self._steps, telemetry_keys.ATTR_EPISODE_VIRTUAL_S: virtual_s}
+        telemetry.set_attrs(self._span, **attrs)
+        self._end_span()
+
+    def _end_span(self) -> None:
+        assert self._span is not None
+        self._span.end()
+        telemetry.pop_anchor(self._span)
+        self._span = None
 
 
 class Harness(pimm.ControlSystem):
@@ -112,13 +192,8 @@ class Harness(pimm.ControlSystem):
         # A trial with a task is bounded by ``task.timeout``, set per episode; a task-less attended
         # session has no deadline and is ended by directives.
         self._deadline: float | None = None
-        # Wall-clock telemetry for the live rollout (opened under ``--timing``, inert otherwise): the
-        # episode span, its 0-based index, its control-step count, and the virtual instant its rollout began
-        # (``None`` until the rollout starts — reset is excluded, and a reset that fails leaves it unstamped).
-        self._episode_span: Span | None = None
-        self._episode_index = -1
-        self._episode_steps = 0
-        self._episode_virtual_start: float | None = None
+        # Wall-clock telemetry for the live rollout, opened under ``--timing`` and inert otherwise.
+        self._telemetry = _EpisodeTelemetry()
 
         self._descriptor = embodiment.descriptor
         self.observations = pimm.ReceiverDict(self)
@@ -223,28 +298,21 @@ class Harness(pimm.ControlSystem):
         self.context = context
         # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
         self._inference_latency = self.context.get('inference_latency', False)
-        # Open the episode span before the reset so the per-tick spans (reset, env.step, policy.infer,
-        # record.io) parent to it; stamp the index and the flat trial-context keys.
-        self._episode_index += 1
-        self._episode_steps = 0
-        episode_attrs: dict[str, Any] = {telemetry.ATTR_EPISODE_INDEX: self._episode_index}
-        episode_attrs.update({k: v for k, v in context.items() if isinstance(v, (bool, int, float, str))})
-        self._episode_span = telemetry.begin_episode(**episode_attrs)
-        # Cleared before the reset so a reset that raises leaves the rollout unanchored: the seal then reads
-        # zero virtual time rather than measuring from a prior episode's (or the initial) instant.
-        self._episode_virtual_start = None
+        # Open the episode span before the reset, so the per-tick spans (reset, env.step, policy.infer,
+        # record.io) parent to it.
+        self._telemetry.begin(context)
         # Reset the scene before opening the session: a resettable task only learns its instruction on reset
         # (a remote env reports it then), so the session context — and the task-grouped sampling/counting it
         # drives — must read the instruction here, once it is known.
         if self._task is not None and self._task.reset is not None:
-            with telemetry.span(telemetry.SPAN_RESET):
+            with telemetry.span(telemetry_keys.SPAN_RESET):
                 self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
         self._policy_session = self.policy.new_session(self.context, clock.now)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
-        self._episode_virtual_start = clock.now()
+        self._telemetry.start_rollout(clock.now())
         self.ds_command.emit(DsWriterCommand.START())
 
     def _end_episode(
@@ -273,29 +341,15 @@ class Harness(pimm.ControlSystem):
             # to the episode) is captured while it is still in flight. Accepted skew: a producer that also
             # steps during that shared tick charges one more span (≤ one control period per episode) to the
             # closing episode — the cooperative scheduler cannot give the recorder a turn alone.
-            self._end_episode_span(virtual_now, abort=abort)
+            if abort:
+                self._telemetry.abort()
+            else:
+                self._telemetry.end(virtual_now)
         if self._policy_session:
             self._policy_session.close()
             self._policy_session = None
         self._home(clock)
         self._running = False
-
-    def _end_episode_span(self, virtual_now: float, *, abort: bool) -> None:
-        """Close the live rollout's telemetry span: an abort is dropped, a finish is stamped with its step
-        count and virtual duration up to ``virtual_now`` — captured when the rollout ended, before the flush
-        tick advances the sim clock. Inert when no span is open (telemetry off)."""
-        if self._episode_span is None:
-            return
-        if abort:
-            telemetry.discard_episode(self._episode_span)
-        else:
-            assert self._episode_virtual_start is not None  # a clean finish is reached only after the anchor is stamped
-            virtual_s = max(virtual_now - self._episode_virtual_start, 0.0)
-            telemetry.end_episode(
-                self._episode_span,
-                **{telemetry.ATTR_EPISODE_STEPS: self._episode_steps, telemetry.ATTR_EPISODE_VIRTUAL_S: virtual_s},
-            )
-        self._episode_span = None
 
     def _handle_directive(self, directive: Directive, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         """Dispatch a directive to the episode lifecycle; updates ``_running``."""
@@ -387,7 +441,7 @@ class Harness(pimm.ControlSystem):
         if self._deadline is not None and clock.now() >= self._deadline:
             return
 
-        self._episode_steps += 1
+        self._telemetry.step()
         self._emit_commands(actions)
 
     def _trial_terminal(self, clock: pimm.Clock) -> dict[str, Any] | None:
@@ -410,23 +464,6 @@ class Harness(pimm.ControlSystem):
             return {'eval.terminated': False}
         return None
 
-    def _seal_open_episode_span(self, clock: pimm.Clock) -> None:
-        """Seal an episode span left open by a mid-rollout failure — marked partial and stamped with its step
-        count and virtual duration up to ``clock.now()`` — before the exception reaches the provider's exit
-        flush. Inert when no span is open (telemetry off, or the failure fell outside an episode)."""
-        if self._episode_span is None:
-            return
-        # A rollout that never started (a reset/new_session that raised before the anchor was stamped) has zero
-        # virtual duration; only an anchored rollout measures from its start.
-        virtual_s = 0.0
-        if self._episode_virtual_start is not None:
-            virtual_s = max(clock.now() - self._episode_virtual_start, 0.0)
-        telemetry.end_partial_episode(
-            self._episode_span,
-            **{telemetry.ATTR_EPISODE_STEPS: self._episode_steps, telemetry.ATTR_EPISODE_VIRTUAL_S: virtual_s},
-        )
-        self._episode_span = None
-
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         # Home the embodiment before the first episode; each ``_end_episode`` re-homes for the next one, so
         # every episode begins from the home pose (a real arm gets the inter-episode gap to reach it).
@@ -435,11 +472,11 @@ class Harness(pimm.ControlSystem):
         try:
             yield from self._run(should_stop, clock)
         except BaseException:
-            # A failure mid-rollout (task.reset / new_session / a session call raising after begin_episode
-            # opened the span) unwinds past the normal span close. Seal the open episode span here, before the
-            # exception reaches ``bind``'s exit flush, or the span never exports and its finished children
-            # orphan — losing their phases and charging the episode's wall to between_episodes.
-            self._seal_open_episode_span(clock)
+            # A failure mid-rollout (task.reset / new_session / a session call raising after the episode span
+            # was opened) unwinds past the normal span close. Seal the open span here, before the exception
+            # reaches ``bind``'s exit flush, or it never exports and its finished children orphan — losing
+            # their phases and charging the episode's wall to between_episodes.
+            self._telemetry.seal(clock.now())
             raise
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:  # noqa: C901
@@ -480,7 +517,7 @@ class Harness(pimm.ControlSystem):
             # order as ``_end_episode`` — so its shutdown-flush record.io span parents to the episode, not
             # the pass.
             yield self._pace()
-            self._end_episode_span(virtual_now, abort=False)
+            self._telemetry.end(virtual_now)
         if self._policy_session:
             self._policy_session.close()
         # The harness does not own the policy's lifetime: the caller may run several harnesses over

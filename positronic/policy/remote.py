@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import pos3
 
-from positronic import telemetry
+from positronic import telemetry, telemetry_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
@@ -90,7 +90,7 @@ class RemoteSession(Session):
         try:
             result = self._session.infer(self._prepare_obs(obs))
         finally:
-            telemetry.record_span(telemetry.SPAN_POLICY_INFER, infer_start_ns, time.time_ns())
+            telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns())
         if isinstance(result, dict):
             return [result]
         return result

@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from functools import partial
 from types import SimpleNamespace
 from typing import Any, cast
@@ -6,7 +7,7 @@ import numpy as np
 import pytest
 
 import pimm
-from positronic import keys, telemetry, wire
+from positronic import keys, telemetry, telemetry_keys, wire
 from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
@@ -32,6 +33,19 @@ from positronic.policy.harness import Directive, DirectiveType, Harness
 from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
+
+
+@contextmanager
+def _eval_pass(run_id: str):
+    """The eval CLI's pass span, which the harness's episode spans parent to: a span its owner holds open and
+    anchors, rather than entering as the OTel-current span."""
+    span = telemetry.start_span(telemetry_keys.SPAN_EVAL_PASS, **{'run.id': run_id})
+    telemetry.push_anchor(span)
+    try:
+        yield
+    finally:
+        span.end()
+        telemetry.pop_anchor(span)
 
 
 def make_embodiment(descriptor: str = '', cameras=('image.cam',)) -> Embodiment:
@@ -1293,7 +1307,7 @@ def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(tmp_path):
     stop = SimpleNamespace(value=False)
     clock = _ManualClock()
 
-    with telemetry.bind(tmp_path, 'harness', 'run-stop'), telemetry.eval_pass(**{'run.id': 'run-stop'}):
+    with telemetry.bind(tmp_path, 'harness', 'run-stop'), _eval_pass('run-stop'):
         gen = harness.run(cast(pimm.SignalReceiver, stop), cast(pimm.Clock, clock))
         for _ in range(20):
             next(gen)
@@ -1308,18 +1322,18 @@ def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(tmp_path):
         except StopIteration:
             pytest.fail('harness must yield a recorder turn between queueing STOP and ending the episode span')
         assert any(d.type == DsWriterCommandType.STOP_EPISODE for _, d in ds_recorder.emitted)
-        with telemetry.span(telemetry.SPAN_RECORD_IO):  # the recorder's shutdown flush, emitted in that turn
+        with telemetry.span(telemetry_keys.SPAN_RECORD_IO):  # the recorder's shutdown flush, emitted in that turn
             pass
         with pytest.raises(StopIteration):
             while True:
                 next(gen)
 
     spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
-    episodes = [s for s in spans if s.name == telemetry.SPAN_EPISODE]
+    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     assert len(episodes) == 1
     episode = episodes[0]
-    assert telemetry.ATTR_EPISODE_STEPS in episode.attrs  # sealed via end_episode, neither leaked open nor aborted
-    flushes = [s for s in spans if s.name == telemetry.SPAN_RECORD_IO]
+    assert telemetry_keys.ATTR_EPISODE_STEPS in episode.attrs  # sealed via end_episode, neither leaked open nor aborted
+    flushes = [s for s in spans if s.name == telemetry_keys.SPAN_RECORD_IO]
     assert flushes and all(s.parent_id == episode.span_id for s in flushes)
 
 
@@ -1339,7 +1353,7 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
         (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.0)
     ])
 
-    with telemetry.bind(tmp_path, 'harness', 'run-taxonomy'), telemetry.eval_pass(**{'run.id': 'run-taxonomy'}):
+    with telemetry.bind(tmp_path, 'harness', 'run-taxonomy'), _eval_pass('run-taxonomy'):
         scheduler = world.start([harness, producer])
         drive_scheduler(scheduler, steps=400)
 
@@ -1348,26 +1362,49 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     for rec in spans:
         by_name.setdefault(rec.name, []).append(rec)
 
-    assert len(by_name[telemetry.SPAN_EVAL_PASS]) == 1
-    assert len(by_name[telemetry.SPAN_EPISODE]) == 1
-    assert by_name[telemetry.SPAN_RESET]  # the task's scene reset was timed
-    assert by_name[telemetry.SPAN_POLICY_INFER]  # at least one real inference round-trip
+    assert len(by_name[telemetry_keys.SPAN_EVAL_PASS]) == 1
+    assert len(by_name[telemetry_keys.SPAN_EPISODE]) == 1
+    assert by_name[telemetry_keys.SPAN_RESET]  # the task's scene reset was timed
+    assert by_name[telemetry_keys.SPAN_POLICY_INFER]  # at least one real inference round-trip
 
-    pass_span = by_name[telemetry.SPAN_EVAL_PASS][0]
-    episode = by_name[telemetry.SPAN_EPISODE][0]
+    pass_span = by_name[telemetry_keys.SPAN_EVAL_PASS][0]
+    episode = by_name[telemetry_keys.SPAN_EPISODE][0]
     assert pass_span.parent_id is None
     assert episode.parent_id == pass_span.span_id
-    assert all(r.parent_id == episode.span_id for r in by_name[telemetry.SPAN_RESET])
-    assert all(r.parent_id == episode.span_id for r in by_name[telemetry.SPAN_POLICY_INFER])
+    assert all(r.parent_id == episode.span_id for r in by_name[telemetry_keys.SPAN_RESET])
+    assert all(r.parent_id == episode.span_id for r in by_name[telemetry_keys.SPAN_POLICY_INFER])
 
-    assert episode.attrs[telemetry.ATTR_EPISODE_INDEX] == 0
-    assert episode.attrs[telemetry.ATTR_EPISODE_STEPS] == len(by_name[telemetry.SPAN_POLICY_INFER])
-    assert episode.attrs[telemetry.ATTR_EPISODE_VIRTUAL_S] >= 0.0
+    assert episode.attrs[telemetry_keys.ATTR_EPISODE_INDEX] == 0
+    assert episode.attrs[telemetry_keys.ATTR_EPISODE_STEPS] == len(by_name[telemetry_keys.SPAN_POLICY_INFER])
+    assert episode.attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S] >= 0.0
+
+
+@pytest.mark.timeout(3.0)
+def test_aborted_episode_span_marked_aborted(world, tmp_path):
+    """An ABORT discards the rollout, and its episode span is stamped ``episode.aborted`` — the reduce drops
+    it rather than charging a partial rollout's wall to a real episode."""
+    harness = Harness(ChunkPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    with telemetry.bind(tmp_path, 'harness', 'run-abort'):
+        scheduler = world.start([harness])
+        p['directive_em'].emit(Directive.RUN(task='test'))
+        drive_scheduler(scheduler, steps=1)
+        emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
+        drive_scheduler(scheduler, steps=5)
+        p['directive_em'].emit(Directive.ABORT())
+        drive_scheduler(scheduler, steps=3)
+
+    spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
+    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    assert len(episodes) == 1
+    assert episodes[0].attrs[telemetry_keys.ATTR_EPISODE_ABORTED] is True
 
 
 @pytest.mark.timeout(3.0)
 def test_failed_pass_seals_open_episode_span(tmp_path):
-    """A ``task.reset`` raising after ``begin_episode`` opened the episode span must seal that span before the
+    """A ``task.reset`` raising after the episode span was opened must seal that span before the
     provider flushes on exit. Ending it is what exports it at all: an unended span never leaves the batch
     processor, so its finished ``reset`` child orphans (unknown parent) and the report loses that phase and
     charges the episode's whole wall to ``between_episodes``. Sealed and marked ``episode.partial`` — with its
@@ -1385,21 +1422,25 @@ def test_failed_pass_seals_open_episode_span(tmp_path):
     clock = _ManualClock()
 
     with pytest.raises(RuntimeError, match='reset boom'):
-        with telemetry.bind(tmp_path, 'harness', 'run-fail'), telemetry.eval_pass(**{'run.id': 'run-fail'}):
+        with telemetry.bind(tmp_path, 'harness', 'run-fail'), _eval_pass('run-fail'):
             for _ in harness.run(cast(pimm.SignalReceiver, stop), cast(pimm.Clock, clock)):
                 pass
 
     spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
-    episodes = [s for s in spans if s.name == telemetry.SPAN_EPISODE]
+    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     assert len(episodes) == 1  # the open span was sealed and exported, not lost with the failure
     episode = episodes[0]
-    assert episode.attrs.get(telemetry.ATTR_EPISODE_PARTIAL) is True  # flagged so the reduce sees it did not complete
-    assert episode.attrs[telemetry.ATTR_EPISODE_STEPS] == 0  # stamped like a clean end — no step ran before the failure
+    assert (
+        episode.attrs.get(telemetry_keys.ATTR_EPISODE_PARTIAL) is True
+    )  # flagged so the reduce sees it did not complete
+    assert (
+        episode.attrs[telemetry_keys.ATTR_EPISODE_STEPS] == 0
+    )  # stamped like a clean end — no step ran before the failure
     # The rollout never started — reset raised before its virtual anchor was stamped — so its virtual duration
     # is zero, not the garbage ``clock.now() - 0`` a never-stamped anchor would otherwise yield.
-    assert episode.attrs[telemetry.ATTR_EPISODE_VIRTUAL_S] == 0.0
-    passes = [s for s in spans if s.name == telemetry.SPAN_EVAL_PASS]
+    assert episode.attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S] == 0.0
+    passes = [s for s in spans if s.name == telemetry_keys.SPAN_EVAL_PASS]
     assert len(passes) == 1
     assert episode.parent_id == passes[0].span_id  # parented to the pass, so the reduce does not drop it as an orphan
-    resets = [s for s in spans if s.name == telemetry.SPAN_RESET]
+    resets = [s for s in spans if s.name == telemetry_keys.SPAN_RESET]
     assert resets and all(r.parent_id == episode.span_id for r in resets)  # finished child attributes to its phase

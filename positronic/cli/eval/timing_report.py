@@ -19,7 +19,8 @@ import configuronic as cfn
 import numpy as np
 import pos3
 
-from positronic.telemetry import (
+from positronic.telemetry import TELEMETRY_SUBDIR, SpanRec, read_spans, read_stats
+from positronic.telemetry_keys import (
     ATTR_EPISODE_ABORTED,
     ATTR_EPISODE_PARTIAL,
     ATTR_EPISODE_VIRTUAL_S,
@@ -32,10 +33,6 @@ from positronic.telemetry import (
     SPAN_POLICY_INFER,
     SPAN_RECORD_IO,
     SPAN_RESET,
-    TELEMETRY_SUBDIR,
-    SpanRec,
-    read_spans,
-    read_stats,
 )
 
 logger = logging.getLogger(__name__)

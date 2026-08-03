@@ -3,7 +3,7 @@ import json
 import pytest
 
 from positronic.cli.eval.timing_report import _build_report, _parse_dmon, _read_spans_dir, _read_stats_dir, _render
-from positronic.telemetry import (
+from positronic.telemetry_keys import (
     ATTR_EPISODE_ABORTED,
     ATTR_EPISODE_VIRTUAL_S,
     SPAN_ENV_STEP,

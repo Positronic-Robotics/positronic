@@ -14,7 +14,7 @@ from contextlib import AbstractContextManager, ExitStack
 from typing import Any
 
 import pimm
-from positronic import keys, telemetry
+from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
@@ -111,16 +111,16 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     # Frame-0 materialisation (allocating shared-memory image buffers and copying each camera
                     # frame) is part of the reset cost, like the server-side render already timed under reset —
                     # charge it to reset, not overhead.
-                    with telemetry.span(telemetry.SPAN_RESET):
+                    with telemetry.span(telemetry_keys.SPAN_RESET):
                         self._emit_payload(self._frame['obs'])
                     self.done.emit({})
                 elif self._active:
                     # ``env.step`` spans the whole client-observed step; ``materialize`` nests the client-side
                     # observation assembly (shared-memory image allocation + camera copies) inside it, so the
                     # reduce can split materialisation out of the wire cost.
-                    with telemetry.span(telemetry.SPAN_ENV_STEP):
+                    with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
                         self._frame = self._step_env(clock)
-                        with telemetry.span(telemetry.SPAN_MATERIALIZE):
+                        with telemetry.span(telemetry_keys.SPAN_MATERIALIZE):
                             self._emit_payload(self._frame['obs'])
         finally:
             # Closes the connection then the server, in that order (reverse of acquisition); a no-op if no reset

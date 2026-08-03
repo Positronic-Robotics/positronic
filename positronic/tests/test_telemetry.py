@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+from contextlib import contextmanager
 
 import pynvml
 import pytest
@@ -12,6 +13,19 @@ from positronic import telemetry
 
 def _spans_by_name(path):
     return {rec.name: rec for rec in telemetry.read_spans(path)}
+
+
+@contextmanager
+def _anchored(name, **attrs):
+    """One anchor's lifetime, the shape every anchor owner (the eval CLI's pass, the harness's episode) drives
+    by hand: start a span the caller holds, anchor it, end and unanchor it."""
+    span = telemetry.start_span(name, **attrs)
+    telemetry.push_anchor(span)
+    try:
+        yield span
+    finally:
+        span.end()
+        telemetry.pop_anchor(span)
 
 
 @pytest.fixture
@@ -33,10 +47,9 @@ def without_telemetry_extra(monkeypatch):
 def test_span_surface_survives_without_the_telemetry_extra(without_telemetry_extra):
     """Every instrumented call site sits on the OTel API alone, so an install carrying no telemetry extra runs
     a normal eval — the helpers no-op exactly as they do while unbound."""
-    with telemetry.span(telemetry.SPAN_RESET):
-        pass
-    episode = telemetry.begin_episode()
-    telemetry.end_episode(episode)
+    with _anchored('outer'):
+        with telemetry.span('tick'):
+            pass
 
 
 def test_recording_without_the_telemetry_extra_names_the_extra(tmp_path, without_telemetry_extra):
@@ -50,59 +63,68 @@ def test_recording_without_the_telemetry_extra_names_the_extra(tmp_path, without
 
 
 def test_nested_spans_round_trip(tmp_path):
-    """A bound run's nested spans parse back with the taxonomy's parenting (materialize under env.step, both
-    under episode, episode under the pass), hex ids, and decoded attributes."""
+    """A bound run's spans parse back with anchor parenting — a per-tick span under the innermost anchor, an
+    anchor under the anchor enclosing it, one opened inside another under that one — plus hex ids and decoded
+    attributes."""
     with telemetry.bind(tmp_path, 'harness', 'run-xyz'):
-        with telemetry.eval_pass(**{'run.id': 'run-xyz', 'policy': 'stub'}):
-            episode = telemetry.begin_episode(**{telemetry.ATTR_EPISODE_INDEX: 0})
-            with telemetry.span(telemetry.SPAN_RESET):
-                pass
-            with telemetry.span(telemetry.SPAN_ENV_STEP):
-                with telemetry.span(telemetry.SPAN_MATERIALIZE):
+        with _anchored('outer', policy='stub'):
+            with _anchored('inner', index=0) as inner:
+                with telemetry.span('tick'):
                     pass
-            telemetry.end_episode(episode, **{telemetry.ATTR_EPISODE_STEPS: 5, telemetry.ATTR_EPISODE_VIRTUAL_S: 1.5})
+                with telemetry.span('phase'):
+                    with telemetry.span('sub-phase'):
+                        pass
+                telemetry.set_attrs(inner, steps=5, virtual_s=1.5)
 
     spans_path = tmp_path / 'telemetry' / 'harness.spans.jsonl'
     spans = _spans_by_name(spans_path)
-    assert set(spans) == {
-        telemetry.SPAN_EVAL_PASS,
-        telemetry.SPAN_EPISODE,
-        telemetry.SPAN_RESET,
-        telemetry.SPAN_ENV_STEP,
-        telemetry.SPAN_MATERIALIZE,
-    }
+    assert set(spans) == {'outer', 'inner', 'tick', 'phase', 'sub-phase'}
 
     # Hex ids: 16 nibbles for a span id, and every id parses as hex.
     for rec in spans.values():
         assert len(rec.span_id) == 16
         int(rec.span_id, 16)
 
-    assert spans[telemetry.SPAN_EVAL_PASS].parent_id is None
-    assert spans[telemetry.SPAN_EPISODE].parent_id == spans[telemetry.SPAN_EVAL_PASS].span_id
-    assert spans[telemetry.SPAN_RESET].parent_id == spans[telemetry.SPAN_EPISODE].span_id
-    assert spans[telemetry.SPAN_ENV_STEP].parent_id == spans[telemetry.SPAN_EPISODE].span_id
-    assert spans[telemetry.SPAN_MATERIALIZE].parent_id == spans[telemetry.SPAN_ENV_STEP].span_id
+    assert spans['outer'].parent_id is None
+    assert spans['inner'].parent_id == spans['outer'].span_id
+    assert spans['tick'].parent_id == spans['inner'].span_id
+    assert spans['phase'].parent_id == spans['inner'].span_id
+    assert spans['sub-phase'].parent_id == spans['phase'].span_id
 
-    assert spans[telemetry.SPAN_EVAL_PASS].attrs['policy'] == 'stub'
-    assert spans[telemetry.SPAN_EPISODE].attrs[telemetry.ATTR_EPISODE_STEPS] == 5
-    assert spans[telemetry.SPAN_EPISODE].attrs[telemetry.ATTR_EPISODE_VIRTUAL_S] == 1.5
-    assert spans[telemetry.SPAN_EPISODE].end_ns >= spans[telemetry.SPAN_EPISODE].start_ns
+    assert spans['outer'].attrs['policy'] == 'stub'
+    assert spans['inner'].attrs['steps'] == 5
+    assert spans['inner'].attrs['virtual_s'] == 1.5
+    assert spans['inner'].end_ns >= spans['inner'].start_ns
 
 
-def test_discarded_episode_marked_aborted(tmp_path):
-    with telemetry.bind(tmp_path, 'harness', 'run-abort'):
-        episode = telemetry.begin_episode(**{telemetry.ATTR_EPISODE_INDEX: 0})
-        telemetry.discard_episode(episode)
+def test_anchor_popped_out_of_order_stops_parenting(tmp_path):
+    """An owner closing an anchor that is no longer the innermost — a failure path unwinding several at once —
+    drops it from wherever it sits, so no finished span goes on adopting later per-tick spans."""
+    with telemetry.bind(tmp_path, 'harness', 'run-unwind'):
+        outer = telemetry.start_span('outer')
+        telemetry.push_anchor(outer)
+        inner = telemetry.start_span('inner')
+        telemetry.push_anchor(inner)
+
+        telemetry.pop_anchor(outer)  # the enclosing anchor closes first
+        outer.end()
+        with telemetry.span('tick'):
+            pass
+        inner.end()
+        telemetry.pop_anchor(inner)
+        with telemetry.span('after'):
+            pass
+
     spans = _spans_by_name(tmp_path / 'telemetry' / 'harness.spans.jsonl')
-    assert spans[telemetry.SPAN_EPISODE].attrs[telemetry.ATTR_EPISODE_ABORTED] is True
+    assert spans['tick'].parent_id == spans['inner'].span_id  # the innermost anchor still stands
+    assert spans['after'].parent_id is None  # nothing anchored: the span roots rather than adopting a corpse
 
 
 def test_unbound_span_is_inert(tmp_path):
     """Off ``--timing`` nothing binds: the span helpers no-op, write no file, and raise nothing."""
-    with telemetry.span(telemetry.SPAN_RESET):
-        pass
-    episode = telemetry.begin_episode()
-    telemetry.end_episode(episode)
+    with _anchored('outer'):
+        with telemetry.span('tick'):
+            pass
     assert not (tmp_path / 'telemetry').exists()
 
 
@@ -110,7 +132,7 @@ def test_resource_carries_process_identity(tmp_path):
     """Every span document's resource block names the run and the writing process, so a sidecar identifies
     itself without a second file."""
     with telemetry.bind(tmp_path, 'env', 'run-1'):
-        with telemetry.span(telemetry.SPAN_RESET):
+        with telemetry.span('tick'):
             pass
 
     line = json.loads((tmp_path / 'telemetry' / 'env.spans.jsonl').read_text().splitlines()[0])
@@ -135,44 +157,31 @@ class _FakeProc:
         self.usedGpuMemory = used
 
 
-def test_failed_pass_exported_and_stamped(tmp_path):
-    """A sweep that dies mid-pass still exports its pass span — the partial window is real data — stamped
-    ``pass.failed`` so the reduce can name the mix instead of silently folding it in."""
-    with telemetry.bind(tmp_path, 'harness', 'run-fail'):
-        with pytest.raises(RuntimeError):
-            with telemetry.eval_pass(**{'run.id': 'run-fail'}):
-                raise RuntimeError('sim died')
-
-    spans = {s.name: s for s in telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl')}
-    assert spans[telemetry.SPAN_EVAL_PASS].attrs.get(telemetry.ATTR_PASS_FAILED) is True
-
-
 def test_unbound_span_never_touches_global_tracer(monkeypatch):
     """Unbound telemetry is a PRIVATE no-op: a host application may have configured OTel's global tracer
-    provider, and an untimed run must not export spans (or trial attributes) through it."""
+    provider, and an untimed run must not export spans (or their attributes) through it."""
 
     def _boom(*args, **kwargs):
         raise AssertionError('unbound telemetry must not consult the global tracer provider')
 
     monkeypatch.setattr(telemetry.trace, 'get_tracer', _boom)
-    with telemetry.span(telemetry.SPAN_RESET, **{telemetry.ATTR_EPISODE_INDEX: 0}):
+    with telemetry.span('tick', index=0):
         pass
 
 
 def test_per_tick_span_ignores_foreign_ambient_span(tmp_path):
     """A host application's current OTel span (a different provider, a different trace) must not adopt our
-    per-tick spans: they parent to the episode in flight, so the report still sees them."""
+    per-tick spans: they parent to the innermost anchor, so the report still sees them."""
     foreign = SdkTracerProvider()
     with telemetry.bind(tmp_path, 'harness', 'run-foreign'):
-        episode = telemetry.begin_episode(**{telemetry.ATTR_EPISODE_INDEX: 0})
-        with foreign.get_tracer('host-app').start_as_current_span('host-span'):
-            with telemetry.span(telemetry.SPAN_ENV_STEP):
-                pass
-        telemetry.end_episode(episode, **{telemetry.ATTR_EPISODE_STEPS: 1, telemetry.ATTR_EPISODE_VIRTUAL_S: 0.0})
+        with _anchored('outer'):
+            with foreign.get_tracer('host-app').start_as_current_span('host-span'):
+                with telemetry.span('tick'):
+                    pass
 
-    spans = {s.name: s for s in telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl')}
+    spans = _spans_by_name(tmp_path / 'telemetry' / 'harness.spans.jsonl')
     assert 'host-span' not in spans  # the foreign span belongs to the host's provider, not our file
-    assert spans[telemetry.SPAN_ENV_STEP].parent_id == spans[telemetry.SPAN_EPISODE].span_id
+    assert spans['tick'].parent_id == spans['outer'].span_id
 
 
 def _install_fake_nvml(monkeypatch):
@@ -277,29 +286,29 @@ def test_bind_seals_truncated_predecessor_line(tmp_path):
     spans_path = tmp_path / 'telemetry' / 'harness.spans.jsonl'
 
     with telemetry.bind(tmp_path, 'harness', 'run-1'):
-        with telemetry.span(telemetry.SPAN_RESET):
+        with telemetry.span('first'):
             pass
     with open(spans_path, 'a') as file:
         file.write('{"resourceSpans": [{"scopeSpans": [{"spans": [{"nam')  # crash mid-write, no trailing newline
 
     with telemetry.bind(tmp_path, 'harness', 'run-2'):
-        with telemetry.span(telemetry.SPAN_MATERIALIZE):
+        with telemetry.span('second'):
             pass
 
     names = [rec.name for rec in telemetry.read_spans(spans_path)]
-    assert telemetry.SPAN_MATERIALIZE in names  # pre-fix, the new record merges into the fragment and is skipped
-    assert telemetry.SPAN_RESET in names  # the pre-existing valid span still reads back
+    assert 'second' in names  # pre-fix, the new record merges into the fragment and is skipped
+    assert 'first' in names  # the pre-existing valid span still reads back
 
 
 def test_readers_tolerate_truncated_final_line(tmp_path):
     spans_path = tmp_path / 'telemetry' / 'harness.spans.jsonl'
     with telemetry.bind(tmp_path, 'harness', 'run-trunc'):
-        with telemetry.span(telemetry.SPAN_RESET):
+        with telemetry.span('tick'):
             pass
     with open(spans_path, 'a') as file:
         file.write('{"resourceSpans": [{"scopeSpans": [{"spans": [{"nam')  # crash mid-write
     names = [rec.name for rec in telemetry.read_spans(spans_path)]
-    assert names == [telemetry.SPAN_RESET]
+    assert names == ['tick']
 
     stats_path = tmp_path / 'stats.jsonl'
     stats_path.write_text('{"t_ns": 1, "gpus": []}\n{"t_ns": 2, "cpu_sy')

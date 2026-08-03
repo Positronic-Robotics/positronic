@@ -7,7 +7,7 @@ import mujoco as mj
 import numpy as np
 
 import pimm
-from positronic import geom, telemetry
+from positronic import geom, telemetry, telemetry_keys
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.ik import qpos_from_site_pose
@@ -178,7 +178,7 @@ class MujocoSim(pimm.ControlSystem):
                 self._emit_robot_meta()
                 # Frame-0 rendering is part of the reset cost, not overhead: the remote path likewise charges
                 # its reset's rendered first observation to reset, so time this publish there too.
-                with telemetry.span(telemetry.SPAN_RESET):
+                with telemetry.span(telemetry_keys.SPAN_RESET):
                     self._publish_frame()
                 continue
             now = clock.now()
@@ -206,7 +206,7 @@ class MujocoSim(pimm.ControlSystem):
             # rendering) to the env step: the remote env-server path times its whole step, which returns
             # rendered observations, so an image-heavy native sim must count rendering here too or its wall
             # split reads rendering as overhead and is not comparable to the remote path.
-            with telemetry.span(telemetry.SPAN_ENV_STEP):
+            with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
                 self.step()
                 self.fps_counter.tick()
                 if state_due(now):
