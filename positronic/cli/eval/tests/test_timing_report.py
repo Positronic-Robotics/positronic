@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from positronic.cli.eval.timing_report import _build_report, _parse_dmon, _read_spans_dir, _read_stats_dir
+from positronic.cli.eval.timing_report import _build_report, _parse_dmon, _read_spans_dir, _read_stats_dir, _render
 from positronic.telemetry import (
     ATTR_EPISODE_ABORTED,
     ATTR_EPISODE_VIRTUAL_S,
@@ -94,7 +94,6 @@ def test_report_aggregates(tmp_path):
     assert report.episodes == 2
     assert report.wall_pass_s == pytest.approx(100.0)
     assert report.real_time_factor == pytest.approx(0.40)  # 40 virtual-s / 100 wall-s
-    assert report.policy_busy_fraction == pytest.approx(0.08)  # 8 infer-s / 100
     assert report.infer_calls == 4
     assert report.infer_p50_ms == pytest.approx(2000.0)
     assert report.infer_p95_ms == pytest.approx(3000.0)
@@ -122,6 +121,41 @@ def test_report_aggregates(tmp_path):
     assert report.gpu.sim.peak_vram_gb == pytest.approx(4.0)
     assert report.gpu.sim.peak_proc_vram_gb == pytest.approx(2.0)
     assert report.gpu.policy is None
+
+
+def test_render_shows_shares_as_percentages(tmp_path):
+    """Every unitless share renders as an aligned percentage, and the policy-wait row carries the serving
+    capacity derived from it."""
+    _fixture(tmp_path / 'telemetry')
+    spans = _read_spans_dir(tmp_path / 'telemetry')
+    report = _build_report(spans, _read_stats_dir(tmp_path / 'telemetry'), policy_gpu=None)
+
+    rendered = _render(report).splitlines()
+
+    assert 'real-time factor:      40.0% (sim-s per wall-s)' in rendered
+    assert '  policy_wait         8.0%  -> ~12.5 sims per policy server' in rendered
+    assert '  between_episodes   20.0%' in rendered  # the longest label still lands in the same column
+    assert '  physics            37.5%' in rendered
+    assert '  materialize        25.0%' in rendered
+
+
+def test_render_omits_serving_capacity_without_inference(tmp_path):
+    """A pass with no inference has a zero policy-wait share, which yields no sims-per-server figure."""
+    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir.mkdir()
+    _write_lines(
+        telemetry_dir / 'harness.spans.jsonl',
+        [
+            _span(SPAN_EVAL_PASS, 0, 100, 'pass0'),
+            _span(SPAN_EPISODE, 0, 40, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+        ],
+    )
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+
+    rendered = _render(report).splitlines()
+
+    assert '  policy_wait         0.0%' in rendered
+    assert not any('sims per policy server' in line for line in rendered)
 
 
 def test_aborted_episode_excluded(tmp_path):
@@ -178,7 +212,7 @@ def test_aborted_episode_wall_excluded_from_between_episodes(tmp_path):
     assert split.overhead == pytest.approx(19 / 60)
     assert sum(vars(split).values()) == pytest.approx(1.0)
     # The aborted wall no longer inflates the denominator of these figures.
-    assert report.policy_busy_fraction == pytest.approx(4 / 60)
+    assert split.policy_wait == pytest.approx(4 / 60)
     assert report.real_time_factor == pytest.approx(20 / 60)
 
 

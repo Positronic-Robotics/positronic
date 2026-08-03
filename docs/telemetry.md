@@ -85,13 +85,16 @@ Reduces the sidecars under `<run_dir>/telemetry/` into a pass report and writes 
 the input (`<run_dir>` may be an `s3://` URI). It reports:
 
 - the **wall split** — each phase's share of `W_pass` (reset / env.step / policy wait / record IO / overhead /
-  between-episodes), summing to 1;
+  between-episodes), summing to 1; the policy-wait share also carries the sizing figure derived from it, how
+  many such evals one policy server could keep fed;
 - the **env-step split** — physics / render / server-other (the env server's own decomposition), plus the wire
   and materialisation shares of the client step; absent for a native sim, which reports no server decomposition;
 - **inference latency** — call count and p50 / p95;
 - the **real-time factor** — recorded virtual duration over span wall;
 - the sim box's **GPU load** — mean utilisation, peak VRAM, and this eval's peak process VRAM, from the stats
   stream.
+
+Shares print as percentages; `timing_summary.json` keeps them as fractions.
 
 `--gpu_policy_log` folds in the policy endpoint (a different box) from an `nvidia-smi dmon -s um` log; it reads
 the `sm` / `fb` column positions from the log header and fails loudly if the `fb` (framebuffer) column is

@@ -110,7 +110,6 @@ class PassReport:
     episodes: int
     wall_pass_s: float
     real_time_factor: float
-    policy_busy_fraction: float
     infer_calls: int
     infer_p50_ms: float
     infer_p95_ms: float
@@ -332,7 +331,7 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
     # counts in the denominator; the wall gap between two separate passes falls outside every pass span. An
     # aborted episode's wall is subtracted out: the episode is dropped as invalid data (its virtual time, phases
     # and infers never reduce), so its wall must also leave every W_pass-normalised figure rather than land in
-    # ``between_episodes`` and deflate the policy-busy / real-time factors.
+    # ``between_episodes`` and deflate the policy-wait / real-time factors.
     passes = [p for p in spans if p.name == SPAN_EVAL_PASS]
     pass_ids = {p.span_id for p in passes}
     aborted_wall = float(
@@ -376,11 +375,10 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
     def phase_fraction(total: float) -> float:
         return (total / wall_pass) if wall_pass else 0.0
 
-    policy_wait_sum = float(sum(t.policy_wait_s for t in timings))
     wall_split = WallSplit(
         reset=phase_fraction(sum(t.reset_s for t in timings)),
         env_step=phase_fraction(env_step_sum),
-        policy_wait=phase_fraction(policy_wait_sum),
+        policy_wait=phase_fraction(sum(t.policy_wait_s for t in timings)),
         record_io=phase_fraction(sum(t.record_io_s for t in timings)),
         overhead=phase_fraction(sum(t.overhead_s for t in timings)),
         between_episodes=phase_fraction(wall_pass - episode_wall_sum),
@@ -389,7 +387,6 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
         episodes=len(episodes),
         wall_pass_s=wall_pass,
         real_time_factor=(sum(t.virtual_s for t in timings) / wall_pass) if wall_pass else 0.0,
-        policy_busy_fraction=phase_fraction(policy_wait_sum),
         infer_calls=int(all_infer_ms.size),
         infer_p50_ms=float(np.percentile(all_infer_ms, 50)) if all_infer_ms.size else 0.0,
         infer_p95_ms=float(np.percentile(all_infer_ms, 95)) if all_infer_ms.size else 0.0,
@@ -399,25 +396,38 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
     )
 
 
+def _share_row(name: str, fraction: float) -> str:
+    """One indented ``name    12.3%`` row of a split.
+
+    The label column fits the longest name any split renders (``between_episodes``), so the percentages line
+    up in one column across the wall and env-step splits.
+    """
+    return f'  {name:<16} {fraction * 100:>6.1f}%'
+
+
 def _render(report: PassReport) -> str:
     lines = [
         f'episodes:            {report.episodes}',
         f'W_pass (wall):       {report.wall_pass_s:.1f} s ({report.wall_pass_s / 3600:.2f} h)',
-        f'real-time factor:    {report.real_time_factor:.3f} (sim-s per wall-s)',
-        f'policy busy (k):     {report.policy_busy_fraction:.3f}  -> ~{1 / report.policy_busy_fraction:.1f} sims/H100'
-        if report.policy_busy_fraction
-        else 'policy busy (k):     n/a',
+        f'real-time factor:    {report.real_time_factor * 100:>6.1f}% (sim-s per wall-s)',
         f'infer calls:         {report.infer_calls}',
         f'infer p50 / p95:     {report.infer_p50_ms:.1f} / {report.infer_p95_ms:.1f} ms',
-        'wall split (fraction of W_pass):',
+        'wall split (share of W_pass):',
     ]
-    lines += [f'  {f.name:<12} {getattr(report.wall_split, f.name):.3f}' for f in fields(WallSplit)]
+    for f in fields(WallSplit):
+        share = getattr(report.wall_split, f.name)
+        row = _share_row(f.name, share)
+        # The wall share blocked on inference is also this eval's serving-capacity figure: how many such evals
+        # one policy server could keep fed, if inference is what saturates it.
+        if f.name == 'policy_wait' and share:
+            row += f'  -> ~{1 / share:.1f} sims per policy server'
+        lines.append(row)
     if report.env_step_split is not None:
         split = report.env_step_split
-        lines.append('env-step split (fraction of env_step):')
-        lines += [f'  {name:<14} {frac:.3f}' for name, frac in split.phases.items()]
-        lines.append(f'  {"wire":<14} {split.wire:.3f}')
-        lines.append(f'  {"materialize":<14} {split.materialize:.3f}')
+        lines.append('env-step split (share of env_step):')
+        lines += [_share_row(name, frac) for name, frac in split.phases.items()]
+        lines.append(_share_row('wire', split.wire))
+        lines.append(_share_row('materialize', split.materialize))
     for f in fields(GpuReport):
         summary = getattr(report.gpu, f.name)
         if summary is not None:
