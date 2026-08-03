@@ -182,9 +182,11 @@ def from_wire(wire: dict[str, Any]) -> CommandType:
             return JointDelta(velocities=wire['velocities'])
         case 'cartesian_delta':
             rep = geom.Rotation.Representation.ROTATION_MATRIX
+            # A payload from a server predating the frame field speaks the receiver's own frame.
+            frame = wire.get('frame')
             return CartesianDelta(
                 delta=geom.Transform3D.from_vector(wire['delta'], rep),
-                frame=geom.Transform3D.from_vector(wire['frame'], rep),
+                frame=geom.Transform3D.identity if frame is None else geom.Transform3D.from_vector(frame, rep),
             )
         case _:
             raise ValueError(f'Unknown command type: {wire["type"]}')

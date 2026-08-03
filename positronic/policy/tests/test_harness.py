@@ -1189,12 +1189,25 @@ def test_directive_types():
 
 def test_cartesian_delta_wire_roundtrip():
     delta = Transform3D(np.array([0.01, -0.02, 0.03]), Rotation.from_rotvec(np.array([0.0, 0.1, 0.0])))
-    wire = to_wire(CartesianDelta(delta=delta))
+    frame = Transform3D(np.array([0.0, 0.0, 0.1]), Rotation.from_rotvec(np.array([0.0, 0.0, 0.5])))
+    wire = to_wire(CartesianDelta(delta=delta, frame=frame))
     assert wire['type'] == 'cartesian_delta'
     out = from_wire(wire)
     assert isinstance(out, CartesianDelta)
     np.testing.assert_allclose(out.delta.translation, delta.translation)
     np.testing.assert_allclose(out.delta.rotation.as_quat, delta.rotation.as_quat, atol=1e-9)
+    np.testing.assert_allclose(out.frame.translation, frame.translation)
+    np.testing.assert_allclose(out.frame.rotation.as_quat, frame.rotation.as_quat, atol=1e-9)
+
+
+def test_cartesian_delta_without_a_frame_reads_as_the_receivers_own():
+    """A payload from a server predating the field is a delta in whatever frame the receiver measures."""
+    delta = Transform3D(np.array([0.01, -0.02, 0.03]), Rotation.from_rotvec(np.array([0.0, 0.1, 0.0])))
+    wire = to_wire(CartesianDelta(delta=delta))
+    del wire['frame']
+    out = from_wire(wire)
+    assert isinstance(out, CartesianDelta)
+    np.testing.assert_allclose(out.frame.as_matrix, np.eye(4), atol=1e-12)
 
 
 def test_apply_cartesian_delta_composes_in_world_frame():

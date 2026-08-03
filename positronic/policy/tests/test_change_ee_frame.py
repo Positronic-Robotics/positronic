@@ -34,12 +34,12 @@ def test_named_frame_resolves_against_the_default_frame():
 
 def test_encode_maps_obs_to_policy_frame():
     pose_c = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
-    obs = {keys.EE_POSE: pose_c.as_vector(QUAT), 'grip': 0.5}
+    obs = {keys.EE_POSE: pose_c.as_vector(QUAT), keys.GRIP: 0.5}
 
     encoded = ChangeEEFrame(TO_DROID).encode(obs)
 
     np.testing.assert_allclose(encoded[keys.EE_POSE], (pose_c * TO_DROID).as_vector(QUAT), atol=1e-9)
-    assert encoded['grip'] == 0.5, 'unrelated obs keys pass through'
+    assert encoded[keys.GRIP] == 0.5, 'unrelated obs keys pass through'
 
 
 def test_decode_maps_action_back_to_canonical():
@@ -145,7 +145,7 @@ def test_training_encoder_maps_both_poses_forward():
             keys.CONTROL_FRAME: DEFAULT_FRAME,
             keys.EE_POSE: DummySignal(ts, np.stack([obs_pose.as_vector(QUAT)] * 2)),
             'robot_command.pose': DummySignal(ts, np.stack([cmd_pose.as_vector(QUAT)] * 2)),
-            'grip': DummySignal(ts, np.array([0.0, 1.0])),
+            keys.GRIP: DummySignal(ts, np.array([0.0, 1.0])),
         }
     )
 
@@ -154,7 +154,7 @@ def test_training_encoder_maps_both_poses_forward():
     np.testing.assert_allclose(out[keys.EE_POSE][0][0], (obs_pose * TO_DROID).as_vector(QUAT), atol=1e-9)
     np.testing.assert_allclose(out['robot_command.pose'][0][0], (cmd_pose * TO_DROID).as_vector(QUAT), atol=1e-9)
     np.testing.assert_allclose(out[keys.EE_FRAME], TO_DROID.as_vector(QUAT), atol=1e-9)
-    assert 'grip' in out, 'unrelated signals pass through'
+    assert keys.GRIP in out, 'unrelated signals pass through'
 
 
 def test_training_encoder_skips_absent_command_pose():

@@ -87,7 +87,6 @@ Upon connection, the server sends a ready packet with metadata:
       {"name": "restrict_image_size", "args": {"width": 224, "height": 224}}
     ]},
     "compress_images": false,
-    "strip": ["urdf", "control_frame"],
     "positronic_version": "0.2.1"
   }
 }

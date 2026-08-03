@@ -85,21 +85,14 @@ gh api repos/$REPO/issues/$PR/comments --paginate -q '.[] | {user:.user.login, b
 Ignore comments that are already your own replies, and comments on already-resolved threads
 (the GraphQL query in Step 5 reports `isResolved` per thread).
 
-**Only submitted feedback counts. Never read a reviewer's draft.** A review in progress is
-`PENDING` with `submitted_at: null`; its comments do not exist as far as this skill is concerned.
-The three REST fetches above enforce that for free — GitHub hides pending comments from them —
-which is exactly why they are the prescribed fetch. The danger is the workaround: when you are
-authenticated **as** the reviewer (a solo repo, your own PR), the GraphQL `reviewThreads` query
-**does** return your own unsubmitted drafts, indistinguishable from submitted ones. Acting on
-those means "fixing" half-written thoughts the human never sent, replying into their draft
-threads, and scrambling the review they are still composing.
+**Only submitted feedback counts. Never read a reviewer's draft.** The REST fetches above hide
+pending comments, which is why they are the prescribed fetch. GraphQL does not: authenticated as
+the reviewer, `reviewThreads` returns your own unsubmitted drafts indistinguishably. So use
+GraphQL to resolve and reply (Step 5), never to discover.
 
-So: use GraphQL in Step 5 to resolve threads and, when needed, to reply — never to *discover*
-comments. If a REST reply is rejected with `user_id can only have one pending review per pull
-request`, that error is information: **a review is open, so this round's feedback is not ready.**
-Post nothing into those threads. Say so and wait — do not switch to GraphQL to read around it.
-Codex and other bots submit immediately, so their feedback is always fair game; only a human's
-in-progress review is invisible, and that is deliberate.
+A reply rejected with `user_id can only have one pending review per pull request` means a review
+is open: this round is not ready. Post nothing, say so, wait. Bots submit immediately, so their
+feedback is always fair game.
 
 ## Step 2: Triage (agree or disagree)
 
