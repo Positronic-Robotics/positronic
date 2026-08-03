@@ -16,7 +16,13 @@ from positronic.drivers.roboarm.ik import (
     frame_transform,
     ik_joints_from_episode,
 )
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, bundled_franka_model, bundled_panda_model
+from positronic.drivers.roboarm.models import (
+    DEFAULT_FRAME,
+    DROID_EEF_LINK,
+    EE_LINK,
+    bundled_franka_model,
+    bundled_panda_model,
+)
 from positronic.utils import package_assets_path
 
 URDF = Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text()
@@ -154,12 +160,12 @@ def _fk_site(urdf_xml, q, frame):
 
 
 def test_frame_transform_reproduces_droid_eef_across_configs():
-    urdf = bundled_franka_model()['urdf']
-    transform = frame_transform(urdf, 'end_effector', 'droid_eef')
+    urdf = bundled_franka_model()[keys.URDF]
+    transform = frame_transform(urdf, EE_LINK, DROID_EEF_LINK)
     quat = geom.Rotation.Representation.QUAT
     for q in TEST_CONFIGS:
-        got = geom.Transform3D.from_vector(_fk_site(urdf, q, 'end_effector'), quat) * transform
-        want = geom.Transform3D.from_vector(_fk_site(urdf, q, 'droid_eef'), quat)
+        got = geom.Transform3D.from_vector(_fk_site(urdf, q, EE_LINK), quat) * transform
+        want = geom.Transform3D.from_vector(_fk_site(urdf, q, DROID_EEF_LINK), quat)
         np.testing.assert_allclose(got.translation, want.translation, atol=1e-9)
         assert geom.quat_closest(got.rotation, want.rotation) == want.rotation
 
@@ -172,11 +178,11 @@ def test_bundled_model_declares_the_frame_it_reports_in(model):
 
 def test_frame_transform_rejects_frames_across_movable_joints():
     with pytest.raises(ValueError, match='movable joints'):
-        frame_transform(bundled_franka_model()['urdf'], 'link0', 'end_effector')
+        frame_transform(bundled_franka_model()[keys.URDF], 'link0', EE_LINK)
 
 
 def test_frame_transform_identity_when_frames_match():
-    transform = frame_transform(bundled_franka_model()['urdf'], 'end_effector', 'end_effector')
+    transform = frame_transform(bundled_franka_model()[keys.URDF], EE_LINK, EE_LINK)
     np.testing.assert_allclose(transform.translation, 0.0, atol=1e-12)
     assert transform.rotation == geom.Rotation.identity
 
