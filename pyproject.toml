@@ -28,14 +28,11 @@ dependencies = [
     "msgpack",
     "mujoco",
     "numpy",
-    "nvidia-ml-py",
     "opencv-python-headless",
-    "opentelemetry-exporter-otlp-json-file>=0.65b0",
-    "opentelemetry-sdk>=1.42",
+    "opentelemetry-api>=1.42",  # no-op span surface; the SDK ships in the `telemetry` extra
     # openpi-client: optional, see [project.optional-dependencies] openpi
     "plotly>=6.5.0",
     "pos3>=0.3.1",
-    "psutil",
     "pyarrow",
     "pydantic",
     "pyturbojpeg<2",
@@ -101,6 +98,14 @@ lance = [
 yam = [
     "i2rt",  # i2rt YAM arm: joint-space position-PD + gravity-comp over CAN; not on PyPI, see [tool.uv.sources]
 ]
+telemetry = [
+    # `positronic eval run --timing` only: the OTel SDK + exporter that write the span sidecars, and the
+    # machine-load sampler's probes.
+    "nvidia-ml-py",
+    "opentelemetry-exporter-otlp-json-file>=0.65b0",
+    "opentelemetry-sdk>=1.42",
+    "psutil",
+]
 dev = [
     "ruff",
     "basedpyright",
@@ -114,6 +119,7 @@ dev = [
     "pytest-timeout",
     "pytest",
     "rerun-sdk[notebook]",
+    "positronic[telemetry]",  # the telemetry tests exercise the SDK and the samplers
 ]
 
 [tool.uv]

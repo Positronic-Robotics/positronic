@@ -13,6 +13,10 @@ machine-load sample per line). The env server writes its own set; nothing rides 
 Instrumented code sees one seam: ``from positronic import telemetry`` then ``with telemetry.span('reset'):``.
 The span helpers no-op while unbound (a normal eval binds nothing), so a call site carries no ``None`` check.
 The pass-level report is an offline reduce over the raw files (``positronic.cli.eval.timing_report``).
+
+Only the OTel API — the no-op span surface every instrumented call site touches — is a default dependency. The
+recording stack (the OTel SDK, psutil, pynvml) ships in the ``telemetry`` extra, imported by ``bind`` and
+``StatsSampler``, the two entry points ``--timing`` reaches.
 """
 
 import functools
@@ -25,23 +29,26 @@ import time
 from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
-import psutil
-import pynvml
 from opentelemetry import trace
-from opentelemetry.exporter.otlp.json.file import FileSpanExporter
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Span
 
 from positronic.simulator.env_server.telemetry import SPAN_ENV_RESET as SPAN_ENV_RESET
 from positronic.simulator.env_server.telemetry import SPAN_ENV_STEP as SPAN_ENV_STEP
 
+if TYPE_CHECKING:
+    import psutil
+    import pynvml
+    from opentelemetry.sdk.trace import TracerProvider
+
 logger = logging.getLogger(__name__)
 
 _SCOPE = 'positronic'
+
+_MISSING_EXTRA = (
+    '--timing needs the telemetry extra: `uv sync --extra telemetry` (or `pip install positronic[telemetry]`)'
+)
 
 # Span names and attribute keys are the producer↔consumer contract: a producer opens a span (or stamps an
 # attribute) by these literals, and the offline reduce (``positronic.cli.eval.timing_report``) matches on the
@@ -74,7 +81,7 @@ TELEMETRY_SUBDIR = 'telemetry'
 # resolved here rather than through OTel's ambient context (which does not survive the scheduler's generator
 # hops). ``span`` reads these to parent a per-tick span to the episode in flight; a nested span (materialize
 # inside env.step) still parents to whatever OTel span is current within its own ``with`` block.
-_provider: TracerProvider | None = None
+_provider: 'TracerProvider | None' = None
 _current_pass: Span | None = None
 _current_episode: Span | None = None
 
@@ -108,11 +115,18 @@ def _encode_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
 
 
 @contextmanager
-def bind(out_dir: Path | str, process: str, run_id: str) -> Generator[TracerProvider, None, None]:
+def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerProvider', None, None]:
     """Provider lifecycle for one process's telemetry: stream spans to ``<process>.spans.jsonl`` under a
     resource block carrying this process's identity, and register the provider so ``span`` records. The batch
     processor is flushed and shut down on exit — an abrupt exit would otherwise lose its queued tail."""
     global _provider
+    try:  # the OTel SDK and its file exporter ship in the optional `telemetry` extra
+        from opentelemetry.exporter.otlp.json.file import FileSpanExporter  # noqa: PLC0415
+        from opentelemetry.sdk.resources import Resource  # noqa: PLC0415
+        from opentelemetry.sdk.trace import TracerProvider  # noqa: PLC0415
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor  # noqa: PLC0415
+    except ImportError as error:
+        raise RuntimeError(_MISSING_EXTRA) from error
     telemetry_dir = Path(out_dir) / TELEMETRY_SUBDIR
     telemetry_dir.mkdir(parents=True, exist_ok=True)
     resource = Resource.create({
@@ -449,6 +463,12 @@ class StatsSampler:
     load-of-a-hang forensics this profiling does not need."""
 
     def __init__(self, out_path: Path | str, hz: float = 1.0) -> None:
+        global psutil, pynvml
+        try:  # the sampler's probes ship in the optional `telemetry` extra
+            import psutil  # noqa: PLC0415
+            import pynvml  # noqa: PLC0415
+        except ImportError as error:
+            raise RuntimeError(_MISSING_EXTRA) from error
         self._path = Path(out_path)
         self._interval = 1.0 / hz
         self._stop = threading.Event()

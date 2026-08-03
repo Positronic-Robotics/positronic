@@ -4884,14 +4884,11 @@ dependencies = [
     { name = "mujoco" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra != 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam') or (extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam')" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3' or extra == 'extra-10-positronic-molmoact2' or extra != 'extra-10-positronic-yam'" },
-    { name = "nvidia-ml-py" },
     { name = "opencv-python-headless", version = "4.11.0.86", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
     { name = "opencv-python-headless", version = "4.13.0.92", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra == 'extra-10-positronic-molmoact2' or extra == 'extra-10-positronic-yam' or extra != 'extra-10-positronic-lerobot'" },
-    { name = "opentelemetry-exporter-otlp-json-file" },
-    { name = "opentelemetry-sdk" },
+    { name = "opentelemetry-api" },
     { name = "plotly" },
     { name = "pos3" },
-    { name = "psutil" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pyturbojpeg" },
@@ -4912,8 +4909,12 @@ dev = [
     { name = "coverage" },
     { name = "ipython" },
     { name = "jupyter" },
+    { name = "nvidia-ml-py" },
     { name = "opencv-python" },
+    { name = "opentelemetry-exporter-otlp-json-file" },
+    { name = "opentelemetry-sdk" },
     { name = "pre-commit" },
+    { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -4964,6 +4965,12 @@ molmoact2 = [
 openpi = [
     { name = "openpi-client" },
 ]
+telemetry = [
+    { name = "nvidia-ml-py" },
+    { name = "opentelemetry-exporter-otlp-json-file" },
+    { name = "opentelemetry-sdk" },
+    { name = "psutil" },
+]
 yam = [
     { name = "i2rt" },
 ]
@@ -4994,20 +5001,22 @@ requires-dist = [
     { name = "msgpack" },
     { name = "mujoco" },
     { name = "numpy" },
-    { name = "nvidia-ml-py" },
+    { name = "nvidia-ml-py", marker = "extra == 'telemetry'" },
     { name = "opencv-python", marker = "extra == 'dev'" },
     { name = "opencv-python-headless" },
     { name = "openpi-client", marker = "extra == 'openpi'", git = "https://github.com/Positronic-Robotics/openpi.git?subdirectory=packages%2Fopenpi-client&rev=main-positronic" },
-    { name = "opentelemetry-exporter-otlp-json-file", specifier = ">=0.65b0" },
-    { name = "opentelemetry-sdk", specifier = ">=1.42" },
+    { name = "opentelemetry-api", specifier = ">=1.42" },
+    { name = "opentelemetry-exporter-otlp-json-file", marker = "extra == 'telemetry'", specifier = ">=0.65b0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'telemetry'", specifier = ">=1.42" },
     { name = "pillow", marker = "extra == 'molmoact2'" },
     { name = "placo", marker = "extra == 'hardware'" },
     { name = "plotly", specifier = ">=6.5.0" },
     { name = "pos3", specifier = ">=0.3.1" },
+    { name = "positronic", extras = ["telemetry"], marker = "extra == 'dev'" },
     { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.7.0" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "protobuf", marker = "extra == 'molmoact2'" },
-    { name = "psutil" },
+    { name = "psutil", marker = "extra == 'telemetry'" },
     { name = "pyarrow" },
     { name = "pyaudio", marker = "sys_platform == 'linux' and extra == 'hardware'" },
     { name = "pydantic" },
@@ -5042,7 +5051,7 @@ requires-dist = [
     { name = "websockets", specifier = ">=15.0.1" },
     { name = "zmq" },
 ]
-provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "dev"]
+provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "telemetry", "dev"]
 
 [[package]]
 name = "positronic-franka"

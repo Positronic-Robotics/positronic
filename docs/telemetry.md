@@ -22,7 +22,10 @@ under the bound tracer enters the report, so a sweep containing a real embodimen
 than allowed to pollute it. (A real eval runs its recorder and producers as separate processes with no shared
 tracer, so there is nothing to time there anyway — run real embodiments in a separate untimed invocation.)
 
-A normal eval (no `--timing`) pays nothing: the span helpers compile to no-ops and no sidecar is written.
+A normal eval (no `--timing`) pays nothing: the span helpers compile to no-ops and no sidecar is written. That
+is also why the recording stack is not a default dependency — `--timing` needs the `telemetry` extra
+(`uv sync --extra telemetry`, or `pip install positronic[telemetry]`), and says so if it is missing. An install
+without it carries only the OTel API the no-op helpers sit on.
 
 ## File layout
 

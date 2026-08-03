@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import time
 
 import pynvml
@@ -11,6 +12,41 @@ from positronic import telemetry
 
 def _spans_by_name(path):
     return {rec.name: rec for rec in telemetry.read_spans(path)}
+
+
+@pytest.fixture
+def without_telemetry_extra(monkeypatch):
+    """A default install: the OTel API is there, the ``telemetry`` extra's packages are not. ``None`` in
+    ``sys.modules`` is what the import system raises ImportError on."""
+    for name in (
+        'psutil',
+        'pynvml',
+        'opentelemetry.sdk',
+        'opentelemetry.sdk.resources',
+        'opentelemetry.sdk.trace',
+        'opentelemetry.sdk.trace.export',
+        'opentelemetry.exporter.otlp.json.file',
+    ):
+        monkeypatch.setitem(sys.modules, name, None)
+
+
+def test_span_surface_survives_without_the_telemetry_extra(without_telemetry_extra):
+    """Every instrumented call site sits on the OTel API alone, so an install carrying no telemetry extra runs
+    a normal eval — the helpers no-op exactly as they do while unbound."""
+    with telemetry.span(telemetry.SPAN_RESET):
+        pass
+    episode = telemetry.begin_episode()
+    telemetry.end_episode(episode)
+
+
+def test_recording_without_the_telemetry_extra_names_the_extra(tmp_path, without_telemetry_extra):
+    """Both entry points ``--timing`` reaches fail with the install command, not an ImportError on a package
+    name the operator has no reason to connect to ``--timing``."""
+    with pytest.raises(RuntimeError, match='telemetry extra'):
+        with telemetry.bind(tmp_path, 'harness', 'run-no-extra'):
+            pass
+    with pytest.raises(RuntimeError, match='telemetry extra'):
+        telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
 
 
 def test_nested_spans_round_trip(tmp_path):
