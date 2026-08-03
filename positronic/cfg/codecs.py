@@ -1,10 +1,9 @@
 """Configuration for policy codecs (observation encoders and action decoders)."""
 
 import configuronic as cfn
+import numpy as np
 
 from positronic import geom, keys
-from positronic.drivers.roboarm.ik import frame_transform
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, bundled_franka_model
 from positronic.policy.codec import (
     ActionHorizon,
     ActionTimestamp,
@@ -18,17 +17,13 @@ from positronic.policy.observation import ObservationCodec
 RotRep = geom.Rotation.Representation
 
 
-def change_ee_frame(frame: str) -> ChangeEEFrame:
-    """``ChangeEEFrame`` into the end-effector frame ``frame`` names on the bundled franka rig.
-
-    The transform belongs to the checkpoint rather than to the rig running it, which holds only while every
-    embodiment puts ``DEFAULT_FRAME`` at the same physical place.
-
-    TODO(#550): they do not. The FR3 puts it at ``F_T_EE`` and the sim panda at its grasp site, 45mm apart
-    along the approach axis, so a codec built here is right on a franka rig and shifted on the sim. Moving
-    both to the flange is what makes this transform embodiment-independent.
-    """
-    return ChangeEEFrame(frame_transform(bundled_franka_model()[keys.URDF], DEFAULT_FRAME, frame))
+# DROID's end-effector frame, where its checkpoints express poses: the Robotiq 2F-85 coupler, 18.17mm along
+# the flange approach axis and +90deg about it. Stated relative to ``DEFAULT_FRAME``, so a checkpoint declares
+# its own frame and no robot model is consulted to serve it.
+# TODO(#550): the awkward numbers are the FR3's ``F_T_EE`` offset riding along, because ``default`` is not the
+# flange yet. Moving it there turns this into the authored gripper geometry and makes the value portable — as
+# it stands it is right on a franka rig and 45mm off on the sim, whose ``default`` sits elsewhere again.
+DROID_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0, -0.085225977]), geom.Rotation.from_euler([0.0, 0.0, 2.35619449]))
 
 
 @cfn.config()
@@ -74,13 +69,14 @@ def compose(
     horizon: float | None,
     binarize_grip: tuple[str, ...] | None,
     flip_grip: bool,
-    ee_frame: str | None,
+    ee_frame: geom.Transform3D | None,
 ):
     """Compose observation and action codecs with timing and optional grip binarization.
 
     ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame``
-    names the end-effector frame the checkpoint speaks and re-expresses a dataset in it for training (see
-    ``ChangeEEFrame``); serving declares the conversion in the pipeline instead, so leave it unset there.
+    places the end-effector frame the checkpoint speaks relative to ``DEFAULT_FRAME`` (``DROID_EE_FRAME``) and
+    re-expresses a dataset in it for training (see ``ChangeEEFrame``); serving declares the conversion in the
+    pipeline instead, so leave it unset there.
 
     Layout::
 
@@ -89,7 +85,7 @@ def compose(
     """
     result = obs & action
     if ee_frame is not None:
-        result = change_ee_frame(ee_frame) | result
+        result = ChangeEEFrame(ee_frame) | result
     if flip_grip:
         result = FlipGrip() | result
     if binarize_grip:

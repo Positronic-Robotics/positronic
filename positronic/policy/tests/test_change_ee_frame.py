@@ -27,9 +27,9 @@ def test_droid_eef_matches_robolab_eef_frame():
     assert quat_closest(transform.rotation, expected) == expected
 
 
-def test_named_frame_resolves_against_the_default_frame():
-    codec = codecs_cfg.change_ee_frame(DROID_EEF_LINK)
-    np.testing.assert_allclose(codec.to_spec()['args']['transform'], TO_DROID.as_vector(QUAT), atol=1e-12)
+def test_declared_droid_frame_matches_the_model_geometry():
+    """The checkpoint states its frame as a constant; this pins it to where the model puts that frame."""
+    np.testing.assert_allclose(codecs_cfg.DROID_EE_FRAME.as_matrix, TO_DROID.as_matrix, atol=1e-9)
 
 
 def test_encode_maps_obs_to_policy_frame():
