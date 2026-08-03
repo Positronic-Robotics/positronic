@@ -224,6 +224,8 @@ class Robot(pimm.ControlSystem):
         Raises if the arm does not arrive: homing is where the run starts from, so continuing with
         the arm somewhere unknown is worse than stopping.
         """
+        # The startup call gets a freshly allocated FrankaState, so fill it before anyone reads it.
+        robot_state.encode(robot.state())
         robot_state._start_reset()
         self.state.emit(robot_state)
 
