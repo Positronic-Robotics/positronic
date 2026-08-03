@@ -1,7 +1,7 @@
 import logging
 import os
 import uuid
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterable
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -19,7 +19,7 @@ from positronic.eval import Embodiment, Eval, Task
 from positronic.gui import dpg_ui
 from positronic.policy.base import SampledPolicy
 from positronic.policy.harness import Harness
-from positronic.simulator.env_server.telemetry import ENV_RUN_ID, ENV_TELEMETRY_DIR
+from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -123,20 +123,16 @@ def _run_world(
             world.run([harness, *foreground], [*producers, ds_agent, gui])
 
 
-def _validate_timing(evals: list[Eval] | None, embodiment: Embodiment | None, output_dir: str | Path | None) -> None:
+def _validate_timing(embodiments: Iterable[Embodiment], output_dir: str | Path | None) -> None:
     """Reject a ``--timing`` sweep the report cannot describe: one without an output dir to write the
     sidecars under, or one carrying a real embodiment. Everything under the bound tracer enters the report,
     so a real eval's episodes, wall time and machine samples would silently corrupt it."""
     if output_dir is None:
         raise ValueError('--timing needs --output_dir: the telemetry sidecars are written under it')
-    if evals is not None:
-        simulated = [ev.embodiment.simulated for ev in evals]
-    else:
-        assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
-        simulated = [embodiment.simulated]
-    if not all(simulated):
+    real = sum(not embodiment.simulated for embodiment in embodiments)
+    if real:
         raise ValueError(
-            f'eval timing needs an all-simulated sweep, got {sum(not s for s in simulated)} real '
+            f'eval timing needs an all-simulated sweep, got {real} real '
             'embodiment(s): a real eval would run inside the same bound tracer and pass span, so its '
             'episodes, wall time and machine samples would silently corrupt the report. Run real '
             'embodiments in a separate untimed invocation.'
@@ -177,12 +173,13 @@ def _timed_pass(output_dir: str | Path | None, timing: bool, policy):
     os.environ[ENV_TELEMETRY_DIR] = str(timed_dir / telemetry.TELEMETRY_SUBDIR)
     os.environ[ENV_RUN_ID] = run_id
     try:
-        stats_path = timed_dir / telemetry.TELEMETRY_SUBDIR / f'{telemetry_keys.HARNESS_PROCESS}.stats.jsonl'
+        stats_name = f'{telemetry_keys.HARNESS_PROCESS}{telemetry.STATS_SUFFIX}'
+        stats_path = timed_dir / telemetry.TELEMETRY_SUBDIR / stats_name
         # The pass span closes before the tracer it is bound to shuts its provider down.
         with (
             telemetry.bind(timed_dir, telemetry_keys.HARNESS_PROCESS, run_id),
             telemetry.StatsSampler(stats_path),
-            _pass_span(**{'run.id': run_id, 'policy': type(policy).__name__}),
+            _pass_span(**{ATTR_RUN_ID: run_id, 'policy': type(policy).__name__}),
         ):
             yield
     finally:
@@ -218,7 +215,12 @@ def main(
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
     # Validate timing up front, before the policy warmup, so a rejected sweep fails before it spends anything.
     if timing:
-        _validate_timing(evals, embodiment, output_dir)
+        if evals is not None:
+            embodiments = [ev.embodiment for ev in evals]
+        else:
+            assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
+            embodiments = [embodiment]
+        _validate_timing(embodiments, output_dir)
 
     # Drive the policy's remote endpoints through their cold start before hardware and the operator
     # surface come up: opening a session blocks on the server handshake, which returns only once the

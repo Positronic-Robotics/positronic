@@ -1,4 +1,5 @@
 import logging
+import time
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -253,6 +254,28 @@ def test_records_infer_span_without_scheduling_wrapper(tmp_path):
         assert session({'obs_time_ns': 0}) is not None
     spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
     assert [s.name for s in spans] == [telemetry_keys.SPAN_POLICY_INFER]
+
+
+def test_infer_span_excludes_client_side_image_preparation(tmp_path):
+    """``policy.infer`` is the remote round-trip, so JPEG-encoding the observation stays outside it: folding
+    client CPU work into the span would inflate the inference percentiles and the policy-server capacity
+    estimate the report derives from them (Codex on PR #531)."""
+    policy, _ = _mock_remote_policy({**EMPTY_STACK, 'compress_images': True}, infer_return=[])
+    session = policy.new_session()
+    encoded_at: list[int] = []
+
+    def _stamp_encode(image):
+        encoded_at.append(time.time_ns())
+        return {'jpeg': b''}
+
+    with patch('positronic.policy.remote.encode_jpeg', side_effect=_stamp_encode):
+        with telemetry.bind(tmp_path, 'harness', 'run-infer-prep'):
+            session({'cam': _make_image(48, 64), 'obs_time_ns': 0})
+
+    (span,) = telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl')
+    assert span.name == telemetry_keys.SPAN_POLICY_INFER
+    assert encoded_at, 'the observation carried an image to compress'
+    assert span.start_ns >= encoded_at[-1]  # pre-fix the encode ran inside the span, so the span opened first
 
 
 def test_records_infer_span_when_inference_raises(tmp_path):

@@ -69,7 +69,7 @@ The span names are the contract:
 | `env.step` | `episode` | — | the client-observed env step (materialisation included) |
 | `materialize` | `env.step` | — | client-side observation assembly (shared-memory image alloc + camera copies) |
 | `record.io` | `episode` | — | the recorder's serialize + append |
-| `policy.infer` | `episode` | — | one real inference round-trip (a scheduler replay gets none) |
+| `policy.infer` | `episode` | — | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
 | `env.step` (server) | root (env file) | — | the env server's own in-step wall |
 | env-owned children (e.g. `physics`, `render`) | server `env.step` | env decides | the sim's native phase decomposition |
 
@@ -80,14 +80,19 @@ boundary, so no sample is lost at a phase edge:
 
 ```json
 {"t_ns": 0, "cpu_sys_pct": 0.0, "iowait_pct": 0.0, "mem_sys_used_b": 0,
- "cpu_proc_pct": 0.0, "rss_proc_b": 0,
+ "cpu_proc_pct": 0.0, "rss_proc_b": 0, "gpu_count": 1,
  "gpus": [{"i": 0, "util_pct": 0.0, "mem_used_b": 0, "mem_total_b": 0, "power_w": 0.0,
            "proc_mem_b": 0, "proc_util_pct": null}]}
 ```
 
+The field names are `positronic.telemetry`'s `STAT_*` / `GPU_*` constants, which the reduce imports rather
+than re-spelling.
+
 `cpu_proc_pct` / `rss_proc_b` / `proc_mem_b` are this eval's whole process tree (harness + env server + Isaac
-children). `gpus` is empty on a box with no NVML; `proc_mem_b` is null where per-process GPU memory is
-unavailable (a PID namespace without `--pid=host`); `proc_util_pct` is left null because per-process GPU
+children). `gpus` is empty on a box with no NVML, and carries fewer entries than `gpu_count` when a device
+refuses a query mid-run (MIG, a transiently lost GPU) — so `gpu_count` is what tells a reader the sample saw
+the whole box. `proc_mem_b` is null where per-process GPU memory is unavailable (a PID namespace without
+`--pid=host`, or a driver that cannot attribute it); `proc_util_pct` is left null because per-process GPU
 utilisation is not reliably attributable under MPS / co-location.
 
 ## Reporting
@@ -107,13 +112,14 @@ the input (`<run_dir>` may be an `s3://` URI). It reports:
 - **inference latency** — call count and p50 / p95;
 - the **real-time factor** — recorded virtual duration over span wall;
 - the sim box's **GPU load** — mean utilisation, peak VRAM, and this eval's peak process VRAM, from the stats
-  stream.
+  stream. Utilisation averages every per-device reading taken; the two peaks are box-wide totals, so they need
+  samples that saw every device and read unavailable when none did.
 
 Shares print as percentages; `timing_summary.json` keeps them as fractions.
 
 `--gpu_policy_log` folds in the policy endpoint (a different box) from an `nvidia-smi dmon -s um` log; it reads
 the `sm` / `fb` column positions from the log header and fails loudly if the `fb` (framebuffer) column is
-missing rather than under-reporting peak VRAM as 0.
+missing, rather than dropping every row and reporting no peak VRAM for the policy box.
 
 ## Future work
 

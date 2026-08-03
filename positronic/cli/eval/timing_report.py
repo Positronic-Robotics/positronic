@@ -19,7 +19,20 @@ import configuronic as cfn
 import numpy as np
 import pos3
 
-from positronic.telemetry import TELEMETRY_SUBDIR, SpanRec, read_spans, read_stats
+from positronic.telemetry import (
+    GPU_MEM_USED_B,
+    GPU_PROC_MEM_B,
+    GPU_UTIL_PCT,
+    SPANS_SUFFIX,
+    STAT_GPU_COUNT,
+    STAT_GPUS,
+    STAT_T_NS,
+    STATS_SUFFIX,
+    TELEMETRY_SUBDIR,
+    SpanRec,
+    read_spans,
+    read_stats,
+)
 from positronic.telemetry_keys import (
     ATTR_EPISODE_ABORTED,
     ATTR_EPISODE_PARTIAL,
@@ -39,17 +52,26 @@ logger = logging.getLogger(__name__)
 
 _BYTES_PER_GB = 1024**3
 
+# The ``nvidia-smi dmon`` column names the policy-endpoint log is read through: SM utilisation (%), framebuffer
+# use (MiB) and the device index. Named once so header detection and row indexing cannot drift apart.
+_DMON_UTIL = 'sm'
+_DMON_FB = 'fb'
+_DMON_DEVICE = 'gpu'
+
 
 @dataclass
 class GpuSummary:
     """Mean utilisation and peak VRAM for one box.
 
-    ``peak_proc_vram_gb`` is the peak memory attributed to this eval's process tree; it is ``None`` for a
-    policy ``dmon`` log, which carries no per-process attribution (only the whole box).
+    ``mean_util_pct`` averages every per-device reading taken, so it covers whichever devices answered. The
+    peaks are box-wide totals — a sample's devices summed, then the max over samples — so each needs a sample
+    that saw the whole box, and reads ``None`` when none did. ``peak_proc_vram_gb`` is the share attributed to
+    this eval's process tree, and needs that attribution on top; it is always ``None`` for a policy ``dmon``
+    log, which carries none (only the whole box).
     """
 
     mean_util_pct: float
-    peak_vram_gb: float
+    peak_vram_gb: float | None
     peak_proc_vram_gb: float | None
 
 
@@ -122,47 +144,51 @@ def _dur_s(span: SpanRec) -> float:
 def _read_spans_dir(telemetry_dir: Path) -> list[SpanRec]:
     """Every span across all per-process ``*.spans.jsonl`` files under the telemetry dir."""
     spans: list[SpanRec] = []
-    for path in sorted(telemetry_dir.glob('*.spans.jsonl')):
+    for path in sorted(telemetry_dir.glob(f'*{SPANS_SUFFIX}')):
         spans.extend(read_spans(path))
     return spans
 
 
 def _read_stats_dir(telemetry_dir: Path) -> list[dict]:
     samples: list[dict] = []
-    for path in sorted(telemetry_dir.glob('*.stats.jsonl')):
+    for path in sorted(telemetry_dir.glob(f'*{STATS_SUFFIX}')):
         samples.extend(read_stats(path))
     return samples
 
 
 def _gpu_summary_from_stats(stats: list[dict], pass_windows: list[tuple[int, int]]) -> GpuSummary | None:
-    """The sim box's GPU summary from the machine-load stream: mean utilisation over every per-GPU reading,
-    and peak VRAM as the box-wide total — each sample's devices summed first, then the max over samples, so a
-    multi-GPU box's peak is what the box held at one instant, not the largest single device. Only samples
-    taken inside a completed pass's wall window count — a reused directory carries an earlier (possibly
-    killed) run's samples, the stats twin of the orphan-episode exclusion. ``None`` when no counted sample
-    carried a GPU (a CPU sim box)."""
-    in_window = [sample for sample in stats if any(start <= int(sample['t_ns']) <= end for start, end in pass_windows)]
+    """The sim box's GPU summary from the machine-load stream. Only samples taken inside a completed pass's
+    wall window count — a reused directory carries an earlier (possibly killed) run's samples, the stats twin
+    of the orphan-episode exclusion. ``None`` when no counted sample carried a GPU (a CPU sim box)."""
+    in_window = [s for s in stats if any(start <= int(s[STAT_T_NS]) <= end for start, end in pass_windows)]
     utils: list[float] = []
     mem: list[float] = []
     proc: list[float] = []
     for sample in in_window:
-        gpus = sample.get('gpus', [])
-        utils.extend(float(gpu['util_pct']) for gpu in gpus)
-        if gpus:
-            mem.append(sum(float(gpu['mem_used_b']) for gpu in gpus))
-        # Box-wide process VRAM needs every GPU attributed. A device whose NVML query errors mid-run is dropped
-        # from the sample entirely, not left ``None``, so a sample is complete only when its present device
-        # count equals the ``gpu_count`` the sampler recorded (its NVML handle count) AND every device reported
-        # ``proc_mem_b``; an omitted device or a ``None`` reading each make the sum an undercount, so an
-        # incomplete sample contributes nothing. If no sample is complete, ``proc`` stays empty and the peak
-        # reads ``None``.
-        if gpus and len(gpus) == sample['gpu_count'] and all(gpu.get('proc_mem_b') is not None for gpu in gpus):
-            proc.append(sum(float(gpu['proc_mem_b']) for gpu in gpus))
-    if not utils and not mem:
+        gpus = sample.get(STAT_GPUS, [])
+        if not gpus:
+            continue
+        utils.extend(float(gpu[GPU_UTIL_PCT]) for gpu in gpus)
+        # Either peak is a box-wide total, so it needs a sample that saw the whole box. A device whose NVML
+        # query errors mid-run is dropped from the sample entirely, not left ``None``, so a sample covers the
+        # box only when its device count equals the ``gpu_count`` the sampler recorded (its NVML handle
+        # count); a shorter one would undercount and contributes to neither peak. The process peak needs
+        # per-device attribution on top, so a ``None`` reading drops the sample from that peak alone.
+        if len(gpus) != sample[STAT_GPU_COUNT]:
+            continue
+        mem.append(sum(float(gpu[GPU_MEM_USED_B]) for gpu in gpus))
+        if all(gpu.get(GPU_PROC_MEM_B) is not None for gpu in gpus):
+            proc.append(sum(float(gpu[GPU_PROC_MEM_B]) for gpu in gpus))
+    if not utils:
         return None
+    if not mem:
+        logger.warning(
+            'no machine-load sample carried every GPU the sampler configured (a device errored throughout?); '
+            'peak VRAM is unavailable and mean utilisation covers only the devices that answered'
+        )
     return GpuSummary(
-        mean_util_pct=float(np.mean(utils)) if utils else 0.0,
-        peak_vram_gb=(max(mem) / _BYTES_PER_GB) if mem else 0.0,
+        mean_util_pct=float(np.mean(utils)),
+        peak_vram_gb=(max(mem) / _BYTES_PER_GB) if mem else None,
         peak_proc_vram_gb=(max(proc) / _BYTES_PER_GB) if proc else None,
     )
 
@@ -171,15 +197,16 @@ def _dmon_column_indices(names: list[str], log_path: Path) -> tuple[int, int, in
     """Positions of the ``sm``, ``fb`` and (where present) ``gpu`` columns in a dmon name header.
 
     A header carrying ``sm`` but no ``fb`` (plain ``dmon`` / ``-s u``) fails loudly: every row would be
-    skipped and peak VRAM silently read as 0.
+    skipped and the policy box would report no peak VRAM at all, as if none had been asked for.
     """
-    if 'fb' not in names:
+    if _DMON_FB not in names:
         raise ValueError(
-            f'{log_path}: nvidia-smi dmon log has an `sm` column but no `fb` (framebuffer) column, so '
-            f'peak VRAM cannot be read and every sample would be dropped. Re-collect it with '
-            f'`nvidia-smi dmon -s um` (u=utilisation, m=memory), which emits the `fb` column.'
+            f'{log_path}: nvidia-smi dmon log has an `{_DMON_UTIL}` column but no `{_DMON_FB}` (framebuffer) '
+            f'column, so peak VRAM cannot be read and every sample would be dropped. Re-collect it with '
+            f'`nvidia-smi dmon -s um` (u=utilisation, m=memory), which emits the `{_DMON_FB}` column.'
         )
-    return names.index('sm'), names.index('fb'), names.index('gpu') if 'gpu' in names else None
+    device_idx = names.index(_DMON_DEVICE) if _DMON_DEVICE in names else None
+    return names.index(_DMON_UTIL), names.index(_DMON_FB), device_idx
 
 
 def _parse_dmon(log_path: Path) -> GpuSummary:
@@ -189,8 +216,8 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
     drivers, JPEG/OFA) columns before the framebuffer — so the positions are read from the ``# ... sm ...
     fb ...`` name header rather than hard-coded. ``sm`` is SM utilisation (%) and ``fb`` the framebuffer
     use (MiB). Rows before the header, or with missing numeric fields, are skipped; a log whose header has
-    ``sm`` but no ``fb`` (plain ``dmon`` / ``-s u``) fails loudly rather than silently reporting 0. A dmon
-    log carries no per-process attribution, so ``peak_proc_vram_gb`` is ``None``.
+    ``sm`` but no ``fb`` (plain ``dmon`` / ``-s u``) fails loudly rather than dropping every row. A dmon log
+    carries no per-process attribution, so ``peak_proc_vram_gb`` is ``None``.
     """
     sm_idx: int | None = None
     fb_idx: int | None = None
@@ -214,7 +241,7 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
         if stripped.startswith('#'):
             # The name header carries the column names ('sm', 'fb', ...); the units line ('%', 'MB') has no 'sm'.
             names = stripped.lstrip('#').split()
-            if 'sm' in names:
+            if _DMON_UTIL in names:
                 sm_idx, fb_idx, gpu_idx = _dmon_column_indices(names, log_path)
             continue
         if sm_idx is None or fb_idx is None:
@@ -233,7 +260,7 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
     flush_cycle()
     return GpuSummary(
         mean_util_pct=float(np.mean(utils)) if utils else 0.0,
-        peak_vram_gb=(max(cycle_totals) / 1024.0) if cycle_totals else 0.0,
+        peak_vram_gb=(max(cycle_totals) / 1024.0) if cycle_totals else None,
         peak_proc_vram_gb=None,
     )
 
@@ -428,7 +455,8 @@ def _render(report: PassReport) -> str:
     for f in fields(GpuReport):
         summary = getattr(report.gpu, f.name)
         if summary is not None:
-            line = f'gpu[{f.name}]: util {summary.mean_util_pct:.0f}%  peak VRAM {summary.peak_vram_gb:.1f} GB'
+            peak = f'{summary.peak_vram_gb:.1f} GB' if summary.peak_vram_gb is not None else 'unavailable'
+            line = f'gpu[{f.name}]: util {summary.mean_util_pct:.0f}%  peak VRAM {peak}'
             if summary.peak_proc_vram_gb is not None:
                 line += f'  (this eval {summary.peak_proc_vram_gb:.1f} GB)'
             lines.append(line)

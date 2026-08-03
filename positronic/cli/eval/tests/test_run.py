@@ -4,7 +4,7 @@ from typing import cast
 import pytest
 
 from positronic import telemetry, telemetry_keys
-from positronic.cli.eval.run import _pass_span, main
+from positronic.cli.eval.run import Driver, _pass_span, main
 from positronic.eval import Embodiment, Eval, Task
 
 
@@ -17,6 +17,25 @@ def test_timed_sweep_rejects_real_embodiment(tmp_path):
     tracer enters the report, so a real eval's spans and wall time would silently corrupt it."""
     with pytest.raises(ValueError, match='all-simulated'):
         main(policy=object(), evals=[_eval(True), _eval(False)], output_dir=tmp_path, timing=True)
+
+
+def test_timed_attended_run_rejects_real_embodiment(tmp_path):
+    """The attended (driver) path runs one embodiment rather than a sweep, and reaches the same check."""
+    real = cast(Embodiment, SimpleNamespace(simulated=False))
+    with pytest.raises(ValueError, match='all-simulated'):
+        main(
+            policy=object(),
+            embodiment=real,
+            driver=lambda _: cast(Driver, SimpleNamespace()),
+            output_dir=tmp_path,
+            timing=True,
+        )
+
+
+def test_timed_sweep_needs_an_output_dir():
+    """There is nowhere to write the sidecars without one, so the sweep is rejected before it spends anything."""
+    with pytest.raises(ValueError, match='output_dir'):
+        main(policy=object(), evals=[_eval(True)], timing=True)
 
 
 def test_failed_pass_exported_and_stamped(tmp_path):

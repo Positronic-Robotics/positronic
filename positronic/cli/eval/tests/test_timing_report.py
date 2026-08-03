@@ -316,7 +316,7 @@ def test_multi_gpu_peak_vram_sums_devices_per_sample(tmp_path):
 def test_partial_per_gpu_proc_vram_excluded_from_peak(tmp_path):
     """A sample where some GPU can't attribute process memory (``proc_mem_b`` None) is incomplete for the
     box-wide process-VRAM peak and contributes nothing; the peak reflects only samples where every GPU
-    reported. Box-wide util and mem still count every reading (Codex on PR #531)."""
+    reported. The sample still carries every device, so it counts towards util and the box-wide mem peak."""
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
     _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
@@ -384,8 +384,8 @@ def test_omitted_gpu_device_excluded_from_proc_vram_peak(tmp_path):
 def test_device_omitted_from_every_sample_excluded_via_recorded_count(tmp_path):
     """When a device is omitted from EVERY in-window sample, no sample carries the box's full complement, so
     max-observed would wrongly infer the complement from the surviving device and count every sample complete.
-    The recorded ``gpu_count`` keeps the true count (2), so the one-device samples are incomplete and never
-    inflate the process-VRAM peak (Codex on PR #531)."""
+    The recorded ``gpu_count`` keeps the true count (2), so the one-device samples are incomplete and neither
+    box-wide peak can be reported. Mean utilisation still covers the device that answered."""
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
     _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
@@ -411,7 +411,9 @@ def test_device_omitted_from_every_sample_excluded_via_recorded_count(tmp_path):
     # No sample carries both GPUs, so none is complete: the peak is ``None``. Pre-fix, max-observed inferred a
     # complement of 1 and both single-device samples counted, inflating the peak to 7 GB.
     assert sim.peak_proc_vram_gb is None
-    assert sim.peak_vram_gb == pytest.approx(2.0)  # box-wide mem peak still counts every reading: sample 1's 2 GB
+    # Peak VRAM is a box-wide sum too, so an incomplete sample would report half the box as the whole of it.
+    assert sim.peak_vram_gb is None
+    assert sim.mean_util_pct == pytest.approx(60.0)  # the surviving device's readings still average
 
 
 def test_gpu_samples_outside_pass_windows_excluded(tmp_path):

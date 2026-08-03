@@ -86,9 +86,13 @@ class RemoteSession(Session):
         """
         # The only place ``policy.infer`` is timed: the real remote inference boundary, with in-process terminals
         # (e.g. ``_LerobotSession``) left uninstrumented by design; ``finally`` times a raising round-trip too.
+        # The span starts after preparation: JPEG-encoding a stack of HD frames is client-side work, and folding
+        # it into the round-trip would inflate the inference percentiles and the policy-server capacity estimate
+        # the report derives from them.
+        prepared = self._prepare_obs(obs)
         infer_start_ns = time.time_ns()
         try:
-            result = self._session.infer(self._prepare_obs(obs))
+            result = self._session.infer(prepared)
         finally:
             telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns())
         if isinstance(result, dict):

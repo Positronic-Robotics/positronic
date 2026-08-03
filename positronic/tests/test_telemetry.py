@@ -4,6 +4,7 @@ import sys
 import time
 from contextlib import contextmanager
 
+import psutil
 import pynvml
 import pytest
 from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
@@ -231,6 +232,33 @@ def test_stats_sample_treats_nvml_sentinel_as_unavailable(tmp_path, monkeypatch)
     sample = sampler._sample()
     gpu = sample['gpus'][0]
     assert gpu['proc_mem_b'] is None  # pre-fix, the sentinel was int()-cast and recorded as ~1.8e19 bytes
+    sampler._nvml.shutdown()
+
+
+def test_stats_sample_treats_foreign_pid_namespace_as_unavailable(tmp_path, monkeypatch):
+    """NVML reports host pids; in a container without ``--pid=host`` the sampler's own tree pids are
+    namespace-local, so no reported process matches and the device would read a confident 0 — a GPU-heavy eval
+    published as using no VRAM. Pids that exist in no namespace we can see mark that mismatch, and the device
+    reads unavailable instead (Codex on PR #531)."""
+    _install_fake_nvml(monkeypatch)
+    # A host pid the sampler's namespace cannot see, standing in for NVML reporting from outside the container.
+    foreign = _FakeProc(4_000_000, 8 * 1024**3)
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetComputeRunningProcesses', lambda h: [foreign])
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetGraphicsRunningProcesses', lambda h: [])
+    monkeypatch.setattr(psutil, 'pid_exists', lambda pid: pid != foreign.pid)
+    sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
+    assert sampler._sample()['gpus'][0]['proc_mem_b'] is None  # pre-fix this read 0, indistinguishable from idle
+    sampler._nvml.shutdown()
+
+
+def test_stats_sample_reports_zero_when_gpu_is_idle(tmp_path, monkeypatch):
+    """A device with no processes on it is genuinely 0 for this eval, not unavailable — the namespace check
+    must not swallow the ordinary idle case."""
+    _install_fake_nvml(monkeypatch)
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetComputeRunningProcesses', lambda h: [])
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetGraphicsRunningProcesses', lambda h: [])
+    sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
+    assert sampler._sample()['gpus'][0]['proc_mem_b'] == 0
     sampler._nvml.shutdown()
 
 

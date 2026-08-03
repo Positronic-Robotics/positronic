@@ -38,6 +38,16 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from opentelemetry import trace
 from opentelemetry.trace import Span
 
+# The resource-block attribute keys are defined by the stdlib-only env-server writer — the isolated env
+# interpreter cannot import positronic, so the constrained side owns the names and this one follows them.
+from positronic.simulator.env_server.telemetry import (
+    ATTR_HOST_NAME,
+    ATTR_PROCESS_NAME,
+    ATTR_PROCESS_PID,
+    ATTR_RUN_ID,
+    SPANS_SUFFIX,
+)
+
 if TYPE_CHECKING:
     import psutil
     import pynvml
@@ -54,6 +64,27 @@ _MISSING_EXTRA = (
 # The subdirectory under a run's output dir where every process's sidecars live. The eval CLI writer, a
 # launched env server (via the env-var it is handed) and the offline reduce all resolve to this same dir.
 TELEMETRY_SUBDIR = 'telemetry'
+
+# The machine-load sample's field names, and the suffix of the file holding one such sample per line. Owned
+# here — ``StatsSampler`` is the only writer — and imported by the reduce, which is the only reader.
+STATS_SUFFIX = '.stats.jsonl'
+STAT_T_NS = 't_ns'
+STAT_CPU_SYS_PCT = 'cpu_sys_pct'
+STAT_IOWAIT_PCT = 'iowait_pct'
+STAT_MEM_SYS_USED_B = 'mem_sys_used_b'
+STAT_CPU_PROC_PCT = 'cpu_proc_pct'
+STAT_RSS_PROC_B = 'rss_proc_b'
+STAT_GPU_COUNT = 'gpu_count'
+STAT_GPUS = 'gpus'
+
+# The per-device fields of one ``STAT_GPUS`` entry.
+GPU_INDEX = 'i'
+GPU_UTIL_PCT = 'util_pct'
+GPU_MEM_USED_B = 'mem_used_b'
+GPU_MEM_TOTAL_B = 'mem_total_b'
+GPU_POWER_W = 'power_w'
+GPU_PROC_MEM_B = 'proc_mem_b'
+GPU_PROC_UTIL_PCT = 'proc_util_pct'
 
 # The bound provider and the anchor stack are process-global: the harness, env proxy and recorder run as
 # cooperative control systems in one thread and interleave their spans, so parenting is resolved here rather
@@ -109,13 +140,13 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
     telemetry_dir = Path(out_dir) / TELEMETRY_SUBDIR
     telemetry_dir.mkdir(parents=True, exist_ok=True)
     resource = Resource.create({
-        'run.id': run_id,
-        'process.name': process,
-        'process.pid': os.getpid(),
-        'host.name': socket.gethostname(),
+        ATTR_RUN_ID: run_id,
+        ATTR_PROCESS_NAME: process,
+        ATTR_PROCESS_PID: os.getpid(),
+        ATTR_HOST_NAME: socket.gethostname(),
     })
     provider = TracerProvider(resource=resource)
-    spans_path = telemetry_dir / f'{process}.spans.jsonl'
+    spans_path = telemetry_dir / f'{process}{SPANS_SUFFIX}'
     # A killed predecessor can leave a truncated final line; seal it so the appending exporter starts a fresh
     # line — otherwise read_spans merges the first new record into the fragment and skips both.
     _seal_truncated_line(spans_path)
@@ -272,7 +303,7 @@ def read_spans(path: Path | str) -> Iterator[SpanRec]:
                 continue
             for resource_spans in doc.get('resourceSpans', []):
                 resource_attrs = _decode_attrs(resource_spans.get('resource', {}).get('attributes', []))
-                process = str(resource_attrs.get('process.name', ''))
+                process = str(resource_attrs.get(ATTR_PROCESS_NAME, ''))
                 for scope_spans in resource_spans.get('scopeSpans', []):
                     for span_data in scope_spans.get('spans', []):
                         yield SpanRec(
@@ -337,15 +368,15 @@ class _Nvml:
                     self._device_warned.add(index)
                 continue
             gpus.append({
-                'i': index,
-                'util_pct': float(util.gpu),
-                'mem_used_b': int(memory.used),
-                'mem_total_b': int(memory.total),
-                'power_w': self._power_w(handle),
-                'proc_mem_b': self._process_memory(handle, tree_pids),
+                GPU_INDEX: index,
+                GPU_UTIL_PCT: float(util.gpu),
+                GPU_MEM_USED_B: int(memory.used),
+                GPU_MEM_TOTAL_B: int(memory.total),
+                GPU_POWER_W: self._power_w(handle),
+                GPU_PROC_MEM_B: self._process_memory(handle, tree_pids),
                 # Per-process GPU utilisation is not reliably attributable under MPS / co-location, so it is
                 # left unmeasured (device util above is real); per-process memory is attributed.
-                'proc_util_pct': None,
+                GPU_PROC_UTIL_PCT: None,
             })
         return gpus
 
@@ -370,6 +401,16 @@ class _Nvml:
         except pynvml.NVMLError as error:
             if not self._proc_mem_warned:
                 logger.info('telemetry: per-process GPU memory unavailable (%s); proc_mem_b left null', error)
+                self._proc_mem_warned = True
+            return None
+        # NVML reports host pids. In a PID namespace without ``--pid=host`` the tree pids are namespace-local,
+        # so every membership test below misses and the device reads a confident 0 — a GPU-heavy eval published
+        # as using no VRAM. The host mapping is unreadable from inside the namespace, so translating is out;
+        # but a reported pid that exists in no namespace we can see is that mismatch. On the host every
+        # reported pid resolves, including other tenants', so a device we genuinely do not touch still reads 0.
+        if procs and not any(psutil.pid_exists(proc.pid) for proc in procs):
+            if not self._proc_mem_warned:
+                logger.info('telemetry: GPU processes live in another PID namespace; proc_mem_b left null')
                 self._proc_mem_warned = True
             return None
         # A process with both context types (Isaac: CUDA + Vulkan) appears in BOTH lists, and drivers commonly
@@ -460,14 +501,14 @@ class StatsSampler:
         cpu_times = psutil.cpu_times_percent(interval=None)
         tree_pids, cpu_proc_pct, rss_proc_b = self._tree()
         return {
-            't_ns': time.time_ns(),
-            'cpu_sys_pct': psutil.cpu_percent(interval=None),
-            'iowait_pct': float(getattr(cpu_times, 'iowait', 0.0)),
-            'mem_sys_used_b': int(psutil.virtual_memory().used),
-            'cpu_proc_pct': cpu_proc_pct,
-            'rss_proc_b': rss_proc_b,
-            'gpu_count': self._nvml.device_count,
-            'gpus': self._nvml.sample(tree_pids),
+            STAT_T_NS: time.time_ns(),
+            STAT_CPU_SYS_PCT: psutil.cpu_percent(interval=None),
+            STAT_IOWAIT_PCT: float(getattr(cpu_times, 'iowait', 0.0)),
+            STAT_MEM_SYS_USED_B: int(psutil.virtual_memory().used),
+            STAT_CPU_PROC_PCT: cpu_proc_pct,
+            STAT_RSS_PROC_B: rss_proc_b,
+            STAT_GPU_COUNT: self._nvml.device_count,
+            STAT_GPUS: self._nvml.sample(tree_pids),
         }
 
     def _loop(self) -> None:

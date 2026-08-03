@@ -35,6 +35,19 @@ ENV_RUN_ID = 'POSITRONIC_RUN_ID'
 SPAN_ENV_STEP = 'env.step'
 SPAN_ENV_RESET = 'env.reset'
 
+# The resource-block attribute keys every sidecar writer stamps and ``positronic.telemetry.read_spans`` reads
+# back. Owned here for the same reason as the span names: this is the writer that cannot import the other side.
+ATTR_RUN_ID = 'run.id'
+ATTR_PROCESS_NAME = 'process.name'
+ATTR_PROCESS_PID = 'process.pid'
+ATTR_HOST_NAME = 'host.name'
+
+# This writer's own value for ``ATTR_PROCESS_NAME``.
+ENV_PROCESS = 'env'
+
+# Every process's spans file is its ``ATTR_PROCESS_NAME`` plus this suffix; the reduce globs for it.
+SPANS_SUFFIX = '.spans.jsonl'
+
 _lock = threading.Lock()
 _file = None
 _trace_id = ''
@@ -90,13 +103,14 @@ def bind(telemetry_dir: Path | str, run_id: str):
     directory.mkdir(parents=True, exist_ok=True)
     _trace_id = os.urandom(16).hex()
     _resource_attrs = _otlp_attributes({
-        'run.id': run_id,
-        'process.name': 'env',
-        'process.pid': os.getpid(),
-        'host.name': socket.gethostname(),
+        ATTR_RUN_ID: run_id,
+        ATTR_PROCESS_NAME: ENV_PROCESS,
+        ATTR_PROCESS_PID: os.getpid(),
+        ATTR_HOST_NAME: socket.gethostname(),
     })
-    _seal_truncated_line(directory / 'env.spans.jsonl')
-    _file = open(directory / 'env.spans.jsonl', 'a')
+    spans_path = directory / f'{ENV_PROCESS}{SPANS_SUFFIX}'
+    _seal_truncated_line(spans_path)
+    _file = open(spans_path, 'a')
     try:
         yield
     finally:
