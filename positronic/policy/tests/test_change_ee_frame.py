@@ -6,7 +6,7 @@ from positronic.cfg import codecs as codecs_cfg
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm.ik import frame_transform
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, DROID_EEF_LINK, bundled_franka_model
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, DROID_EEF_LINK, FLANGE_LINK, bundled_franka_model
 from positronic.geom import Rotation, Transform3D, quat_closest
 from positronic.policy.codec import ChangeEEFrame
 from positronic.policy.spec import from_spec
@@ -21,7 +21,7 @@ def _pose(t, euler):
 
 
 def test_droid_eef_matches_robolab_eef_frame():
-    transform = frame_transform(URDF, 'link8', DROID_EEF_LINK)
+    transform = frame_transform(URDF, FLANGE_LINK, DROID_EEF_LINK)
     expected = Rotation.from_euler([0.0, 0.0, np.pi / 2])
     np.testing.assert_allclose(transform.translation, [0.0, 0.0, 0.01817402261], atol=1e-9)
     assert quat_closest(transform.rotation, expected) == expected

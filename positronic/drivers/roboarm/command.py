@@ -90,9 +90,8 @@ def apply_cartesian_delta(current: geom.Transform3D, cmd: CartesianDelta) -> geo
 def _combine(acc: CommandType, cmd: CommandType) -> CommandType:
     match (acc, cmd):
         case (CartesianDelta(a, frame_a), CartesianDelta(b, frame_b)):
-            assert np.allclose(frame_a.as_matrix, frame_b.as_matrix), (
-                'Cannot accumulate cartesian deltas expressed in different frames'
-            )
+            if not np.allclose(frame_a.as_matrix, frame_b.as_matrix):
+                raise ValueError('Cannot accumulate cartesian deltas expressed in different frames')
             return CartesianDelta(_compose_delta(a, b), frame_a)
         case (JointDelta(a), JointDelta(b)):
             return JointDelta(a + b)
