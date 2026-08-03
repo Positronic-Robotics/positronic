@@ -116,22 +116,15 @@ phail_multiple = production.override(
     group_fields=EVAL_GROUP_FIELDS,
 )
 
-# The gyros deployments sit behind the workspace's proxy, so pass --policy.headers with its token.
-gyros_p497 = production.override(
+# The blind set the rig is evaluating right now. Runway ships a new batch of checkpoints every few days;
+# repoint `endpoints` at that batch rather than adding a preset per batch, so the eval CLI stays one line.
+# These deployments sit behind the workspace's proxy, so pass --policy.headers with its token.
+runway_current = production.override(
     endpoints={
-        'nm167k_us': 'wss://runway-pythagoras-dev--gyros-p497-nm167k-us-gyrosserver-web.modal.run',
-        'fm167k_us': 'wss://runway-pythagoras-dev--gyros-p497-fm167k-us-gyrosserver-web.modal.run',
-        'nm167k': 'wss://runway-pythagoras-dev--gyros-p497-nm167k-gyrosserver-web.modal.run',
-    },
-    sampler=balanced,
-    group_fields=EVAL_GROUP_FIELDS,
-)
-
-gyros_fm_act = production.override(
-    endpoints={
-        'actuni': 'wss://runway-pythagoras-dev--gyros-fm-actuni-gyrosserver-web.modal.run',
-        'tsu_actuni': 'wss://runway-pythagoras-dev--gyros-fm-tsu-actuni-gyrosserver-web.modal.run',
-        'n60': 'wss://runway-pythagoras-dev--gyros-p497-n60-gyrosserver-web.modal.run',
+        'ged112k': 'wss://runway-pythagoras-dev--curie-ged112k-curieserver-web.modal.run',
+        'gd127k': 'wss://runway-pythagoras-dev--curie-gd127k-curieserver-web.modal.run',
+        'gdf127k': 'wss://runway-pythagoras-dev--curie-gdf127k-curieserver-web.modal.run',
+        'gdl142k': 'wss://runway-pythagoras-dev--curie-gdl142k-curieserver-web.modal.run',
     },
     sampler=balanced,
     group_fields=EVAL_GROUP_FIELDS,
