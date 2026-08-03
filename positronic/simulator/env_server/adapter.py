@@ -111,10 +111,10 @@ class WireCommandAdapter(EnvAdapter):
     around it) and keep the observation and terminal mappings to themselves.
     """
 
-    def __init__(self, control_frame: geom.Transform3D = geom.Transform3D.identity):
+    def __init__(self, control_frame: geom.Transform3D | None = None):
         """``control_frame`` places the frame the env measures and drives relative to the embodiment's
         ``default``; the adapter re-expresses outgoing commands into it, and observations back out of it."""
-        self.control_frame = control_frame
+        self.control_frame = control_frame if control_frame is not None else geom.Transform3D.identity
         self._reset_command_state()
 
     def _reset_command_state(self) -> None:

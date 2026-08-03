@@ -133,6 +133,10 @@ class PolicySource(ModelSource):
         return self._policy
 
 
+# TODO(hardcoded-keys): every name here is written twice — once as a literal in the wrapper's own ``to_spec``
+# and once as a key below — so a rename in one place silently desyncs the wire. Let each wrapper own its wire
+# name as a class attribute and build this mapping from it. ``test_wire_names_match_table`` is what catches a
+# desync until then.
 WIRE_WRAPPERS: dict[str, type[PolicyWrapper]] = {
     'chunked_schedule': ChunkedSchedule,
     'temporal_stack': TemporalStack,

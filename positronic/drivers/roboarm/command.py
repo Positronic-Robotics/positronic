@@ -1,6 +1,6 @@
 """Collection of commands that can be sent to the robot."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, TypeAlias, TypeVar
 
 import numpy as np
@@ -65,7 +65,9 @@ class CartesianDelta:
 
     TYPE = 'cartesian_delta'
     delta: geom.Transform3D
-    frame: geom.Transform3D = geom.Transform3D.identity
+    # Per-command, not a shared class-level default: ``Transform3D`` attributes are writable, so one instance
+    # across every frameless delta means adjusting one silently relabels the rest.
+    frame: geom.Transform3D = field(default_factory=lambda: geom.Transform3D.identity)
 
     def apply(self, current: geom.Transform3D) -> geom.Transform3D:
         """The absolute target to drive to, given the pose measured at the receiver's ``default`` frame.
