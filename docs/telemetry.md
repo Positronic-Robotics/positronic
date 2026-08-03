@@ -112,8 +112,10 @@ the input (`<run_dir>` may be an `s3://` URI). It reports:
 - **inference latency** — call count and p50 / p95;
 - the **real-time factor** — recorded virtual duration over span wall;
 - the sim box's **GPU load** — mean utilisation, peak VRAM, and this eval's peak process VRAM, from the stats
-  stream. Utilisation averages every per-device reading taken; the two peaks are box-wide totals, so they need
-  samples that saw every device and read unavailable when none did.
+  stream. The two peaks are box-wide totals, so they need samples that saw every device and read unavailable
+  when none did. Utilisation averages every per-device reading taken, so it is biased towards the devices that
+  answered; it carries `devices_seen` / `box_devices` with it, and the report prints `util 60% over 1 of 2
+  GPUs` whenever the mean covers part of a box.
 
 Shares print as percentages; `timing_summary.json` keeps them as fractions.
 

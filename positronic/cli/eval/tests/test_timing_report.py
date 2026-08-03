@@ -309,6 +309,9 @@ def test_multi_gpu_peak_vram_sums_devices_per_sample(tmp_path):
     assert sim is not None
     assert sim.mean_util_pct == pytest.approx(50.0)  # mean over the four per-GPU readings
     assert sim.peak_vram_gb == pytest.approx(5.0)  # sample 1's 2+3 GB total, not device 1's 3 GB
+    # Every device answered, so the mean covers the box and the rendered line carries no coverage qualifier.
+    assert (sim.devices_seen, sim.box_devices) == (2, 2)
+    assert 'util 50%  peak VRAM' in _render(report)
     # Every sample has a GPU with no per-process attribution, so no sample can carry a box-wide process total.
     assert sim.peak_proc_vram_gb is None
 
@@ -413,7 +416,10 @@ def test_device_omitted_from_every_sample_excluded_via_recorded_count(tmp_path):
     assert sim.peak_proc_vram_gb is None
     # Peak VRAM is a box-wide sum too, so an incomplete sample would report half the box as the whole of it.
     assert sim.peak_vram_gb is None
-    assert sim.mean_util_pct == pytest.approx(60.0)  # the surviving device's readings still average
+    # The mean still averages the surviving device's readings, and carries the coverage that biases it.
+    assert sim.mean_util_pct == pytest.approx(60.0)
+    assert (sim.devices_seen, sim.box_devices) == (1, 2)
+    assert 'util 60% over 1 of 2 GPUs' in _render(report)
 
 
 def test_gpu_samples_outside_pass_windows_excluded(tmp_path):

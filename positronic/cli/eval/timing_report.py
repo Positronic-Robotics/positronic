@@ -20,6 +20,7 @@ import numpy as np
 import pos3
 
 from positronic.telemetry import (
+    GPU_INDEX,
     GPU_MEM_USED_B,
     GPU_PROC_MEM_B,
     GPU_UTIL_PCT,
@@ -63,14 +64,21 @@ _DMON_DEVICE = 'gpu'
 class GpuSummary:
     """Mean utilisation and peak VRAM for one box.
 
-    ``mean_util_pct`` averages every per-device reading taken, so it covers whichever devices answered. The
-    peaks are box-wide totals — a sample's devices summed, then the max over samples — so each needs a sample
-    that saw the whole box, and reads ``None`` when none did. ``peak_proc_vram_gb`` is the share attributed to
-    this eval's process tree, and needs that attribution on top; it is always ``None`` for a policy ``dmon``
-    log, which carries none (only the whole box).
+    ``mean_util_pct`` averages every per-device reading taken, so a device that never answers biases it
+    towards the ones that did. ``devices_seen`` and ``box_devices`` carry that bias with the number instead of
+    leaving it to be inferred: they are the devices the mean covers and the devices the box holds, and
+    ``devices_seen < box_devices`` says outright that the figure describes part of a box. A ``dmon`` log
+    declares no complement, so both are the devices its rows mention — a missing one is unknowable there.
+
+    The peaks are box-wide totals — a sample's devices summed, then the max over samples — so each needs a
+    sample that saw the whole box, and reads ``None`` when none did. ``peak_proc_vram_gb`` is the share
+    attributed to this eval's process tree and needs that attribution on top; it is always ``None`` for a
+    ``dmon`` log, which carries none (only the whole box).
     """
 
     mean_util_pct: float
+    devices_seen: int
+    box_devices: int
     peak_vram_gb: float | None
     peak_proc_vram_gb: float | None
 
@@ -164,11 +172,15 @@ def _gpu_summary_from_stats(stats: list[dict], pass_windows: list[tuple[int, int
     utils: list[float] = []
     mem: list[float] = []
     proc: list[float] = []
+    seen: set[int] = set()
+    box_devices = 0
     for sample in in_window:
         gpus = sample.get(STAT_GPUS, [])
         if not gpus:
             continue
         utils.extend(float(gpu[GPU_UTIL_PCT]) for gpu in gpus)
+        seen.update(int(gpu[GPU_INDEX]) for gpu in gpus)
+        box_devices = max(box_devices, int(sample[STAT_GPU_COUNT]))
         # Either peak is a box-wide total, so it needs a sample that saw the whole box. A device whose NVML
         # query errors mid-run is dropped from the sample entirely, not left ``None``, so a sample covers the
         # box only when its device count equals the ``gpu_count`` the sampler recorded (its NVML handle
@@ -183,11 +195,15 @@ def _gpu_summary_from_stats(stats: list[dict], pass_windows: list[tuple[int, int
         return None
     if not mem:
         logger.warning(
-            'no machine-load sample carried every GPU the sampler configured (a device errored throughout?); '
-            'peak VRAM is unavailable and mean utilisation covers only the devices that answered'
+            "no machine-load sample carried all %d of the box's GPUs (an NVML query refused mid-run?); both "
+            'peaks are unavailable, and mean utilisation covers the %d device(s) that answered',
+            box_devices,
+            len(seen),
         )
     return GpuSummary(
         mean_util_pct=float(np.mean(utils)),
+        devices_seen=len(seen),
+        box_devices=box_devices,
         peak_vram_gb=(max(mem) / _BYTES_PER_GB) if mem else None,
         peak_proc_vram_gb=(max(proc) / _BYTES_PER_GB) if proc else None,
     )
@@ -228,6 +244,7 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
     # the max over per-cycle sums — matching the sim summary's per-sample device sum.
     cycle_fb: dict[str, float] = {}
     cycle_totals: list[float] = []
+    devices: set[str] = set()
 
     def flush_cycle() -> None:
         if cycle_fb:
@@ -256,10 +273,14 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
         if device in cycle_fb:
             flush_cycle()
         cycle_fb[device] = fb
+        devices.add(device)
         utils.append(sm)
     flush_cycle()
     return GpuSummary(
         mean_util_pct=float(np.mean(utils)) if utils else 0.0,
+        # A dmon log declares no complement, so the devices it mentions are all that can be known of the box.
+        devices_seen=len(devices),
+        box_devices=len(devices),
         peak_vram_gb=(max(cycle_totals) / 1024.0) if cycle_totals else None,
         peak_proc_vram_gb=None,
     )
@@ -455,8 +476,13 @@ def _render(report: PassReport) -> str:
     for f in fields(GpuReport):
         summary = getattr(report.gpu, f.name)
         if summary is not None:
+            util = f'util {summary.mean_util_pct:.0f}%'
+            # A mean over part of a box says so where it is read, not only in the log: the coverage rides with
+            # the number, and appears exactly when it qualifies it.
+            if summary.devices_seen < summary.box_devices:
+                util += f' over {summary.devices_seen} of {summary.box_devices} GPUs'
             peak = f'{summary.peak_vram_gb:.1f} GB' if summary.peak_vram_gb is not None else 'unavailable'
-            line = f'gpu[{f.name}]: util {summary.mean_util_pct:.0f}%  peak VRAM {peak}'
+            line = f'gpu[{f.name}]: {util}  peak VRAM {peak}'
             if summary.peak_proc_vram_gb is not None:
                 line += f'  (this eval {summary.peak_proc_vram_gb:.1f} GB)'
             lines.append(line)
