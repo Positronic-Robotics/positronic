@@ -459,26 +459,6 @@ class RestrictImageSize(Codec):
         return {'name': 'restrict_image_size', 'args': {'width': self._width, 'height': self._height}}
 
 
-def _as_transform(value: geom.Transform3D | cabc.Sequence[float]) -> geom.Transform3D:
-    """A transform, or the ``[tx,ty,tz,qw,qx,qy,qz]`` vector a wire spec carries one as."""
-    if isinstance(value, geom.Transform3D):
-        return value
-    return geom.Transform3D.from_vector(np.asarray(value, dtype=np.float64), _QUAT)
-
-
-def _move(value: Any, transform: geom.Transform3D) -> Any:
-    """A pose vector or an arm command, re-expressed through ``transform``."""
-    match value:
-        case command.CartesianPosition(pose):
-            return command.CartesianPosition(pose=pose * transform)
-        case command.CartesianDelta(delta, frame):
-            return command.CartesianDelta(delta=delta, frame=transform.inv * frame)
-        case command.Reset() | command.JointPosition() | command.JointDelta():
-            return value
-        case _:
-            return change_frame(value, transform)
-
-
 class ChangeEEFrame(Codec):
     """Convert poses between the embodiment's ``default`` frame and the frame the policy speaks.
 
@@ -495,6 +475,26 @@ class ChangeEEFrame(Codec):
     pairing is wrong.
     """
 
+    @staticmethod
+    def _as_transform(value: geom.Transform3D | cabc.Sequence[float]) -> geom.Transform3D:
+        """A transform, or the ``[tx,ty,tz,qw,qx,qy,qz]`` vector a wire spec carries one as."""
+        if isinstance(value, geom.Transform3D):
+            return value
+        return geom.Transform3D.from_vector(np.asarray(value, dtype=np.float64), _QUAT)
+
+    @staticmethod
+    def _move(value: Any, transform: geom.Transform3D) -> Any:
+        """A pose vector or an arm command, re-expressed through ``transform``."""
+        match value:
+            case command.CartesianPosition(pose):
+                return command.CartesianPosition(pose=pose * transform)
+            case command.CartesianDelta(delta, frame):
+                return command.CartesianDelta(delta=delta, frame=transform.inv * frame)
+            case command.Reset() | command.JointPosition() | command.JointDelta():
+                return value
+            case _:
+                return change_frame(value, transform)
+
     class _ChangeEpisodeFrames(EpisodeTransform):
         """Move the episode's pose signals into the policy's frame and record where they now sit, so a later
         transform solving against the model (``IKJointsAction``) reaches the same frame.
@@ -504,7 +504,8 @@ class ChangeEEFrame(Codec):
             self._codec = codec
 
         def _derive_pose(self, key: str, episode):
-            return Elementwise(episode[key], lazy_sequence(partial(_move, transform=self._codec._transform)))
+            codec = self._codec
+            return Elementwise(episode[key], lazy_sequence(partial(codec._move, transform=codec._transform)))
 
         def __call__(self, episode):
             codec = self._codec
@@ -528,11 +529,11 @@ class ChangeEEFrame(Codec):
         transform: geom.Transform3D | cabc.Sequence[float],
         keys: tuple[str, ...] = (obs_keys.EE_POSE, 'robot_command.pose', 'robot_command'),
     ):
-        self._transform = _as_transform(transform)
+        self._transform = self._as_transform(transform)
         self._keys = tuple(keys)
 
     def _apply(self, data: dict, transform: geom.Transform3D) -> dict:
-        moved = {key: _move(data[key], transform) for key in self._keys if key in data}
+        moved = {key: self._move(data[key], transform) for key in self._keys if key in data}
         return {**data, **moved} if moved else data
 
     def encode(self, data):

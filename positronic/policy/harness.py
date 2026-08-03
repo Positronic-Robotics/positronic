@@ -307,6 +307,10 @@ class Harness(pimm.ControlSystem):
         every conversion by the offset between the two and nothing downstream can see it. Checked against
         whatever model is live now: a remote env publishes its ``robot_meta`` a turn after the reset that
         produced it, so nothing earlier in the episode has the model this observation was measured against.
+
+        TODO(#550): delete this method. It is the only frame knowledge the harness carries, and both halves
+        expire — ``CONTROL_FRAME`` is deleted by that issue, and nothing at serving reads the model, so
+        "declares ``DEFAULT_FRAME``" belongs to whoever builds the model, asserted once at construction.
         """
         statics = self._statics()
         if keys.CONTROL_FRAME not in statics:

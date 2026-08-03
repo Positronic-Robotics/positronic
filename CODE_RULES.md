@@ -143,3 +143,27 @@ def b(data): return data['values'] * data.get('scale', 1.0)
 # Good — the dependency is in the signature
 def b(values, scale: float): return values * scale
 ```
+
+### stranded-definition
+
+Don't leave a definition far from the code that uses it. Put it directly above its first user, or
+inside the single entity that uses it. Distance costs the reader a search in both directions: from the
+use, to find out what it does; from the definition, to find out why it exists.
+
+A private name has every user in the file, so its place is determined; with a single user, folding it
+in is recommended rather than required. Not touching `self` is no reason to stay at module level —
+that is what `@staticmethod` is for.
+
+A public name is looser: most of its users are elsewhere, and a module may order its surface
+deliberately. Group it with its in-file callers where that ordering does not say otherwise. Module
+scope is right either way once several entities in the file use it.
+
+```python
+# Bad — defined at the top of the file, first used 400 lines below
+def _as_transform(value): ...
+
+# Good — folded into its only user
+class ChangeEEFrame(Codec):
+    @staticmethod
+    def _as_transform(value): ...
+```
