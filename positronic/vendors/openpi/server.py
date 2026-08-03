@@ -243,7 +243,7 @@ def pipeline(codec: Codec, source: ModelSource, ee_frame: geom.Transform3D | Non
     """The OpenPI serving pipeline: rig-side chunk scheduling, the server-side codec, the checkpoint source.
 
     ``ee_frame`` places the end-effector frame this checkpoint's poses live in relative to ``DEFAULT_FRAME``
-    (``codecs.DROID_EE_FRAME``). Leave it unset for a checkpoint trained in ``default``, or one speaking joints.
+    (``models.DROID_EE_FRAME``). Leave it unset for a checkpoint trained in ``default``, or one speaking joints.
     """
     local = ChunkedSchedule() | RestrictImageSize(224, 224)
     if ee_frame is not None:

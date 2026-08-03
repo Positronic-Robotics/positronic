@@ -58,7 +58,7 @@ It is declared in two places, for the two things it does:
 - **Training** — `compose(ee_frame=DROID_EE_FRAME)` re-expresses the dataset in that frame, which is what makes the resulting checkpoint speak it.
 - **Serving** — the vendor pipeline's `ee_frame=` puts the codec left of the `remote` marker, so the rig converts and the server stays frame-agnostic.
 
-Both take the transform itself — `cfg.codecs.DROID_EE_FRAME` is the one we ship — so a checkpoint declares its own frame and no robot model is consulted to serve it. Leave it unset for a checkpoint trained in `default` or one that speaks joints — joints are unambiguous — and behavior is unchanged.
+Both take the transform itself — `models.DROID_EE_FRAME` is the one we ship — so a checkpoint declares its own frame and no robot model is consulted to serve it. Leave it unset for a checkpoint trained in `default` or one that speaks joints — joints are unambiguous — and behavior is unchanged.
 
 A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
 

@@ -24,7 +24,7 @@ from positronic.drivers.roboarm.command import (
     reduce,
     to_wire,
 )
-from positronic.drivers.roboarm.models import bundled_franka_model
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, bundled_franka_model
 from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
@@ -412,20 +412,44 @@ def test_robot_model_stays_out_of_the_observation(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_rejects_a_control_frame_the_model_does_not_declare(world):
-    """Every frame transform is measured from this one, so a name the model lacks must not run."""
-    statics = {keys.URDF: bundled_franka_model()[keys.URDF], keys.CONTROL_FRAME: 'no_such_frame'}
-    harness = Harness(SpyPolicy(), make_embodiment(static_meta=statics))
+def _run_with_model(world, model, static_meta=None):
+    """Drive one episode with ``model`` published on ``robot_meta_in``, or baked into embodiment statics."""
+    harness = Harness(SpyPolicy(), make_embodiment(static_meta=static_meta))
     harness.commands['robot_command']._bind(RecordingEmitter())
     harness.commands['target_grip']._bind(RecordingEmitter())
     harness.ds_command._bind(RecordingEmitter())
     directive_em = world.pair(harness.directive)
+    meta_em = world.pair(harness.robot_meta_in)
 
-    driver = ManualDriver([(partial(directive_em.emit, Directive.RUN(task='t')), 0.0), (None, 0.05)])
+    steps = [(partial(directive_em.emit, Directive.RUN(task='t')), 0.0)]
+    if model is not None:
+        steps.append((partial(meta_em.emit, model), 0.01))
+    drive_scheduler(world.start([harness, ManualDriver([*steps, (None, 0.05)])]), steps=20)
 
-    scheduler = world.start([harness, driver])
-    with pytest.raises(ValueError, match='no_such_frame'):
-        drive_scheduler(scheduler, steps=20)
+
+@pytest.mark.timeout(3.0)
+def test_rejects_a_control_frame_that_is_not_the_default(world):
+    """A rig reporting at another of its own frames shifts every codec transform by the offset between them."""
+    statics = {keys.URDF: bundled_franka_model()[keys.URDF], keys.CONTROL_FRAME: EE_LINK}
+    with pytest.raises(ValueError, match=EE_LINK):
+        _run_with_model(world, None, static_meta=statics)
+
+
+@pytest.mark.timeout(3.0)
+def test_rejects_a_default_frame_the_model_does_not_declare(world):
+    """Every frame transform is measured from this one, so a name the model lacks must not run."""
+    statics = {keys.URDF: '<robot name="r"><link name="base"/></robot>', keys.CONTROL_FRAME: DEFAULT_FRAME}
+    with pytest.raises(ValueError, match=DEFAULT_FRAME):
+        _run_with_model(world, None, static_meta=statics)
+
+
+@pytest.mark.timeout(3.0)
+def test_rejects_a_control_frame_a_late_model_declares(world):
+    """A remote env publishes its model a turn after the reset that produced it, so the check runs on the
+    live metadata rather than on whatever was known when the episode opened."""
+    model = {keys.URDF: bundled_franka_model()[keys.URDF], keys.CONTROL_FRAME: EE_LINK}
+    with pytest.raises(ValueError, match=EE_LINK):
+        _run_with_model(world, model)
 
 
 @pytest.mark.timeout(3.0)
@@ -1199,14 +1223,13 @@ def test_cartesian_delta_wire_roundtrip():
     np.testing.assert_allclose(out.frame.rotation.as_quat, frame.rotation.as_quat, atol=1e-9)
 
 
-def test_cartesian_delta_without_a_frame_reads_as_the_receivers_own():
-    """A payload from a server predating the field is a delta in whatever frame the receiver measures."""
+def test_cartesian_delta_without_a_frame_is_rejected():
+    """A delta means nothing without the frame it is expressed in, so the payload has to carry one."""
     delta = Transform3D(np.array([0.01, -0.02, 0.03]), Rotation.from_rotvec(np.array([0.0, 0.1, 0.0])))
     wire = to_wire(CartesianDelta(delta=delta))
     del wire['frame']
-    out = from_wire(wire)
-    assert isinstance(out, CartesianDelta)
-    np.testing.assert_allclose(out.frame.as_matrix, np.eye(4), atol=1e-12)
+    with pytest.raises(KeyError):
+        from_wire(wire)
 
 
 def test_cartesian_delta_applies_in_world_frame():

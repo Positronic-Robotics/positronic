@@ -17,8 +17,9 @@ some other end-effector frame does not name that frame to the rig — it carries
 what lets one checkpoint run on any embodiment honouring the contract, and it is why `default` has to mean
 something stable.
 
-The harness checks the declaration at the start of every episode: a `control_frame` the model does not carry
-raises before the arm moves.
+The harness checks the declaration on every observation it assembles: a `control_frame` the model does not
+carry raises before that observation reaches the policy. It cannot be a once-per-episode check — a remote env
+publishes its `robot_meta` a turn after the reset that produced it, so at episode start there is no model yet.
 
 ## Where to put it
 
@@ -28,7 +29,7 @@ FR3 and the sim panda sit 45 mm apart along the approach axis — which is what 
 
 Recordings predating this contract state their frame as a name rather than an `ee_frame` transform, and
 `ik.pose_anchor` solves at that name. That is exact — `default` was added alongside those frames, not in place
-of them — but `cfg.codecs.DROID_EE_FRAME` is measured from where `default` sits today, so the two only agree
+of them — but `models.DROID_EE_FRAME` is measured from where `default` sits today, so the two only agree
 while the placements coincide. `test_default_frame_still_coincides_with_the_franka_tool_frame` is what fails
 when the placement moves.
 

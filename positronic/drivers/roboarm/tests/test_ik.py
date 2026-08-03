@@ -20,6 +20,7 @@ from positronic.drivers.roboarm.ik import (
 )
 from positronic.drivers.roboarm.models import (
     DEFAULT_FRAME,
+    DROID_EE_FRAME,
     DROID_EEF_LINK,
     EE_LINK,
     bundled_franka_model,
@@ -179,6 +180,13 @@ def test_frame_transform_reproduces_droid_eef_across_configs():
 def test_bundled_model_declares_the_frame_it_reports_in(model):
     assert model[keys.CONTROL_FRAME] == DEFAULT_FRAME
     frame_transform(model[keys.URDF], DEFAULT_FRAME, DEFAULT_FRAME)
+
+
+def test_declared_droid_frame_matches_the_model_geometry():
+    """The checkpoint states its frame as a constant; this pins it to where the model puts that frame."""
+    urdf = bundled_franka_model()[keys.URDF]
+    measured = frame_transform(urdf, DEFAULT_FRAME, DROID_EEF_LINK)
+    np.testing.assert_allclose(DROID_EE_FRAME.as_matrix, measured.as_matrix, atol=1e-9)
 
 
 def test_default_frame_still_coincides_with_the_franka_tool_frame():

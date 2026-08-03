@@ -6,7 +6,9 @@ import xml.etree.ElementTree as ET
 from functools import lru_cache
 from pathlib import Path
 
-from positronic import keys
+import numpy as np
+
+from positronic import geom, keys
 
 FLANGE_LINK = 'link8'
 DROID_EEF_LINK = 'droid_eef'
@@ -16,6 +18,13 @@ EE_LINK = 'end_effector'
 # the flange whenever the gripper can be swapped: recorded data outlives grippers, and an episode anchored to a
 # gripper frame becomes unplaceable once that gripper comes off.
 DEFAULT_FRAME = 'default'
+# ``DROID_EEF_LINK`` measured from ``DEFAULT_FRAME``: the Robotiq 2F-85 coupler, 18.17mm along the flange
+# approach axis and +90deg about it. DROID's checkpoints express poses here, and stating it as a transform is
+# what lets one declare its frame without any rig consulting a robot model to serve it.
+# TODO(#550): the awkward numbers are the FR3's ``F_T_EE`` offset riding along, because ``DEFAULT_FRAME`` is not
+# the flange yet. Moving it there turns this into the authored gripper geometry and makes the value portable —
+# as it stands it is right on a franka rig and 45mm off on the sim, whose ``DEFAULT_FRAME`` sits elsewhere again.
+DROID_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0, -0.085225977]), geom.Rotation.from_euler([0.0, 0.0, 2.35619449]))
 # Seat the gripper on the flange, rotated about the approach axis to match the real 2F-85 coupler
 # (a +45deg Z, i.e. 90deg off the franka ``end_effector`` frame).
 _2F85_MOUNT_RPY = '0 0 0.7853981634'

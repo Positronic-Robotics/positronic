@@ -1,7 +1,6 @@
 """Configuration for policy codecs (observation encoders and action decoders)."""
 
 import configuronic as cfn
-import numpy as np
 
 from positronic import geom, keys
 from positronic.policy.codec import (
@@ -15,15 +14,6 @@ from positronic.policy.codec import (
 from positronic.policy.observation import ObservationCodec
 
 RotRep = geom.Rotation.Representation
-
-
-# DROID's end-effector frame, where its checkpoints express poses: the Robotiq 2F-85 coupler, 18.17mm along
-# the flange approach axis and +90deg about it. Stated relative to ``DEFAULT_FRAME``, so a checkpoint declares
-# its own frame and no robot model is consulted to serve it.
-# TODO(#550): the awkward numbers are the FR3's ``F_T_EE`` offset riding along, because ``default`` is not the
-# flange yet. Moving it there turns this into the authored gripper geometry and makes the value portable — as
-# it stands it is right on a franka rig and 45mm off on the sim, whose ``default`` sits elsewhere again.
-DROID_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0, -0.085225977]), geom.Rotation.from_euler([0.0, 0.0, 2.35619449]))
 
 
 @cfn.config()
@@ -74,9 +64,9 @@ def compose(
     """Compose observation and action codecs with timing and optional grip binarization.
 
     ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame``
-    places the end-effector frame the checkpoint speaks relative to ``DEFAULT_FRAME`` (``DROID_EE_FRAME``) and
-    re-expresses a dataset in it for training (see ``ChangeEEFrame``); serving declares the conversion in the
-    pipeline instead, so leave it unset there.
+    places the end-effector frame the checkpoint speaks relative to ``DEFAULT_FRAME`` (``models.DROID_EE_FRAME``)
+    and re-expresses a dataset in it for training (see ``ChangeEEFrame``); serving declares the conversion in
+    the pipeline instead, so leave it unset there.
 
     Layout::
 

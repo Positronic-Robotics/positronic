@@ -3,7 +3,6 @@ import pytest
 
 import positronic.drivers.roboarm.command as cmd_module
 from positronic import keys
-from positronic.cfg import codecs as codecs_cfg
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm.ik import frame_transform
@@ -26,11 +25,6 @@ def test_droid_eef_matches_robolab_eef_frame():
     expected = Rotation.from_euler([0.0, 0.0, np.pi / 2])
     np.testing.assert_allclose(transform.translation, [0.0, 0.0, 0.01817402261], atol=1e-9)
     assert quat_closest(transform.rotation, expected) == expected
-
-
-def test_declared_droid_frame_matches_the_model_geometry():
-    """The checkpoint states its frame as a constant; this pins it to where the model puts that frame."""
-    np.testing.assert_allclose(codecs_cfg.DROID_EE_FRAME.as_matrix, TO_DROID.as_matrix, atol=1e-9)
 
 
 def test_encode_maps_obs_to_policy_frame():
