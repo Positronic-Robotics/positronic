@@ -14,7 +14,7 @@ from typing import Any, final
 import numpy as np
 
 import pimm
-from positronic import geom
+from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
 
 
@@ -22,7 +22,7 @@ def fresh_command_players() -> defaultdict[str, roboarm_command.TrajectoryPlayer
     """A trajectory player per command channel: ``robot_command`` accumulates the deltas due in one tick (a
     missed tick catches up instead of dropping motion), every other channel keeps the last value due."""
     players = defaultdict(roboarm_command.TrajectoryPlayer)
-    players['robot_command'] = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
+    players[keys.ROBOT_COMMAND] = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
     return players
 
 
@@ -148,13 +148,13 @@ class WireCommandAdapter(EnvAdapter):
         # dropped. Re-sending a stale delta would re-compose it against the moving arm every tick (the eef
         # drifts, or the joints walk toward their limits), so once a delta's trajectory is exhausted the arm
         # holds its measured pose.
-        cmd = self._held.get('robot_command')
+        cmd = self._held.get(keys.ROBOT_COMMAND)
         match cmd:
             case roboarm_command.Reset():
-                self._held.pop('robot_command')
+                self._held.pop(keys.ROBOT_COMMAND)
                 cmd = None
             case roboarm_command.CartesianDelta() | roboarm_command.JointDelta():
-                self._held.pop('robot_command')
+                self._held.pop(keys.ROBOT_COMMAND)
         if 'target_grip' in self._held:
             self._grip = float(self._held['target_grip'])
         return {'command': _wire_command(_in_control_frame(cmd, self.control_frame)), 'grip': self._grip}

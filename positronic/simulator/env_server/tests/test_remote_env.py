@@ -6,7 +6,7 @@ import pos3
 import pytest
 
 import pimm
-from positronic import geom
+from positronic import geom, keys
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Task
@@ -282,7 +282,7 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     assert episode.static['scene_xml'].startswith('<mujoco')
     signals = episode.signals
     assert 'image.agentview' in signals
-    assert 'robot_command.joints' in signals
+    assert keys.TARGET_JOINTS in signals
     assert 'sim_state.mjSTATE_INTEGRATION' in signals
 
 
@@ -306,7 +306,7 @@ class _JointposChunkSession(Session):
     def __call__(self, obs):
         self._policy.chunks += 1
         return [
-            {'robot_command': self._policy.command, 'target_grip': self._policy.chunks * 100.0 + i}
+            {keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.chunks * 100.0 + i}
             for i in range(self._policy.chunk_len)
         ]
 

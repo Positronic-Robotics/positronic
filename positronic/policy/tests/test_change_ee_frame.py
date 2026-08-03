@@ -39,20 +39,20 @@ def test_encode_maps_obs_to_policy_frame():
 
 def test_decode_maps_action_back_to_canonical():
     pose_c = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
-    action = {'robot_command': cmd_module.CartesianPosition(pose=pose_c * TO_DROID), 'target_grip': 1.0}
+    action = {keys.ROBOT_COMMAND: cmd_module.CartesianPosition(pose=pose_c * TO_DROID), 'target_grip': 1.0}
 
     decoded = ChangeEEFrame(TO_DROID)._decode_single(dict(action), context=None)
 
-    np.testing.assert_allclose(decoded['robot_command'].pose.as_vector(QUAT), pose_c.as_vector(QUAT), atol=1e-9)
+    np.testing.assert_allclose(decoded[keys.ROBOT_COMMAND].pose.as_vector(QUAT), pose_c.as_vector(QUAT), atol=1e-9)
     assert decoded['target_grip'] == 1.0
 
 
 def test_decode_hands_a_delta_the_frame_it_was_meant_for():
     """A delta has no anchor to convert against, so it travels with its frame for the driver to apply."""
     delta = _pose([0.01, 0.0, -0.02], [0.0, 0.0, 0.1])
-    action = {'robot_command': cmd_module.CartesianDelta(delta=delta)}
+    action = {keys.ROBOT_COMMAND: cmd_module.CartesianDelta(delta=delta)}
 
-    decoded = ChangeEEFrame(TO_DROID)._decode_single(action, context=None)['robot_command']
+    decoded = ChangeEEFrame(TO_DROID)._decode_single(action, context=None)[keys.ROBOT_COMMAND]
 
     np.testing.assert_allclose(decoded.delta.as_vector(QUAT), delta.as_vector(QUAT), atol=1e-12)
     np.testing.assert_allclose(decoded.frame.as_vector(QUAT), TO_DROID.as_vector(QUAT), atol=1e-9)
@@ -63,8 +63,9 @@ def test_a_delta_moves_the_arm_where_the_policy_meant():
     measured = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
     delta = _pose([0.01, 0.0, -0.02], [0.0, 0.0, 0.1])
 
-    decoded = ChangeEEFrame(TO_DROID)._decode_single({'robot_command': cmd_module.CartesianDelta(delta)}, context=None)
-    target = decoded['robot_command'].apply(measured)
+    action = {keys.ROBOT_COMMAND: cmd_module.CartesianDelta(delta)}
+    decoded = ChangeEEFrame(TO_DROID)._decode_single(action, context=None)
+    target = decoded[keys.ROBOT_COMMAND].apply(measured)
 
     before, after = measured * TO_DROID, target * TO_DROID
     np.testing.assert_allclose(after.translation, before.translation + delta.translation, atol=1e-12)
@@ -74,9 +75,9 @@ def test_a_delta_moves_the_arm_where_the_policy_meant():
 
 
 def test_decode_passes_non_cartesian_commands_through():
-    action = {'robot_command': cmd_module.JointPosition(positions=np.zeros(7)), 'target_grip': 0.0}
+    action = {keys.ROBOT_COMMAND: cmd_module.JointPosition(positions=np.zeros(7)), 'target_grip': 0.0}
     decoded = ChangeEEFrame(TO_DROID)._decode_single(dict(action), context=None)
-    assert isinstance(decoded['robot_command'], cmd_module.JointPosition)
+    assert isinstance(decoded[keys.ROBOT_COMMAND], cmd_module.JointPosition)
 
 
 def test_identity_transform_leaves_poses_alone():
@@ -139,7 +140,7 @@ def test_training_encoder_maps_both_poses_forward():
             keys.URDF: URDF,
             keys.CONTROL_FRAME: DEFAULT_FRAME,
             keys.EE_POSE: DummySignal(ts, np.stack([obs_pose.as_vector(QUAT)] * 2)),
-            'robot_command.pose': DummySignal(ts, np.stack([cmd_pose.as_vector(QUAT)] * 2)),
+            keys.TARGET_EE_POSE: DummySignal(ts, np.stack([cmd_pose.as_vector(QUAT)] * 2)),
             keys.GRIP: DummySignal(ts, np.array([0.0, 1.0])),
         }
     )
@@ -147,7 +148,7 @@ def test_training_encoder_maps_both_poses_forward():
     out = ChangeEEFrame(TO_DROID).training_encoder(episode)
 
     np.testing.assert_allclose(out[keys.EE_POSE][0][0], (obs_pose * TO_DROID).as_vector(QUAT), atol=1e-9)
-    np.testing.assert_allclose(out['robot_command.pose'][0][0], (cmd_pose * TO_DROID).as_vector(QUAT), atol=1e-9)
+    np.testing.assert_allclose(out[keys.TARGET_EE_POSE][0][0], (cmd_pose * TO_DROID).as_vector(QUAT), atol=1e-9)
     np.testing.assert_allclose(out[keys.EE_FRAME], TO_DROID.as_vector(QUAT), atol=1e-9)
     assert keys.GRIP in out, 'unrelated signals pass through'
 
@@ -176,12 +177,12 @@ def test_training_encoder_skips_absent_command_pose():
             keys.URDF: URDF,
             keys.CONTROL_FRAME: DEFAULT_FRAME,
             keys.EE_POSE: DummySignal(ts, np.stack([obs_pose.as_vector(QUAT)] * 2)),
-            'robot_command.joints': DummySignal(ts, np.zeros((2, 7), dtype=np.float32)),
+            keys.TARGET_JOINTS: DummySignal(ts, np.zeros((2, 7), dtype=np.float32)),
         }
     )
 
     out = ChangeEEFrame(TO_DROID).training_encoder(episode)
 
-    assert 'robot_command.pose' not in list(out), 'absent command pose must not be materialized'
+    assert keys.TARGET_EE_POSE not in list(out), 'absent command pose must not be materialized'
     np.testing.assert_allclose(out[keys.EE_POSE][0][0], (obs_pose * TO_DROID).as_vector(QUAT), atol=1e-9)
-    assert 'robot_command.joints' in out
+    assert keys.TARGET_JOINTS in out

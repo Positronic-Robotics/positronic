@@ -30,7 +30,7 @@ def droid(robot_arm, gripper, cameras):
         **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
     }
     commands = {
-        'robot_command': Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
+        keys.ROBOT_COMMAND: Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
         'target_grip': Command(gripper.target_grip, 0.0, None),
     }
     return Embodiment(
@@ -53,7 +53,7 @@ def yam(robot_arm, cameras):
         **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
     }
     commands = {
-        'robot_command': Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
+        keys.ROBOT_COMMAND: Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
         'target_grip': Command(robot_arm.target_grip, 0.0, None),
     }
     return Embodiment(
@@ -139,7 +139,7 @@ def mujoco_franka(sim, camera_dict):
     # trial's end state right when the operator reviews it.
     home = roboarm_command.JointPosition(np.array(sim.initial_ctrl[:7]))
     commands = {
-        'robot_command': Command(sim.commands, home, Serializers.robot_command),
+        keys.ROBOT_COMMAND: Command(sim.commands, home, Serializers.robot_command),
         'target_grip': Command(sim.target_grip, 0.0, None),
     }
     return Embodiment(

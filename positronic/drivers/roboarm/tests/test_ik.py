@@ -110,13 +110,13 @@ def test_ik_joints_from_episode():
     episode = EpisodeContainer(
         data={
             keys.JOINTS: DummySignal(ts, q_traj),
-            'robot_command.pose': DummySignal(ts, ee_poses),
+            keys.TARGET_EE_POSE: DummySignal(ts, ee_poses),
             keys.URDF: URDF,
             keys.JOINT_NAMES: JOINT_NAMES,
             keys.CONTROL_FRAME: CONTROL_FRAME,
         }
     )
-    result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, 'robot_command.pose', keys.JOINTS)
+    result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, keys.TARGET_EE_POSE, keys.JOINTS)
 
     assert len(result) == n_steps
     for i in range(n_steps):
@@ -150,14 +150,14 @@ def test_ik_joints_from_episode_solves_targets_a_codec_moved():
     episode = EpisodeContainer(
         data={
             keys.JOINTS: DummySignal(ts, q_traj),
-            'robot_command.pose': DummySignal(ts, moved),
+            keys.TARGET_EE_POSE: DummySignal(ts, moved),
             keys.URDF: urdf,
             keys.JOINT_NAMES: JOINT_NAMES,
             keys.CONTROL_FRAME: DEFAULT_FRAME,
             keys.EE_FRAME: offset.as_vector(quat),
         }
     )
-    result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, 'robot_command.pose', keys.JOINTS)
+    result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, keys.TARGET_EE_POSE, keys.JOINTS)
 
     for i in range(n_steps):
         solved = _fk_site(urdf, result[i][0], DEFAULT_FRAME)

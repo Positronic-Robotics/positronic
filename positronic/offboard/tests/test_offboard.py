@@ -136,18 +136,18 @@ class TestCommandRoundtrip:
         pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
         joints = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7], dtype=np.float32)
         actions = [
-            {'robot_command': CartesianPosition(pose=pose), 'target_grip': 0.5, 'timestamp': 0.0},
-            {'robot_command': Reset(), 'timestamp': 0.1},
-            {'robot_command': JointPosition(positions=joints), 'target_grip': 0.8, 'timestamp': 0.2},
+            {keys.ROBOT_COMMAND: CartesianPosition(pose=pose), 'target_grip': 0.5, 'timestamp': 0.0},
+            {keys.ROBOT_COMMAND: Reset(), 'timestamp': 0.1},
+            {keys.ROBOT_COMMAND: JointPosition(positions=joints), 'target_grip': 0.8, 'timestamp': 0.2},
         ]
         result = deserialise(serialise({'result': actions}))['result']
         assert len(result) == 3
-        assert isinstance(result[0]['robot_command'], CartesianPosition)
-        assert isinstance(result[1]['robot_command'], Reset)
-        assert isinstance(result[2]['robot_command'], JointPosition)
+        assert isinstance(result[0][keys.ROBOT_COMMAND], CartesianPosition)
+        assert isinstance(result[1][keys.ROBOT_COMMAND], Reset)
+        assert isinstance(result[2][keys.ROBOT_COMMAND], JointPosition)
         assert result[0]['target_grip'] == 0.5
         assert result[1]['timestamp'] == 0.1
-        np.testing.assert_allclose(result[2]['robot_command'].positions, joints)
+        np.testing.assert_allclose(result[2][keys.ROBOT_COMMAND].positions, joints)
 
     def test_plain_dict_passthrough(self):
         """Dicts without Commands round-trip unchanged."""

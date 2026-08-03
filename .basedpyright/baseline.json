@@ -1141,7 +1141,7 @@
                 "code": "reportArgumentType",
                 "range": {
                     "startColumn": 33,
-                    "endColumn": 89,
+                    "endColumn": 88,
                     "lineCount": 1
                 }
             },
@@ -7686,8 +7686,8 @@
             {
                 "code": "reportPossiblyUnboundVariable",
                 "range": {
-                    "startColumn": 78,
-                    "endColumn": 83,
+                    "startColumn": 81,
+                    "endColumn": 86,
                     "lineCount": 1
                 }
             },

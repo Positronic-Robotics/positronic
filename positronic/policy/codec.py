@@ -521,7 +521,7 @@ class ChangeEEFrame(Codec):
     def __init__(
         self,
         transform: geom.Transform3D | cabc.Sequence[float],
-        keys: tuple[str, ...] = (obs_keys.EE_POSE, 'robot_command.pose', 'robot_command'),
+        keys: tuple[str, ...] = (obs_keys.EE_POSE, obs_keys.TARGET_EE_POSE, obs_keys.ROBOT_COMMAND),
     ):
         self._transform = self._as_transform(transform)
         self._keys = tuple(keys)

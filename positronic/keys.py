@@ -6,6 +6,13 @@ change the type checker propagates instead of a string literal duplicated across
 configs, adapters and datasets.
 """
 
+# The arm's command channel, and the signals a recorded command unfolds into. The suffixes are the
+# serializer's (see ``Serializers.robot_command`` and ``expand_suffixed``), so the names derive from the
+# channel rather than restating it.
+ROBOT_COMMAND = 'robot_command'
+TARGET_EE_POSE = f'{ROBOT_COMMAND}.pose'
+TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
+
 JOINTS = 'robot_state.q'
 JOINT_VEL = 'robot_state.dq'
 EE_POSE = 'robot_state.ee_pose'

@@ -98,7 +98,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     # the episode self-contained for downstream scoring and faithful replay.
     assert episode.static['scene_xml'].startswith('<mujoco')
     signals = episode.signals
-    assert 'robot_command.pose' in signals
+    assert keys.TARGET_EE_POSE in signals
     assert 'target_grip' in signals
     assert keys.WRIST_IMAGE in signals
     # Privileged ground truth: the full sim state is recorded as a time-series signal.
@@ -121,9 +121,9 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
         first_state, _ = list(ds[i].signals['sim_state.mjSTATE_INTEGRATION'])[0]
         np.testing.assert_allclose(first_state, reference.save_state()['mjSTATE_INTEGRATION'], rtol=1e-6)
 
-    pose_signal = signals['robot_command.pose']
+    pose_signal = signals[keys.TARGET_EE_POSE]
     pose_samples = list(pose_signal)
-    assert pose_samples, 'robot_command.pose signal is empty'
+    assert pose_samples, f'{keys.TARGET_EE_POSE} signal is empty'
     first_pose, _first_pose_ts = pose_samples[0]
     np.testing.assert_allclose(first_pose[:3], np.array([0.4, 0.5, 0.6], dtype=np.float32))
     np.testing.assert_allclose(first_pose[3:], np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32))
@@ -197,8 +197,8 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
         descriptor='test.countdown',
         observations={'value': Observation(producer.observations['value'], None)},
         commands={
-            'robot_command': Command(
-                producer.commands['robot_command'], roboarm_command.Reset(), Serializers.robot_command
+            keys.ROBOT_COMMAND: Command(
+                producer.commands[keys.ROBOT_COMMAND], roboarm_command.Reset(), Serializers.robot_command
             )
         },
         static_meta=dict(ROBOT_STATIC_META),
@@ -220,7 +220,7 @@ def test_countdown_records_frame0_every_trial(tmp_path):
     ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.35)
     with pos3.mirror():
         main(
-            policy=StubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0),
+            policy=StubPolicy(command=ev.embodiment.commands[keys.ROBOT_COMMAND].home, target_grip=0.0),
             evals=[replace(ev, trials=[{'eval.trial_index': i, 'eval.seed': i} for i in range(2)])],
             # the degenerate obs is not Franka-shaped, so run the policy unwrapped
             output_dir=str(tmp_path),
@@ -289,7 +289,7 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     ev = _countdown_eval(_CountdownProducer(done_after=4), timeout=15.0)
     with pos3.mirror():
         main(
-            policy=StubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0),
+            policy=StubPolicy(command=ev.embodiment.commands[keys.ROBOT_COMMAND].home, target_grip=0.0),
             evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
             output_dir=str(tmp_path),
         )
