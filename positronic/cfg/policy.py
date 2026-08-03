@@ -116,15 +116,24 @@ phail_multiple = production.override(
     group_fields=EVAL_GROUP_FIELDS,
 )
 
-# The blind set the rig is evaluating right now. Runway ships a new batch of checkpoints every few days;
-# repoint `endpoints` at that batch rather than adding a preset per batch, so the eval CLI stays one line.
-# These deployments sit behind the workspace's proxy, so pass --policy.headers with its token.
-runway_current = production.override(
+# The blind set each Runway owner is asking the rig for right now. They ship a new batch of checkpoints every
+# few days, so repoint theirs rather than adding a preset per batch, and the eval CLI stays one line. These
+# deployments sit behind the workspace's proxy, so pass --policy.headers with its token.
+runway_anton = production.override(
     endpoints={
         'ged112k': 'wss://runway-pythagoras-dev--curie-ged112k-curieserver-web.modal.run',
         'gd127k': 'wss://runway-pythagoras-dev--curie-gd127k-curieserver-web.modal.run',
         'gdf127k': 'wss://runway-pythagoras-dev--curie-gdf127k-curieserver-web.modal.run',
         'gdl142k': 'wss://runway-pythagoras-dev--curie-gdl142k-curieserver-web.modal.run',
+    },
+    sampler=balanced,
+    group_fields=EVAL_GROUP_FIELDS,
+)
+
+runway_ziyi = production.override(
+    endpoints={
+        'nm82k_us': 'wss://runway-pythagoras-dev--gyros-nm82k-us-gyrosserver-web.modal.run',
+        'fm82k_us': 'wss://runway-pythagoras-dev--gyros-fm82k-us-gyrosserver-web.modal.run',
     },
     sampler=balanced,
     group_fields=EVAL_GROUP_FIELDS,
