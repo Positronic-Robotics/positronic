@@ -6,7 +6,7 @@ from positronic import keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm.ik import frame_transform
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, DROID_EEF_LINK, FLANGE_LINK, bundled_franka_model
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, DROID_EEF_LINK, EE_LINK, FLANGE_LINK, bundled_franka_model
 from positronic.geom import Rotation, Transform3D, quat_closest
 from positronic.policy.codec import ChangeEEFrame
 from positronic.policy.spec import from_spec
@@ -152,15 +152,20 @@ def test_training_encoder_maps_both_poses_forward():
     assert keys.GRIP in out, 'unrelated signals pass through'
 
 
-def test_training_encoder_rejects_a_model_that_predates_the_frame():
-    """Without ``default`` there is nothing to state the moved poses against, and guessing is a silent 10cm."""
-    legacy = bundled_franka_model()[keys.URDF].replace(f'"{DEFAULT_FRAME}"', '"tool"')
-    episode = EpisodeContainer(
-        data={keys.URDF: legacy, keys.CONTROL_FRAME: 'tool', keys.EE_POSE: DummySignal([1000, 2000], np.zeros((2, 7)))}
-    )
+def _episode(**statics):
+    return EpisodeContainer(data={keys.EE_POSE: DummySignal([1000, 2000], np.zeros((2, 7))), **statics})
 
-    with pytest.raises(ValueError, match='declares no'):
-        ChangeEEFrame(TO_DROID).training_encoder(episode)
+
+def test_training_encoder_rejects_poses_anchored_elsewhere():
+    """A recording predating the contract names its own frame, and moving those poses is a silent 10cm."""
+    with pytest.raises(ValueError, match=EE_LINK):
+        ChangeEEFrame(TO_DROID).training_encoder(_episode(**{keys.URDF: URDF, keys.CONTROL_FRAME: EE_LINK}))
+
+
+def test_training_encoder_accepts_a_rig_that_ships_no_model():
+    """What frame the poses sit in is what the recording states; a model confirms that but is not the claim."""
+    out = ChangeEEFrame(TO_DROID).training_encoder(_episode(**{keys.CONTROL_FRAME: DEFAULT_FRAME}))
+    np.testing.assert_allclose(out[keys.EE_FRAME], TO_DROID.as_vector(QUAT), atol=1e-9)
 
 
 def test_training_encoder_skips_absent_command_pose():

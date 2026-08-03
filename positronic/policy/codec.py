@@ -21,8 +21,7 @@ from positronic import keys as obs_keys
 from positronic.dataset.transforms import Elementwise, lazy_sequence
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, FromValue, Group, Identity
 from positronic.drivers.roboarm import command
-from positronic.drivers.roboarm.ik import change_frame, declares_default, ee_frame
-from positronic.drivers.roboarm.models import DEFAULT_FRAME
+from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee_frame
 from positronic.policy.base import PAR, SEQ, DelegatingSession, PolicyWrapper, Session, _ComposedWrapper
 from positronic.utils import merge_dicts
 
@@ -509,12 +508,7 @@ class ChangeEEFrame(Codec):
 
         def __call__(self, episode):
             codec = self._codec
-            if not declares_default(episode[obs_keys.URDF]):
-                raise ValueError(
-                    f'The episode model declares no {DEFAULT_FRAME!r} frame, so there is nothing to state where '
-                    'its poses end up. Re-express the dataset against it (#550) before training a checkpoint '
-                    'that speaks another frame.'
-                )
+            assert_default_frame(episode)
             frame = ee_frame(episode) * codec._transform
             derived: dict[str, Any] = {obs_keys.EE_FRAME: FromValue(frame.as_vector(_QUAT))}
             derived.update({key: partial(self._derive_pose, key) for key in codec._keys if key in episode})

@@ -107,11 +107,25 @@ def change_frame(pose_vec, transform: geom.Transform3D) -> np.ndarray:
     return (geom.Transform3D.from_vector(np.asarray(pose_vec, dtype=np.float64), _QUAT) * transform).as_vector(_QUAT)
 
 
-@lru_cache(maxsize=8)
-def declares_default(urdf_xml: str) -> bool:
-    """Whether a model carries ``DEFAULT_FRAME``, as a site or a body — recordings predating the contract do not."""
-    spec = _prepare_spec(urdf_xml)
-    return DEFAULT_FRAME in ({b.name for b in spec.bodies} | {s.name for b in spec.bodies for s in b.sites})
+def assert_default_frame(statics) -> None:
+    """Raise unless a rig or recording states that its poses are anchored at ``DEFAULT_FRAME``.
+
+    ``CONTROL_FRAME`` is that statement, and a model — when one is carried — has to declare the frame it names.
+    Saying nothing is not a false claim and passes; a caller that needs the model fails on its own terms.
+
+    TODO(#550): delete this. ``CONTROL_FRAME`` goes with that issue, leaving nothing to check: poses are at
+    ``DEFAULT_FRAME`` by contract and ``EE_FRAME`` states any offset from it.
+    """
+    if keys.CONTROL_FRAME not in statics:
+        return
+    frame = statics[keys.CONTROL_FRAME]
+    if frame != DEFAULT_FRAME:
+        raise ValueError(
+            f'Poses are reported in {frame!r}, but every frame transform is measured from {DEFAULT_FRAME!r} '
+            '— see positronic/drivers/roboarm/README.md'
+        )
+    if keys.URDF in statics:
+        frame_transform(statics[keys.URDF], frame, frame)
 
 
 def ee_frame(episode) -> geom.Transform3D:

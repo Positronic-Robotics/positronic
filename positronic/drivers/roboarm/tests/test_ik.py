@@ -13,7 +13,6 @@ from positronic.drivers.roboarm.ik import (
     DLSIKSolverWithLimits,
     LMIKSolver,
     _prepare_spec,
-    declares_default,
     frame_transform,
     ik_joints_from_episode,
     pose_anchor,
@@ -209,11 +208,6 @@ def test_pose_anchor_reads_a_stated_frame_and_falls_back_to_the_name():
     np.testing.assert_allclose(pose_anchor(stated)[1].as_vector(quat), offset.as_vector(quat), atol=1e-12)
     assert pose_anchor(legacy)[0] == CONTROL_FRAME
     np.testing.assert_allclose(pose_anchor(legacy)[1].as_matrix, np.eye(4), atol=1e-12)
-
-
-def test_declares_default_separates_bundled_models_from_legacy_ones():
-    assert declares_default(bundled_franka_model()[keys.URDF])
-    assert not declares_default(URDF)
 
 
 def test_frame_transform_rejects_frames_across_movable_joints():

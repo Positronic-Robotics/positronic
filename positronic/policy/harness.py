@@ -10,8 +10,7 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
-from positronic.drivers.roboarm.ik import frame_transform
-from positronic.drivers.roboarm.models import DEFAULT_FRAME
+from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy, Session
 from positronic.policy.wrappers import ChunkedSchedule
@@ -300,30 +299,6 @@ class Harness(pimm.ControlSystem):
         self._cancel_trajectories()
         self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(self.context), **(payload or {})}))
 
-    def _assert_control_frame(self) -> None:
-        """Raise unless the embodiment reports poses in ``DEFAULT_FRAME``, and its own model declares that frame.
-
-        Every codec transform is measured from ``DEFAULT_FRAME``, so a rig reporting at any other frame shifts
-        every conversion by the offset between the two and nothing downstream can see it. Checked against
-        whatever model is live now: a remote env publishes its ``robot_meta`` a turn after the reset that
-        produced it, so nothing earlier in the episode has the model this observation was measured against.
-
-        TODO(#550): delete this method. It is the only frame knowledge the harness carries, and both halves
-        expire — ``CONTROL_FRAME`` is deleted by that issue, and nothing at serving reads the model, so
-        "declares ``DEFAULT_FRAME``" belongs to whoever builds the model, asserted once at construction.
-        """
-        statics = self._statics()
-        if keys.CONTROL_FRAME not in statics:
-            return
-        frame = statics[keys.CONTROL_FRAME]
-        if frame != DEFAULT_FRAME:
-            raise ValueError(
-                f'Embodiment reports poses in {frame!r}, but every codec transform is measured from '
-                f'{DEFAULT_FRAME!r} — see positronic/drivers/roboarm/README.md'
-            )
-        if keys.URDF in statics:
-            frame_transform(statics[keys.URDF], frame, frame)
-
     def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> None:
         """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
 
@@ -414,7 +389,9 @@ class Harness(pimm.ControlSystem):
         episode's reset, so the harness skips inference rather than feeding a partial or
         stale obs.
         """
-        self._assert_control_frame()
+        # Against the live model, not the one known at episode start: a remote env publishes its ``robot_meta``
+        # a turn after the reset that produced it, so at episode start there is no model to check.
+        assert_default_frame(self._statics())
         inputs: dict[str, Any] = {}
         for name, obs in self._embodiment.observations.items():
             message = self.observations[name].read()
