@@ -9346,14 +9346,6 @@
         ],
         "./positronic/simulator/env_server/proxy.py": [
             {
-                "code": "reportIncompatibleMethodOverride",
-                "range": {
-                    "startColumn": 8,
-                    "endColumn": 11,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportOptionalMemberAccess",
                 "range": {
                     "startColumn": 28,
