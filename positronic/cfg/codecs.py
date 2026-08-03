@@ -21,8 +21,12 @@ RotRep = geom.Rotation.Representation
 def change_ee_frame(frame: str) -> ChangeEEFrame:
     """``ChangeEEFrame`` into the end-effector frame ``frame`` names on the bundled franka rig.
 
-    The transform belongs to the checkpoint rather than to the rig running it: it places ``frame`` relative to
-    ``DEFAULT_FRAME``, which every embodiment declares in its own model at its own geometry.
+    The transform belongs to the checkpoint rather than to the rig running it, which holds only while every
+    embodiment puts ``DEFAULT_FRAME`` at the same physical place.
+
+    TODO(#550): they do not. The FR3 puts it at ``F_T_EE`` and the sim panda at its grasp site, 45mm apart
+    along the approach axis, so a codec built here is right on a franka rig and shifted on the sim. Moving
+    both to the flange is what makes this transform embodiment-independent.
     """
     return ChangeEEFrame(frame_transform(bundled_franka_model()[keys.URDF], DEFAULT_FRAME, frame))
 

@@ -22,6 +22,10 @@ raises before the arm moves.
 
 ## Where to put it
 
+A checkpoint's frame transform is measured from `default` and travels with the checkpoint, so it is only
+portable while every embodiment puts `default` at the same physical place. Today's placements do not — the
+FR3 and the sim panda sit 45 mm apart along the approach axis — which is what [#550](https://github.com/Positronic-Robotics/positronic/issues/550) closes.
+
 **Put `default` at the flange when the gripper can be swapped.** Recorded data outlives grippers. An episode
 anchored to a gripper frame becomes unplaceable the moment that gripper comes off — nothing in the dataset
 says where that frame was — while one anchored to the flange stays valid for the life of the arm.
