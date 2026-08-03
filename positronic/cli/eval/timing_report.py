@@ -171,6 +171,21 @@ def _gpu_summary_from_stats(stats: list[dict], pass_windows: list[tuple[int, int
     )
 
 
+def _dmon_column_indices(names: list[str], log_path: Path) -> tuple[int, int, int | None]:
+    """Positions of the ``sm``, ``fb`` and (where present) ``gpu`` columns in a dmon name header.
+
+    A header carrying ``sm`` but no ``fb`` (plain ``dmon`` / ``-s u``) fails loudly: every row would be
+    skipped and peak VRAM silently read as 0.
+    """
+    if 'fb' not in names:
+        raise ValueError(
+            f'{log_path}: nvidia-smi dmon log has an `sm` column but no `fb` (framebuffer) column, so '
+            f'peak VRAM cannot be read and every sample would be dropped. Re-collect it with '
+            f'`nvidia-smi dmon -s um` (u=utilisation, m=memory), which emits the `fb` column.'
+        )
+    return names.index('sm'), names.index('fb'), names.index('gpu') if 'gpu' in names else None
+
+
 def _parse_dmon(log_path: Path) -> GpuSummary:
     """Mean SM utilisation and peak framebuffer (GB) from a policy endpoint's ``nvidia-smi dmon`` log.
 
@@ -204,16 +219,7 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
             # The name header carries the column names ('sm', 'fb', ...); the units line ('%', 'MB') has no 'sm'.
             names = stripped.lstrip('#').split()
             if 'sm' in names:
-                if 'fb' not in names:
-                    # Plain ``nvidia-smi dmon`` (or ``-s u``) omits the framebuffer column, so every row would
-                    # be skipped and peak VRAM silently read as 0. Fail loudly instead of under-reporting.
-                    raise ValueError(
-                        f'{log_path}: nvidia-smi dmon log has an `sm` column but no `fb` (framebuffer) column, so '
-                        f'peak VRAM cannot be read and every sample would be dropped. Re-collect it with '
-                        f'`nvidia-smi dmon -s um` (u=utilisation, m=memory), which emits the `fb` column.'
-                    )
-                sm_idx, fb_idx = names.index('sm'), names.index('fb')
-                gpu_idx = names.index('gpu') if 'gpu' in names else None
+                sm_idx, fb_idx, gpu_idx = _dmon_column_indices(names, log_path)
             continue
         if sm_idx is None or fb_idx is None:
             continue

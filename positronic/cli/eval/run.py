@@ -123,6 +123,26 @@ def _run_world(
             world.run([harness, *foreground], [*producers, ds_agent, gui])
 
 
+def _validate_timing(evals: list[Eval] | None, embodiment: Embodiment | None, output_dir: str | Path | None) -> None:
+    """Reject a ``--timing`` sweep the report cannot describe: one without an output dir to write the
+    sidecars under, or one carrying a real embodiment. Everything under the bound tracer enters the report,
+    so a real eval's episodes, wall time and machine samples would silently corrupt it."""
+    if output_dir is None:
+        raise ValueError('--timing needs --output_dir: the telemetry sidecars are written under it')
+    if evals is not None:
+        simulated = [ev.embodiment.simulated for ev in evals]
+    else:
+        assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
+        simulated = [embodiment.simulated]
+    if not all(simulated):
+        raise ValueError(
+            f'eval timing needs an all-simulated sweep, got {sum(not s for s in simulated)} real '
+            'embodiment(s): a real eval would run inside the same bound tracer and pass span, so its '
+            'episodes, wall time and machine samples would silently corrupt the report. Run real '
+            'embodiments in a separate untimed invocation.'
+        )
+
+
 def main(
     policy,
     *,
@@ -148,20 +168,7 @@ def main(
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
     # Validate timing up front, before the policy warmup, so a rejected sweep fails before it spends anything.
     if timing:
-        if output_dir is None:
-            raise ValueError('--timing needs --output_dir: the telemetry sidecars are written under it')
-        if evals is not None:
-            simulated = [ev.embodiment.simulated for ev in evals]
-        else:
-            assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
-            simulated = [embodiment.simulated]
-        if not all(simulated):
-            raise ValueError(
-                f'eval timing needs an all-simulated sweep, got {sum(not s for s in simulated)} real '
-                'embodiment(s): a real eval would run inside the same bound tracer and pass span, so its '
-                'episodes, wall time and machine samples would silently corrupt the report. Run real '
-                'embodiments in a separate untimed invocation.'
-            )
+        _validate_timing(evals, embodiment, output_dir)
 
     # Drive the policy's remote endpoints through their cold start before hardware and the operator
     # surface come up: opening a session blocks on the server handshake, which returns only once the
