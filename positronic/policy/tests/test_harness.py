@@ -19,11 +19,13 @@ from positronic.drivers.roboarm.command import (
     JointPosition,
     Reset,
     TrajectoryPlayer,
+    _compose_delta,
     apply_cartesian_delta,
     from_wire,
     reduce,
     to_wire,
 )
+from positronic.drivers.roboarm.models import bundled_franka_model
 from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
@@ -381,10 +383,11 @@ def test_harness_passes_descriptor_to_policy(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_robot_model_from_embodiment_statics_reaches_policy(world):
-    """An embodiment whose env cannot publish a model carries it in statics instead (``cfg.eval.sim.libero``)."""
+def test_robot_model_stays_out_of_the_observation(world):
+    """A codec carries its frame as a transform, so the model never has to leave the rig."""
     policy = SpyPolicy()
-    statics = {'urdf': '<robot/>', 'control_frame': 'end_effector'}
+    model = bundled_franka_model()
+    statics = {keys.URDF: model[keys.URDF], keys.CONTROL_FRAME: model[keys.CONTROL_FRAME]}
     harness = Harness(policy, make_embodiment(static_meta=statics))
     harness.commands['robot_command']._bind(RecordingEmitter())
     harness.commands['target_grip']._bind(RecordingEmitter())
@@ -406,37 +409,24 @@ def test_robot_model_from_embodiment_statics_reaches_policy(world):
     drive_scheduler(scheduler, steps=20)
 
     assert policy.last_obs is not None
-    assert policy.last_obs['urdf'] == '<robot/>'
-    assert policy.last_obs['control_frame'] == 'end_effector'
+    assert keys.URDF not in policy.last_obs and keys.CONTROL_FRAME not in policy.last_obs
 
 
 @pytest.mark.timeout(3.0)
-def test_model_keys_forwarded_independently(world):
-    """A rig that names its control frame but ships no URDF (``yam``) still builds observations."""
-    policy = SpyPolicy()
-    harness = Harness(policy, make_embodiment(static_meta={'control_frame': 'grasp_site'}))
+def test_rejects_a_control_frame_the_model_does_not_declare(world):
+    """Every frame transform is measured from this one, so a name the model lacks must not run."""
+    statics = {keys.URDF: bundled_franka_model()[keys.URDF], keys.CONTROL_FRAME: 'no_such_frame'}
+    harness = Harness(SpyPolicy(), make_embodiment(static_meta=statics))
     harness.commands['robot_command']._bind(RecordingEmitter())
     harness.commands['target_grip']._bind(RecordingEmitter())
     harness.ds_command._bind(RecordingEmitter())
-
-    frame_em = world.pair(harness.observations['image.cam'])
-    robot_em = world.pair(harness.observations['robot_state'])
-    grip_em = world.pair(harness.observations['grip'])
     directive_em = world.pair(harness.directive)
 
-    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
-        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
-        (None, 0.05),
-    ])
+    driver = ManualDriver([(partial(directive_em.emit, Directive.RUN(task='t')), 0.0), (None, 0.05)])
 
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, steps=20)
-
-    assert policy.last_obs is not None
-    assert policy.last_obs['control_frame'] == 'grasp_site'
-    assert 'urdf' not in policy.last_obs
+    with pytest.raises(ValueError, match='no_such_frame'):
+        drive_scheduler(scheduler, steps=20)
 
 
 @pytest.mark.timeout(3.0)
@@ -1210,7 +1200,7 @@ def test_cartesian_delta_wire_roundtrip():
 def test_apply_cartesian_delta_composes_in_world_frame():
     current = Transform3D(np.array([0.5, 0.1, 0.3]), Rotation.from_rotvec(np.array([0.2, 0.1, 0.4])))
     delta = Transform3D(np.array([0.02, -0.01, 0.05]), Rotation.from_rotvec(np.array([0.1, 0.0, 0.0])))
-    target = apply_cartesian_delta(current, delta)
+    target = apply_cartesian_delta(current, CartesianDelta(delta))
     # World frame: translation adds directly (not rotated by current, as Transform3D.__mul__ would) and the
     # rotation left-multiplies.
     np.testing.assert_allclose(target.translation, current.translation + delta.translation)
@@ -1225,10 +1215,10 @@ def test_reduce_accumulates_due_cartesian_deltas():
     d1 = Transform3D(np.array([0.02, 0.01, 0.0]), Rotation.from_rotvec(np.array([0.0, 0.0, 0.2])))
     out = reduce([(10, CartesianDelta(d0)), (20, CartesianDelta(d1))])
     assert isinstance(out, CartesianDelta)
-    expected = apply_cartesian_delta(d0, d1)  # two due deltas catch up as their world-frame compose, not last-wins
+    expected = _compose_delta(d0, d1)  # two due deltas catch up as their world-frame compose, not last-wins
     np.testing.assert_allclose(out.delta.translation, expected.translation)
     np.testing.assert_allclose(out.delta.rotation.as_quat, expected.rotation.as_quat, atol=1e-12)
-    assert not np.allclose(out.delta.rotation.as_quat, apply_cartesian_delta(d1, d0).rotation.as_quat)
+    assert not np.allclose(out.delta.rotation.as_quat, _compose_delta(d1, d0).rotation.as_quat)
 
 
 def test_reduce_sums_due_joint_deltas():

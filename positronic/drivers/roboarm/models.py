@@ -10,6 +10,12 @@ from positronic import keys
 
 _FLANGE_LINK = 'link8'
 DROID_EEF_LINK = 'droid_eef'
+# The franka's own tool frame, ``F_T_EE`` off the flange. TODO(#550): move ``DEFAULT_FRAME`` to the flange.
+EE_LINK = 'end_effector'
+# The frame every embodiment publishes its poses in and every codec transform is measured from. Recommended at
+# the flange whenever the gripper can be swapped: recorded data outlives grippers, and an episode anchored to a
+# gripper frame becomes unplaceable once that gripper comes off.
+DEFAULT_FRAME = 'default'
 # Seat the gripper on the flange, rotated about the approach axis to match the real 2F-85 coupler
 # (a +45deg Z, i.e. 90deg off the franka ``end_effector`` frame).
 _2F85_MOUNT_RPY = '0 0 0.7853981634'
@@ -122,6 +128,15 @@ def _bundled_robotiq_2f85() -> dict:
     }
 
 
+def add_default_frame(arm_root: ET.Element, parent: str) -> None:
+    """Declare ``DEFAULT_FRAME`` on a URDF in place, coincident with the ``parent`` link."""
+    ET.SubElement(arm_root, 'link', name=DEFAULT_FRAME)
+    joint = ET.SubElement(arm_root, 'joint', name=f'{parent}_to_{DEFAULT_FRAME}', type='fixed')
+    ET.SubElement(joint, 'origin', xyz='0 0 0', rpy='0 0 0')
+    ET.SubElement(joint, 'parent', link=parent)
+    ET.SubElement(joint, 'child', link=DEFAULT_FRAME)
+
+
 def attach_robotiq_2f85(arm_root: ET.Element, meshes: dict[str, bytes]) -> dict:
     """Mount the 2F-85 on a franka arm URDF in place: append its links/joints under the flange and
     merge its meshes into ``meshes``. Returns the ``grip``-driven gripper spec for the viewer."""
@@ -136,20 +151,19 @@ def bundled_franka_model() -> dict:
     """The bundled real franka arm + Robotiq 2F-85 for the 3D viewer: the FR3 URDF and its collision
     meshes with the 2F-85 grafted onto the flange, plus the canonical joint names and control frame.
 
-    Backfills real-robot datasets recorded before they stored their own model. Its ``end_effector``
-    is the physical flange frame the driver measures against; the MuJoCo sim measures at a different
-    grasp site and supplies its own model via ``bundled_panda_model``.
+    Backfills real-robot datasets recorded before they stored their own model.
     """
     here = Path(__file__).resolve()
     arm_root = ET.fromstring((here.parent / 'fr3.urdf').read_text())
     mesh_dir = here.parents[2] / 'assets' / 'fr3_collision'
     meshes = {f.name: f.read_bytes() for f in sorted(mesh_dir.glob('*.stl'))}
     gripper = attach_robotiq_2f85(arm_root, meshes)
+    add_default_frame(arm_root, EE_LINK)
     return {
-        'urdf': ET.tostring(arm_root, encoding='unicode'),
+        keys.URDF: ET.tostring(arm_root, encoding='unicode'),
         'meshes': meshes,
         'joint_names': [f'joint{i}' for i in range(1, 8)],
-        'control_frame': 'end_effector',
+        keys.CONTROL_FRAME: DEFAULT_FRAME,
         'gripper': gripper,
     }
 
@@ -157,21 +171,21 @@ def bundled_franka_model() -> dict:
 @lru_cache(maxsize=1)
 def bundled_panda_model() -> dict:
     """The bundled simulated Franka panda (arm + hand) for the 3D viewer and offline IK: the panda
-    URDF, its collision meshes, the joint names, the ``end_effector`` control frame — the grasp site
-    where the sim measures ``robot_state.ee_pose`` — and the ``gripper`` spec that slides the fingers
-    from the recorded ``grip`` signal. Supplied to sim datasets by ``SIM_ROBOT_TRANSFORM``, mirroring
-    how ``bundled_franka_model`` backfills the real arm; its ``end_effector`` sits at the simulated
-    grasp site rather than the FR3 physical flange.
+    URDF, its collision meshes, the joint names, the ``DEFAULT_FRAME`` the sim measures
+    ``robot_state.ee_pose`` at, and the ``gripper`` spec that slides the fingers from the recorded
+    ``grip`` signal. Supplied to sim datasets by ``SIM_ROBOT_TRANSFORM``, mirroring how
+    ``bundled_franka_model`` backfills the real arm.
     """
     urdf_path = Path(__file__).resolve().parents[2] / 'assets' / 'mujoco' / 'panda.urdf'
-    urdf = urdf_path.read_text()
+    root = ET.fromstring(urdf_path.read_text())
     mesh_dir = urdf_path.parent / 'assets'
-    mesh_files = {mesh.get('filename') for mesh in ET.fromstring(urdf).iter('mesh')}
+    mesh_files = {mesh.get('filename') for mesh in root.iter('mesh')}
+    add_default_frame(root, EE_LINK)
     return {
-        'urdf': urdf,
+        keys.URDF: ET.tostring(root, encoding='unicode'),
         'meshes': {name: (mesh_dir / name).read_bytes() for name in sorted(mesh_files)},
         'joint_names': [f'joint{i}' for i in range(1, 8)],
-        'control_frame': 'end_effector',
+        keys.CONTROL_FRAME: DEFAULT_FRAME,
         # ``grip`` is recorded in [0, 1] (open→closed); each finger slides 0..0.04 m along its axis.
         'gripper': {'signal': keys.GRIP, 'joints': ['finger_joint1', 'finger_joint2'], 'travel': 0.04},
     }

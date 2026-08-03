@@ -21,22 +21,18 @@ from positronic import keys as obs_keys
 from positronic.dataset.transforms import Elementwise, lazy_sequence
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, FromValue, Group, Identity
 from positronic.drivers.roboarm import command
-from positronic.drivers.roboarm.ik import frame_transform
+from positronic.drivers.roboarm.ik import change_frame, ee_frame
 from positronic.policy.base import PAR, SEQ, DelegatingSession, PolicyWrapper, Session, _ComposedWrapper
 from positronic.utils import merge_dicts
 
 _QUAT = geom.Rotation.Representation.QUAT
 
 
-def _carries_pose(value) -> bool:
-    """A bare pose vector, or the Cartesian command holding one — as opposed to a command in another space."""
-    return isinstance(value, command.CartesianPosition) or not isinstance(value, command.CommandType)
-
-
-def _change_frame(pose_vec, transform: geom.Transform3D) -> np.ndarray:
-    """Recompose a ``[tx,ty,tz,qw,qx,qy,qz]`` pose through ``pose * transform``."""
-    pose = geom.Transform3D.from_vector(np.asarray(pose_vec, dtype=np.float64), _QUAT)
-    return (pose * transform).as_vector(_QUAT)
+def _as_transform(value: geom.Transform3D | cabc.Sequence[float]) -> geom.Transform3D:
+    """A transform, or the ``[tx,ty,tz,qw,qx,qy,qz]`` vector a wire spec carries one as."""
+    if isinstance(value, geom.Transform3D):
+        return value
+    return geom.Transform3D.from_vector(np.asarray(value, dtype=np.float64), _QUAT)
 
 
 def lerobot_state(dim: int, names: list[str] | None = None) -> dict[str, Any]:
@@ -470,22 +466,24 @@ class RestrictImageSize(Codec):
 
 
 class ChangeEEFrame(Codec):
-    """Convert poses between the rig's canonical EE frame and the policy's ``to`` frame.
+    """Convert poses between the embodiment's ``default`` frame and the frame the policy speaks.
 
-    ``T`` is the transform between the two, read from the robot model under ``urdf_key``/``control_frame_key`` —
-    the observation at inference, episode statics at training. Keys in ``keys`` go ``pose * T`` on encode and
-    ``pose * T⁻¹`` on decode; absent keys and values with no pose are left alone.
+    ``transform`` expresses the policy's frame relative to ``default`` — the frame every embodiment declares in
+    its model and reports poses in, so one policy-side constant serves every rig that honours the contract.
+    Keys in ``keys`` go ``pose * transform`` on encode and ``pose * transform⁻¹`` on decode; absent keys and
+    joint-space commands are left alone. A ``CartesianDelta`` has no anchor pose to convert against, so it
+    travels with the frame it is expressed in and the driver applies it there.
 
-    Which side of the ``remote`` marker it sits on decides who converts, the rig or the server; a server that
-    converts needs the model on the wire (``remote(strip=())``). Compose it left of the observation/action
-    codecs. A decoder that rebuilds its command from the decode context (``RelativePositionAction``) needs this
-    codec on the far side of ``remote`` from it. TODO(#483): ``_ComposedCodec.decode`` hands both halves the
-    same pre-encode context, so within one composed codec that pairing is wrong.
+    Which side of the ``remote`` marker it sits on decides who converts, the rig or the server. Compose it left
+    of the observation/action codecs. A decoder that rebuilds its command from the decode context
+    (``RelativePositionAction``) needs this codec on the far side of ``remote`` from it. TODO(#483):
+    ``_ComposedCodec.decode`` hands both halves the same pre-encode context, so within one composed codec that
+    pairing is wrong.
     """
 
     class _ChangeEpisodeFrames(EpisodeTransform):
-        """Move the episode's pose signals into ``to`` and relabel ``control_frame``, so a later codec solving
-        against the frame (``IKJointsAction``) resolves it to the right site.
+        """Move the episode's pose signals into the policy's frame and record where they now sit, so a later
+        transform solving against the model (``IKJointsAction``) reaches the same frame.
 
         Separate from the codec because ``|`` and ``&`` mean codec composition on one and transform chaining on the
         other; one object cannot carry both.
@@ -495,12 +493,13 @@ class ChangeEEFrame(Codec):
             self._codec = codec
 
         def _derive_pose(self, key: str, episode):
-            transform = self._codec._transform(episode)
-            return Elementwise(episode[key], lazy_sequence(partial(_change_frame, transform=transform)))
+            move = partial(self._codec._move, transform=self._codec._transform)
+            return Elementwise(episode[key], lazy_sequence(move))
 
         def __call__(self, episode):
             codec = self._codec
-            derived: dict[str, Any] = {codec._control_frame_key: FromValue(codec._to)}
+            frame = ee_frame(episode) * codec._transform
+            derived: dict[str, Any] = {obs_keys.EE_FRAME: FromValue(frame.as_vector(_QUAT))}
             derived.update({key: partial(self._derive_pose, key) for key in codec._keys if key in episode})
             return Group(Derive(**derived), Identity())(episode)
 
@@ -510,38 +509,32 @@ class ChangeEEFrame(Codec):
 
     def __init__(
         self,
-        to: str,
+        transform: geom.Transform3D | cabc.Sequence[float],
         keys: tuple[str, ...] = (obs_keys.EE_POSE, 'robot_command.pose', 'robot_command'),
-        urdf_key: str = obs_keys.URDF,
-        control_frame_key: str = obs_keys.CONTROL_FRAME,
     ):
-        self._to = to
+        self._transform = _as_transform(transform)
         self._keys = tuple(keys)
-        self._urdf_key = urdf_key
-        self._control_frame_key = control_frame_key
 
-    def _transform(self, source) -> geom.Transform3D:
-        return frame_transform(source[self._urdf_key], source[self._control_frame_key], self._to)
+    def _move(self, value: Any, transform: geom.Transform3D) -> Any:
+        match value:
+            case command.CartesianPosition(pose):
+                return command.CartesianPosition(pose=pose * transform)
+            case command.CartesianDelta(delta, frame):
+                return command.CartesianDelta(delta=delta, frame=transform.inv * frame)
+            case command.Reset() | command.JointPosition() | command.JointDelta():
+                return value
+            case _:
+                return change_frame(value, transform)
 
-    def _posed(self, data: dict) -> list[str]:
-        return [key for key in self._keys if key in data and _carries_pose(data[key])]
-
-    def _move(self, data: dict, keys: list[str], transform: geom.Transform3D) -> dict:
-        moved = {
-            key: command.CartesianPosition(pose=data[key].pose * transform)
-            if isinstance(data[key], command.CartesianPosition)
-            else _change_frame(data[key], transform)
-            for key in keys
-        }
-        return {**data, **moved}
+    def _apply(self, data: dict, transform: geom.Transform3D) -> dict:
+        moved = {key: self._move(data[key], transform) for key in self._keys if key in data}
+        return {**data, **moved} if moved else data
 
     def encode(self, data):
-        keys = self._posed(data)
-        return self._move(data, keys, self._transform(data)) if keys else data
+        return self._apply(data, self._transform)
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
-        keys = self._posed(data)
-        return self._move(data, keys, self._transform(context).inv) if keys else data
+        return self._apply(data, self._transform.inv)
 
     @property
     def training_encoder(self) -> EpisodeTransform:
@@ -549,16 +542,11 @@ class ChangeEEFrame(Codec):
 
     @property
     def meta(self):
-        return {'ee_frame': self._to}
+        return {obs_keys.EE_FRAME: self._transform.as_vector(_QUAT).tolist()}
 
     def to_spec(self):
         # Lists, not tuples, so the spec is identical before and after a wire round-trip.
         return {
             'name': 'change_ee_frame',
-            'args': {
-                'to': self._to,
-                'keys': list(self._keys),
-                'urdf_key': self._urdf_key,
-                'control_frame_key': self._control_frame_key,
-            },
+            'args': {'transform': self._transform.as_vector(_QUAT).tolist(), 'keys': list(self._keys)},
         }

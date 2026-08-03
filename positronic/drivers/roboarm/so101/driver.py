@@ -1,14 +1,16 @@
+import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
 
 import pimm
-from positronic import geom
+from positronic import geom, keys
 from positronic.drivers.motors.feetech import MotorBus
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.kinematics import Kinematics
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, add_default_frame
 
 
 class SO101State(State, pimm.shared_memory.NumpySMAdapter):
@@ -73,10 +75,12 @@ class Robot(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self.motor_bus.connect()
+        urdf = ET.fromstring(Path(_SO101_URDF_PATH).read_text())
+        add_default_frame(urdf, 'gripper_frame_link')
         self.robot_meta.emit({
-            'urdf': Path(_SO101_URDF_PATH).read_text(),
+            keys.URDF: ET.tostring(urdf, encoding='unicode'),
             'joint_names': _SO101_JOINT_NAMES,
-            'control_frame': 'gripper_frame_link',
+            keys.CONTROL_FRAME: DEFAULT_FRAME,
         })
 
         rate_limit = pimm.RateLimiter(hz=1000, clock=clock)
@@ -104,9 +108,9 @@ class Robot(pimm.ControlSystem):
                         qpos = self._solve_ik(state, pose)
                         q_with_gripper = np.concatenate([qpos, [self._last_grip]])
                         self.motor_bus.set_target_position(q_with_gripper)
-                    case roboarm_command.CartesianDelta(delta):
+                    case roboarm_command.CartesianDelta() as delta_cmd:
                         ee_pose, _ = self._forward_kinematics(self.motor_bus.position)
-                        target = roboarm_command.apply_cartesian_delta(ee_pose, delta)
+                        target = roboarm_command.apply_cartesian_delta(ee_pose, delta_cmd)
                         qpos = self._solve_ik(state, target)
                         q_with_gripper = np.concatenate([qpos, [self._last_grip]])
                         self.motor_bus.set_target_position(q_with_gripper)

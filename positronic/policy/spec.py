@@ -28,7 +28,6 @@ import operator
 from collections.abc import Callable
 from typing import Any
 
-from positronic import keys
 from positronic.policy.action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
@@ -48,31 +47,24 @@ from positronic.policy.codec import (
 from positronic.policy.observation import ObservationCodec
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
 
-# The robot model the harness puts in the observation for ``ChangeEEFrame``. Nothing else reads it and a URDF
-# is large, so it stays home unless a server that converts frames itself asks for it.
-DEFAULT_STRIP = (keys.URDF, keys.CONTROL_FRAME)
-
 
 class RemoteMarker(PolicyWrapper):
     """The client/server border in a policy pipeline. Only ever split on, never applied.
 
     Its arguments describe the wire rather than the policy, so they belong to the border itself:
     ``compress_images`` has the rig JPEG-encode frames before sending, for an endpoint behind a proxy
-    with a message-size cap; ``strip`` names the rig-local observation keys that do not cross. The server
-    declares them in its handshake and the rig obeys.
+    with a message-size cap. The server declares them in its handshake and the rig obeys.
 
     ``remote`` is the plain border; call it to describe the wire::
 
         ChunkedSchedule() | remote(compress_images=True) | codec | source
-        ChunkedSchedule() | remote(strip=()) | ChangeEEFrame(to='droid_eef') | codec | source
     """
 
-    def __init__(self, compress_images: bool = False, strip: tuple[str, ...] = DEFAULT_STRIP):
+    def __init__(self, compress_images: bool = False):
         self.compress_images = compress_images
-        self.strip = tuple(strip)
 
-    def __call__(self, *, compress_images: bool = False, strip: tuple[str, ...] = DEFAULT_STRIP) -> 'RemoteMarker':
-        return RemoteMarker(compress_images=compress_images, strip=strip)
+    def __call__(self, *, compress_images: bool = False) -> 'RemoteMarker':
+        return RemoteMarker(compress_images=compress_images)
 
     def wrap(self, policy: Policy) -> Policy:
         raise TypeError('`remote` marks the client/server border of a pipeline; split() it instead of wrapping')

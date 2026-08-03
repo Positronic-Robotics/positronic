@@ -57,19 +57,14 @@ def _legacy_bound(sizes: Any) -> RestrictImageSize | None:
 class RemoteSession(Session):
     """Per-episode session that forwards observations to a remote inference server.
 
-    ``strip`` and ``compress_images`` come from what the server declared (see ``RemoteMarker``).
+    ``compress_images`` comes from what the server declared (see ``RemoteMarker``).
     """
 
-    def __init__(
-        self, ws_session: InferenceSession, compress_images: bool = False, strip: frozenset[str] = frozenset()
-    ):
+    def __init__(self, ws_session: InferenceSession, compress_images: bool = False):
         self._session = ws_session
         self._compress_images = compress_images
-        self._strip = strip
 
     def _prepare_obs(self, obs: dict[str, Any]) -> dict[str, Any]:
-        if self._strip & obs.keys():
-            obs = {key: value for key, value in obs.items() if key not in self._strip}
         if not self._compress_images:
             return obs
         return {key: self._prepare_value(key, value) for key, value in obs.items()}
@@ -116,21 +111,12 @@ class _Endpoint(Policy):
     """The wire connection to one inference server: sessions forward observations under the border's settings.
 
     ``InferenceClient`` reads the server, the model, and the session params off the URL.
-    ``compress_images`` and ``strip`` stand in for a server that declares no wire settings of its own.
+    ``compress_images`` stands in for a server that declares no wire settings of its own.
     """
 
-    def __init__(
-        self,
-        url: str,
-        *,
-        headers: dict[str, str] | None,
-        infer_timeout: float,
-        compress_images: bool | None,
-        strip: tuple[str, ...],
-    ):
+    def __init__(self, url: str, *, headers: dict[str, str] | None, infer_timeout: float, compress_images: bool | None):
         self._client = InferenceClient(url, headers=headers, infer_timeout=infer_timeout)
         self._compress_override = compress_images
-        self._strip_fallback = frozenset(strip)
         # Both filled on first contact: the metadata via a throwaway session if ``meta`` is read before any
         # real one exists, the compression flag from that metadata.
         self._server_meta: dict[str, Any] | None = None
@@ -153,15 +139,11 @@ class _Endpoint(Policy):
             self._compress = bool(self._compress_override if override else declared)
         return self._compress
 
-    def _strip(self) -> frozenset[str]:
-        declared = self.server_meta().get('strip')
-        return self._strip_fallback if declared is None else frozenset(declared)
-
     def new_session(self, context=None, now=None) -> RemoteSession:
         # Resolved before connecting, so a session that contradicts the declaration leaves no socket open.
-        compress, strip = self._compression(), self._strip()
+        compress = self._compression()
         ws_session = self._client.new_session()
-        return RemoteSession(ws_session, compress_images=compress, strip=strip)
+        return RemoteSession(ws_session, compress_images=compress)
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -185,24 +167,20 @@ class RemotePolicy(Policy):
     ``local`` — with the ``image_sizes`` such a server reports bounding the wire either way.
 
     ``local`` and ``compress_images`` stand in for a server that declares neither — see
-    ``_operator_override``. ``strip`` names the rig-local observation keys held back from a server that
-    declares no ``strip`` of its own. ``recording_dir`` taps the raw and wire boundaries around the stack.
+    ``_operator_override``. ``recording_dir`` taps the raw and wire boundaries around the stack.
     """
 
     def __init__(
         self,
         url: str,
         *,
-        strip: tuple[str, ...],
         local: PolicyWrapper | None = None,
         recording_dir: str | None = None,
         headers: dict[str, str] | None = None,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
         compress_images: bool | None = None,
     ):
-        self._endpoint = _Endpoint(
-            url, headers=headers, infer_timeout=infer_timeout, compress_images=compress_images, strip=strip
-        )
+        self._endpoint = _Endpoint(url, headers=headers, infer_timeout=infer_timeout, compress_images=compress_images)
         self._local = local
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
         self._stacked: Policy | None = None

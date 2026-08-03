@@ -10,7 +10,6 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.remote import RemoteSession
-from positronic.policy.spec import DEFAULT_STRIP
 from positronic.policy.wrappers import ChunkedSchedule
 
 EMPTY_STACK = {'local_stack': {'seq': []}}
@@ -28,7 +27,7 @@ def _mock_remote_policy(metadata=None, infer_return=None, **kwargs):
     mock_ws = _mock_ws_session(metadata)
     if infer_return is not None:
         mock_ws.infer.return_value = infer_return
-    policy = RemotePolicy('localhost:0', strip=DEFAULT_STRIP, **kwargs)
+    policy = RemotePolicy('localhost:0', **kwargs)
     policy._endpoint._client = MagicMock()
     policy._endpoint._client.new_session.return_value = mock_ws
     return policy, mock_ws
@@ -46,12 +45,6 @@ class TestPrepareObs:
         obs = {'cam': _make_image(480, 640), 'state': np.array([1.0])}
         assert session._prepare_obs(obs) is obs
 
-    def test_strips_the_keys_it_is_given(self):
-        session = RemoteSession(_mock_ws_session(), strip=frozenset(DEFAULT_STRIP))
-        result = session._prepare_obs({'state': np.array([1.0]), 'urdf': '<robot/>', 'control_frame': 'end_effector'})
-        assert 'urdf' not in result and 'control_frame' not in result
-        np.testing.assert_array_equal(result['state'], np.array([1.0]))
-
     def test_compression_reaches_nested_images(self):
         session = RemoteSession(_mock_ws_session(), compress_images=True)
         result = session._prepare_obs({
@@ -64,17 +57,6 @@ class TestPrepareObs:
         assert isinstance(result['video']['wrist'], dict)
         np.testing.assert_array_equal(result['state'], np.array([1.0, 2.0]))
         assert result[keys.TASK] == 'pick cube'
-
-
-class TestDeclaredStrip:
-    def test_server_declaration_is_obeyed(self):
-        policy, _ = _mock_remote_policy({**EMPTY_STACK, 'strip': []})
-        assert policy._endpoint._strip() == frozenset()
-
-    def test_silent_server_gets_the_standard_set(self):
-        """A server too old to declare must not start receiving the robot model when the rig upgrades."""
-        policy, _ = _mock_remote_policy(EMPTY_STACK)
-        assert policy._endpoint._strip() == frozenset(DEFAULT_STRIP)
 
 
 class TestInferenceClientHeaders:
@@ -208,7 +190,7 @@ class TestInferenceClientUrl:
 
 def test_remote_policy_hands_the_url_and_headers_to_the_client():
     headers = {'Modal-Key': 'k'}
-    client = RemotePolicy('https://example.com/api/v1/session/10000', strip=(), headers=headers)._endpoint._client
+    client = RemotePolicy('https://example.com/api/v1/session/10000', headers=headers)._endpoint._client
     assert client is not None
     assert client.session_url == 'wss://example.com/api/v1/session/10000'
     assert client.headers == headers
@@ -431,7 +413,7 @@ def test_remote_policy_lifecycle(inference_server, mock_policy):
     """RemotePolicy against a live server whose pipeline declares a chunked_schedule local stack."""
     host, port = inference_server
 
-    policy = RemotePolicy(f'{host}:{port}', strip=())
+    policy = RemotePolicy(f'{host}:{port}')
     session = policy.new_session(now=lambda: 0.0)
 
     meta = session.meta
@@ -454,7 +436,7 @@ def test_remote_policy_lifecycle(inference_server, mock_policy):
 def test_remote_session_meta(inference_server):
     """Session meta must include server metadata."""
     host, port = inference_server
-    policy = RemotePolicy(f'{host}:{port}', strip=())
+    policy = RemotePolicy(f'{host}:{port}')
     session = policy.new_session(now=lambda: 0.0)
 
     meta = session.meta

@@ -13,7 +13,7 @@ from openpi_client.websocket_client_policy import WebsocketClientPolicy
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Codec, Policy, Session
-from positronic.policy.codec import ChangeEEFrame, RestrictImageSize
+from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
@@ -241,13 +241,13 @@ openpi_source = cfn.Config(OpenpiSource)
 def pipeline(codec: Codec, source: ModelSource, ee_frame: str | None):
     """The OpenPI serving pipeline: rig-side chunk scheduling, the server-side codec, the checkpoint source.
 
-    ``ee_frame`` names the end-effector frame this checkpoint's poses live in, resolved against the rig's own
-    robot model. Leave it unset for a checkpoint trained in the rig's canonical frame, or one that speaks joints.
+    ``ee_frame`` names the end-effector frame this checkpoint's poses live in. Leave it unset for a checkpoint
+    trained in the embodiment's ``default`` frame, or one that speaks joints.
     """
     local = ChunkedSchedule() | RestrictImageSize(224, 224)
     if ee_frame is not None:
         # Outermost, so everything downstream — the wire, the server's codec — sees poses already in ``ee_frame``.
-        local = ChangeEEFrame(to=ee_frame) | local
+        local = codecs.change_ee_frame(ee_frame) | local
     return local | remote | codec | source
 
 

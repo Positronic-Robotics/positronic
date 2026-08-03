@@ -49,16 +49,18 @@ These timestamps are **relative** — seconds from the start of the trajectory. 
 
 ## End-effector frames
 
-"EE pose" has no universal meaning: our rigs report the flange (`end_effector`), DROID and RoboLab report the gripper frame (`droid_eef`). A checkpoint speaks whichever frame its training data was in, so serving it on a rig with a different canonical frame misreads every pose and every command by one constant transform — silently.
+"EE pose" has no universal meaning: our rigs report the frame their model calls `default`, DROID and RoboLab report the gripper frame (`droid_eef`). A checkpoint speaks whichever frame its training data was in, so serving it on a rig whose `default` sits elsewhere misreads every pose and every command by one constant transform — silently. See [the frame contract](../positronic/drivers/roboarm/README.md) for what `default` is and what each embodiment owes it.
 
-`ChangeEEFrame(to=...)` converts at that boundary: observations compose forward into the policy's frame, commands compose back. The frame name is a site in the rig's own robot model, and the transform is read from that model — so one checkpoint runs on any rig whose model defines the frame.
+`ChangeEEFrame(T)` converts at that boundary: observations compose forward into the policy's frame (`pose * T`), commands compose back (`pose * T⁻¹`). `T` places the checkpoint's frame relative to `default`, so it belongs to the checkpoint and travels with it — nothing about the rig's model crosses the wire.
 
 It is declared in two places, for the two things it does:
 
 - **Training** — `compose(ee_frame='droid_eef')` re-expresses the dataset in that frame, which is what makes the resulting checkpoint speak it.
-- **Serving** — the vendor pipeline's `ee_frame=` puts the codec left of the `remote` marker, so the rig converts using its own model and the server stays frame-agnostic. Declared right of the marker instead, the server converts and needs the model on the wire (`remote(strip=())`).
+- **Serving** — the vendor pipeline's `ee_frame=` puts the codec left of the `remote` marker, so the rig converts and the server stays frame-agnostic.
 
-Leave it unset for a checkpoint trained in the rig's canonical frame or one that speaks joints — joints are unambiguous — and behavior is unchanged.
+Both resolve the name through `cfg.codecs.change_ee_frame`, which measures it against `default` on the bundled franka model. Leave it unset for a checkpoint trained in `default` or one that speaks joints — joints are unambiguous — and behavior is unchanged.
+
+A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
 
 ## Writing custom codecs
 

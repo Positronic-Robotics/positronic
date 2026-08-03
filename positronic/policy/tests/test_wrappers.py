@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from positronic import keys
+from positronic.geom import Transform3D
 from positronic.policy import spec
 from positronic.policy.action import (
     AbsoluteJointsAction,
@@ -333,7 +334,7 @@ class TestPipelineSpec:
             'absolute_joints_action': AbsoluteJointsAction('robot_command.joints', 'target_grip'),
             'relative_position_action': RelativePositionAction(),
             'joint_delta_action': JointDeltaAction(),
-            'change_ee_frame': ChangeEEFrame(to='droid_eef'),
+            'change_ee_frame': ChangeEEFrame(Transform3D.identity),
         }
         assert set(instances) == set(spec.WIRE_WRAPPERS)
         for name, instance in instances.items():

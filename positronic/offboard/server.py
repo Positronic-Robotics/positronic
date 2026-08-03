@@ -279,7 +279,6 @@ class PolicyServer:
                 **session.meta,
                 'local_stack': local_spec,
                 'compress_images': border.compress_images,
-                'strip': list(border.strip),
                 'positronic_version': _pkg_version('positronic'),
             }
             await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))

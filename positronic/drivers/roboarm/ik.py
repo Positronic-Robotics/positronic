@@ -1,4 +1,4 @@
-"""IK solvers using MuJoCo for FK/Jacobian computation.
+"""Frame algebra and IK solvers, both using MuJoCo for FK/Jacobian computation.
 
 Three solvers for reconstructing joint-space targets from recorded EE targets:
 - LMIKSolver: Levenberg-Marquardt on the site pose with nullspace damping (for sim data)
@@ -8,15 +8,17 @@ Three solvers for reconstructing joint-space targets from recorded EE targets:
 """
 
 import xml.etree.ElementTree as ET
-from functools import lru_cache
+from functools import lru_cache, partial
 
 import mujoco as mj
 import numpy as np
 from scipy.optimize import lsq_linear
 from scipy.spatial.transform import Rotation as ScipyRotation
 
-from positronic import geom
+from positronic import geom, keys
 from positronic.dataset import transforms
+
+_QUAT = geom.Rotation.Representation.QUAT
 
 
 def _ensure_site(spec: mj.MjSpec, frame: str) -> None:  # pyright: ignore[reportAttributeAccessIssue]
@@ -97,6 +99,18 @@ def frame_transform(urdf_xml: str, from_frame: str, to_frame: str) -> geom.Trans
     to_site = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, to_frame)  # pyright: ignore[reportAttributeAccessIssue]
     _assert_rigidly_connected(model, from_frame, to_frame, model.site_bodyid[from_site], model.site_bodyid[to_site])
     return _site_transform(data, from_site).inv * _site_transform(data, to_site)
+
+
+def change_frame(pose_vec, transform: geom.Transform3D) -> np.ndarray:
+    """Recompose a ``[tx,ty,tz,qw,qx,qy,qz]`` pose through ``pose * transform``."""
+    return (geom.Transform3D.from_vector(np.asarray(pose_vec, dtype=np.float64), _QUAT) * transform).as_vector(_QUAT)
+
+
+def ee_frame(episode) -> geom.Transform3D:
+    """Where an episode's poses sit relative to its ``control_frame`` — identity unless a codec moved them."""
+    if keys.EE_FRAME not in episode:
+        return geom.Transform3D.identity
+    return geom.Transform3D.from_vector(np.asarray(episode[keys.EE_FRAME], dtype=np.float64), _QUAT)
 
 
 def _parse_target(target_ee_pose_vec):
@@ -410,7 +424,10 @@ class DLSIKSolverWithLimits(_SolverBase):
 def ik_joints_from_episode(episode, solver_cls, tgt_ee_pose_key, current_q_key):
     """Episode -> Signal. Computes target joints from EE targets via IK.
 
-    Reads 'urdf', 'joint_names', and 'control_frame' from episode statics.
+    Reads the robot model from episode statics and solves at its ``control_frame``, so targets a codec has
+    moved elsewhere (``ee_frame``) come back to that frame first.
     """
-    solver = solver_cls(episode['urdf'], episode['joint_names'], episode['control_frame'])
-    return transforms.pairwise(episode[current_q_key], episode[tgt_ee_pose_key], solver.solve)
+    solver = solver_cls(episode[keys.URDF], episode['joint_names'], episode[keys.CONTROL_FRAME])
+    move = partial(change_frame, transform=ee_frame(episode).inv)
+    targets = transforms.Elementwise(episode[tgt_ee_pose_key], transforms.lazy_sequence(move))
+    return transforms.pairwise(episode[current_q_key], targets, solver.solve)

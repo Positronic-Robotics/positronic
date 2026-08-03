@@ -10,6 +10,7 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
+from positronic.drivers.roboarm.ik import frame_transform
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy, Session
 from positronic.policy.wrappers import ChunkedSchedule
@@ -298,6 +299,16 @@ class Harness(pimm.ControlSystem):
         self._cancel_trajectories()
         self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(self.context), **(payload or {})}))
 
+    def _assert_control_frame(self) -> None:
+        """Raise unless the frame the embodiment reports poses in is one its own model declares.
+
+        Every frame a codec converts to is measured from this one, so a name the model does not carry would
+        make each of those conversions silently arbitrary.
+        """
+        statics = self._statics()
+        if keys.URDF in statics and keys.CONTROL_FRAME in statics:
+            frame_transform(statics[keys.URDF], statics[keys.CONTROL_FRAME], statics[keys.CONTROL_FRAME])
+
     def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> None:
         """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
 
@@ -308,6 +319,7 @@ class Harness(pimm.ControlSystem):
         ``timeout``, bounding policy- and operator-driven trials alike) is armed here; a task-less attended
         session has no deadline and ends only on a directive.
         """
+        self._assert_control_frame()
         self.context = context
         # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
         self._inference_latency = self.context.get('inference_latency', False)
@@ -408,8 +420,6 @@ class Harness(pimm.ControlSystem):
         inputs['wall_time_ns'] = time.time_ns()
         inputs['obs_time_ns'] = clock.now_ns()
         inputs.update(self.context)
-        statics = self._statics()
-        inputs.update({k: statics[k] for k in (keys.URDF, keys.CONTROL_FRAME) if k in statics})
         inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
         return inputs
 

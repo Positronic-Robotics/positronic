@@ -11,7 +11,7 @@ from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.spec import DEFAULT_STRIP, ModelSource, PolicySource, inline, remote
+from positronic.policy.spec import ModelSource, PolicySource, inline, remote
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
 from positronic.utils.serialization import deserialise
 
@@ -209,19 +209,6 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
     session = client.new_session()
     try:
         assert session.metadata['local_stack'] == {'name': 'chunked_schedule'}
-        assert session.metadata['strip'] == list(DEFAULT_STRIP)
-    finally:
-        session.close()
-
-
-def test_border_can_ask_for_the_robot_model(start_server, make_mock_policy):
-    stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    pipeline = ChunkedSchedule() | remote(strip=()) | _IdentityCodec() | _StubSource(stub)
-    host, port, _server = start_server(pipeline)
-    client = InferenceClient(f'{host}:{port}')
-    session = client.new_session()
-    try:
-        assert session.metadata['strip'] == []
     finally:
         session.close()
 
@@ -247,7 +234,7 @@ def test_in_process_equals_remote_for_same_pipeline(start_server):
     clock = [100.0]
 
     host, port, _server = start_server(pipeline())
-    remote_session = RemotePolicy(f'{host}:{port}', strip=()).new_session(now=lambda: clock[0])
+    remote_session = RemotePolicy(f'{host}:{port}').new_session(now=lambda: clock[0])
 
     local_session = inline(pipeline()).new_session(now=lambda: clock[0])
 

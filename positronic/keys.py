@@ -14,7 +14,12 @@ TASK = 'task'
 WRIST_IMAGE = 'image.wrist'
 EXTERIOR_IMAGE = 'image.exterior'
 
-# The robot model, for codecs that resolve a frame against it (``ChangeEEFrame``). Rig-local: the harness puts
-# them in the observation, episode statics carry them at training, and a wire border strips them by default.
+# The robot model, carried in episode statics for the transforms that solve against it (``IKJointsAction``).
+# ``CONTROL_FRAME`` names the frame in ``URDF`` that the embodiment reports ``EE_POSE`` in; every embodiment
+# declares it as ``models.DEFAULT_FRAME``, and datasets recorded before that convention name their own frame.
 URDF = 'urdf'
 CONTROL_FRAME = 'control_frame'
+
+# Where the episode's poses sit relative to ``CONTROL_FRAME``, as a ``[tx,ty,tz,qw,qx,qy,qz]`` transform.
+# Absent means they are in ``CONTROL_FRAME`` itself; ``ChangeEEFrame`` writes it when it moves them.
+EE_FRAME = 'ee_frame'

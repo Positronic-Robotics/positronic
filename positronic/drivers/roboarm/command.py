@@ -48,10 +48,15 @@ class CartesianDelta:
     A one-shot relative motion: the driver composes ``delta`` onto the pose it measures the moment the
     command is consumed, never re-applying it. Unlike ``JointDelta`` this is end-effector space, not joint
     space.
+
+    A delta has no anchor pose of its own, so it carries the frame it is expressed in instead: ``frame``
+    places that frame relative to the receiver's ``default``, and the driver measures there before composing
+    (see ``apply_cartesian_delta``).
     """
 
     TYPE = 'cartesian_delta'
     delta: geom.Transform3D
+    frame: geom.Transform3D = geom.Transform3D.identity
 
 
 CommandType = Reset | CartesianPosition | JointPosition | JointDelta | CartesianDelta
@@ -63,20 +68,32 @@ _T = TypeVar('_T')
 Trajectory: TypeAlias = list[tuple[int, _T]]
 
 
-def apply_cartesian_delta(current: geom.Transform3D, delta: geom.Transform3D) -> geom.Transform3D:
-    """Compose a world-frame ``delta`` onto a measured ``current`` pose for the absolute target a driver drives to.
+def _compose_delta(base: geom.Transform3D, delta: geom.Transform3D) -> geom.Transform3D:
+    """Compose a world-frame ``delta`` onto ``base``.
 
     Translation adds in the world frame and rotation left-multiplies (``goal_ori = R(Δrot) @ ee_ori``), the
     robosuite OSC convention. This is not ``Transform3D.__mul__``, which composes in the body frame and would
     rotate the translation.
     """
-    return geom.Transform3D(current.translation + delta.translation, delta.rotation * current.rotation)
+    return geom.Transform3D(base.translation + delta.translation, delta.rotation * base.rotation)
+
+
+def apply_cartesian_delta(current: geom.Transform3D, cmd: CartesianDelta) -> geom.Transform3D:
+    """The absolute target a driver drives to, given the pose it measures at its ``default`` frame.
+
+    ``cmd.frame`` carries the delta into the frame it was expressed in and the result back out, so a policy
+    that speaks a different end-effector frame moves the arm as it intended.
+    """
+    return _compose_delta(current * cmd.frame, cmd.delta) * cmd.frame.inv
 
 
 def _combine(acc: CommandType, cmd: CommandType) -> CommandType:
     match (acc, cmd):
-        case (CartesianDelta(a), CartesianDelta(b)):
-            return CartesianDelta(apply_cartesian_delta(a, b))
+        case (CartesianDelta(a, frame_a), CartesianDelta(b, frame_b)):
+            assert np.allclose(frame_a.as_matrix, frame_b.as_matrix), (
+                'Cannot accumulate cartesian deltas expressed in different frames'
+            )
+            return CartesianDelta(_compose_delta(a, b), frame_a)
         case (JointDelta(a), JointDelta(b)):
             return JointDelta(a + b)
         case (CartesianDelta() | JointDelta(), _) | (_, CartesianDelta() | JointDelta()):
@@ -114,8 +131,12 @@ def to_wire(command: CommandType) -> dict[str, Any]:
             return {'type': command.TYPE, 'positions': positions}
         case JointDelta(velocities):
             return {'type': command.TYPE, 'velocities': velocities}
-        case CartesianDelta(delta):
-            return {'type': command.TYPE, 'delta': delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
+        case CartesianDelta(delta, frame):
+            return {
+                'type': command.TYPE,
+                'delta': delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX),
+                'frame': frame.as_vector(geom.Rotation.Representation.ROTATION_MATRIX),
+            }
 
 
 class TrajectoryPlayer:
@@ -160,8 +181,10 @@ def from_wire(wire: dict[str, Any]) -> CommandType:
         case 'joint_delta':
             return JointDelta(velocities=wire['velocities'])
         case 'cartesian_delta':
+            rep = geom.Rotation.Representation.ROTATION_MATRIX
             return CartesianDelta(
-                delta=geom.Transform3D.from_vector(wire['delta'], geom.Rotation.Representation.ROTATION_MATRIX)
+                delta=geom.Transform3D.from_vector(wire['delta'], rep),
+                frame=geom.Transform3D.from_vector(wire['frame'], rep),
             )
         case _:
             raise ValueError(f'Unknown command type: {wire["type"]}')

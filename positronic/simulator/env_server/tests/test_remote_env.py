@@ -15,12 +15,13 @@ from positronic.policy import Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.policy.wrappers import ChunkedSchedule
-from positronic.simulator.env_server.adapter import EnvAdapter
+from positronic.simulator.env_server.adapter import EnvAdapter, _in_control_frame, _wire_command
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.env_server.tests.conftest import serve_env
 from positronic.simulator.env_server.tests.mujoco_env import CAMERAS, make_mujoco_env, remote_stack_cubes_eval
+from positronic.simulator.robolab.adapter import RobolabAdapter
 from positronic.tests.testing_coutils import drive_scheduler
 
 
@@ -100,6 +101,48 @@ def _settle(env, action: dict, steps: int) -> np.ndarray:
     for _ in range(steps):
         out = env.step(_HOLD)
     return np.asarray(out['obs']['ee_pos'])
+
+
+class TestEnvControlFrame:
+    """An env measuring somewhere other than the embodiment's ``default`` gets commands re-expressed for it.
+
+    ``RobolabAdapter`` is the live case and has no test module of its own, so its round-trip lands here beside
+    the rest of the adapter's wire contract.
+    """
+
+    frame = geom.Transform3D(np.array([0.0, 0.0, 0.1]), geom.Rotation.from_euler([0.0, 0.0, np.pi / 2]))
+    rotmat = geom.Rotation.Representation.ROTATION_MATRIX
+
+    def test_an_absolute_pose_arrives_in_the_env_frame(self):
+        pose = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
+        wired = _wire_command(_in_control_frame(roboarm_command.CartesianPosition(pose), self.frame))
+        np.testing.assert_allclose(wired['pose'], (pose * self.frame).as_vector(self.rotmat), atol=1e-12)
+
+    def test_a_delta_already_in_the_env_frame_wires_bare(self):
+        delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
+        cmd = roboarm_command.CartesianDelta(delta, frame=self.frame)
+        wired = _wire_command(_in_control_frame(cmd, self.frame))
+        np.testing.assert_allclose(wired['delta'], delta.as_vector(self.rotmat), atol=1e-12)
+
+    def test_a_delta_outside_the_env_frame_is_refused(self):
+        """The env anchors on its own measured pose, so a delta meant for another frame has no wire form."""
+        delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
+        with pytest.raises(ValueError, match='control frame'):
+            _wire_command(_in_control_frame(roboarm_command.CartesianDelta(delta), self.frame))
+
+    def test_robolab_reports_and_drives_the_same_frame(self):
+        adapter = RobolabAdapter(camera_dict={})
+        eef = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
+        raw = {
+            'eef_pos': eef.translation,
+            'eef_quat': eef.rotation.as_quat,
+            'joint_pos': np.zeros(7),
+            'joint_vel': np.zeros(7),
+            'grip': 0.0,
+        }
+        reported = adapter.observations(raw)['robot_state'].ee_pose
+        commanded = _in_control_frame(roboarm_command.CartesianPosition(reported), adapter.control_frame).pose
+        np.testing.assert_allclose(commanded.as_vector(self.rotmat), eef.as_vector(self.rotmat), atol=1e-6)
 
 
 @pytest.mark.timeout(60.0)

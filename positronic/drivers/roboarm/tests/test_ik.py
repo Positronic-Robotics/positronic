@@ -16,7 +16,7 @@ from positronic.drivers.roboarm.ik import (
     frame_transform,
     ik_joints_from_episode,
 )
-from positronic.drivers.roboarm.models import bundled_franka_model
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, bundled_franka_model, bundled_panda_model
 from positronic.utils import package_assets_path
 
 URDF = Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text()
@@ -116,6 +116,31 @@ def test_ik_joints_from_episode():
         np.testing.assert_allclose(reconstructed_pose[:3], ee_poses[i, :3], atol=1e-3)
 
 
+def test_ik_joints_from_episode_solves_targets_a_codec_moved():
+    """Targets re-expressed in a policy's frame come back to ``control_frame`` before the solve."""
+    n_steps = 3
+    ts = np.arange(n_steps, dtype=np.int64) * 100_000_000
+    q_traj = np.linspace(TEST_CONFIGS[0], TEST_CONFIGS[1], n_steps)
+    quat = geom.Rotation.Representation.QUAT
+    offset = geom.Transform3D(np.array([0.0, 0.0, 0.05]), geom.Rotation.from_euler([0.0, 0.0, np.pi / 4]))
+    moved = np.array([(geom.Transform3D.from_vector(_fk(URDF, q), quat) * offset).as_vector(quat) for q in q_traj])
+
+    episode = EpisodeContainer(
+        data={
+            keys.JOINTS: DummySignal(ts, q_traj),
+            'robot_command.pose': DummySignal(ts, moved),
+            keys.URDF: URDF,
+            'joint_names': JOINT_NAMES,
+            keys.CONTROL_FRAME: CONTROL_FRAME,
+            keys.EE_FRAME: offset.as_vector(quat),
+        }
+    )
+    result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, 'robot_command.pose', keys.JOINTS)
+
+    for i in range(n_steps):
+        np.testing.assert_allclose(_fk(URDF, result[i][0])[:3], _fk(URDF, q_traj[i])[:3], atol=1e-3)
+
+
 def _fk_site(urdf_xml, q, frame):
     model = _prepare_spec(urdf_xml, frame).compile()
     data = mj.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]
@@ -137,6 +162,12 @@ def test_frame_transform_reproduces_droid_eef_across_configs():
         want = geom.Transform3D.from_vector(_fk_site(urdf, q, 'droid_eef'), quat)
         np.testing.assert_allclose(got.translation, want.translation, atol=1e-9)
         assert geom.quat_closest(got.rotation, want.rotation) == want.rotation
+
+
+@pytest.mark.parametrize('model', [bundled_franka_model(), bundled_panda_model()], ids=['franka', 'panda'])
+def test_bundled_model_declares_the_frame_it_reports_in(model):
+    assert model[keys.CONTROL_FRAME] == DEFAULT_FRAME
+    frame_transform(model[keys.URDF], DEFAULT_FRAME, DEFAULT_FRAME)
 
 
 def test_frame_transform_rejects_frames_across_movable_joints():

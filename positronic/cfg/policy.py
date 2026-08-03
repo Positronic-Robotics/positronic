@@ -5,7 +5,7 @@ from positronic import keys
 from positronic.cfg import codecs
 from positronic.policy import Codec, Policy, RemotePolicy, SampledPolicy
 from positronic.policy.sampler import Sampler
-from positronic.policy.spec import DEFAULT_STRIP, PolicySource, inline
+from positronic.policy.spec import PolicySource, inline
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils import get_latest_checkpoint
 
@@ -57,8 +57,7 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
     return SampledPolicy(*origins, weights=weights)
 
 
-# ``strip`` only applies to a server that declares none of its own.
-remote = cfn.Config(RemotePolicy, url='localhost:8000', strip=DEFAULT_STRIP)
+remote = cfn.Config(RemotePolicy, url='localhost:8000')
 
 
 @cfn.config(balance=2)
@@ -89,16 +88,16 @@ def production(
     # Every Sampler but the default uniform one picks by episode counts alone, so weights would be dropped.
     if weights and sampler is not None:
         raise ValueError(f'weights cannot be combined with {type(sampler).__name__}, which samples by count')
-    policies = [RemotePolicy(url, strip=DEFAULT_STRIP, recording_dir=recording_dir) for url in endpoints.values()]
+    policies = [RemotePolicy(url, recording_dir=recording_dir) for url in endpoints.values()]
     w = [weights.get(name, 1.0) for name in endpoints] if weights else None
     return SampledPolicy(*policies, weights=w, sampler=sampler, group_fields=group_fields)
 
 
 @cfn.config()
 def phail_single(hostname, w_openpi=1.0, w_groot=1.0, w_act=1.0):
-    openpi = RemotePolicy(f'{hostname}:8000', strip=DEFAULT_STRIP)
-    groot = RemotePolicy(f'{hostname}:8001', strip=DEFAULT_STRIP)
-    act = RemotePolicy(f'{hostname}:8002', strip=DEFAULT_STRIP)
+    openpi = RemotePolicy(f'{hostname}:8000')
+    groot = RemotePolicy(f'{hostname}:8001')
+    act = RemotePolicy(f'{hostname}:8002')
 
     return SampledPolicy(openpi, groot, act, weights=[w_openpi, w_groot, w_act])
 

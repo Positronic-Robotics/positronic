@@ -3,6 +3,8 @@
 import configuronic as cfn
 
 from positronic import geom, keys
+from positronic.drivers.roboarm.ik import frame_transform
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, bundled_franka_model
 from positronic.policy.codec import (
     ActionHorizon,
     ActionTimestamp,
@@ -14,6 +16,15 @@ from positronic.policy.codec import (
 from positronic.policy.observation import ObservationCodec
 
 RotRep = geom.Rotation.Representation
+
+
+def change_ee_frame(frame: str) -> ChangeEEFrame:
+    """``ChangeEEFrame`` into the end-effector frame ``frame`` names on the bundled franka rig.
+
+    The transform belongs to the checkpoint rather than to the rig running it: it places ``frame`` relative to
+    ``DEFAULT_FRAME``, which every embodiment declares in its own model at its own geometry.
+    """
+    return ChangeEEFrame(frame_transform(bundled_franka_model()[keys.URDF], DEFAULT_FRAME, frame))
 
 
 @cfn.config()
@@ -64,8 +75,8 @@ def compose(
     """Compose observation and action codecs with timing and optional grip binarization.
 
     ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame``
-    re-expresses a dataset in that end-effector frame for training (see ``ChangeEEFrame``); serving declares the
-    conversion in the pipeline instead, so leave it unset there.
+    names the end-effector frame the checkpoint speaks and re-expresses a dataset in it for training (see
+    ``ChangeEEFrame``); serving declares the conversion in the pipeline instead, so leave it unset there.
 
     Layout::
 
@@ -74,7 +85,7 @@ def compose(
     """
     result = obs & action
     if ee_frame is not None:
-        result = ChangeEEFrame(to=ee_frame) | result
+        result = change_ee_frame(ee_frame) | result
     if flip_grip:
         result = FlipGrip() | result
     if binarize_grip:
