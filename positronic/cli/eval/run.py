@@ -2,7 +2,7 @@ import logging
 import os
 import uuid
 from collections.abc import Callable
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -143,6 +143,37 @@ def _validate_timing(evals: list[Eval] | None, embodiment: Embodiment | None, ou
         )
 
 
+@contextmanager
+def _timed_pass(output_dir: str | Path | None, timing: bool, policy):
+    """Bracket a sweep in the harness-process telemetry: the bound tracer, the machine-load sampler and one
+    ``eval.pass`` span, with the environment a launched env server reads set around them. Inert without
+    ``timing``."""
+    if not timing or output_dir is None:
+        yield
+        return
+    timed_dir = Path(output_dir)
+    run_id = uuid.uuid4().hex
+    env_snapshot = {name: os.environ.get(name) for name in _ENV_TELEMETRY_VARS}
+    # Set before any world comes up: a launched env server reads them off the environment its launcher
+    # forwards to the subprocess, and writes its own sidecar under the same directory.
+    os.environ[ENV_TELEMETRY_DIR] = str(timed_dir / telemetry.TELEMETRY_SUBDIR)
+    os.environ[ENV_RUN_ID] = run_id
+    try:
+        # The pass span closes before the tracer it is bound to shuts its provider down.
+        with (
+            telemetry.bind(timed_dir, telemetry.HARNESS_PROCESS, run_id),
+            telemetry.StatsSampler(timed_dir / telemetry.TELEMETRY_SUBDIR / f'{telemetry.HARNESS_PROCESS}.stats.jsonl'),
+            telemetry.eval_pass(**{'run.id': run_id, 'policy': type(policy).__name__}),
+        ):
+            yield
+    finally:
+        for name, value in env_snapshot.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def main(
     policy,
     *,
@@ -188,31 +219,8 @@ def main(
     # over the whole sweep.
     on_complete = _completion_sink(policy)
 
-    # Bind the harness-process telemetry (and the machine-load sampler) around the whole sweep, and bracket
-    # the trial loop in one ``eval.pass`` span. All inert off --timing.
-    run_id = uuid.uuid4().hex
-    timed_dir = Path(output_dir) if timing and output_dir is not None else None
-    env_snapshot = {name: os.environ.get(name) for name in _ENV_TELEMETRY_VARS}
-    if timed_dir is not None:
-        # A launched env server (e.g. RoboLab, positronic-free in its own interpreter) writes its own
-        # telemetry sidecar; it reads these from the environment its launcher forwards to the subprocess.
-        os.environ[ENV_TELEMETRY_DIR] = str(timed_dir / telemetry.TELEMETRY_SUBDIR)
-        os.environ[ENV_RUN_ID] = run_id
-    telemetry_cm = (
-        telemetry.bind(timed_dir, telemetry.HARNESS_PROCESS, run_id) if timed_dir is not None else nullcontext()
-    )
-    stats_cm = (
-        telemetry.StatsSampler(timed_dir / telemetry.TELEMETRY_SUBDIR / f'{telemetry.HARNESS_PROCESS}.stats.jsonl')
-        if timed_dir is not None
-        else nullcontext()
-    )
-    pass_cm = (
-        telemetry.eval_pass(**{'run.id': run_id, 'policy': type(policy).__name__})
-        if timed_dir is not None
-        else nullcontext()
-    )
     try:
-        with telemetry_cm, stats_cm, pass_cm:
+        with _timed_pass(output_dir, timing, policy):
             if driver is not None:
                 assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
                 _run_world(policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete)
@@ -221,16 +229,7 @@ def main(
                 for ev in evals:
                     _run_world(policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete)
     finally:
-        try:
-            policy.close()
-        finally:
-            # A later invocation in the same process (a notebook, a test runner) must not inherit this run's
-            # telemetry environment and write env spans into its directory — even when the close raised.
-            for name, value in env_snapshot.items():
-                if value is None:
-                    os.environ.pop(name, None)
-                else:
-                    os.environ[name] = value
+        policy.close()
 
 
 @cfn.config(eval=placeholder, policy=policy_cfg.placeholder, show_gui=False)
