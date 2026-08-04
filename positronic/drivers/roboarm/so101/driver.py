@@ -97,7 +97,7 @@ class Robot(pimm.ControlSystem):
         player = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
         grip_player = roboarm_command.TrajectoryPlayer[float]()
         # The motors take one position for the whole chain, so a grip target reaches them only with the next
-        # arm command; until then it is played but unsent.
+        # arm command; until then it is played but unsent, and the write is when it arrives.
         pending_grip: roboarm_command.Applied[float] | None = None
 
         while not should_stop.value:
@@ -107,8 +107,6 @@ class Robot(pimm.ControlSystem):
             grip_msg = self.target_grip.read()
             if grip_msg is not None and grip_msg.updated:
                 grip_player.set(grip_msg.data)
-                if not grip_msg.data:  # cancelled: a grip still waiting for a write never ran
-                    pending_grip = None
             played_grip = grip_player.advance(clock.now_ns())
             if played_grip is not None:
                 pending_grip = played_grip
@@ -118,7 +116,7 @@ class Robot(pimm.ControlSystem):
                 self._apply_command(played.value, state)
                 self.executed_commands.emit([played])
                 if pending_grip is not None:
-                    self.executed_target_grip.emit([pending_grip])
+                    self.executed_target_grip.emit([pending_grip._replace(ts=played.ts)])
                     pending_grip = None
 
             q = self.motor_bus.position
