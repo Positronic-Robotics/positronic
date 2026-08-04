@@ -121,8 +121,13 @@ def _attr_value(value: Any) -> Any:
     Anything nested is JSON-encoded, so a call site can pass a trial-context value without a shape check."""
     if isinstance(value, (bool, int, float, str)):
         return value
-    if isinstance(value, (list, tuple)) and all(isinstance(item, (bool, int, float, str)) for item in value):
-        return list(value)
+    if isinstance(value, (list, tuple)):
+        items = list(value)
+        # OTel drops an array whose elements disagree in type, so a mixed sequence goes the JSON route: the
+        # value survives as text rather than the attribute vanishing from the span.
+        scalars = all(isinstance(item, (bool, int, float, str)) for item in items)
+        if scalars and len({type(item) for item in items}) <= 1:
+            return items
     return json.dumps(value)
 
 

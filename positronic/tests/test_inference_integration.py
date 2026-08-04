@@ -280,7 +280,7 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
 
     stats = list(telemetry.read_stats(telemetry_dir / 'harness.stats.jsonl'))
     assert len(stats) >= 1
-    assert all('t_ns' in sample and 'gpus' in sample for sample in stats)
+    assert all(telemetry.STAT_T_NS in sample and telemetry.STAT_GPUS in sample for sample in stats)
 
 
 @pytest.mark.timeout(30.0)

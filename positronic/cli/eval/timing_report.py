@@ -173,26 +173,26 @@ def _gpu_summary_from_stats(stats: list[dict], pass_windows: list[tuple[int, int
     of the orphan-episode exclusion. ``None`` when no counted sample held a device at all (a CPU sim box); a
     box whose devices all refused their queries is a summary with nothing measured, not a CPU box."""
     in_window = [s for s in stats if any(start <= int(s[STAT_T_NS]) <= end for start, end in pass_windows)]
+    # The recorded count is the box's NVML handle count, so it stands whether or not any device answered:
+    # reading it across every sample, including the empty ones, separates an unreadable GPU box from a CPU one.
+    box_devices = max((int(s[STAT_GPU_COUNT]) for s in in_window), default=0)
     utils: list[float] = []
     mem: list[float] = []
     proc: list[float] = []
     seen: set[int] = set()
-    box_devices = 0
     for sample in in_window:
-        # The recorded count is the box's NVML handle count, so it stands whether or not any device answered:
-        # taking it before the empty-sample skip is what separates an unreadable GPU box from a CPU one.
-        box_devices = max(box_devices, int(sample[STAT_GPU_COUNT]))
         gpus = sample.get(STAT_GPUS, [])
         if not gpus:
             continue
         utils.extend(float(gpu[GPU_UTIL_PCT]) for gpu in gpus)
         seen.update(int(gpu[GPU_INDEX]) for gpu in gpus)
-        # Either peak is a box-wide total, so it needs a sample that saw the whole box. A device whose NVML
-        # query errors mid-run is dropped from the sample entirely, not left ``None``, so a sample covers the
-        # box only when its device count equals the ``gpu_count`` the sampler recorded (its NVML handle
-        # count); a shorter one would undercount and contributes to neither peak. The process peak needs
-        # per-device attribution on top, so a ``None`` reading drops the sample from that peak alone.
-        if len(gpus) != sample[STAT_GPU_COUNT]:
+        # Either peak is a box-wide total over the complement this summary reports, so a sample counts only
+        # when it carries all of it. Two ways a sample falls short: a device whose NVML query errors mid-run is
+        # dropped from it entirely rather than left ``None``, and a directory resumed on a smaller box holds
+        # samples of a smaller complement — either way the total would cover part of the box and be read as
+        # the whole of it. The process peak needs per-device attribution on top, so a ``None`` reading drops
+        # the sample from that peak alone.
+        if len(gpus) != box_devices:
             continue
         mem.append(sum(float(gpu[GPU_MEM_USED_B]) for gpu in gpus))
         if all(gpu.get(GPU_PROC_MEM_B) is not None for gpu in gpus):

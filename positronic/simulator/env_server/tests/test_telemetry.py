@@ -26,9 +26,9 @@ def test_env_spans_parse_with_positronic_reader(tmp_path):
 
     line = json.loads((tmp_path / 'env.spans.jsonl').read_text().splitlines()[0])
     attrs = positronic_telemetry._decode_attrs(line['resourceSpans'][0]['resource']['attributes'])
-    assert attrs['run.id'] == 'run-env'
-    assert attrs['process.name'] == 'env'
-    assert attrs['process.pid'] == os.getpid()
+    assert attrs[telemetry.ATTR_RUN_ID] == 'run-env'
+    assert attrs[telemetry.ATTR_PROCESS_NAME] == 'env'
+    assert attrs[telemetry.ATTR_PROCESS_PID] == os.getpid()
 
 
 def test_env_span_inert_when_unbound(tmp_path):

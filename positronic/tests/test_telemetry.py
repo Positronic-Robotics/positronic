@@ -99,6 +99,18 @@ def test_nested_spans_round_trip(tmp_path):
     assert spans['inner'].end_ns >= spans['inner'].start_ns
 
 
+def test_mixed_type_attribute_sequence_survives_as_json(tmp_path):
+    """OTel drops an attribute array whose elements disagree in type, so a mixed sequence — a trial context
+    holding a label beside a number — is JSON-encoded rather than lost between the caller and the sidecar."""
+    with telemetry.bind(tmp_path, 'harness', 'run-mixed'):
+        with telemetry.span('probe', mixed=[1, 'two'], plain=[1, 2]):
+            pass
+
+    attrs = _spans_by_name(tmp_path / 'telemetry' / 'harness.spans.jsonl')['probe'].attrs
+    assert json.loads(attrs['mixed']) == [1, 'two']
+    assert attrs['plain'] == [1, 2]  # a single-type sequence still travels as an array
+
+
 def test_anchor_popped_out_of_order_stops_parenting(tmp_path):
     """An owner closing an anchor that is no longer the innermost — a failure path unwinding several at once —
     drops it from wherever it sits, so no finished span goes on adopting later spans."""
@@ -139,9 +151,9 @@ def test_resource_carries_process_identity(tmp_path):
 
     line = json.loads((tmp_path / 'telemetry' / 'env.spans.jsonl').read_text().splitlines()[0])
     attrs = telemetry._decode_attrs(line['resourceSpans'][0]['resource']['attributes'])
-    assert attrs['run.id'] == 'run-1'
-    assert attrs['process.name'] == 'env'
-    assert attrs['process.pid'] == os.getpid()
+    assert attrs[telemetry.ATTR_RUN_ID] == 'run-1'
+    assert attrs[telemetry.ATTR_PROCESS_NAME] == 'env'
+    assert attrs[telemetry.ATTR_PROCESS_PID] == os.getpid()
 
 
 class _FakeUtil:
@@ -237,17 +249,25 @@ def test_stats_sample_with_fake_gpu(tmp_path, monkeypatch):
     _install_fake_nvml(monkeypatch)
     sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
     sample = sampler._sample()
-    assert set(sample) >= {'t_ns', 'cpu_sys_pct', 'iowait_pct', 'mem_sys_used_b', 'cpu_proc_pct', 'rss_proc_b', 'gpus'}
-    assert len(sample['gpus']) == 1
-    gpu = sample['gpus'][0]
-    assert gpu['i'] == 0
-    assert gpu['util_pct'] == 42.0
-    assert gpu['mem_used_b'] == 3 * 1024**3
-    assert gpu['power_w'] == 150.0
+    assert set(sample) >= {
+        telemetry.STAT_T_NS,
+        telemetry.STAT_CPU_SYS_PCT,
+        telemetry.STAT_IOWAIT_PCT,
+        telemetry.STAT_MEM_SYS_USED_B,
+        telemetry.STAT_CPU_PROC_PCT,
+        telemetry.STAT_RSS_PROC_B,
+        telemetry.STAT_GPUS,
+    }
+    assert len(sample[telemetry.STAT_GPUS]) == 1
+    gpu = sample[telemetry.STAT_GPUS][0]
+    assert gpu[telemetry.GPU_INDEX] == 0
+    assert gpu[telemetry.GPU_UTIL_PCT] == 42.0
+    assert gpu[telemetry.GPU_MEM_USED_B] == 3 * 1024**3
+    assert gpu[telemetry.GPU_POWER_W] == 150.0
     # The same pid in the compute and graphics lists merges by max — drivers commonly report the process
     # total in each, so summing both entries would double-count.
-    assert gpu['proc_mem_b'] == 1234 * 1024**2
-    assert gpu['proc_util_pct'] is None
+    assert gpu[telemetry.GPU_PROC_MEM_B] == 1234 * 1024**2
+    assert gpu[telemetry.GPU_PROC_UTIL_PCT] is None
     sampler._nvml.shutdown()
 
 
@@ -261,8 +281,8 @@ def test_stats_sample_treats_nvml_sentinel_as_unavailable(tmp_path, monkeypatch)
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetGraphicsRunningProcesses', lambda h: [])
     sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
     sample = sampler._sample()
-    gpu = sample['gpus'][0]
-    assert gpu['proc_mem_b'] is None  # taken verbatim the sentinel reads as ~1.8e19 bytes of process VRAM
+    gpu = sample[telemetry.STAT_GPUS][0]
+    assert gpu[telemetry.GPU_PROC_MEM_B] is None  # taken verbatim the sentinel reads as ~1.8e19 bytes of process VRAM
     sampler._nvml.shutdown()
 
 
@@ -278,7 +298,9 @@ def test_stats_sample_treats_foreign_pid_namespace_as_unavailable(tmp_path, monk
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetGraphicsRunningProcesses', lambda h: [])
     monkeypatch.setattr(psutil, 'pid_exists', lambda pid: pid != foreign.pid)
     sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
-    assert sampler._sample()['gpus'][0]['proc_mem_b'] is None  # a 0 here would be indistinguishable from idle
+    assert (
+        sampler._sample()[telemetry.STAT_GPUS][0][telemetry.GPU_PROC_MEM_B] is None
+    )  # a 0 here would be indistinguishable from idle
     sampler._nvml.shutdown()
 
 
@@ -289,7 +311,7 @@ def test_stats_sample_reports_zero_when_gpu_is_idle(tmp_path, monkeypatch):
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetComputeRunningProcesses', lambda h: [])
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetGraphicsRunningProcesses', lambda h: [])
     sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
-    assert sampler._sample()['gpus'][0]['proc_mem_b'] == 0
+    assert sampler._sample()[telemetry.STAT_GPUS][0][telemetry.GPU_PROC_MEM_B] == 0
     sampler._nvml.shutdown()
 
 
@@ -307,8 +329,8 @@ def test_stats_sample_skips_failing_device(tmp_path, monkeypatch):
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetUtilizationRates', _util)
     sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
     sample = sampler._sample()
-    assert [gpu['i'] for gpu in sample['gpus']] == [1]
-    assert isinstance(sample['cpu_sys_pct'], float)
+    assert [gpu[telemetry.GPU_INDEX] for gpu in sample[telemetry.STAT_GPUS]] == [1]
+    assert isinstance(sample[telemetry.STAT_CPU_SYS_PCT], float)
     sampler._nvml.shutdown()
 
 
@@ -319,9 +341,9 @@ def test_stats_sample_without_gpu(tmp_path, monkeypatch):
     monkeypatch.setattr(pynvml, 'nvmlInit', _raise)
     sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
     sample = sampler._sample()
-    assert sample['gpus'] == []
-    assert isinstance(sample['cpu_sys_pct'], float)
-    assert isinstance(sample['rss_proc_b'], int)
+    assert sample[telemetry.STAT_GPUS] == []
+    assert isinstance(sample[telemetry.STAT_CPU_SYS_PCT], float)
+    assert isinstance(sample[telemetry.STAT_RSS_PROC_B], int)
 
 
 def test_stats_sampler_thread_writes_lines(tmp_path, monkeypatch):
@@ -334,7 +356,7 @@ def test_stats_sampler_thread_writes_lines(tmp_path, monkeypatch):
         time.sleep(0.1)
     samples = list(telemetry.read_stats(path))
     assert samples, 'the sampler thread wrote at least one line'
-    assert all('t_ns' in sample for sample in samples)
+    assert all(telemetry.STAT_T_NS in sample for sample in samples)
 
 
 def test_bind_seals_truncated_predecessor_line(tmp_path):
@@ -371,4 +393,4 @@ def test_readers_tolerate_truncated_final_line(tmp_path):
     stats_path = tmp_path / 'stats.jsonl'
     stats_path.write_text('{"t_ns": 1, "gpus": []}\n{"t_ns": 2, "cpu_sy')
     stats = list(telemetry.read_stats(stats_path))
-    assert [sample['t_ns'] for sample in stats] == [1]
+    assert [sample[telemetry.STAT_T_NS] for sample in stats] == [1]

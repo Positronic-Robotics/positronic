@@ -3,6 +3,16 @@ import json
 import pytest
 
 from positronic.cli.eval.timing_report import _build_report, _parse_dmon, _read_spans_dir, _read_stats_dir, _render
+from positronic.telemetry import (
+    ATTR_PROCESS_NAME,
+    GPU_INDEX,
+    GPU_MEM_USED_B,
+    GPU_PROC_MEM_B,
+    GPU_UTIL_PCT,
+    STAT_GPU_COUNT,
+    STAT_GPUS,
+    STAT_T_NS,
+)
 from positronic.telemetry_keys import (
     ATTR_EPISODE_ABORTED,
     ATTR_EPISODE_VIRTUAL_S,
@@ -32,7 +42,7 @@ def _span(name, start_s, end_s, span_id, parent_id=None, attrs=None, process='ha
     return {
         'resourceSpans': [
             {
-                'resource': {'attributes': [{'key': 'process.name', 'value': {'stringValue': process}}]},
+                'resource': {'attributes': [{'key': ATTR_PROCESS_NAME, 'value': {'stringValue': process}}]},
                 'scopeSpans': [{'spans': [encoded]}],
             }
         ]
@@ -73,14 +83,14 @@ def _fixture(telemetry_dir):
     _write_lines(telemetry_dir / 'env.spans.jsonl', env)
     stats = [
         {
-            't_ns': 1,
-            'gpu_count': 1,
-            'gpus': [{'i': 0, 'util_pct': 50.0, 'mem_used_b': 2 * 1024**3, 'proc_mem_b': 1 * 1024**3}],
+            STAT_T_NS: 1,
+            STAT_GPU_COUNT: 1,
+            STAT_GPUS: [{GPU_INDEX: 0, GPU_UTIL_PCT: 50.0, GPU_MEM_USED_B: 2 * 1024**3, GPU_PROC_MEM_B: 1 * 1024**3}],
         },
         {
-            't_ns': 2,
-            'gpu_count': 1,
-            'gpus': [{'i': 0, 'util_pct': 100.0, 'mem_used_b': 4 * 1024**3, 'proc_mem_b': 2 * 1024**3}],
+            STAT_T_NS: 2,
+            STAT_GPU_COUNT: 1,
+            STAT_GPUS: [{GPU_INDEX: 0, GPU_UTIL_PCT: 100.0, GPU_MEM_USED_B: 4 * 1024**3, GPU_PROC_MEM_B: 2 * 1024**3}],
         },
     ]
     (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
@@ -285,19 +295,19 @@ def test_multi_gpu_peak_vram_sums_devices_per_sample(tmp_path):
     _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
     stats = [
         {
-            't_ns': 1,
-            'gpu_count': 2,
-            'gpus': [
-                {'i': 0, 'util_pct': 40.0, 'mem_used_b': 2 * 1024**3, 'proc_mem_b': 1 * 1024**3},
-                {'i': 1, 'util_pct': 60.0, 'mem_used_b': 3 * 1024**3, 'proc_mem_b': None},
+            STAT_T_NS: 1,
+            STAT_GPU_COUNT: 2,
+            STAT_GPUS: [
+                {GPU_INDEX: 0, GPU_UTIL_PCT: 40.0, GPU_MEM_USED_B: 2 * 1024**3, GPU_PROC_MEM_B: 1 * 1024**3},
+                {GPU_INDEX: 1, GPU_UTIL_PCT: 60.0, GPU_MEM_USED_B: 3 * 1024**3, GPU_PROC_MEM_B: None},
             ],
         },
         {
-            't_ns': 2,
-            'gpu_count': 2,
-            'gpus': [
-                {'i': 0, 'util_pct': 80.0, 'mem_used_b': 1 * 1024**3, 'proc_mem_b': 1 * 1024**3},
-                {'i': 1, 'util_pct': 20.0, 'mem_used_b': 3 * 1024**3, 'proc_mem_b': None},
+            STAT_T_NS: 2,
+            STAT_GPU_COUNT: 2,
+            STAT_GPUS: [
+                {GPU_INDEX: 0, GPU_UTIL_PCT: 80.0, GPU_MEM_USED_B: 1 * 1024**3, GPU_PROC_MEM_B: 1 * 1024**3},
+                {GPU_INDEX: 1, GPU_UTIL_PCT: 20.0, GPU_MEM_USED_B: 3 * 1024**3, GPU_PROC_MEM_B: None},
             ],
         },
     ]
@@ -325,19 +335,19 @@ def test_partial_per_gpu_proc_vram_excluded_from_peak(tmp_path):
     _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
     stats = [
         {  # incomplete: gpu1 unattributed -> must not add gpu0's 5 GB alone to the peak
-            't_ns': 1,
-            'gpu_count': 2,
-            'gpus': [
-                {'i': 0, 'util_pct': 40.0, 'mem_used_b': 2 * 1024**3, 'proc_mem_b': 5 * 1024**3},
-                {'i': 1, 'util_pct': 60.0, 'mem_used_b': 3 * 1024**3, 'proc_mem_b': None},
+            STAT_T_NS: 1,
+            STAT_GPU_COUNT: 2,
+            STAT_GPUS: [
+                {GPU_INDEX: 0, GPU_UTIL_PCT: 40.0, GPU_MEM_USED_B: 2 * 1024**3, GPU_PROC_MEM_B: 5 * 1024**3},
+                {GPU_INDEX: 1, GPU_UTIL_PCT: 60.0, GPU_MEM_USED_B: 3 * 1024**3, GPU_PROC_MEM_B: None},
             ],
         },
         {  # complete: box-wide process VRAM is 1+2 = 3 GB
-            't_ns': 2,
-            'gpu_count': 2,
-            'gpus': [
-                {'i': 0, 'util_pct': 80.0, 'mem_used_b': 1 * 1024**3, 'proc_mem_b': 1 * 1024**3},
-                {'i': 1, 'util_pct': 20.0, 'mem_used_b': 3 * 1024**3, 'proc_mem_b': 2 * 1024**3},
+            STAT_T_NS: 2,
+            STAT_GPU_COUNT: 2,
+            STAT_GPUS: [
+                {GPU_INDEX: 0, GPU_UTIL_PCT: 80.0, GPU_MEM_USED_B: 1 * 1024**3, GPU_PROC_MEM_B: 1 * 1024**3},
+                {GPU_INDEX: 1, GPU_UTIL_PCT: 20.0, GPU_MEM_USED_B: 3 * 1024**3, GPU_PROC_MEM_B: 2 * 1024**3},
             ],
         },
     ]
@@ -360,17 +370,17 @@ def test_omitted_gpu_device_excluded_from_proc_vram_peak(tmp_path):
     _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
     stats = [
         {  # complete: both GPUs present, matching the recorded complement of 2, for a 1+2 = 3 GB total
-            't_ns': 1,
-            'gpu_count': 2,
-            'gpus': [
-                {'i': 0, 'util_pct': 40.0, 'mem_used_b': 2 * 1024**3, 'proc_mem_b': 1 * 1024**3},
-                {'i': 1, 'util_pct': 60.0, 'mem_used_b': 3 * 1024**3, 'proc_mem_b': 2 * 1024**3},
+            STAT_T_NS: 1,
+            STAT_GPU_COUNT: 2,
+            STAT_GPUS: [
+                {GPU_INDEX: 0, GPU_UTIL_PCT: 40.0, GPU_MEM_USED_B: 2 * 1024**3, GPU_PROC_MEM_B: 1 * 1024**3},
+                {GPU_INDEX: 1, GPU_UTIL_PCT: 60.0, GPU_MEM_USED_B: 3 * 1024**3, GPU_PROC_MEM_B: 2 * 1024**3},
             ],
         },
         {  # gpu1 omitted (errored mid-run): only one device against a recorded count of 2, so incomplete
-            't_ns': 2,
-            'gpu_count': 2,
-            'gpus': [{'i': 0, 'util_pct': 80.0, 'mem_used_b': 1 * 1024**3, 'proc_mem_b': 9 * 1024**3}],
+            STAT_T_NS: 2,
+            STAT_GPU_COUNT: 2,
+            STAT_GPUS: [{GPU_INDEX: 0, GPU_UTIL_PCT: 80.0, GPU_MEM_USED_B: 1 * 1024**3, GPU_PROC_MEM_B: 9 * 1024**3}],
         },
     ]
     (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
@@ -395,14 +405,14 @@ def test_device_omitted_from_every_sample_excluded_via_recorded_count(tmp_path):
     stats = [
         # 2-GPU box, but device 1 is missing from both samples; each records the configured count of 2.
         {
-            't_ns': 1,
-            'gpu_count': 2,
-            'gpus': [{'i': 0, 'util_pct': 40.0, 'mem_used_b': 2 * 1024**3, 'proc_mem_b': 5 * 1024**3}],
+            STAT_T_NS: 1,
+            STAT_GPU_COUNT: 2,
+            STAT_GPUS: [{GPU_INDEX: 0, GPU_UTIL_PCT: 40.0, GPU_MEM_USED_B: 2 * 1024**3, GPU_PROC_MEM_B: 5 * 1024**3}],
         },
         {
-            't_ns': 2,
-            'gpu_count': 2,
-            'gpus': [{'i': 0, 'util_pct': 80.0, 'mem_used_b': 1 * 1024**3, 'proc_mem_b': 7 * 1024**3}],
+            STAT_T_NS: 2,
+            STAT_GPU_COUNT: 2,
+            STAT_GPUS: [{GPU_INDEX: 0, GPU_UTIL_PCT: 80.0, GPU_MEM_USED_B: 1 * 1024**3, GPU_PROC_MEM_B: 7 * 1024**3}],
         },
     ]
     (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
@@ -422,6 +432,39 @@ def test_device_omitted_from_every_sample_excluded_via_recorded_count(tmp_path):
     assert 'util 60% over 1 of 2 GPUs' in _render(report)
 
 
+def test_sample_of_a_smaller_complement_cannot_set_the_box_peak(tmp_path):
+    """An output directory resumed on a box with fewer GPUs holds samples of two complements. The summary
+    reports the larger one, so a smaller complement's totals cover part of that box and must not become its
+    peak, complete though they are within their own run."""
+    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir.mkdir()
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
+    stats = [
+        {  # a 2-GPU box, whole: 1+2 = 3 GB of process VRAM
+            STAT_T_NS: 1,
+            STAT_GPU_COUNT: 2,
+            STAT_GPUS: [
+                {GPU_INDEX: 0, GPU_UTIL_PCT: 40.0, GPU_MEM_USED_B: 2 * 1024**3, GPU_PROC_MEM_B: 1 * 1024**3},
+                {GPU_INDEX: 1, GPU_UTIL_PCT: 60.0, GPU_MEM_USED_B: 3 * 1024**3, GPU_PROC_MEM_B: 2 * 1024**3},
+            ],
+        },
+        {  # a later run on a 1-GPU box: complete for its own complement, half a box for this summary
+            STAT_T_NS: 2,
+            STAT_GPU_COUNT: 1,
+            STAT_GPUS: [{GPU_INDEX: 0, GPU_UTIL_PCT: 80.0, GPU_MEM_USED_B: 9 * 1024**3, GPU_PROC_MEM_B: 8 * 1024**3}],
+        },
+    ]
+    (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+
+    report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
+
+    sim = report.gpu.sim
+    assert sim is not None
+    assert sim.box_devices == 2
+    assert sim.peak_proc_vram_gb == pytest.approx(3.0)  # the two-device sample, not the 1-GPU run's 8 GB
+    assert sim.peak_vram_gb == pytest.approx(5.0)  # likewise 2+3 GB, not the 1-GPU run's 9 GB
+
+
 def test_box_whose_devices_all_refuse_is_reported_with_metrics_unavailable(tmp_path):
     """A box whose every device refuses its query (a single unsupported MIG device is enough) records a
     positive ``gpu_count`` with no per-device entries. That is a GPU box with nothing measured, and reporting
@@ -429,7 +472,7 @@ def test_box_whose_devices_all_refuse_is_reported_with_metrics_unavailable(tmp_p
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
     _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
-    stats = [{'t_ns': 1, 'gpu_count': 2, 'gpus': []}, {'t_ns': 2, 'gpu_count': 2, 'gpus': []}]
+    stats = [{STAT_T_NS: 1, STAT_GPU_COUNT: 2, STAT_GPUS: []}, {STAT_T_NS: 2, STAT_GPU_COUNT: 2, STAT_GPUS: []}]
     (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
 
     report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
@@ -448,7 +491,9 @@ def test_cpu_box_has_no_gpu_summary(tmp_path):
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
     _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
-    (telemetry_dir / 'harness.stats.jsonl').write_text(json.dumps({'t_ns': 1, 'gpu_count': 0, 'gpus': []}) + '\n')
+    (telemetry_dir / 'harness.stats.jsonl').write_text(
+        json.dumps({STAT_T_NS: 1, STAT_GPU_COUNT: 0, STAT_GPUS: []}) + '\n'
+    )
 
     report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
 
@@ -464,11 +509,15 @@ def test_gpu_samples_outside_pass_windows_excluded(tmp_path):
     _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 100, 200, 'pass0')])
     stats = [
         {
-            't_ns': 50 * _S,
-            'gpu_count': 1,
-            'gpus': [{'i': 0, 'util_pct': 100.0, 'mem_used_b': 8 * 1024**3}],
+            STAT_T_NS: 50 * _S,
+            STAT_GPU_COUNT: 1,
+            STAT_GPUS: [{GPU_INDEX: 0, GPU_UTIL_PCT: 100.0, GPU_MEM_USED_B: 8 * 1024**3}],
         },  # earlier run
-        {'t_ns': 150 * _S, 'gpu_count': 1, 'gpus': [{'i': 0, 'util_pct': 40.0, 'mem_used_b': 2 * 1024**3}]},
+        {
+            STAT_T_NS: 150 * _S,
+            STAT_GPU_COUNT: 1,
+            STAT_GPUS: [{GPU_INDEX: 0, GPU_UTIL_PCT: 40.0, GPU_MEM_USED_B: 2 * 1024**3}],
+        },
     ]
     (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
 

@@ -45,7 +45,7 @@ def test_failed_pass_exported_and_stamped(tmp_path):
     stamped ``pass.failed`` so the reduce can name the mix instead of silently folding it in."""
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-fail'):
         with pytest.raises(RuntimeError):
-            with _pass_span(**{'run.id': 'run-fail'}):
+            with _pass_span(**{telemetry.ATTR_RUN_ID: 'run-fail'}):
                 raise RuntimeError('sim died')
 
     spans = {s.name: s for s in telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl')}
