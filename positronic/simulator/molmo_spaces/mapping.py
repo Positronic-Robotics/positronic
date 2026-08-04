@@ -29,8 +29,7 @@ IkSolver: TypeAlias = Callable[[np.ndarray, np.ndarray], Any]
 MOLMO_ARM_GROUP = 'arm'
 MOLMO_GRIPPER_GROUP = 'gripper'
 
-# Where the MolmoSpaces asset packs live. ``env.py`` needs it to build a scene and the positronic-side
-# launcher checks it before spawning, so the name is owned here, where both interpreters read it.
+# Where the MolmoSpaces asset packs live.
 ASSETS_DIR_ENV = 'MLSPACES_ASSETS_DIR'
 
 # MolmoSpaces DROID rig camera names (FrankaDroidCameraSystem); a benchmark's own variants replace the defaults
