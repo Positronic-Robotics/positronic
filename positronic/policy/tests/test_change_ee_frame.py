@@ -169,6 +169,14 @@ def test_training_encoder_accepts_a_rig_that_ships_no_model():
     np.testing.assert_allclose(out[keys.EE_FRAME], TO_DROID.as_vector(QUAT), atol=1e-9)
 
 
+def test_training_encoder_rejects_an_episode_another_codec_already_moved():
+    """The transform names the policy frame from ``default``, so it has no meaning applied twice — the poses
+    would land at the product while ``meta`` still declares one of the pair."""
+    moved = _episode(**{keys.CONTROL_FRAME: DEFAULT_FRAME, keys.EE_FRAME: TO_DROID.as_vector(QUAT)})
+    with pytest.raises(ValueError, match='already sit at'):
+        ChangeEEFrame(TO_DROID).training_encoder(moved)
+
+
 def test_training_encoder_skips_absent_command_pose():
     obs_pose = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
     ts = [1000, 2000]

@@ -64,6 +64,8 @@ _FK_ATOL = 2e-4  # a fresh FK recompute vs the live stepped eef site agree only 
 # ``bundled_panda_model``'s ``DEFAULT_FRAME`` restated against link7, because this script runs in LIBERO's venv
 # and cannot import positronic: the same transform as ``frame_transform(panda_urdf, 'link7', DEFAULT_FRAME)``.
 # ``LiberoAdapter`` passes no ``env_control_frame``, which claims LIBERO's eef site is exactly this pose.
+# rules-allow: hardcoded-keys — this script runs in LIBERO's 3.10 venv, where positronic is not importable, so
+# there is no shared constant to reach for; naming the body is the point of the check
 _LINK7_BODY = 'robot0_link7'
 _LINK7_TO_EEF_POS = (0.0, 0.0, 0.1654)
 _LINK7_TO_EEF_YAW = -np.pi / 4

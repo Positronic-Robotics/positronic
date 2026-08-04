@@ -22,6 +22,7 @@ from positronic.dataset.transforms import Elementwise, lazy_sequence
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, FromValue, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee_frame
+from positronic.drivers.roboarm.models import DEFAULT_FRAME
 from positronic.policy.base import PAR, SEQ, DelegatingSession, PolicyWrapper, Session, _ComposedWrapper
 from positronic.utils import merge_dicts
 
@@ -526,8 +527,14 @@ class ChangeEEFrame(Codec):
         def __call__(self, episode):
             codec = self._codec
             assert_default_frame(episode)
-            frame = ee_frame(episode) * codec._transform
-            derived: dict[str, Any] = {obs_keys.EE_FRAME: FromValue(frame.as_vector(_QUAT))}
+            existing = ee_frame(episode)
+            if not np.allclose(existing.as_matrix, np.eye(4)):
+                raise ValueError(
+                    f'episode poses already sit at {existing.as_vector(_QUAT).tolist()} relative to '
+                    f'{DEFAULT_FRAME!r}; ``transform`` names the policy frame from there, so re-expressing an '
+                    'episode a codec already moved would train on a frame the checkpoint does not declare'
+                )
+            derived: dict[str, Any] = {obs_keys.EE_FRAME: FromValue(codec._transform.as_vector(_QUAT))}
             derived.update({key: partial(self._derive_pose, key) for key in codec._keys if key in episode})
             return Group(Derive(**derived), Identity())(episode)
 

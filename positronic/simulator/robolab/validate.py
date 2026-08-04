@@ -51,6 +51,8 @@ _EEF_OFFSET_ROT_T = torch.tensor([EEF_OFFSET_ROT], dtype=torch.float32)
 # ``models.DROID_EE_FRAME`` restated against the flange, because this script runs in RoboLab's venv and cannot
 # import positronic: the same transform as ``frame_transform(fr3_urdf, FLANGE_LINK, DROID_EEF_LINK)``, quat wxyz.
 # It is measured from an FR3 and applied to RoboLab's Panda, so the check below is what says the two agree.
+# rules-allow: hardcoded-keys — this script runs in RoboLab's venv, where positronic is not importable, so
+# there is no shared constant to reach for; naming the body is the point of the check
 _FLANGE_BODY = 'panda_link8'
 _FLANGE_TO_EEF_POS = (0.0, 0.0, 0.018174023)
 _FLANGE_TO_EEF_QUAT = (-0.707106781, 0.0, 0.0, -0.707106781)
