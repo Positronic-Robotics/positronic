@@ -488,7 +488,7 @@ def test_pickles_with_every_constructor_argument_filled():
         pass
 
 
-def test_trajectory_serializer_records_each_waypoint_at_the_tick_that_applied_it():
+def test_trajectory_serializer_records_each_waypoint_at_the_instant_it_was_applied():
     s = TrajectorySerializer(None)
 
     out = s([rcmd.Applied(1, 0, 'a'), rcmd.Applied(2, 2, 'b')])
