@@ -11,8 +11,9 @@ RUN_DIR = 's3://checkpoints/phail/dreamzero/w22f1_100k_200626/'
 
 
 class _FakeSubprocess:
-    def __init__(self, **kwargs):
-        self.roboarena_port = kwargs['roboarena_port']
+    def __init__(self, model_path, roboarena_port, **kwargs):
+        self.model_path = model_path
+        self.roboarena_port = roboarena_port
 
     def start(self, on_progress=None):
         pass
@@ -63,5 +64,19 @@ def test_a_huggingface_repo_is_itself_the_checkpoint():
     assert _experiment_name('GEAR-Dreams/DreamZero-DROID') == 'DreamZero-DROID'
 
 
-def test_a_zero_padded_step_keeps_its_number_as_the_id():
-    assert _checkpoint_id('s3://bucket/exp/checkpoint-005000') == '5000'
+def test_a_zero_padded_step_is_reached_by_the_name_its_directory_carries(latest):
+    latest('005000')
+    source = DreamZeroSource(model_path=RUN_DIR, backbone='wan2.2')
+    pinned = source.get_models()[0]
+
+    downloaded = latest('010000')
+    source.load(pinned)
+
+    assert downloaded == [RUN_DIR + 'checkpoint-005000']
+
+
+def test_the_experiment_name_does_not_relist_the_bucket(monkeypatch):
+    monkeypatch.setattr(server, 'get_latest_checkpoint', lambda _path, _prefix: pytest.fail('meta must not reach S3'))
+    source = DreamZeroSource(model_path=RUN_DIR, backbone='wan2.2')
+
+    assert source.meta('100000')['experiment_name'] == 'w22f1_100k_200626'

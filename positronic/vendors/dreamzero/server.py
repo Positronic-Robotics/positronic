@@ -51,13 +51,12 @@ def _resolve_checkpoint_path(model_path: str) -> str:
 
 
 def _checkpoint_id(checkpoint_path: str) -> str:
-    """The public id for a resolved checkpoint: its step number, free of any zero-padding.
+    """The public id for a resolved checkpoint: the step its directory names.
 
-    A HuggingFace repo or a bare local path names no step, so its trailing segment stands in.
+    Kept as the directory writes it, zero-padding and all, so the id maps back to a directory that
+    exists. A HuggingFace repo or a bare local path names no step, so its trailing segment stands in.
     """
-    last = checkpoint_path.rstrip('/').split('/')[-1]
-    step = last.removeprefix('checkpoint-')
-    return str(int(step)) if step.isdigit() else last
+    return checkpoint_path.rstrip('/').split('/')[-1].removeprefix('checkpoint-')
 
 
 def _experiment_name(checkpoint_path: str) -> str:
@@ -308,7 +307,9 @@ class DreamZeroSource(ModelSource):
             'type': 'dreamzero',
             'backbone': self._backbone,
             'num_gpus': self._num_gpus,
-            'experiment_name': _experiment_name(self._checkpoint_path(model_id)),
+            # Read off the configured path: a handshake must not depend on the checkpoint bucket
+            # being reachable, since the weights it describes are already in GPU memory.
+            'experiment_name': _experiment_name(self._model_path),
         }
 
 
