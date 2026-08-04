@@ -23,6 +23,7 @@ class Robotiq2F(pimm.ControlSystem):
         self._port = port
         self.grip = pimm.ControlSystemEmitter(self)
         self.target_grip: pimm.ControlSystemReceiver[Trajectory[float]] = pimm.ControlSystemReceiver(self, default=[])
+        self.executed_target_grip: pimm.ControlSystemEmitter[Trajectory[float]] = pimm.ControlSystemEmitter(self)
         self.force = pimm.ControlSystemReceiver(self, default=255)  # device scale 0..255
         self.speed = pimm.ControlSystemReceiver(self, default=255)  # device scale 0..255
 
@@ -43,9 +44,10 @@ class Robotiq2F(pimm.ControlSystem):
                 pos_msg = self.target_grip.read()
                 if pos_msg.updated:
                     player.set(pos_msg.data)
-                grip = player.advance(clock.now_ns())
-                if grip is not None:
-                    pos = int(max(0, min(1, grip)) * 255)
+                played = player.advance(clock.now_ns())
+                if played is not None:
+                    self.executed_target_grip.emit([played])
+                    pos = int(max(0, min(1, played[1])) * 255)
                     spd = int(max(0, min(255, self.speed.value)))
                     frc = int(max(0, min(255, self.force.value)))
 

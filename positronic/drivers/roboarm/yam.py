@@ -184,7 +184,9 @@ class Robot(pimm.ControlSystem):
         self._connect = connect
 
         self.commands = pimm.ControlSystemReceiver[command.Trajectory[command.CommandType]](self, default=[])
+        self.executed_commands = pimm.ControlSystemEmitter[command.Trajectory[command.CommandType]](self)
         self.target_grip = pimm.ControlSystemReceiver[command.Trajectory[float]](self, default=[])
+        self.executed_target_grip = pimm.ControlSystemEmitter[command.Trajectory[float]](self)
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
@@ -210,15 +212,18 @@ class Robot(pimm.ControlSystem):
                 if (grip_msg := self.target_grip.read()) is not None and grip_msg.updated:
                     grip_player.set(grip_msg.data)
 
-                grip = grip_player.advance(clock.now_ns())
-                if grip is not None:
-                    grip_target = float(grip)
+                played_grip = grip_player.advance(clock.now_ns())
+                if played_grip is not None:
+                    self.executed_target_grip.emit([played_grip])
+                    grip_target = float(played_grip[1])
 
                 obs = arm.get_observations()
                 q = obs['joint_pos']
 
-                cmd = player.advance(clock.now_ns())
-                if cmd is not None:
+                played = player.advance(clock.now_ns())
+                if played is not None:
+                    self.executed_commands.emit([played])
+                    _, cmd = played
                     match cmd:
                         case command.Reset():
                             # Drop the in-flight trajectories so the homed arm holds position rather than

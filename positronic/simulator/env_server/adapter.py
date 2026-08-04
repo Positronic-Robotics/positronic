@@ -9,11 +9,21 @@ benchmark ships one adapter (``vendors/``-style); the native ``MujocoSim`` fixtu
 
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from dataclasses import dataclass, field
 from typing import Any, final
 
 import pimm
 from positronic import geom
 from positronic.drivers.roboarm import command as roboarm_command
+
+
+@dataclass
+class Action:
+    """One control period's action: the raw payload the env steps, and the waypoints each command channel
+    played to produce it."""
+
+    raw: dict[str, Any]
+    executed: dict[str, roboarm_command.Trajectory[Any]] = field(default_factory=dict)
 
 
 def fresh_command_players() -> defaultdict[str, roboarm_command.TrajectoryPlayer]:
@@ -36,11 +46,12 @@ class EnvAdapter(ABC):
         """
 
     @abstractmethod
-    def action(self, commands: dict[str, pimm.Message], now_ns: int) -> dict[str, Any]:
-        """The latest per-channel command messages + the clock -> the raw action the env steps.
+    def action(self, commands: dict[str, pimm.Message], now_ns: int) -> Action:
+        """The latest per-channel command messages + the clock -> the action the env steps.
 
         The adapter owns trajectory playing (sampling each channel's waypoints down to ``now_ns``) and
         what to do between waypoints — e.g. hold the last commanded value, the absolute-mode invariant.
+        Playing it is also what decides which waypoints ran, so the returned ``executed`` reports them.
         """
 
     @abstractmethod
@@ -113,16 +124,18 @@ class WireCommandAdapter(EnvAdapter):
     def _reset_token(self, context: dict[str, Any]) -> Any:
         """The per-trial RUN context -> the env's opaque reset token; the command state is already cleared."""
 
-    def action(self, commands: dict[str, pimm.Message], now_ns: int) -> dict[str, Any]:
+    def action(self, commands: dict[str, pimm.Message], now_ns: int) -> Action:
+        executed: dict[str, roboarm_command.Trajectory[Any]] = {}
         for name, msg in commands.items():
             player = self._players[name]
             if msg.updated:
                 player.set(msg.data)
                 if not msg.data:  # an empty trajectory cancels: stop replaying the held waypoint
                     self._held.pop(name, None)
-            value = player.advance(now_ns)
-            if value is not None:
-                self._held[name] = value
+            played = player.advance(now_ns)
+            if played is not None:
+                executed[name] = [played]
+                self._held[name] = played[1]
         # The server maps the held command into its controller's action. Reset has no env-side action, so it
         # forwards as a hold; a delta — Cartesian or joint — is a one-shot relative motion, forwarded once then
         # dropped. Re-sending a stale delta would re-compose it against the moving arm every tick (the eef
@@ -137,4 +150,4 @@ class WireCommandAdapter(EnvAdapter):
                 self._held.pop('robot_command')
         if 'target_grip' in self._held:
             self._grip = float(self._held['target_grip'])
-        return {'command': _wire_command(cmd), 'grip': self._grip}
+        return Action({'command': _wire_command(cmd), 'grip': self._grip}, executed)

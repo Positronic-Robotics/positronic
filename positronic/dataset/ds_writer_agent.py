@@ -59,72 +59,6 @@ class DsWriterCommand:
         return DsWriterCommand(DsWriterCommandType.ABORT_EPISODE)
 
 
-class TrajectoryOverrideSerializer(StatefulSerializer):
-    """Flatten policy trajectories into a single monotonic per-point stream.
-
-    A policy emits whole trajectories ``[(abs_ts_ns, value), ...]``. A newer
-    trajectory overrides the overlapping tail of the previous one
-    (last-writer-wins on the timeline): given ``1:[1..10]`` then ``2:[5..15]``
-    the recorded stream is ``1@1..4`` then ``2@5..15``. A point is committed
-    only once a newer trajectory starting after it proves it final; the
-    remainder is drained by :meth:`flush`, which the writer calls both when a
-    trajectory is canceled and at episode end.
-
-    HACK: lossy. Drops the notion of a *predicted* trajectory and cannot
-    represent overlapping schedulers (RTC/temporal ensembling) that replan into
-    the already-committed past — such points are dropped to keep timestamps
-    strictly increasing. Faithful full-command recording needs an
-    object-valued Signal (``Kind.OBJECT``); tracked in TODO(positronic#NNN).
-    """
-
-    def __init__(self, inner: Serializer | None):
-        self._inner = inner
-        self._buffer: list[tuple[int, Any]] = []  # latest trajectory, (abs_ts_ns, value), ts-sorted
-        self._last_ts: int | None = None
-
-    def reset(self) -> None:
-        self._buffer = []
-        self._last_ts = None
-
-    def _encode(self, value: Any) -> Any:
-        return self._inner(value) if self._inner is not None else value
-
-    def _committable(self, points: list[tuple[int, Any]]) -> list[Timestamped]:
-        # Guard only bites in the overlap-degrade case (RTC replanning into the
-        # past); under ChunkedSchedule the prefix is always already ahead.
-        if self._last_ts is not None:
-            points = [(ts, v) for ts, v in points if ts > self._last_ts]
-        if points:
-            self._last_ts = points[-1][0]
-        return [Timestamped(ts, self._encode(v)) for ts, v in points]
-
-    def __call__(self, message: list[tuple[int, Any]]) -> list[Timestamped]:
-        start = message[0][0]
-        # Buffer is ts-sorted: everything before the new trajectory's start is
-        # final; the rest is overridden and dropped by the reassignment below.
-        cut = next((i for i, (ts, _) in enumerate(self._buffer) if ts >= start), len(self._buffer))
-        committed = self._committable(self._buffer[:cut])
-        self._buffer = list(message)
-        return committed
-
-    def serialize(self, value: list[tuple[int, Any]], now_ns: int) -> list[Timestamped]:
-        # An empty trajectory cancels the plan from the moment it was emitted, so drain on
-        # the same due/not-due split the episode end uses: the already-executed prefix is
-        # recorded, the un-executed tail dropped. Cutting at the message's own timestamp
-        # (not the recorder's clock) keeps waypoints scheduled in the delivery gap — which
-        # no driver played — out of the recording.
-        return self.flush(now_ns) if not value else self(value)
-
-    def flush(self, now_ns: int | None = None) -> list[Timestamped]:
-        # Commit only points already due (ts <= now_ns); the remaining
-        # future-scheduled tail never executed, so drop it. ``now_ns`` is None
-        # only for callers wanting the legacy "commit everything".
-        points = self._buffer if now_ns is None else [(ts, v) for ts, v in self._buffer if ts <= now_ns]
-        out = self._committable(points)
-        self._buffer = []
-        return out
-
-
 def _append(ep_writer: EpisodeWriter, name: str, value: Any, ts_ns: int, extra_ts: dict[str, int] | None = None):
     for full_name, v in expand_suffixed(name, value):
         if v is None:
@@ -215,7 +149,7 @@ class DsWriterAgent(pimm.ControlSystem):
                 opened = False
                 if start:
                     was_open = ep_writer is not None
-                    ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts)
+                    ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter)
                     opened = ep_writer is not None and not was_open
 
                 if ep_writer is not None:
@@ -242,7 +176,7 @@ class DsWriterAgent(pimm.ControlSystem):
                                 serializer = self._serializers.get(name)
                                 value = msg.data
                                 if serializer is not None:
-                                    value = serializer.serialize(value, message_time_ns)
+                                    value = serializer(value)
                                 # Gate on `Timestamped` so plain list-valued samples
                                 # (e.g. list-state vectors) still go through `_append`.
                                 # Empty list matches too — a serializer with nothing to emit yet.
@@ -253,13 +187,13 @@ class DsWriterAgent(pimm.ControlSystem):
                                     _append(ep_writer, name, value, primary_ts, extra_ts)
 
                 if closing:
-                    ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts)
+                    ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter)
 
                 yield pace()
         finally:
             cmd_msg = self.command.read()
             if cmd_msg.updated:
-                ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts)
+                ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter)
 
             if ep_writer is not None:
                 try:
@@ -269,7 +203,7 @@ class DsWriterAgent(pimm.ControlSystem):
                     logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
 
     def _handle_command(  # noqa: C901
-        self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None, ep_counter: int, now_ns: int | None = None
+        self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None, ep_counter: int
     ):
         match cmd.type:
             case DsWriterCommandType.START_EPISODE:
@@ -285,10 +219,6 @@ class DsWriterAgent(pimm.ControlSystem):
                     logger.warning('Episode already started, ignoring start command')
             case DsWriterCommandType.STOP_EPISODE:
                 if ep_writer is not None:
-                    with self._telemetry_span():
-                        for name, ser in self._serializers.items():
-                            for sample in ser.flush(now_ns):
-                                _append(ep_writer, name, sample.value, sample.ts, None)
                     for k, v in cmd.static_data.items():
                         ep_writer.set_static(k, v)
                     ep_writer.__exit__(None, None, None)

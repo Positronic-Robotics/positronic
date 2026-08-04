@@ -137,6 +137,9 @@ class Robot(pimm.ControlSystem):
         self.commands: pimm.SignalReceiver[command.Trajectory[command.CommandType]] = pimm.ControlSystemReceiver(
             self, default=[]
         )
+        self.executed_commands: pimm.SignalEmitter[command.Trajectory[command.CommandType]] = pimm.ControlSystemEmitter(
+            self
+        )
         self.state: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self._load = load
@@ -313,8 +316,10 @@ class Robot(pimm.ControlSystem):
                         yield rate_limiter.wait()
                         continue
 
-                    cmd = player.advance(clock.now_ns())
-                    if cmd is not None:
+                    played = player.advance(clock.now_ns())
+                    if played is not None:
+                        self.executed_commands.emit([played])
+                        _, cmd = played
                         match cmd:
                             case command.Reset():
                                 yield from self._reset(robot, robot_state, rate_limiter, should_stop)

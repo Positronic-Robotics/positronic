@@ -149,10 +149,16 @@ class MujocoSim(pimm.ControlSystem):
         self.commands: pimm.SignalReceiver[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
             pimm.ControlSystemReceiver(self, default=[])
         )
+        self.executed_commands: pimm.SignalEmitter[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
+            pimm.ControlSystemEmitter(self)
+        )
         self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self.target_grip: pimm.SignalReceiver[roboarm_command.Trajectory[float]] = pimm.ControlSystemReceiver(
             self, default=[]
+        )
+        self.executed_target_grip: pimm.SignalEmitter[roboarm_command.Trajectory[float]] = pimm.ControlSystemEmitter(
+            self
         )
         self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self.cameras: pimm.EmitterDict = pimm.EmitterDict(self)
@@ -191,15 +197,17 @@ class MujocoSim(pimm.ControlSystem):
                 # waypoint once the error clears.
                 self._arm_player.set([])
             else:
-                cmd = self._arm_player.advance(clock.now_ns())
-                if cmd is not None:
-                    self._apply_command(cmd)
+                played = self._arm_player.advance(clock.now_ns())
+                if played is not None:
+                    self.executed_commands.emit([played])
+                    self._apply_command(played[1])
             grip_msg = self.target_grip.read()
             if grip_msg.updated:
                 self._grip_player.set(grip_msg.data)
-            grip = self._grip_player.advance(clock.now_ns())
-            if grip is not None:
-                self._last_grip = grip
+            played_grip = self._grip_player.advance(clock.now_ns())
+            if played_grip is not None:
+                self.executed_target_grip.emit([played_grip])
+                self._last_grip = played_grip[1]
             self._apply_grip(self._last_grip)
 
             # An env step is the sim advance plus the observations it produces, rendering included

@@ -27,8 +27,8 @@ from positronic.drivers.roboarm.command import (
 #         - any dict entry with value None is skipped
 #     * None -> the sample is dropped
 #     * a list[Timestamped] -> a self-timestamped stream (recording only): each item is
-#       recorded at its own ``ts_ns``. An empty list defers; a StatefulSerializer may emit
-#       the remainder later from ``flush()``. The per-item ``value`` follows the rules above.
+#       recorded at its own ``ts_ns`` and an empty list records nothing. The per-item
+#       ``value`` follows the rules above.
 Serializer = Callable[[Any], Any | dict[str, Any]]
 
 
@@ -54,26 +54,6 @@ class StatefulSerializer:
     def __call__(self, value: Any) -> Any | dict[str, Any] | list['Timestamped']:
         raise NotImplementedError
 
-    def serialize(self, value: Any, now_ns: int) -> Any | dict[str, Any] | list['Timestamped']:
-        """Serialize one delivered sample, told when it was sent.
-
-        ``DsWriterAgent`` calls this rather than ``__call__``, so a serializer whose reading of
-        a sample depends on the moment it was sent has that moment; ``now_ns`` is the sample's
-        own message timestamp. The default ignores it, which is what a serializer that maps a
-        value to a value needs.
-        """
-        return self(value)
-
-    def flush(self, now_ns: int | None = None) -> list['Timestamped']:
-        """Drain any buffered samples up to ``now_ns`` (mirror of ``reset``).
-
-        Called on ``STOP_EPISODE`` before the episode is finalized, and whenever a
-        signal delivers the empty-list cancel. ``now_ns`` is the cutoff: serializers
-        that buffer future-scheduled samples commit what is already due and drop the
-        un-executed tail. The default keeps stateless serializers a no-op.
-        """
-        return []
-
 
 class _PureSerializer(StatefulSerializer):
     """Wraps a plain callable so every serializer has a uniform interface."""
@@ -83,6 +63,19 @@ class _PureSerializer(StatefulSerializer):
 
     def __call__(self, value: Any) -> Any | dict[str, Any]:
         return self._fn(value)
+
+
+class TrajectorySerializer:
+    """Records a trajectory as one sample per waypoint, each at the waypoint's own timestamp.
+
+    ``inner`` serializes the waypoint values; ``None`` records them unchanged.
+    """
+
+    def __init__(self, inner: Serializer | None):
+        self._inner = inner
+
+    def __call__(self, trajectory: list[tuple[int, Any]]) -> list['Timestamped']:
+        return [Timestamped(ts, value if self._inner is None else self._inner(value)) for ts, value in trajectory]
 
 
 class Serializers:

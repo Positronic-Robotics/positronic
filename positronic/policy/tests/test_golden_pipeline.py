@@ -123,6 +123,7 @@ class FakeRobot(pimm.ControlSystem):
         self._status = RobotStatus.AVAILABLE
         self._error_pending = False
         self.commands = pimm.ControlSystemReceiver(self, default=[])
+        self.executed_commands = pimm.ControlSystemEmitter(self)
         self.state = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
 
@@ -152,9 +153,10 @@ class FakeRobot(pimm.ControlSystem):
                 # Drop the in-flight trajectory so the arm holds position rather than resuming a stale waypoint.
                 player.set([])
             else:
-                cmd = player.advance(clock.now_ns())
-                if cmd is not None:
-                    self._apply(cmd)
+                played = player.advance(clock.now_ns())
+                if played is not None:
+                    self.executed_commands.emit([played])
+                    self._apply(played[1])
             if self._error_pending:
                 self._status = RobotStatus.ERROR
                 self._error_pending = False
@@ -168,6 +170,7 @@ class FakeGripper(pimm.ControlSystem):
     def __init__(self):
         self._grip = 0.0
         self.target_grip = pimm.ControlSystemReceiver(self, default=[])
+        self.executed_target_grip = pimm.ControlSystemEmitter(self)
         self.grip = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
@@ -176,9 +179,10 @@ class FakeGripper(pimm.ControlSystem):
             msg = self.target_grip.read()
             if msg.updated:
                 player.set(msg.data)
-            grip = player.advance(clock.now_ns())
-            if grip is not None:
-                self._grip = float(grip)
+            played = player.advance(clock.now_ns())
+            if played is not None:
+                self.executed_target_grip.emit([played])
+                self._grip = float(played[1])
             self.grip.emit(self._grip)
             yield pimm.Sleep(CONTROL_PERIOD_S)
 
@@ -197,8 +201,8 @@ def _run_pipeline(tmp_path: Path) -> dict:
                 keys.GRIP: Observation(gripper.grip, None),
             },
             commands={
-                'robot_command': Command(robot.commands, Reset(), Serializers.robot_command),
-                'target_grip': Command(gripper.target_grip, 0.0, None),
+                'robot_command': Command(robot.commands, robot.executed_commands, Reset(), Serializers.robot_command),
+                'target_grip': Command(gripper.target_grip, gripper.executed_target_grip, 0.0, None),
             },
             static_meta=dict(ROBOT_STATIC_META),
             meta_source=robot.robot_meta,

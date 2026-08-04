@@ -14,6 +14,7 @@ class DHGripper(pimm.ControlSystem):
         self.port = port
         self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self.target_grip: pimm.SignalReceiver[Trajectory[float]] = pimm.ControlSystemReceiver(self, default=[])
+        self.executed_target_grip: pimm.SignalEmitter[Trajectory[float]] = pimm.ControlSystemEmitter(self)
         self.force: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=100)
         self.speed: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=100)
 
@@ -42,9 +43,10 @@ class DHGripper(pimm.ControlSystem):
                 grip_msg = self.target_grip.read()
                 if grip_msg.updated:
                     player.set(grip_msg.data)
-                grip = player.advance(clock.now_ns())
-                if grip is not None:
-                    last_grip = grip
+                played = player.advance(clock.now_ns())
+                if played is not None:
+                    self.executed_target_grip.emit([played])
+                    last_grip = played[1]
                 width = round((1 - max(0, min(last_grip, 1))) * 1000)
                 client.write_register(0x103, c_uint16(width).value, slave=1)
                 client.write_register(0x101, c_uint16(self.force.value).value, slave=1)

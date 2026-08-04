@@ -58,8 +58,14 @@ class Robot(pimm.ControlSystem):
         self.commands: pimm.SignalReceiver[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
             pimm.ControlSystemReceiver(self, default=[])
         )
+        self.executed_commands: pimm.SignalEmitter[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
+            pimm.ControlSystemEmitter(self)
+        )
         self.target_grip: pimm.SignalReceiver[roboarm_command.Trajectory[float]] = pimm.ControlSystemReceiver(
             self, default=[]
+        )
+        self.executed_target_grip: pimm.SignalEmitter[roboarm_command.Trajectory[float]] = pimm.ControlSystemEmitter(
+            self
         )
         self._last_grip: float = 0.0
 
@@ -92,11 +98,14 @@ class Robot(pimm.ControlSystem):
             grip_msg = self.target_grip.read()
             if grip_msg.updated:
                 grip_player.set(grip_msg.data)
-            grip = grip_player.advance(clock.now_ns())
-            if grip is not None:
-                self._last_grip = grip
-            cmd = player.advance(clock.now_ns())
-            if cmd is not None:
+            played_grip = grip_player.advance(clock.now_ns())
+            if played_grip is not None:
+                self.executed_target_grip.emit([played_grip])
+                self._last_grip = played_grip[1]
+            played = player.advance(clock.now_ns())
+            if played is not None:
+                self.executed_commands.emit([played])
+                _, cmd = played
                 match cmd:
                     case roboarm_command.Reset():
                         raise NotImplementedError('Reset not implemented')

@@ -7,15 +7,10 @@ import pytest
 import pimm
 from positronic import keys, wire
 from positronic.data_collection import DataCollectionController, OperatorPosition, controller_positions_serializer
-from positronic.dataset.ds_writer_agent import (
-    DsWriterAgent,
-    DsWriterCommand,
-    DsWriterCommandType,
-    TrajectoryOverrideSerializer,
-)
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
-from positronic.dataset.serializers import Serializers
+from positronic.dataset.serializers import Serializers, TrajectorySerializer
 from positronic.geom import Rotation, Transform3D
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
@@ -43,6 +38,7 @@ def assert_strictly_increasing(sig):
 class DummyRobot(pimm.ControlSystem):
     def __init__(self):
         self.commands = pimm.FakeReceiver(self)
+        self.executed_commands = pimm.FakeEmitter(self)
         self.state = pimm.FakeEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
 
@@ -162,8 +158,8 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
 
         writer_cm = LocalDatasetWriter(tmp_path)
         agent = DsWriterAgent(writer_cm.__enter__())
-        agent.add_signal('target_grip', TrajectoryOverrideSerializer(None))
-        agent.add_signal('robot_command', TrajectoryOverrideSerializer(Serializers.robot_command))
+        agent.add_signal('target_grip', TrajectorySerializer(None))
+        agent.add_signal('robot_command', TrajectorySerializer(Serializers.robot_command))
         agent.add_signal('controller_positions', controller_positions_serializer)
         agent.add_signal('robot_state', Serializers.robot_state)
         agent.add_signal(keys.GRIP)
@@ -171,9 +167,9 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
         world.connect(sim.state, dc.robot_state)
         world.connect(sim.state, agent.inputs['robot_state'])
         world.connect(dc.robot_commands, sim.commands)
-        world.connect(dc.robot_commands, agent.inputs['robot_command'])
+        world.connect(sim.executed_commands, agent.inputs['robot_command'])
         world.connect(dc.target_grip, sim.target_grip)
-        world.connect(dc.target_grip, agent.inputs['target_grip'])
+        world.connect(sim.executed_target_grip, agent.inputs['target_grip'])
         world.connect(sim.grip, agent.inputs[keys.GRIP])
         world.connect(dc.ds_agent_commands, agent.command)
 

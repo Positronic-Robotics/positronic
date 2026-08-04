@@ -3,8 +3,8 @@ import functools
 import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset import DatasetWriter
-from positronic.dataset.ds_writer_agent import DsWriterAgent, TimeMode, TrajectoryOverrideSerializer
-from positronic.dataset.serializers import Serializers, StatefulSerializer
+from positronic.dataset.ds_writer_agent import DsWriterAgent, TimeMode
+from positronic.dataset.serializers import Serializers, StatefulSerializer, TrajectorySerializer
 from positronic.eval import ROBOT_STATIC_META, Embodiment, Observation
 
 __all__ = ['ROBOT_STATIC_META', 'wire', 'wire_embodiment']
@@ -44,21 +44,19 @@ def wire(  # noqa: C901
         for signal_name in cameras.keys():
             ds_agent.add_signal(signal_name, Serializers.camera_images)
         if robot_arm is not None:
-            # Command channels carry whole trajectories; flatten with last-writer-wins so the
-            # recording is a dense per-command stream. See TrajectoryOverrideSerializer.
-            ds_agent.add_signal('robot_command', TrajectoryOverrideSerializer(Serializers.robot_command))
+            ds_agent.add_signal('robot_command', TrajectorySerializer(Serializers.robot_command))
             ds_agent.add_signal('robot_state', Serializers.robot_state)
         if gripper is not None:
-            ds_agent.add_signal('target_grip', TrajectoryOverrideSerializer(None))
+            ds_agent.add_signal('target_grip', TrajectorySerializer(None))
             ds_agent.add_signal(keys.GRIP)
 
         for signal_name, emitter in cameras.items():
             world.connect(emitter, ds_agent.inputs[signal_name])
         if robot_arm is not None:
-            world.connect(harness.robot_commands, ds_agent.inputs['robot_command'])
+            world.connect(robot_arm.executed_commands, ds_agent.inputs['robot_command'])
             world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
         if gripper is not None:
-            world.connect(harness.target_grip, ds_agent.inputs['target_grip'])
+            world.connect(gripper.executed_target_grip, ds_agent.inputs['target_grip'])
             world.connect(gripper.grip, ds_agent.inputs[keys.GRIP])
 
     if gui is not None:
@@ -80,8 +78,8 @@ def wire_embodiment(
     """Wire an embodiment to the Harness for the inference path.
 
     Connects device observation sources -> ``harness.observations`` and
-    ``harness.commands`` -> device receivers, and records observations, command
-    chunks, and the task's privileged ground-truth into the dataset. The task's ``done``
+    ``harness.commands`` -> device receivers, and records observations, the waypoints each device
+    played, and the task's privileged ground-truth into the dataset. The task's ``done``
     terminating signal, when present, is connected to ``harness.done``. GUI camera wiring
     stays with the caller — it is a presentation concern, not part of the embodiment contract.
     """
@@ -109,10 +107,8 @@ def wire_embodiment(
             ds_agent.add_signal(name, obs.serializer)
             world.connect(obs.source, ds_agent.inputs[name])
         for name, cmd in embodiment.commands.items():
-            # Command channels carry whole trajectories; flatten with last-writer-wins so the
-            # recording is a dense per-command stream. See TrajectoryOverrideSerializer.
-            ds_agent.add_signal(name, TrajectoryOverrideSerializer(cmd.serializer))
-            world.connect(harness.commands[name], ds_agent.inputs[name])
+            ds_agent.add_signal(name, TrajectorySerializer(cmd.serializer))
+            world.connect(cmd.executed, ds_agent.inputs[name])
         for name, priv in privileged.items():
             ds_agent.add_signal(name, priv.serializer)
             world.connect(priv.source, ds_agent.inputs[name])

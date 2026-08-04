@@ -15,7 +15,7 @@ from positronic.policy import Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.policy.wrappers import ChunkedSchedule
-from positronic.simulator.env_server.adapter import EnvAdapter
+from positronic.simulator.env_server.adapter import Action, EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.env_server.server import EnvProtocol
@@ -165,7 +165,7 @@ class _CountdownAdapter(EnvAdapter):
         return context.get('eval.seed')
 
     def action(self, commands, now_ns):
-        return {}
+        return Action({})
 
     def observations(self, raw_obs):
         return {'value': raw_obs['q']}

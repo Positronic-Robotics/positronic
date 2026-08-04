@@ -1,5 +1,6 @@
 import os
 import xml.etree.ElementTree as ET
+from collections import defaultdict
 from dataclasses import replace
 
 import mujoco as mj
@@ -163,8 +164,12 @@ class _CountdownProducer(pimm.ControlSystem):
         self._steps = 0
         self._active = False
         self._reset_pending = False
+        self._players: defaultdict[str, roboarm_command.TrajectoryPlayer] = defaultdict(
+            roboarm_command.TrajectoryPlayer
+        )
         self.observations = pimm.EmitterDict(self)
         self.commands = pimm.ReceiverDict(self, default=None)
+        self.executed = pimm.EmitterDict(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self.done = pimm.ControlSystemEmitter(self)
 
@@ -176,9 +181,19 @@ class _CountdownProducer(pimm.ControlSystem):
     def _emit_obs(self) -> None:
         self.observations['value'].emit(np.full(7, self._steps, dtype=np.float64))
 
+    def _play_commands(self, clock: pimm.Clock) -> None:
+        for name, receiver in self.commands.items():
+            msg = receiver.read()
+            if msg.updated and msg.data is not None:
+                self._players[name].set(msg.data)
+            played = self._players[name].advance(clock.now_ns())
+            if played is not None:
+                self.executed[name].emit([played])
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         while not should_stop.value:
             yield pimm.Sleep(self._control_dt)
+            self._play_commands(clock)
             if self._reset_pending:
                 self._reset_pending = False
                 self.robot_meta.emit({})
@@ -198,7 +213,10 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
         observations={'value': Observation(producer.observations['value'], None)},
         commands={
             'robot_command': Command(
-                producer.commands['robot_command'], roboarm_command.Reset(), Serializers.robot_command
+                producer.commands['robot_command'],
+                producer.executed['robot_command'],
+                roboarm_command.Reset(),
+                Serializers.robot_command,
             )
         },
         static_meta=dict(ROBOT_STATIC_META),

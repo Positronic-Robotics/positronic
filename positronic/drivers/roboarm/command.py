@@ -135,8 +135,13 @@ class TrajectoryPlayer:
         self._trajectory = trajectory
         self._index = 0
 
-    def advance(self, current_time: int):
-        """Collapse every waypoint whose timestamp <= current_time into the single value to apply, or None."""
+    def advance(self, current_time: int) -> tuple[int, Any] | None:
+        """Collapse every waypoint whose timestamp <= current_time into the one waypoint to apply, or None.
+
+        The returned waypoint is stamped with ``current_time``, the tick that applies it, rather than with
+        the timestamp it was scheduled for: a device reaches a waypoint at a tick of its own control rate,
+        and several waypoints falling in one tick collapse into that single applied value.
+        """
         due = []
         while self._index < len(self._trajectory):
             ts, value = self._trajectory[self._index]
@@ -144,7 +149,7 @@ class TrajectoryPlayer:
                 break
             self._index += 1
             due.append((ts, value))
-        return self._reduce(due) if due else None
+        return (current_time, self._reduce(due)) if due else None
 
 
 def from_wire(wire: dict[str, Any]) -> CommandType:

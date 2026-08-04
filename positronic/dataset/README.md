@@ -357,6 +357,14 @@ Key ideas
 - A separate `command` channel controls episode lifecycle.
 - `time_mode` selects how timestamps are recorded: `CLOCK` (default) stamps samples when the agent ingests them (useful during live data collection so every signal reflects when the recorder could act on it), while `MESSAGE` preserves the timestamp attached by the emitting control system (ideal for analysing inference latency by keeping original emission times).
 
+### Command signals record what the device played
+
+A command channel carries a trajectory of waypoints, and a device plays it at its own control rate: it applies whatever is due at each tick, collapsing several waypoints into one when several fall inside the same tick, and it never reaches the waypoints a newer trajectory overrides or a cancel drops. A recorded command signal is that played stream — one sample per waypoint the device applied, stamped with the tick that applied it. A waypoint that was scheduled but never played is a prediction, not an action, and is absent.
+
+This is what makes a recording replayable and trainable: every command sample pairs with the observations that follow from it, because the robot moved. It is also why the executing device reports its own stream (`Command.executed`) rather than the recorder tapping the policy's output — only the device knows what it reached, and a recorder watching the intent has to guess.
+
+The full prediction history — everything a policy planned, including what it later overrode — is a different signal with a different shape, and would be recorded as its own object-valued one. It is not this signal loosened.
+
 `Serializer` is a pure function that know how to translate the incoming data into a format that `SignalWriter` can accept:
 - A serializer receives the latest value for the input and can return:
   - Transformed value: recorded under the same input name.
@@ -375,6 +383,8 @@ Built‑in serializers (`positronic.dataset.serializers.Serializers`)
   - `CartesianMove(pose)` -> `{'.pose': transform_3d(pose)}`
   - `JointMove(positions)` -> `{'.joints': positions}`
   - `Reset()` -> `{'.reset': 1}`
+- `TrajectorySerializer(inner)` -> `list[Timestamped]`
+  - Records a trajectory as one sample per waypoint, each at the waypoint's own timestamp; `inner` serializes the values (`None` records them unchanged). This is how command channels are recorded.
 
 Lifecycle
 - `START_EPISODE`: allocates a new episode writer and applies provided static
