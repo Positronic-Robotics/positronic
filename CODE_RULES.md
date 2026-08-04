@@ -35,6 +35,10 @@ Two remedies, by who owns the name. When callers may legitimately use different 
 parameter with a default for the usual one. When everyone must agree on the same name, define it once
 as a named constant in a shared module.
 
+The same holds for any literal two scopes must spell identically — an environment-variable name, a
+filename two processes agree on, a wire field. Hoist it at the first duplication, into the module every
+consumer can import, usually the most constrained of them. Never a third copy neither side reaches.
+
 Exception: a name the component itself owns and defines, rather than one it reads from its input.
 
 ```python
@@ -169,3 +173,124 @@ def _as_transform(value):
 if not isinstance(transform, Transform3D):
     transform = Transform3D.from_vector(np.asarray(transform), QUAT)
 ```
+### primitive-type
+
+Give a value the most specific type that fits it: `Path` for a filesystem path, an enum for a bounded
+set of strings, a named struct for a multi-element return, integer nanoseconds for a time on the
+robot's timeline. A primitive stands in for all of them, so it carries none of their meaning and none
+of their operations, and every consumer re-derives what it holds.
+
+Convert once, where the value enters. A CLI token, an environment variable or a wire field arrives as
+a string: parse it at that edge and everything inside is typed. The annotation must not lie — where a
+framework hands the value through uncoerced, keep the honest `str` on the parameter it lands on and
+convert immediately inside, or fix the framework.
+
+Two tells. A literal meeting a `match` or an `if` ladder is a bounded set that wants an enum, and once
+it is one, iterate it rather than restating its members. A union of a type with its own string form
+pushes the conversion onto every consumer instead of doing it once.
+
+```python
+# Bad
+def record(recording_dir: str | Path): ...
+
+if state == 'OPEN': ...
+elif state == 'CLOSED': ...
+
+# Good
+def record(recording_dir: Path): ...
+
+if state is GripperState.OPEN: ...
+```
+
+### optional-lie
+
+Don't type a value `X | None` when it is never `None`. The annotation says `None` is a case this code
+handles, so every consumer writes the guard — and the guard that matters is then indistinguishable
+from the ones that are dead.
+
+Where the value is genuinely absent sometimes, say when: a default in the signature, or a distinct
+state. `None` standing for both "not supplied" and "not applicable" is the same lie one level down.
+
+### swallowed-error
+
+Let a failure surface. Don't wrap a call in `try`/`except` to keep going, and don't fall back to a
+second path when the first comes back empty. A pipeline that silently yields nothing is harder to
+diagnose than one that raises, and the fallback becomes the path everything quietly runs through.
+
+Where a failure genuinely must not stop the caller — one malformed file in a scan, an optional
+feature, a cleanup — catch that specific exception, log it at ERROR with what failed, and say in one
+line why continuing is correct. `except Exception: pass` says none of it.
+
+```python
+# Bad
+try:
+    meta = _read_meta(path)
+except Exception:
+    continue
+
+# Good
+try:
+    meta = _read_meta(path)
+except json.JSONDecodeError:
+    logger.error('Skipping %s: malformed episode meta', path)
+    continue
+```
+
+### earn-its-place
+
+A new class, file, field or parameter must carry a distinction the code does not already encode. The
+dict an entry lives in, an enum member, the calling context, a module that already owns the subject —
+check each before adding a name for it.
+
+The cost is not the lines. Every new type is another thing a reader holds, another place a value can
+live, and another edge to keep in sync; a field duplicating what its caller already knows goes stale
+the first time only one of the two is set.
+
+Extend the module that owns the subject rather than adding a file beside it. Where nothing owns it,
+that is a finding about the layout — say so, rather than restructuring on your own initiative.
+
+### whole-body-with
+
+When the entire body of a function is one `with` block, make the context manager a decorator. That the
+whole call runs inside it belongs at the signature, where a reader meets it first, not as an indent
+wrapped around everything.
+
+Keep the `with` when code runs outside the block, when the `as` value is used, or when a generator or
+coroutine needs the context scoped per `yield`/`await` — a decorator scopes it per call.
+
+```python
+# Bad
+def step(self, action):
+    with telemetry.span('env.step'):
+        ...
+
+# Good
+@telemetry.traced('env.step')
+def step(self, action):
+    ...
+```
+
+### stale-doc
+
+A document states the system as it is now. Not how it got here: no "previously", no "this PR", no "as
+of this writing", no resolved-while-writing note, no struck-through section kept for context. The
+reader has no access to the past state, so prose written against it is noise that ages into a lie.
+
+Nothing in the tree is a worklog. A status, progress, implementation-summary or completed-plan file is
+folded into the document that owns its subject and then deleted. A changelog is the exception, history
+being its subject.
+
+Where a change must be referenced, cite something durable — a ticket, a tag, a version. Two things
+that look like history and stay: a footgun the reader can still walk into, and a current limitation
+with its workaround.
+
+### baseline-grandfather
+
+Never add an entry to `.basedpyright/baseline.json` for code in your own change. The baseline holds the
+debt that existed when the ratchet landed: a file you write or touch lands clean, and typing an old
+file removes its entries.
+
+The hook compares per-file counts, so it cannot see one diagnostic swapped for another under the same
+code, and re-anchoring line numbers absorbs new findings silently. That part is yours to hold. An
+import that genuinely cannot resolve takes a narrow `# pyright: ignore[reportMissingImports]` with a
+reason, so every other diagnostic in the file stays live.
