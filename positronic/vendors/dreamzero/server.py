@@ -50,6 +50,22 @@ def _resolve_checkpoint_path(model_path: str) -> str:
     return f'{model_path.rstrip("/")}/{get_latest_checkpoint(model_path, "checkpoint-")}'
 
 
+def _checkpoint_id(checkpoint_path: str) -> str:
+    """The public id for a resolved checkpoint: its step number, free of any zero-padding.
+
+    A HuggingFace repo or a bare local path names no step, so its trailing segment stands in.
+    """
+    last = checkpoint_path.rstrip('/').split('/')[-1]
+    step = last.removeprefix('checkpoint-')
+    return str(int(step)) if step.isdigit() else last
+
+
+def _experiment_name(checkpoint_path: str) -> str:
+    """The training run a resolved checkpoint belongs to."""
+    parts = checkpoint_path.rstrip('/').split('/')
+    return parts[-2] if len(parts) >= 2 and parts[-1].startswith('checkpoint-') else parts[-1]
+
+
 # TODO: Extract RoboarenaClient to positronic/offboard/ — roboarena is a cross-vendor
 # standard (used by DreamZero, potentially GR00T N2, etc.) and other vendors may need it.
 class RoboarenaClient:
@@ -215,13 +231,18 @@ class _DreamZeroSession(Session):
 class DreamZeroPolicy(Policy):
     """Owns the DreamZero subprocess; every session talks to it over its own roboarena connection."""
 
-    def __init__(self, sp: DreamZeroSubprocess):
+    def __init__(self, sp: DreamZeroSubprocess, checkpoint_path: str):
         self._subprocess = sp
+        self._checkpoint_path = checkpoint_path
 
     def new_session(self, context=None, now=None):
         client = RoboarenaClient(port=self._subprocess.roboarena_port)
         client.connect()
         return _DreamZeroSession(client, str(uuid.uuid4()))
+
+    @property
+    def meta(self):
+        return {'checkpoint_path': self._checkpoint_path}
 
     def close(self):
         self._subprocess.stop()
@@ -231,7 +252,8 @@ class DreamZeroSource(ModelSource):
     """DreamZero checkpoints served through a torchrun subprocess speaking the roboarena protocol.
 
     ``model_path`` is an ``s3://`` run directory (served at its latest ``checkpoint-N``), a pinned
-    checkpoint dir, a HuggingFace repo, or a local path.
+    checkpoint dir, a HuggingFace repo, or a local path. Model ids are checkpoint step numbers
+    (``'100000'`` for ``checkpoint-100000``).
     """
 
     def __init__(
@@ -251,11 +273,12 @@ class DreamZeroSource(ModelSource):
         self._enable_dit_cache = enable_dit_cache
 
     def get_models(self) -> list[str]:
-        return [_resolve_checkpoint_path(self._model_path)]
+        return [_checkpoint_id(_resolve_checkpoint_path(self._model_path))]
 
     def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
+        checkpoint_path = _resolve_checkpoint_path(self._model_path)
         local_path = run_with_progress(
-            lambda: _download_checkpoint(model_id), 'Downloading DreamZero checkpoint', on_progress
+            lambda: _download_checkpoint(checkpoint_path), 'Downloading DreamZero checkpoint', on_progress
         )
         logger.info(f'Starting DreamZero subprocess with {self._num_gpus} GPUs')
         sp = DreamZeroSubprocess(
@@ -271,10 +294,15 @@ class DreamZeroSource(ModelSource):
         except Exception:
             sp.stop()
             raise
-        return DreamZeroPolicy(sp)
+        return DreamZeroPolicy(sp, checkpoint_path)
 
     def meta(self, model_id: str) -> dict[str, Any]:
-        return {'type': 'dreamzero', 'backbone': self._backbone, 'model_path': model_id, 'num_gpus': self._num_gpus}
+        return {
+            'type': 'dreamzero',
+            'backbone': self._backbone,
+            'num_gpus': self._num_gpus,
+            'experiment_name': _experiment_name(_resolve_checkpoint_path(self._model_path)),
+        }
 
 
 dreamzero_source = cfn.Config(DreamZeroSource)
@@ -304,6 +332,15 @@ COMMANDS = {
     'joints_traj': serve.override(pipeline=joints_traj),
     'joints_ik': serve.override(pipeline=joints_ik),
     'joints_ik_sim': serve.override(pipeline=joints_ik_sim),
+    # The PhAIL fine-tune. Trained with the joints_ik codec, whose inference decode is the shared joints
+    # one, so the joints pipeline serves it; the backbone must be the one the run was trained on.
+    'phail': serve.override(
+        pipeline=joints.override(**{
+            'source.model_path': 's3://checkpoints/phail/dreamzero/w22f1_100k_200626/',
+            'source.backbone': 'wan2.2',
+        }),
+        recording_dir='s3://inference/phail_unified/server_recordings/dreamzero/w22f1_100k_200626/',
+    ),
     # Public pretrained DROID checkpoint: wan2.1 backbone (the base default) paired with the DROID
     # pipeline whose codec feeds its required 320x180 frames.
     'droid': serve.override(pipeline=droid.override(**{'source.model_path': 'GEAR-Dreams/DreamZero-DROID'})),

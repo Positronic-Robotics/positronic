@@ -1,0 +1,13 @@
+# DreamZero on vm-train2 (H100 80GB — wan2.2 5B needs ~26GB)
+#
+# docker --context vm-train2 compose -f docker-compose.phail.dreamzero.yml up
+services:
+  phail-dreamzero-server:
+    extends:
+      file: docker-compose.yml
+      service: dreamzero-server
+    container_name: phail-dreamzero-server
+    pull_policy: always
+    command: ["phail"]
+    ports: !override
+      - "8000:8000"

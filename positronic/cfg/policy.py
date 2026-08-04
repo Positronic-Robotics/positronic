@@ -103,7 +103,14 @@ def phail_single(hostname, w_openpi=1.0, w_groot=1.0, w_act=1.0):
 
 
 phail_multiple = production.override(
-    endpoints={'smolvla': 'notebook:8000', 'act': 'notebook:8001', 'groot': 'desktop:8000', 'openpi': 'vm-openpi:8000'},
+    endpoints={
+        'smolvla': 'notebook:8000',
+        'act': 'notebook:8001',
+        'groot': 'desktop:8000',
+        'openpi': 'vm-openpi:8000',
+        # DreamZero's 5B wan2.2 needs an H100, so it cannot share the consumer boxes above.
+        'dreamzero': 'vm-train2:8000',
+    },
     sampler=balanced,
     group_fields=[keys.TASK, 'eval.object', 'eval.tote_placement', 'eval.external_camera'],
 )
