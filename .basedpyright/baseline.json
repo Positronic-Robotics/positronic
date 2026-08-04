@@ -1692,14 +1692,6 @@
             {
                 "code": "reportOptionalMemberAccess",
                 "range": {
-                    "startColumn": 110,
-                    "endColumn": 112,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
                     "startColumn": 56,
                     "endColumn": 58,
                     "lineCount": 1
@@ -1740,14 +1732,6 @@
             {
                 "code": "reportOptionalMemberAccess",
                 "range": {
-                    "startColumn": 110,
-                    "endColumn": 112,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
                     "startColumn": 23,
                     "endColumn": 30,
                     "lineCount": 1
@@ -1758,14 +1742,6 @@
                 "range": {
                     "startColumn": 69,
                     "endColumn": 73,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 106,
-                    "endColumn": 108,
                     "lineCount": 1
                 }
             }
@@ -9064,14 +9040,6 @@
                     "endColumn": 32,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 54,
-                    "endColumn": 62,
-                    "lineCount": 1
-                }
             }
         ],
         "./positronic/simulator/env_server/server.py": [
@@ -11182,24 +11150,8 @@
             {
                 "code": "reportAttributeAccessIssue",
                 "range": {
-                    "startColumn": 34,
-                    "endColumn": 48,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
                     "startColumn": 36,
                     "endColumn": 41,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 34,
-                    "endColumn": 45,
                     "lineCount": 1
                 }
             },
@@ -11304,14 +11256,6 @@
                 "range": {
                     "startColumn": 26,
                     "endColumn": 36,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 34,
-                    "endColumn": 42,
                     "lineCount": 1
                 }
             },

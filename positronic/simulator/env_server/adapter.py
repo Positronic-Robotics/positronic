@@ -46,7 +46,7 @@ class EnvAdapter(ABC):
         """
 
     @abstractmethod
-    def action(self, commands: dict[str, pimm.Message], now_ns: int) -> Action:
+    def action(self, commands: dict[str, pimm.Message | None], now_ns: int) -> Action:
         """The latest per-channel command messages + the clock -> the action the env steps.
 
         The adapter owns trajectory playing (sampling each channel's waypoints down to ``now_ns``) and
@@ -124,11 +124,11 @@ class WireCommandAdapter(EnvAdapter):
     def _reset_token(self, context: dict[str, Any]) -> Any:
         """The per-trial RUN context -> the env's opaque reset token; the command state is already cleared."""
 
-    def action(self, commands: dict[str, pimm.Message], now_ns: int) -> Action:
+    def action(self, commands: dict[str, pimm.Message | None], now_ns: int) -> Action:
         executed: dict[str, roboarm_command.Trajectory[Any]] = {}
         for name, msg in commands.items():
             player = self._players[name]
-            if msg.updated:
+            if msg is not None and msg.updated:
                 player.set(msg.data)
                 if not msg.data:  # an empty trajectory cancels: stop replaying the held waypoint
                     self._held.pop(name, None)

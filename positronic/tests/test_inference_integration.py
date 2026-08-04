@@ -184,7 +184,7 @@ class _CountdownProducer(pimm.ControlSystem):
     def _play_commands(self, clock: pimm.Clock) -> None:
         for name, receiver in self.commands.items():
             msg = receiver.read()
-            if msg.updated and msg.data is not None:
+            if msg is not None and msg.updated and msg.data is not None:
                 self._players[name].set(msg.data)
             played = self._players[name].advance(clock.now_ns())
             if played is not None:

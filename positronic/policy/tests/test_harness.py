@@ -1001,7 +1001,7 @@ class _GripDevice(pimm.ControlSystem):
         player = TrajectoryPlayer()
         while not should_stop.value:
             msg = self.target_grip.read()
-            if msg.updated:
+            if msg is not None and msg.updated:
                 player.set(msg.data)
             played = player.advance(clock.now_ns())
             if played is not None:

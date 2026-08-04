@@ -14,7 +14,7 @@ class DHGripper(pimm.ControlSystem):
         self.port = port
         self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self.target_grip: pimm.SignalReceiver[Trajectory[float]] = pimm.ControlSystemReceiver(self, default=[])
-        self.executed_target_grip: pimm.SignalEmitter[Trajectory[float]] = pimm.ControlSystemEmitter(self)
+        self.executed_target_grip: pimm.ControlSystemEmitter[Trajectory[float]] = pimm.ControlSystemEmitter(self)
         self.force: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=100)
         self.speed: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=100)
 

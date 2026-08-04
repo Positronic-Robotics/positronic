@@ -137,8 +137,8 @@ class Robot(pimm.ControlSystem):
         self.commands: pimm.SignalReceiver[command.Trajectory[command.CommandType]] = pimm.ControlSystemReceiver(
             self, default=[]
         )
-        self.executed_commands: pimm.SignalEmitter[command.Trajectory[command.CommandType]] = pimm.ControlSystemEmitter(
-            self
+        self.executed_commands: pimm.ControlSystemEmitter[command.Trajectory[command.CommandType]] = (
+            pimm.ControlSystemEmitter(self)
         )
         self.state: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)

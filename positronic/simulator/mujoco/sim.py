@@ -149,7 +149,7 @@ class MujocoSim(pimm.ControlSystem):
         self.commands: pimm.SignalReceiver[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
             pimm.ControlSystemReceiver(self, default=[])
         )
-        self.executed_commands: pimm.SignalEmitter[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
+        self.executed_commands: pimm.ControlSystemEmitter[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
             pimm.ControlSystemEmitter(self)
         )
         self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
@@ -157,8 +157,8 @@ class MujocoSim(pimm.ControlSystem):
         self.target_grip: pimm.SignalReceiver[roboarm_command.Trajectory[float]] = pimm.ControlSystemReceiver(
             self, default=[]
         )
-        self.executed_target_grip: pimm.SignalEmitter[roboarm_command.Trajectory[float]] = pimm.ControlSystemEmitter(
-            self
+        self.executed_target_grip: pimm.ControlSystemEmitter[roboarm_command.Trajectory[float]] = (
+            pimm.ControlSystemEmitter(self)
         )
         self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self.cameras: pimm.EmitterDict = pimm.EmitterDict(self)
