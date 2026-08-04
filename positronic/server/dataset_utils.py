@@ -57,6 +57,7 @@ class EpisodeSignals:
     numerics: list[str]
     dims: dict[str, int]
     poses: list[str]
+    unplotted: dict[str, int]  # name -> element count, for signals too wide to plot
 
 
 def _infer_dims(sig) -> int:
@@ -137,20 +138,28 @@ def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeContro
     return rrb.EyeControls3D(position=camera_pos.tolist(), look_target=centroid.tolist())
 
 
-# MuJoCo's privileged full-physics state is a single wide vector recorded for replay/scoring —
-# ``sim_state.mjSTATE_*`` in current recordings, bare ``mjSTATE_*`` in older datasets — not a set of
-# readable channels. Plotting it as one scalar series per channel stalls the viewer, so any signal
-# carrying it is left out of the visualization.
-# TODO: a high-dimensional signal like this has no useful scalar-series view and needs one of its own.
-_HIDDEN_SIGNAL_MARKER = 'mjSTATE'
+# One series per element stops being readable long before it stops being drawable, and a signal wide
+# enough — a full physics state runs to hundreds — takes the video panels down with it: the scalar
+# series crowd out the recording and the video sits on its loading spinner. Signals past this width
+# are left out of the plots and named in the viewer instead.
+# TODO: a view that plots a chosen few elements of a wide signal, so it stops being all-or-nothing.
+_MAX_PLOTTED_WIDTH = 32
+_UNPLOTTED_ENTITY = '/unplotted'
+
+
+def _unplotted_notice(unplotted: dict[str, int]) -> str:
+    lines = '\n'.join(f'- `{name}` — {dim} values' for name, dim in sorted(unplotted.items()))
+    return (
+        f'### Not plotted\n\n{lines}\n\n'
+        f'Wider than {_MAX_PLOTTED_WIDTH} values, so a per-element plot is unreadable and crowds out '
+        'the rest of the recording. The signals are in the episode and readable through the dataset API.'
+    )
 
 
 def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
     pose_set = set(ep.static.get('pose_signals', []))
-    signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[])
+    signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[], unplotted={})
     for name, sig in ep.signals.items():
-        if _HIDDEN_SIGNAL_MARKER in name:
-            continue
         if sig.kind == Kind.IMAGE:
             try:
                 sig[0]
@@ -159,11 +168,16 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
                 pass
             continue
 
-        signals.numerics.append(name)
         try:
-            signals.dims[name] = _infer_dims(sig)
+            dim = _infer_dims(sig)
         except Exception:
-            signals.dims[name] = 1
+            dim = 1
+        if dim > _MAX_PLOTTED_WIDTH:
+            signals.unplotted[name] = dim
+            continue
+
+        signals.numerics.append(name)
+        signals.dims[name] = dim
         if name in pose_set:
             signals.poses.append(name)
     return signals
@@ -196,6 +210,8 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
         else:
             view = rrb.Tabs(*[_ts_view(sig) for sig in sigs], name=group_name)
         series_views.append(view)
+    if signals.unplotted:
+        series_views.append(rrb.TextDocumentView(name='Not plotted', origin=_UNPLOTTED_ENTITY))
 
     # Top row: images (big) + optional 3D (smaller)
     top_items = []
@@ -526,6 +542,10 @@ def stream_episode_rrd(ds: Dataset, episode_id: int) -> Iterator[bytes]:
     with rec:
         signals = _collect_signal_groups(ep)
         rr.send_blueprint(_build_blueprint(signals, ep))
+        if signals.unplotted:
+            logging.warning(f'Episode {episode_id}: not plotting {signals.unplotted}')
+            notice = _unplotted_notice(signals.unplotted)
+            rr.log(_UNPLOTTED_ENTITY, rr.TextDocument(notice, media_type=rr.MediaType.MARKDOWN), static=True)
         yield from drainer.drain()
 
         _setup_series_names(signals, ep)
