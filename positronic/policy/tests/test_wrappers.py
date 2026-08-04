@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from positronic import keys
-from positronic.geom import Transform3D
+from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
 from positronic.policy.action import (
     AbsoluteJointsAction,
@@ -161,6 +161,21 @@ class TestPipelineComposition:
         c2 = ActionTimestamp(fps=5.0)
         composed = c1 & c2
         assert isinstance(composed, Codec)
+
+    def test_agreeing_declarations_merge(self):
+        assert (ActionTimestamp(fps=10.0) | ActionTimestamp(fps=10.0)).meta['action_fps'] == 10.0
+
+    def test_disagreeing_declarations_have_no_merged_answer(self):
+        composed = ActionTimestamp(fps=10.0) & ActionTimestamp(fps=5.0)
+        with pytest.raises(ValueError, match='action_fps'):
+            _ = composed.meta
+
+    def test_two_frame_codecs_refuse_to_advertise_one_frame(self):
+        """Poses come out at the product of both transforms, which neither codec's declaration names."""
+        a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
+        b = Transform3D(np.array([0.01, 0.0, 0.02]), Rotation.from_euler([0.0, 0.0, -0.4]))
+        with pytest.raises(ValueError, match=keys.EE_FRAME):
+            _ = (ChangeEEFrame(a) | ChangeEEFrame(b)).meta
 
 
 class _CaptureSession(Session):

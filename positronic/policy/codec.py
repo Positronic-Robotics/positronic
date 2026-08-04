@@ -127,6 +127,36 @@ class _CodecSession(DelegatingSession):
         return self._inner.meta | self._codec.meta
 
 
+def _meta_conflicts(left: dict, right: dict, prefix: str = '') -> list[str]:
+    """``key: left != right`` for every leaf the two metas declare differently. Nested dicts merge per key,
+    so only leaves can conflict."""
+    found = []
+    for key in left.keys() & right.keys():
+        a, b = left[key], right[key]
+        if isinstance(a, dict) and isinstance(b, dict):
+            found += _meta_conflicts(a, b, f'{prefix}{key}.')
+        elif isinstance(a, dict) or isinstance(b, dict) or not np.array_equal(a, b):
+            found.append(f'{prefix}{key}: {a!r} != {b!r}')
+    return found
+
+
+def _merged_meta(left: dict, right: dict) -> dict:
+    """Two codecs' metadata as one dict.
+
+    A leaf both declare differently has no merged answer, so it raises rather than keeping one: the survivor
+    would describe a pipeline neither codec implements. Two ``ChangeEEFrame`` are the case to picture — the
+    poses come out at the product of both transforms while the surviving declaration names only one of them.
+    Declare the composition as a single value instead.
+    """
+    conflicts = _meta_conflicts(left, right)
+    if conflicts:
+        raise ValueError(f'composed codecs disagree on metadata — {"; ".join(sorted(conflicts))}')
+    result: dict[str, Any] = {}
+    merge_dicts(result, left)
+    merge_dicts(result, right)
+    return result
+
+
 class _ComposedCodec(Codec):
     """Two codecs composed via ``|``. Encodes left-to-right, decodes right-to-left."""
 
@@ -146,10 +176,7 @@ class _ComposedCodec(Codec):
 
     @property
     def meta(self):
-        result: dict[str, Any] = {}
-        merge_dicts(result, self._left.meta)
-        merge_dicts(result, self._right.meta)
-        return result
+        return _merged_meta(self._left.meta, self._right.meta)
 
     def to_spec(self):
         return {SEQ: [self._left.to_spec(), self._right.to_spec()]}
@@ -181,10 +208,7 @@ class _ParallelCodec(Codec):
 
     @property
     def meta(self):
-        result: dict[str, Any] = {}
-        merge_dicts(result, self._left.meta)
-        merge_dicts(result, self._right.meta)
-        return result
+        return _merged_meta(self._left.meta, self._right.meta)
 
     def to_spec(self):
         return {PAR: [self._left.to_spec(), self._right.to_spec()]}
