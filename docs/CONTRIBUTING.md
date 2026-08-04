@@ -121,10 +121,9 @@ uv run ruff format .         # Format code
 
 ## Code Rules
 
-[CODE_RULES.md](../CODE_RULES.md) carries the judgment rules Ruff cannot check — how things are
-named, where a shared name lives, what a comment may say. Each rule has an id, and a review cites
-that id, so read it before your first pull request. Where a rule is genuinely wrong for one line,
-waive it at that line:
+[CODE_RULES.md](../CODE_RULES.md) carries the judgment rules Ruff cannot check. Each rule has an id,
+and a review cites that id, so read it before your first pull request. Where a rule is genuinely
+wrong for one line, waive it at that line:
 
 ```python
 # rules-allow: <rule-id> — <why this instance is correct>
