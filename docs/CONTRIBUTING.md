@@ -129,8 +129,8 @@ wrong for one line, waive it at that line:
 # rules-allow: <rule-id> — <why this instance is correct>
 ```
 
-What the system as a whole guarantees, and the principles an integration follows from, are in
-[ARCHITECTURE.md](../ARCHITECTURE.md).
+[ARCHITECTURE.md](../ARCHITECTURE.md) says what a policy, a driver, a simulator and a recording may
+assume about each other. Read it before adding one of them.
 
 ## Testing
 
