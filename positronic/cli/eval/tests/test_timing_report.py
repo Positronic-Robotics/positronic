@@ -3,6 +3,7 @@ import json
 import pytest
 
 from positronic.cli.eval.timing_report import _build_report, _parse_dmon, _read_spans_dir, _read_stats_dir, _render
+from positronic.simulator.env_server.telemetry import ENV_PROCESS
 from positronic.telemetry import (
     ATTR_PROCESS_NAME,
     GPU_INDEX,
@@ -16,6 +17,7 @@ from positronic.telemetry import (
 from positronic.telemetry_keys import (
     ATTR_EPISODE_ABORTED,
     ATTR_EPISODE_VIRTUAL_S,
+    HARNESS_PROCESS,
     SPAN_ENV_STEP,
     SPAN_EPISODE,
     SPAN_EVAL_PASS,
@@ -28,7 +30,7 @@ from positronic.telemetry_keys import (
 _S = 1_000_000_000  # seconds -> ns
 
 
-def _span(name, start_s, end_s, span_id, parent_id=None, attrs=None, process='harness'):
+def _span(name, start_s, end_s, span_id, parent_id=None, attrs=None, process=HARNESS_PROCESS):
     encoded = {
         'traceId': '0' * 32,
         'spanId': span_id,
@@ -75,9 +77,9 @@ def _fixture(telemetry_dir):
         # in the env process's own file, discriminated by its resource process name.
         server = f'srv{i}'
         env += [
-            _span(SPAN_ENV_STEP, base + 10, base + 15, server, process='env'),
-            _span('physics', base + 10, base + 13, f'phys{i}', server, process='env'),
-            _span('render', base + 13, base + 14, f'rend{i}', server, process='env'),
+            _span(SPAN_ENV_STEP, base + 10, base + 15, server, process=ENV_PROCESS),
+            _span('physics', base + 10, base + 13, f'phys{i}', server, process=ENV_PROCESS),
+            _span('render', base + 13, base + 14, f'rend{i}', server, process=ENV_PROCESS),
         ]
     _write_lines(telemetry_dir / 'harness.spans.jsonl', harness)
     _write_lines(telemetry_dir / 'env.spans.jsonl', env)
@@ -245,11 +247,11 @@ def test_env_step_split_ignores_aborted_episode(tmp_path):
         'value': {'boolValue': True},
     })
     env = [
-        _span(SPAN_ENV_STEP, 10, 15, 'srv0', process='env'),
-        _span('physics', 10, 13, 'phys0', 'srv0', process='env'),
-        _span('render', 13, 14, 'rend0', 'srv0', process='env'),
-        _span(SPAN_ENV_STEP, 51, 56, 'srv1', process='env'),  # during the aborted rollout
-        _span('physics', 51, 54, 'phys1', 'srv1', process='env'),
+        _span(SPAN_ENV_STEP, 10, 15, 'srv0', process=ENV_PROCESS),
+        _span('physics', 10, 13, 'phys0', 'srv0', process=ENV_PROCESS),
+        _span('render', 13, 14, 'rend0', 'srv0', process=ENV_PROCESS),
+        _span(SPAN_ENV_STEP, 51, 56, 'srv1', process=ENV_PROCESS),  # during the aborted rollout
+        _span('physics', 51, 54, 'phys1', 'srv1', process=ENV_PROCESS),
     ]
     _write_lines(telemetry_dir / 'harness.spans.jsonl', harness)
     _write_lines(telemetry_dir / 'env.spans.jsonl', env)
@@ -463,6 +465,8 @@ def test_sample_of_a_smaller_complement_cannot_set_the_box_peak(tmp_path):
     assert sim.box_devices == 2
     assert sim.peak_proc_vram_gb == pytest.approx(3.0)  # the two-device sample, not the 1-GPU run's 8 GB
     assert sim.peak_vram_gb == pytest.approx(5.0)  # likewise 2+3 GB, not the 1-GPU run's 9 GB
+    # The mean is a figure about this box too: the other machine's 80% reading is not averaged into it.
+    assert sim.mean_util_pct == pytest.approx(50.0)
 
 
 def test_box_whose_devices_all_refuse_is_reported_with_metrics_unavailable(tmp_path):

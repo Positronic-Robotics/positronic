@@ -181,17 +181,21 @@ def _gpu_summary_from_stats(stats: list[dict], pass_windows: list[tuple[int, int
     proc: list[float] = []
     seen: set[int] = set()
     for sample in in_window:
+        # A directory resumed on a box with fewer GPUs holds samples of another machine. This summary reports
+        # one complement, so those readings belong to no figure in it — not the mean either, which would
+        # otherwise average two boxes under one box's name.
+        if int(sample[STAT_GPU_COUNT]) != box_devices:
+            continue
         gpus = sample.get(STAT_GPUS, [])
         if not gpus:
             continue
         utils.extend(float(gpu[GPU_UTIL_PCT]) for gpu in gpus)
         seen.update(int(gpu[GPU_INDEX]) for gpu in gpus)
-        # Either peak is a box-wide total over the complement this summary reports, so a sample counts only
-        # when it carries all of it. Two ways a sample falls short: a device whose NVML query errors mid-run is
-        # dropped from it entirely rather than left ``None``, and a directory resumed on a smaller box holds
-        # samples of a smaller complement — either way the total would cover part of the box and be read as
-        # the whole of it. The process peak needs per-device attribution on top, so a ``None`` reading drops
-        # the sample from that peak alone.
+        # Either peak is a box-wide total over that complement, so a sample counts only when it carries all of
+        # it: a device whose NVML query errors mid-run is dropped from the sample entirely rather than left
+        # ``None``, and its total would cover part of the box and be read as the whole of it. The mean is
+        # per-device, so those readings still count. The process peak needs per-device attribution on top, so
+        # a ``None`` reading drops the sample from that peak alone.
         if len(gpus) != box_devices:
             continue
         mem.append(sum(float(gpu[GPU_MEM_USED_B]) for gpu in gpus))
