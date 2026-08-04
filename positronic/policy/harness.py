@@ -201,6 +201,10 @@ class Harness(pimm.ControlSystem):
         self._deadline: float | None = None
         # Wall-clock telemetry for the live rollout, opened under ``--timing`` and inert otherwise.
         self._telemetry = _EpisodeTelemetry()
+        # Observation channels that have not delivered since this episode's reset. A receiver latches its
+        # last value, so an empty set is what makes the first inference of an episode read the post-reset
+        # scene rather than the previous episode's final frame.
+        self._awaiting_obs: set[str] = set()
 
         self._descriptor = embodiment.descriptor
         self.observations = pimm.ReceiverDict(self)
@@ -305,6 +309,7 @@ class Harness(pimm.ControlSystem):
         self.context = context
         # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
         self._inference_latency = self.context.get('inference_latency', False)
+        self._awaiting_obs = set(self._embodiment.observations)
         # Open the episode span before the reset, so the phase spans (reset, env.step, policy.infer,
         # record.io) parent to it.
         self._telemetry.begin(context)
@@ -377,11 +382,18 @@ class Harness(pimm.ControlSystem):
         Raises ``NoValueException`` (caught by ``run``) if any channel has no value
         yet — so inference waits for a complete set of inputs. Returns ``None`` if a
         serializer reports a sample is not ready (e.g. ``robot_state`` while the arm is
-        ``RESETTING``), so the harness skips inference rather than feeding a partial obs.
+        ``RESETTING``), or while a channel is still holding a value delivered before this
+        episode's reset, so the harness skips inference rather than feeding a partial or
+        stale obs.
         """
         inputs: dict[str, Any] = {}
         for name, obs in self._embodiment.observations.items():
-            value = self.observations[name].value
+            message = self.observations[name].read()
+            if message is None:
+                raise pimm.NoValueException
+            if message.updated:
+                self._awaiting_obs.discard(name)
+            value = message.data
             if obs.serializer is not None:
                 value = obs.serializer(value)
                 if value is None:
@@ -389,6 +401,8 @@ class Harness(pimm.ControlSystem):
             for full_name, v in expand_suffixed(name, value):
                 if v is not None:
                     inputs[full_name] = v
+        if self._awaiting_obs:
+            return None
         inputs['wall_time_ns'] = time.time_ns()
         inputs['obs_time_ns'] = clock.now_ns()
         inputs.update(self.context)

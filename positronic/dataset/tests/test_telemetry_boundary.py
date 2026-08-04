@@ -33,8 +33,8 @@ def _imports_telemetry(source: str) -> bool:
 def test_dataset_package_has_no_telemetry_dependency():
     """The dataset core stays agnostic to telemetry: no module under ``positronic/dataset`` imports
     ``positronic.telemetry``, its vocabulary, or ``opentelemetry``. Timing rides in as an opaque
-    ``telemetry_span`` context factory (default inert) — naming the injected span a telemetry span is fine;
-    importing telemetry, or naming one of its spans, is not."""
+    ``io_context`` context factory (default inert), named after the work it brackets rather than after what
+    the caller does with it."""
     offenders = []
     for path in _DATASET_ROOT.rglob('*.py'):
         if 'tests' in path.parts:

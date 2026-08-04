@@ -1476,3 +1476,35 @@ def test_episode_virtual_duration_starts_at_the_first_observation(world, tmp_pat
     # Five observed rounds against forty unobserved ones: anchoring when the reset returned would swallow the
     # whole gap into the rollout's virtual duration.
     assert virtual_s < gap_s
+
+
+@pytest.mark.timeout(3.0)
+def test_a_later_episode_waits_for_its_own_first_observation(world, tmp_path):
+    """An observation channel latches its last value, so after the first episode every channel already holds
+    one. A rollout still anchors on a value delivered after its own reset — anchoring on the latched frame
+    would charge the wait for frame zero to the rollout and infer on the previous episode's last scene."""
+    harness = Harness(ChunkPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    def episode(gap_steps: int) -> float:
+        p['directive_em'].emit(Directive.RUN(task='test'))
+        drive_scheduler(scheduler, steps=1)
+        gap_start = world.clock.now()
+        drive_scheduler(scheduler, steps=gap_steps)  # the producer has not published this episode's frame zero
+        gap_s = world.clock.now() - gap_start
+        emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
+        drive_scheduler(scheduler, steps=5)
+        p['directive_em'].emit(Directive.FINISH())
+        drive_scheduler(scheduler, steps=3)
+        return gap_s
+
+    with telemetry.bind(tmp_path, 'harness', 'run-anchor-2'), _eval_pass('run-anchor-2'):
+        scheduler = world.start([harness])
+        episode(gap_steps=2)
+        gap_s = episode(gap_steps=40)
+
+    spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
+    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    assert len(episodes) == 2
+    assert episodes[1].attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S] < gap_s
