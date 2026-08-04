@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import configuronic as cfn
 import pos3
@@ -120,7 +120,7 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     # resolvable root (e.g. concatenated ones) all share the 'unknown_dataset' namespace. Uids are
     # arbitrary caller-provided strings, so the key is their digest: one bounded filename component,
     # free of the path separators, glob metacharacters and dots a raw uid may carry.
-    uid_digest = hashlib.sha256(ds[episode_id].meta['uid'].encode()).hexdigest()
+    uid_digest = hashlib.sha256(cast(Episode, ds[episode_id]).meta['uid'].encode()).hexdigest()
     return os.path.join(_episode_cache_dir(), f'{uid_digest}{_GENERATION_SUFFIX}')
 
 
@@ -554,6 +554,7 @@ async def api_episode_static_field(episode_id: int, field_path: str):
 @require_dataset
 async def api_episode_rrd(episode_id: int):
     ds = app_state.get('dataset')
+    assert isinstance(ds, Dataset)
     cache_path = _get_rrd_cache_path(episode_id)
 
     if os.path.exists(cache_path):

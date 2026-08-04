@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 import av
+import av.video.frame
+import av.video.stream
 import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb

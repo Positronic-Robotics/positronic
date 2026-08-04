@@ -4,6 +4,8 @@ import time
 from pathlib import Path
 
 import av
+import av.video.frame
+import av.video.stream
 import numpy as np
 import pytest
 
@@ -29,8 +31,8 @@ def _write_video(path, n_frames, max_b_frames):
             container.mux(packet)
 
 
-def _pict_types(data):
-    with av.open(data) as container:
+def _pict_types(data: str | io.BytesIO):
+    with av.open(data, mode='r') as container:
         return [int(frame.pict_type) for frame in container.decode(video=0)]
 
 
@@ -60,7 +62,7 @@ def test_playable_video_bytes_preserves_seek_points(tmp_path):
     with av.open(str(src)) as container:
         src_keys = sum(1 for frame in container.decode(video=0) if frame.key_frame)
 
-    with av.open(io.BytesIO(playable_video_bytes(src))) as container:
+    with av.open(io.BytesIO(playable_video_bytes(src)), mode='r') as container:
         out_keys = sum(1 for frame in container.decode(video=0) if frame.key_frame)
     assert out_keys == src_keys
 
