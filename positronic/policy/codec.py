@@ -167,7 +167,11 @@ class _ComposedCodec(Codec):
         return self._right.encode(self._left.encode(data))
 
     def decode(self, data, *, context=None):
-        return self._left.decode(self._right.decode(data, context=context), context=context)
+        # The right half decodes actions the left half re-expressed, so its context has to be re-expressed too:
+        # a decoder that rebuilds its command from it (``RelativePositionAction``) would otherwise anchor a
+        # policy-frame delta on a pose in the frame the policy never saw. Encoders carry no state across calls.
+        inner = self._left.encode(context) if context is not None else None
+        return self._left.decode(self._right.decode(data, context=inner), context=context)
 
     @property
     def training_encoder(self):
@@ -500,10 +504,7 @@ class ChangeEEFrame(Codec):
     travels with the frame it is expressed in and the driver applies it there.
 
     Which side of the ``remote`` marker it sits on decides who converts, the rig or the server. Compose it left
-    of the observation/action codecs. A decoder that rebuilds its command from the decode context
-    (``RelativePositionAction``) needs this codec on the far side of ``remote`` from it. TODO(#553):
-    ``_ComposedCodec.decode`` hands both halves the same pre-encode context, so within one composed codec that
-    pairing is wrong.
+    of the observation/action codecs.
     """
 
     @staticmethod

@@ -183,6 +183,27 @@ class TestPipelineComposition:
         with pytest.raises(ValueError, match=keys.EE_FRAME):
             _ = (ChangeEEFrame(a) | ChangeEEFrame(a)).meta
 
+    def test_a_relative_decoder_anchors_on_the_pose_the_policy_saw(self):
+        """The right half decodes actions the left half re-expressed, so its context is re-expressed too —
+        anchoring a policy-frame delta on the raw pose would send the arm somewhere else."""
+        quat = Rotation.Representation.QUAT
+        t = Transform3D(np.array([0.0, 0.0, 0.1]), Rotation.from_euler([0.0, 0.0, np.pi / 2]))
+        raw = Transform3D(np.array([0.3, 0.1, 0.4]), Rotation.from_euler([0.0, 0.0, 0.0]))
+        turn, shift = Rotation.from_euler([0.0, 0.0, 0.2]), np.array([0.01, -0.02, 0.03])
+        action = {'action': np.concatenate([turn.as_quat, shift, [1.0]]).astype(np.float32)}
+
+        codec = ChangeEEFrame(t) | RelativePositionAction()
+        assert isinstance(codec, Codec)
+        decoded = codec.decode(action, context={keys.EE_POSE: raw.as_vector(quat)})
+        assert isinstance(decoded, dict)
+
+        seen = raw * t
+        pose = decoded[keys.ROBOT_COMMAND].pose
+        want = Transform3D(seen.translation + shift, seen.rotation * turn) * t.inv
+        np.testing.assert_allclose(pose.as_vector(quat), want.as_vector(quat), atol=1e-6)
+        anchored_raw = Transform3D(raw.translation + shift, raw.rotation * turn) * t.inv
+        assert not np.allclose(pose.translation, anchored_raw.translation)
+
     def test_parallel_frame_codecs_keep_the_frame_they_share(self):
         """Both halves encode the same input, so one move happens and the shared declaration describes it."""
         a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
