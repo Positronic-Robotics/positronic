@@ -1092,7 +1092,7 @@ def _record_grip_through(world, device, policy_wrapper) -> tuple[list[float], Ch
     world.connect(harness.commands['target_grip'], device.target_grip)
     world.connect(device.executed_target_grip, agent.inputs['target_grip'])
     world.connect(harness.ds_command, agent.command)
-    world.pair(harness.commands['robot_command'])
+    world.pair(harness.commands[keys.ROBOT_COMMAND])
 
     frame_em = world.pair(harness.observations['image.cam'])
     robot_em = world.pair(harness.observations['robot_state'])
