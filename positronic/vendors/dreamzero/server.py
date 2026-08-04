@@ -340,6 +340,8 @@ COMMANDS = {
     'joints_ik_sim': serve.override(pipeline=joints_ik_sim),
     # The PhAIL fine-tune. Trained with the joints_ik codec, whose inference decode is the shared joints
     # one, so the joints pipeline serves it; the backbone must be the one the run was trained on.
+    # TODO: publish this checkpoint to positronic-public and point here, as the other PhAIL models are
+    # (`utilities/release_phail.py`, `positronic.cfg.phail.v1_0.models`). Reading it needs credentials until then.
     'phail': serve.override(
         pipeline=joints.override(**{
             'source.model_path': 's3://checkpoints/phail/dreamzero/w22f1_100k_200626/',
