@@ -475,13 +475,6 @@ class ChangeEEFrame(Codec):
     """
 
     @staticmethod
-    def _as_transform(value: geom.Transform3D | cabc.Sequence[float]) -> geom.Transform3D:
-        """A transform, or the ``[tx,ty,tz,qw,qx,qy,qz]`` vector a wire spec carries one as."""
-        if isinstance(value, geom.Transform3D):
-            return value
-        return geom.Transform3D.from_vector(np.asarray(value, dtype=np.float64), _QUAT)
-
-    @staticmethod
     def _move(value: Any, transform: geom.Transform3D) -> Any:
         """A pose vector or an arm command, re-expressed through ``transform``."""
         match value:
@@ -523,7 +516,9 @@ class ChangeEEFrame(Codec):
         transform: geom.Transform3D | cabc.Sequence[float],
         keys: tuple[str, ...] = (obs_keys.EE_POSE, obs_keys.TARGET_EE_POSE, obs_keys.ROBOT_COMMAND),
     ):
-        self._transform = self._as_transform(transform)
+        if not isinstance(transform, geom.Transform3D):  # the ``[tx,ty,tz,qw,qx,qy,qz]`` vector a wire spec carries
+            transform = geom.Transform3D.from_vector(np.asarray(transform, dtype=np.float64), _QUAT)
+        self._transform = transform
         self._keys = tuple(keys)
 
     def _apply(self, data: dict, transform: geom.Transform3D) -> dict:
