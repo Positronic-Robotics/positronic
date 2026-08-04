@@ -37,7 +37,7 @@ import pytest
 
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
-from positronic.simulator.molmo_spaces import launcher
+from positronic.simulator.molmo_spaces import launcher, mapping
 
 FIXTURES = sorted(Path(__file__).parent.glob('replay_ep*.npz'))
 
@@ -71,10 +71,10 @@ def _replay(benchmark_dir: Path, episode_index: int, commands: np.ndarray, grips
         conn = EnvConnection(host, port)
         try:
             # No seed: the benchmark episode carries its own, exactly as the recorded run left it unset.
-            conn.reset({'episode_index': episode_index, 'seed': None})
+            conn.reset({mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: None})
             for command, grip in zip(commands, grips, strict=True):
                 out = conn.step({'command': {'type': protocol.JOINT_POS, 'q': command}, 'grip': float(grip)})
-                states.append(np.asarray(out['obs']['sim_state'], dtype=np.float64))
+                states.append(np.asarray(out['obs'][mapping.OBS_SIM_STATE], dtype=np.float64))
                 if out['done']:
                     break
         finally:

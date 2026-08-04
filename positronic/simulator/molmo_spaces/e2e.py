@@ -31,7 +31,7 @@ _CAMERA_DICT = {keys.WRIST_IMAGE: mapping.MOLMO_WRIST_CAMERA, keys.EXTERIOR_IMAG
 
 def _check_sim_state(adapter: MolmoAdapter, raw_obs: dict) -> np.ndarray:
     """The privileged full MuJoCo state must survive the wire and reach the recorder as a finite qpos+qvel vector."""
-    sim_state = adapter.privileged(raw_obs)['sim_state']
+    sim_state = adapter.privileged(raw_obs)[mapping.OBS_SIM_STATE]
     assert isinstance(sim_state, np.ndarray) and sim_state.ndim == 1 and sim_state.size > 0, (
         f'privileged sim_state malformed: {type(sim_state)} shape={getattr(sim_state, "shape", None)}'
     )
@@ -54,7 +54,7 @@ def run(
         conn = EnvConnection(host, port)
         try:
             for i in range(episodes):
-                frame = conn.reset({'episode_index': i, 'seed': None})
+                frame = conn.reset({mapping.TOKEN_EPISODE_INDEX: i, mapping.TOKEN_SEED: None})
                 obs = adapter.observations(frame['obs'])
                 assert 'robot_state' in obs and 'grip' in obs, f'missing contract keys: {sorted(obs)}'
                 assert all(logical in obs for logical in camera_dict), f'missing cameras: {sorted(obs)}'

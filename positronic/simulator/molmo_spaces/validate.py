@@ -45,6 +45,7 @@ from pathlib import Path
 # import it before any other molmo_spaces import. Reaching into its private ``_fk``/``_ik`` is the point: this
 # validates that exact solver, not a re-derivation of it.
 import env  # noqa: E402
+import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import numpy as np
 import protocol  # the positronic-free wire contract, flat on PYTHONPATH beside ``server`` — see ``launcher``
 
@@ -145,7 +146,7 @@ def main() -> None:
     np.random.seed(0)
 
     sim_env = env.MolmoSpacesEnv(Path(args.benchmark_dir), args.task_horizon_steps)
-    sim_env.reset({'episode_index': args.episode_index, 'seed': args.seed})
+    sim_env.reset({mapping.TOKEN_EPISODE_INDEX: args.episode_index, mapping.TOKEN_SEED: args.seed})
     print(f'molmo_spaces episode {args.episode_index} (seed {args.seed})')
     try:
         _check_fk_identity(sim_env)

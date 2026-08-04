@@ -115,12 +115,11 @@ class MolmoSpacesEnv(EnvProtocol):
         self._task: Any = None
         self._robot_view: Any = None
         self._control_dt: float | None = None
-        # The episode's enforced horizon in sim-seconds (``task_horizon`` steps x the control period), reported at
-        # reset so positronic can check its safety-net timeout is strictly weaker.
+        # The episode's enforced horizon in sim-seconds (``task_horizon`` steps x the control period), reported
+        # at reset.
         self._horizon_sec: float | None = None
         self._meta: dict[str, Any] | None = None
-        # The RGB camera keys the current episode renders — emitted every frame; the client's ``camera_dict``
-        # selects which the policy sees.
+        # The RGB camera keys the current episode renders, emitted every frame.
         self._camera_names: list[str] = []
         # Scratch ``MjData`` the kinematics probes (``_fk``/``_ik``) run on, allocated once per episode and
         # refreshed from the live buffer per call — a Cartesian policy solves IK every control step, so the
@@ -151,13 +150,12 @@ class MolmoSpacesEnv(EnvProtocol):
         self._meta = {'task': episode.language.task_description, 'house_index': episode.house_index}
 
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
-        self._build(token['episode_index'], token.get('seed'))
+        self._build(token[mapping.TOKEN_EPISODE_INDEX], token.get(mapping.TOKEN_SEED))
         obs, _info = self._task.reset()  # obs is a list, one dict per env; n_batch == 1
         env_obs = obs[0]
         self._camera_names = [k for k, v in env_obs.items() if _is_rgb_frame(v)]
         # robot_meta is empty: this venv cannot import positronic to emit the Franka model, so the eval supplies
-        # it via ``static_meta`` (``bundled_franka_model``). ``meta`` carries the scene/task identity; ``horizon``
-        # is the sim-enforced episode deadline the harness checks its timeout against.
+        # it via ``static_meta`` (``bundled_franka_model``).
         return {
             'obs': self._observe(env_obs),
             'meta': self._meta,
@@ -276,15 +274,13 @@ def observe_payload(robot_view: Any, env_obs: dict[str, Any], camera_names: list
     # mju_mat2Quat is a C binding absent from mujoco's type stubs, so pyright can't see the attribute.
     mujoco.mju_mat2Quat(eef_quat, rot9)  # pyright: ignore[reportAttributeAccessIssue]
     payload = {
-        'joint_pos': np.asarray(arm.joint_pos, dtype=np.float32),
-        'joint_vel': np.asarray(arm.joint_vel, dtype=np.float32),
-        'eef_pos': eef_world[:3, 3].astype(np.float32),
-        'eef_quat': eef_quat.astype(np.float32),
-        'grip': np.float32(mapping.normalize_grip_qpos(env_obs['qpos']['gripper'])),
-        # The full MuJoCo generalized state (every body's pose + velocity, objects included) — privileged ground
-        # truth the adapter routes to the recorder, so success can be recomputed/audited offline (like libero's
-        # ``sim_state``), never fed to the policy.
-        'sim_state': _full_physics_state(robot_view),
+        mapping.OBS_JOINT_POS: np.asarray(arm.joint_pos, dtype=np.float32),
+        mapping.OBS_JOINT_VEL: np.asarray(arm.joint_vel, dtype=np.float32),
+        mapping.OBS_EEF_POS: eef_world[:3, 3].astype(np.float32),
+        mapping.OBS_EEF_QUAT: eef_quat.astype(np.float32),
+        mapping.OBS_GRIP: np.float32(mapping.normalize_grip_qpos(env_obs['qpos'][mapping.MOLMO_GRIPPER_GROUP])),
+        # The full MuJoCo generalized state: every body's pose + velocity, objects included.
+        mapping.OBS_SIM_STATE: _full_physics_state(robot_view),
     }
     for name in camera_names:
         payload[name] = np.ascontiguousarray(env_obs[name])

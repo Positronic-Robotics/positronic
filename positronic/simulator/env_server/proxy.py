@@ -53,8 +53,8 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         # The robot model identity the env reports at ``reset`` (URDF / joint names) — emitted on the
         # ``robot_meta`` port into the episode; distinct from the scene ``meta`` above.
         self._robot_meta: dict[str, Any] | None = None
-        # The env's sim-enforced episode horizon in sim-seconds from the latest ``reset``, or ``None`` when the env
-        # enforces none — read by the client's ``Task`` so the harness can check its timeout stays strictly weaker.
+        # The env's sim-enforced episode horizon in sim-seconds from the latest ``reset``, or ``None`` when the
+        # env enforces none.
         self._horizon: float | None = None
         # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
         self._reset_pending = False
