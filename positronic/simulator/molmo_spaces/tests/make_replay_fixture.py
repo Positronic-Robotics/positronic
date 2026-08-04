@@ -6,7 +6,10 @@
 
 ``test_replay.py`` replays a real pi05 rollout open-loop against the sim and asserts it reproduces. This
 script distils one recorded episode into the fixture that replay needs: the commanded joint targets and grip
-per step, plus checkpoints of the recorded ``sim_state`` to compare the replayed trajectory against.
+per step, taken from the recording, plus checkpoints of the ``sim_state`` those commands produce, taken by
+replaying them here. The commands are what the recording pins; the checkpoints pin the integration's current
+trajectory, so a later run that drifts from it fails. Regenerate them together whenever the recorded
+``sim_state`` changes shape or the pinned MolmoSpaces commit moves.
 
 Two properties make the distillation exact. The recorded commands are *absolute* joint targets, so the
 replay never reads the measured state back — it is genuinely open-loop, and the only thing under test is the
@@ -22,8 +25,10 @@ counts the rest as the recording's gap.
 Commands are stored as float32, the dtype ``env.py`` casts them to, so the fixture holds the bits the sim
 actually applied rather than the float64 the recorder wrote.
 
-Run (needs positronic, for the dataset reader — hence ``--locked``, not ``--no-project``)::
+Run (needs positronic for the dataset reader, and the MolmoSpaces assets for the replay — hence
+``--locked``, not ``--no-project``)::
 
+    MLSPACES_ASSETS_DIR=... MUJOCO_GL=egl EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 \
     uv run --locked python positronic/simulator/molmo_spaces/tests/make_replay_fixture.py \
         --dataset_dir ~/.cache/positronic/s3/_/inference/molmo_battle_test/2026-07-29/sweep_jp \
         --episode_index 3 --episode_index 6
@@ -33,6 +38,7 @@ only, never the videos).
 """
 
 import argparse
+import os
 import re
 from pathlib import Path
 
@@ -41,6 +47,9 @@ import numpy as np
 from positronic.dataset.local_dataset import DiskEpisode
 from positronic.dataset.signal import Signal
 from positronic.eval import EVAL_EPISODE_INDEX
+from positronic.simulator.env_server import protocol
+from positronic.simulator.env_server.client import EnvConnection
+from positronic.simulator.molmo_spaces import launcher, mapping
 
 # Checkpoint stride over the replayed steps: dense enough that drift is caught early rather than only at the
 # end state, sparse enough to keep the fixture small. The final step is always included on top.
@@ -87,7 +96,29 @@ def sample_at(signal: Signal, timestamps: list[int]) -> list:
     return [value for value, _ts in sampled]
 
 
-def build_fixture(episode_dir: Path, benchmark_path: str) -> dict[str, np.ndarray]:
+def replay_commands(benchmark_dir: Path, episode_index: int, commands, grips) -> list:
+    """Step the commands open-loop through a MolmoSpaces env server, returning the sim state each produced.
+
+    Stops early if the sim ends the trial, so a caller can tell a full replay from a truncated one by the
+    length of what comes back.
+    """
+    states: list = []
+    with launcher.serve_molmo_spaces(benchmark_dir) as (host, port):
+        conn = EnvConnection(host, port)
+        try:
+            # No seed: the benchmark episode carries its own, exactly as the recorded run left it unset.
+            conn.reset({mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: None})
+            for command, grip in zip(commands, grips, strict=True):
+                out = conn.step({'command': {'type': protocol.JOINT_POS, 'q': command}, 'grip': float(grip)})
+                states.append(np.asarray(out['obs'][mapping.OBS_SIM_STATE], dtype=np.float64))
+                if out['done']:
+                    break
+        finally:
+            conn.close()
+    return states
+
+
+def build_fixture(episode_dir: Path, benchmark_path: str, assets_dir: Path) -> dict[str, np.ndarray]:
     episode = DiskEpisode(episode_dir)
     states, commands, grips = episode['sim_state'], episode['robot_command.joints'], episode['target_grip']
     # Frame 0 is the reset observation; every later frame is one step.
@@ -105,15 +136,24 @@ def build_fixture(episode_dir: Path, benchmark_path: str) -> dict[str, np.ndarra
 
     steps = np.arange(1, replayable + 1)
     checkpoints = np.unique(np.concatenate([steps[::CHECKPOINT_STRIDE], steps[-1:]]))
+    episode_index = int(episode.static[EVAL_EPISODE_INDEX])
+    played_prefix = np.stack(played[:replayable])
+    grip_prefix = np.array(grip[:replayable], dtype=np.float32)
+    replayed = replay_commands(assets_dir / 'benchmarks' / benchmark_path, episode_index, played_prefix, grip_prefix)
+    if len(replayed) != replayable:
+        raise SystemExit(
+            f'episode {episode_index}: the sim ended after {len(replayed)} of {replayable} replayable steps, '
+            'so the recording and the integration no longer agree on the trial length'
+        )
     return {
         'episode_index': np.asarray(episode.static[EVAL_EPISODE_INDEX], dtype=np.int32),
         'benchmark_path': np.asarray(benchmark_path),
         'task': np.asarray(episode.static['task']),
-        'commands': np.stack(played[:replayable]),
-        'grips': np.array(grip[:replayable], dtype=np.float32),
+        'commands': played_prefix,
+        'grips': grip_prefix,
         'unreplayable_tail_steps': np.asarray(len(step_ts) - replayable, dtype=np.int32),
         'checkpoint_steps': checkpoints.astype(np.int32),
-        'checkpoint_sim_state': np.stack([np.asarray(states[int(step)][0], dtype=np.float64) for step in checkpoints]),
+        'checkpoint_sim_state': np.stack([replayed[int(step) - 1] for step in checkpoints]),
         'expected_success': np.asarray(episode.static['eval.success'], dtype=bool),
     }
 
@@ -126,9 +166,16 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    assets = os.environ.get(mapping.ASSETS_DIR_ENV)
+    if not assets:
+        raise SystemExit(
+            f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs — the checkpoints '
+            'are taken by replaying the recorded commands, which needs the benchmark scene'
+        )
+
     benchmark_path = read_benchmark_path(args.dataset_dir)
     for episode_index in args.episode_index:
-        fixture = build_fixture(find_episode_dir(args.dataset_dir, episode_index), benchmark_path)
+        fixture = build_fixture(find_episode_dir(args.dataset_dir, episode_index), benchmark_path, Path(assets))
         if not fixture['expected_success']:
             raise SystemExit(f'episode {episode_index} did not succeed — replay fixtures pin successful rollouts')
         out = Path(__file__).parent / f'replay_ep{episode_index:02d}.npz'
