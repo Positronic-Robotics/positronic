@@ -1,0 +1,193 @@
+"""Positronic-free wall-clock span writer for the env-server process.
+
+The env server runs in a benchmark's isolated interpreter (RoboLab's Isaac venv) where positronic — and so
+``positronic.telemetry`` — cannot be imported. This module is stdlib-only, copied in alongside the dumb
+``server``/``protocol``, and writes the same OTLP/JSON-lines shape ``positronic.telemetry.read_spans`` parses,
+so the env process's spans land in its own ``env.spans.jsonl`` sidecar next to the harness's file.
+
+It is synchronous (one span per line, flushed per line) — the server is single-client lockstep, one request in
+flight — so no batch thread and no per-span allocation churn. ``span`` nests through a module span stack: the
+``env.step``/``env.reset`` span is active while the sim's physics/render calls open their own spans under it.
+Unbound (no telemetry env vars), every helper is inert.
+"""
+
+import functools
+import json
+import os
+import socket
+import threading
+import time
+from collections.abc import Callable
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
+
+_SCOPE = 'positronic'
+
+# The env-var contract between this reader and the eval-CLI writer (``positronic.cli.eval.run``), which sets
+# them for a launched env server. Public so the writer imports them here rather than re-spelling the literals.
+ENV_TELEMETRY_DIR = 'POSITRONIC_ENV_TELEMETRY_DIR'
+ENV_RUN_ID = 'POSITRONIC_RUN_ID'
+
+# The two env-server phase span names. Owned here because the isolated env interpreter (robolab/env.py) imports
+# this stdlib-only module as ``telemetry`` and cannot reach ``positronic.telemetry``; the main process reduces
+# them through ``positronic.telemetry``, which re-exports these.
+SPAN_ENV_STEP = 'env.step'
+SPAN_ENV_RESET = 'env.reset'
+
+# The resource-block attribute keys every sidecar writer stamps and ``positronic.telemetry.read_spans`` reads
+# back. Owned here for the same reason as the span names: this is the writer that cannot import the other side.
+ATTR_RUN_ID = 'run.id'
+ATTR_PROCESS_NAME = 'process.name'
+ATTR_PROCESS_PID = 'process.pid'
+ATTR_HOST_NAME = 'host.name'
+
+# This writer's own value for ``ATTR_PROCESS_NAME``.
+ENV_PROCESS = 'env'
+
+# Every process's spans file is its ``ATTR_PROCESS_NAME`` plus this suffix; the reduce globs for it.
+SPANS_SUFFIX = '.spans.jsonl'
+
+_lock = threading.Lock()
+_file = None
+_trace_id = ''
+_resource_attrs: list[dict[str, Any]] = []
+_stack: list[str] = []  # active span ids (hex), innermost last — a new span parents to the top
+
+
+def active() -> bool:
+    return _file is not None
+
+
+def _otlp_value(value: Any) -> dict[str, Any]:
+    if isinstance(value, bool):
+        return {'boolValue': value}
+    if isinstance(value, int):
+        return {'intValue': str(value)}
+    if isinstance(value, float):
+        return {'doubleValue': value}
+    if isinstance(value, str):
+        return {'stringValue': value}
+    if isinstance(value, (list, tuple)):
+        return {'arrayValue': {'values': [_otlp_value(item) for item in value]}}
+    return {'stringValue': json.dumps(value)}
+
+
+def _seal_truncated_line(path: Path) -> None:
+    """Seal a predecessor's truncated final line (a killed run can die mid-write) with a newline before
+    appending, so the first new record does not merge into the fragment and get skipped along with it."""
+    try:
+        with open(path, 'rb') as file:
+            file.seek(-1, os.SEEK_END)
+            sealed = file.read(1) == b'\n'
+    except (FileNotFoundError, OSError):
+        return  # absent or empty: nothing to seal
+    if not sealed:
+        with open(path, 'ab') as file:
+            file.write(b'\n')
+
+
+def _otlp_attributes(attrs: dict[str, Any]) -> list[dict[str, Any]]:
+    return [{'key': key, 'value': _otlp_value(value)} for key, value in attrs.items()]
+
+
+@contextmanager
+def bind(telemetry_dir: Path | str, run_id: str):
+    """Open ``env.spans.jsonl`` under ``telemetry_dir``, stamping this process's identity into every span's
+    resource block; a second bind is a no-op so a nested/duplicate call cannot reopen the file."""
+    global _file, _trace_id, _resource_attrs
+    if _file is not None:
+        yield
+        return
+    directory = Path(telemetry_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    _trace_id = os.urandom(16).hex()
+    _resource_attrs = _otlp_attributes({
+        ATTR_RUN_ID: run_id,
+        ATTR_PROCESS_NAME: ENV_PROCESS,
+        ATTR_PROCESS_PID: os.getpid(),
+        ATTR_HOST_NAME: socket.gethostname(),
+    })
+    spans_path = directory / f'{ENV_PROCESS}{SPANS_SUFFIX}'
+    _seal_truncated_line(spans_path)
+    _file = open(spans_path, 'a')
+    try:
+        yield
+    finally:
+        with _lock:
+            _file.close()
+        _file = None
+        _stack.clear()
+
+
+def bind_from_env():
+    """Bind from the telemetry env vars the parent sets under ``--timing`` (the launcher forwards the whole
+    environment to this subprocess); an inert context manager when they are absent."""
+    directory = os.environ.get(ENV_TELEMETRY_DIR)
+    run_id = os.environ.get(ENV_RUN_ID)
+    if directory is None or run_id is None:
+        return _inert()
+    return bind(directory, run_id)
+
+
+@contextmanager
+def _inert():
+    yield
+
+
+@contextmanager
+def span(name: str, **attrs: Any):
+    """Time the enclosed block as a span parented to the span currently on the stack. Inert while unbound."""
+    if _file is None:
+        yield
+        return
+    span_id = os.urandom(8).hex()
+    parent_id = _stack[-1] if _stack else None
+    start_ns = time.time_ns()
+    _stack.append(span_id)
+    try:
+        yield
+    finally:
+        _stack.pop()
+        _write_span(name, span_id, parent_id, start_ns, time.time_ns(), attrs)
+
+
+def traced(name: str, **attrs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Decorator form of ``span`` for a function whose whole body is one span: run the call inside a span
+    named ``name``. Inert while unbound, like ``span``."""
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            with span(name, **attrs):
+                return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+def _write_span(name: str, span_id: str, parent_id: str | None, start_ns: int, end_ns: int, attrs: dict[str, Any]):
+    encoded: dict[str, Any] = {
+        'traceId': _trace_id,
+        'spanId': span_id,
+        'name': name,
+        'startTimeUnixNano': str(start_ns),
+        'endTimeUnixNano': str(end_ns),
+        'attributes': _otlp_attributes(attrs),
+    }
+    if parent_id is not None:
+        encoded['parentSpanId'] = parent_id
+    doc = {
+        'resourceSpans': [
+            {
+                'resource': {'attributes': _resource_attrs},
+                'scopeSpans': [{'scope': {'name': _SCOPE}, 'spans': [encoded]}],
+            }
+        ]
+    }
+    line = json.dumps(doc, separators=(',', ':')) + '\n'
+    with _lock:
+        if _file is not None:
+            _file.write(line)
+            _file.flush()

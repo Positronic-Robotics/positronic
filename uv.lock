@@ -4128,6 +4128,15 @@ wheels = [
 ]
 
 [[package]]
+name = "nvidia-ml-py"
+version = "13.610.43"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f0/b5/a8fbc356f768fa5c9cfd646668fd7d34bf55bdd1c6e20754642a64d930d4/nvidia_ml_py-13.610.43.tar.gz", hash = "sha256:65437eb73d68d0c62c931ca4d45038472faff03bd0b8729abba4b899f70d60f2", size = 52109, upload-time = "2026-06-01T18:54:08.829Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/23/45/caa600acfab94560807a20a64b5830d2cd3c3202b7f1328644d70b7d6bd8/nvidia_ml_py-13.610.43-py3-none-any.whl", hash = "sha256:f13c72698edef492f985cc225f14faafe68ae065a2e407f45bdf6f4b9b43fde8", size = 53163, upload-time = "2026-06-01T18:54:07.704Z" },
+]
+
+[[package]]
 name = "nvidia-nccl-cu12"
 version = "2.26.2"
 source = { registry = "https://pypi.org/simple" }
@@ -4277,6 +4286,80 @@ dependencies = [
     { name = "pillow" },
     { name = "tree" },
     { name = "websockets" },
+]
+
+[[package]]
+name = "opentelemetry-api"
+version = "1.44.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ee/8b/aa9e2d8b8dfa7c946f7dec5d1f8f6ba8eca062f43509a06bdb5ce93d26c0/opentelemetry_api-1.44.0.tar.gz", hash = "sha256:67647e5e9566edcf421166fdf022b3537f818635daa852b289e34604dc6fb33a", size = 72406, upload-time = "2026-07-16T15:25:32.678Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ca/6f/a04e900f465ff3221ccc395522503e2d10e79fa21f2723c8e177aae1e0d1/opentelemetry_api-1.44.0-py3-none-any.whl", hash = "sha256:94b98c893a91b88657eaac1e3ba89618cdb85be6918196705354f34728b2cdef", size = 60018, upload-time = "2026-07-16T15:25:11.657Z" },
+]
+
+[[package]]
+name = "opentelemetry-exporter-otlp-json-common"
+version = "0.65b0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-proto-json" },
+    { name = "opentelemetry-sdk" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/23/a3/f4dbf87b48c2de020c17c937ba2e6ce2e66b3fbbf0ca90cb0ef7a6634350/opentelemetry_exporter_otlp_json_common-0.65b0.tar.gz", hash = "sha256:e5c2ae6b2f154b5804332074bf4ff14c8b55d9613e38687d355343adfc4a4abf", size = 22096, upload-time = "2026-07-16T15:25:36.308Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/fb/0fc0bd211cd3e3bb3995c4a2fb366bbba571b1e801c9c3bb60ca06609ff3/opentelemetry_exporter_otlp_json_common-0.65b0-py3-none-any.whl", hash = "sha256:2adc328b0cdc5bd960658f96378c2c5280a49468f08df63624e8aa6053f73890", size = 14596, upload-time = "2026-07-16T15:25:16.489Z" },
+]
+
+[[package]]
+name = "opentelemetry-exporter-otlp-json-file"
+version = "0.65b0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-exporter-otlp-json-common" },
+    { name = "opentelemetry-sdk" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/24/3a/5089e7bfd35a25c24051c228f360549fac31dcce8aa5b117905b0df34031/opentelemetry_exporter_otlp_json_file-0.65b0.tar.gz", hash = "sha256:66262e688f68a99bb6f552dc365a470104f4c4f06050c826adb62a489f8bf9f2", size = 12477, upload-time = "2026-07-16T15:25:37.06Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0b/69/06be4f988034ca4683df991c12ca2e7064dd7819438b69e2ecea12ee2bf6/opentelemetry_exporter_otlp_json_file-0.65b0-py3-none-any.whl", hash = "sha256:154020d0d3dfb76cfdfaafd39eb00ee5c97518eda076f812ba6c40eb4b6187b3", size = 11857, upload-time = "2026-07-16T15:25:17.373Z" },
+]
+
+[[package]]
+name = "opentelemetry-proto-json"
+version = "0.65b0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/fe/01/27a9f85068eb304b8bea4e1bc37957d79ae6c7650f6b864411704275662f/opentelemetry_proto_json-0.65b0.tar.gz", hash = "sha256:db903ce00980601088555a8d86027f3143f3eaa14b8c29388774ccf820a687a5", size = 18698, upload-time = "2026-07-16T18:04:57.282Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a8/4d/fcc56675b09009c867ad928d0c0e58381e678613c7d65d22514e112ef838/opentelemetry_proto_json-0.65b0-py3-none-any.whl", hash = "sha256:709582c02f145ccb75d95e6c15c4decc0495e9a7524f6de0b1f8045219c5b3cb", size = 32059, upload-time = "2026-07-16T18:04:54.931Z" },
+]
+
+[[package]]
+name = "opentelemetry-sdk"
+version = "1.44.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5d/77/a6592cbc7c8d9bcc9d6757a9df45e04a7c585e3e6e7a13456da522b21109/opentelemetry_sdk-1.44.0.tar.gz", hash = "sha256:cebe7f65dc12f26ead75c6064de12fd2a9052e5060c0272d402cfa203aae123b", size = 208624, upload-time = "2026-07-16T15:25:46.078Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/23/ff077e61886ee020a17ce9c8b6fa11c601c8d8345b09ea24f605445df62a/opentelemetry_sdk-1.44.0-py3-none-any.whl", hash = "sha256:df081c4c6bcfdb1211e3e86140376792643128a25f8d72d1d27675936e7e96ad", size = 137221, upload-time = "2026-07-16T15:25:29.534Z" },
+]
+
+[[package]]
+name = "opentelemetry-semantic-conventions"
+version = "0.65b0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8f/73/0cbdebcb4cf545fdd328da14f5137e37d0770c3f26185e478b0d15d94f50/opentelemetry_semantic_conventions-0.65b0.tar.gz", hash = "sha256:f9b2b81e9d5b64f11bc952075e7e9c7fb0aab075c7fd1c46d597f1b919852d60", size = 148774, upload-time = "2026-07-16T15:25:46.902Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a6/0e/49df70d9b81fb5cbae4bbf2a49d865b09bcbcbc4eb53f5851b1027738d78/opentelemetry_semantic_conventions-0.65b0-py3-none-any.whl", hash = "sha256:1cacde7b0ad306f84c5ef08c3dbe1bbaf20165bba6f8bff43b670e555a086bcb", size = 204645, upload-time = "2026-07-16T15:25:30.688Z" },
 ]
 
 [[package]]
@@ -4803,6 +4886,7 @@ dependencies = [
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3' or extra == 'extra-10-positronic-molmoact2' or extra != 'extra-10-positronic-yam'" },
     { name = "opencv-python-headless", version = "4.11.0.86", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
     { name = "opencv-python-headless", version = "4.13.0.92", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra == 'extra-10-positronic-molmoact2' or extra == 'extra-10-positronic-yam' or extra != 'extra-10-positronic-lerobot'" },
+    { name = "opentelemetry-api" },
     { name = "plotly" },
     { name = "pos3" },
     { name = "pyarrow" },
@@ -4825,8 +4909,12 @@ dev = [
     { name = "coverage" },
     { name = "ipython" },
     { name = "jupyter" },
+    { name = "nvidia-ml-py" },
     { name = "opencv-python" },
+    { name = "opentelemetry-exporter-otlp-json-file" },
+    { name = "opentelemetry-sdk" },
     { name = "pre-commit" },
+    { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -4877,6 +4965,12 @@ molmoact2 = [
 openpi = [
     { name = "openpi-client" },
 ]
+telemetry = [
+    { name = "nvidia-ml-py" },
+    { name = "opentelemetry-exporter-otlp-json-file" },
+    { name = "opentelemetry-sdk" },
+    { name = "psutil" },
+]
 yam = [
     { name = "i2rt" },
 ]
@@ -4907,16 +5001,22 @@ requires-dist = [
     { name = "msgpack" },
     { name = "mujoco" },
     { name = "numpy" },
+    { name = "nvidia-ml-py", marker = "extra == 'telemetry'" },
     { name = "opencv-python", marker = "extra == 'dev'" },
     { name = "opencv-python-headless" },
     { name = "openpi-client", marker = "extra == 'openpi'", git = "https://github.com/Positronic-Robotics/openpi.git?subdirectory=packages%2Fopenpi-client&rev=main-positronic" },
+    { name = "opentelemetry-api", specifier = ">=1.42" },
+    { name = "opentelemetry-exporter-otlp-json-file", marker = "extra == 'telemetry'", specifier = ">=0.65b0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'telemetry'", specifier = ">=1.42" },
     { name = "pillow", marker = "extra == 'molmoact2'" },
     { name = "placo", marker = "extra == 'hardware'" },
     { name = "plotly", specifier = ">=6.5.0" },
     { name = "pos3", specifier = ">=0.3.1" },
+    { name = "positronic", extras = ["telemetry"], marker = "extra == 'dev'" },
     { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.7.0" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "protobuf", marker = "extra == 'molmoact2'" },
+    { name = "psutil", marker = "extra == 'telemetry'" },
     { name = "pyarrow" },
     { name = "pyaudio", marker = "sys_platform == 'linux' and extra == 'hardware'" },
     { name = "pydantic" },
@@ -4951,7 +5051,7 @@ requires-dist = [
     { name = "websockets", specifier = ">=15.0.1" },
     { name = "zmq" },
 ]
-provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "dev"]
+provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "telemetry", "dev"]
 
 [[package]]
 name = "positronic-franka"

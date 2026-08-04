@@ -29,6 +29,7 @@ dependencies = [
     "mujoco",
     "numpy",
     "opencv-python-headless",
+    "opentelemetry-api>=1.42",  # no-op span surface; the SDK ships in the `telemetry` extra
     # openpi-client: optional, see [project.optional-dependencies] openpi
     "plotly>=6.5.0",
     "pos3>=0.3.1",
@@ -97,6 +98,14 @@ lance = [
 yam = [
     "i2rt",  # i2rt YAM arm: joint-space position-PD + gravity-comp over CAN; not on PyPI, see [tool.uv.sources]
 ]
+telemetry = [
+    # `positronic eval run --timing` only: the OTel SDK + exporter that write the span sidecars, and the
+    # machine-load sampler's probes.
+    "nvidia-ml-py",
+    "opentelemetry-exporter-otlp-json-file>=0.65b0",
+    "opentelemetry-sdk>=1.42",
+    "psutil",
+]
 dev = [
     "ruff",
     "basedpyright",
@@ -110,6 +119,7 @@ dev = [
     "pytest-timeout",
     "pytest",
     "rerun-sdk[notebook]",
+    "positronic[telemetry]",  # the telemetry tests exercise the SDK and the samplers
 ]
 
 [tool.uv]
@@ -131,12 +141,13 @@ constraint-dependencies = ["cmake<4.3", "evdev<1.9", "numpy<2.5"]
 # instead"), so a wider exclude-newer that admits 0.10+ into the isolated build env breaks the
 # wheel build. Constrain only the build backend, leaving runtime resolution untouched.
 build-constraint-dependencies = ["scikit-build-core<0.10"]
-# Pin third-party resolution to a fixed point in time so `uv sync --locked` is
-# reproducible across machines and CI regardless of contributors' personal uv
-# config. `uv lock` reads this date, so the lockfile can never drift ahead of
-# it; bump the date and re-run `uv lock` in the same commit to refresh deps.
-# Our own packages (exclude-newer-package below) are exempt so they always
-# resolve to the latest release.
+# Pin third-party resolution to a fixed point in time. This serves two ends. First, reproducibility:
+# `uv sync --locked` resolves identically across machines and CI regardless of contributors' personal uv config,
+# and because `uv lock` reads this date the lockfile can never drift ahead of it. Second, supply-chain safety: it
+# holds third-party deps to at least ~1 week old, so a compromised release has time to be caught and yanked before
+# we would pick it up. That week-long buffer is also why bumping this date to roughly one week before today is
+# generally safe at any time; do it and re-run `uv lock` in the same commit to refresh deps. Our own packages
+# (exclude-newer-package below) are exempt so they always resolve to the latest release.
 exclude-newer = "2026-07-21T00:00:00Z"
 conflicts = [
     [
@@ -236,6 +247,15 @@ exclude = [
 # `exclude` only drops vendors as analysis roots; a checked module that imports them
 # still pulls their diagnostics. `ignore` suppresses those transitive vendor errors too.
 ignore = ["positronic/vendors"]
+
+# ``robolab/env.py`` runs in RoboLab's isolated interpreter with the env-server modules (``server``,
+# ``protocol``, ``telemetry``) copied flat onto PYTHONPATH, so it imports them top-level. Put ``env_server``
+# on the search path for that directory so those flat imports resolve for the type checker exactly as they
+# do at runtime; the project root stays on the path so the other robolab files' ``positronic.*`` imports
+# (an editable install the checker resolves by search path) keep resolving.
+[[tool.basedpyright.executionEnvironments]]
+root = "positronic/simulator/robolab"
+extraPaths = [".", "positronic/simulator/env_server"]
 
 [tool.setuptools.packages.find]
 where = ["."]

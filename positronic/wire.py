@@ -1,5 +1,7 @@
+import functools
+
 import pimm
-from positronic import keys
+from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset import DatasetWriter
 from positronic.dataset.ds_writer_agent import DsWriterAgent, TimeMode, TrajectoryOverrideSerializer
 from positronic.dataset.serializers import Serializers, StatefulSerializer
@@ -32,7 +34,13 @@ def wire(  # noqa: C901
 
     ds_agent = None
     if dataset_writer is not None:
-        ds_agent = DsWriterAgent(dataset_writer, time_mode=time_mode)
+        # A partial, never a lambda: the recorder may be spawned as a background process, and `World`
+        # pickles a background control system whole.
+        ds_agent = DsWriterAgent(
+            dataset_writer,
+            time_mode=time_mode,
+            telemetry_span=functools.partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
+        )
         for signal_name in cameras.keys():
             ds_agent.add_signal(signal_name, Serializers.camera_images)
         if robot_arm is not None:
@@ -89,7 +97,12 @@ def wire_embodiment(
 
     ds_agent = None
     if dataset_writer is not None:
-        ds_agent = DsWriterAgent(dataset_writer, time_mode=time_mode, virtual_time=embodiment.simulated)
+        ds_agent = DsWriterAgent(
+            dataset_writer,
+            time_mode=time_mode,
+            virtual_time=embodiment.simulated,
+            telemetry_span=functools.partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
+        )
         for name, obs in embodiment.observations.items():
             if isinstance(obs.serializer, StatefulSerializer):
                 raise TypeError(f"observation '{name}': stateful serializer can't be shared by policy and record paths")

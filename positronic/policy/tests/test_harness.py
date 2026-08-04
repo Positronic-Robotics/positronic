@@ -1,11 +1,13 @@
+from contextlib import contextmanager
 from functools import partial
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import numpy as np
 import pytest
 
 import pimm
-from positronic import keys, wire
+from positronic import keys, telemetry, telemetry_keys, wire
 from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
@@ -24,11 +26,26 @@ from positronic.drivers.roboarm.command import (
 )
 from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
+from positronic.offboard.client import InferenceSession
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import Directive, DirectiveType, Harness
+from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
+
+
+@contextmanager
+def _eval_pass(run_id: str):
+    """The eval CLI's pass span, which the harness's episode spans parent to: a span its owner holds open and
+    anchors, rather than entering as the OTel-current span."""
+    span = telemetry.start_span(telemetry_keys.SPAN_EVAL_PASS, **{telemetry.ATTR_RUN_ID: run_id})
+    telemetry.push_anchor(span)
+    try:
+        yield
+    finally:
+        span.end()
+        telemetry.pop_anchor(span)
 
 
 def make_embodiment(descriptor: str = '', cameras=('image.cam',)) -> Embodiment:
@@ -150,6 +167,40 @@ class ChunkPolicy(StubPolicy):
         self.reset_calls += 1
         self.last_reset_context = context
         return _ChunkSession(self)
+
+
+class _FakeInferenceSession(InferenceSession):
+    """A stub ``InferenceSession`` returning a canned action, so a ``RemoteSession`` over it round-trips
+    ``RemoteSession.__call__`` — the real inference boundary that records the ``policy.infer`` span."""
+
+    def __init__(self, action: list[dict[str, Any]]) -> None:
+        self._action = action
+
+    def infer(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
+        return self._action
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return {}
+
+    def close(self) -> None:
+        pass
+
+
+class RemoteStubPolicy(Policy):
+    """A stub policy served through a real ``RemoteSession`` over a fake inference session, so its inference
+    round-trips ``RemoteSession.__call__`` and records the ``policy.infer`` span independent of any wrapper."""
+
+    def __init__(self, command: roboarm.command.CommandType | None = None, target_grip: float = 0.33) -> None:
+        if command is None:
+            pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+            command = CartesianPosition(pose=pose)
+        self.command = command
+        self.target_grip = float(target_grip)
+
+    def new_session(self, context=None, now=None) -> RemoteSession:
+        action = [{'robot_command': self.command, 'target_grip': self.target_grip, 'timestamp': 0.0}]
+        return RemoteSession(_FakeInferenceSession(action))
 
 
 class FakeRobotState:
@@ -1225,3 +1276,235 @@ def test_shutdown_cancels_trajectory_before_stop(world):
     assert cancels, 'shutdown did not cancel robot_command'
     assert stops, 'shutdown did not emit STOP_EPISODE'
     assert cancels[0] < stops[0], 'cancel must precede STOP_EPISODE on shutdown'
+
+
+@pytest.mark.timeout(5.0)
+class _ManualClock:
+    """A self-advancing clock for driving ``Harness.run`` directly, without a world."""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def now(self) -> float:
+        self.t += 0.001
+        return self.t
+
+    def now_ns(self) -> int:
+        return int(self.now() * 1e9)
+
+
+@pytest.mark.timeout(3.0)
+def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(tmp_path):
+    """A stop arriving mid-episode winds down through the same close order as ``_end_episode``: the harness
+    yields a turn between queueing the recorder's STOP and closing the episode span, so the recorder's
+    shutdown-flush ``record.io`` span parents to the episode, not the pass. Driven straight through the
+    generator protocol: the yield after the queued STOP is the recorder's flush slot."""
+    policy = StubPolicy()
+    task = Task(instruction='stack', timeout=10.0, reset=lambda context: None)  # never ends within the drive
+    harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
+    ds_recorder = RecordingEmitter()
+    harness.ds_command._bind(ds_recorder)
+    stop = SimpleNamespace(value=False)
+    clock = _ManualClock()
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-stop'), _eval_pass('run-stop'):
+        gen = harness.run(cast(pimm.SignalReceiver, stop), cast(pimm.Clock, clock))
+        for _ in range(20):
+            next(gen)
+            if any(d.type == DsWriterCommandType.START_EPISODE for _, d in ds_recorder.emitted):
+                break
+        else:
+            pytest.fail('the self-driven trial never started')
+
+        stop.value = True
+        try:
+            next(gen)  # the post-STOP yield: the turn the recorder commits the queued STOP on
+        except StopIteration:
+            pytest.fail('harness must yield a recorder turn between queueing STOP and ending the episode span')
+        assert any(d.type == DsWriterCommandType.STOP_EPISODE for _, d in ds_recorder.emitted)
+        with telemetry.span(telemetry_keys.SPAN_RECORD_IO):  # the recorder's shutdown flush, emitted in that turn
+            pass
+        with pytest.raises(StopIteration):
+            while True:
+                next(gen)
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    assert len(episodes) == 1
+    episode = episodes[0]
+    assert telemetry_keys.ATTR_EPISODE_STEPS in episode.attrs  # sealed via end_episode, neither leaked open nor aborted
+    flushes = [s for s in spans if s.name == telemetry_keys.SPAN_RECORD_IO]
+    assert flushes and all(s.parent_id == episode.span_id for s in flushes)
+
+
+def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
+    """Under ``telemetry.bind`` a self-driven episode writes the span taxonomy to the harness file: the
+    episode parents to the pass, and reset + policy.infer parent to the episode, with the episode carrying its
+    index, step count, and virtual duration. Read back from the file so the OTLP encoding is exercised. The
+    ``policy.infer`` span is recorded at the remote inference boundary, so the terminal is a ``RemoteStubPolicy``
+    (a real ``RemoteSession`` over a fake inference session)."""
+    policy = ChunkedSchedule().wrap(RemoteStubPolicy())
+    task = Task(instruction='stack', timeout=0.05, reset=lambda context: None)
+    harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    # A latched observation set makes every step's inference fire (the harness reads the latest value).
+    producer = ManualDriver([
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.0)
+    ])
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-taxonomy'), _eval_pass('run-taxonomy'):
+        scheduler = world.start([harness, producer])
+        drive_scheduler(scheduler, steps=400)
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    by_name: dict[str, list] = {}
+    for rec in spans:
+        by_name.setdefault(rec.name, []).append(rec)
+
+    assert len(by_name[telemetry_keys.SPAN_EVAL_PASS]) == 1
+    assert len(by_name[telemetry_keys.SPAN_EPISODE]) == 1
+    assert by_name[telemetry_keys.SPAN_RESET]  # the task's scene reset was timed
+    assert by_name[telemetry_keys.SPAN_POLICY_INFER]  # at least one real inference round-trip
+
+    pass_span = by_name[telemetry_keys.SPAN_EVAL_PASS][0]
+    episode = by_name[telemetry_keys.SPAN_EPISODE][0]
+    assert pass_span.parent_id is None
+    assert episode.parent_id == pass_span.span_id
+    assert all(r.parent_id == episode.span_id for r in by_name[telemetry_keys.SPAN_RESET])
+    assert all(r.parent_id == episode.span_id for r in by_name[telemetry_keys.SPAN_POLICY_INFER])
+
+    assert episode.attrs[telemetry_keys.ATTR_EPISODE_INDEX] == 0
+    assert episode.attrs[telemetry_keys.ATTR_EPISODE_STEPS] == len(by_name[telemetry_keys.SPAN_POLICY_INFER])
+    assert episode.attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S] >= 0.0
+
+
+@pytest.mark.timeout(3.0)
+def test_aborted_episode_span_marked_aborted(world, tmp_path):
+    """An ABORT discards the rollout, and its episode span is stamped ``episode.aborted`` — the reduce drops
+    it rather than charging a partial rollout's wall to a real episode."""
+    harness = Harness(ChunkPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-abort'):
+        scheduler = world.start([harness])
+        p['directive_em'].emit(Directive.RUN(task='test'))
+        drive_scheduler(scheduler, steps=1)
+        emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
+        drive_scheduler(scheduler, steps=5)
+        p['directive_em'].emit(Directive.ABORT())
+        drive_scheduler(scheduler, steps=3)
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    assert len(episodes) == 1
+    assert episodes[0].attrs[telemetry_keys.ATTR_EPISODE_ABORTED] is True
+
+
+@pytest.mark.timeout(3.0)
+def test_failed_pass_seals_open_episode_span(tmp_path):
+    """A ``task.reset`` raising after the episode span was opened must seal that span before the
+    provider flushes on exit. Ending it is what exports it at all: an unended span never leaves the batch
+    processor, so its finished ``reset`` child orphans (unknown parent) and the report loses that phase and
+    charges the episode's whole wall to ``between_episodes``. Sealed and marked ``episode.partial`` — with its
+    step count and virtual duration stamped, like a clean end — the span exports parented to the (failed) pass,
+    so the reduce keeps it and its phases attribute."""
+
+    def boom(context):
+        raise RuntimeError('reset boom')
+
+    policy = StubPolicy()
+    task = Task(instruction='stack', timeout=10.0, reset=boom)
+    harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
+    harness.ds_command._bind(RecordingEmitter())
+    stop = SimpleNamespace(value=False)
+    clock = _ManualClock()
+
+    with pytest.raises(RuntimeError, match='reset boom'):
+        with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-fail'), _eval_pass('run-fail'):
+            for _ in harness.run(cast(pimm.SignalReceiver, stop), cast(pimm.Clock, clock)):
+                pass
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    assert len(episodes) == 1  # the open span was sealed and exported, not lost with the failure
+    episode = episodes[0]
+    assert (
+        episode.attrs.get(telemetry_keys.ATTR_EPISODE_PARTIAL) is True
+    )  # flagged so the reduce sees it did not complete
+    assert (
+        episode.attrs[telemetry_keys.ATTR_EPISODE_STEPS] == 0
+    )  # stamped like a clean end — no step ran before the failure
+    # The rollout never started — reset raised before its virtual anchor was stamped — so its virtual duration
+    # is zero, not the garbage ``clock.now() - 0`` a never-stamped anchor would otherwise yield.
+    assert episode.attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S] == 0.0
+    passes = [s for s in spans if s.name == telemetry_keys.SPAN_EVAL_PASS]
+    assert len(passes) == 1
+    assert episode.parent_id == passes[0].span_id  # parented to the pass, so the reduce does not drop it as an orphan
+    resets = [s for s in spans if s.name == telemetry_keys.SPAN_RESET]
+    assert resets and all(r.parent_id == episode.span_id for r in resets)  # finished child attributes to its phase
+
+
+@pytest.mark.timeout(3.0)
+def test_episode_virtual_duration_starts_at_the_first_observation(world, tmp_path):
+    """A simulated producer's reset only arms frame zero, which it publishes on a later turn; the rounds in
+    between advance the virtual clock without stepping the environment. The rollout's virtual duration
+    measures from the first cycle that has an observation, so that gap stays reset work instead of inflating
+    the real-time factor the report derives from it."""
+    harness = Harness(ChunkPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-anchor'), _eval_pass('run-anchor'):
+        scheduler = world.start([harness])
+        p['directive_em'].emit(Directive.RUN(task='test'))
+        drive_scheduler(scheduler, steps=1)
+        gap_start = world.clock.now()
+        drive_scheduler(scheduler, steps=40)  # no observation yet: the producer has not published frame zero
+        gap_s = world.clock.now() - gap_start
+        emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
+        drive_scheduler(scheduler, steps=5)
+        p['directive_em'].emit(Directive.FINISH())
+        drive_scheduler(scheduler, steps=3)
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    assert len(episodes) == 1
+    virtual_s = episodes[0].attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S]
+    assert virtual_s > 0.0  # the observed cycles are measured
+    # Five observed rounds against forty unobserved ones: anchoring when the reset returned would swallow the
+    # whole gap into the rollout's virtual duration.
+    assert virtual_s < gap_s
+
+
+@pytest.mark.timeout(3.0)
+def test_a_later_episode_waits_for_its_own_first_observation(world, tmp_path):
+    """An observation channel latches its last value, so after the first episode every channel already holds
+    one. A rollout still anchors on a value delivered after its own reset — anchoring on the latched frame
+    would charge the wait for frame zero to the rollout and infer on the previous episode's last scene."""
+    harness = Harness(ChunkPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    def episode(gap_steps: int) -> float:
+        p['directive_em'].emit(Directive.RUN(task='test'))
+        drive_scheduler(scheduler, steps=1)
+        gap_start = world.clock.now()
+        drive_scheduler(scheduler, steps=gap_steps)  # the producer has not published this episode's frame zero
+        gap_s = world.clock.now() - gap_start
+        emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
+        drive_scheduler(scheduler, steps=5)
+        p['directive_em'].emit(Directive.FINISH())
+        drive_scheduler(scheduler, steps=3)
+        return gap_s
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-anchor-2'), _eval_pass('run-anchor-2'):
+        scheduler = world.start([harness])
+        episode(gap_steps=2)
+        gap_s = episode(gap_steps=40)
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    assert len(episodes) == 2
+    assert episodes[1].attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S] < gap_s

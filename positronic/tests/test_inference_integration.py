@@ -1,3 +1,4 @@
+import os
 import xml.etree.ElementTree as ET
 from dataclasses import replace
 
@@ -9,7 +10,7 @@ import tqdm
 
 import pimm
 import positronic.cfg.simulator
-from positronic import keys
+from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
@@ -17,8 +18,9 @@ from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
 from positronic.inference import main
-from positronic.policy.tests.test_harness import StubPolicy
+from positronic.policy.tests.test_harness import RemoteStubPolicy, StubPolicy
 from positronic.policy.wrappers import ChunkedSchedule
+from positronic.simulator.env_server import telemetry as env_telemetry
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import AddBox, SetBodyPosition
 from positronic.utils import package_assets_path
@@ -229,6 +231,55 @@ def test_countdown_records_frame0_every_trial(tmp_path):
     for i in range(2):
         first_value, _ts = ds[i].signals['value'][0]
         np.testing.assert_array_equal(first_value, np.zeros(7))
+
+
+@pytest.mark.timeout(30.0)
+def test_timing_writes_telemetry_sidecars(tmp_path):
+    """[harness + recorder + sim] under ``--timing``: the sweep writes the harness telemetry sidecars, the
+    span taxonomy nests (episode under pass; reset, policy.infer and the recorder's record.io under episode),
+    and the machine-load stats stream records at least one sample. record.io parenting proves the episode span
+    stays in flight while the recorder commits STOP."""
+    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2)
+    with pos3.mirror():
+        main(
+            policy=ChunkedSchedule().wrap(
+                RemoteStubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0)
+            ),
+            evals=[replace(ev, trials=[{'eval.trial_index': i} for i in range(2)])],
+            output_dir=str(tmp_path),
+            timing=True,
+        )
+
+    # The env handed to a launched env server is restored after the run, so a later run in this process
+    # inherits nothing from this one.
+    assert env_telemetry.ENV_TELEMETRY_DIR not in os.environ
+    assert env_telemetry.ENV_RUN_ID not in os.environ
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    assert {rec.process for rec in spans} == {telemetry_keys.HARNESS_PROCESS}
+    by_name: dict[str, list] = {}
+    for rec in spans:
+        by_name.setdefault(rec.name, []).append(rec)
+
+    assert len(by_name[telemetry_keys.SPAN_EVAL_PASS]) == 1
+    assert len(by_name[telemetry_keys.SPAN_EPISODE]) == 2  # one per trial
+    assert (
+        by_name[telemetry_keys.SPAN_RESET]
+        and by_name[telemetry_keys.SPAN_RECORD_IO]
+        and by_name[telemetry_keys.SPAN_POLICY_INFER]
+    )
+
+    pass_id = by_name[telemetry_keys.SPAN_EVAL_PASS][0].span_id
+    episode_ids = {episode.span_id for episode in by_name[telemetry_keys.SPAN_EPISODE]}
+    assert all(episode.parent_id == pass_id for episode in by_name[telemetry_keys.SPAN_EPISODE])
+    # The phase spans all parent to some episode — record.io most of all, since it is committed by a
+    # different control system after the harness emits STOP.
+    for name in (telemetry_keys.SPAN_RESET, telemetry_keys.SPAN_RECORD_IO, telemetry_keys.SPAN_POLICY_INFER):
+        assert all(rec.parent_id in episode_ids for rec in by_name[name]), name
+
+    stats = list(telemetry.read_stats(telemetry.stats_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    assert len(stats) >= 1
+    assert all(telemetry.STAT_T_NS in sample and telemetry.STAT_GPUS in sample for sample in stats)
 
 
 @pytest.mark.timeout(30.0)

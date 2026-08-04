@@ -14,7 +14,7 @@ from contextlib import AbstractContextManager, ExitStack
 from typing import Any
 
 import pimm
-from positronic import keys
+from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
@@ -105,13 +105,23 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                 if self._reset_pending:
                     # The reset is this turn's step: publish the env's frame-0 (no step) and clear the prior
                     # terminal, so the recorder samples it before any step advances the env.
+                    assert self._frame is not None  # reset() set the frame before arming reset_pending
                     self._reset_pending = False
                     self.robot_meta.emit(self._robot_meta)
-                    self._emit_payload(self._frame['obs'])
+                    # Materialising frame-0 (allocating shared-memory image buffers, copying each camera
+                    # frame) is reset cost: it is work the reset asked for, and left untimed it would land in
+                    # overhead.
+                    with telemetry.span(telemetry_keys.SPAN_RESET):
+                        self._emit_payload(self._frame['obs'])
                     self.done.emit({})
                 elif self._active:
-                    self._frame = self._step_env(clock)
-                    self._emit_payload(self._frame['obs'])
+                    # ``env.step`` spans the whole client-observed step; ``materialize`` nests the client-side
+                    # observation assembly (shared-memory image allocation + camera copies) inside it, so the
+                    # reduce can split materialisation out of the wire cost.
+                    with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
+                        self._frame = self._step_env(clock)
+                        with telemetry.span(telemetry_keys.SPAN_MATERIALIZE):
+                            self._emit_payload(self._frame['obs'])
         finally:
             # Closes the connection then the server, in that order (reverse of acquisition); a no-op if no reset
             # ever connected.

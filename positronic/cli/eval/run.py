@@ -1,6 +1,8 @@
 import logging
-from collections.abc import Callable
-from contextlib import nullcontext
+import os
+import uuid
+from collections.abc import Callable, Generator, Iterable
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -9,7 +11,7 @@ import pos3
 
 import pimm
 import positronic.cfg.policy as policy_cfg
-from positronic import utils, wire
+from positronic import telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import placeholder
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
@@ -17,8 +19,13 @@ from positronic.eval import Embodiment, Eval, Task
 from positronic.gui import dpg_ui
 from positronic.policy.base import SampledPolicy
 from positronic.policy.harness import Harness
+from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 
 logger = logging.getLogger(__name__)
+
+# The environment a timed run hands a launched env server (read by ``env_server.telemetry.bind_from_env``);
+# snapshotted before a run and restored after it, so a later run in the same process inherits nothing.
+_ENV_TELEMETRY_VARS = (ENV_TELEMETRY_DIR, ENV_RUN_ID)
 
 
 @dataclass
@@ -116,6 +123,78 @@ def _run_world(
             world.run([harness, *foreground], [*producers, ds_agent, gui])
 
 
+def _validate_timing(embodiments: Iterable[Embodiment], output_dir: str | Path | None) -> None:
+    """Reject a ``--timing`` sweep the report cannot describe: one without an output dir to write the
+    sidecars under, or one carrying a real embodiment. Everything under the bound tracer enters the report,
+    so a real eval's episodes, wall time and machine samples would silently corrupt it."""
+    if output_dir is None:
+        raise ValueError('--timing needs --output_dir: the telemetry sidecars are written under it')
+    real = sum(not embodiment.simulated for embodiment in embodiments)
+    if real:
+        raise ValueError(
+            f'eval timing needs an all-simulated sweep, got {real} real '
+            'embodiment(s): a real eval would run inside the same bound tracer and pass span, so its '
+            'episodes, wall time and machine samples would silently corrupt the report. Run real '
+            'embodiments in a separate untimed invocation.'
+        )
+
+
+@contextmanager
+def _pass_span(**attrs) -> Generator[None, None, None]:
+    """The span bracketing a whole eval sweep; the harness's episode spans parent to it, so it is anchored
+    rather than entered as the OTel-current span — it must not become the parent of the rollout's phase spans. A
+    sweep that exits with an exception still exports its pass — the partial window is real recorded data —
+    stamped ``pass.failed`` so a reduce can see (and report) that it did not run to completion."""
+    span = telemetry.start_span(telemetry_keys.SPAN_EVAL_PASS, **attrs)
+    telemetry.push_anchor(span)
+    try:
+        yield
+    except BaseException:
+        telemetry.set_attrs(span, **{telemetry_keys.ATTR_PASS_FAILED: True})
+        raise
+    finally:
+        span.end()
+        telemetry.pop_anchor(span)
+
+
+@contextmanager
+def _timed_pass(output_dir: str | Path | None, timing: bool, policy):
+    """Bracket a sweep in the harness-process telemetry: the bound tracer, the machine-load sampler and one
+    ``eval.pass`` span, with the environment a launched env server reads set around them. Inert without
+    ``timing``."""
+    if not timing or output_dir is None:
+        yield
+        return
+    timed_dir = Path(output_dir)
+    run_id = uuid.uuid4().hex
+    env_snapshot = {name: os.environ.get(name) for name in _ENV_TELEMETRY_VARS}
+    # Set before any world comes up: a launched env server reads them off the environment its launcher
+    # forwards to the subprocess, and writes its own sidecar under the same directory.
+    os.environ[ENV_TELEMETRY_DIR] = str(timed_dir / telemetry.TELEMETRY_SUBDIR)
+    os.environ[ENV_RUN_ID] = run_id
+    try:
+        # Built outside the pass: the constructor initialises NVML, enumerates its handles and primes the CPU
+        # counters, and that setup is not eval wall — charging it to W_pass depresses the real-time factor.
+        sampler = telemetry.StatsSampler(telemetry.stats_path(timed_dir, telemetry_keys.HARNESS_PROCESS))
+        # Order is the contract twice over: the pass span closes before the tracer it is bound to shuts its
+        # provider down, and the sampler's SAMPLING runs strictly INSIDE the pass span, so every sample it
+        # stamps falls in the window the reduce counts. Sampling around the span instead drops its first and
+        # last samples — and a run shorter than the sampling interval loses its only one, reporting a GPU box
+        # as CPU-only.
+        with (
+            telemetry.bind(timed_dir, telemetry_keys.HARNESS_PROCESS, run_id),
+            _pass_span(**{ATTR_RUN_ID: run_id, 'policy': type(policy).__name__}),
+            sampler,
+        ):
+            yield
+    finally:
+        for name, value in env_snapshot.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def main(
     policy,
     *,
@@ -124,6 +203,7 @@ def main(
     driver: Callable[[Path | None], Driver] | None = None,
     output_dir: str | Path | None = None,
     show_gui: bool = False,
+    timing: bool = False,
 ):
     """Run inference for an embodiment, real or simulated.
 
@@ -132,8 +212,20 @@ def main(
     rebuilding the World per eval) must be given; ``show_gui`` applies to the unattended path (attended surfaces
     bring their own). ``main`` owns the policy lifetime: it warms the policy once up front and closes it once
     after the last World, so a multi-eval sweep reuses one live policy across the rebuilds.
+
+    ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + a machine-load stats
+    stream). It needs an ``output_dir`` and an all-simulated sweep: everything under the bound tracer enters
+    the report, so a real embodiment in a timed sweep is rejected rather than allowed to pollute it.
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
+    # Validate timing up front, before the policy warmup, so a rejected sweep fails before it spends anything.
+    if timing:
+        if evals is not None:
+            embodiments = [ev.embodiment for ev in evals]
+        else:
+            assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
+            embodiments = [embodiment]
+        _validate_timing(embodiments, output_dir)
 
     # Drive the policy's remote endpoints through their cold start before hardware and the operator
     # surface come up: opening a session blocks on the server handshake, which returns only once the
@@ -152,20 +244,28 @@ def main(
     # One completion sink — so one ``SampledPolicy`` counter — across every eval, keeping sampling balanced
     # over the whole sweep.
     on_complete = _completion_sink(policy)
+
     try:
-        if driver is not None:
-            _run_world(policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete)
-        else:
-            for ev in evals:
-                _run_world(policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete)
+        with _timed_pass(output_dir, timing, policy):
+            if driver is not None:
+                assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
+                _run_world(policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete)
+            else:
+                assert evals is not None  # driver/evals XOR asserted up front
+                for ev in evals:
+                    _run_world(policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete)
     finally:
         policy.close()
 
 
 @cfn.config(eval=placeholder, policy=policy_cfg.placeholder, show_gui=False)
-def run(eval: Eval, policy, show_gui, output_dir=None, inference_latency=False):
-    """Run a selected eval (embodiment + task + its trial sweep) through the shared inference harness."""
+def run(eval: Eval, policy, show_gui, output_dir=None, inference_latency=False, timing=False):
+    """Run a selected eval (embodiment + task + its trial sweep) through the shared inference harness.
+
+    ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
+    simulated eval; reduce them with ``positronic eval timing-report``.
+    """
     # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob
     # (sim inference-cost simulation). Overlay it onto every trial context, then self-drive the eval.
     eval = replace(eval, trials=[{**trial, 'inference_latency': inference_latency} for trial in eval.trials])
-    main(policy=policy, evals=[eval], show_gui=show_gui, output_dir=output_dir)
+    main(policy=policy, evals=[eval], show_gui=show_gui, output_dir=output_dir, timing=timing)

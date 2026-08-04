@@ -1,10 +1,12 @@
 import collections.abc as cabc
 import logging
+import time
 from typing import Any
 
 import numpy as np
 import pos3
 
+from positronic import telemetry, telemetry_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
@@ -82,7 +84,14 @@ class RemoteSession(Session):
         Single-action server responses are wrapped into a 1-element list to honor
         the ``Session.__call__`` contract (``list[dict] | None``).
         """
-        result = self._session.infer(self._prepare_obs(obs))
+        # Timed from after preparation: JPEG-encoding a stack of HD frames is client-side work, and folding it
+        # into the round-trip would inflate the inference percentiles. ``finally`` times a raising one too.
+        prepared = self._prepare_obs(obs)
+        infer_start_ns = time.time_ns()
+        try:
+            result = self._session.infer(prepared)
+        finally:
+            telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns())
         if isinstance(result, dict):
             return [result]
         return result
