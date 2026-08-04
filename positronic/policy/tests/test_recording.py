@@ -154,6 +154,31 @@ def test_handles_none_actions(tmp_path):
     assert session._step == 1
 
 
+def test_skipped_tick_logs_state_without_frames(tmp_path):
+    """A tick the inner scheduling wrapper skipped keeps the numeric trace but writes no frame."""
+
+    class _FirstTickSession(Session):
+        def __init__(self):
+            self._calls = 0
+
+        def __call__(self, obs):
+            self._calls += 1
+            return [{'v': 1.0, 'timestamp': 0.0}] if self._calls == 1 else None
+
+    class _FirstTickPolicy(Policy):
+        def new_session(self, context=None, now=None):
+            return _FirstTickSession()
+
+    rec = Recorder(tmp_path)
+    session = rec.tap('raw').wrap(_FirstTickPolicy()).new_session()
+    obs = {'camera': np.zeros((4, 4, 3), dtype=np.uint8), keys.GRIP: 0.5, 'wall_time_ns': 1}
+    session(obs)
+    session(obs)
+
+    assert rec._image_paths == ['raw/camera']
+    assert rec._numeric_paths == ['raw/grip', 'raw/grip']
+
+
 def test_two_taps_share_one_file_per_episode(tmp_path):
     rec = Recorder(tmp_path)
     policy = (rec.tap('raw') | rec.tap('server')).wrap(_TrackingPolicy())

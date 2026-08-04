@@ -19,6 +19,12 @@ correlated recording::
 - the ``server`` tap (innermost, next to the remote policy) logs the observation as
   sent to the server and the chunk as received back.
 
+Both are logged once the inner call returns, so a tap above a scheduling wrapper can tell
+an inference from a control tick the wrapper skipped (``ChunkedSchedule`` returns ``None``
+for those). Frames are written only on ticks that ran inference, which ties file size to the
+inference rate; numeric entries are written on every tick, so the state trace keeps the full
+control rate.
+
 Each entity is stamped on the timelines given by ``timelines`` (a mapping of rerun
 timeline name to observation key; by default ``wall_time`` and ``obs_time``
 read from the matching ``*_ns`` observation fields). Those values are read once per
@@ -356,6 +362,7 @@ class _RecordingTapSession(DelegatingSession):
         self._name = name
         self._stream = stream
         self._step = 0
+        self._blueprint_sent = False
 
     @property
     def meta(self):
@@ -366,17 +373,22 @@ class _RecordingTapSession(DelegatingSession):
             set_timeline_time(timeline, value)
         set_timeline_sequence('step', self._step)
 
-    def _log(self, prefix: str, data: dict) -> None:
-        """Recursively log obs *data* under *prefix*, recording entity paths on the Recorder."""
+    def _log(self, prefix: str, data: dict, images: bool) -> None:
+        """Recursively log obs *data* under *prefix*, recording entity paths on the Recorder.
+
+        ``images`` False drops the frames and keeps the numeric entries.
+        """
         for key, value in data.items():
             if key.endswith('_time_ns') or isinstance(value, str):
                 continue
             path = f'{prefix}/{key}'
             if isinstance(value, dict):
-                self._log(path, value)
+                self._log(path, value, images)
             elif (img := _as_image(value)) is not None:
-                rr.log(path, rr.Image(img).compress())
-                self._rec._image_paths.append(path)
+                # Gated inside the branch: a frame that fell through would log as a numeric series.
+                if images:
+                    rr.log(path, rr.Image(img).compress())
+                    self._rec._image_paths.append(path)
             elif (num := _as_numeric(value)) is not None:
                 log_numeric_series(path, num)
                 self._rec._numeric_paths.append(path)
@@ -438,21 +450,18 @@ class _RecordingTapSession(DelegatingSession):
             rec._timeline_values = {t: obs[k] for t, k in rec._timelines.items() if k in obs}
         rec._depth += 1
         try:
-            with self._stream:
-                self._set_timelines()
-                self._log(self._name, obs)
-
             actions = self._inner(obs)
 
-            if actions is not None:
-                with self._stream:
-                    self._set_timelines()
+            with self._stream:
+                self._set_timelines()
+                self._log(self._name, obs, images=actions is not None)
+                if actions is not None:
                     self._log_action_chunk(self._name, actions, obs)
-            # Send a combined blueprint (all taps' paths) once, from the outermost
-            # tap, after inner taps have logged their first obs.
-            if outermost and self._step == 0:
-                with self._stream:
-                    self._send_blueprint()
+                    # Send a combined blueprint (all taps' paths) once, from the outermost tap: the
+                    # first tick that ran inference is the first one every inner tap logged through.
+                    if outermost and not self._blueprint_sent:
+                        self._send_blueprint()
+                        self._blueprint_sent = True
             self._step += 1
             return actions
         finally:
