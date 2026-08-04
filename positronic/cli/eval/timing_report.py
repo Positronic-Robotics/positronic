@@ -12,6 +12,7 @@ box's GPU load. The policy endpoint (a different box) folds in from an optional 
 import json
 import logging
 from collections import defaultdict
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
@@ -236,32 +237,17 @@ def _dmon_column_indices(names: list[str], log_path: Path) -> tuple[int, int, in
     return names.index(_DMON_UTIL), names.index(_DMON_FB), device_idx
 
 
-def _parse_dmon(log_path: Path) -> GpuSummary:
-    """Mean SM utilisation and peak framebuffer (GB) from a policy endpoint's ``nvidia-smi dmon`` log.
+def _dmon_readings(log_path: Path) -> Iterator[tuple[str, float | None, float | None]]:
+    """Each data row of a ``dmon`` log as ``(device, sm, fb)``, in file order.
 
-    Column layout varies — ``-o DT`` prepends date/time, ``-s u`` adds encoder/decoder (and, on newer
-    drivers, JPEG/OFA) columns before the framebuffer — so the positions are read from the ``# ... sm ...
-    fb ...`` name header rather than hard-coded. ``sm`` is SM utilisation (%) and ``fb`` the framebuffer
-    use (MiB). Rows before the header, or with missing numeric fields, are skipped; a log whose header has
-    ``sm`` but no ``fb`` (plain ``dmon`` / ``-s u``) fails loudly rather than dropping every row. A dmon log
-    carries no per-process attribution, so ``peak_proc_vram_gb`` is ``None``.
+    ``sm`` and ``fb`` are ``None`` where the row's metrics are missing or non-numeric — a device that
+    refused its query prints ``-``. Such a row still yields its device, because the device index is what
+    marks a sampling interval; dropping it whole would merge two intervals. A row before the name header,
+    or one too short to carry a device index, yields nothing.
     """
     sm_idx: int | None = None
     fb_idx: int | None = None
     gpu_idx: int | None = None
-    utils: list[float] = []
-    # dmon prints one row per device per sampling interval; peak VRAM is the box-wide total at one instant,
-    # so rows group into cycles on the ``gpu`` index (a repeating index opens the next cycle) and the peak is
-    # the max over per-cycle sums — matching the sim summary's per-sample device sum.
-    cycle_fb: dict[str, float] = {}
-    cycle_totals: list[float] = []
-    devices: set[str] = set()
-
-    def flush_cycle() -> None:
-        if cycle_fb:
-            cycle_totals.append(sum(cycle_fb.values()))
-            cycle_fb.clear()
-
     for line in log_path.read_text().splitlines():
         stripped = line.strip()
         if not stripped:
@@ -276,13 +262,48 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
             continue
         row = line.split()
         try:
-            sm = float(row[sm_idx])
-            fb = float(row[fb_idx])
             device = row[gpu_idx] if gpu_idx is not None else '0'
-        except (IndexError, ValueError):
+        except IndexError:
             continue
-        if device in cycle_fb:
+        try:
+            yield device, float(row[sm_idx]), float(row[fb_idx])
+        except (IndexError, ValueError):
+            yield device, None, None
+
+
+def _parse_dmon(log_path: Path) -> GpuSummary:
+    """Mean SM utilisation and peak framebuffer (GB) from a policy endpoint's ``nvidia-smi dmon`` log.
+
+    Column layout varies — ``-o DT`` prepends date/time, ``-s u`` adds encoder/decoder (and, on newer
+    drivers, JPEG/OFA) columns before the framebuffer — so the positions are read from the ``# ... sm ...
+    fb ...`` name header rather than hard-coded. ``sm`` is SM utilisation (%) and ``fb`` the framebuffer
+    use (MiB). A log whose header has ``sm`` but no ``fb`` (plain ``dmon`` / ``-s u``) fails loudly rather
+    than dropping every row. A dmon log carries no per-process attribution, so ``peak_proc_vram_gb`` is
+    ``None``.
+    """
+    utils: list[float] = []
+    # dmon prints one row per device per sampling interval; peak VRAM is the box-wide total at one instant,
+    # so rows group into cycles on the ``gpu`` index (a repeating index opens the next cycle) and the peak is
+    # the max over per-cycle sums — matching the sim summary's per-sample device sum.
+    cycle_fb: dict[str, float] = {}
+    cycle_totals: list[float] = []
+    devices: set[str] = set()
+    # Every device the open cycle has covered, readable metrics or not: an unreadable row marks the interval
+    # boundary just as well as a readable one, and only the readable ones carry a total.
+    cycle_devices: set[str] = set()
+
+    def flush_cycle() -> None:
+        if cycle_fb:
+            cycle_totals.append(sum(cycle_fb.values()))
+            cycle_fb.clear()
+        cycle_devices.clear()
+
+    for device, sm, fb in _dmon_readings(log_path):
+        if device in cycle_devices:
             flush_cycle()
+        cycle_devices.add(device)
+        if sm is None or fb is None:
+            continue
         cycle_fb[device] = fb
         devices.add(device)
         utils.append(sm)

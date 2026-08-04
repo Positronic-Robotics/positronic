@@ -520,6 +520,26 @@ def test_parse_dmon_multi_gpu_sums_devices_per_cycle(tmp_path):
     assert summary.peak_vram_gb == pytest.approx(4096 / 1024)  # cycle 1's sum, not device 1's 3072 alone
 
 
+def test_parse_dmon_unreadable_row_still_closes_its_cycle(tmp_path):
+    """A row whose metrics are non-numeric (``-`` on a device that refused the query) contributes no reading
+    but still marks its device in the open cycle. Dropping it whole would leave the cycle unclosed, so the
+    next interval's device-0 reading would sum into this interval's box total."""
+    log = tmp_path / 'dmon.log'
+    log.write_text(
+        '# gpu    sm    fb\n'
+        '#  Idx     %    MB\n'
+        '    0     -     -\n'  # cycle 1: device 0 refused the query
+        '    1    50  6144\n'  # cycle 1 total: 6144
+        '    0   100  8192\n'
+        '    1   100  1024\n'  # cycle 2 total: 9216
+    )
+    summary = _parse_dmon(log)
+    # Without the boundary, cycle 1's device 1 (6144) and cycle 2's device 0 (8192) sum into one 14336 MB
+    # "instant" the box never held, and cycle 2 is left with device 1 alone.
+    assert summary.peak_vram_gb == pytest.approx(9216 / 1024)
+    assert summary.mean_util_pct == pytest.approx(250 / 3)  # the three readable rows: 50, 100, 100
+
+
 def test_parse_dmon_fails_loudly_without_fb(tmp_path):
     log = tmp_path / 'dmon.log'
     log.write_text('# gpu    sm\n#  Idx     %\n    0    50\n')
