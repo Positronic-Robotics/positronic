@@ -8,8 +8,13 @@ actually spent.
 
 It is **observability, not data** (see `architecture.md`, "Telemetry is observability, not data"). The dataset
 records the robot's world under the run's (possibly virtual) clock; telemetry describes the machinery around it
-in wall time. So it lives in **sidecar files next to the dataset, never inside it** — the dataset core imports
-no telemetry and stays clock-agnostic.
+in wall time. So it lives in **sidecar files next to the dataset, never inside it**, and anything derived from
+them is an offline reduce over the raw files rather than a second recording.
+
+The boundary holds in the other direction too: nothing under `positronic/dataset` imports telemetry, its
+vocabulary, or `opentelemetry`, and `positronic/dataset/tests/test_telemetry_boundary.py` fails the build if
+one starts to. Code that needs timing there takes it as an opaque injected context factory — `DsWriterAgent`'s
+`telemetry_span`, inert by default — so the dataset core stays clock-agnostic and names none of this.
 
 `positronic/telemetry.py` owns the mechanism, and it is domain-blind: spans, anchors and sidecar files, with
 no notion of an episode, a pass or an inference call. An **anchor** is a long-running span its owner holds
@@ -76,24 +81,16 @@ The span names are the contract:
 ### Stats schema (`*.stats.jsonl`)
 
 One JSON sample per line, sampled free-running at 1 Hz (default) on wall time — no span context, no episode
-boundary, so no sample is lost at a phase edge:
+boundary, so no sample is lost at a phase edge. A sample is a flat object of host and process readings plus a
+list holding one object per GPU. Its keys are the `STAT_*` and `GPU_*` constants in `positronic/telemetry.py`
+— read them there; the sampler writes them and the reduce imports them.
 
-```json
-{"t_ns": 0, "cpu_sys_pct": 0.0, "iowait_pct": 0.0, "mem_sys_used_b": 0,
- "cpu_proc_pct": 0.0, "rss_proc_b": 0, "gpu_count": 1,
- "gpus": [{"i": 0, "util_pct": 0.0, "mem_used_b": 0, "mem_total_b": 0, "power_w": 0.0,
-           "proc_mem_b": 0, "proc_util_pct": null}]}
-```
-
-The field names are `positronic.telemetry`'s `STAT_*` / `GPU_*` constants, which the reduce imports rather
-than re-spelling.
-
-`cpu_proc_pct` / `rss_proc_b` / `proc_mem_b` are this eval's whole process tree (harness + env server + Isaac
-children). `gpus` is empty on a box with no NVML, and carries fewer entries than `gpu_count` when a device
-refuses a query mid-run (MIG, a transiently lost GPU) — so `gpu_count` is what tells a reader the sample saw
-the whole box. `proc_mem_b` is null where per-process GPU memory is unavailable (a PID namespace without
-`--pid=host`, or a driver that cannot attribute it); `proc_util_pct` is left null because per-process GPU
-utilisation is not reliably attributable under MPS / co-location.
+The process readings cover this eval's whole process tree (harness + env server + Isaac children). The GPU
+list is empty on a box with no NVML, and shorter than the recorded device count when a device refuses a query
+mid-run (MIG, a transiently lost GPU) — so that count is what tells a reader whether a sample saw the whole
+box. Per-process GPU memory is null where it cannot be attributed (a PID namespace without `--pid=host`, or a
+driver that will not report it), and per-process GPU utilisation is always null: it is not reliably
+attributable under MPS / co-location.
 
 ## Reporting
 

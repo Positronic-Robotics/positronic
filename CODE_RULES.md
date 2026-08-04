@@ -113,14 +113,3 @@ if should_stop.value:
 if should_stop.value:
     return
 ```
-
-### telemetry-as-data
-
-Don't put operational telemetry in the dataset. The dataset records the robot's world — signals,
-static, meta — on the world's clock. Wall time, machine load and latencies describe the machinery
-around it: they belong in sidecar files under `<out_dir>/telemetry/`, owned by
-`positronic/telemetry.py` and native to wall time. Anything derived from them is an offline reduce
-over those raw files.
-
-The boundary holds in the other direction too: `positronic/dataset` imports no telemetry, and a test
-enforces that. Code there takes timing as an opaque injected span instead.
