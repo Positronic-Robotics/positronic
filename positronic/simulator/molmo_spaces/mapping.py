@@ -29,6 +29,12 @@ IkSolver: TypeAlias = Callable[[np.ndarray, np.ndarray], Any]
 MOLMO_ARM_GROUP = 'arm'
 MOLMO_GRIPPER_GROUP = 'gripper'
 
+# The MolmoSpaces site the arm move group's leaf frame resolves to, and so the frame this adoption reports
+# poses in and resolves Cartesian targets against. The eval declares its recorded model's control frame at the
+# same physical point, and ``env.py`` checks the live scene against this name so the two cannot drift apart.
+# A scene prefixes every model name with the robot's namespace (``robot_0/``), so the live name ends with this.
+MOLMO_GRASP_SITE = 'gripper/grasp_site'
+
 # Where the MolmoSpaces asset packs live.
 ASSETS_DIR_ENV = 'MLSPACES_ASSETS_DIR'
 
@@ -174,13 +180,13 @@ def resolve_task_horizon_steps(episode: Any, policy_dt_ms: float, override_steps
     An explicit ``override_steps`` wins — the way MolmoSpaces' ``--task_horizon_steps`` overrides the benchmark —
     so an operator can pin the exact horizon a reference run used. Otherwise read the benchmark's own
     ``task_horizon_sec`` (sim-seconds): shipped DROID benchmarks carry it as an **episode-level** field (a
-    pydantic extra on the loaded spec — DROID Pick = 20 s), so read it there first, falling back to the task dict
+    pydantic extra on the loaded spec), so read it there first, falling back to the task dict
     for layouts that nest it, and convert with ``round(sec * 1000 / policy_dt_ms)`` (MolmoSpaces' own conversion).
     The horizon is part of the task definition, so a benchmark carrying none and no override fails loud.
 
     Discrepancy worth knowing: MolmoSpaces' own ``determine_task_horizon`` reads only ``episode.task``, which is
     absent on the shipped benchmarks, so it raises there and a native run needs ``--task_horizon_steps`` (or a
-    ``patch_benchmarks`` pass that moves the field into ``task``, defaulting PickTask to 20 s). Reading the
+    ``patch_benchmarks`` pass that moves the field into ``task``). Reading the
     episode-level field reproduces the benchmark's declared horizon without that override.
     """
     if override_steps is not None:
