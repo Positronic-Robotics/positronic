@@ -97,6 +97,26 @@ class _DroidPickEvalConfig(JsonBenchmarkEvalConfig):
         self.robot_config.action_noise_config = ActionNoiseConfig(enabled=False)
 
 
+def _assert_measures_at_grasp_site(robot_view: Any) -> None:
+    """Fail unless the arm move group's leaf frame is ``mapping.MOLMO_GRASP_SITE``.
+
+    That frame is what every pose this server reports is measured in, and the eval declares its recorded
+    model's control frame at the same point. Nothing else ties the two together, so a scene whose arm resolves
+    somewhere else would misframe every recorded pose silently — for the viewer, for offline IK and for any
+    frame a policy asks for.
+    """
+    arm = robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
+    if arm.leaf_frame_type != 'site':
+        raise ValueError(f'arm move group measures at a {arm.leaf_frame_type}, not the expected site')
+    name = mujoco.mj_id2name(arm.mj_model, mujoco.mjtObj.mjOBJ_SITE, arm.leaf_frame_id)  # pyright: ignore[reportAttributeAccessIssue]
+    if name != mapping.MOLMO_GRASP_SITE and not name.endswith(f'/{mapping.MOLMO_GRASP_SITE}'):
+        raise ValueError(f'arm move group measures at site {name!r}, expected {mapping.MOLMO_GRASP_SITE!r}')
+
+
+def _is_rgb_frame(value: Any) -> bool:
+    return isinstance(value, np.ndarray) and value.ndim == 3 and value.shape[2] == 3 and value.dtype == np.uint8
+
+
 class MolmoSpacesEnv(EnvProtocol):
     """A MolmoSpaces benchmark episode behind the gym-style ``reset``/``step``/``close`` the env server serves.
 
@@ -135,13 +155,14 @@ class MolmoSpacesEnv(EnvProtocol):
         # Determinism enters at sampler construction (seed_task_sampling); the token's seed overrides the spec's.
         cfg.seed = int(seed) if seed is not None else (episode.seed if episode.seed is not None else 42)
         # The sim owns the episode horizon: it is part of the task definition, so resolve the benchmark's own
-        # ``task_horizon_sec`` into steps (``mapping.resolve_task_horizon_steps``; DROID Pick = 20 s -> 303 steps).
+        # ``task_horizon_sec`` into steps (``mapping.resolve_task_horizon_steps``).
         # With ``task_horizon`` set, the task enforces it and ``is_done`` reports expiry, so a horizon-expired
         # trial ends with a terminal ``done`` exactly as the native benchmark scores it.
         cfg.task_horizon = mapping.resolve_task_horizon_steps(episode, cfg.policy_dt_ms, self._task_horizon_override)
         self._sampler = JsonEvalTaskSampler(cfg, episode)
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._robot_view = self._task.env.current_robot.robot_view
+        _assert_measures_at_grasp_site(self._robot_view)
         self._scratch = None  # sized by this episode's model; allocated on the first probe
         self._control_dt = cfg.policy_dt_ms / 1000.0
         self._horizon_sec = cfg.task_horizon * self._control_dt
@@ -247,11 +268,23 @@ class MolmoSpacesEnv(EnvProtocol):
             if np.linalg.norm(err) < _IK_TOL:
                 break
             jac = np.zeros((6, model.nv))
-            _leaf_jacobian(arm, model, data, jac)
+            self._leaf_jacobian(arm, model, data, jac)
             jac = jac[:, veladr]
             dq = jac.T @ np.linalg.solve(jac @ jac.T + _IK_DAMPING**2 * np.eye(6), err)
             q = np.clip(q + dq, limits[:, 0], limits[:, 1])
         return q
+
+    @staticmethod
+    def _leaf_jacobian(move_group: Any, model: Any, data: Any, out: np.ndarray) -> None:
+        """The ``(6, nv)`` leaf-frame Jacobian into *out*, evaluated on *data*.
+
+        Mirrors the move group's own ``get_jacobian`` but against a caller-supplied ``MjData``, which the IK
+        iteration needs (the group's method is bound to the live one).
+        """
+        if move_group.leaf_frame_type == 'site':
+            mujoco.mj_jacSite(model, data, out[:3], out[3:], move_group.leaf_frame_id)  # pyright: ignore[reportAttributeAccessIssue]
+        else:
+            mujoco.mj_jacBody(model, data, out[:3], out[3:], move_group.leaf_frame_id)  # pyright: ignore[reportAttributeAccessIssue]
 
     def _observe(self, env_obs: dict[str, Any]) -> dict[str, Any]:
         return observe_payload(self._robot_view, env_obs, self._camera_names)
@@ -261,6 +294,19 @@ class MolmoSpacesEnv(EnvProtocol):
             self._sampler.close()
             self._sampler = None
             self._task = None
+
+
+def _full_physics_state(robot_view: Any) -> np.ndarray:
+    """The scene's complete integrable state: ``mjSTATE_INTEGRATION``, the minimal subset a deterministic
+    MuJoCo sim restores from to reproduce its forward trajectory — positions and velocities, and with them
+    mocap bodies, actuator activation, controls and the solver warm-start. Object poses in it let analysis
+    recompute success. Positions start at index 1, after the scalar time."""
+    data = robot_view.mj_data
+    model = data.model
+    spec = mujoco.mjtState.mjSTATE_INTEGRATION  # pyright: ignore[reportAttributeAccessIssue]
+    state = np.empty(mujoco.mj_stateSize(model, spec), dtype=np.float64)  # pyright: ignore[reportAttributeAccessIssue]
+    mujoco.mj_getState(model, data, state, spec)  # pyright: ignore[reportAttributeAccessIssue]
+    return state
 
 
 def observe_payload(robot_view: Any, env_obs: dict[str, Any], camera_names: list[str]) -> dict[str, Any]:
@@ -301,18 +347,6 @@ def _leaf_pose(move_group: Any, data: Any) -> tuple[np.ndarray, np.ndarray]:
     return np.array(pos, dtype=np.float64), np.array(mat, dtype=np.float64).reshape(3, 3)
 
 
-def _leaf_jacobian(move_group: Any, model: Any, data: Any, out: np.ndarray) -> None:
-    """The ``(6, nv)`` leaf-frame Jacobian into *out*, evaluated on *data*.
-
-    Mirrors the move group's own ``get_jacobian`` but against a caller-supplied ``MjData``, which the IK
-    iteration needs (the group's method is bound to the live one).
-    """
-    if move_group.leaf_frame_type == 'site':
-        mujoco.mj_jacSite(model, data, out[:3], out[3:], move_group.leaf_frame_id)  # pyright: ignore[reportAttributeAccessIssue]
-    else:
-        mujoco.mj_jacBody(model, data, out[:3], out[3:], move_group.leaf_frame_id)  # pyright: ignore[reportAttributeAccessIssue]
-
-
 def _pose_error(target_pos: np.ndarray, target_rot: np.ndarray, cur_pos: np.ndarray, cur_rot: np.ndarray) -> np.ndarray:
     """The world-frame 6-vector error ``[translation, axis-angle rotation]`` from a measured to a target pose.
 
@@ -324,23 +358,6 @@ def _pose_error(target_pos: np.ndarray, target_rot: np.ndarray, cur_pos: np.ndar
     rot_err = np.zeros(3)
     mujoco.mju_quat2Vel(rot_err, quat, 1.0)  # pyright: ignore[reportAttributeAccessIssue]
     return np.concatenate([np.asarray(target_pos, dtype=np.float64).reshape(3) - cur_pos, rot_err])
-
-
-def _full_physics_state(robot_view: Any) -> np.ndarray:
-    """The scene's complete integrable state: ``mjSTATE_INTEGRATION``, the minimal subset a deterministic
-    MuJoCo sim restores from to reproduce its forward trajectory — positions and velocities, and with them
-    mocap bodies, actuator activation, controls and the solver warm-start. Object poses in it let analysis
-    recompute success. Positions start at index 1, after the scalar time."""
-    data = robot_view.mj_data
-    model = data.model
-    spec = mujoco.mjtState.mjSTATE_INTEGRATION  # pyright: ignore[reportAttributeAccessIssue]
-    state = np.empty(mujoco.mj_stateSize(model, spec), dtype=np.float64)  # pyright: ignore[reportAttributeAccessIssue]
-    mujoco.mj_getState(model, data, state, spec)  # pyright: ignore[reportAttributeAccessIssue]
-    return state
-
-
-def _is_rgb_frame(value: Any) -> bool:
-    return isinstance(value, np.ndarray) and value.ndim == 3 and value.shape[2] == 3 and value.dtype == np.uint8
 
 
 def main() -> None:

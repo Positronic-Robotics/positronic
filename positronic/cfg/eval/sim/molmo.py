@@ -63,7 +63,7 @@ def _molmo_eval(
 
     ``task_horizon_steps`` optionally pins the episode horizon, mirroring MolmoSpaces' ``--task_horizon_steps`` —
     use it to reproduce a reference run whose horizon differs from the benchmark's declared value. Default
-    (``None``) reads the benchmark's own ``task_horizon_sec`` (DROID Pick = 20 s -> 303 steps).
+    (``None``) reads the benchmark's own ``task_horizon_sec``, episode-level first and then the task dict.
     """
     if benchmark_dir is None:
         raise ValueError('MolmoSpaces eval needs --eval.benchmark_dir pointing at a dir with benchmark.json')
