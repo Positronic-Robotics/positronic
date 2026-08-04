@@ -75,17 +75,20 @@ Write a comment for someone reading the file, not for someone reading the change
 nothing about why the line was touched: if it answers "why did you change this?" rather than "what must
 be true here?", delete it.
 
-Two ways it goes wrong. The comment argues for the code — names the alternative rejected, or traces the
-consequences that justify the line; that belongs in the commit message. Or it asserts how code elsewhere
+Two ways it goes wrong. The comment narrates the change — what the code did before, what replaced it,
+the reasoning that got there; that belongs in the commit message. Or it asserts how code elsewhere
 behaves — another function, another module, the layer below; nothing here keeps that claim true, so it
 rots silently.
 
 What survives is what the code cannot say: an invariant, a constraint from outside the file, a
-precondition. Write it dry — a flat statement, no intensifiers, no rhetorical build, no clause there
-only to make the point land. Usually one line, and often none.
+precondition, one dry line on why the obvious alternative fails. That last one is a standing fact, not a
+story about the edit: "a `readOnce()` here would take the connection the control loop holds" stays true
+forever, where "a generator rather than a blocking call" only parses for someone who knows there was a
+blocking call. Write it flat — no intensifiers, no rhetorical build, no clause there only to make the
+point land. Usually one line, and often none.
 
 ```python
-# Bad — argues the design against what it replaced, and builds to a flourish
+# Bad — narrates what it replaced, at paragraph length, and builds to a flourish
 def _reset(self, robot, robot_state, rate_limiter, should_stop):
     """Home the arm, yielding until it arrives. Drive with ``yield from``.
 
