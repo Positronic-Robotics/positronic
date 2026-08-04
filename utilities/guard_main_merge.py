@@ -50,6 +50,10 @@ SUBST = '\x00subst'
 # `origin/main`, `main:other` — but not `mainline` or `feature/main2`.
 MAIN_REF_RE = re.compile(r'(^|[:/+])main(?![\w/\-])')
 
+# A heredoc opener whose delimiter is QUOTED — `<<'EOF'`, `<<"EOF"`, `<<-'EOF'`. The quoting is
+# what makes the body inert: it suppresses every expansion, so the text cannot execute.
+HEREDOC_QUOTED_RE = re.compile(r"""<<(-?)\s*(['"])(\w+)\2""")
+
 
 def repo_slug(url: str) -> str:
     """owner/repo from a remote URL, ssh or https form; empty when there is none.
@@ -137,6 +141,36 @@ def _apply_dash_c(words: list[str], base: str | None) -> str | None:
             continue
         i += 1
     return base
+
+
+def _strip_heredoc_bodies(cmd: str) -> str:
+    """`cmd` with the bodies of quoted-delimiter heredocs removed.
+
+    A heredoc body is stdin DATA, never command words — but the tokenizer reads it as words
+    anyway, so a single apostrophe in a commit message ("don't") leaves the whole command
+    unparseable and every invocation in it falls back to guarded. That refused pushes to
+    entirely different repos.
+
+    Dropping the body loses nothing analyzable, because a QUOTED delimiter suppresses every
+    expansion: the text reaches the command literally and cannot execute. Unquoted `<<EOF` is
+    deliberately left in place — its body DOES expand `$(…)`, so it keeps failing closed, and
+    `_substitution_bodies` still scans the untouched command for what such a body might run.
+    """
+    lines = cmd.split('\n')
+    kept: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        kept.append(line)
+        i += 1
+        for dash, _quote, delim in HEREDOC_QUOTED_RE.findall(line):
+            while i < len(lines):
+                # `<<-` lets the terminator be indented with tabs.
+                terminator = lines[i].lstrip('\t') if dash else lines[i]
+                i += 1
+                if terminator == delim:
+                    break
+    return '\n'.join(kept)
 
 
 def _segments(cmd: str) -> list[list[str]]:
@@ -241,6 +275,7 @@ def _parse_lossy(cmd: str) -> list[Invocation]:
 
 
 def parse_invocations(cmd: str, cwd: str, path_exists=os.path.isdir) -> list[Invocation]:
+    cmd = _strip_heredoc_bodies(cmd)
     try:
         segments = _segments(cmd)
     except ValueError:

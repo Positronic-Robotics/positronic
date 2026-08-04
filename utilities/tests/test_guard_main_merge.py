@@ -215,6 +215,41 @@ def test_unbalanced_quoting_falls_back_guarded(git):
     assert verdict(git, "echo don't panic") is None
 
 
+def test_quoted_heredoc_body_does_not_guard_another_repo(git):
+    """A commit message is data, and an apostrophe in it is not a parse failure.
+
+    `<<'EOF'` bodies reach the command as literal stdin, so the apostrophe in "don't"
+    used to leave the whole command unparseable — which poisoned the `cd`, and a push
+    on a feature branch of an entirely different repo was refused as a push to main.
+    """
+    cmd = (
+        "cd /w/agent_infra && git commit -F- -- x.py <<'EOF' && git push origin HEAD\n"
+        "subject line\n\ndon't reverse this decision\nEOF"
+    )
+    assert verdict(git, cmd) is None
+
+
+def test_quoted_heredoc_body_is_text_not_commands(git):
+    """Nothing in a quoted heredoc body executes, so git-shaped prose in one is prose.
+
+    A commit message explaining a main-branch rule is the realistic case, and blocking
+    the commit that carries it is a false positive.
+    """
+    cmd = "cd /w/positronic && git commit -F- -- x.py <<'EOF'\nWhy we never git push origin main\nEOF"
+    assert verdict(git, cmd) is None
+
+
+def test_dash_quoted_heredoc_body_is_also_text(git):
+    cmd = "cd /w/agent_infra && git commit -F- -- x.py <<-'EOF' && git push origin HEAD\n\tdon't\n\tEOF"
+    assert verdict(git, cmd) is None
+
+
+def test_commands_after_a_heredoc_are_still_analyzed(git):
+    """Stripping the body must not swallow what follows the terminator."""
+    cmd = "cd /w/positronic && git commit -F- -- x.py <<'EOF'\nmessage\nEOF\ngit push origin main"
+    assert verdict(git, cmd) is not None
+
+
 def test_deny_messages_name_the_operation(git):
     assert 'amend' in verdict(git, 'git commit --amend')
     assert 'gh pr merge' in verdict(git, 'gh pr merge 5')
