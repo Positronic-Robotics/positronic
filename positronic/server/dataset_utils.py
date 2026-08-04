@@ -138,10 +138,8 @@ def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeContro
     return rrb.EyeControls3D(position=camera_pos.tolist(), look_target=centroid.tolist())
 
 
-# One series per element stops being readable long before it stops being drawable, and a signal wide
-# enough — a full physics state runs to hundreds — takes the video panels down with it: the scalar
-# series crowd out the recording and the video sits on its loading spinner. Signals past this width
-# are left out of the plots and named in the viewer instead.
+# A per-element plot of a signal this wide is unreadable, and crowds the video panels out of the
+# recording until they never decode.
 # TODO: a view that plots a chosen few elements of a wide signal, so it stops being all-or-nothing.
 _MAX_PLOTTED_WIDTH = 32
 _UNPLOTTED_ENTITY = '/unplotted'

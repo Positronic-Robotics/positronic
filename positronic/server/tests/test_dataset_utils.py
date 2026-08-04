@@ -1,5 +1,6 @@
 import numpy as np
 
+from positronic import keys
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
 from positronic.server.dataset_utils import _MAX_PLOTTED_WIDTH, _collect_signal_groups, _unplotted_notice
 
@@ -13,18 +14,18 @@ def _episode(ep_dir, widths: dict[str, int]) -> DiskEpisode:
 
 
 def test_narrow_signals_are_plotted(tmp_path):
-    signals = _collect_signal_groups(_episode(tmp_path / 'ep', {'robot_state.q': 7, 'grip': 1}))
+    signals = _collect_signal_groups(_episode(tmp_path / 'ep', {keys.JOINTS: 7, keys.GRIP: 1}))
 
-    assert set(signals.numerics) == {'robot_state.q', 'grip'}
+    assert set(signals.numerics) == {keys.JOINTS, keys.GRIP}
     assert signals.unplotted == {}
 
 
 def test_wide_signal_is_named_instead_of_plotted(tmp_path):
     width = _MAX_PLOTTED_WIDTH + 1
-    signals = _collect_signal_groups(_episode(tmp_path / 'ep', {'robot_state.q': 7, 'sim_state': width}))
+    signals = _collect_signal_groups(_episode(tmp_path / 'ep', {keys.JOINTS: 7, 'sim_state': width}))
 
-    assert signals.numerics == ['robot_state.q']
-    assert signals.dims == {'robot_state.q': 7}
+    assert signals.numerics == [keys.JOINTS]
+    assert signals.dims == {keys.JOINTS: 7}
     assert signals.unplotted == {'sim_state': width}
 
 
