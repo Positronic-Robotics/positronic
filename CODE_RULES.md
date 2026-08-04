@@ -76,16 +76,17 @@ nothing about why the line was touched: if it answers "why did you change this?"
 be true here?", delete it.
 
 Two ways it goes wrong. The comment narrates the change — what the code did before, what replaced it,
-the reasoning that got there; that belongs in the commit message. Or it asserts how code elsewhere
-behaves — another function, another module, the layer below; nothing here keeps that claim true, so it
-rots silently.
+the reasoning that got there. Or it describes what other code happens to do — what the caller does
+next, what a consumer waits for. Neither is anchored: the first only parses for someone who saw the
+edit, and nothing keeps the second true.
 
-What survives is what the code cannot say: an invariant, a constraint from outside the file, a
-precondition, one dry line on why the obvious alternative fails. That last one is a standing fact, not a
-story about the edit: "a `readOnce()` here would take the connection the control loop holds" stays true
-forever, where "a generator rather than a blocking call" only parses for someone who knows there was a
-blocking call. Write it flat — no intensifiers, no rhetorical build, no clause there only to make the
-point land. Usually one line, and often none.
+Each has a near neighbour that stays. A constraint the code is written against is worth one dry line,
+including one on why the obvious alternative fails. The test is whether this code would be wrong if the
+claim stopped holding: "a `readOnce()` here would take the connection the control loop holds" earns its
+place, where "the caller's `finally` halts the control thread" does not.
+
+Write it flat — no intensifiers, no rhetorical build, no clause there only to make the point land.
+Usually one line, and often none.
 
 ```python
 # Bad — narrates what it replaced, at paragraph length, and builds to a flourish
@@ -104,7 +105,7 @@ def _reset(self, robot, robot_state, rate_limiter, should_stop):
 ```
 
 ```python
-# Bad — asserts what another function does; nothing here keeps it true
+# Bad — describes what the caller happens to do; this code does not depend on it
 if should_stop.value:
     return  # shutting down — the caller's `finally` halts the control thread
 
