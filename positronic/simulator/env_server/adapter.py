@@ -67,13 +67,13 @@ class EnvAdapter(ABC):
         """
 
 
-def _in_control_frame(cmd: Any, control_frame: geom.Transform3D) -> Any:
+def _in_env_control_frame(cmd: Any, env_control_frame: geom.Transform3D) -> Any:
     """A command against the embodiment's ``default``, re-expressed in the frame the env measures and drives."""
     match cmd:
         case roboarm_command.CartesianPosition(pose):
-            return roboarm_command.CartesianPosition(pose=pose * control_frame)
+            return roboarm_command.CartesianPosition(pose=pose * env_control_frame)
         case roboarm_command.CartesianDelta(delta, frame):
-            return roboarm_command.CartesianDelta(delta, control_frame.inv * frame)
+            return roboarm_command.CartesianDelta(delta, env_control_frame.inv * frame)
         case _:
             return cmd
 
@@ -111,10 +111,10 @@ class WireCommandAdapter(EnvAdapter):
     around it) and keep the observation and terminal mappings to themselves.
     """
 
-    def __init__(self, control_frame: geom.Transform3D | None = None):
-        """``control_frame`` places the frame the env measures and drives relative to the embodiment's
+    def __init__(self, env_control_frame: geom.Transform3D | None = None):
+        """``env_control_frame`` places the frame the env measures and drives relative to the embodiment's
         ``default``; the adapter re-expresses outgoing commands into it, and observations back out of it."""
-        self.control_frame = control_frame if control_frame is not None else geom.Transform3D.identity
+        self.env_control_frame = env_control_frame if env_control_frame is not None else geom.Transform3D.identity
         self._reset_command_state()
 
     def _reset_command_state(self) -> None:
@@ -157,4 +157,4 @@ class WireCommandAdapter(EnvAdapter):
                 self._held.pop(keys.ROBOT_COMMAND)
         if 'target_grip' in self._held:
             self._grip = float(self._held['target_grip'])
-        return {'command': _wire_command(_in_control_frame(cmd, self.control_frame)), 'grip': self._grip}
+        return {'command': _wire_command(_in_env_control_frame(cmd, self.env_control_frame)), 'grip': self._grip}

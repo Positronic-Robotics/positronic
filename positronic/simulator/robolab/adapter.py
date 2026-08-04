@@ -12,17 +12,15 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
-from positronic.drivers.roboarm.ik import frame_transform
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, DROID_EEF_LINK, bundled_franka_model
+from positronic.drivers.roboarm.models import DROID_EE_FRAME
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
 
 class RobolabAdapter(WireCommandAdapter):
     def __init__(self, camera_dict: dict[str, str]):
-        # RoboLab measures and drives at DROID's gripper frame, while the rig it stands in for reports at
-        # ``DEFAULT_FRAME``. Converting here is what lets one checkpoint run on both unchanged.
-        super().__init__(frame_transform(bundled_franka_model()[keys.URDF], DEFAULT_FRAME, DROID_EEF_LINK))
+        # Converting here is what lets one checkpoint run on RoboLab and on the rig it stands in for unchanged.
+        super().__init__(DROID_EE_FRAME)
         self._camera_dict = camera_dict  # logical observation name -> the RoboLab obs image key
 
     def _reset_token(self, context: dict[str, Any]) -> Any:
@@ -33,7 +31,7 @@ class RobolabAdapter(WireCommandAdapter):
         # The env reports the eef pose in the control frame IK drives; ``eef_quat`` is scalar-first (wxyz),
         # so ``from_quat`` is the matching decode.
         eef_pose = geom.Transform3D(raw_obs['eef_pos'], geom.Rotation.from_quat(raw_obs['eef_quat']))
-        ee_pose = eef_pose * self.control_frame.inv
+        ee_pose = eef_pose * self.env_control_frame.inv
         state = MujocoFrankaState()
         state.encode(raw_obs['joint_pos'], raw_obs['joint_vel'], ee_pose)
         obs: dict[str, Any] = {'robot_state': state, keys.GRIP: float(raw_obs['grip'])}
