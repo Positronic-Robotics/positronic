@@ -34,9 +34,8 @@ class Command:
     """A policy action channel: where its waypoints go, what the device played, and how it homes/records.
 
     ``dest`` receives the policy's waypoints and ``executed`` carries back the ones the device applied,
-    each stamped with the tick that applied it — the recording is made from ``executed``, so it holds
-    what ran rather than what was planned. ``home`` is the value emitted to send this channel to its safe
-    state; ``serializer`` serializes the channel's values, recorded under the channel's own key.
+    each stamped with the tick that applied it. ``home`` is the value emitted to send this channel to its
+    safe state; ``serializer`` serializes the channel's values, recorded under the channel's own key.
     """
 
     dest: pimm.SignalReceiver
