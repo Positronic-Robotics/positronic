@@ -53,7 +53,7 @@ def wire(  # noqa: C901
         for signal_name, emitter in cameras.items():
             world.connect(emitter, ds_agent.inputs[signal_name])
         if robot_arm is not None:
-            # Device ports are duck-typed off `ControlSystem`, as the neighbouring `state` / `grip` reads are.
+            # Device ports are duck-typed off `ControlSystem`.
             executed_commands = robot_arm.executed_commands  # pyright: ignore[reportAttributeAccessIssue]
             world.connect(executed_commands, ds_agent.inputs['robot_command'])
             world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
@@ -111,7 +111,7 @@ def wire_embodiment(
             world.connect(obs.source, ds_agent.inputs[name])
         for name, cmd in embodiment.commands.items():
             ds_agent.add_signal(name, TrajectorySerializer(cmd.serializer))
-            # `Command` ports are typed as the abstract `SignalEmitter`, as `Observation.source` above is.
+            # `Command` ports are typed as the abstract `SignalEmitter`.
             world.connect(cmd.executed, ds_agent.inputs[name])  # pyright: ignore[reportArgumentType]
         for name, priv in privileged.items():
             ds_agent.add_signal(name, priv.serializer)
