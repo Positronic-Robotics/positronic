@@ -215,7 +215,6 @@ class Robot(pimm.ControlSystem):
 
                 played_grip = grip_player.advance(clock.now_ns())
                 if played_grip is not None:
-                    self.executed_target_grip.emit([played_grip])
                     grip_target = float(played_grip.value)
 
                 obs = arm.get_observations()
@@ -231,7 +230,9 @@ class Robot(pimm.ControlSystem):
                             player.set([])
                             grip_player.set([])
                             q_target = self._reset(arm, kin, robot_state)
+                            # Homing opens the gripper, so a grip played this cycle never reaches the chain.
                             grip_target = 0.0
+                            played_grip = None
                             obs = arm.get_observations()
                             q = obs['joint_pos']
                         case command.JointPosition(positions):
@@ -247,6 +248,8 @@ class Robot(pimm.ControlSystem):
                             raise NotImplementedError(f'Unsupported command {played.value}')
                     if applied:
                         self.executed_commands.emit([played])
+                if played_grip is not None:
+                    self.executed_target_grip.emit([played_grip])
 
                 arm.command_joint_pos(np.append(q_target, 1.0 - grip_target))
 
