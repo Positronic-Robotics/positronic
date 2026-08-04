@@ -40,6 +40,13 @@ Narrow the scope to any sim target the catalog exposes — a single suite or cat
 
 Real-hardware DROID evals take the same model endpoint, but we run them for you — operated and operator-scored on our fleet, not self-driven in sim. That's the paid path under [Two ways to start](#two-ways-to-start).
 
+## What a run cost
+
+`--timing` records the wall-clock cost of a sim sweep — the split across reset, env step, inference and
+recording, the machine's load, and the inference-latency distribution — into sidecar files beside the
+dataset, and `positronic eval timing-report` reduces them. Sizing and performance work reads that; a run's
+scores never do. See [Eval telemetry](telemetry.md).
+
 ## Two ways to start
 
 1. **Try it yourself, in sim.** A public checkpoint runs end-to-end in about ten minutes — see [Connect your model](connect-your-model.md).

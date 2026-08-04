@@ -14,7 +14,7 @@ them is an offline reduce over the raw files rather than a second recording.
 The boundary holds in the other direction too: nothing under `positronic/dataset` imports telemetry, its
 vocabulary, or `opentelemetry`, and `positronic/dataset/tests/test_telemetry_boundary.py` fails the build if
 one starts to. Code that needs timing there takes it as an opaque injected context factory — `DsWriterAgent`'s
-`telemetry_span`, inert by default — so the dataset core stays clock-agnostic and names none of this.
+`io_context`, inert by default — so the dataset core stays clock-agnostic and names none of this.
 
 `positronic/telemetry.py` owns the mechanism, and it is domain-blind: spans, anchors and sidecar files, with
 no notion of an episode, a pass or an inference call. An **anchor** is a long-running span its owner holds
@@ -124,17 +124,3 @@ Shares print as percentages; `timing_summary.json` keeps them as fractions.
 `--gpu_policy_log` folds in the policy endpoint (a different box) from an `nvidia-smi dmon -s um` log; it reads
 the `sm` / `fb` column positions from the log header and fails loudly if the `fb` (framebuffer) column is
 missing, rather than dropping every row and reporting no peak VRAM for the policy box.
-
-## Future work
-
-Not implemented here — recorded so the design is legible:
-
-- **Perfetto / Chrome-trace view.** The spans (as `X` duration events) and the stats (as `C` counter events)
-  open on one timeline in `ui.perfetto.dev` for interactive inspection. The report reads the raw JSONL directly
-  and needs no converter, so this is a convenience view, deferred.
-- **H100 / server-side serving telemetry.** The policy-serving images could emit their own sidecar: startup
-  spans (entrypoint → weights loaded → listening → first request), CUDA-event stage timing, per-request peak
-  VRAM, and Cristian's-algorithm min-RTT clock probes to reconcile the policy box's wall clock with the eval
-  box's. A follow-up; this is eval-box only.
-- **Closed-weight-model telemetry.** A client-facing recipe for models served behind a vendor API (no
-  server-side hooks) — a separate proposal.
