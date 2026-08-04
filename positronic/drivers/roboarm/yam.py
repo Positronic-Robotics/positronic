@@ -184,9 +184,9 @@ class Robot(pimm.ControlSystem):
         self._connect = connect
 
         self.commands = pimm.ControlSystemReceiver[command.Trajectory[command.CommandType]](self, default=[])
-        self.executed_commands = pimm.ControlSystemEmitter[list[command.Applied]](self)
+        self.executed_commands = pimm.ControlSystemEmitter[list[command.Applied[command.CommandType]]](self)
         self.target_grip = pimm.ControlSystemReceiver[command.Trajectory[float]](self, default=[])
-        self.executed_target_grip = pimm.ControlSystemEmitter[list[command.Applied]](self)
+        self.executed_target_grip = pimm.ControlSystemEmitter[list[command.Applied[float]]](self)
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
@@ -201,7 +201,7 @@ class Robot(pimm.ControlSystem):
             robot_state = YamState()
             limiter = pimm.RateLimiter(clock, hz=100)
             player = command.TrajectoryPlayer(reduce=command.reduce)
-            grip_player = command.TrajectoryPlayer()
+            grip_player = command.TrajectoryPlayer[float]()
 
             q_target = self._reset(arm, kin, robot_state)
             grip_target = 0.0

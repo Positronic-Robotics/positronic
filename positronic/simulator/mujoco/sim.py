@@ -141,7 +141,7 @@ class MujocoSim(pimm.ControlSystem):
         self._error = False
         self._adapters: dict[str, pimm.shared_memory.NumpySMAdapter] | None = None
         self._arm_player = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
-        self._grip_player = roboarm_command.TrajectoryPlayer()
+        self._grip_player = roboarm_command.TrajectoryPlayer[float]()
         self._last_grip = 0.0
         # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
         self._reset_pending = False
@@ -149,16 +149,16 @@ class MujocoSim(pimm.ControlSystem):
         self.commands: pimm.SignalReceiver[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
             pimm.ControlSystemReceiver(self, default=[])
         )
-        self.executed_commands: pimm.ControlSystemEmitter[list[roboarm_command.Applied]] = pimm.ControlSystemEmitter(
-            self
-        )
+        self.executed_commands: pimm.ControlSystemEmitter[
+            list[roboarm_command.Applied[roboarm_command.CommandType]]
+        ] = pimm.ControlSystemEmitter(self)
         self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self.target_grip: pimm.SignalReceiver[roboarm_command.Trajectory[float]] = pimm.ControlSystemReceiver(
             self, default=[]
         )
-        self.executed_target_grip: pimm.ControlSystemEmitter[list[roboarm_command.Applied]] = pimm.ControlSystemEmitter(
-            self
+        self.executed_target_grip: pimm.ControlSystemEmitter[list[roboarm_command.Applied[float]]] = (
+            pimm.ControlSystemEmitter(self)
         )
         self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self.cameras: pimm.EmitterDict = pimm.EmitterDict(self)

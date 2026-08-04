@@ -71,7 +71,9 @@ class Robot(pimm.ControlSystem):
         self.commands: pimm.SignalReceiver[command.Trajectory[command.CommandType]] = pimm.ControlSystemReceiver(
             self, default=[]
         )
-        self.executed_commands: pimm.ControlSystemEmitter[list[command.Applied]] = pimm.ControlSystemEmitter(self)
+        self.executed_commands: pimm.ControlSystemEmitter[list[command.Applied[command.CommandType]]] = (
+            pimm.ControlSystemEmitter(self)
+        )
         self.state: pimm.SignalEmitter[KinovaState] = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:

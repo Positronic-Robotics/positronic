@@ -174,7 +174,7 @@ class FakeGripper(pimm.ControlSystem):
         self.grip = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        player = TrajectoryPlayer()
+        player = TrajectoryPlayer[float]()
         while not should_stop.value:
             msg = self.target_grip.read()
             if msg.updated:

@@ -14,7 +14,7 @@ class DHGripper(pimm.ControlSystem):
         self.port = port
         self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self.target_grip: pimm.SignalReceiver[Trajectory[float]] = pimm.ControlSystemReceiver(self, default=[])
-        self.executed_target_grip: pimm.ControlSystemEmitter[list[Applied]] = pimm.ControlSystemEmitter(self)
+        self.executed_target_grip: pimm.ControlSystemEmitter[list[Applied[float]]] = pimm.ControlSystemEmitter(self)
         self.force: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=100)
         self.speed: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=100)
 
@@ -34,7 +34,7 @@ class DHGripper(pimm.ControlSystem):
             while _state_g() != 1 and _state_r() != 1:
                 yield pimm.Sleep(0.1)
 
-        player = TrajectoryPlayer()
+        player = TrajectoryPlayer[float]()
         last_grip = 0.0
 
         # TODO: We must translate these to physical units (N and m/s)

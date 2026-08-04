@@ -998,7 +998,7 @@ class _GripDevice(pimm.ControlSystem):
         self.executed_target_grip = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop, clock):
-        player = TrajectoryPlayer()
+        player = TrajectoryPlayer[float]()
         while not should_stop.value:
             msg = self.target_grip.read()
             if msg is not None and msg.updated:

@@ -23,7 +23,7 @@ class Robotiq2F(pimm.ControlSystem):
         self._port = port
         self.grip = pimm.ControlSystemEmitter(self)
         self.target_grip: pimm.ControlSystemReceiver[Trajectory[float]] = pimm.ControlSystemReceiver(self, default=[])
-        self.executed_target_grip: pimm.ControlSystemEmitter[list[Applied]] = pimm.ControlSystemEmitter(self)
+        self.executed_target_grip: pimm.ControlSystemEmitter[list[Applied[float]]] = pimm.ControlSystemEmitter(self)
         self.force = pimm.ControlSystemReceiver(self, default=255)  # device scale 0..255
         self.speed = pimm.ControlSystemReceiver(self, default=255)  # device scale 0..255
 
@@ -38,7 +38,7 @@ class Robotiq2F(pimm.ControlSystem):
             client.write_registers(_REG_CMD, [0x0000, 0x0000, 0x0000], device_id=_SLAVE)
             client.write_registers(_REG_CMD, [0x0100, 0x0000, 0x0000], device_id=_SLAVE)
 
-            player = TrajectoryPlayer()
+            player = TrajectoryPlayer[float]()
 
             while not should_stop.value:
                 pos_msg = self.target_grip.read()

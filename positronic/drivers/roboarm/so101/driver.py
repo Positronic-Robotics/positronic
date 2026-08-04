@@ -58,14 +58,14 @@ class Robot(pimm.ControlSystem):
         self.commands: pimm.SignalReceiver[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
             pimm.ControlSystemReceiver(self, default=[])
         )
-        self.executed_commands: pimm.ControlSystemEmitter[list[roboarm_command.Applied]] = pimm.ControlSystemEmitter(
-            self
-        )
+        self.executed_commands: pimm.ControlSystemEmitter[
+            list[roboarm_command.Applied[roboarm_command.CommandType]]
+        ] = pimm.ControlSystemEmitter(self)
         self.target_grip: pimm.SignalReceiver[roboarm_command.Trajectory[float]] = pimm.ControlSystemReceiver(
             self, default=[]
         )
-        self.executed_target_grip: pimm.ControlSystemEmitter[list[roboarm_command.Applied]] = pimm.ControlSystemEmitter(
-            self
+        self.executed_target_grip: pimm.ControlSystemEmitter[list[roboarm_command.Applied[float]]] = (
+            pimm.ControlSystemEmitter(self)
         )
         self._last_grip: float = 0.0
 
@@ -89,7 +89,7 @@ class Robot(pimm.ControlSystem):
         state = SO101State()
 
         player = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
-        grip_player = roboarm_command.TrajectoryPlayer()
+        grip_player = roboarm_command.TrajectoryPlayer[float]()
 
         while not should_stop.value:
             cmd_msg = self.commands.read()

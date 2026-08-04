@@ -23,7 +23,7 @@ class Action:
     played to produce it."""
 
     raw: dict[str, Any]
-    executed: dict[str, list[roboarm_command.Applied]] = field(default_factory=dict)
+    executed: dict[str, list[roboarm_command.Applied[Any]]] = field(default_factory=dict)
 
 
 def fresh_command_players() -> defaultdict[str, roboarm_command.TrajectoryPlayer]:
@@ -125,7 +125,7 @@ class WireCommandAdapter(EnvAdapter):
         """The per-trial RUN context -> the env's opaque reset token; the command state is already cleared."""
 
     def action(self, commands: dict[str, pimm.Message | None], now_ns: int) -> Action:
-        executed: dict[str, list[roboarm_command.Applied]] = {}
+        executed: dict[str, list[roboarm_command.Applied[Any]]] = {}
         for name, msg in commands.items():
             player = self._players[name]
             if msg is not None and msg.updated:
