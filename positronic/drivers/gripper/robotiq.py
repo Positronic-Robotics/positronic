@@ -46,8 +46,9 @@ class Robotiq2F(pimm.ControlSystem):
                     player.set(pos_msg.data)
                 played = player.advance(clock.now_ns())
                 if played is not None:
-                    self.executed_target_grip.emit([played])
-                    pos = int(max(0, min(1, played.value)) * 255)
+                    target = max(0.0, min(1.0, played.value))
+                    self.executed_target_grip.emit([played._replace(value=target)])
+                    pos = int(target * 255)
                     spd = int(max(0, min(255, self.speed.value)))
                     frc = int(max(0, min(255, self.force.value)))
 

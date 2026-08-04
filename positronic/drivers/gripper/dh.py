@@ -45,9 +45,9 @@ class DHGripper(pimm.ControlSystem):
                     player.set(grip_msg.data)
                 played = player.advance(clock.now_ns())
                 if played is not None:
-                    self.executed_target_grip.emit([played])
-                    last_grip = played.value
-                width = round((1 - max(0, min(last_grip, 1))) * 1000)
+                    last_grip = max(0.0, min(1.0, played.value))
+                    self.executed_target_grip.emit([played._replace(value=last_grip)])
+                width = round((1 - last_grip) * 1000)
                 client.write_register(0x103, c_uint16(width).value, slave=1)
                 client.write_register(0x101, c_uint16(self.force.value).value, slave=1)
                 client.write_register(0x104, c_uint16(self.speed.value).value, slave=1)

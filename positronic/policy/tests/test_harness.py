@@ -1074,6 +1074,44 @@ def test_recording_holds_nothing_a_device_never_played(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_recording_holds_only_the_waypoints_a_device_accepted(world):
+    """A waypoint a device rejects — an unreachable pose, a target outside its range — is not an action, so
+    it stays out of the recording even though the device was given it."""
+
+    class _PickyDevice(_GripDevice):
+        """Applies only every second waypoint, reporting exactly those."""
+
+        def __init__(self):
+            super().__init__()
+            self.reached = []
+            self.applied = []
+
+        def run(self, should_stop, clock):
+            player = TrajectoryPlayer[float]()
+            while not should_stop.value:
+                msg = self.target_grip.read()
+                if msg is not None and msg.updated:
+                    player.set(msg.data)
+                played = player.advance(clock.now_ns())
+                if played is not None:
+                    self.reached.append(played.value)
+                    if len(self.reached) % 2 == 0:
+                        self.applied.append(played.value)
+                        self.executed_target_grip.emit([played])
+                yield pimm.Sleep(self._period_s)
+
+    device = _PickyDevice()
+    recorded, policy = _record_grip_through(world, device, ChunkedSchedule())
+
+    assert policy.counter >= 1, 'the policy must have emitted a chunk for the device to accept half of'
+    assert device.applied, 'the device must have accepted something'
+    assert len(device.reached) > len(device.applied), 'the device must have rejected something'
+    # The episode holds every accepted waypoint; the device also plays the home command that follows FINISH.
+    assert device.applied[: len(recorded)] == recorded
+    assert device.applied[len(recorded) :] == [0.0]
+
+
+@pytest.mark.timeout(3.0)
 def test_empty_chunk_cancels_both_robot_and_grip(world):
     """A session returning ``[]`` must cancel *both* driver buffers.
 

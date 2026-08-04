@@ -198,9 +198,8 @@ class MujocoSim(pimm.ControlSystem):
                 self._arm_player.set([])
             else:
                 played = self._arm_player.advance(clock.now_ns())
-                if played is not None:
+                if played is not None and self._apply_command(played.value):
                     self.executed_commands.emit([played])
-                    self._apply_command(played.value)
             grip_msg = self.target_grip.read()
             if grip_msg.updated:
                 self._grip_player.set(grip_msg.data)
@@ -344,23 +343,25 @@ class MujocoSim(pimm.ControlSystem):
         while self.data.time < target_time:
             mj.mj_step(self.model, self.data)
 
-    def _apply_command(self, cmd):
+    def _apply_command(self, cmd) -> bool:
+        """Drive the arm to ``cmd``, reporting whether it took: an unreachable Cartesian target leaves the
+        actuators where they were."""
         match cmd:
             case roboarm_command.CartesianPosition(pose=pose):
                 q = self._recalculate_ik(pose)
-                if q is not None:
-                    self._set_actuator_values(q)
-                else:
+                if q is None:
                     logger.warning(f'IK failed for ee_pose: {pose}')
                     self._error = True
+                    return False
+                self._set_actuator_values(q)
             case roboarm_command.CartesianDelta(delta=delta):
                 target = roboarm_command.apply_cartesian_delta(self._ee_pose, delta)
                 q = self._recalculate_ik(target)
-                if q is not None:
-                    self._set_actuator_values(q)
-                else:
+                if q is None:
                     logger.warning(f'IK failed for delta target: {target}')
                     self._error = True
+                    return False
+                self._set_actuator_values(q)
             case roboarm_command.JointPosition(positions=positions):
                 self._set_actuator_values(positions)
             case roboarm_command.JointDelta(velocities=delta):
@@ -369,6 +370,7 @@ class MujocoSim(pimm.ControlSystem):
                 self._home()  # the Reset command homes the arm; re-randomizing the scene is ``reset``'s job
             case _:
                 raise ValueError(f'Unknown command type: {type(cmd)}')
+        return True
 
     def _recalculate_ik(self, target: geom.Transform3D) -> np.ndarray | None:
         if self._ik_data is None:

@@ -222,7 +222,7 @@ class Robot(pimm.ControlSystem):
 
                 played = player.advance(clock.now_ns())
                 if played is not None:
-                    self.executed_commands.emit([played])
+                    applied = True
                     match played.value:
                         case command.Reset():
                             # Drop the in-flight trajectories so the homed arm holds position rather than
@@ -238,12 +238,14 @@ class Robot(pimm.ControlSystem):
                         case command.JointDelta(velocities=delta):
                             q_target = q + np.asarray(delta, dtype=np.float64)
                         case command.CartesianPosition(pose):
-                            q_target = self._ik_or_hold(kin, pose, q, q_target)
+                            q_target, applied = self._ik_or_hold(kin, pose, q, q_target)
                         case command.CartesianDelta(delta):
                             target = command.apply_cartesian_delta(self._base_pose * kin.fk(q), delta)
-                            q_target = self._ik_or_hold(kin, target, q, q_target)
+                            q_target, applied = self._ik_or_hold(kin, target, q, q_target)
                         case _:
                             raise NotImplementedError(f'Unsupported command {played.value}')
+                    if applied:
+                        self.executed_commands.emit([played])
 
                 arm.command_joint_pos(np.append(q_target, 1.0 - grip_target))
 
@@ -266,13 +268,14 @@ class Robot(pimm.ControlSystem):
 
     def _ik_or_hold(
         self, kin: _Kinematics, world_pose: geom.Transform3D, q: np.ndarray, hold: np.ndarray
-    ) -> np.ndarray:
-        """IK in the arm-base frame; on failure hold the previous joint target rather than jump."""
+    ) -> tuple[np.ndarray, bool]:
+        """IK in the arm-base frame, and whether it solved; on failure hold the previous joint target
+        rather than jump."""
         solution = kin.ik(self._base_pose.inv * world_pose, q)
         if solution is None:
             logging.warning(f'IK failed for target {world_pose}, holding previous joint target')
-            return hold
-        return solution
+            return hold, False
+        return solution, True
 
 
 class _FakeYam:
