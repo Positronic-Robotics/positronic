@@ -177,8 +177,8 @@ def test_aborted_episode_excluded(tmp_path):
 
 def test_aborted_episode_wall_excluded_from_between_episodes(tmp_path):
     """An aborted rollout is dropped as invalid data, so its wall must leave W_pass entirely — not fall into
-    ``between_episodes`` and not deflate the policy-busy / real-time factors (Codex on PR #531). Here a 40 s
-    aborted episode sits beside a 40 s completed one in a 100 s pass, so the valid W_pass is 60 s."""
+    ``between_episodes`` and not deflate the policy-busy / real-time factors. Here a 40 s aborted episode sits
+    beside a 40 s completed one in a 100 s pass, so the valid W_pass is 60 s."""
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
     harness = [
@@ -211,15 +211,15 @@ def test_aborted_episode_wall_excluded_from_between_episodes(tmp_path):
     assert split.record_io == pytest.approx(4 / 60)
     assert split.overhead == pytest.approx(19 / 60)
     assert sum(vars(split).values()) == pytest.approx(1.0)
-    # The aborted wall no longer inflates the denominator of these figures.
+    # 60 s is the denominator of these figures too — the aborted wall is out of W_pass, not merely unattributed.
     assert split.policy_wait == pytest.approx(4 / 60)
     assert report.real_time_factor == pytest.approx(20 / 60)
 
 
 def test_env_step_split_ignores_aborted_episode(tmp_path):
     """An aborted rollout's spans — its client env.step AND its server-side steps — stay out of the env-step
-    split: the denominator covers completed episodes only, so counting them made fractions exceed 1 and wire
-    go negative (Codex P2 on PR #531)."""
+    split: the denominator covers completed episodes only, so counting them would push the fractions past 1 and
+    the wire residual below 0."""
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
     harness = [
@@ -354,7 +354,7 @@ def test_partial_per_gpu_proc_vram_excluded_from_peak(tmp_path):
 def test_omitted_gpu_device_excluded_from_proc_vram_peak(tmp_path):
     """A device whose NVML query errors mid-run is dropped from the sample, so it carries fewer GPUs than the
     box holds. Such a sample is incomplete for the box-wide process peak even though every GPU it *does* carry
-    reported ``proc_mem_b`` — its large lone reading must not win over a complete sample (Codex on PR #531)."""
+    reported ``proc_mem_b`` — its large lone reading must not win over a complete sample."""
     telemetry_dir = tmp_path / 'telemetry'
     telemetry_dir.mkdir()
     _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
@@ -379,8 +379,8 @@ def test_omitted_gpu_device_excluded_from_proc_vram_peak(tmp_path):
 
     sim = report.gpu.sim
     assert sim is not None
-    # Peak reflects only the complete two-device sample; the omitted-device sample's 9 GB is dropped. Pre-fix,
-    # ``all(...)`` passed over the single present device and the 9 GB won.
+    # Peak reflects only the complete two-device sample; the omitted-device sample's 9 GB is dropped. Asking
+    # whether every device PRESENT reported would pass over the single one and let the 9 GB win.
     assert sim.peak_proc_vram_gb == pytest.approx(3.0)
 
 
@@ -411,8 +411,8 @@ def test_device_omitted_from_every_sample_excluded_via_recorded_count(tmp_path):
 
     sim = report.gpu.sim
     assert sim is not None
-    # No sample carries both GPUs, so none is complete: the peak is ``None``. Pre-fix, max-observed inferred a
-    # complement of 1 and both single-device samples counted, inflating the peak to 7 GB.
+    # No sample carries both GPUs, so none is complete: the peak is ``None``. Inferring the complement from the
+    # devices observed would read 1, count both single-device samples complete, and report a 7 GB peak.
     assert sim.peak_proc_vram_gb is None
     # Peak VRAM is a box-wide sum too, so an incomplete sample would report half the box as the whole of it.
     assert sim.peak_vram_gb is None

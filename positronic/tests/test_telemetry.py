@@ -254,7 +254,7 @@ def test_stats_sample_with_fake_gpu(tmp_path, monkeypatch):
 def test_stats_sample_treats_nvml_sentinel_as_unavailable(tmp_path, monkeypatch):
     """A driver that cannot attribute a process's GPU memory returns NVML's uint64 sentinel (~18 EiB), not
     ``None`` — recording it verbatim would publish garbage as the eval's peak process VRAM. The device reads
-    unavailable (``proc_mem_b`` None) instead (Codex on PR #531)."""
+    unavailable (``proc_mem_b`` None) instead."""
     _install_fake_nvml(monkeypatch)
     sentinel_proc = _FakeProc(os.getpid(), telemetry._NVML_VALUE_NOT_AVAILABLE)
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetComputeRunningProcesses', lambda h: [sentinel_proc])
@@ -262,7 +262,7 @@ def test_stats_sample_treats_nvml_sentinel_as_unavailable(tmp_path, monkeypatch)
     sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
     sample = sampler._sample()
     gpu = sample['gpus'][0]
-    assert gpu['proc_mem_b'] is None  # pre-fix, the sentinel was int()-cast and recorded as ~1.8e19 bytes
+    assert gpu['proc_mem_b'] is None  # taken verbatim the sentinel reads as ~1.8e19 bytes of process VRAM
     sampler._nvml.shutdown()
 
 
@@ -270,7 +270,7 @@ def test_stats_sample_treats_foreign_pid_namespace_as_unavailable(tmp_path, monk
     """NVML reports host pids; in a container without ``--pid=host`` the sampler's own tree pids are
     namespace-local, so no reported process matches and the device would read a confident 0 — a GPU-heavy eval
     published as using no VRAM. Pids that exist in no namespace we can see mark that mismatch, and the device
-    reads unavailable instead (Codex on PR #531)."""
+    reads unavailable instead."""
     _install_fake_nvml(monkeypatch)
     # A host pid the sampler's namespace cannot see, standing in for NVML reporting from outside the container.
     foreign = _FakeProc(4_000_000, 8 * 1024**3)
@@ -278,7 +278,7 @@ def test_stats_sample_treats_foreign_pid_namespace_as_unavailable(tmp_path, monk
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetGraphicsRunningProcesses', lambda h: [])
     monkeypatch.setattr(psutil, 'pid_exists', lambda pid: pid != foreign.pid)
     sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
-    assert sampler._sample()['gpus'][0]['proc_mem_b'] is None  # pre-fix this read 0, indistinguishable from idle
+    assert sampler._sample()['gpus'][0]['proc_mem_b'] is None  # a 0 here would be indistinguishable from idle
     sampler._nvml.shutdown()
 
 
@@ -340,8 +340,7 @@ def test_stats_sampler_thread_writes_lines(tmp_path, monkeypatch):
 def test_bind_seals_truncated_predecessor_line(tmp_path):
     """A killed run can leave ``<process>.spans.jsonl`` ending in a truncated fragment with no trailing newline.
     The next bind into the same directory seals that line before its exporter appends, so the first new record
-    starts a fresh line instead of concatenating onto the fragment and being skipped along with it (Codex on
-    PR #531)."""
+    starts a fresh line instead of concatenating onto the fragment and being skipped along with it."""
     spans_path = tmp_path / 'telemetry' / 'harness.spans.jsonl'
 
     with telemetry.bind(tmp_path, 'harness', 'run-1'):
@@ -355,7 +354,7 @@ def test_bind_seals_truncated_predecessor_line(tmp_path):
             pass
 
     names = [rec.name for rec in telemetry.read_spans(spans_path)]
-    assert 'second' in names  # pre-fix, the new record merges into the fragment and is skipped
+    assert 'second' in names  # an unsealed fragment swallows the record appended after it
     assert 'first' in names  # the pre-existing valid span still reads back
 
 

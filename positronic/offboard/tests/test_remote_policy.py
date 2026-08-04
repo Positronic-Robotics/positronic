@@ -259,7 +259,7 @@ def test_records_infer_span_without_scheduling_wrapper(tmp_path):
 def test_infer_span_excludes_client_side_image_preparation(tmp_path):
     """``policy.infer`` is the remote round-trip, so JPEG-encoding the observation stays outside it: folding
     client CPU work into the span would inflate the inference percentiles and the policy-server capacity
-    estimate the report derives from them (Codex on PR #531)."""
+    estimate the report derives from them."""
     policy, _ = _mock_remote_policy({**EMPTY_STACK, 'compress_images': True}, infer_return=[])
     session = policy.new_session()
     encoded_at: list[int] = []
@@ -275,7 +275,7 @@ def test_infer_span_excludes_client_side_image_preparation(tmp_path):
     (span,) = telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl')
     assert span.name == telemetry_keys.SPAN_POLICY_INFER
     assert encoded_at, 'the observation carried an image to compress'
-    assert span.start_ns >= encoded_at[-1]  # pre-fix the encode ran inside the span, so the span opened first
+    assert span.start_ns >= encoded_at[-1]  # every encode finishes before the span opens, not inside it
 
 
 def test_records_infer_span_when_inference_raises(tmp_path):
