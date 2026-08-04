@@ -6,6 +6,7 @@ from typing import Any
 import configuronic as cfn
 import pos3
 
+from positronic import keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress
 from positronic.policy import Codec, Policy
@@ -45,10 +46,10 @@ class LerobotSource(ModelSource):
         local = run_with_progress(
             lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {model_id}', on_progress
         )
-        return LerobotPolicy(str(local), self.device, extra_meta={'checkpoint_path': checkpoint_path})
+        return LerobotPolicy(str(local), self.device, extra_meta={keys.CHECKPOINT_PATH: checkpoint_path})
 
     def meta(self, model_id: str) -> dict[str, Any]:
-        return {'device': self.device, 'experiment_name': self.experiment_name}
+        return {'device': self.device, keys.EXPERIMENT_NAME: self.experiment_name}
 
 
 lerobot_source = cfn.Config(LerobotSource, checkpoint=None, device=None)

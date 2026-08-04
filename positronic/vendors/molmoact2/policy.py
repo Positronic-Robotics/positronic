@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
+from positronic import keys
 from positronic.policy import Policy, Session
 
 
@@ -47,7 +48,7 @@ class MolmoAct2Policy(Policy):
         ).eval()
         self._norm_tag = norm_tag
         self._num_steps = num_steps
-        self._meta = {'type': 'molmoact2', 'norm_tag': norm_tag}
+        self._meta = {keys.TYPE: 'molmoact2', 'norm_tag': norm_tag}
 
     def new_session(self, context=None, now=None) -> Session:
         return _MolmoAct2Session(self._model, self._processor, self._norm_tag, self._num_steps, self._meta)
