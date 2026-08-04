@@ -428,9 +428,11 @@ class _Nvml:
         # NVML reports host pids. In a PID namespace without ``--pid=host`` the tree pids are namespace-local,
         # so every membership test below misses and the device reads a confident 0 — a GPU-heavy eval published
         # as using no VRAM. The host mapping is unreadable from inside the namespace, so translating is out;
-        # but a reported pid that exists in no namespace we can see is that mismatch. On the host every
-        # reported pid resolves, including other tenants', so a device we genuinely do not touch still reads 0.
-        if procs and not any(psutil.pid_exists(proc.pid) for proc in procs):
+        # but a reported pid that resolves to no process here is that mismatch. Every reported pid must resolve:
+        # a namespace-local pid can collide with an unrelated host pid, and one such collision is enough to make
+        # the whole set look comparable and charge a stranger's memory to this eval. On the host they all
+        # resolve, including other tenants', so a device this eval does not touch still reads 0.
+        if procs and not all(psutil.pid_exists(proc.pid) for proc in procs):
             if not self._proc_mem_warned:
                 logger.info('telemetry: GPU processes live in another PID namespace; proc_mem_b left null')
                 self._proc_mem_warned = True

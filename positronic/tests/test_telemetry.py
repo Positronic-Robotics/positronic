@@ -304,6 +304,21 @@ def test_stats_sample_treats_foreign_pid_namespace_as_unavailable(tmp_path, monk
     sampler._nvml.shutdown()
 
 
+def test_stats_sample_treats_a_partly_resolving_pid_set_as_unavailable(tmp_path, monkeypatch):
+    """A namespace-local pid can collide with an unrelated host pid, so one reported process resolving here is
+    no evidence the two pid spaces are the same. Attribution needs every reported pid to resolve; short of
+    that the device reads unavailable rather than charging a stranger's memory to this eval."""
+    _install_fake_nvml(monkeypatch)
+    collision = _FakeProc(os.getpid(), 2 * 1024**3)  # a host pid that happens to name a live process here
+    foreign = _FakeProc(4_000_000, 8 * 1024**3)
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetComputeRunningProcesses', lambda h: [collision, foreign])
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetGraphicsRunningProcesses', lambda h: [])
+    monkeypatch.setattr(psutil, 'pid_exists', lambda pid: pid != foreign.pid)
+    sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
+    assert sampler._sample()[telemetry.STAT_GPUS][0][telemetry.GPU_PROC_MEM_B] is None
+    sampler._nvml.shutdown()
+
+
 def test_stats_sample_reports_zero_when_gpu_is_idle(tmp_path, monkeypatch):
     """A device with no processes on it is genuinely 0 for this eval, not unavailable — the namespace check
     must not swallow the ordinary idle case."""
