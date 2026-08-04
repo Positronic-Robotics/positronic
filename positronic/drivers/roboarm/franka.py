@@ -213,18 +213,8 @@ class Robot(pimm.ControlSystem):
             robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
 
     def _reset(self, robot, robot_state: FrankaState, rate_limiter, should_stop) -> Iterator[pimm.Sleep]:
-        """Home the arm, yielding until it arrives. Drive with ``yield from``.
-
-        A generator rather than a blocking call because the waiting has to keep clearing robot
-        errors. `set_target_joints` returns as soon as the target is published, and the driver's own
-        loop is what notices and clears a reflex — so a wait that parks inside the library stops the
-        only thing that can end the move it is waiting for. Ticking here keeps that work running,
-        and lets `should_stop` cut the wait short.
-
-        Raises if the arm does not arrive: homing is where the run starts from, so continuing with
-        the arm somewhere unknown is worse than stopping.
-        """
-        # The startup call gets a freshly allocated FrankaState, so fill it before anyone reads it.
+        """Home the arm, yielding until it arrives. Drive with ``yield from``."""
+        # The first emit must not ship an unfilled state.
         robot_state.encode(robot.state())
         robot_state._start_reset()
         self.state.emit(robot_state)
@@ -239,7 +229,7 @@ class Robot(pimm.ControlSystem):
 
         while True:
             if should_stop.value:
-                return  # shutting down — the caller's `finally` halts the control thread
+                return
             goal = robot.goal()
             if goal.status == pf.GoalStatus.REACHED:
                 break
@@ -248,16 +238,9 @@ class Robot(pimm.ControlSystem):
 
             st = robot.state()
             robot_state.encode(st)
-            # `encode` derives the status from the robot's error flag, so it reports AVAILABLE the
-            # moment nothing is wrong — but the arm is still on its way home. Consumers wait for
-            # RESETTING to clear to know homing finished, so re-mark it or the first tick releases
-            # them before the arm has moved.
-            robot_state._start_reset()
+            robot_state._start_reset()  # `encode` clears RESETTING; the arm has not arrived
             self.state.emit(robot_state)
             if st.error != 0:
-                # Same policy as the main loop: the driver clears a recoverable error itself. It also
-                # stops active control, so the goal settles ABORTED and the raise above ends the
-                # homing rather than pushing on toward whatever the arm hit.
                 robot.recover_from_errors()
             yield rate_limiter.wait()
 
