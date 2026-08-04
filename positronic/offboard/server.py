@@ -191,7 +191,7 @@ class PolicyServer:
         self._manager = PolicyManager(self._source)
         self.host = host
         self.port = port
-        self.metadata: dict[str, Any] = {'host': host, 'port': port}
+        self.metadata: dict[str, Any] = {keys.HOST: host, keys.PORT: port}
         # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
 

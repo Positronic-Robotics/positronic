@@ -639,8 +639,8 @@ phail_inference = base_cfg.transform.override(
                     'robot_commands.reset',
                     'robot_command.reset',
                     'eval.object',
-                    f'{keys.POLICY_META}.port',
-                    f'{keys.POLICY_META}.host',
+                    f'{keys.POLICY_META}.{keys.PORT}',
+                    f'{keys.POLICY_META}.{keys.HOST}',
                     f'{keys.SERVER_META}.{keys.CHECKPOINT_ID}',
                     f'{keys.SERVER_META}.{keys.CONFIG_NAME}',
                     f'{keys.SERVER_META}.{keys.EXPERIMENT_NAME}',
@@ -744,8 +744,8 @@ phail_inference_release = base_cfg.transform.override(
                 remove=[
                     'robot_commands.reset',
                     'robot_command.reset',
-                    f'{keys.POLICY_META}.port',
-                    f'{keys.POLICY_META}.host',
+                    f'{keys.POLICY_META}.{keys.PORT}',
+                    f'{keys.POLICY_META}.{keys.HOST}',
                     f'{keys.POLICY_META}.{keys.TYPE}',
                 ]
             ),
