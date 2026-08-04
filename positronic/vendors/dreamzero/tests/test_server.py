@@ -45,6 +45,7 @@ def test_run_directory_is_served_at_its_latest_step(latest):
         'type': 'dreamzero',
         'backbone': 'wan2.2',
         'num_gpus': 1,
+        'checkpoint_path': RUN_DIR + 'checkpoint-100000',
         'experiment_name': 'w22f1_100k_200626',
     }
 
@@ -53,10 +54,10 @@ def test_a_newer_checkpoint_does_not_displace_the_id_being_loaded(latest):
     downloaded = latest('105000')
     source = DreamZeroSource(model_path=RUN_DIR, backbone='wan2.2')
 
-    policy = source.load('100000')
+    source.load('100000')
 
     assert downloaded == [RUN_DIR + 'checkpoint-100000']
-    assert policy.meta == {'checkpoint_path': RUN_DIR + 'checkpoint-100000'}
+    assert source.meta('100000')['checkpoint_path'] == RUN_DIR + 'checkpoint-100000'
 
 
 def test_a_huggingface_repo_is_itself_the_checkpoint():
@@ -75,7 +76,7 @@ def test_a_zero_padded_step_is_reached_by_the_name_its_directory_carries(latest)
     assert downloaded == [RUN_DIR + 'checkpoint-005000']
 
 
-def test_the_experiment_name_does_not_relist_the_bucket(monkeypatch):
+def test_meta_does_not_relist_the_bucket(monkeypatch):
     monkeypatch.setattr(server, 'get_latest_checkpoint', lambda _path, _prefix: pytest.fail('meta must not reach S3'))
     source = DreamZeroSource(model_path=RUN_DIR, backbone='wan2.2')
 

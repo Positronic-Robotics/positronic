@@ -230,18 +230,13 @@ class _DreamZeroSession(Session):
 class DreamZeroPolicy(Policy):
     """Owns the DreamZero subprocess; every session talks to it over its own roboarena connection."""
 
-    def __init__(self, sp: DreamZeroSubprocess, checkpoint_path: str):
+    def __init__(self, sp: DreamZeroSubprocess):
         self._subprocess = sp
-        self._checkpoint_path = checkpoint_path
 
     def new_session(self, context=None, now=None):
         client = RoboarenaClient(port=self._subprocess.roboarena_port)
         client.connect()
         return _DreamZeroSession(client, str(uuid.uuid4()))
-
-    @property
-    def meta(self):
-        return {'checkpoint_path': self._checkpoint_path}
 
     def close(self):
         self._subprocess.stop()
@@ -272,10 +267,13 @@ class DreamZeroSource(ModelSource):
         self._enable_dit_cache = enable_dit_cache
 
     def _checkpoint_path(self, model_id: str) -> str:
-        """The checkpoint directory whose public id is ``model_id``."""
-        resolved = _resolve_checkpoint_path(self._model_path)
-        if _checkpoint_id(resolved) == model_id:
-            return resolved
+        """The checkpoint directory whose public id is ``model_id``.
+
+        Composed rather than looked up: a session handshake reaches here, and must not need the
+        checkpoint bucket to describe weights that are already loaded.
+        """
+        if _checkpoint_id(self._model_path) == model_id:
+            return self._model_path
         return f'{self._model_path.rstrip("/")}/checkpoint-{model_id}'
 
     def get_models(self) -> list[str]:
@@ -300,16 +298,16 @@ class DreamZeroSource(ModelSource):
         except Exception:
             sp.stop()
             raise
-        return DreamZeroPolicy(sp, checkpoint_path)
+        return DreamZeroPolicy(sp)
 
     def meta(self, model_id: str) -> dict[str, Any]:
+        checkpoint_path = self._checkpoint_path(model_id)
         return {
             'type': 'dreamzero',
             'backbone': self._backbone,
             'num_gpus': self._num_gpus,
-            # Read off the configured path: a handshake must not depend on the checkpoint bucket
-            # being reachable, since the weights it describes are already in GPU memory.
-            'experiment_name': _experiment_name(self._model_path),
+            'checkpoint_path': checkpoint_path,
+            'experiment_name': _experiment_name(checkpoint_path),
         }
 
 
