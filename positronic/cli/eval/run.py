@@ -135,6 +135,13 @@ def main(
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
 
+    # Ahead of warmup, which opens a session and so already samples: the counter it samples against holds
+    # what the output directory already recorded, rather than starting the run from zero.
+    if output_dir is not None:
+        output_dir = pos3.sync(output_dir, sync_on_error=True)
+        utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
+        _seed_counter(policy, output_dir)
+
     # Drive the policy's remote endpoints through their cold start before hardware and the operator
     # surface come up: opening a session blocks on the server handshake, which returns only once the
     # model is loaded, and a SampledPolicy reaches every sub-policy. The first episode then begins
@@ -143,11 +150,6 @@ def main(
     # an empty .rrd plus a bump to the recorder's episode counter — but warmup is not a real episode.
     logger.info('Warming up policy endpoints')
     policy.new_session().close()
-
-    if output_dir is not None:
-        output_dir = pos3.sync(output_dir, sync_on_error=True)
-        utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
-        _seed_counter(policy, output_dir)
 
     # One completion sink — so one ``SampledPolicy`` counter — across every eval, keeping sampling balanced
     # over the whole sweep.

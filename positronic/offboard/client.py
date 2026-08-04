@@ -180,11 +180,12 @@ class InferenceClient:
                 if ws is not None:
                     ws.close()
                 # A non-101 upgrade response only means "not ready" when it's a 5xx or 429; any other status
-                # (401/403/404, …) is permanent misconfiguration and surfaces immediately.
+                # (401/403/404, …) is permanent misconfiguration and surfaces immediately — naming the URL,
+                # which is the whole diagnosis when several endpoints are being opened at once.
                 if isinstance(e, InvalidStatus) and not (
                     e.response.status_code >= 500 or e.response.status_code == 429
                 ):
-                    raise
+                    raise RuntimeError(f'{e} (connecting to {self.session_url})') from e
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'{e} (connecting to {self.session_url})') from e
                 logger.info('Server not ready (cold start?): %s; retrying in %.0fs', e, backoff)

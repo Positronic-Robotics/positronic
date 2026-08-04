@@ -255,6 +255,20 @@ def test_remote_policy_meta_exposes_server_fields():
     assert meta['server.model_name'] == 'foo'
 
 
+def test_label_distinguishes_endpoints_serving_one_checkpoint():
+    """Two deployments of the same checkpoint report identical server metadata, so their labels are
+    what a ``SampledPolicy`` keys on."""
+    server_meta = {'checkpoint_path': '/ckpts/abc', **EMPTY_STACK}
+    labelled, _ = _mock_remote_policy(server_meta, label='nm167k')
+    other, _ = _mock_remote_policy(server_meta, label='nm167k_us')
+    unlabelled, _ = _mock_remote_policy(server_meta)
+
+    assert labelled.meta['label'] == 'nm167k'
+    assert other.meta['label'] == 'nm167k_us'
+    assert labelled.meta['server.checkpoint_path'] == other.meta['server.checkpoint_path']
+    assert 'label' not in unlabelled.meta
+
+
 def test_no_declaration_falls_back_to_chunked_schedule():
     """A server that declares no ``local_stack`` in the handshake gets the standard ChunkedSchedule."""
     clock = [0.0]

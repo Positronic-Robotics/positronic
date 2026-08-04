@@ -1,11 +1,8 @@
-import logging
 import random
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Hashable, Sequence
 from typing import Any
-
-logger = logging.getLogger(__name__)
 
 
 class EpisodeCounter:
@@ -99,10 +96,4 @@ class BalancedSampler(Sampler):
         c = [counts[k] for k in keys]
         max_count = max(c) if c else 0
         weights = [max_count + self._balance - x for x in c]
-        chosen = random.choices(list(keys), weights)[0]
-        lines = ['BalancedSampler']
-        for k, x, w in zip(keys, c, weights, strict=True):
-            marker = ' ←' if k == chosen else ''
-            lines.append(f'  {k}: count={x} weight={w}{marker}')
-        logger.info('\n'.join(lines))
-        return chosen
+        return random.choices(list(keys), weights)[0]
