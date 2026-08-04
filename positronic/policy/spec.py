@@ -28,6 +28,7 @@ import operator
 from collections.abc import Callable
 from typing import Any
 
+from positronic import keys
 from positronic.policy.action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
@@ -117,6 +118,14 @@ class Pipeline:
     def __init__(self, components: tuple[PolicyWrapper, ...], source: ModelSource):
         self.components = tuple(components)
         self.source = source
+        # Which side of ``remote`` the conversion sits on is a choice; doing it on both sides is not. Two
+        # declarations convert twice, leaving poses at the product while the handshake still names one of them.
+        declared = [c for c in self.components if keys.EE_FRAME in c.meta]
+        if len(declared) > 1:
+            raise ValueError(
+                f'{len(declared)} components of this pipeline declare {keys.EE_FRAME}; each converts, so poses '
+                'end up at the product of their transforms. Declare the frame once.'
+            )
 
 
 class PolicySource(ModelSource):

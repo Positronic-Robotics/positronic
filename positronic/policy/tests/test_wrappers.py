@@ -438,6 +438,13 @@ class TestPipe:
         with pytest.raises(ValueError, match='exactly one'):
             spec.split(ChunkedSchedule() | spec.PolicySource(_ConstPolicy([])))
 
+    def test_pipe_refuses_a_frame_declared_on_both_sides_of_the_wire(self):
+        """Rig-side and server-side conversion are alternatives; running both puts poses at the product."""
+        t = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
+        chain = ChangeEEFrame(t) | spec.remote | (ActionTimestamp(fps=10.0) | ChangeEEFrame(t))
+        with pytest.raises(ValueError, match=keys.EE_FRAME):
+            _ = chain | spec.PolicySource(_ConstPolicy([]))
+
     def test_pipe_composes_no_further(self):
         pipeline: Any = ChunkedSchedule() | spec.remote | spec.PolicySource(_ConstPolicy([]))
         with pytest.raises(TypeError):
