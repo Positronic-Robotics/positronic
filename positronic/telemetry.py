@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from opentelemetry import trace
+from opentelemetry.context import Context
 from opentelemetry.trace import Span
 
 # The resource-block attribute keys are defined by the stdlib-only env-server writer — the isolated env
@@ -185,21 +186,27 @@ def pop_anchor(anchor: Span) -> None:
 
 
 def _anchor_context() -> Any:
-    """The context parenting a span to the innermost anchor; ``None`` (ambient) when nothing is anchored."""
-    return trace.set_span_in_context(_anchors[-1]) if _anchors else None
+    """The context parenting a span to the innermost anchor, or a root context when nothing is anchored.
+
+    Rooting is explicit rather than ``None``, which would mean "whatever is ambient": a host application
+    embedding this code can have its own OTel span current, and inheriting it makes the span a child of a
+    foreign trace. Under parent-based sampling an unsampled host span then makes ``eval.pass`` non-recording,
+    and every episode and phase anchored beneath it is dropped — the sidecar comes back empty and the report
+    reads the run as untimed.
+    """
+    return trace.set_span_in_context(_anchors[-1]) if _anchors else Context()
 
 
 def _anchor_parent() -> Any:
     """The parent context for a span that is not nested in an active one. A currently-active span of THIS
     provider's trace means a genuinely nested span — ``None`` lets it parent ambiently. Otherwise the
-    span parents to the innermost anchor: between scheduler hops nothing of ours is current, and a host
-    application's unrelated current span must not adopt telemetry spans — they would leave the trace the
-    report reduces. With nothing anchored there is nothing to anchor to; ambient stands."""
-    if not _anchors:
-        return None
-    current = trace.get_current_span().get_span_context()
-    if current.is_valid and current.trace_id == _anchors[-1].get_span_context().trace_id:
-        return None
+    span parents to the innermost anchor, or roots: between scheduler hops nothing of ours is current, and a
+    host application's unrelated current span must not adopt telemetry spans — they would leave the trace the
+    report reduces, and take its sampling decision with them."""
+    if _anchors:
+        current = trace.get_current_span().get_span_context()
+        if current.is_valid and current.trace_id == _anchors[-1].get_span_context().trace_id:
+            return None
     return _anchor_context()
 
 

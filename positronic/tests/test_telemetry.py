@@ -8,6 +8,7 @@ import psutil
 import pynvml
 import pytest
 from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
+from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
 
 from positronic import telemetry
 
@@ -183,6 +184,23 @@ def test_anchored_span_ignores_foreign_ambient_span(tmp_path):
     spans = _spans_by_name(tmp_path / 'telemetry' / 'harness.spans.jsonl')
     assert 'host-span' not in spans  # the foreign span belongs to the host's provider, not our file
     assert spans['probe'].parent_id == spans['outer'].span_id
+
+
+def test_root_span_detaches_from_a_foreign_ambient_span(tmp_path):
+    """With nothing anchored, a host application's current OTel span must not become the parent of ours.
+    Inheriting it hands our trace the host's sampling decision: under parent-based sampling an unsampled host
+    span makes the pass non-recording, and every episode and phase anchored beneath it is dropped — an empty
+    sidecar, and a report that reads a timed run as untimed."""
+    foreign = SdkTracerProvider(sampler=ALWAYS_OFF)
+    with telemetry.bind(tmp_path, 'harness', 'run-foreign-root'):
+        with foreign.get_tracer('host-app').start_as_current_span('host-span'):
+            with _anchored('eval.pass'):
+                with telemetry.span('probe'):
+                    pass
+
+    spans = _spans_by_name(tmp_path / 'telemetry' / 'harness.spans.jsonl')
+    assert spans['eval.pass'].parent_id is None  # a root of our own trace, not a child of the host's
+    assert spans['probe'].parent_id == spans['eval.pass'].span_id
 
 
 def _install_fake_nvml(monkeypatch):
