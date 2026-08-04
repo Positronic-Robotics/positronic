@@ -90,6 +90,9 @@ class Robot(pimm.ControlSystem):
 
         player = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
         grip_player = roboarm_command.TrajectoryPlayer[float]()
+        # The motors take one position for the whole chain, so a grip target reaches them only with the next
+        # arm command; until then it is played but unsent.
+        pending_grip: roboarm_command.Applied[float] | None = None
 
         while not should_stop.value:
             cmd_msg = self.commands.read()
@@ -100,30 +103,15 @@ class Robot(pimm.ControlSystem):
                 grip_player.set(grip_msg.data)
             played_grip = grip_player.advance(clock.now_ns())
             if played_grip is not None:
-                self.executed_target_grip.emit([played_grip])
+                pending_grip = played_grip
                 self._last_grip = played_grip.value
             played = player.advance(clock.now_ns())
             if played is not None:
-                match played.value:
-                    case roboarm_command.Reset():
-                        raise NotImplementedError('Reset not implemented')
-                    case roboarm_command.CartesianPosition(pose):
-                        qpos = self._solve_ik(state, pose)
-                        q_with_gripper = np.concatenate([qpos, [self._last_grip]])
-                        self.motor_bus.set_target_position(q_with_gripper)
-                    case roboarm_command.CartesianDelta(delta):
-                        ee_pose, _ = self._forward_kinematics(self.motor_bus.position)
-                        target = roboarm_command.apply_cartesian_delta(ee_pose, delta)
-                        qpos = self._solve_ik(state, target)
-                        q_with_gripper = np.concatenate([qpos, [self._last_grip]])
-                        self.motor_bus.set_target_position(q_with_gripper)
-                    case roboarm_command.JointPosition(qpos):
-                        q_norm = self.rad_to_norm(qpos)
-                        q_with_gripper = np.concatenate([q_norm, [self._last_grip]])
-                        self.motor_bus.set_target_position(q_with_gripper)
-                    case _:
-                        raise ValueError(f'Unknown command: {played.value}')
+                self._apply_command(played.value, state)
                 self.executed_commands.emit([played])
+                if pending_grip is not None:
+                    self.executed_target_grip.emit([pending_grip])
+                    pending_grip = None
 
             q = self.motor_bus.position
             dq = self.motor_bus.velocity[:-1]
@@ -135,13 +123,36 @@ class Robot(pimm.ControlSystem):
             self.grip.emit(gripper)
             yield rate_limit.wait()
 
+    def _apply_command(self, cmd, state: SO101State) -> None:
+        """Drive the chain to ``cmd``. The motors take one position for the whole chain, so every write
+        carries the latest grip target alongside the joints."""
+        match cmd:
+            case roboarm_command.Reset():
+                raise NotImplementedError('Reset not implemented')
+            case roboarm_command.CartesianPosition(pose):
+                qpos = self._solve_ik(state, pose)
+                q_with_gripper = np.concatenate([qpos, [self._last_grip]])
+                self.motor_bus.set_target_position(q_with_gripper)
+            case roboarm_command.CartesianDelta(delta):
+                ee_pose, _ = self._forward_kinematics(self.motor_bus.position)
+                target = roboarm_command.apply_cartesian_delta(ee_pose, delta)
+                qpos = self._solve_ik(state, target)
+                q_with_gripper = np.concatenate([qpos, [self._last_grip]])
+                self.motor_bus.set_target_position(q_with_gripper)
+            case roboarm_command.JointPosition(qpos):
+                q_norm = self.rad_to_norm(qpos)
+                q_with_gripper = np.concatenate([q_norm, [self._last_grip]])
+                self.motor_bus.set_target_position(q_with_gripper)
+            case _:
+                raise ValueError(f'Unknown command: {cmd}')
+
     def _solve_ik(self, state, pose: geom.Transform3D) -> np.ndarray:
         q = np.array(state.q).tolist()
         q.append(0.0)  # ignore gripper in ik
         q_rad_new = self.kinematic.inverse(q, pose, n_iter=10)
         return self.rad_to_norm(q_rad_new)[:-1]
 
-    def _forward_kinematics(self, motor_position) -> geom.Transform3D:
+    def _forward_kinematics(self, motor_position) -> tuple[geom.Transform3D, float]:
         q_rad = self.norm_to_rad(motor_position)
         ee_pose = self.kinematic.forward(q_rad)
         gripper = motor_position[-1]
