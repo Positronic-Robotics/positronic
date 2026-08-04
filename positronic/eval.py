@@ -15,6 +15,10 @@ EVAL_EPISODE_INDEX = 'eval.episode_index'
 EVAL_TRIAL_INDEX = 'eval.trial_index'
 EVAL_TRIAL_COUNT = 'eval.trial_count'
 
+# The trial's verdict, put in a terminal ``done`` payload by an adapter and landing verbatim in the episode's
+# static data, where analysis reads it.
+EVAL_SUCCESS = 'eval.success'
+
 
 @dataclass
 class Observation:

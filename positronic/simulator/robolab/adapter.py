@@ -13,6 +13,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers.roboarm.models import DROID_EE_FRAME
+from positronic.eval import EVAL_SUCCESS
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
@@ -60,4 +61,4 @@ class RobolabAdapter(WireCommandAdapter):
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
         # ``done`` covers termination and truncation, so the trial ends either way; ``success`` is True only
         # when the task's success condition fired, keeping timeouts honest.
-        return {'eval.success': bool(result['success'])} if result['done'] else None
+        return {EVAL_SUCCESS: bool(result['success'])} if result['done'] else None
