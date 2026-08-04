@@ -344,7 +344,11 @@ class WebEvalUI(pimm.ControlSystem):
                 # Only reached on a clean finalize (idle) or the idle-ABORT path: let the commanded home
                 # reach the arm, then stop the World.
                 await asyncio.sleep(_FINISH_HOME_SETTLE_S)
-                should_stop._event.set()
+                # Setting the event is the only stop that survives a nohup launch, where SIGINT is SIG_IGN.
+                if isinstance(should_stop, pimm.world.EventReceiver):
+                    should_stop._event.set()
+                else:
+                    print('finish_run: stop signal is not event-backed; leaving the World running.')
 
             asyncio.create_task(_wrap_up())
             return {'wrapping_up': True}
@@ -372,7 +376,7 @@ class WebEvalUI(pimm.ControlSystem):
                         latest[name] = cam_msg.data.array
                         changed = True
                 status_msg = self.status.read()
-                if status_msg.updated and status_msg.data is not None:
+                if status_msg is not None and status_msg.updated and status_msg.data is not None:
                     status_holder['value'] = status_msg.data
                 if changed and len(latest) == len(names):
                     stream.push(_tile([latest[name] for name in names], self.width))

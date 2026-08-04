@@ -256,15 +256,15 @@ class Harness(pimm.ControlSystem):
 
     def _robot_in_error(self) -> bool:
         """Best-effort read of the latest robot_state: True iff it reports ``RobotStatus.ERROR``.
-        Additive and safe — any gap (no observation yet, or a state without ``.status``) returns
+        Additive and safe — any gap (no observation yet, or a state of another shape) returns
         False, so it never raises a false alarm and never breaks the status emit."""
         try:
             # noqa: PLC0415 — lazy on purpose: the status path stays driver-agnostic, so a harness
             # used with a non-roboarm embodiment never imports the driver package.
-            from positronic.drivers.roboarm import RobotStatus  # noqa: PLC0415
+            from positronic.drivers.roboarm import RobotStatus, State  # noqa: PLC0415
 
             state = self.observations['robot_state'].value
-            return state is not None and state.status == RobotStatus.ERROR
+            return isinstance(state, State) and state.status == RobotStatus.ERROR
         except Exception:
             return False
 

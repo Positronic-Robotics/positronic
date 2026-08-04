@@ -1608,9 +1608,9 @@ def test_begin_episode_yields_before_the_blocking_handshake():
     handshakes: list[str] = []
 
     class _BlockingHandshakePolicy(Policy):
-        def new_session(self, context, clock_now):  # noqa: ARG002 — the block is the point
+        def new_session(self, context=None, now=None):
             handshakes.append('new_session')
-            return StubPolicy().new_session(context, clock_now)
+            return StubPolicy().new_session(context, now)
 
     harness = Harness(_BlockingHandshakePolicy(), make_embodiment())
     statuses = RecordingEmitter()

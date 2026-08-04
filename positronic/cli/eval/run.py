@@ -105,8 +105,10 @@ def _run_world(
             if driver.manual_commands is not None:
                 world.connect(driver.manual_commands, harness.manual_command)
             # Feed live harness status to an operator surface that wants it (e.g. WebEvalUI's badge).
-            if driver.gui is not None and hasattr(driver.gui, 'status'):
-                world.connect(harness.status, driver.gui.status)
+            # The status sink is optional: a GUI without one has no such attribute.
+            gui_status = getattr(driver.gui, 'status', None) if driver.gui is not None else None
+            if gui_status is not None:
+                world.connect(harness.status, gui_status)
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)
 
