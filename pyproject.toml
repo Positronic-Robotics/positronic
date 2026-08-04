@@ -51,7 +51,6 @@ positronic="positronic.cli:_internal_main"
 positronic-server="positronic.server.positronic_server:_internal_main"
 positronic-inference="positronic.inference:_internal_main"
 positronic-probe="positronic.probe:_internal_main"
-positronic-server-probe="positronic.server.probe:_internal_main"
 positronic-data-collection="positronic.data_collection:_internal_main"
 
 
@@ -98,10 +97,6 @@ lance = [
 ]
 yam = [
     "i2rt",  # i2rt YAM arm: joint-space position-PD + gravity-comp over CAN; not on PyPI, see [tool.uv.sources]
-]
-probe = [
-    # `positronic-server-probe` only: the headless browser it drives to render a viewer page.
-    "playwright",
 ]
 telemetry = [
     # `positronic eval run --timing` only: the OTel SDK + exporter that write the span sidecars, and the
