@@ -24,14 +24,15 @@ _QUAT = geom.Rotation.Representation.QUAT
 
 def _ensure_site(spec: mj.MjSpec, frame: str) -> None:  # pyright: ignore[reportAttributeAccessIssue]
     """Ensure ``frame`` is a site in ``spec``, adding one at the body origin when it names a body."""
-    all_sites = {s.name for b in spec.bodies for s in b.sites}
-    if frame in all_sites:
-        return
-    body_names = {b.name for b in spec.bodies}
-    if frame in body_names:
-        site = spec.body(frame).add_site()
-        site.name = frame
-        return
+    for b in spec.bodies:
+        for s in b.sites:
+            if s.name == frame:
+                return
+    for b in spec.bodies:
+        if b.name == frame:
+            site = b.add_site()
+            site.name = frame
+            return
     raise ValueError(f'Frame {frame!r} not found as site or body in model')
 
 

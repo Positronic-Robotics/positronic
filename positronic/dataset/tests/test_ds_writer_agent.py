@@ -413,7 +413,6 @@ def test_robot_command_serializer_variants(world):
 
     pose = geom.Transform3D(translation=np.array([0.2, 0.0, -0.1]), rotation=geom.Rotation.identity)
     delta = geom.Transform3D(translation=np.array([0.01, -0.02, 0.03]), rotation=geom.Rotation.identity)
-    # A delta's numbers move the arm somewhere else when read against another frame, so the frame is recorded too.
     delta_frame = geom.Transform3D(translation=np.array([0.0, 0.0, 0.05]), rotation=geom.Rotation.identity)
     joints = np.arange(7, dtype=np.float32) * 0.1
 
