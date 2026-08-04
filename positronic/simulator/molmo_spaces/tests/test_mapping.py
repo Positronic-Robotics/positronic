@@ -219,7 +219,5 @@ def test_episode_seed_prefers_the_override_then_the_spec_then_the_index():
     spec = types.SimpleNamespace(seed=7)
     assert mapping.resolve_episode_seed(spec, 3, 99) == 99
     assert mapping.resolve_episode_seed(spec, 3) == 7
-    # An unseeded spec falls back to the index, as MolmoSpaces' own runner does — not to a constant, which
-    # would put every unseeded episode of a benchmark on the same stream.
     assert mapping.resolve_episode_seed(types.SimpleNamespace(seed=None), 3) == 3
     assert mapping.resolve_episode_seed(types.SimpleNamespace(), 5) == 5
