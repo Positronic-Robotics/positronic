@@ -26,6 +26,10 @@ JOINT_VEL = 'joint_vel'
 HOLD = 'hold'
 CANONICAL_COMMAND_TYPES = (CARTESIAN, CARTESIAN_DELTA, JOINT_POS, JOINT_VEL, HOLD)
 
+# The reset frame's horizon: the trial's minimum time budget in sim-seconds, or absent when the env enforces
+# none. An env venv's ``env.py`` writes it and positronic's proxy reads it, so both sides import it here.
+FRAME_HORIZON = 'horizon'
+
 
 def _pack(obj):
     if isinstance(obj, np.ndarray):

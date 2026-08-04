@@ -18,6 +18,7 @@ from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
 
@@ -95,7 +96,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         # Optional: only envs that enforce a horizon report one. Fold in the one control period this proxy spends
         # publishing frame-0 before the first step — the env reaches its horizon a tick after the harness arms the
         # deadline, so the timeout floor must clear the horizon plus that tick, not the bare horizon.
-        sim_horizon = self._frame.get('horizon')
+        sim_horizon = self._frame.get(protocol.FRAME_HORIZON)
         self._horizon = None if sim_horizon is None else sim_horizon + self._frame['control_dt']
         self._reset_pending = True
         self._active = True
