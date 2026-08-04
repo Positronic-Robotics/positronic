@@ -96,11 +96,13 @@ class Robot(pimm.ControlSystem):
 
         while not should_stop.value:
             cmd_msg = self.commands.read()
-            if cmd_msg.updated:
+            if cmd_msg is not None and cmd_msg.updated:
                 player.set(cmd_msg.data)
             grip_msg = self.target_grip.read()
-            if grip_msg.updated:
+            if grip_msg is not None and grip_msg.updated:
                 grip_player.set(grip_msg.data)
+                if not grip_msg.data:  # cancelled: a grip still waiting for a write never ran
+                    pending_grip = None
             played_grip = grip_player.advance(clock.now_ns())
             if played_grip is not None:
                 pending_grip = played_grip
