@@ -9,7 +9,7 @@ MuJoCo model is, so the adapter holds no model and stays geometry-only.
 from typing import Any
 
 import pimm
-from positronic import geom
+from positronic import geom, keys
 from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.molmo_spaces import mapping
@@ -29,17 +29,16 @@ class MolmoAdapter(WireCommandAdapter):
         self._camera_dict = camera_dict  # logical observation name -> the MolmoSpaces obs camera key
 
     def _reset_token(self, context: dict[str, Any]) -> Any:
-        # The benchmark episode selector rides the token: env.py loads the benchmark once and builds the task
-        # for this episode index, seeding from the spec (``eval.seed`` overrides the spec's own seed when set).
-        return {'episode_index': context[EVAL_EPISODE_INDEX], 'seed': context.get(EVAL_SEED)}
+        # The benchmark episode selector rides the token. An absent seed leaves the episode spec's own in force.
+        return {mapping.TOKEN_EPISODE_INDEX: context[EVAL_EPISODE_INDEX], mapping.TOKEN_SEED: context.get(EVAL_SEED)}
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         # env.py reports the eef pose in the grasp-site world frame; ``eef_quat`` is scalar-first (wxyz, from
         # ``mju_mat2Quat``), so ``from_quat`` is the matching decode.
-        ee_pose = geom.Transform3D(raw_obs['eef_pos'], geom.Rotation.from_quat(raw_obs['eef_quat']))
+        ee_pose = geom.Transform3D(raw_obs[mapping.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[mapping.OBS_EEF_QUAT]))
         state = MujocoFrankaState()
-        state.encode(raw_obs['joint_pos'], raw_obs['joint_vel'], ee_pose)
-        obs: dict[str, Any] = {'robot_state': state, 'grip': float(raw_obs['grip'])}
+        state.encode(raw_obs[mapping.OBS_JOINT_POS], raw_obs[mapping.OBS_JOINT_VEL], ee_pose)
+        obs: dict[str, Any] = {'robot_state': state, keys.GRIP: float(raw_obs[mapping.OBS_GRIP])}
         for logical, molmo_key in self._camera_dict.items():
             env_key = mapping.resolve_camera_key(raw_obs, molmo_key, _CAMERA_VARIANTS.get(molmo_key, ()))
             frame = raw_obs[env_key]  # MolmoSpaces renders top-down already — no flip
@@ -51,7 +50,7 @@ class MolmoAdapter(WireCommandAdapter):
     def privileged(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         # The env's full MuJoCo state — recorded as ground truth so success can be recomputed offline, never fed
         # to the policy (mirrors the libero adapter).
-        return {'sim_state': raw_obs['sim_state']}
+        return {mapping.OBS_SIM_STATE: raw_obs[mapping.OBS_SIM_STATE]}
 
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
         # ``done`` covers termination and timeout; ``success`` is the task's judged success, so a timeout stays

@@ -36,13 +36,13 @@ import numpy as np
 
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
-from positronic.simulator.molmo_spaces import launcher
+from positronic.simulator.molmo_spaces import launcher, mapping
 
 # parity_native.py runs only in MolmoSpaces' venv (it imports the flat, positronic-free ``env``), so reference it
 # by path — importing it into positronic's interpreter would fail on that import.
 _PARITY_NATIVE = Path(__file__).parent / 'parity_native.py'
 _HOLD = {'command': {'type': protocol.HOLD}, 'grip': 0.0}
-_ARRAY_FIELDS = ('joint_pos', 'joint_vel', 'eef_pos', 'eef_quat')
+_ARRAY_FIELDS = (mapping.OBS_JOINT_POS, mapping.OBS_JOINT_VEL, mapping.OBS_EEF_POS, mapping.OBS_EEF_QUAT)
 
 
 def _is_rgb(value: object) -> bool:
@@ -64,7 +64,7 @@ def _drive_positronic(benchmark_dir: Path, episode_index: int, seed: int, max_st
     with launcher.serve_molmo_spaces(benchmark_dir) as (host, port):
         conn = EnvConnection(host, port)
         try:
-            frame = conn.reset({'episode_index': episode_index, 'seed': seed})
+            frame = conn.reset({mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: seed})
             reported_horizon = frame['horizon']
             camera_names = [k for k, v in frame['obs'].items() if _is_rgb(v)]
             cam_hashes = {name: [] for name in camera_names}
@@ -79,7 +79,7 @@ def _drive_positronic(benchmark_dir: Path, episode_index: int, seed: int, max_st
             conn.close()
     return {
         **{key: np.stack(fields[key]) for key in _ARRAY_FIELDS},
-        'grip': np.array(fields['grip'], dtype=np.float32),
+        mapping.OBS_GRIP: np.array(fields[mapping.OBS_GRIP], dtype=np.float32),
         'camera_names': camera_names,
         'cam_hashes': cam_hashes,
         'reported_horizon': reported_horizon,

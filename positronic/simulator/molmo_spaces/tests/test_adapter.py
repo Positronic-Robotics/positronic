@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from positronic import keys
+from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.adapter import MolmoAdapter
 
@@ -27,11 +28,11 @@ def test_observations_assemble_robot_state():
     payload = _payload()
     obs = MolmoAdapter(CAMERA_DICT).observations(payload)
     state = obs['robot_state']
-    assert np.allclose(state.q, payload['joint_pos'])
-    assert np.allclose(state.dq, payload['joint_vel'])
-    assert np.allclose(state.ee_pose.translation, payload['eef_pos'])
-    assert np.allclose(state.ee_pose.rotation.as_quat, payload['eef_quat'])  # wxyz round-trips
-    assert obs['grip'] == 0.5
+    assert np.allclose(state.q, payload[mapping.OBS_JOINT_POS])
+    assert np.allclose(state.dq, payload[mapping.OBS_JOINT_VEL])
+    assert np.allclose(state.ee_pose.translation, payload[mapping.OBS_EEF_POS])
+    assert np.allclose(state.ee_pose.rotation.as_quat, payload[mapping.OBS_EEF_QUAT])  # wxyz round-trips
+    assert obs[keys.GRIP] == 0.5
 
 
 def test_observations_camera_passthrough_no_swap():
@@ -61,8 +62,8 @@ def test_privileged_forwards_sim_state():
     # The full MuJoCo state is recorded as privileged ground truth (never fed to the policy), so success can be
     # recomputed offline.
     state = np.arange(10, dtype=np.float64)
-    out = MolmoAdapter(CAMERA_DICT).privileged({'sim_state': state})
-    assert list(out) == ['sim_state'] and out['sim_state'] is state
+    out = MolmoAdapter(CAMERA_DICT).privileged({mapping.OBS_SIM_STATE: state})
+    assert list(out) == [mapping.OBS_SIM_STATE] and out[mapping.OBS_SIM_STATE] is state
 
 
 def test_terminal_reports_success_only_when_done():
@@ -74,6 +75,7 @@ def test_terminal_reports_success_only_when_done():
 
 def test_reset_token_carries_episode_and_seed():
     adapter = MolmoAdapter(CAMERA_DICT)
-    assert adapter.reset_token({'eval.episode_index': 3, 'eval.seed': 7}) == {'episode_index': 3, 'seed': 7}
+    expected = {mapping.TOKEN_EPISODE_INDEX: 3, mapping.TOKEN_SEED: 7}
+    assert adapter.reset_token({EVAL_EPISODE_INDEX: 3, EVAL_SEED: 7}) == expected
     # An absent seed falls back to the spec's own (None here).
-    assert adapter.reset_token({'eval.episode_index': 2}) == {'episode_index': 2, 'seed': None}
+    assert adapter.reset_token({EVAL_EPISODE_INDEX: 2}) == {mapping.TOKEN_EPISODE_INDEX: 2, mapping.TOKEN_SEED: None}

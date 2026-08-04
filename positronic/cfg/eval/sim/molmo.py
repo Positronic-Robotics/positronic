@@ -102,11 +102,8 @@ def _molmo_eval(
     embodiment = remote_franka_embodiment(
         proxy, camera_dict, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model(GRASP_SITE_LINK)
     )
-    # The env's full MuJoCo state is the privileged ground truth (recorded, never fed to the policy), so success
-    # can be recomputed offline from a rollout. ``horizon`` lets the harness reject a timeout that isn't a strictly
-    # weaker safety net than the sim's own per-episode horizon (the env reports it at reset); ``timeout`` stays a
-    # runaway-cost backstop, not the deadline.
-    privileged = {'sim_state': Observation(proxy.privileged['sim_state'], None)}
+    # The env's full MuJoCo state is recorded as privileged ground truth, never fed to the policy.
+    privileged = {mapping.OBS_SIM_STATE: Observation(proxy.privileged[mapping.OBS_SIM_STATE], None)}
     task = Task(
         instruction=lambda: proxy.meta['task'],
         timeout=timeout,

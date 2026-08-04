@@ -32,6 +32,18 @@ MOLMO_GRIPPER_GROUP = 'gripper'
 # Where the MolmoSpaces asset packs live.
 ASSETS_DIR_ENV = 'MLSPACES_ASSETS_DIR'
 
+# The reset token: which benchmark episode to build, and the seed overriding the episode spec's own.
+TOKEN_EPISODE_INDEX = 'episode_index'
+TOKEN_SEED = 'seed'
+
+# The raw observation payload ``env.py`` reports and ``MolmoAdapter`` reads back.
+OBS_JOINT_POS = 'joint_pos'
+OBS_JOINT_VEL = 'joint_vel'
+OBS_EEF_POS = 'eef_pos'
+OBS_EEF_QUAT = 'eef_quat'
+OBS_GRIP = 'grip'
+OBS_SIM_STATE = 'sim_state'
+
 # MolmoSpaces DROID rig camera names (FrankaDroidCameraSystem); a benchmark's own variants replace the defaults
 # and the adapter resolves them so the default camera_dict works across the benchmarks: the light-randomization
 # suite records the exterior as ``droid_shoulder_light_randomization`` (MolmoSpaces' Pi policy prefers it), and

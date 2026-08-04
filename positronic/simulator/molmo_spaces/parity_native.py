@@ -49,7 +49,16 @@ def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out
 
     obs, _info = task.reset()
     camera_names = [k for k, v in obs[0].items() if env._is_rgb_frame(v)]
-    fields: dict[str, list] = {k: [] for k in ('joint_pos', 'joint_vel', 'eef_pos', 'eef_quat', 'grip')}
+    fields: dict[str, list] = {
+        k: []
+        for k in (
+            mapping.OBS_JOINT_POS,
+            mapping.OBS_JOINT_VEL,
+            mapping.OBS_EEF_POS,
+            mapping.OBS_EEF_QUAT,
+            mapping.OBS_GRIP,
+        )
+    }
     cam_hashes: dict[str, list[str]] = {name: [] for name in camera_names}
 
     def record(env_obs: dict) -> None:
@@ -77,11 +86,11 @@ def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out
 
     np.savez(
         out_path,
-        joint_pos=np.stack(fields['joint_pos']),
-        joint_vel=np.stack(fields['joint_vel']),
-        eef_pos=np.stack(fields['eef_pos']),
-        eef_quat=np.stack(fields['eef_quat']),
-        grip=np.array(fields['grip'], dtype=np.float32),
+        joint_pos=np.stack(fields[mapping.OBS_JOINT_POS]),
+        joint_vel=np.stack(fields[mapping.OBS_JOINT_VEL]),
+        eef_pos=np.stack(fields[mapping.OBS_EEF_POS]),
+        eef_quat=np.stack(fields[mapping.OBS_EEF_QUAT]),
+        grip=np.array(fields[mapping.OBS_GRIP], dtype=np.float32),
         camera_names=np.array(camera_names),
         native_horizon=native_horizon,
         horizon_sec=native_horizon * (cfg.policy_dt_ms / 1000.0),  # the sim-seconds env.py reports at reset

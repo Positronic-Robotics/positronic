@@ -20,6 +20,8 @@ from typing import Any
 
 import numpy as np
 
+from positronic.simulator.molmo_spaces import mapping
+
 RIG_HEIGHT, RIG_WIDTH = 36, 64  # (H, W); DROID exo/wrist cameras are 16:9.
 
 
@@ -33,12 +35,12 @@ def _marked_frame(base_rgb: tuple[int, int, int]) -> np.ndarray:
 
 def build_payload() -> dict[str, Any]:  # grip is a float32 scalar, the rest are arrays
     return {
-        'joint_pos': np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785], dtype=np.float32),
-        'joint_vel': np.linspace(-0.2, 0.2, 7, dtype=np.float32),
-        'eef_pos': np.array([0.4, 0.0, 0.35], dtype=np.float32),
+        mapping.OBS_JOINT_POS: np.array([0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785], dtype=np.float32),
+        mapping.OBS_JOINT_VEL: np.linspace(-0.2, 0.2, 7, dtype=np.float32),
+        mapping.OBS_EEF_POS: np.array([0.4, 0.0, 0.35], dtype=np.float32),
         # Identity orientation, scalar-first (wxyz) as env.py reports via mju_mat2Quat.
-        'eef_quat': np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
-        'grip': np.float32(0.5),
+        mapping.OBS_EEF_QUAT: np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+        mapping.OBS_GRIP: np.float32(0.5),
         'wrist_camera': _marked_frame((200, 40, 40)),  # reddish wrist view
         'exo_camera_1': _marked_frame((40, 160, 40)),  # greenish exterior view
     }
