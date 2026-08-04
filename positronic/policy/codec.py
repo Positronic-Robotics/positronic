@@ -145,9 +145,7 @@ def _merged_meta(left: dict, right: dict) -> dict:
     """Two codecs' metadata as one dict.
 
     A leaf both declare differently has no merged answer, so it raises rather than keeping one: the survivor
-    would describe a pipeline neither codec implements. Two ``ChangeEEFrame`` are the case to picture — the
-    poses come out at the product of both transforms while the surviving declaration names only one of them.
-    Declare the composition as a single value instead.
+    would describe a pipeline neither codec implements. Declare the composition as a single value instead.
     """
     conflicts = _meta_conflicts(left, right)
     if conflicts:
@@ -177,7 +175,16 @@ class _ComposedCodec(Codec):
 
     @property
     def meta(self):
-        return _merged_meta(self._left.meta, self._right.meta)
+        left, right = self._left.meta, self._right.meta
+        # ``ee_frame`` states where poses sit, not how a codec is configured, so declaring it means having moved
+        # them. Agreeing on a value buys nothing here: the second move starts where the first left off. Under
+        # ``&`` both halves see the same input, which is why the check belongs to sequential composition.
+        if obs_keys.EE_FRAME in left and obs_keys.EE_FRAME in right:
+            raise ValueError(
+                f'sequential codecs both declare {obs_keys.EE_FRAME}: poses come out at the product of both '
+                f'moves, which neither {left[obs_keys.EE_FRAME]} nor {right[obs_keys.EE_FRAME]} names'
+            )
+        return _merged_meta(left, right)
 
     def to_spec(self):
         return {SEQ: [self._left.to_spec(), self._right.to_spec()]}

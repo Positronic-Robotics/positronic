@@ -177,6 +177,19 @@ class TestPipelineComposition:
         with pytest.raises(ValueError, match=keys.EE_FRAME):
             _ = (ChangeEEFrame(a) | ChangeEEFrame(b)).meta
 
+    def test_the_same_frame_twice_is_still_two_moves(self):
+        """The second move starts where the first left off, so the shared value names neither end of the pair."""
+        a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
+        with pytest.raises(ValueError, match=keys.EE_FRAME):
+            _ = (ChangeEEFrame(a) | ChangeEEFrame(a)).meta
+
+    def test_parallel_frame_codecs_keep_the_frame_they_share(self):
+        """Both halves encode the same input, so one move happens and the shared declaration describes it."""
+        a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
+        np.testing.assert_allclose(
+            (ChangeEEFrame(a) & ChangeEEFrame(a)).meta[keys.EE_FRAME], a.as_vector(Rotation.Representation.QUAT)
+        )
+
 
 class _CaptureSession(Session):
     def __init__(self):
