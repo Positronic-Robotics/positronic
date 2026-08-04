@@ -65,6 +65,10 @@ and the caller must read the implementation to know what to pass — the same mi
 way. This is a matter of taste and does not reduce to a measurement: judge the result as a reader, not
 by counting.
 
+Widening what a component accepts is not the same as weakening how its values are typed. Sharpening a
+type is `primitive-type` and is never overspecification: it constrains what a value may be, not what
+the component may be asked to do.
+
 ```python
 # Bad — assumes every key belongs to exactly one category, and that the categories need different handling
 def __init__(self, pose_keys, command_keys): ...
@@ -175,10 +179,17 @@ if not isinstance(transform, Transform3D):
 ```
 ### primitive-type
 
-Give a value the most specific type that fits it: `Path` for a filesystem path, an enum for a bounded
-set of strings, a named struct for a multi-element return. A primitive stands in for all of them, so
-it carries none of their meaning and none of their operations, and every consumer re-derives what it
-holds.
+Don't leave a value typed by its representation when its domain has a type of its own. A filesystem
+path is a `Path`, a bounded set of strings is an enum, a multi-element return is a named struct. The
+primitive carries none of the domain's meaning and none of its operations, so every consumer
+re-derives what the value holds.
+
+This governs what a value **is**; what an interface may assume about its **use** is `overspecific`,
+and the two never trade against each other. A truer type refuses nothing a caller could legitimately
+have passed — every path is a `Path`. The enum is the case that can go either way, so ask whether this
+code already dispatches on the set: a `match` or an `if` ladder against literals means the set is
+closed and the type only states it, while a value this code passes through untouched is not yours to
+close. Once it is an enum, iterate it rather than restating its members.
 
 A time on the robot's timeline is `int` nanoseconds — the specific type here, not a fall back to a
 primitive. The clock is monotonic with an arbitrary epoch, so `datetime` misdescribes what the number
@@ -186,13 +197,10 @@ is and holds only microseconds; recordings are addressed by timestamp, and `floa
 compares nor joins exactly.
 
 Convert once, where the value enters. A CLI token, an environment variable or a wire field arrives as
-a string: parse it at that edge and everything inside is typed. The annotation must not lie — where a
-framework hands the value through uncoerced, keep the honest `str` on the parameter it lands on and
-convert immediately inside, or fix the framework.
-
-Two tells. A literal meeting a `match` or an `if` ladder is a bounded set that wants an enum, and once
-it is one, iterate it rather than restating its members. A union of a type with its own string form
-pushes the conversion onto every consumer instead of doing it once.
+a string: parse it at that edge and everything inside is typed. A union of a type with its own string
+form is that conversion left undone, pushing it onto every consumer. The annotation must not lie —
+where a framework hands the value through uncoerced, keep the honest `str` on the parameter it lands
+on and convert immediately inside, or fix the framework.
 
 ```python
 # Bad
@@ -218,9 +226,9 @@ state. `None` standing for both "not supplied" and "not applicable" is the same 
 
 ### swallowed-error
 
-Let a failure surface. Don't wrap a call in `try`/`except` to keep going, and don't fall back to a
-second path when the first comes back empty. A pipeline that silently yields nothing is harder to
-diagnose than one that raises, and the fallback becomes the path everything quietly runs through.
+Don't catch an exception so the code can carry on, and don't fall back to a second path when the first
+comes back empty. Let the failure surface: a pipeline that silently yields nothing is harder to
+diagnose than one that raises, and a fallback becomes the path everything quietly runs through.
 
 Where a failure genuinely must not stop the caller — one malformed file in a scan, an optional
 feature, a cleanup — catch that specific exception, log it at ERROR with what failed, and say in one
@@ -243,9 +251,9 @@ except json.JSONDecodeError:
 
 ### earn-its-place
 
-A new class, file, field or parameter must carry a distinction the code does not already encode. The
-dict an entry lives in, an enum member, the calling context, a module that already owns the subject —
-check each before adding a name for it.
+Don't add a class, file, field or parameter for a distinction the code already encodes. Check each of
+the places one can already live — the dict an entry sits in, an enum member, the calling context, a
+module that owns the subject — and use that instead.
 
 The cost is not the lines. Every new type is another thing a reader holds, another place a value can
 live, and another edge to keep in sync; a field duplicating what its caller already knows goes stale
@@ -256,9 +264,9 @@ that is a finding about the layout — say so, rather than restructuring on your
 
 ### whole-body-with
 
-When the entire body of a function is one `with` block, make the context manager a decorator. That the
-whole call runs inside it belongs at the signature, where a reader meets it first, not as an indent
-wrapped around everything.
+Don't wrap a whole function body in a `with`. Decorate the function with the context manager instead:
+that the whole call runs inside it belongs at the signature, where a reader meets it first, not as an
+indent around everything.
 
 Keep the `with` when code runs outside the block, when the `as` value is used, or when a generator or
 coroutine needs the context scoped per `yield`/`await` — a decorator scopes it per call.
@@ -277,13 +285,13 @@ def step(self, action):
 
 ### stale-doc
 
-A document states the system as it is now. Not how it got here: no "previously", no "this PR", no "as
-of this writing", no resolved-while-writing note, no struck-through section kept for context. The
+Don't write a document against its own past — no "previously", no "this PR", no "as of this writing",
+no resolved-while-writing note, no struck-through section kept for context. State what holds now. The
 reader has no access to the past state, so prose written against it is noise that ages into a lie.
 
-Nothing in the tree is a worklog. A status, progress, implementation-summary or completed-plan file is
-folded into the document that owns its subject and then deleted. A changelog is the exception, history
-being its subject.
+Don't leave a worklog in the tree either. Fold a status, progress, implementation-summary or
+completed-plan file into the document that owns its subject, then delete it. A changelog is the
+exception, history being its subject.
 
 Where a change must be referenced, cite something durable — a ticket, a tag, a version. Two things
 that look like history and stay: a footgun the reader can still walk into, and a current limitation
@@ -291,9 +299,9 @@ with its workaround.
 
 ### baseline-grandfather
 
-Never add an entry to `.basedpyright/baseline.json` for code in your own change. The baseline holds the
-debt that existed when the ratchet landed: a file you write or touch lands clean, and typing an old
-file removes its entries.
+Never add an entry to `.basedpyright/baseline.json` for code in your own change — fix the diagnostic
+instead. The baseline holds the debt that existed when the ratchet landed: a file you write or touch
+lands clean, and typing an old file removes its entries.
 
 The hook compares per-file counts, so it cannot see one diagnostic swapped for another under the same
 code, and re-anchoring line numbers absorbs new findings silently. That part is yours to hold. An
