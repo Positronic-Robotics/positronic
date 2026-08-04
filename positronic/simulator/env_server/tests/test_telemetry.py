@@ -15,7 +15,10 @@ def test_env_spans_parse_with_positronic_reader(tmp_path):
             with telemetry.span('render'):
                 pass
 
-    spans = {rec.name: rec for rec in positronic_telemetry.read_spans(tmp_path / 'env.spans.jsonl')}
+    spans = {
+        rec.name: rec
+        for rec in positronic_telemetry.read_spans(tmp_path / f'{telemetry.ENV_PROCESS}{telemetry.SPANS_SUFFIX}')
+    }
     assert set(spans) == {telemetry.SPAN_ENV_STEP, 'render', 'physics'}
     assert spans[telemetry.SPAN_ENV_STEP].parent_id is None
     assert spans['physics'].parent_id == spans[telemetry.SPAN_ENV_STEP].span_id
@@ -24,7 +27,7 @@ def test_env_spans_parse_with_positronic_reader(tmp_path):
         assert len(rec.span_id) == 16
         assert rec.end_ns >= rec.start_ns
 
-    line = json.loads((tmp_path / 'env.spans.jsonl').read_text().splitlines()[0])
+    line = json.loads((tmp_path / f'{telemetry.ENV_PROCESS}{telemetry.SPANS_SUFFIX}').read_text().splitlines()[0])
     attrs = positronic_telemetry._decode_attrs(line['resourceSpans'][0]['resource']['attributes'])
     assert attrs[telemetry.ATTR_RUN_ID] == 'run-env'
     assert attrs[telemetry.ATTR_PROCESS_NAME] == telemetry.ENV_PROCESS
@@ -35,7 +38,7 @@ def test_env_span_inert_when_unbound(tmp_path):
     with telemetry.span(telemetry.SPAN_ENV_STEP):
         pass
     assert not telemetry.active()
-    assert not (tmp_path / 'env.spans.jsonl').exists()
+    assert not (tmp_path / f'{telemetry.ENV_PROCESS}{telemetry.SPANS_SUFFIX}').exists()
 
 
 def test_bind_from_env_reads_env_vars(tmp_path, monkeypatch):
@@ -46,5 +49,5 @@ def test_bind_from_env_reads_env_vars(tmp_path, monkeypatch):
         with telemetry.span(telemetry.SPAN_ENV_RESET):
             pass
     assert not telemetry.active()
-    spans = list(positronic_telemetry.read_spans(tmp_path / 'env.spans.jsonl'))
+    spans = list(positronic_telemetry.read_spans(tmp_path / f'{telemetry.ENV_PROCESS}{telemetry.SPANS_SUFFIX}'))
     assert [rec.name for rec in spans] == [telemetry.SPAN_ENV_RESET]

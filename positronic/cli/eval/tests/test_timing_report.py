@@ -10,9 +10,12 @@ from positronic.telemetry import (
     GPU_MEM_USED_B,
     GPU_PROC_MEM_B,
     GPU_UTIL_PCT,
+    SPANS_SUFFIX,
     STAT_GPU_COUNT,
     STAT_GPUS,
     STAT_T_NS,
+    STATS_SUFFIX,
+    TELEMETRY_SUBDIR,
 )
 from positronic.telemetry_keys import (
     ATTR_EPISODE_ABORTED,
@@ -81,8 +84,8 @@ def _fixture(telemetry_dir):
             _span('physics', base + 10, base + 13, f'phys{i}', server, process=ENV_PROCESS),
             _span('render', base + 13, base + 14, f'rend{i}', server, process=ENV_PROCESS),
         ]
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', harness)
-    _write_lines(telemetry_dir / 'env.spans.jsonl', env)
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', harness)
+    _write_lines(telemetry_dir / f'{ENV_PROCESS}{SPANS_SUFFIX}', env)
     stats = [
         {
             STAT_T_NS: 1,
@@ -95,13 +98,13 @@ def _fixture(telemetry_dir):
             STAT_GPUS: [{GPU_INDEX: 0, GPU_UTIL_PCT: 100.0, GPU_MEM_USED_B: 4 * 1024**3, GPU_PROC_MEM_B: 2 * 1024**3}],
         },
     ]
-    (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+    (telemetry_dir / f'{HARNESS_PROCESS}{STATS_SUFFIX}').write_text(''.join(json.dumps(s) + '\n' for s in stats))
 
 
 def test_report_aggregates(tmp_path):
-    _fixture(tmp_path / 'telemetry')
-    spans = _read_spans_dir(tmp_path / 'telemetry')
-    report = _build_report(spans, _read_stats_dir(tmp_path / 'telemetry'), policy_gpu=None)
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    spans = _read_spans_dir(tmp_path / TELEMETRY_SUBDIR)
+    report = _build_report(spans, _read_stats_dir(tmp_path / TELEMETRY_SUBDIR), policy_gpu=None)
 
     assert report.episodes == 2
     assert report.wall_pass_s == pytest.approx(100.0)
@@ -138,9 +141,9 @@ def test_report_aggregates(tmp_path):
 def test_render_shows_shares_as_percentages(tmp_path):
     """Every unitless share renders as an aligned percentage, and the policy-wait row carries the serving
     capacity derived from it."""
-    _fixture(tmp_path / 'telemetry')
-    spans = _read_spans_dir(tmp_path / 'telemetry')
-    report = _build_report(spans, _read_stats_dir(tmp_path / 'telemetry'), policy_gpu=None)
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    spans = _read_spans_dir(tmp_path / TELEMETRY_SUBDIR)
+    report = _build_report(spans, _read_stats_dir(tmp_path / TELEMETRY_SUBDIR), policy_gpu=None)
 
     rendered = _render(report).splitlines()
 
@@ -153,10 +156,10 @@ def test_render_shows_shares_as_percentages(tmp_path):
 
 def test_render_omits_serving_capacity_without_inference(tmp_path):
     """A pass with no inference has a zero policy-wait share, which yields no sims-per-server figure."""
-    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
     _write_lines(
-        telemetry_dir / 'harness.spans.jsonl',
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
         [
             _span(SPAN_EVAL_PASS, 0, 100, 'pass0'),
             _span(SPAN_EPISODE, 0, 40, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
@@ -171,7 +174,7 @@ def test_render_omits_serving_capacity_without_inference(tmp_path):
 
 
 def test_aborted_episode_excluded(tmp_path):
-    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
     docs = [
         _span(SPAN_EVAL_PASS, 0, 100, 'pass0'),
@@ -182,7 +185,7 @@ def test_aborted_episode_excluded(tmp_path):
         'key': ATTR_EPISODE_ABORTED,
         'value': {'boolValue': True},
     })
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', docs)
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', docs)
     report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
     assert report.episodes == 1
 
@@ -191,7 +194,7 @@ def test_aborted_episode_wall_excluded_from_between_episodes(tmp_path):
     """An aborted rollout is dropped as invalid data, so its wall must leave W_pass entirely — not fall into
     ``between_episodes`` and not deflate the policy-busy / real-time factors. Here a 40 s aborted episode sits
     beside a 40 s completed one in a 100 s pass, so the valid W_pass is 60 s."""
-    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
     harness = [
         _span(SPAN_EVAL_PASS, 0, 100, 'pass0'),
@@ -208,7 +211,7 @@ def test_aborted_episode_wall_excluded_from_between_episodes(tmp_path):
         'key': ATTR_EPISODE_ABORTED,
         'value': {'boolValue': True},
     })
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', harness)
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', harness)
 
     report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
 
@@ -232,7 +235,7 @@ def test_env_step_split_ignores_aborted_episode(tmp_path):
     """An aborted rollout's spans — its client env.step AND its server-side steps — stay out of the env-step
     split: the denominator covers completed episodes only, so counting them would push the fractions past 1 and
     the wire residual below 0."""
-    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
     harness = [
         _span(SPAN_EVAL_PASS, 0, 100, 'pass0'),
@@ -253,8 +256,8 @@ def test_env_step_split_ignores_aborted_episode(tmp_path):
         _span(SPAN_ENV_STEP, 51, 56, 'srv1', process=ENV_PROCESS),  # during the aborted rollout
         _span('physics', 51, 54, 'phys1', 'srv1', process=ENV_PROCESS),
     ]
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', harness)
-    _write_lines(telemetry_dir / 'env.spans.jsonl', env)
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', harness)
+    _write_lines(telemetry_dir / f'{ENV_PROCESS}{SPANS_SUFFIX}', env)
 
     report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
 
@@ -273,10 +276,10 @@ def test_env_step_split_ignores_aborted_episode(tmp_path):
 def test_orphan_episode_from_killed_run_excluded(tmp_path):
     """A killed run flushes its episodes but never writes its ``eval.pass`` span; when the directory is reused,
     those orphans must not reduce — they would inflate every pass-normalized figure."""
-    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
     _write_lines(
-        telemetry_dir / 'harness.spans.jsonl',
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
         [
             _span(SPAN_EPISODE, 0, 30, 'ghost-ep', 'ghost-pass', {ATTR_EPISODE_VIRTUAL_S: 15.0}),  # killed earlier run
             _span(SPAN_EVAL_PASS, 100, 200, 'pass0'),
@@ -292,9 +295,9 @@ def test_orphan_episode_from_killed_run_excluded(tmp_path):
 def test_multi_gpu_peak_vram_sums_devices_per_sample(tmp_path):
     """Peak VRAM on a multi-GPU box is the box-wide total at one instant — each sample's devices summed, then
     the max over samples — not the largest single-device reading."""
-    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
     stats = [
         {
             STAT_T_NS: 1,
@@ -313,7 +316,7 @@ def test_multi_gpu_peak_vram_sums_devices_per_sample(tmp_path):
             ],
         },
     ]
-    (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+    (telemetry_dir / f'{HARNESS_PROCESS}{STATS_SUFFIX}').write_text(''.join(json.dumps(s) + '\n' for s in stats))
 
     report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
 
@@ -332,9 +335,9 @@ def test_partial_per_gpu_proc_vram_excluded_from_peak(tmp_path):
     """A sample where some GPU can't attribute process memory (``proc_mem_b`` None) is incomplete for the
     box-wide process-VRAM peak and contributes nothing; the peak reflects only samples where every GPU
     reported. The sample still carries every device, so it counts towards util and the box-wide mem peak."""
-    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
     stats = [
         {  # incomplete: gpu1 unattributed -> must not add gpu0's 5 GB alone to the peak
             STAT_T_NS: 1,
@@ -353,7 +356,7 @@ def test_partial_per_gpu_proc_vram_excluded_from_peak(tmp_path):
             ],
         },
     ]
-    (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+    (telemetry_dir / f'{HARNESS_PROCESS}{STATS_SUFFIX}').write_text(''.join(json.dumps(s) + '\n' for s in stats))
 
     report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
 
@@ -367,9 +370,9 @@ def test_omitted_gpu_device_excluded_from_proc_vram_peak(tmp_path):
     """A device whose NVML query errors mid-run is dropped from the sample, so it carries fewer GPUs than the
     box holds. Such a sample is incomplete for the box-wide process peak even though every GPU it *does* carry
     reported ``proc_mem_b`` — its large lone reading must not win over a complete sample."""
-    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
     stats = [
         {  # complete: both GPUs present, matching the recorded complement of 2, for a 1+2 = 3 GB total
             STAT_T_NS: 1,
@@ -385,7 +388,7 @@ def test_omitted_gpu_device_excluded_from_proc_vram_peak(tmp_path):
             STAT_GPUS: [{GPU_INDEX: 0, GPU_UTIL_PCT: 80.0, GPU_MEM_USED_B: 1 * 1024**3, GPU_PROC_MEM_B: 9 * 1024**3}],
         },
     ]
-    (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+    (telemetry_dir / f'{HARNESS_PROCESS}{STATS_SUFFIX}').write_text(''.join(json.dumps(s) + '\n' for s in stats))
 
     report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
 
@@ -401,9 +404,9 @@ def test_device_omitted_from_every_sample_excluded_via_recorded_count(tmp_path):
     max-observed would wrongly infer the complement from the surviving device and count every sample complete.
     The recorded ``gpu_count`` keeps the true count (2), so the one-device samples are incomplete and neither
     box-wide peak can be reported. Mean utilisation still covers the device that answered."""
-    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
     stats = [
         # 2-GPU box, but device 1 is missing from both samples; each records the configured count of 2.
         {
@@ -417,7 +420,7 @@ def test_device_omitted_from_every_sample_excluded_via_recorded_count(tmp_path):
             STAT_GPUS: [{GPU_INDEX: 0, GPU_UTIL_PCT: 80.0, GPU_MEM_USED_B: 1 * 1024**3, GPU_PROC_MEM_B: 7 * 1024**3}],
         },
     ]
-    (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+    (telemetry_dir / f'{HARNESS_PROCESS}{STATS_SUFFIX}').write_text(''.join(json.dumps(s) + '\n' for s in stats))
 
     report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
 
@@ -438,9 +441,9 @@ def test_sample_of_a_smaller_complement_cannot_set_the_box_peak(tmp_path):
     """An output directory resumed on a box with fewer GPUs holds samples of two complements. The summary
     reports the larger one, so a smaller complement's totals cover part of that box and must not become its
     peak, complete though they are within their own run."""
-    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
     stats = [
         {  # a 2-GPU box, whole: 1+2 = 3 GB of process VRAM
             STAT_T_NS: 1,
@@ -456,7 +459,7 @@ def test_sample_of_a_smaller_complement_cannot_set_the_box_peak(tmp_path):
             STAT_GPUS: [{GPU_INDEX: 0, GPU_UTIL_PCT: 80.0, GPU_MEM_USED_B: 9 * 1024**3, GPU_PROC_MEM_B: 8 * 1024**3}],
         },
     ]
-    (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+    (telemetry_dir / f'{HARNESS_PROCESS}{STATS_SUFFIX}').write_text(''.join(json.dumps(s) + '\n' for s in stats))
 
     report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
 
@@ -473,11 +476,11 @@ def test_box_whose_devices_all_refuse_is_reported_with_metrics_unavailable(tmp_p
     """A box whose every device refuses its query (a single unsupported MIG device is enough) records a
     positive ``gpu_count`` with no per-device entries. That is a GPU box with nothing measured, and reporting
     it as CPU-only — no GPU line at all — hides both the box and the failure."""
-    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
     stats = [{STAT_T_NS: 1, STAT_GPU_COUNT: 2, STAT_GPUS: []}, {STAT_T_NS: 2, STAT_GPU_COUNT: 2, STAT_GPUS: []}]
-    (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+    (telemetry_dir / f'{HARNESS_PROCESS}{STATS_SUFFIX}').write_text(''.join(json.dumps(s) + '\n' for s in stats))
 
     report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
 
@@ -492,10 +495,10 @@ def test_box_whose_devices_all_refuse_is_reported_with_metrics_unavailable(tmp_p
 
 def test_cpu_box_has_no_gpu_summary(tmp_path):
     """A box NVML found no device on records a zero ``gpu_count``, and carries no GPU summary at all."""
-    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
-    (telemetry_dir / 'harness.stats.jsonl').write_text(
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
+    (telemetry_dir / f'{HARNESS_PROCESS}{STATS_SUFFIX}').write_text(
         json.dumps({STAT_T_NS: 1, STAT_GPU_COUNT: 0, STAT_GPUS: []}) + '\n'
     )
 
@@ -508,9 +511,9 @@ def test_cpu_box_has_no_gpu_summary(tmp_path):
 def test_gpu_samples_outside_pass_windows_excluded(tmp_path):
     """Stats samples taken outside every completed pass's wall window (an earlier run in a reused directory)
     stay out of the GPU summary — the stats twin of the orphan-episode exclusion."""
-    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 100, 200, 'pass0')])
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', [_span(SPAN_EVAL_PASS, 100, 200, 'pass0')])
     stats = [
         {
             STAT_T_NS: 50 * _S,
@@ -523,7 +526,7 @@ def test_gpu_samples_outside_pass_windows_excluded(tmp_path):
             STAT_GPUS: [{GPU_INDEX: 0, GPU_UTIL_PCT: 40.0, GPU_MEM_USED_B: 2 * 1024**3}],
         },
     ]
-    (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+    (telemetry_dir / f'{HARNESS_PROCESS}{STATS_SUFFIX}').write_text(''.join(json.dumps(s) + '\n' for s in stats))
 
     report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
 
@@ -534,14 +537,14 @@ def test_gpu_samples_outside_pass_windows_excluded(tmp_path):
 
 
 def test_native_sim_has_no_env_step_split(tmp_path):
-    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
     docs = [
         _span(SPAN_EVAL_PASS, 0, 10, 'pass0'),
         _span(SPAN_EPISODE, 0, 8, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 4.0}),
         _span(SPAN_ENV_STEP, 1, 3, 'step0', 'ep0'),  # client only; no server env.step in the file
     ]
-    _write_lines(telemetry_dir / 'harness.spans.jsonl', docs)
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', docs)
     report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
     assert report.env_step_split is None  # no env server reported a decomposition
 
