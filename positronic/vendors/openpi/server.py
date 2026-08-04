@@ -10,10 +10,11 @@ import configuronic as cfn
 import pos3
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
 
+from positronic import geom
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Codec, Policy, Session
-from positronic.policy.codec import RestrictImageSize
+from positronic.policy.codec import ChangeEEFrame, RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
@@ -237,10 +238,18 @@ class OpenpiSource(ModelSource):
 openpi_source = cfn.Config(OpenpiSource)
 
 
-@cfn.config(codec=codecs.ee, source=openpi_source)
-def pipeline(codec: Codec, source: ModelSource):
-    """The OpenPI serving pipeline: rig-side chunk scheduling, the server-side codec, the checkpoint source."""
-    return ChunkedSchedule() | RestrictImageSize(224, 224) | remote | codec | source
+@cfn.config(codec=codecs.ee, source=openpi_source, ee_frame=None)
+def pipeline(codec: Codec, source: ModelSource, ee_frame: geom.Transform3D | None):
+    """The OpenPI serving pipeline: rig-side chunk scheduling, the server-side codec, the checkpoint source.
+
+    ``ee_frame`` places the end-effector frame this checkpoint's poses live in relative to ``DEFAULT_FRAME``
+    (``models.DROID_EE_FRAME``). Leave it unset for a checkpoint trained in ``default``, or one speaking joints.
+    """
+    local = ChunkedSchedule() | RestrictImageSize(224, 224)
+    if ee_frame is not None:
+        # Outermost, so everything downstream — the wire, the server's codec — sees poses already in ``ee_frame``.
+        local = ChangeEEFrame(ee_frame) | local
+    return local | remote | codec | source
 
 
 ee = pipeline
@@ -250,6 +259,8 @@ ee_joints_traj = pipeline.override(codec=codecs.ee_joints_traj)
 joints_traj = pipeline.override(codec=codecs.joints_traj)
 # For checkpoints trained on inverted-grip (1 = open) data, e.g. the sim_stack recordings.
 ee_flip_grip = pipeline.override(**{'codec.flip_grip': True})
+# Both DROID deployments are joint-space, so they declare no frame. An EE-space DROID checkpoint would set
+# ``ee_frame=models.DROID_EE_FRAME`` here.
 droid_pipe = pipeline.override(codec=codecs.droid, **{'source.config_name': 'pi05_droid'})
 droid_jointpos_pipe = pipeline.override(codec=codecs.droid_jointpos, **{'source.config_name': 'pi05_droid_jointpos'})
 libero_pipe = pipeline.override(codec=codecs.libero, **{'source.config_name': 'pi05_libero'})

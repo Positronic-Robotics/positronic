@@ -15,7 +15,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 import pimm
-from positronic import geom, utils
+from positronic import geom, keys, utils
 from positronic.drivers.roboarm import command
 from positronic.policy.harness import Directive
 
@@ -277,7 +277,7 @@ class WebEvalUI(pimm.ControlSystem):
                 rotvec = np.zeros(3)
                 rotvec[_ROTATION_AXES[body.axis]] = np.deg2rad(body.sign * angle)
                 delta = geom.Transform3D(rotation=geom.Rotation.from_rotvec(rotvec))
-            self.manual_command.emit({'robot_command': command.CartesianDelta(delta)}, clock.now_ns())
+            self.manual_command.emit({keys.ROBOT_COMMAND: command.CartesianDelta(delta)}, clock.now_ns())
 
         @app.post('/grip')
         async def grip(body: _GripBody):

@@ -3,6 +3,9 @@
   review, and `check-rules` is how you check a change against them
 - Don't restore code that you wrote and I deleted
 - Don't hide errors with try-catch blocks; let failures surface until asked otherwise
+- Fix a defect when you find it, whether or not a current path reaches it. An unexercised wrong path
+  produces no signal until something depends on it, so the failure surfaces later and further from its
+  cause. Scope can justify deferring; being latent cannot
 - Stay scoped: no features beyond the request. Structure of the code you touch is governed by Design
   discipline below — bringing it to the end state is in scope, refactoring unrelated code is not
 - Don't add comments, docstrings, or type annotations to code you didn't change

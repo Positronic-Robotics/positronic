@@ -223,13 +223,13 @@ def main(
         agent.add_signal(keys.WRIST_IMAGE, Serializers.camera_images)
         agent.add_signal(keys.EXTERIOR_IMAGE, Serializers.camera_images)
         agent.add_signal('robot_state')  # Already dict
-        agent.add_signal('robot_command')  # Already dict
+        agent.add_signal(keys.ROBOT_COMMAND)  # Already dict
 
         world.connect(generator.command, agent.command)
         world.connect(generator.image_wrist, agent.inputs[keys.WRIST_IMAGE])
         world.connect(generator.image_exterior, agent.inputs[keys.EXTERIOR_IMAGE])
         world.connect(generator.robot_state, agent.inputs['robot_state'])
-        world.connect(generator.robot_command, agent.inputs['robot_command'])
+        world.connect(generator.robot_command, agent.inputs[keys.ROBOT_COMMAND])
 
         for _ in world.start([agent, generator]):
             pass

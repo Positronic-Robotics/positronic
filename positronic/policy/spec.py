@@ -28,6 +28,7 @@ import operator
 from collections.abc import Callable
 from typing import Any
 
+from positronic import keys
 from positronic.policy.action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
@@ -40,6 +41,7 @@ from positronic.policy.codec import (
     ActionTimestamp,
     BinarizeGripInference,
     BinarizeGripTraining,
+    ChangeEEFrame,
     FlipGrip,
     RestrictImageSize,
 )
@@ -51,8 +53,8 @@ class RemoteMarker(PolicyWrapper):
     """The client/server border in a policy pipeline. Only ever split on, never applied.
 
     Its arguments describe the wire rather than the policy, so they belong to the border itself:
-    ``compress_images`` has the rig JPEG-encode frames before sending, for an endpoint behind a
-    proxy with a message-size cap. The server declares them in its handshake and the rig obeys.
+    ``compress_images`` has the rig JPEG-encode frames before sending, for an endpoint behind a proxy
+    with a message-size cap. The server declares them in its handshake and the rig obeys.
 
     ``remote`` is the plain border; call it to describe the wire::
 
@@ -116,6 +118,14 @@ class Pipeline:
     def __init__(self, components: tuple[PolicyWrapper, ...], source: ModelSource):
         self.components = tuple(components)
         self.source = source
+        # Which side of ``remote`` the conversion sits on is a choice; doing it on both sides is not. Two
+        # declarations convert twice, leaving poses at the product while the handshake still names one of them.
+        declared = [c for c in self.components if keys.EE_FRAME in c.meta]
+        if len(declared) > 1:
+            raise ValueError(
+                f'{len(declared)} components of this pipeline declare {keys.EE_FRAME}; each converts, so poses '
+                'end up at the product of their transforms. Declare the frame once.'
+            )
 
 
 class PolicySource(ModelSource):
@@ -132,6 +142,12 @@ class PolicySource(ModelSource):
         return self._policy
 
 
+# TODO(hardcoded-keys): every name here is written twice — once as a literal in the wrapper's own ``to_spec``
+# and once as a key below — so a rename in one place silently desyncs the wire. Let each wrapper own its wire
+# name as a class attribute and build this mapping from it. ``test_wire_names_match_table`` is what catches a
+# desync until then.
+# rules-allow: hardcoded-keys — fixing one of the thirteen leaves the rest on the old pattern; the TODO above
+# names the whole-table fix, and the test above catches a desync meanwhile
 WIRE_WRAPPERS: dict[str, type[PolicyWrapper]] = {
     'chunked_schedule': ChunkedSchedule,
     'temporal_stack': TemporalStack,
@@ -141,6 +157,7 @@ WIRE_WRAPPERS: dict[str, type[PolicyWrapper]] = {
     'binarize_grip_inference': BinarizeGripInference,
     'flip_grip': FlipGrip,
     'restrict_image_size': RestrictImageSize,
+    'change_ee_frame': ChangeEEFrame,
     'observation_codec': ObservationCodec,
     'absolute_position_action': AbsolutePositionAction,
     'absolute_joints_action': AbsoluteJointsAction,

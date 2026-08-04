@@ -157,7 +157,9 @@ def remote_franka_embodiment(
         **{logical: Observation(proxy.observations[logical], Serializers.camera_images) for logical in camera_dict},
     }
     commands = {
-        'robot_command': Command(proxy.commands['robot_command'], roboarm_command.Reset(), Serializers.robot_command),
+        keys.ROBOT_COMMAND: Command(
+            proxy.commands[keys.ROBOT_COMMAND], roboarm_command.Reset(), Serializers.robot_command
+        ),
         'target_grip': Command(proxy.commands['target_grip'], 0.0, None),
     }
     return Embodiment(

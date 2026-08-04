@@ -69,7 +69,7 @@ def _meta_doc(name: str, meta: dict) -> str:
 
 def _is_cartesian_chunk(actions: list[dict] | None) -> bool:
     """Whether every action carries a Cartesian end-effector command (so a 3D trajectory exists)."""
-    return bool(actions) and all(isinstance(a.get('robot_command'), CartesianPosition) for a in actions)
+    return bool(actions) and all(isinstance(a.get(keys.ROBOT_COMMAND), CartesianPosition) for a in actions)
 
 
 def _log_commands(actions: list[dict], wall_ns: int, inf_ns: int) -> None:
@@ -82,11 +82,11 @@ def _log_commands(actions: list[dict], wall_ns: int, inf_ns: int) -> None:
     with a relative ``chunk_time`` axis alongside.
     """
     if _is_cartesian_chunk(actions):
-        commands = [a['robot_command'] for a in actions]
+        commands = [a[keys.ROBOT_COMMAND] for a in actions]
         labels = ['tx', 'ty', 'tz', 'qw', 'qx', 'qy', 'qz']
         rows = [[*c.pose.translation, *c.pose.rotation.as_quat] for c in commands]
-    elif all(isinstance(a.get('robot_command'), JointDelta) for a in actions):
-        deltas = [a['robot_command'].velocities for a in actions]
+    elif all(isinstance(a.get(keys.ROBOT_COMMAND), JointDelta) for a in actions):
+        deltas = [a[keys.ROBOT_COMMAND].velocities for a in actions]
         labels = [f'dq{i}' for i in range(len(deltas[0]))]
         rows = [list(d) for d in deltas]
     else:

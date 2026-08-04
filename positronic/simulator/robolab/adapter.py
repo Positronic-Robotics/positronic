@@ -3,7 +3,7 @@
 Runs in positronic's interpreter (the RoboLab env server runs in its own Isaac Lab interpreter). The command
 side is ``WireCommandAdapter``'s forwarding; all action encoding — the joint-target conversion and the
 differential IK that bridges Cartesian commands — lives server-side where the articulation model is, so the
-adapter holds no model and stays geometry-only.
+adapter's only geometry is the constant frame offset between what the env measures and what the rig reports.
 """
 
 from typing import Any
@@ -12,13 +12,15 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
+from positronic.drivers.roboarm.models import DROID_EE_FRAME
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
 
 class RobolabAdapter(WireCommandAdapter):
     def __init__(self, camera_dict: dict[str, str]):
-        super().__init__()
+        # Converting here is what lets one checkpoint run on RoboLab and on the rig it stands in for unchanged.
+        super().__init__(DROID_EE_FRAME)
         self._camera_dict = camera_dict  # logical observation name -> the RoboLab obs image key
 
     def _reset_token(self, context: dict[str, Any]) -> Any:
@@ -28,7 +30,8 @@ class RobolabAdapter(WireCommandAdapter):
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         # The env reports the eef pose in the control frame IK drives; ``eef_quat`` is scalar-first (wxyz),
         # so ``from_quat`` is the matching decode.
-        ee_pose = geom.Transform3D(raw_obs['eef_pos'], geom.Rotation.from_quat(raw_obs['eef_quat']))
+        eef_pose = geom.Transform3D(raw_obs['eef_pos'], geom.Rotation.from_quat(raw_obs['eef_quat']))
+        ee_pose = eef_pose * self.env_control_frame.inv
         state = MujocoFrankaState()
         state.encode(raw_obs['joint_pos'], raw_obs['joint_vel'], ee_pose)
         obs: dict[str, Any] = {'robot_state': state, keys.GRIP: float(raw_obs['grip'])}

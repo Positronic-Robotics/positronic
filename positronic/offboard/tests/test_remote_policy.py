@@ -38,8 +38,7 @@ def _make_image(h, w):
 
 
 class TestPrepareObs:
-    """Tests for RemoteSession's optional JPEG compression. Image geometry is the declared
-    stack's business (see RestrictImageSize) — the session only compresses."""
+    """The border's own settings. Image geometry is the declared stack's business (see RestrictImageSize)."""
 
     def test_images_pass_through_untouched_by_default(self):
         session = RemoteSession(_mock_ws_session())
@@ -230,11 +229,11 @@ class TestActionHorizonWrapping:
 
 def test_remote_session_normalizes_single_dict():
     """Server returning a single action dict (legacy shape) is wrapped into a 1-element list."""
-    policy, _ = _mock_remote_policy(EMPTY_STACK, infer_return={'robot_command': 'X', 'timestamp': 0.0})
+    policy, _ = _mock_remote_policy(EMPTY_STACK, infer_return={keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0})
 
     session = policy.new_session()
     actions = session({})
-    assert actions == [{'robot_command': 'X', 'timestamp': 0.0}]
+    assert actions == [{keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0}]
 
 
 def test_remote_session_passes_through_none():

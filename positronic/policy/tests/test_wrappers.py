@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from positronic import keys
+from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
 from positronic.policy.action import (
     AbsoluteJointsAction,
@@ -20,6 +21,7 @@ from positronic.policy.codec import (
     ActionTimestamp,
     BinarizeGripInference,
     BinarizeGripTraining,
+    ChangeEEFrame,
     Codec,
     FlipGrip,
     RestrictImageSize,
@@ -159,6 +161,55 @@ class TestPipelineComposition:
         c2 = ActionTimestamp(fps=5.0)
         composed = c1 & c2
         assert isinstance(composed, Codec)
+
+    def test_agreeing_declarations_merge(self):
+        assert (ActionTimestamp(fps=10.0) | ActionTimestamp(fps=10.0)).meta['action_fps'] == 10.0
+
+    def test_disagreeing_declarations_have_no_merged_answer(self):
+        composed = ActionTimestamp(fps=10.0) & ActionTimestamp(fps=5.0)
+        with pytest.raises(ValueError, match='action_fps'):
+            _ = composed.meta
+
+    def test_two_frame_codecs_refuse_to_advertise_one_frame(self):
+        """Poses come out at the product of both transforms, which neither codec's declaration names."""
+        a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
+        b = Transform3D(np.array([0.01, 0.0, 0.02]), Rotation.from_euler([0.0, 0.0, -0.4]))
+        with pytest.raises(ValueError, match=keys.EE_FRAME):
+            _ = (ChangeEEFrame(a) | ChangeEEFrame(b)).meta
+
+    def test_the_same_frame_twice_is_still_two_moves(self):
+        """The second move starts where the first left off, so the shared value names neither end of the pair."""
+        a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
+        with pytest.raises(ValueError, match=keys.EE_FRAME):
+            _ = (ChangeEEFrame(a) | ChangeEEFrame(a)).meta
+
+    def test_a_relative_decoder_anchors_on_the_pose_the_policy_saw(self):
+        """The right half decodes actions the left half re-expressed, so its context is re-expressed too —
+        anchoring a policy-frame delta on the raw pose would send the arm somewhere else."""
+        quat = Rotation.Representation.QUAT
+        t = Transform3D(np.array([0.0, 0.0, 0.1]), Rotation.from_euler([0.0, 0.0, np.pi / 2]))
+        raw = Transform3D(np.array([0.3, 0.1, 0.4]), Rotation.from_euler([0.0, 0.0, 0.0]))
+        turn, shift = Rotation.from_euler([0.0, 0.0, 0.2]), np.array([0.01, -0.02, 0.03])
+        action = {'action': np.concatenate([turn.as_quat, shift, [1.0]]).astype(np.float32)}
+
+        codec = ChangeEEFrame(t) | RelativePositionAction()
+        assert isinstance(codec, Codec)
+        decoded = codec.decode(action, context={keys.EE_POSE: raw.as_vector(quat)})
+        assert isinstance(decoded, dict)
+
+        seen = raw * t
+        pose = decoded[keys.ROBOT_COMMAND].pose
+        want = Transform3D(seen.translation + shift, seen.rotation * turn) * t.inv
+        np.testing.assert_allclose(pose.as_vector(quat), want.as_vector(quat), atol=1e-6)
+        anchored_raw = Transform3D(raw.translation + shift, raw.rotation * turn) * t.inv
+        assert not np.allclose(pose.translation, anchored_raw.translation)
+
+    def test_parallel_frame_codecs_keep_the_frame_they_share(self):
+        """Both halves encode the same input, so one move happens and the shared declaration describes it."""
+        a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
+        np.testing.assert_allclose(
+            (ChangeEEFrame(a) & ChangeEEFrame(a)).meta[keys.EE_FRAME], a.as_vector(Rotation.Representation.QUAT)
+        )
 
 
 class _CaptureSession(Session):
@@ -328,10 +379,11 @@ class TestPipelineSpec:
             'flip_grip': FlipGrip(),
             'restrict_image_size': RestrictImageSize(),
             'observation_codec': ObservationCodec(state={}, images={}),
-            'absolute_position_action': AbsolutePositionAction('robot_command.pose', 'target_grip'),
-            'absolute_joints_action': AbsoluteJointsAction('robot_command.joints', 'target_grip'),
+            'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, 'target_grip'),
+            'absolute_joints_action': AbsoluteJointsAction(keys.TARGET_JOINTS, 'target_grip'),
             'relative_position_action': RelativePositionAction(),
             'joint_delta_action': JointDeltaAction(),
+            'change_ee_frame': ChangeEEFrame(Transform3D.identity),
         }
         assert set(instances) == set(spec.WIRE_WRAPPERS)
         for name, instance in instances.items():
@@ -385,6 +437,13 @@ class TestPipe:
     def test_split_pipe_requires_exactly_one_marker(self):
         with pytest.raises(ValueError, match='exactly one'):
             spec.split(ChunkedSchedule() | spec.PolicySource(_ConstPolicy([])))
+
+    def test_pipe_refuses_a_frame_declared_on_both_sides_of_the_wire(self):
+        """Rig-side and server-side conversion are alternatives; running both puts poses at the product."""
+        t = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
+        chain = ChangeEEFrame(t) | spec.remote | (ActionTimestamp(fps=10.0) | ChangeEEFrame(t))
+        with pytest.raises(ValueError, match=keys.EE_FRAME):
+            _ = chain | spec.PolicySource(_ConstPolicy([]))
 
     def test_pipe_composes_no_further(self):
         pipeline: Any = ChunkedSchedule() | spec.remote | spec.PolicySource(_ConstPolicy([]))

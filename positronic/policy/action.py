@@ -41,7 +41,7 @@ class AbsolutePositionAction(Codec):
         action_vector = data['action']
         target_pose = geom.Transform3D.from_vector(action_vector[:-1], self.rot_rep)
         target_grip = action_vector[-1].item()
-        return {'robot_command': command.CartesianPosition(pose=target_pose), 'target_grip': target_grip}
+        return {keys.ROBOT_COMMAND: command.CartesianPosition(pose=target_pose), 'target_grip': target_grip}
 
     def _encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         pose = episode[self.tgt_ee_pose_key]
@@ -81,7 +81,7 @@ class AbsoluteJointsAction(Codec):
 
         joint_positions = action_vector[: self.num_joints]
         target_grip = action_vector[-1].item()
-        return {'robot_command': command.JointPosition(positions=joint_positions), 'target_grip': target_grip}
+        return {keys.ROBOT_COMMAND: command.JointPosition(positions=joint_positions), 'target_grip': target_grip}
 
     def _encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         return transforms.concat(episode[self.tgt_joints_key], episode[self.tgt_grip_key], dtype=np.float32)
@@ -113,9 +113,9 @@ class IKJointsAction(Codec):
         self,
         solver_cls,
         *,
-        tgt_ee_pose_key='robot_command.pose',
+        tgt_ee_pose_key=keys.TARGET_EE_POSE,
         current_q_key=keys.JOINTS,
-        tgt_joints_key='robot_command.joints',
+        tgt_joints_key=keys.TARGET_JOINTS,
     ):
         self.solver_cls = solver_cls
         self.tgt_ee_pose_key = tgt_ee_pose_key
@@ -141,7 +141,7 @@ class RelativePositionAction(Codec):
         self,
         rotation_rep: RotRep | str = RotRep.QUAT,
         robot_pose_key: str = keys.EE_POSE,
-        target_pose_key: str = 'robot_command.pose',
+        target_pose_key: str = keys.TARGET_EE_POSE,
         target_grip_key: str = 'target_grip',
     ):
         self.rot_rep = RotRep(rotation_rep)
@@ -168,7 +168,7 @@ class RelativePositionAction(Codec):
 
         target_pose = geom.Transform3D(translation=tr_add, rotation=rot_mul)
         target_grip = action_vector[self.rot_rep.size + 3].item()
-        return {'robot_command': command.CartesianPosition(pose=target_pose), 'target_grip': target_grip}
+        return {keys.ROBOT_COMMAND: command.CartesianPosition(pose=target_pose), 'target_grip': target_grip}
 
     def _encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
         robot_pose = episode[self.robot_pose_key]
@@ -238,7 +238,7 @@ class JointDeltaAction(Codec):
         action_vector = action_vector.clip(-1.0, 1.0)
         velocities = action_vector[: self.num_joints] * self.MAX_JOINT_DELTA
         grip = 1.0 if action_vector[self.num_joints].item() > 0.5 else 0.0
-        return {'robot_command': command.JointDelta(velocities=velocities), 'target_grip': grip}
+        return {keys.ROBOT_COMMAND: command.JointDelta(velocities=velocities), 'target_grip': grip}
 
     def to_spec(self):
         return {'name': 'joint_delta_action', 'args': {'num_joints': self.num_joints}}

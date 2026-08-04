@@ -36,7 +36,7 @@ _REMOVE_SIGNALS = ['controller_positions.right', 'robot_commands.pose']
 # transform, so the transform always supplies them — overriding any stale value a recording baked
 # into static (pre-rename recordings carry `robot_commands.pose` in their `pose_signals`).
 _ROBOT_SIGNAL_POINTERS = Derive(
-    joint_signal=FromValue(keys.JOINTS), pose_signals=FromValue([keys.EE_POSE, 'robot_command.pose'])
+    joint_signal=FromValue(keys.JOINTS), pose_signals=FromValue([keys.EE_POSE, keys.TARGET_EE_POSE])
 )
 
 # The bundled model (URDF + collision meshes + joint names + control frame + gripper) for the real
@@ -47,7 +47,7 @@ _SIM_MODEL = Derive(**{key: FromValue(value) for key, value in bundled_panda_mod
 # Backfill the canonical `robot_command.pose` from the plural name older recordings stored on
 # disk. Recordings already using the canonical name pass through the Identity, which wins on the
 # key clash (Group prefers the earlier transform), so this alias is a no-op for them.
-_RENAME_ROBOT_COMMAND = Derive(**{'robot_command.pose': Get('robot_commands.pose', None)})
+_RENAME_ROBOT_COMMAND = Derive(**{keys.TARGET_EE_POSE: Get('robot_commands.pose', None)})
 
 # Signal pointers always come from the transform (first in each Group, so they win). Real recordings
 # carry the arm's own driver-emitted model, so the bundled one only backfills it (Identity before
@@ -116,7 +116,7 @@ def _flip_grip(key: str):
 # Signal transformations for sim datasets
 old_to_new = Group(
     Derive(**{
-        'robot_command.pose': Concat('target_robot_position_translation', 'target_robot_position_quaternion'),
+        keys.TARGET_EE_POSE: Concat('target_robot_position_translation', 'target_robot_position_quaternion'),
         keys.EE_POSE: Concat('robot_position_translation', 'robot_position_quaternion'),
         keys.TASK: FromValue('Pick up the green cube and place it on the red cube.'),
         keys.GRIP: _flip_grip(keys.GRIP),

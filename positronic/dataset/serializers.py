@@ -121,8 +121,11 @@ class Serializers:
         match command:
             case CartesianPosition(pose):
                 return {'.pose': Serializers.transform_3d(pose)}
-            case CartesianDelta(delta):
-                return {'.pose_delta': Serializers.transform_3d(delta)}
+            case CartesianDelta(delta, frame):
+                return {
+                    '.pose_delta': Serializers.transform_3d(delta),
+                    '.pose_delta_frame': Serializers.transform_3d(frame),
+                }
             case JointPosition(positions):
                 return {'.joints': positions}
             case JointDelta(delta):

@@ -3,6 +3,14 @@
 import configuronic as cfn
 
 from positronic import geom, keys
+from positronic.policy.codec import (
+    ActionHorizon,
+    ActionTimestamp,
+    BinarizeGripInference,
+    BinarizeGripTraining,
+    ChangeEEFrame,
+    FlipGrip,
+)
 from positronic.policy.observation import ObservationCodec
 
 RotRep = geom.Rotation.Representation
@@ -43,25 +51,31 @@ eepose_joints_obs = eepose_grip_joints_obs.override(
 )
 
 
-@cfn.config(fps=15.0, horizon=None, binarize_grip=None, flip_grip=False)
-def compose(obs, action, fps: float, horizon: float | None, binarize_grip: tuple[str, ...] | None, flip_grip: bool):
+@cfn.config(fps=15.0, horizon=None, binarize_grip=None, flip_grip=False, ee_frame=None)
+def compose(
+    obs,
+    action,
+    fps: float,
+    horizon: float | None,
+    binarize_grip: tuple[str, ...] | None,
+    flip_grip: bool,
+    ee_frame: geom.Transform3D | None,
+):
     """Compose observation and action codecs with timing and optional grip binarization.
 
-    ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``).
+    ``flip_grip`` serves checkpoints that speak the inverted grip convention (see ``FlipGrip``). ``ee_frame``
+    places the end-effector frame the checkpoint speaks relative to ``DEFAULT_FRAME`` (``models.DROID_EE_FRAME``)
+    and re-expresses a dataset in it for training (see ``ChangeEEFrame``); serving declares the conversion in
+    the pipeline instead, so leave it unset there.
 
     Layout::
 
-        [ActionHorizon] | ActionTimestamp | [BinarizeGripTraining | BinarizeGripInference] | [FlipGrip] | obs & action
+        [ActionHorizon] | ActionTimestamp | [BinarizeGripTraining | BinarizeGripInference]
+            | [FlipGrip] | [ChangeEEFrame] | obs & action
     """
-    from positronic.policy.codec import (
-        ActionHorizon,
-        ActionTimestamp,
-        BinarizeGripInference,
-        BinarizeGripTraining,
-        FlipGrip,
-    )
-
     result = obs & action
+    if ee_frame is not None:
+        result = ChangeEEFrame(ee_frame) | result
     if flip_grip:
         result = FlipGrip() | result
     if binarize_grip:
@@ -72,7 +86,7 @@ def compose(obs, action, fps: float, horizon: float | None, binarize_grip: tuple
     return result
 
 
-@cfn.config(rotation_rep=None, tgt_ee_pose_key='robot_command.pose', tgt_grip_key='target_grip')
+@cfn.config(rotation_rep=None, tgt_ee_pose_key=keys.TARGET_EE_POSE, tgt_grip_key='target_grip')
 def absolute_pos_action(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key: str):
     """Absolute position action codec for ACT/OpenPI."""
     from positronic.policy.action import AbsolutePositionAction
@@ -101,7 +115,7 @@ traj_ee_action = absolute_pos_action.override(tgt_ee_pose_key=keys.EE_POSE, tgt_
 
 @cfn.config(
     solver='dls_limits',
-    tgt_ee_pose_key='robot_command.pose',
+    tgt_ee_pose_key=keys.TARGET_EE_POSE,
     tgt_grip_key='target_grip',
     current_q_key=keys.JOINTS,
     num_joints=7,
@@ -111,7 +125,7 @@ def ik_joints_action(solver, tgt_ee_pose_key, tgt_grip_key, current_q_key, num_j
     from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver
     from positronic.policy.action import AbsoluteJointsAction, IKJointsAction
 
-    tgt_joints_key = 'robot_command.joints'
+    tgt_joints_key = keys.TARGET_JOINTS
     solver_map = {'lm': LMIKSolver, 'dls': DLSIKSolver, 'dls_limits': DLSIKSolverWithLimits}
     ik = IKJointsAction(
         solver_cls=solver_map[solver],

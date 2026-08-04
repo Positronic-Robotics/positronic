@@ -77,16 +77,16 @@ def test_absolute_position_action_encode_decode_quat():
 
     pose = [np.concatenate([t[i], q[i].as_quat]).astype(np.float32) for i in range(len(ts))]
 
-    ep = EpisodeContainer({'robot_command.pose': DummySignal(ts, pose), 'target_grip': DummySignal(ts, g)})
+    ep = EpisodeContainer({obs_keys.TARGET_EE_POSE: DummySignal(ts, pose), 'target_grip': DummySignal(ts, g)})
 
-    act = AbsolutePositionAction('robot_command.pose', 'target_grip', Rotation.Representation.QUAT)
+    act = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, 'target_grip', Rotation.Representation.QUAT)
     sig = act._encode_episode(ep)
     vec = list(sig)[0][0]
     assert vec.shape == (8,)  # 4 quat + 3 trans + 1 grip
     assert vec.dtype == np.float32
 
     decoded = act._decode_single({'action': vec}, context={})
-    command = decoded['robot_command']
+    command = decoded[obs_keys.ROBOT_COMMAND]
     target_grip = decoded['target_grip']
     assert isinstance(command, cmd_module.CartesianPosition)
     np.testing.assert_allclose(command.pose.translation, t[0], atol=1e-6)
@@ -108,7 +108,7 @@ def test_relative_target_position_action_encode_decode_quat():
 
     ep = EpisodeContainer({
         obs_keys.EE_POSE: DummySignal(ts, cur_pose),
-        'robot_command.pose': DummySignal(ts, tgt_pose),
+        obs_keys.TARGET_EE_POSE: DummySignal(ts, tgt_pose),
         'target_grip': DummySignal(ts, g_tgt),
     })
 
@@ -123,7 +123,7 @@ def test_relative_target_position_action_encode_decode_quat():
     decoded = act._decode_single(
         {'action': vec}, context={obs_keys.EE_POSE: np.concatenate([t_cur[0], q_cur[0].as_quat])}
     )
-    command = decoded['robot_command']
+    command = decoded[obs_keys.ROBOT_COMMAND]
     target_grip = decoded['target_grip']
     assert isinstance(command, cmd_module.CartesianPosition)
     # Decode applies diff to current translation
@@ -137,16 +137,16 @@ def test_absolute_joints_action_encode_decode():
     joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32) for _ in ts]
     g = [0.5, 0.6]
 
-    ep = EpisodeContainer({'robot_command.joints': DummySignal(ts, joints), 'target_grip': DummySignal(ts, g)})
+    ep = EpisodeContainer({obs_keys.TARGET_JOINTS: DummySignal(ts, joints), 'target_grip': DummySignal(ts, g)})
 
-    act = AbsoluteJointsAction('robot_command.joints', 'target_grip', num_joints=7)
+    act = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, 'target_grip', num_joints=7)
     sig = act._encode_episode(ep)
     vec = list(sig)[0][0]
     assert vec.shape == (8,)  # 7 joints + 1 grip
     assert vec.dtype == np.float32
 
     decoded = act._decode_single({'action': vec}, context={})
-    command = decoded['robot_command']
+    command = decoded[obs_keys.ROBOT_COMMAND]
     target_grip = decoded['target_grip']
     assert isinstance(command, cmd_module.JointPosition)
     np.testing.assert_allclose(command.positions, joints[0], atol=1e-6)
@@ -326,7 +326,7 @@ def test_codec_wrap_meta_merges():
 
 def test_timestamps_survive_action_decoder_composition():
     """Timestamps from ActionTiming must survive through composed action decoders."""
-    action_codec = AbsolutePositionAction('robot_command.pose', 'target_grip', Rotation.Representation.QUAT)
+    action_codec = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, 'target_grip', Rotation.Representation.QUAT)
     timing = ActionTiming(fps=15.0, horizon_sec=1.0)
     composed = timing | action_codec
 
@@ -341,7 +341,7 @@ def test_timestamps_survive_action_decoder_composition():
 
     assert len(decoded) == 6  # 5 actions + timestamp sentinel
     for i, action in enumerate(decoded[:5]):
-        assert 'robot_command' in action
+        assert obs_keys.ROBOT_COMMAND in action
         assert 'target_grip' in action
         assert 'timestamp' in action, f'Action {i} missing timestamp — stripped by action decoder'
         assert action['timestamp'] == pytest.approx(i / 15.0)
@@ -358,7 +358,7 @@ def test_composed_training_encoder_uses_parallel():
     ep = EpisodeContainer({
         obs_keys.JOINTS: DummySignal(ts, joints),
         obs_keys.GRIP: DummySignal(ts, grip),
-        'robot_command.joints': DummySignal(ts, joints),
+        obs_keys.TARGET_JOINTS: DummySignal(ts, joints),
         'target_grip': DummySignal(ts, grip),
         obs_keys.WRIST_IMAGE: DummySignal(ts, img),
         obs_keys.EXTERIOR_IMAGE: DummySignal(ts, img),
@@ -369,7 +369,7 @@ def test_composed_training_encoder_uses_parallel():
         state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}},
         images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))},
     )
-    action = AbsoluteJointsAction('robot_command.joints', 'target_grip', num_joints=7)
+    action = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, 'target_grip', num_joints=7)
     timing = ActionTiming(fps=15.0)
     composed = timing | (obs & action)
 
@@ -389,7 +389,7 @@ def test_composed_training_encoder_uses_parallel():
 
     # Original episode keys should NOT appear (no Identity pass-through)
     assert 'target_grip' not in result
-    assert 'robot_command.joints' not in result
+    assert obs_keys.TARGET_JOINTS not in result
 
     # Meta should merge from all codecs
     assert encoder.meta.get('action_fps') == 15.0
@@ -436,10 +436,10 @@ def test_binarize_grip_training_composed_with_action_codec():
     ts = [1000]
     joints = [np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32)]
 
-    ep = EpisodeContainer({'robot_command.joints': DummySignal(ts, joints), 'target_grip': DummySignal(ts, [0.7])})
+    ep = EpisodeContainer({obs_keys.TARGET_JOINTS: DummySignal(ts, joints), 'target_grip': DummySignal(ts, [0.7])})
 
     binarize = BinarizeGripTraining((obs_keys.GRIP, 'target_grip'))
-    action = AbsoluteJointsAction('robot_command.joints', 'target_grip', num_joints=7)
+    action = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, 'target_grip', num_joints=7)
     composed = binarize | action
 
     result = composed.training_encoder(ep)
@@ -465,7 +465,7 @@ def test_flip_grip():
 
 def test_flip_grip_composed_with_obs_and_action():
     obs = ObservationCodec(state={'observation.state': {obs_keys.GRIP: 1}}, images={})
-    action = AbsolutePositionAction('robot_command.pose', 'target_grip', Rotation.Representation.QUAT)
+    action = AbsolutePositionAction(obs_keys.TARGET_EE_POSE, 'target_grip', Rotation.Representation.QUAT)
     composed = FlipGrip() | (obs & action)
 
     encoded = composed.encode({obs_keys.GRIP: 0.2})
@@ -499,7 +499,7 @@ def test_parallel_codec_decode_merges_outputs():
     raw_action[7] = 0.5
     result = composed.decode({'action': raw_action})
     # Obs returns {} from decode, action returns decoded keys
-    assert 'robot_command' in result
+    assert obs_keys.ROBOT_COMMAND in result
     assert 'target_grip' in result
     assert 'action' not in result
 
@@ -512,7 +512,7 @@ def test_sequential_into_parallel_training():
     ep = EpisodeContainer({
         obs_keys.JOINTS: DummySignal(ts, joints),
         obs_keys.GRIP: DummySignal(ts, [0.7]),
-        'robot_command.joints': DummySignal(ts, joints),
+        obs_keys.TARGET_JOINTS: DummySignal(ts, joints),
         'target_grip': DummySignal(ts, [0.3]),
         obs_keys.WRIST_IMAGE: DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)]),
         obs_keys.EXTERIOR_IMAGE: DummySignal(ts, [np.zeros((4, 4, 3), dtype=np.uint8)]),
@@ -522,7 +522,7 @@ def test_sequential_into_parallel_training():
         state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}},
         images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))},
     )
-    action = AbsoluteJointsAction('robot_command.joints', 'target_grip', num_joints=7)
+    action = AbsoluteJointsAction(obs_keys.TARGET_JOINTS, 'target_grip', num_joints=7)
     binarize = BinarizeGripTraining((obs_keys.GRIP, 'target_grip'))
     composed = binarize | (obs & action)
 
@@ -548,7 +548,7 @@ def test_compose_training_encoder_produces_only_derived_keys():
     ep = EpisodeContainer({
         obs_keys.JOINTS: DummySignal(ts, joints),
         obs_keys.GRIP: DummySignal(ts, grip),
-        'robot_command.joints': DummySignal(ts, joints),
+        obs_keys.TARGET_JOINTS: DummySignal(ts, joints),
         'target_grip': DummySignal(ts, grip),
         obs_keys.WRIST_IMAGE: DummySignal(ts, img),
         obs_keys.EXTERIOR_IMAGE: DummySignal(ts, img),
@@ -560,7 +560,7 @@ def test_compose_training_encoder_produces_only_derived_keys():
             state={'observation.state': {obs_keys.JOINTS: 7, obs_keys.GRIP: 1}},
             images={'observation.images.left': (obs_keys.WRIST_IMAGE, (4, 4))},
         ),
-        action=AbsoluteJointsAction('robot_command.joints', 'target_grip', num_joints=7),
+        action=AbsoluteJointsAction(obs_keys.TARGET_JOINTS, 'target_grip', num_joints=7),
     )
 
     result = codec.training_encoder(ep)
@@ -571,7 +571,7 @@ def test_compose_training_encoder_produces_only_derived_keys():
 
     # Original episode keys must NOT leak through — this fails if compose uses | instead of &
     assert 'target_grip' not in result
-    assert 'robot_command.joints' not in result
+    assert obs_keys.TARGET_JOINTS not in result
     assert obs_keys.JOINTS not in result
     assert obs_keys.GRIP not in result
 
@@ -605,7 +605,7 @@ def test_groot_ee_codec_decodes_modality_keyed_actions():
     decoded = codec.decode(model_output, context=_T0_OBS)
     assert len(decoded) == 4  # 3 actions + timestamp sentinel
     for d in decoded[:-1]:
-        assert 'robot_command' in d
+        assert obs_keys.ROBOT_COMMAND in d
         assert 'target_grip' in d
         assert 'timestamp' in d
     assert decoded[-1] == {'timestamp': pytest.approx(3 / 15.0)}  # timestamp sentinel
@@ -621,6 +621,6 @@ def test_groot_joints_codec_decodes_modality_keyed_actions():
     decoded = codec.decode(model_output, context=_T0_OBS)
     assert len(decoded) == 4  # 3 actions + timestamp sentinel
     for d in decoded[:-1]:
-        assert 'robot_command' in d
+        assert obs_keys.ROBOT_COMMAND in d
         assert 'target_grip' in d
     assert decoded[-1] == {'timestamp': pytest.approx(3 / 15.0)}  # timestamp sentinel

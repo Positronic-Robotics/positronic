@@ -32,6 +32,8 @@ against robosuite's *own* control path:
   ``_arm_action``, and assert the recovered action equals the original. This proves ``_arm_action`` is the exact
   inverse of robosuite's ``scale_action`` + ``set_goal`` — byte-identical to what a LIBERO policy drives.
 - forward kinematics: ``_fk`` of the live joints reproduces the controller's eef-site read to the bit.
+- the eef site against the panda model's ``DEFAULT_FRAME``: LIBERO's own scene puts the site where
+  ``LiberoAdapter``, passing no ``env_control_frame``, claims it is.
 - inverse kinematics: ``_fk(_ik(pose))`` recovers the target pose (round-trip; LIBERO has no IK to match).
 
 Run on a LIBERO-capable box with the positronic-free ``server`` module and a LIBERO source checkout on the
@@ -39,7 +41,11 @@ path (the same two entries ``launcher._spawn`` sets; the checkout lands at ``~/.
 once the env server has run once)::
 
     PYTHONPATH=positronic/simulator/env_server:~/.cache/positronic/libero/src \
+        LIBERO_CONFIG_PATH=~/.cache/positronic/libero/config \
         uv run --no-project positronic/simulator/libero/validate.py
+
+``LIBERO_CONFIG_PATH`` is not optional: LIBERO caches absolute asset paths on first import, and without it the
+run picks up a ``~/.libero`` written by some earlier, differently-located clone.
 """
 
 import argparse
@@ -54,6 +60,20 @@ _ATOL = 1e-9  # pure joint-space algebra (q+dq, goal velocities) inverts to floa
 _OSC_ATOL = 1e-5  # robosuite mat2quat casts to float32, so the OSC orientation channel carries ~1e-6 error
 _FK_ATOL = 2e-4  # a fresh FK recompute vs the live stepped eef site agree only to float precision near the
 # settled, near-singular tool-down pose — far tighter than a real FK bug (O(1e-2)+), still not float64-exact
+
+# ``bundled_panda_model``'s ``DEFAULT_FRAME`` restated against link7, because this script runs in LIBERO's venv
+# and cannot import positronic: the same transform as ``frame_transform(panda_urdf, 'link7', DEFAULT_FRAME)``.
+# ``LiberoAdapter`` passes no ``env_control_frame``, which claims LIBERO's eef site is exactly this pose.
+# rules-allow: hardcoded-keys — this script runs in LIBERO's 3.10 venv, where positronic is not importable, so
+# there is no shared constant to reach for; naming the body is the point of the check
+_LINK7_BODY = 'robot0_link7'
+_LINK7_TO_EEF_POS = (0.0, 0.0, 0.1654)
+_LINK7_TO_EEF_YAW = -np.pi / 4
+_FRAME_POS_TOL = 1e-3  # m — the arm is settling, so allow the same slack the FK check needs, still 100x under
+_FRAME_ROT_TOL = np.radians(0.5)  # a real frame mismatch here is centimetres and tens of degrees
+# The gap is real and measured at 38.1 mm / 90.03 deg; reported rather than fatal until #557 settles what a
+# LIBERO recording's poses mean, since fixing the adapter changes the meaning of every dataset already recorded.
+_FRAME_ISSUE = 'https://github.com/Positronic-Robotics/positronic/issues/557'
 
 
 def _token(args, control_mode: str) -> dict:
@@ -220,6 +240,21 @@ def _check_fk_identity(env: LiberoEnv, token: dict) -> None:
     print(f'  fk identity: OK (matches eef-site read, atol {_FK_ATOL})')
 
 
+def _check_flange_to_eef(env: LiberoEnv, token: dict) -> None:
+    env.reset(token)
+    sim = env._sim
+    link7 = sim.model.body_name2id(_LINK7_BODY)
+    link7_rot = np.asarray(sim.data.body_xmat[link7]).reshape(3, 3)
+    eef_pos, eef_rot = env._cur_pose()
+
+    rel_pos = link7_rot.T @ (eef_pos - np.asarray(sim.data.body_xpos[link7]))
+    rel_rot = link7_rot.T @ eef_rot
+    ang = np.linalg.norm(quat2axisangle(mat2quat(rel_rot @ euler2mat([0.0, 0.0, _LINK7_TO_EEF_YAW]).T)))
+    off = float(np.linalg.norm(rel_pos - np.asarray(_LINK7_TO_EEF_POS)))
+    verdict = 'OK' if off <= _FRAME_POS_TOL and ang <= _FRAME_ROT_TOL else f'DIVERGENT ({_FRAME_ISSUE})'
+    print(f'  link7 -> eef site: {verdict} ({off * 1000:.4f} mm / {np.degrees(ang):.4f} deg)')
+
+
 def _check_ik_roundtrip(env: LiberoEnv, token: dict) -> None:
     env.reset(token)
     n = len(env._qpos_idx)
@@ -249,6 +284,7 @@ def main() -> None:
     _check_obs_encoding(ee, ee_token)
     _check_osc_delta_scale(ee, ee_token)
     _check_fk_identity(ee, ee_token)
+    _check_flange_to_eef(ee, ee_token)
     _check_ik_roundtrip(ee, ee_token)
     ee.close()
 

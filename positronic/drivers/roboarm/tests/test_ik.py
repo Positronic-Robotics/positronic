@@ -5,10 +5,26 @@ import mujoco as mj
 import numpy as np
 import pytest
 
-from positronic import keys
+from positronic import geom, keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
-from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver, ik_joints_from_episode
+from positronic.drivers.roboarm.ik import (
+    DLSIKSolver,
+    DLSIKSolverWithLimits,
+    LMIKSolver,
+    _prepare_spec,
+    frame_transform,
+    ik_joints_from_episode,
+    pose_anchor,
+)
+from positronic.drivers.roboarm.models import (
+    DEFAULT_FRAME,
+    DROID_EE_FRAME,
+    DROID_EEF_LINK,
+    EE_LINK,
+    bundled_franka_model,
+    bundled_panda_model,
+)
 from positronic.utils import package_assets_path
 
 URDF = Path(package_assets_path('assets/mujoco/panda_ik.xml')).read_text()
@@ -30,7 +46,7 @@ def _fk(urdf_xml, q):
     qpos_ids = [model.joint(n).qposadr.item() for n in JOINT_NAMES]
     data.qpos[qpos_ids] = q
     mj.mj_forward(model, data)
-    site_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, 'end_effector')
+    site_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, CONTROL_FRAME)
     pos = data.site_xpos[site_id].copy()
     quat = np.empty(4)
     mj.mju_mat2Quat(quat, data.site_xmat[site_id])
@@ -94,18 +110,116 @@ def test_ik_joints_from_episode():
     episode = EpisodeContainer(
         data={
             keys.JOINTS: DummySignal(ts, q_traj),
-            'robot_command.pose': DummySignal(ts, ee_poses),
-            'urdf': URDF,
-            'joint_names': JOINT_NAMES,
-            'control_frame': CONTROL_FRAME,
+            keys.TARGET_EE_POSE: DummySignal(ts, ee_poses),
+            keys.URDF: URDF,
+            keys.JOINT_NAMES: JOINT_NAMES,
+            keys.CONTROL_FRAME: CONTROL_FRAME,
         }
     )
-    result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, 'robot_command.pose', keys.JOINTS)
+    result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, keys.TARGET_EE_POSE, keys.JOINTS)
 
     assert len(result) == n_steps
     for i in range(n_steps):
         reconstructed_pose = _fk(URDF, result[i][0])
         np.testing.assert_allclose(reconstructed_pose[:3], ee_poses[i, :3], atol=1e-3)
+
+
+def _fk_site(urdf_xml, q, frame):
+    model = _prepare_spec(urdf_xml, frame).compile()
+    data = mj.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]
+    qpos_ids = [model.joint(n).qposadr.item() for n in JOINT_NAMES]
+    data.qpos[qpos_ids] = q
+    mj.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]
+    sid = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, frame)  # pyright: ignore[reportAttributeAccessIssue]
+    quat = np.empty(4)
+    mj.mju_mat2Quat(quat, data.site_xmat[sid])  # pyright: ignore[reportAttributeAccessIssue]
+    return np.concatenate([data.site_xpos[sid].copy(), quat])
+
+
+def test_ik_joints_from_episode_solves_targets_a_codec_moved():
+    """Targets re-expressed in a policy's frame come back to the episode's anchor frame before the solve."""
+    n_steps = 3
+    ts = np.arange(n_steps, dtype=np.int64) * 100_000_000
+    q_traj = np.linspace(TEST_CONFIGS[0], TEST_CONFIGS[1], n_steps)
+    quat = geom.Rotation.Representation.QUAT
+    urdf = bundled_panda_model()[keys.URDF]
+    offset = geom.Transform3D(np.array([0.0, 0.0, 0.05]), geom.Rotation.from_euler([0.0, 0.0, np.pi / 4]))
+    anchored = [geom.Transform3D.from_vector(_fk_site(urdf, q, DEFAULT_FRAME), quat) for q in q_traj]
+    moved = np.array([(pose * offset).as_vector(quat) for pose in anchored])
+
+    episode = EpisodeContainer(
+        data={
+            keys.JOINTS: DummySignal(ts, q_traj),
+            keys.TARGET_EE_POSE: DummySignal(ts, moved),
+            keys.URDF: urdf,
+            keys.JOINT_NAMES: JOINT_NAMES,
+            keys.CONTROL_FRAME: DEFAULT_FRAME,
+            keys.EE_FRAME: offset.as_vector(quat),
+        }
+    )
+    result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, keys.TARGET_EE_POSE, keys.JOINTS)
+
+    for i in range(n_steps):
+        solved = _fk_site(urdf, result[i][0], DEFAULT_FRAME)
+        np.testing.assert_allclose(solved[:3], anchored[i].translation, atol=1e-3)
+
+
+def test_frame_transform_reproduces_droid_eef_across_configs():
+    urdf = bundled_franka_model()[keys.URDF]
+    transform = frame_transform(urdf, EE_LINK, DROID_EEF_LINK)
+    quat = geom.Rotation.Representation.QUAT
+    for q in TEST_CONFIGS:
+        got = geom.Transform3D.from_vector(_fk_site(urdf, q, EE_LINK), quat) * transform
+        want = geom.Transform3D.from_vector(_fk_site(urdf, q, DROID_EEF_LINK), quat)
+        np.testing.assert_allclose(got.translation, want.translation, atol=1e-9)
+        assert geom.quat_closest(got.rotation, want.rotation) == want.rotation
+
+
+@pytest.mark.parametrize('model', [bundled_franka_model(), bundled_panda_model()], ids=['franka', 'panda'])
+def test_bundled_model_declares_the_frame_it_reports_in(model):
+    assert model[keys.CONTROL_FRAME] == DEFAULT_FRAME
+    frame_transform(model[keys.URDF], DEFAULT_FRAME, DEFAULT_FRAME)
+
+
+def test_declared_droid_frame_matches_the_model_geometry():
+    """The checkpoint states its frame as a constant; this pins it to where the model puts that frame."""
+    urdf = bundled_franka_model()[keys.URDF]
+    measured = frame_transform(urdf, DEFAULT_FRAME, DROID_EEF_LINK)
+    np.testing.assert_allclose(DROID_EE_FRAME.as_matrix, measured.as_matrix, atol=1e-9)
+
+
+def test_default_frame_still_coincides_with_the_franka_tool_frame():
+    """Two things rest on this and neither is reachable from the data: recordings predating ``EE_FRAME`` are
+    solved at ``end_effector`` (see ``pose_anchor``), and ``DROID_EE_FRAME`` is stated from where
+    ``DEFAULT_FRAME`` sits. TODO(#550): moving it to the flange invalidates both, so re-express those
+    recordings and re-measure the constant in the same change.
+    """
+    transform = frame_transform(bundled_franka_model()[keys.URDF], DEFAULT_FRAME, EE_LINK)
+    np.testing.assert_allclose(transform.as_matrix, np.eye(4), atol=1e-12)
+
+
+def test_pose_anchor_reads_a_stated_frame_and_falls_back_to_the_name():
+    offset = geom.Transform3D(np.array([0.0, 0.0, 0.05]), geom.Rotation.identity)
+    quat = geom.Rotation.Representation.QUAT
+    stated = EpisodeContainer(data={keys.CONTROL_FRAME: CONTROL_FRAME, keys.EE_FRAME: offset.as_vector(quat)})
+    legacy = EpisodeContainer(data={keys.CONTROL_FRAME: CONTROL_FRAME})
+
+    assert pose_anchor(stated)[0] == DEFAULT_FRAME
+    np.testing.assert_allclose(pose_anchor(stated)[1].as_vector(quat), offset.as_vector(quat), atol=1e-12)
+    assert pose_anchor(legacy)[0] == CONTROL_FRAME
+    np.testing.assert_allclose(pose_anchor(legacy)[1].as_matrix, np.eye(4), atol=1e-12)
+
+
+def test_frame_transform_rejects_frames_across_movable_joints():
+    # rules-allow: hardcoded-keys — the base link is this test's input, not a name it shares with the code
+    with pytest.raises(ValueError, match='movable joints'):
+        frame_transform(bundled_franka_model()[keys.URDF], 'link0', EE_LINK)
+
+
+def test_frame_transform_identity_when_frames_match():
+    transform = frame_transform(bundled_franka_model()[keys.URDF], EE_LINK, EE_LINK)
+    np.testing.assert_allclose(transform.translation, 0.0, atol=1e-12)
+    assert transform.rotation == geom.Rotation.identity
 
 
 @pytest.mark.parametrize('solver_cls', [DLSIKSolver, DLSIKSolverWithLimits])

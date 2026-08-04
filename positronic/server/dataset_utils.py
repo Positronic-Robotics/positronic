@@ -17,6 +17,7 @@ import rerun as rr
 import rerun.blueprint as rrb
 from rerun.urdf import UrdfTree
 
+from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
@@ -240,7 +241,7 @@ def _joint_signals(ep: Episode) -> set[str]:
 
 def _setup_series_names(signals: EpisodeSignals, ep: Episode) -> None:
     joint_set = _joint_signals(ep)
-    joint_names = ep.static.get('joint_names')
+    joint_names = ep.static.get(keys.JOINT_NAMES)
     pose_set = set(signals.poses)
     for key in signals.numerics:
         dim = signals.dims.get(key, 1)
@@ -425,8 +426,8 @@ def _log_urdf_robot(
 ) -> Generator[bytes, None, str | None]:
     """Log URDF robot model with animated joint angles. Returns root frame name."""
     joint_sigs = sorted(_joint_signals(ep) & numeric_data.keys())
-    joint_names = ep.static.get('joint_names')
-    urdf_str = ep.static.get('urdf')
+    joint_names = ep.static.get(keys.JOINT_NAMES)
+    urdf_str = ep.static.get(keys.URDF)
     meshes = ep.static.get('meshes')
     if not all((joint_sigs, joint_names, urdf_str, meshes)):
         return None

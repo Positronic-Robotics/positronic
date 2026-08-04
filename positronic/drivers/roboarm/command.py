@@ -1,6 +1,6 @@
 """Collection of commands that can be sent to the robot."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, TypeAlias, TypeVar
 
 import numpy as np
@@ -41,6 +41,16 @@ class JointDelta:
     velocities: np.ndarray
 
 
+def _compose_delta(base: geom.Transform3D, delta: geom.Transform3D) -> geom.Transform3D:
+    """Compose a world-frame ``delta`` onto ``base``.
+
+    Translation adds in the world frame and rotation left-multiplies (``goal_ori = R(Δrot) @ ee_ori``), the
+    robosuite OSC convention. This is not ``Transform3D.__mul__``, which composes in the body frame and would
+    rotate the translation.
+    """
+    return geom.Transform3D(base.translation + delta.translation, delta.rotation * base.rotation)
+
+
 @dataclass
 class CartesianDelta:
     """Move the end-effector by a world-frame pose delta from its current measured pose.
@@ -48,10 +58,24 @@ class CartesianDelta:
     A one-shot relative motion: the driver composes ``delta`` onto the pose it measures the moment the
     command is consumed, never re-applying it. Unlike ``JointDelta`` this is end-effector space, not joint
     space.
+
+    A delta has no anchor pose of its own, so it carries the frame it is expressed in instead: ``frame``
+    places that frame relative to the receiver's ``default``, and ``apply`` measures there before composing.
     """
 
     TYPE = 'cartesian_delta'
     delta: geom.Transform3D
+    # Per-command, not a shared class-level default: ``Transform3D`` attributes are writable, so one instance
+    # across every frameless delta means adjusting one silently relabels the rest.
+    frame: geom.Transform3D = field(default_factory=lambda: geom.Transform3D.identity)
+
+    def apply(self, current: geom.Transform3D) -> geom.Transform3D:
+        """The absolute target to drive to, given the pose measured at the receiver's ``default`` frame.
+
+        ``frame`` carries the delta into the frame it was expressed in and the result back out, so a policy
+        speaking a different end-effector frame moves the arm as it intended.
+        """
+        return _compose_delta(current * self.frame, self.delta) * self.frame.inv
 
 
 CommandType = Reset | CartesianPosition | JointPosition | JointDelta | CartesianDelta
@@ -63,20 +87,12 @@ _T = TypeVar('_T')
 Trajectory: TypeAlias = list[tuple[int, _T]]
 
 
-def apply_cartesian_delta(current: geom.Transform3D, delta: geom.Transform3D) -> geom.Transform3D:
-    """Compose a world-frame ``delta`` onto a measured ``current`` pose for the absolute target a driver drives to.
-
-    Translation adds in the world frame and rotation left-multiplies (``goal_ori = R(Δrot) @ ee_ori``), the
-    robosuite OSC convention. This is not ``Transform3D.__mul__``, which composes in the body frame and would
-    rotate the translation.
-    """
-    return geom.Transform3D(current.translation + delta.translation, delta.rotation * current.rotation)
-
-
 def _combine(acc: CommandType, cmd: CommandType) -> CommandType:
     match (acc, cmd):
-        case (CartesianDelta(a), CartesianDelta(b)):
-            return CartesianDelta(apply_cartesian_delta(a, b))
+        case (CartesianDelta(a, frame_a), CartesianDelta(b, frame_b)):
+            if not np.allclose(frame_a.as_matrix, frame_b.as_matrix):
+                raise ValueError('Cannot accumulate cartesian deltas expressed in different frames')
+            return CartesianDelta(_compose_delta(a, b), frame_a)
         case (JointDelta(a), JointDelta(b)):
             return JointDelta(a + b)
         case (CartesianDelta() | JointDelta(), _) | (_, CartesianDelta() | JointDelta()):
@@ -114,8 +130,12 @@ def to_wire(command: CommandType) -> dict[str, Any]:
             return {'type': command.TYPE, 'positions': positions}
         case JointDelta(velocities):
             return {'type': command.TYPE, 'velocities': velocities}
-        case CartesianDelta(delta):
-            return {'type': command.TYPE, 'delta': delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
+        case CartesianDelta(delta, frame):
+            return {
+                'type': command.TYPE,
+                'delta': delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX),
+                'frame': frame.as_vector(geom.Rotation.Representation.ROTATION_MATRIX),
+            }
 
 
 class TrajectoryPlayer:
@@ -160,8 +180,10 @@ def from_wire(wire: dict[str, Any]) -> CommandType:
         case 'joint_delta':
             return JointDelta(velocities=wire['velocities'])
         case 'cartesian_delta':
+            rep = geom.Rotation.Representation.ROTATION_MATRIX
             return CartesianDelta(
-                delta=geom.Transform3D.from_vector(wire['delta'], geom.Rotation.Representation.ROTATION_MATRIX)
+                delta=geom.Transform3D.from_vector(wire['delta'], rep),
+                frame=geom.Transform3D.from_vector(wire['frame'], rep),
             )
         case _:
             raise ValueError(f'Unknown command type: {wire["type"]}')

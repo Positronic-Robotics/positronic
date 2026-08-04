@@ -11,8 +11,10 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from typing import Any, final
 
+import numpy as np
+
 import pimm
-from positronic import geom
+from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
 
 
@@ -20,7 +22,7 @@ def fresh_command_players() -> defaultdict[str, roboarm_command.TrajectoryPlayer
     """A trajectory player per command channel: ``robot_command`` accumulates the deltas due in one tick (a
     missed tick catches up instead of dropping motion), every other channel keeps the last value due."""
     players = defaultdict(roboarm_command.TrajectoryPlayer)
-    players['robot_command'] = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
+    players[keys.ROBOT_COMMAND] = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
     return players
 
 
@@ -65,6 +67,17 @@ class EnvAdapter(ABC):
         """
 
 
+def _in_env_control_frame(cmd: Any, env_control_frame: geom.Transform3D) -> Any:
+    """A command against the embodiment's ``default``, re-expressed in the frame the env measures and drives."""
+    match cmd:
+        case roboarm_command.CartesianPosition(pose):
+            return roboarm_command.CartesianPosition(pose=pose * env_control_frame)
+        case roboarm_command.CartesianDelta(delta, frame):
+            return roboarm_command.CartesianDelta(delta, env_control_frame.inv * frame)
+        case _:
+            return cmd
+
+
 def _wire_command(cmd: Any) -> dict[str, Any]:
     """The held command as a positronic-free payload the server decodes (no ``geom``/``roboarm`` on its side)."""
     match cmd:
@@ -74,7 +87,11 @@ def _wire_command(cmd: Any) -> dict[str, Any]:
             return {'type': 'joint_pos', 'q': positions}
         case roboarm_command.JointDelta(velocities):
             return {'type': 'joint_vel', 'dq': velocities}
-        case roboarm_command.CartesianDelta(delta):
+        case roboarm_command.CartesianDelta(delta, frame):
+            # The env anchors a delta on the pose it measures, which is its control frame and nowhere else, so
+            # a delta still expressed somewhere else has no faithful wire form.
+            if not np.allclose(frame.as_matrix, np.eye(4)):
+                raise ValueError('CartesianDelta outside the env control frame cannot be sent to a remote env')
             return {'type': 'cartesian_delta', 'delta': delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
         case None:
             return {'type': 'hold'}
@@ -94,7 +111,10 @@ class WireCommandAdapter(EnvAdapter):
     around it) and keep the observation and terminal mappings to themselves.
     """
 
-    def __init__(self):
+    def __init__(self, env_control_frame: geom.Transform3D | None = None):
+        """``env_control_frame`` places the frame the env measures and drives relative to the embodiment's
+        ``default``; the adapter re-expresses outgoing commands into it, and observations back out of it."""
+        self.env_control_frame = env_control_frame if env_control_frame is not None else geom.Transform3D.identity
         self._reset_command_state()
 
     def _reset_command_state(self) -> None:
@@ -128,13 +148,13 @@ class WireCommandAdapter(EnvAdapter):
         # dropped. Re-sending a stale delta would re-compose it against the moving arm every tick (the eef
         # drifts, or the joints walk toward their limits), so once a delta's trajectory is exhausted the arm
         # holds its measured pose.
-        cmd = self._held.get('robot_command')
+        cmd = self._held.get(keys.ROBOT_COMMAND)
         match cmd:
             case roboarm_command.Reset():
-                self._held.pop('robot_command')
+                self._held.pop(keys.ROBOT_COMMAND)
                 cmd = None
             case roboarm_command.CartesianDelta() | roboarm_command.JointDelta():
-                self._held.pop('robot_command')
+                self._held.pop(keys.ROBOT_COMMAND)
         if 'target_grip' in self._held:
             self._grip = float(self._held['target_grip'])
-        return {'command': _wire_command(cmd), 'grip': self._grip}
+        return {'command': _wire_command(_in_env_control_frame(cmd, self.env_control_frame)), 'grip': self._grip}

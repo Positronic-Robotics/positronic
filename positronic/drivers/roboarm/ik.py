@@ -1,4 +1,4 @@
-"""IK solvers using MuJoCo for FK/Jacobian computation.
+"""Frame algebra and IK solvers, both using MuJoCo for FK/Jacobian computation.
 
 Three solvers for reconstructing joint-space targets from recorded EE targets:
 - LMIKSolver: Levenberg-Marquardt on the site pose with nullspace damping (for sim data)
@@ -8,21 +8,36 @@ Three solvers for reconstructing joint-space targets from recorded EE targets:
 """
 
 import xml.etree.ElementTree as ET
+from functools import lru_cache, partial
 
 import mujoco as mj
 import numpy as np
 from scipy.optimize import lsq_linear
 from scipy.spatial.transform import Rotation as ScipyRotation
 
+from positronic import geom, keys
 from positronic.dataset import transforms
+from positronic.drivers.roboarm.models import DEFAULT_FRAME
+
+_QUAT = geom.Rotation.Representation.QUAT
 
 
-def _prepare_spec(urdf_xml, control_frame):
-    """Parse URDF or MJCF into an MjSpec, stripping meshes and resolving the control frame site.
+def _ensure_site(spec: mj.MjSpec, frame: str) -> None:  # pyright: ignore[reportAttributeAccessIssue]
+    """Ensure ``frame`` is a site in ``spec``, adding one at the body origin when it names a body."""
+    for b in spec.bodies:
+        for s in b.sites:
+            if s.name == frame:
+                return
+    for b in spec.bodies:
+        if b.name == frame:
+            site = b.add_site()
+            site.name = frame
+            return
+    raise ValueError(f'Frame {frame!r} not found as site or body in model')
 
-    The control frame must exist in the model as a site or body. For bodies (e.g. real URDF
-    with ``end_effector`` link baked in by positronic-franka), a site is added at its origin.
-    """
+
+def _prepare_spec(urdf_xml: str, *frames: str) -> mj.MjSpec:  # pyright: ignore[reportAttributeAccessIssue]
+    """Parse URDF or MJCF into an MjSpec, stripping meshes and resolving each of ``frames`` to a site."""
     root = ET.fromstring(urdf_xml)
     if root.tag == 'robot':
         for link in root.findall('.//link'):
@@ -30,18 +45,107 @@ def _prepare_spec(urdf_xml, control_frame):
                 link.remove(elem)
         urdf_xml = ET.tostring(root, encoding='unicode')
     spec = mj.MjSpec.from_string(urdf_xml)
+    for frame in frames:
+        _ensure_site(spec, frame)
+    return spec
 
-    all_sites = {s.name for b in spec.bodies for s in b.sites}
-    if control_frame in all_sites:
-        return spec
 
-    body_names = {b.name for b in spec.bodies}
-    if control_frame in body_names:
-        site = spec.body(control_frame).add_site()
-        site.name = control_frame
-        return spec
+def _ancestry(model: mj.MjModel, body_id: int) -> list[int]:  # pyright: ignore[reportAttributeAccessIssue]
+    """Body ids from ``body_id`` up to the world, inclusive."""
+    chain = [body_id]
+    while chain[-1] != 0:
+        chain.append(model.body_parentid[chain[-1]])
+    return chain
 
-    raise ValueError(f'Control frame {control_frame!r} not found as site or body in model')
+
+def _assert_rigidly_connected(
+    model: mj.MjModel,  # pyright: ignore[reportAttributeAccessIssue]
+    from_frame: str,
+    to_frame: str,
+    from_body: int,
+    to_body: int,
+) -> None:
+    """Raise unless every joint between the two bodies is fixed, which is what makes one transform stand for all."""
+    up_from, up_to = _ancestry(model, from_body), _ancestry(model, to_body)
+    common = set(up_from) & set(up_to)
+    legs = [b for chain in (up_from, up_to) for b in chain[: min(i for i, x in enumerate(chain) if x in common)]]
+    movable = [b for b in legs if model.body_jntnum[b] > 0]
+    if movable:
+        names = sorted({
+            mj.mj_id2name(model, mj.mjtObj.mjOBJ_BODY, b)  # pyright: ignore[reportAttributeAccessIssue]
+            for b in movable
+        })
+        raise ValueError(
+            f'Frames {from_frame!r} and {to_frame!r} are separated by movable joints on {names}, so their relative '
+            f'pose changes with the configuration and no constant transform describes it'
+        )
+
+
+def _site_transform(data: mj.MjData, site_id: int) -> geom.Transform3D:  # pyright: ignore[reportAttributeAccessIssue]
+    """The world pose of a site as a ``Transform3D``."""
+    rotation = geom.Rotation.from_rotation_matrix(data.site_xmat[site_id].reshape(3, 3))
+    return geom.Transform3D(data.site_xpos[site_id].copy(), rotation)
+
+
+@lru_cache(maxsize=8)
+def frame_transform(urdf_xml: str, from_frame: str, to_frame: str) -> geom.Transform3D:
+    """The rigid transform expressing ``to_frame`` relative to ``from_frame`` in a robot model.
+
+    A pose measured in ``from_frame`` composes to ``to_frame`` via ``pose * frame_transform(...)``. Read at the
+    zero configuration, which stands for every configuration only while the two frames are rigidly connected.
+    """
+    model = _prepare_spec(urdf_xml, from_frame, to_frame).compile()
+    data = mj.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]
+    mj.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]
+    from_site = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, from_frame)  # pyright: ignore[reportAttributeAccessIssue]
+    to_site = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, to_frame)  # pyright: ignore[reportAttributeAccessIssue]
+    _assert_rigidly_connected(model, from_frame, to_frame, model.site_bodyid[from_site], model.site_bodyid[to_site])
+    return _site_transform(data, from_site).inv * _site_transform(data, to_site)
+
+
+def change_frame(pose_vec, transform: geom.Transform3D) -> np.ndarray:
+    """Recompose a ``[tx,ty,tz,qw,qx,qy,qz]`` pose through ``pose * transform``."""
+    return (geom.Transform3D.from_vector(np.asarray(pose_vec, dtype=np.float64), _QUAT) * transform).as_vector(_QUAT)
+
+
+def assert_default_frame(statics) -> None:
+    """Raise unless a rig or recording states that its poses are anchored at ``DEFAULT_FRAME``.
+
+    ``CONTROL_FRAME`` is that statement, and a model — when one is carried — has to declare the frame it names.
+    Saying nothing is not a false claim and passes; a caller that needs the model fails on its own terms.
+
+    TODO(#550): delete this. ``CONTROL_FRAME`` goes with that issue, leaving nothing to check: poses are at
+    ``DEFAULT_FRAME`` by contract and ``EE_FRAME`` states any offset from it.
+    """
+    if keys.CONTROL_FRAME not in statics:
+        return
+    frame = statics[keys.CONTROL_FRAME]
+    if frame != DEFAULT_FRAME:
+        raise ValueError(
+            f'Poses are reported in {frame!r}, but every frame transform is measured from {DEFAULT_FRAME!r} '
+            '— see positronic/drivers/roboarm/README.md'
+        )
+    if keys.URDF in statics:
+        frame_transform(statics[keys.URDF], frame, frame)
+
+
+def ee_frame(episode) -> geom.Transform3D:
+    """Where an episode's poses sit relative to ``DEFAULT_FRAME`` — identity unless a codec moved them."""
+    if keys.EE_FRAME not in episode:
+        return geom.Transform3D.identity
+    return geom.Transform3D.from_vector(np.asarray(episode[keys.EE_FRAME], dtype=np.float64), _QUAT)
+
+
+def pose_anchor(episode) -> tuple[str, geom.Transform3D]:
+    """The model frame an episode's poses are anchored in, and where they sit relative to it.
+
+    TODO(#550): a recording predating ``EE_FRAME`` states the anchor as a frame name and nothing else. Solving at
+    that name is exact — ``DEFAULT_FRAME`` was added alongside those frames, not in place of them — so the branch
+    lives until those datasets are re-expressed, not longer.
+    """
+    if keys.EE_FRAME in episode:
+        return DEFAULT_FRAME, ee_frame(episode)
+    return episode[keys.CONTROL_FRAME], geom.Transform3D.identity
 
 
 def _parse_target(target_ee_pose_vec):
@@ -355,7 +459,11 @@ class DLSIKSolverWithLimits(_SolverBase):
 def ik_joints_from_episode(episode, solver_cls, tgt_ee_pose_key, current_q_key):
     """Episode -> Signal. Computes target joints from EE targets via IK.
 
-    Reads 'urdf', 'joint_names', and 'control_frame' from episode statics.
+    Reads the robot model from episode statics and solves at the frame the poses are anchored in, so targets a
+    codec has moved elsewhere come back to that frame first.
     """
-    solver = solver_cls(episode['urdf'], episode['joint_names'], episode['control_frame'])
-    return transforms.pairwise(episode[current_q_key], episode[tgt_ee_pose_key], solver.solve)
+    frame, offset = pose_anchor(episode)
+    solver = solver_cls(episode[keys.URDF], episode[keys.JOINT_NAMES], frame)
+    move = partial(change_frame, transform=offset.inv)
+    targets = transforms.Elementwise(episode[tgt_ee_pose_key], transforms.lazy_sequence(move))
+    return transforms.pairwise(episode[current_q_key], targets, solver.solve)
