@@ -1130,6 +1130,9 @@ def test_harness_clears_trajectory_on_home(world):
     assert _last_grip(p) == 0.0, 'Expected 0.0 (Abort homes)'
 
     p['directive_em'].emit(Directive.RUN(task='test'))
+    drive_scheduler(scheduler, steps=1)
+    # The rollout infers on an observation delivered after its own reset, so the payload lands once the
+    # directive has been taken — a value published before it belongs to the finished episode.
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, steps=4)
 
