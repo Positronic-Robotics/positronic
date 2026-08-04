@@ -41,11 +41,20 @@ def _download_checkpoint(model_path: str) -> Path:
     return Path(snapshot_download(model_path))
 
 
+def _is_run_directory(model_path: str) -> bool:
+    """Whether ``model_path`` holds ``checkpoint-N`` children rather than being one checkpoint itself.
+
+    Decided by shape, not by name: a run directory may be called anything, including the step number of
+    the checkpoint inside it.
+    """
+    last = model_path.rstrip('/').split('/')[-1]
+    return model_path.startswith('s3://') and not last.startswith('checkpoint-')
+
+
 def _resolve_checkpoint_path(model_path: str) -> str:
     """Latest ``checkpoint-N`` under an ``s3://`` run directory; a pinned checkpoint dir, a HuggingFace repo,
     or a local path is returned unchanged."""
-    last = model_path.rstrip('/').split('/')[-1]
-    if not model_path.startswith('s3://') or last.startswith('checkpoint-'):
+    if not _is_run_directory(model_path):
         return model_path
     return f'{model_path.rstrip("/")}/{get_latest_checkpoint(model_path, "checkpoint-")}'
 
@@ -272,7 +281,7 @@ class DreamZeroSource(ModelSource):
         Composed rather than looked up: a session handshake reaches here, and must not need the
         checkpoint bucket to describe weights that are already loaded.
         """
-        if _checkpoint_id(self._model_path) == model_id:
+        if not _is_run_directory(self._model_path):
             return self._model_path
         return f'{self._model_path.rstrip("/")}/checkpoint-{model_id}'
 

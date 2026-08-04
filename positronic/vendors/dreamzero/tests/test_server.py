@@ -60,6 +60,15 @@ def test_a_newer_checkpoint_does_not_displace_the_id_being_loaded(latest):
     assert source.meta('100000')['checkpoint_path'] == RUN_DIR + 'checkpoint-100000'
 
 
+def test_a_run_directory_named_like_a_step_still_serves_its_checkpoint(latest):
+    downloaded = latest('100000')
+    source = DreamZeroSource(model_path='s3://bucket/100000/', backbone='wan2.2')
+
+    source.load(source.get_models()[0])
+
+    assert downloaded == ['s3://bucket/100000/checkpoint-100000']
+
+
 def test_a_huggingface_repo_is_itself_the_checkpoint():
     assert _checkpoint_id('GEAR-Dreams/DreamZero-DROID') == 'DreamZero-DROID'
     assert _experiment_name('GEAR-Dreams/DreamZero-DROID') == 'DreamZero-DROID'
