@@ -70,8 +70,8 @@ class GpuSummary:
     leaving it to be inferred: they are the devices the mean covers and the devices the box holds, and
     ``devices_seen < box_devices`` says outright that the figure describes part of a box. It reads ``None``
     when no device answered at all, which is a box whose GPUs are all unreadable rather than a box with no
-    GPUs. A ``dmon`` log declares no complement, so both are the devices its rows mention — a missing one is
-    unknowable there.
+    GPUs. A ``dmon`` log declares no complement, so its box is the set of device indices its rows mention —
+    a device absent from the log entirely is unknowable there.
 
     The peaks are box-wide totals — a sample's devices summed, then the max over samples — so each needs a
     sample that saw the whole box, and reads ``None`` when none did. ``peak_proc_vram_gb`` is the share
@@ -286,15 +286,18 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
     # so rows group into cycles on the ``gpu`` index (a repeating index opens the next cycle) and the peak is
     # the max over per-cycle sums — matching the sim summary's per-sample device sum.
     cycle_fb: dict[str, float] = {}
-    cycle_totals: list[float] = []
+    cycles: list[dict[str, float]] = []
+    # Every device index the log mentions is the box's complement; the ones that answered are what the mean
+    # covers. A device silent throughout counts towards the first and not the second.
     devices: set[str] = set()
+    answered: set[str] = set()
     # Every device the open cycle has covered, readable metrics or not: an unreadable row marks the interval
     # boundary just as well as a readable one, and only the readable ones carry a total.
     cycle_devices: set[str] = set()
 
     def flush_cycle() -> None:
         if cycle_fb:
-            cycle_totals.append(sum(cycle_fb.values()))
+            cycles.append(dict(cycle_fb))
             cycle_fb.clear()
         cycle_devices.clear()
 
@@ -302,18 +305,28 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
         if device in cycle_devices:
             flush_cycle()
         cycle_devices.add(device)
+        devices.add(device)
         if sm is None or fb is None:
             continue
         cycle_fb[device] = fb
-        devices.add(device)
+        answered.add(device)
         utils.append(sm)
     flush_cycle()
+    # The complement is known only once the whole log is read, so completeness is decided here rather than at
+    # each flush. A cycle missing a device is a partial box, and the max over partial sums is not a peak: one
+    # device's 12 GiB with its neighbour unread outranks a complete 11 GiB instant and reports as the box.
+    complete = [sum(cycle.values()) for cycle in cycles if len(cycle) == len(devices)]
+    if cycles and not complete:
+        logger.warning(
+            '%s: no dmon sampling interval carried all %d device(s) the log mentions; peak VRAM is unavailable',
+            log_path,
+            len(devices),
+        )
     return GpuSummary(
         mean_util_pct=float(np.mean(utils)) if utils else None,
-        # A dmon log declares no complement, so the devices it mentions are all that can be known of the box.
-        devices_seen=len(devices),
+        devices_seen=len(answered),
         box_devices=len(devices),
-        peak_vram_gb=(max(cycle_totals) / 1024.0) if cycle_totals else None,
+        peak_vram_gb=(max(complete) / 1024.0) if complete else None,
         peak_proc_vram_gb=None,
     )
 

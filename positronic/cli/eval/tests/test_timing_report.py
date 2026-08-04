@@ -540,6 +540,42 @@ def test_parse_dmon_unreadable_row_still_closes_its_cycle(tmp_path):
     assert summary.mean_util_pct == pytest.approx(250 / 3)  # the three readable rows: 50, 100, 100
 
 
+def test_parse_dmon_partial_cycle_excluded_from_peak(tmp_path):
+    """The peak is a box-wide total at one instant, so an interval missing a device is not a candidate:
+    one device's 12 GiB with its neighbour unread would otherwise outrank a complete 11 GiB instant and be
+    reported as the box peak."""
+    log = tmp_path / 'dmon.log'
+    log.write_text(
+        '# gpu    sm    fb\n'
+        '#  Idx     %    MB\n'
+        '    0     -     -\n'
+        '    1    50 12288\n'  # partial: 12 GiB, device 0 unread
+        '    0   100  5120\n'
+        '    1   100  6144\n'  # complete: 11 GiB
+    )
+    summary = _parse_dmon(log)
+    assert summary.peak_vram_gb == pytest.approx(11264 / 1024)
+    assert (summary.devices_seen, summary.box_devices) == (2, 2)
+
+
+def test_parse_dmon_device_unreadable_throughout_counts_towards_the_box(tmp_path):
+    """A device that prints `-` in every interval still appears in the log, so it is part of the box the
+    mean is measured against — and no interval ever covers that box, so there is no peak to report."""
+    log = tmp_path / 'dmon.log'
+    log.write_text(
+        '# gpu    sm    fb\n'
+        '#  Idx     %    MB\n'
+        '    0     -     -\n'
+        '    1    50  1024\n'
+        '    0     -     -\n'
+        '    1    70  2048\n'
+    )
+    summary = _parse_dmon(log)
+    assert (summary.devices_seen, summary.box_devices) == (1, 2)
+    assert summary.peak_vram_gb is None
+    assert summary.mean_util_pct == pytest.approx(60.0)
+
+
 def test_parse_dmon_fails_loudly_without_fb(tmp_path):
     log = tmp_path / 'dmon.log'
     log.write_text('# gpu    sm\n#  Idx     %\n    0    50\n')
