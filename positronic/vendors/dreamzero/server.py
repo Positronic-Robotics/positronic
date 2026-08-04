@@ -52,12 +52,14 @@ def _is_run_directory(model_path: str) -> bool:
 
 
 def _checkpoint_id(checkpoint_path: str) -> str:
-    """The public id for a resolved checkpoint: the step its directory names.
+    """The public id for a checkpoint: the step a ``checkpoint-N`` directory names, else the path itself.
 
-    Kept as the directory writes it, zero-padding and all, so the id maps back to a directory that
-    exists. A HuggingFace repo or a bare local path names no step, so its trailing segment stands in.
+    The step is kept as the directory writes it, zero-padding and all, so the id maps back to a directory
+    that exists. Anything else — a HuggingFace repo, a local path — names no step and stays whole, since
+    that whole string is the id a client addresses it by.
     """
-    return checkpoint_path.rstrip('/').split('/')[-1].removeprefix('checkpoint-')
+    last = checkpoint_path.rstrip('/').split('/')[-1]
+    return last.removeprefix('checkpoint-') if last.startswith('checkpoint-') else checkpoint_path
 
 
 def _experiment_name(checkpoint_path: str) -> str:

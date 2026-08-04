@@ -81,9 +81,20 @@ def test_a_run_directory_named_like_a_step_still_serves_its_checkpoint(holding):
     assert downloaded == ['s3://bucket/100000/checkpoint-100000']
 
 
-def test_a_huggingface_repo_is_itself_the_checkpoint():
-    assert _checkpoint_id('GEAR-Dreams/DreamZero-DROID') == 'DreamZero-DROID'
+def test_a_huggingface_repo_is_addressed_by_its_whole_name():
+    """The id a client puts in /api/v1/session/<id>, which for a repo keeps its own slash."""
+    source = DreamZeroSource(model_path='GEAR-Dreams/DreamZero-DROID')
+
+    assert source.get_models() == ['GEAR-Dreams/DreamZero-DROID']
+    assert source.resolve('GEAR-Dreams/DreamZero-DROID') == 'GEAR-Dreams/DreamZero-DROID'
     assert _experiment_name('GEAR-Dreams/DreamZero-DROID') == 'DreamZero-DROID'
+
+
+def test_a_pinned_checkpoint_directory_is_addressed_by_its_step():
+    source = DreamZeroSource(model_path='s3://bucket/exp/checkpoint-40000')
+
+    assert source.get_models() == ['40000']
+    assert _checkpoint_id('checkpoint-005000') == '005000'
 
 
 def test_a_zero_padded_step_is_reached_by_the_name_its_directory_carries(holding):
