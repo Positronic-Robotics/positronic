@@ -5,6 +5,7 @@ from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.recording import Recorder, _build_blueprint, _squeeze_batch, _stack_numeric
+from positronic.policy.wrappers import ChunkedSchedule
 
 
 class _TrackingSession(Session):
@@ -154,26 +155,15 @@ def test_handles_none_actions(tmp_path):
     assert session._step == 1
 
 
-def test_skipped_tick_logs_state_without_frames(tmp_path):
-    """A tick the inner scheduling wrapper skipped keeps the numeric trace but writes no frame."""
-
-    class _FirstTickSession(Session):
-        def __init__(self):
-            self._calls = 0
-
-        def __call__(self, obs):
-            self._calls += 1
-            return [{'v': 1.0, 'timestamp': 0.0}] if self._calls == 1 else None
-
-    class _FirstTickPolicy(Policy):
-        def new_session(self, context=None, now=None):
-            return _FirstTickSession()
-
+def test_frames_follow_inference_not_control_ticks(tmp_path):
+    """A tap above `ChunkedSchedule` writes a frame per inference; numeric entries stay per tick."""
     rec = Recorder(tmp_path)
-    session = rec.tap('raw').wrap(_FirstTickPolicy()).new_session()
+    policy = (rec.tap('raw') | ChunkedSchedule()).wrap(_TrackingPolicy([{'v': 1.0, 'timestamp': 0.5}]))
+    session = policy.new_session(None, lambda: 0.0)
     obs = {'camera': np.zeros((4, 4, 3), dtype=np.uint8), keys.GRIP: 0.5, 'wall_time_ns': 1}
-    session(obs)
-    session(obs)
+
+    assert session(obs) is not None
+    assert session(obs) is None  # the 0.5 s chunk is still playing
 
     assert rec._image_paths == ['raw/camera']
     assert rec._numeric_paths == ['raw/grip', 'raw/grip']
