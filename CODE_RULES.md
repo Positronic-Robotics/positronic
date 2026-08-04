@@ -176,9 +176,14 @@ if not isinstance(transform, Transform3D):
 ### primitive-type
 
 Give a value the most specific type that fits it: `Path` for a filesystem path, an enum for a bounded
-set of strings, a named struct for a multi-element return, integer nanoseconds for a time on the
-robot's timeline. A primitive stands in for all of them, so it carries none of their meaning and none
-of their operations, and every consumer re-derives what it holds.
+set of strings, a named struct for a multi-element return. A primitive stands in for all of them, so
+it carries none of their meaning and none of their operations, and every consumer re-derives what it
+holds.
+
+A time on the robot's timeline is `int` nanoseconds — the specific type here, not a fall back to a
+primitive. The clock is monotonic with an arbitrary epoch, so `datetime` misdescribes what the number
+is and holds only microseconds; recordings are addressed by timestamp, and `float` seconds neither
+compares nor joins exactly.
 
 Convert once, where the value enters. A CLI token, an environment variable or a wire field arrives as
 a string: parse it at that edge and everything inside is typed. The annotation must not lie — where a
