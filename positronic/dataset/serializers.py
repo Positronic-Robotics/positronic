@@ -72,8 +72,8 @@ class _PureSerializer(StatefulSerializer):
 
 
 class TrajectorySerializer:
-    """Records the waypoints a device applied, one sample each at the tick that applied it, carrying the
-    instant it was scheduled for on the ``scheduled`` timeline.
+    """Records applied waypoints, each at the instant it was applied, carrying the instant it was
+    scheduled for on the ``scheduled`` timeline.
 
     ``inner`` serializes the waypoint values; ``None`` records them unchanged.
     """
