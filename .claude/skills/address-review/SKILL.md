@@ -20,6 +20,9 @@ needs their call. A red build is never "done", no matter what the reviewer says.
 
 ## Principles
 
+- **Only submitted feedback exists.** A reviewer's in-progress review is theirs until they send
+  it; its comments are not input, not even to read. See Step 1 — the prescribed REST fetch hides
+  them, and the GraphQL workaround does not.
 - **Judge every comment on merit.** Agree or disagree; never auto-apply. A reviewer —
   especially a bot — can be wrong, stale, or missing project context. Check intent before
   deciding: `git show <sha>`, the surrounding code, and any design docs. The code may be
@@ -81,6 +84,15 @@ gh api repos/$REPO/issues/$PR/comments --paginate -q '.[] | {user:.user.login, b
 
 Ignore comments that are already your own replies, and comments on already-resolved threads
 (the GraphQL query in Step 5 reports `isResolved` per thread).
+
+**Only submitted feedback counts. Never read a reviewer's draft.** The REST fetches above hide
+pending comments, which is why they are the prescribed fetch. GraphQL does not: authenticated as
+the reviewer, `reviewThreads` returns your own unsubmitted drafts indistinguishably. So use
+GraphQL to resolve and reply (Step 5), never to discover.
+
+A reply rejected with `user_id can only have one pending review per pull request` means a review
+is open: this round is not ready. Post nothing, say so, wait. Bots submit immediately, so their
+feedback is always fair game.
 
 ## Step 2: Triage (agree or disagree)
 
@@ -169,6 +181,11 @@ gh api -X POST repos/$REPO/issues/$PR/comments -F body=@reply.txt
 A combined review (e.g. one Codex body carrying several findings) arrives as a single
 conversation comment, not per-finding threads — answer it with one issue-level reply that
 addresses each finding; there is nothing to resolve in Step 5 for that surface.
+
+If a reply is rejected with `user_id can only have one pending review per pull request`, a review
+is open under your own account. Stop this pass and say so (Step 1) — do not reply at conversation
+level to route around it either, which leaves the thread looking unanswered and re-triggers the
+Step 7 watcher on every cycle.
 
 **Resolve** every thread you *fixed* (a concrete change landed) — this is mandatory, not
 optional: a fixed Codex thread you leave open keeps the PR looking unaddressed to human

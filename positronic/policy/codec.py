@@ -10,16 +10,23 @@ Two composition operators:
 """
 
 import collections.abc as cabc
+from functools import partial
 from typing import Any, final
 
 import numpy as np
 from PIL import Image as PilImage
 
+from positronic import geom
 from positronic import keys as obs_keys
-from positronic.dataset.transforms import Elementwise
-from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
+from positronic.dataset.transforms import Elementwise, lazy_sequence
+from positronic.dataset.transforms.episode import Derive, EpisodeTransform, FromValue, Group, Identity
+from positronic.drivers.roboarm import command
+from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee_frame
+from positronic.drivers.roboarm.models import DEFAULT_FRAME
 from positronic.policy.base import PAR, SEQ, DelegatingSession, PolicyWrapper, Session, _ComposedWrapper
 from positronic.utils import merge_dicts
+
+_QUAT = geom.Rotation.Representation.QUAT
 
 
 def lerobot_state(dim: int, names: list[str] | None = None) -> dict[str, Any]:
@@ -121,6 +128,34 @@ class _CodecSession(DelegatingSession):
         return self._inner.meta | self._codec.meta
 
 
+def _meta_conflicts(left: dict, right: dict, prefix: str = '') -> list[str]:
+    """``key: left != right`` for every leaf the two metas declare differently. Nested dicts merge per key,
+    so only leaves can conflict."""
+    found = []
+    for key in left.keys() & right.keys():
+        a, b = left[key], right[key]
+        if isinstance(a, dict) and isinstance(b, dict):
+            found += _meta_conflicts(a, b, f'{prefix}{key}.')
+        elif isinstance(a, dict) or isinstance(b, dict) or not np.array_equal(a, b):
+            found.append(f'{prefix}{key}: {a!r} != {b!r}')
+    return found
+
+
+def _merged_meta(left: dict, right: dict) -> dict:
+    """Two codecs' metadata as one dict.
+
+    A leaf both declare differently has no merged answer, so it raises rather than keeping one: the survivor
+    would describe a pipeline neither codec implements. Declare the composition as a single value instead.
+    """
+    conflicts = _meta_conflicts(left, right)
+    if conflicts:
+        raise ValueError(f'composed codecs disagree on metadata — {"; ".join(sorted(conflicts))}')
+    result: dict[str, Any] = {}
+    merge_dicts(result, left)
+    merge_dicts(result, right)
+    return result
+
+
 class _ComposedCodec(Codec):
     """Two codecs composed via ``|``. Encodes left-to-right, decodes right-to-left."""
 
@@ -132,7 +167,11 @@ class _ComposedCodec(Codec):
         return self._right.encode(self._left.encode(data))
 
     def decode(self, data, *, context=None):
-        return self._left.decode(self._right.decode(data, context=context), context=context)
+        # The right half decodes actions the left half re-expressed, so its context has to be re-expressed too:
+        # a decoder that rebuilds its command from it (``RelativePositionAction``) would otherwise anchor a
+        # policy-frame delta on a pose in the frame the policy never saw. Encoders carry no state across calls.
+        inner = self._left.encode(context) if context is not None else None
+        return self._left.decode(self._right.decode(data, context=inner), context=context)
 
     @property
     def training_encoder(self):
@@ -140,10 +179,16 @@ class _ComposedCodec(Codec):
 
     @property
     def meta(self):
-        result: dict[str, Any] = {}
-        merge_dicts(result, self._left.meta)
-        merge_dicts(result, self._right.meta)
-        return result
+        left, right = self._left.meta, self._right.meta
+        # ``ee_frame`` states where poses sit, not how a codec is configured, so declaring it means having moved
+        # them. Agreeing on a value buys nothing here: the second move starts where the first left off. Under
+        # ``&`` both halves see the same input, which is why the check belongs to sequential composition.
+        if obs_keys.EE_FRAME in left and obs_keys.EE_FRAME in right:
+            raise ValueError(
+                f'sequential codecs both declare {obs_keys.EE_FRAME}: poses come out at the product of both '
+                f'moves, which neither {left[obs_keys.EE_FRAME]} nor {right[obs_keys.EE_FRAME]} names'
+            )
+        return _merged_meta(left, right)
 
     def to_spec(self):
         return {SEQ: [self._left.to_spec(), self._right.to_spec()]}
@@ -175,10 +220,7 @@ class _ParallelCodec(Codec):
 
     @property
     def meta(self):
-        result: dict[str, Any] = {}
-        merge_dicts(result, self._left.meta)
-        merge_dicts(result, self._right.meta)
-        return result
+        return _merged_meta(self._left.meta, self._right.meta)
 
     def to_spec(self):
         return {PAR: [self._left.to_spec(), self._right.to_spec()]}
@@ -450,3 +492,95 @@ class RestrictImageSize(Codec):
 
     def to_spec(self):
         return {'name': 'restrict_image_size', 'args': {'width': self._width, 'height': self._height}}
+
+
+class ChangeEEFrame(Codec):
+    """Convert poses between the embodiment's ``default`` frame and the frame the policy speaks.
+
+    ``transform`` expresses the policy's frame relative to ``default`` — the frame every embodiment declares in
+    its model and reports poses in, so one policy-side constant serves every rig that honours the contract.
+    Keys in ``keys`` go ``pose * transform`` on encode and ``pose * transform⁻¹`` on decode; absent keys and
+    joint-space commands are left alone. A ``CartesianDelta`` has no anchor pose to convert against, so it
+    travels with the frame it is expressed in and the driver applies it there.
+
+    Which side of the ``remote`` marker it sits on decides who converts, the rig or the server. Compose it left
+    of the observation/action codecs.
+    """
+
+    @staticmethod
+    def _move(value: Any, transform: geom.Transform3D) -> Any:
+        """A pose vector or an arm command, re-expressed through ``transform``."""
+        match value:
+            case command.CartesianPosition(pose):
+                return command.CartesianPosition(pose=pose * transform)
+            case command.CartesianDelta(delta, frame):
+                return command.CartesianDelta(delta=delta, frame=transform.inv * frame)
+            case command.Reset() | command.JointPosition() | command.JointDelta():
+                return value
+            case _:
+                return change_frame(value, transform)
+
+    class _ChangeEpisodeFrames(EpisodeTransform):
+        """Move the episode's pose signals into the policy's frame and record where they now sit, so a later
+        transform solving against the model (``IKJointsAction``) reaches the same frame.
+        """
+
+        def __init__(self, codec: 'ChangeEEFrame'):
+            self._codec = codec
+
+        def _derive_pose(self, key: str, episode):
+            codec = self._codec
+            return Elementwise(episode[key], lazy_sequence(partial(codec._move, transform=codec._transform)))
+
+        def __call__(self, episode):
+            codec = self._codec
+            assert_default_frame(episode)
+            existing = ee_frame(episode)
+            if not np.allclose(existing.as_matrix, np.eye(4)):
+                raise ValueError(
+                    f'episode poses already sit at {existing.as_vector(_QUAT).tolist()} relative to '
+                    f'{DEFAULT_FRAME!r}; ``transform`` names the policy frame from there, so re-expressing an '
+                    'episode a codec already moved would train on a frame the checkpoint does not declare'
+                )
+            derived: dict[str, Any] = {obs_keys.EE_FRAME: FromValue(codec._transform.as_vector(_QUAT))}
+            derived.update({key: partial(self._derive_pose, key) for key in codec._keys if key in episode})
+            return Group(Derive(**derived), Identity())(episode)
+
+        @property
+        def meta(self):
+            return self._codec.meta
+
+    def __init__(
+        self,
+        transform: geom.Transform3D | cabc.Sequence[float],
+        keys: tuple[str, ...] = (obs_keys.EE_POSE, obs_keys.TARGET_EE_POSE, obs_keys.ROBOT_COMMAND),
+    ):
+        if not isinstance(transform, geom.Transform3D):  # the ``[tx,ty,tz,qw,qx,qy,qz]`` vector a wire spec carries
+            transform = geom.Transform3D.from_vector(np.asarray(transform, dtype=np.float64), _QUAT)
+        self._transform = transform
+        self._keys = tuple(keys)
+
+    def _apply(self, data: dict, transform: geom.Transform3D) -> dict:
+        moved = {key: self._move(data[key], transform) for key in self._keys if key in data}
+        return {**data, **moved} if moved else data
+
+    def encode(self, data):
+        return self._apply(data, self._transform)
+
+    def _decode_single(self, data: dict, context: dict | None) -> dict:
+        return self._apply(data, self._transform.inv)
+
+    @property
+    def training_encoder(self) -> EpisodeTransform:
+        return ChangeEEFrame._ChangeEpisodeFrames(self)
+
+    @property
+    def meta(self):
+        return {obs_keys.EE_FRAME: self._transform.as_vector(_QUAT).tolist()}
+
+    def to_spec(self):
+        # Lists, not tuples, so the spec is identical before and after a wire round-trip.
+        return {
+            'name': 'change_ee_frame',
+            'args': {'transform': self._transform.as_vector(_QUAT).tolist(), 'keys': list(self._keys)},
+        }

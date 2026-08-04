@@ -61,7 +61,7 @@ class RestoreCommand(Derive):
     @staticmethod
     def _commands_from_episode(episode: Episode) -> Any:
         # Datasets recorded before the rename store the plural key; accept both.
-        key = 'robot_command.pose' if 'robot_command.pose' in episode else 'robot_commands.pose'
+        key = keys.TARGET_EE_POSE if keys.TARGET_EE_POSE in episode else 'robot_commands.pose'
         pose = episode[key]
         return transforms.Elementwise(pose, RestoreCommand.command_from_pose)
 

@@ -65,7 +65,7 @@ molmoact2_obs = cfn.Config(MolmoAct2ObservationCodec)
 # AbsoluteJointsAction; serving reads the 8-vector directly.
 # Its gripper follows the DROID convention (0=open, 1=closed), matching positronic's Robotiq/DH
 # drivers, so the grip passes through unchanged on both state-in and target_grip-out.
-_action = codecs.absolute_joints_action.override(tgt_joints_key='robot_command.joints', tgt_grip_key='target_grip')
+_action = codecs.absolute_joints_action.override(tgt_joints_key=keys.TARGET_JOINTS, tgt_grip_key='target_grip')
 
 # franka_droid runs at 15 Hz; the model emits a 15-step horizon and compose executes all steps by default.
 droid = codecs.compose.override(obs=molmoact2_obs, action=_action, fps=15.0)

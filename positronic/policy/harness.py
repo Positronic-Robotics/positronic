@@ -10,6 +10,7 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
+from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy, Session
 from positronic.policy.wrappers import ChunkedSchedule
@@ -222,10 +223,12 @@ class Harness(pimm.ControlSystem):
         # recording ``eval.terminated`` True plus that dict in the episode's static data.
         self.done = pimm.ControlSystemReceiver[dict](self, default={})
 
+    def _statics(self) -> dict[str, Any]:
+        """What is known about the rig before the episode runs, live values winning."""
+        return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value
+
     def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
-        meta = dict(self._embodiment.static_meta)
-        meta.update(self._static_meta)
-        meta.update(self.robot_meta_in.value)
+        meta = self._statics()
         if self._task is not None:
             # The eval-identity block: which eval produced this episode.
             # TODO: also stamp the eval's catalog name and its resolved config — both need
@@ -383,6 +386,9 @@ class Harness(pimm.ControlSystem):
         episode's reset, so the harness skips inference rather than feeding a partial or
         stale obs.
         """
+        # Against the live model, not the one known at episode start: a remote env publishes its ``robot_meta``
+        # a turn after the reset that produced it, so at episode start there is no model to check.
+        assert_default_frame(self._statics())
         inputs: dict[str, Any] = {}
         for name, obs in self._embodiment.observations.items():
             message = self.observations[name].read()

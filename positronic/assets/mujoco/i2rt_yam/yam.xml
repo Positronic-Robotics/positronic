@@ -110,6 +110,7 @@
                   <geom class="collision" size="0.01 0.035" pos="0 -0.039 0.052" quat="1 0 1 0"/>
                   <site name="tcp_site" pos="0 0 0" quat="1 0 0 -1" size="0.005" rgba="1 0 0 1" group="4"/>
                   <site name="grasp_site" pos="0 0 0.1347" quat="1 0 0 -1" size="0.005" rgba="0 1 0 1" group="4"/>
+                  <site name="default" pos="0 0 0.1347" quat="1 0 0 -1" size="0.005" rgba="0 1 0 1" group="4"/>
                   <camera name="wrist_cam" pos="0 -0.13 -0.03" xyaxes="1 0 0 0 -0.850 0.526" fovy="100"/>
                   <body name="link_left_finger" pos="-0.037 0.0392 0.0605" quat="1 0 1 0" gravcomp="1">
                     <inertial pos="-0.0192995 -0.0365902 0.039774" quat="0.757351 0.568898 -0.3199 0.0" mass="0.118"

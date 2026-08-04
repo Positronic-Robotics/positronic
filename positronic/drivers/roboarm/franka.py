@@ -10,11 +10,11 @@ from typing import Any
 import numpy as np
 
 import pimm
-from positronic import geom
+from positronic import geom, keys
 from positronic.drivers import vendor_import
 
 from . import RobotStatus, State, command
-from .models import attach_robotiq_2f85
+from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
 
 with vendor_import('positronic_franka', 'Franka support', platforms=('linux',)):
     import positronic_franka._franka as pf
@@ -175,11 +175,12 @@ class Robot(pimm.ControlSystem):
         # TODO: The arm driver should not own the gripper. Move the 2F-85 model to the gripper driver
         # (drivers/gripper) and compose the arm and gripper together at the embodiment level.
         gripper = attach_robotiq_2f85(root, meshes)
+        add_default_frame(root, EE_LINK)
         return {
-            'urdf': ET.tostring(root, encoding='unicode'),
-            'joint_names': _revolute_joint_names(urdf_xml),
+            keys.URDF: ET.tostring(root, encoding='unicode'),
+            keys.JOINT_NAMES: _revolute_joint_names(urdf_xml),
             'meshes': meshes,
-            'control_frame': 'end_effector',
+            keys.CONTROL_FRAME: DEFAULT_FRAME,
             'gripper': gripper,
         }
 
@@ -325,8 +326,8 @@ class Robot(pimm.ControlSystem):
                                 target_pose_wxyz = np.asarray([*pose.translation, *pose.rotation.as_quat])
                                 ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
                                 robot.set_target_joints(ik_solution)
-                            case command.CartesianDelta(delta):
-                                target = command.apply_cartesian_delta(robot_state.ee_pose, delta)
+                            case command.CartesianDelta() as delta_cmd:
+                                target = delta_cmd.apply(robot_state.ee_pose)
                                 target_pose_wxyz = np.asarray([*target.translation, *target.rotation.as_quat])
                                 ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
                                 robot.set_target_joints(ik_solution)

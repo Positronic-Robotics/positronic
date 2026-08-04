@@ -63,27 +63,10 @@ def _pack(obj):
     if isinstance(obj, _roboarm_command.CommandType):
         return {b'__cmd__': _roboarm_command.to_wire(obj)}
     if isinstance(obj, _roboarm.RobotStatus):
-        # NOTE: str key, unlike the bytes keys above. A pre-PR server that doesn't decode
-        # this type leaves the envelope as a plain dict in the observation; its recorder does
-        # `key.endswith(...)` on dict keys, which TypeErrors on a bytes key but is harmless on
-        # a str one. New servers reconstruct the enum in `_unpack` below.
+        # A str key, unlike the bytes keys above: a server that leaves the envelope undecoded passes a plain
+        # dict to a recorder that does ``key.endswith(...)``, which TypeErrors on bytes and not on str.
         return {'__robotstatus__': obj.value}
     return obj
-
-
-# TODO(remove-pre-PR-server-compat): drop once all deployed inference servers
-# are rebuilt against the new client. Pre-PR vendor codecs returned commands as
-# unwrapped ``to_wire(...)`` dicts (no ``__cmd__`` envelope), which the new
-# client otherwise forwards to drivers as plain dicts and the driver ``match``
-# falls through. The legacy ``type`` strings are specific enough that collision
-# with arbitrary payloads is unlikely in practice.
-_LEGACY_COMMAND_TYPES = frozenset({
-    _roboarm_command.Reset.TYPE,
-    _roboarm_command.CartesianPosition.TYPE,
-    _roboarm_command.JointPosition.TYPE,
-    _roboarm_command.JointDelta.TYPE,
-    _roboarm_command.CartesianDelta.TYPE,
-})
 
 
 def _unpack(obj):
@@ -94,12 +77,7 @@ def _unpack(obj):
     if b'__jpeg__' in obj:
         return _decode_jpeg(obj)
     if b'__cmd__' in obj:
-        inner = obj[b'__cmd__']
-        # The legacy shim below decodes the inner ``to_wire`` dict to a Command
-        # before this outer hook fires — accept either shape.
-        if isinstance(inner, _roboarm_command.CommandType):
-            return inner
-        return _roboarm_command.from_wire(inner)
+        return _roboarm_command.from_wire(obj[b'__cmd__'])
     # Accept both the str key (current wire form, see _pack) and the bytes key, so the wire
     # can later migrate to the bytes form — consistent with the envelopes above — without
     # breaking any server already deployed against this version. Both round-trip to the enum.
@@ -107,9 +85,6 @@ def _unpack(obj):
         return _roboarm.RobotStatus(obj['__robotstatus__'])
     if b'__robotstatus__' in obj:
         return _roboarm.RobotStatus(obj[b'__robotstatus__'])
-    # TODO(remove-pre-PR-server-compat): see _LEGACY_COMMAND_TYPES above.
-    if obj.get('type') in _LEGACY_COMMAND_TYPES:
-        return _roboarm_command.from_wire(obj)
     return obj
 
 

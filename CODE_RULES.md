@@ -113,3 +113,59 @@ if should_stop.value:
 if should_stop.value:
     return
 ```
+
+### hidden-dependency
+
+Don't let one component depend on another without saying so. The dependency is real either way; leaving
+it unstated only means a reader cannot see it, and a consumer that does not know about it is silently
+wrong rather than broken.
+
+Common forms, not a closed list — judge a change against the sentence above, not against these:
+
+- **Handoff through shared data** — one stage writes a value so that a later one can find it, and
+  neither signature mentions the other.
+- **Split meaning** — a value cannot be interpreted on its own. A frame *name* needs the model it names
+  a site in; a transform between frames needs nothing. Prefer the value that carries the whole fact.
+- **Order dependence** — a step is correct only if another ran first, and nothing states or enforces it.
+
+State the dependency where the thing is declared: an argument, a constructor parameter, or a single
+value that is complete on its own.
+
+Changing data is not this. Converting poses between frames, or letting an absent transform mean
+identity, transforms the data without hiding anything — the smell is a dependency a reader cannot see,
+not a change of representation.
+
+```python
+# Bad — b() is correct only if a() ran, and only if b remembers to look
+def a(data): data['scale'] = 2.0; return data
+def b(data): return data['values'] * data.get('scale', 1.0)
+
+# Good — the dependency is in the signature
+def b(values, scale: float): return values * scale
+```
+
+### stranded-definition
+
+Don't leave a definition far from the code that uses it. Put it directly above its first user, or
+inside the single entity that uses it. Distance costs the reader a search in both directions: from the
+use, to find out what it does; from the definition, to find out why it exists.
+
+A private name has every user in the file, so its place is determined. With a single user, first ask
+whether the name is worth keeping: a body that says as much as its name is better inlined than moved.
+Not touching `self` is no reason to stay at module level — that is what `@staticmethod` is for.
+
+A public name is looser: most of its users are elsewhere, and a module may order its surface
+deliberately. Group it with its in-file callers where that ordering does not say otherwise. Module
+scope is right either way once several entities in the file use it.
+
+```python
+# Bad — defined at the top of the file, its one caller 400 lines below
+def _as_transform(value):
+    if isinstance(value, Transform3D):
+        return value
+    return Transform3D.from_vector(np.asarray(value), QUAT)
+
+# Good — in the constructor that wanted it
+if not isinstance(transform, Transform3D):
+    transform = Transform3D.from_vector(np.asarray(transform), QUAT)
+```

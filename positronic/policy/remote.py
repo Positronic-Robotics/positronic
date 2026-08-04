@@ -55,7 +55,10 @@ def _legacy_bound(sizes: Any) -> RestrictImageSize | None:
 
 
 class RemoteSession(Session):
-    """Per-episode session that forwards observations to a remote inference server."""
+    """Per-episode session that forwards observations to a remote inference server.
+
+    ``compress_images`` comes from what the server declared (see ``RemoteMarker``).
+    """
 
     def __init__(self, ws_session: InferenceSession, compress_images: bool = False):
         self._session = ws_session
@@ -105,7 +108,7 @@ class RemoteSession(Session):
 
 
 class _Endpoint(Policy):
-    """The wire connection to one inference server: sessions forward observations as-is.
+    """The wire connection to one inference server: sessions forward observations under the border's settings.
 
     ``InferenceClient`` reads the server, the model, and the session params off the URL.
     ``compress_images`` stands in for a server that declares no wire settings of its own.

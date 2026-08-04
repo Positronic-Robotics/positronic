@@ -10,6 +10,8 @@ positronic cannot import isaaclab/robolab, so the joint-target mapping and the d
   equivalence claim) and the arm converges onto the target;
 - ``joint_vel``: the joint targets anchor on the measured joints (``q + dq``), exactly;
 - the eef_frame <-> base_link offset: un-offsetting the observed eef quat recovers the base_link body quat;
+- eef_frame against ``models.DROID_EE_FRAME``: RoboLab's own scene puts eef_frame where the constant
+  ``RobolabAdapter`` converts with says it is;
 - Cartesian tracking, the ``examples/run_abs_ik_demo.py`` protocol: ±5 cm translations and ±20° world-axis
   rotations held 30 steps each, pass at 5 mm / 2°; the demo's own known-divergent ``translate +x`` case is
   reported but not fatal;
@@ -30,7 +32,7 @@ import torch
 
 # Importing ``env`` launches the Isaac app — a precondition for every isaaclab/robolab import below.
 from env import RobolabEnv, simulation_app
-from isaaclab.utils.math import matrix_from_quat, quat_inv, quat_mul
+from isaaclab.utils.math import matrix_from_quat, quat_apply, quat_inv, quat_mul
 
 from robolab.robots.droid import EEF_OFFSET_ROT
 
@@ -45,6 +47,17 @@ _ROT_TOL = math.radians(2.0)
 # run_abs_ik_demo documents "translate +x" as currently divergent; report it, but don't fail the run on it.
 _KNOWN_DIVERGENT = {'translate +x'}
 _EEF_OFFSET_ROT_T = torch.tensor([EEF_OFFSET_ROT], dtype=torch.float32)
+
+# ``models.DROID_EE_FRAME`` restated against the flange, because this script runs in RoboLab's venv and cannot
+# import positronic: the same transform as ``frame_transform(fr3_urdf, FLANGE_LINK, DROID_EEF_LINK)``, quat wxyz.
+# It is measured from an FR3 and applied to RoboLab's Panda, so the check below is what says the two agree.
+# rules-allow: hardcoded-keys — this script runs in RoboLab's venv, where positronic is not importable, so
+# there is no shared constant to reach for; naming the body is the point of the check
+_FLANGE_BODY = 'panda_link8'
+_FLANGE_TO_EEF_POS = (0.0, 0.0, 0.018174023)
+_FLANGE_TO_EEF_QUAT = (-0.707106781, 0.0, 0.0, -0.707106781)
+_FRAME_POS_TOL = 1e-4  # m — float32 body poses, so well above round-off and far below a real geometry change
+_FRAME_ROT_TOL = math.radians(0.05)
 
 _OBS_SPECS = {
     'joint_pos': ((7,), np.float32),
@@ -146,6 +159,27 @@ def _check_eef_offset(env: RobolabEnv) -> None:
     print('  eef offset: OK (obs eef_quat un-offsets to the base_link body quat)')
 
 
+def _check_flange_to_eef(env: RobolabEnv) -> None:
+    out = env.reset(_TOKEN)
+    robot, sim = env._robot, env._env
+    assert robot is not None and sim is not None, 'reset builds both'
+    flange = robot.data.body_names.index(_FLANGE_BODY)
+    flange_pos = (robot.data.body_pos_w[:1, flange] - sim.scene.env_origins[:1, 0:3]).cpu()
+    flange_quat = robot.data.body_quat_w[:1, flange].cpu()
+    eef_pos = torch.as_tensor(out['obs']['eef_pos']).reshape(1, 3)
+    eef_quat = torch.as_tensor(out['obs']['eef_quat']).reshape(1, 4)
+
+    rel_quat = quat_mul(quat_inv(flange_quat), eef_quat)
+    rel_pos = quat_apply(quat_inv(flange_quat), eef_pos - flange_pos)[0]
+    pos_err = float(torch.linalg.norm(rel_pos - torch.tensor(_FLANGE_TO_EEF_POS)))
+    rot_err = _quat_angle(rel_quat[0], torch.tensor(_FLANGE_TO_EEF_QUAT))
+    assert pos_err <= _FRAME_POS_TOL and rot_err <= _FRAME_ROT_TOL, (
+        f'RoboLab measures eef_frame at {rel_pos.tolist()} / {rel_quat[0].tolist()} off {_FLANGE_BODY}, '
+        f'{pos_err * 1000:.3f} mm and {math.degrees(rot_err):.3f} deg from where DROID_EE_FRAME puts it'
+    )
+    print(f'  flange -> eef_frame: OK ({pos_err * 1000:.4f} mm / {math.degrees(rot_err):.4f} deg)')
+
+
 def _run_cartesian_cases(env: RobolabEnv) -> int:
     """The run_abs_ik_demo protocol over the wire ``cartesian`` path; returns the count of non-known failures."""
     env.reset(_TOKEN)
@@ -240,6 +274,7 @@ def main() -> None:
     _check_joint_pos_passthrough(env)
     _check_joint_vel_anchoring(env)
     _check_eef_offset(env)
+    _check_flange_to_eef(env)
     failures = _run_cartesian_cases(env)
     _check_cartesian_delta(env)
     env.close()

@@ -47,6 +47,21 @@ A returned trajectory also needs timing — *when* each action runs. That is han
 
 These timestamps are **relative** — seconds from the start of the trajectory. The model and codecs never see wall-clock time; the real-time client anchors each offset to its own clock the moment inference returns (`now + timestamp`), so execution starts at inference-finish and the round-trip latency is absorbed. Stamping a per-action timestamp rather than a fixed rate is deliberate: it lets non-uniform timings and client-side scheduling strategies share one wire format. See [How inference works](connect-your-model.md#how-inference-works) for the full reasoning.
 
+## End-effector frames
+
+"EE pose" has no universal meaning: our rigs report the frame their model calls `default`, DROID and RoboLab report the gripper frame (`droid_eef`). A checkpoint speaks whichever frame its training data was in, so serving it on a rig whose `default` sits elsewhere misreads every pose and every command by one constant transform — silently. See [the frame contract](../positronic/drivers/roboarm/README.md) for what `default` is and what each embodiment owes it.
+
+`ChangeEEFrame(T)` converts at that boundary: observations compose forward into the policy's frame (`pose * T`), commands compose back (`pose * T⁻¹`). `T` places the checkpoint's frame relative to `default`, so it belongs to the checkpoint and travels with it — nothing about the rig's model crosses the wire.
+
+It is declared in two places, for the two things it does:
+
+- **Training** — `compose(ee_frame=DROID_EE_FRAME)` re-expresses the dataset in that frame, which is what makes the resulting checkpoint speak it.
+- **Serving** — the vendor pipeline's `ee_frame=` puts the codec left of the `remote` marker, so the rig converts and the server stays frame-agnostic.
+
+Both take the transform itself — `models.DROID_EE_FRAME` is the one we ship — so a checkpoint declares its own frame and no robot model is consulted to serve it. Leave it unset for a checkpoint trained in `default` or one that speaks joints — joints are unambiguous — and behavior is unchanged.
+
+A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
+
 ## Writing custom codecs
 
 Subclass `positronic.policy.codec.Codec` and implement `encode()` and/or `_decode_single()`. The base class returns `{}` from both — observation codecs override `encode()`, action codecs override `_decode_single()`. Middleware codecs that pass data through must explicitly `return data` (e.g. `BinarizeGripTraining`, a pure pass-through at decode that only binarizes via its `training_encoder`); middleware that transforms decoded actions modifies and returns `data` instead (e.g. `BinarizeGripInference`, which thresholds `target_grip` in `_decode_single`). Compose observation and action codecs with `&`, chain middleware with `|`. See the vendor codec files below for reference patterns.

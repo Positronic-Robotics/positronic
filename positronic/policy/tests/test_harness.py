@@ -20,11 +20,12 @@ from positronic.drivers.roboarm.command import (
     JointPosition,
     Reset,
     TrajectoryPlayer,
-    apply_cartesian_delta,
+    _compose_delta,
     from_wire,
     reduce,
     to_wire,
 )
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, bundled_franka_model
 from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
@@ -49,7 +50,7 @@ def _eval_pass(run_id: str):
         telemetry.pop_anchor(span)
 
 
-def make_embodiment(descriptor: str = '', cameras=('image.cam',)) -> Embodiment:
+def make_embodiment(descriptor: str = '', cameras=('image.cam',), static_meta=None) -> Embodiment:
     """Minimal Franka-shaped embodiment for harness unit tests.
 
     The sources/dests are no-ops: these tests pair the harness ports directly
@@ -63,10 +64,10 @@ def make_embodiment(descriptor: str = '', cameras=('image.cam',)) -> Embodiment:
     for cam in cameras:
         observations[cam] = Observation(pimm.NoOpEmitter(), Serializers.camera_images)
     commands = {
-        'robot_command': Command(pimm.NoOpReceiver(), pimm.NoOpEmitter(), Reset(), Serializers.robot_command),
+        keys.ROBOT_COMMAND: Command(pimm.NoOpReceiver(), pimm.NoOpEmitter(), Reset(), Serializers.robot_command),
         'target_grip': Command(pimm.NoOpReceiver(), pimm.NoOpEmitter(), 0.0, None),
     }
-    return Embodiment(descriptor, observations, commands, {}, pimm.NoOpEmitter())
+    return Embodiment(descriptor, observations, commands, static_meta or {}, pimm.NoOpEmitter())
 
 
 class _SpySession(Session):
@@ -75,7 +76,7 @@ class _SpySession(Session):
 
     def __call__(self, obs):
         self._policy.last_obs = obs
-        return [{'robot_command': self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}]
+        return [{keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}]
 
 
 class SpyPolicy(Policy):
@@ -103,7 +104,7 @@ class _StubSession(Session):
     def __call__(self, obs):
         self._policy.last_obs = obs
         self._policy.observations.append(obs)
-        return [{'robot_command': self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}]
+        return [{keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}]
 
     @property
     def meta(self):
@@ -149,7 +150,7 @@ class _ChunkSession(Session):
         dt = 0.005
         return [
             {
-                'robot_command': self._policy.command,
+                keys.ROBOT_COMMAND: self._policy.command,
                 'target_grip': self._policy.counter * 100.0 + i,
                 'timestamp': i * dt,
             }
@@ -241,7 +242,7 @@ def _pair_all(world, harness):
         'robot_em': world.pair(harness.observations['robot_state']),
         'grip_em': world.pair(harness.observations[keys.GRIP]),
         'directive_em': world.pair(harness.directive),
-        'command_rx': world.pair(harness.commands['robot_command']),
+        'command_rx': world.pair(harness.commands[keys.ROBOT_COMMAND]),
         'grip_rx': world.pair(harness.commands['target_grip']),
         'meta_em': world.pair(harness.robot_meta_in),
         'ds_recorder': ds_recorder,
@@ -299,7 +300,7 @@ def test_harness_emits_cartesian_move(world):
     harness = Harness(policy, make_embodiment())
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
-    harness.commands['robot_command']._bind(cmd_recorder)
+    harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
     harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
@@ -358,7 +359,7 @@ def test_harness_passes_descriptor_to_policy(world):
     """The embodiment descriptor reaches the policy on every call (stateless policy)."""
     policy = SpyPolicy()
     harness = Harness(policy, make_embodiment(descriptor='mujoco.franka'))
-    harness.commands['robot_command']._bind(RecordingEmitter())
+    harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
     harness.commands['target_grip']._bind(RecordingEmitter())
     harness.ds_command._bind(RecordingEmitter())
 
@@ -382,13 +383,84 @@ def test_harness_passes_descriptor_to_policy(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_robot_model_stays_out_of_the_observation(world):
+    """A codec carries its frame as a transform, so the model never has to leave the rig."""
+    policy = SpyPolicy()
+    model = bundled_franka_model()
+    statics = {keys.URDF: model[keys.URDF], keys.CONTROL_FRAME: model[keys.CONTROL_FRAME]}
+    harness = Harness(policy, make_embodiment(static_meta=statics))
+    harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
+    harness.commands['target_grip']._bind(RecordingEmitter())
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations['grip'])
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+        (None, 0.05),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=20)
+
+    assert policy.last_obs is not None
+    assert keys.URDF not in policy.last_obs and keys.CONTROL_FRAME not in policy.last_obs
+
+
+@pytest.mark.timeout(3.0)
+def _run_with_model(world, model, static_meta=None):
+    """Drive one episode with ``model`` published on ``robot_meta_in``, or baked into embodiment statics."""
+    harness = Harness(SpyPolicy(), make_embodiment(static_meta=static_meta))
+    harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
+    harness.commands['target_grip']._bind(RecordingEmitter())
+    harness.ds_command._bind(RecordingEmitter())
+    directive_em = world.pair(harness.directive)
+    meta_em = world.pair(harness.robot_meta_in)
+
+    steps = [(partial(directive_em.emit, Directive.RUN(task='t')), 0.0)]
+    if model is not None:
+        steps.append((partial(meta_em.emit, model), 0.01))
+    drive_scheduler(world.start([harness, ManualDriver([*steps, (None, 0.05)])]), steps=20)
+
+
+@pytest.mark.timeout(3.0)
+def test_rejects_a_control_frame_that_is_not_the_default(world):
+    """A rig reporting at another of its own frames shifts every codec transform by the offset between them."""
+    statics = {keys.URDF: bundled_franka_model()[keys.URDF], keys.CONTROL_FRAME: EE_LINK}
+    with pytest.raises(ValueError, match=EE_LINK):
+        _run_with_model(world, None, static_meta=statics)
+
+
+@pytest.mark.timeout(3.0)
+def test_rejects_a_default_frame_the_model_does_not_declare(world):
+    """Every frame transform is measured from this one, so a name the model lacks must not run."""
+    statics = {keys.URDF: '<robot name="r"><link name="base"/></robot>', keys.CONTROL_FRAME: DEFAULT_FRAME}
+    with pytest.raises(ValueError, match=DEFAULT_FRAME):
+        _run_with_model(world, None, static_meta=statics)
+
+
+@pytest.mark.timeout(3.0)
+def test_rejects_a_control_frame_a_late_model_declares(world):
+    """A remote env publishes its model a turn after the reset that produced it, so the check runs on the
+    live metadata rather than on whatever was known when the episode opened."""
+    model = {keys.URDF: bundled_franka_model()[keys.URDF], keys.CONTROL_FRAME: EE_LINK}
+    with pytest.raises(ValueError, match=EE_LINK):
+        _run_with_model(world, model)
+
+
+@pytest.mark.timeout(3.0)
 def test_harness_waits_for_complete_inputs(world):
     pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
     policy = SpyPolicy(command=CartesianPosition(pose=pose), target_grip=0.33)
     harness = Harness(policy, make_embodiment())
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
-    harness.commands['robot_command']._bind(cmd_recorder)
+    harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
     harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
@@ -437,7 +509,7 @@ def test_episode_meta_stamped_at_finalize(world):
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
-        (partial(p['meta_em'].emit, {'urdf': '<robot/>', 'joint_names': ['j1']}), 0.0),
+        (partial(p['meta_em'].emit, {keys.URDF: '<robot/>', keys.JOINT_NAMES: ['j1']}), 0.0),
         (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.01),
         (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),
         (None, 0.02),
@@ -450,8 +522,8 @@ def test_episode_meta_stamped_at_finalize(world):
     assert len(stops) == 1
     meta = stops[0].static_data
     assert meta['joint_signal'] == keys.JOINTS
-    assert meta['urdf'] == '<robot/>'
-    assert meta['joint_names'] == ['j1']
+    assert meta[keys.URDF] == '<robot/>'
+    assert meta[keys.JOINT_NAMES] == ['j1']
     assert meta['inference.policy.type'] == 'stub'
     assert meta['inference.policy.checkpoint'] == 'v1'
     assert meta[keys.TASK] == 'test'
@@ -467,7 +539,7 @@ def test_episode_meta_includes_policy_static_meta(world):
             self._command = command
 
         def __call__(self, obs):
-            return [{'robot_command': self._command, 'target_grip': 0.0, 'timestamp': 0.0}]
+            return [{keys.ROBOT_COMMAND: self._command, 'target_grip': 0.0, 'timestamp': 0.0}]
 
     class _StaticMetaPolicy(Policy):
         def __init__(self):
@@ -678,7 +750,7 @@ def test_policy_first_obs_is_frame0(world):
     embodiment = Embodiment(
         descriptor='',
         observations={'frame': Observation(device.state, None)},
-        commands={'robot_command': Command(device.cmd, pimm.NoOpEmitter(), Reset(), None)},
+        commands={keys.ROBOT_COMMAND: Command(device.cmd, pimm.NoOpEmitter(), Reset(), None)},
         static_meta={},
         meta_source=device.meta,
         control_systems=(device,),
@@ -827,7 +899,7 @@ def test_timeout_crossed_during_latency_sleep_drops_chunk(world):
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
     ds_recorder = RecordingEmitter()
-    harness.commands['robot_command']._bind(cmd_recorder)
+    harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
     harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(ds_recorder)
 
@@ -955,7 +1027,7 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
     policy = ChunkPolicy()
     wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # 1.8 s chunk — won't drain before FINISH
     harness = Harness(wrapped, make_embodiment())
-    harness.commands['robot_command']._bind(_LabeledRecorder('robot_command', events))
+    harness.commands[keys.ROBOT_COMMAND]._bind(_LabeledRecorder(keys.ROBOT_COMMAND, events))
     harness.commands['target_grip']._bind(_LabeledRecorder('target_grip', events))
     harness.ds_command._bind(_LabeledRecorder('ds_command', events))
 
@@ -975,7 +1047,7 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
     scheduler = world.start([harness, ManualDriver(script)])
     drive_scheduler(scheduler, steps=200)
 
-    cancels = [i for i, (lbl, data) in enumerate(events) if lbl == 'robot_command' and data == []]
+    cancels = [i for i, (lbl, data) in enumerate(events) if lbl == keys.ROBOT_COMMAND and data == []]
     stops = [
         i
         for i, (lbl, data) in enumerate(events)
@@ -1132,7 +1204,7 @@ def test_empty_chunk_cancels_both_robot_and_grip(world):
     harness = Harness(EmptyChunkPolicy(), make_embodiment())
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
-    harness.commands['robot_command']._bind(cmd_recorder)
+    harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
     harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
@@ -1263,18 +1335,30 @@ def test_directive_types():
 
 def test_cartesian_delta_wire_roundtrip():
     delta = Transform3D(np.array([0.01, -0.02, 0.03]), Rotation.from_rotvec(np.array([0.0, 0.1, 0.0])))
-    wire = to_wire(CartesianDelta(delta=delta))
+    frame = Transform3D(np.array([0.0, 0.0, 0.1]), Rotation.from_rotvec(np.array([0.0, 0.0, 0.5])))
+    wire = to_wire(CartesianDelta(delta=delta, frame=frame))
     assert wire['type'] == 'cartesian_delta'
     out = from_wire(wire)
     assert isinstance(out, CartesianDelta)
     np.testing.assert_allclose(out.delta.translation, delta.translation)
     np.testing.assert_allclose(out.delta.rotation.as_quat, delta.rotation.as_quat, atol=1e-9)
+    np.testing.assert_allclose(out.frame.translation, frame.translation)
+    np.testing.assert_allclose(out.frame.rotation.as_quat, frame.rotation.as_quat, atol=1e-9)
 
 
-def test_apply_cartesian_delta_composes_in_world_frame():
+def test_cartesian_delta_without_a_frame_is_rejected():
+    """A delta means nothing without the frame it is expressed in, so the payload has to carry one."""
+    delta = Transform3D(np.array([0.01, -0.02, 0.03]), Rotation.from_rotvec(np.array([0.0, 0.1, 0.0])))
+    wire = to_wire(CartesianDelta(delta=delta))
+    del wire['frame']
+    with pytest.raises(KeyError):
+        from_wire(wire)
+
+
+def test_cartesian_delta_applies_in_world_frame():
     current = Transform3D(np.array([0.5, 0.1, 0.3]), Rotation.from_rotvec(np.array([0.2, 0.1, 0.4])))
     delta = Transform3D(np.array([0.02, -0.01, 0.05]), Rotation.from_rotvec(np.array([0.1, 0.0, 0.0])))
-    target = apply_cartesian_delta(current, delta)
+    target = CartesianDelta(delta).apply(current)
     # World frame: translation adds directly (not rotated by current, as Transform3D.__mul__ would) and the
     # rotation left-multiplies.
     np.testing.assert_allclose(target.translation, current.translation + delta.translation)
@@ -1289,10 +1373,10 @@ def test_reduce_accumulates_due_cartesian_deltas():
     d1 = Transform3D(np.array([0.02, 0.01, 0.0]), Rotation.from_rotvec(np.array([0.0, 0.0, 0.2])))
     out = reduce([(10, CartesianDelta(d0)), (20, CartesianDelta(d1))])
     assert isinstance(out, CartesianDelta)
-    expected = apply_cartesian_delta(d0, d1)  # two due deltas catch up as their world-frame compose, not last-wins
+    expected = _compose_delta(d0, d1)  # two due deltas catch up as their world-frame compose, not last-wins
     np.testing.assert_allclose(out.delta.translation, expected.translation)
     np.testing.assert_allclose(out.delta.rotation.as_quat, expected.rotation.as_quat, atol=1e-12)
-    assert not np.allclose(out.delta.rotation.as_quat, apply_cartesian_delta(d1, d0).rotation.as_quat)
+    assert not np.allclose(out.delta.rotation.as_quat, _compose_delta(d1, d0).rotation.as_quat)
 
 
 def test_reduce_sums_due_joint_deltas():
@@ -1381,7 +1465,7 @@ def test_shutdown_cancels_trajectory_before_stop(world):
 
     wrapped = ActionTimestamp(fps=5.0).wrap(ChunkPolicy())  # 1.8 s chunk — won't drain before shutdown
     harness = Harness(wrapped, make_embodiment())
-    harness.commands['robot_command']._bind(_LabeledRecorder('robot_command'))
+    harness.commands[keys.ROBOT_COMMAND]._bind(_LabeledRecorder(keys.ROBOT_COMMAND))
     harness.commands['target_grip']._bind(_LabeledRecorder('target_grip'))
     harness.ds_command._bind(_LabeledRecorder('ds_command'))
 
@@ -1401,7 +1485,7 @@ def test_shutdown_cancels_trajectory_before_stop(world):
     scheduler = world.start([harness, driver])
     drive_scheduler(scheduler, steps=200)
 
-    cancels = [i for i, (lbl, data) in enumerate(events) if lbl == 'robot_command' and data == []]
+    cancels = [i for i, (lbl, data) in enumerate(events) if lbl == keys.ROBOT_COMMAND and data == []]
     stops = [
         i
         for i, (lbl, data) in enumerate(events)

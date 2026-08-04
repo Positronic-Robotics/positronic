@@ -132,12 +132,12 @@ def test_obs_log_filtering_uses_pure_tap_names(tmp_path):
 def test_logs_command_chunk_without_mutating(tmp_path):
     pose = Transform3D(translation=np.array([0.1, 0.2, 0.3], dtype=np.float32), rotation=Rotation.identity)
     actions = [
-        {'robot_command': CartesianPosition(pose=pose), 'target_grip': 0.5, 'timestamp': 0.0},
-        {'robot_command': CartesianPosition(pose=pose), 'target_grip': 0.6, 'timestamp': 0.1},
+        {keys.ROBOT_COMMAND: CartesianPosition(pose=pose), 'target_grip': 0.5, 'timestamp': 0.0},
+        {keys.ROBOT_COMMAND: CartesianPosition(pose=pose), 'target_grip': 0.6, 'timestamp': 0.1},
     ]
     session = Recorder(tmp_path).tap('t').wrap(_TrackingPolicy(actions)).new_session()
     result = session({'x': 1.0, 'wall_time_ns': 1})
-    assert result[0]['robot_command'] is actions[0]['robot_command']  # unchanged on return
+    assert result[0][keys.ROBOT_COMMAND] is actions[0][keys.ROBOT_COMMAND]  # unchanged on return
 
 
 def test_handles_none_actions(tmp_path):

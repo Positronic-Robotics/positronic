@@ -41,7 +41,7 @@ class _TargetSession(Session):
             t = (i + 1) / 5.0
             step_pos = current_pos + delta * 0.1 * t
             pose = Transform3D(translation=step_pos, rotation=Rotation.identity)
-            actions.append({'robot_command': CartesianPosition(pose=pose), 'target_grip': 0.5})
+            actions.append({keys.ROBOT_COMMAND: CartesianPosition(pose=pose), 'target_grip': 0.5})
         return actions
 
     @property
@@ -84,7 +84,7 @@ def _pair_all(world, harness):
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
     cmd_recorder = RecordingEmitter()
-    harness.commands['robot_command']._bind(cmd_recorder)
+    harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
     grip_recorder = RecordingEmitter()
     harness.commands['target_grip']._bind(grip_recorder)
     return {

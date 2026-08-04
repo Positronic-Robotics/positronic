@@ -71,7 +71,7 @@ class _ScriptedSession(Session):
         for i in range(10):
             step = current + delta * 0.5 * ((i + 1) / 10.0)
             pose = Transform3D(translation=step.astype(np.float32), rotation=Rotation.identity)
-            chunk.append({'robot_command': CartesianPosition(pose=pose), 'target_grip': round(0.50 + 0.01 * i, 4)})
+            chunk.append({keys.ROBOT_COMMAND: CartesianPosition(pose=pose), 'target_grip': round(0.50 + 0.01 * i, 4)})
         return chunk
 
 
@@ -201,7 +201,9 @@ def _run_pipeline(tmp_path: Path) -> dict:
                 keys.GRIP: Observation(gripper.grip, None),
             },
             commands={
-                'robot_command': Command(robot.commands, robot.executed_commands, Reset(), Serializers.robot_command),
+                keys.ROBOT_COMMAND: Command(
+                    robot.commands, robot.executed_commands, Reset(), Serializers.robot_command
+                ),
                 'target_grip': Command(gripper.target_grip, gripper.executed_target_grip, 0.0, None),
             },
             static_meta=dict(ROBOT_STATIC_META),

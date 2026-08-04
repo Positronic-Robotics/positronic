@@ -44,7 +44,7 @@ def wire(  # noqa: C901
         for signal_name in cameras.keys():
             ds_agent.add_signal(signal_name, Serializers.camera_images)
         if robot_arm is not None:
-            ds_agent.add_signal('robot_command', TrajectorySerializer(Serializers.robot_command))
+            ds_agent.add_signal(keys.ROBOT_COMMAND, TrajectorySerializer(Serializers.robot_command))
             ds_agent.add_signal('robot_state', Serializers.robot_state)
         if gripper is not None:
             ds_agent.add_signal('target_grip', TrajectorySerializer(None))
@@ -55,7 +55,7 @@ def wire(  # noqa: C901
         if robot_arm is not None:
             # Device ports are duck-typed off `ControlSystem`.
             executed_commands = robot_arm.executed_commands  # pyright: ignore[reportAttributeAccessIssue]
-            world.connect(executed_commands, ds_agent.inputs['robot_command'])
+            world.connect(executed_commands, ds_agent.inputs[keys.ROBOT_COMMAND])
             world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
         if gripper is not None:
             executed_grip = gripper.executed_target_grip  # pyright: ignore[reportAttributeAccessIssue]

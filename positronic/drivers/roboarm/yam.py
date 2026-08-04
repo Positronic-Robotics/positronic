@@ -1,7 +1,7 @@
 """Driver for the real i2rt YAM arm — one CAN chain carrying six joints plus the gripper.
 
 i2rt exposes joint-space position-PD with gravity compensation only (its own ~100 Hz control thread), so this
-driver solves FK/IK itself against the vendored MJCF (``assets/mujoco/i2rt_yam/yam.xml``) at ``grasp_site`` —
+driver solves FK/IK itself against the vendored MJCF (``assets/mujoco/i2rt_yam/yam.xml``) at ``DEFAULT_FRAME`` —
 the control frame the training data is expressed in. The upstream MJCF package is vendored whole
 (``scene.xml`` and meshes included); the driver itself loads only ``yam.xml``. The gripper is the chain's 7th
 DOF, normalized 0=closed/1=open — the inverse of positronic's grip convention — so grip values are inverted in
@@ -21,12 +21,13 @@ import mujoco as mj
 import numpy as np
 
 import pimm
-from positronic import geom
+from positronic import geom, keys
 from positronic.drivers import vendor_import
 from positronic.utils import package_assets_path
 
 from . import RobotStatus, State, command
 from .ik import qpos_from_site_pose
+from .models import DEFAULT_FRAME
 
 # i2rt lives in the `yam` extra, which the type-check environment does not install.
 with vendor_import('i2rt', 'YAM support', hint='Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'):
@@ -99,7 +100,7 @@ class YamState(State, pimm.shared_memory.NumpySMAdapter):
 
 
 class _Kinematics:
-    """FK/IK on the vendored YAM MJCF at ``grasp_site``, in the arm-base frame.
+    """FK/IK on the vendored YAM MJCF at ``DEFAULT_FRAME``, in the arm-base frame.
 
     ``mujoco`` exports every symbol below from a compiled extension, so a type checker cannot see them.
     """
@@ -109,7 +110,7 @@ class _Kinematics:
         self._model = mj.MjModel.from_xml_path(model_path)  # pyright: ignore[reportAttributeAccessIssue]
         self._data = mj.MjData(self._model)  # pyright: ignore[reportAttributeAccessIssue]
         site = mj.mjtObj.mjOBJ_SITE  # pyright: ignore[reportAttributeAccessIssue]
-        self._site_id = mj.mj_name2id(self._model, site, 'grasp_site')  # pyright: ignore[reportAttributeAccessIssue]
+        self._site_id = mj.mj_name2id(self._model, site, DEFAULT_FRAME)  # pyright: ignore[reportAttributeAccessIssue]
         self._qpos_ids = np.array([self._model.joint(name).qposadr.item() for name in _JOINT_NAMES])
         self._dof_ids = np.array([self._model.joint(name).dofadr.item() for name in _JOINT_NAMES])
         ranges = np.array([self._model.joint(name).range for name in _JOINT_NAMES])
@@ -195,7 +196,7 @@ class Robot(pimm.ControlSystem):
         arm = self._connect(self._channel, self._sim)
         try:
             kin = _Kinematics()
-            meta = {'robot': 'i2rt_yam', 'joint_names': list(_JOINT_NAMES), 'control_frame': 'grasp_site'}
+            meta = {'robot': 'i2rt_yam', keys.JOINT_NAMES: list(_JOINT_NAMES), keys.CONTROL_FRAME: DEFAULT_FRAME}
             self.robot_meta.emit(meta)
 
             robot_state = YamState()
@@ -239,8 +240,8 @@ class Robot(pimm.ControlSystem):
                             q_target = q + np.asarray(delta, dtype=np.float64)
                         case command.CartesianPosition(pose):
                             q_target, applied = self._ik_or_hold(kin, pose, q, q_target)
-                        case command.CartesianDelta(delta):
-                            target = command.apply_cartesian_delta(self._base_pose * kin.fk(q), delta)
+                        case command.CartesianDelta() as delta_cmd:
+                            target = delta_cmd.apply(self._base_pose * kin.fk(q))
                             q_target, applied = self._ik_or_hold(kin, target, q, q_target)
                         case _:
                             raise NotImplementedError(f'Unsupported command {played.value}')

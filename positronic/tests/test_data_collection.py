@@ -159,7 +159,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
         writer_cm = LocalDatasetWriter(tmp_path)
         agent = DsWriterAgent(writer_cm.__enter__())
         agent.add_signal('target_grip', TrajectorySerializer(None))
-        agent.add_signal('robot_command', TrajectorySerializer(Serializers.robot_command))
+        agent.add_signal(keys.ROBOT_COMMAND, TrajectorySerializer(Serializers.robot_command))
         agent.add_signal('controller_positions', controller_positions_serializer)
         agent.add_signal('robot_state', Serializers.robot_state)
         agent.add_signal(keys.GRIP)
@@ -167,7 +167,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
         world.connect(sim.state, dc.robot_state)
         world.connect(sim.state, agent.inputs['robot_state'])
         world.connect(dc.robot_commands, sim.commands)
-        world.connect(sim.executed_commands, agent.inputs['robot_command'])
+        world.connect(sim.executed_commands, agent.inputs[keys.ROBOT_COMMAND])
         world.connect(dc.target_grip, sim.target_grip)
         world.connect(sim.executed_target_grip, agent.inputs['target_grip'])
         world.connect(sim.grip, agent.inputs[keys.GRIP])
@@ -226,7 +226,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
     # When tracking is enabled, target pose initially matches current robot state (due to offset calibration)
     # Verify a robot command was emitted (tracking enabled and a pose sent)
     # We don't assert exact equality with state here; just presence and shape.
-    cmd_pose = ep['robot_command.pose']
+    cmd_pose = ep[keys.TARGET_EE_POSE]
     assert len(cmd_pose) >= 1 and cmd_pose[0][0].shape == (7,)
 
     # Basic sanity on sizes and monotonic timestamps

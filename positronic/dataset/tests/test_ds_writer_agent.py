@@ -409,12 +409,13 @@ def test_robot_command_serializer_variants(world):
 
     pose = geom.Transform3D(translation=np.array([0.2, 0.0, -0.1]), rotation=geom.Rotation.identity)
     delta = geom.Transform3D(translation=np.array([0.01, -0.02, 0.03]), rotation=geom.Rotation.identity)
+    delta_frame = geom.Transform3D(translation=np.array([0.0, 0.0, 0.05]), rotation=geom.Rotation.identity)
     joints = np.arange(7, dtype=np.float32) * 0.1
 
     script = [
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
         (lambda: emitters['cmd'].emit(rcmd.CartesianPosition(pose)), 0.001),
-        (lambda: emitters['cmd'].emit(rcmd.CartesianDelta(delta)), 0.001),
+        (lambda: emitters['cmd'].emit(rcmd.CartesianDelta(delta, delta_frame)), 0.001),
         (lambda: emitters['cmd'].emit(rcmd.JointPosition(joints)), 0.001),
         (lambda: emitters['cmd'].emit(rcmd.Reset()), 0.001),
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
@@ -426,6 +427,9 @@ def test_robot_command_serializer_variants(world):
     items = {name: val for (name, val, _, _) in w.appends}
     np.testing.assert_allclose(items['cmd.pose'], np.concatenate([pose.translation, pose.rotation.as_quat]))
     np.testing.assert_allclose(items['cmd.pose_delta'], np.concatenate([delta.translation, delta.rotation.as_quat]))
+    np.testing.assert_allclose(
+        items['cmd.pose_delta_frame'], np.concatenate([delta_frame.translation, delta_frame.rotation.as_quat])
+    )
     np.testing.assert_allclose(items['cmd.joints'], joints)
     assert items['cmd.reset'] == 1
 
