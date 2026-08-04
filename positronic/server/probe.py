@@ -1,9 +1,4 @@
-"""Render a dataset-viewer episode in a headless browser and report what the panels showed.
-
-The viewer's failures are visual — a video panel that sits on its loading spinner, a plot that
-never fills — and none of them reach the server log, so reading the code or curling the endpoint
-answers nothing. This drives the real page, steps the time cursor, saves screenshots and prints the
-browser console, which is what a report like "the video is black" has to be checked against.
+"""Render a dataset-viewer page in a headless browser: screenshot each step, print the console.
 
 Two targets:
 
