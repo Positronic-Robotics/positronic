@@ -576,6 +576,26 @@ def test_parse_dmon_device_unreadable_throughout_counts_towards_the_box(tmp_path
     assert summary.mean_util_pct == pytest.approx(60.0)
 
 
+def test_parse_dmon_reads_each_metric_on_its_own(tmp_path):
+    """A device can report one metric and not the other — dmon prints `-` per column. A row carrying
+    utilisation but no framebuffer still contributes its utilisation, and one carrying a framebuffer but no
+    utilisation still contributes to the box total."""
+    log = tmp_path / 'dmon.log'
+    log.write_text(
+        '# gpu    sm    fb\n'
+        '#  Idx     %    MB\n'
+        '    0    40     -\n'  # utilisation only
+        '    1     -  2048\n'  # framebuffer only
+        '    0    80  1024\n'
+        '    1   100  2048\n'
+    )
+    summary = _parse_dmon(log)
+    # Cycle 1 holds device 1 alone, so it is partial; cycle 2 sees both.
+    assert summary.peak_vram_gb == pytest.approx(3072 / 1024)
+    assert summary.mean_util_pct == pytest.approx(220 / 3)  # 40, 80, 100 — device 1's `-` costs only itself
+    assert (summary.devices_seen, summary.box_devices) == (2, 2)
+
+
 def test_parse_dmon_fails_loudly_without_fb(tmp_path):
     log = tmp_path / 'dmon.log'
     log.write_text('# gpu    sm\n#  Idx     %\n    0    50\n')

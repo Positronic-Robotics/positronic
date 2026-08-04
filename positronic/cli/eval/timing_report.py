@@ -237,13 +237,23 @@ def _dmon_column_indices(names: list[str], log_path: Path) -> tuple[int, int, in
     return names.index(_DMON_UTIL), names.index(_DMON_FB), device_idx
 
 
+def _dmon_cell(row: list[str], index: int) -> float | None:
+    """One dmon cell as a float, or ``None`` where the column is missing or not a number — a device that
+    cannot report a metric prints ``-`` for it alone."""
+    try:
+        return float(row[index])
+    except (IndexError, ValueError):
+        return None
+
+
 def _dmon_readings(log_path: Path) -> Iterator[tuple[str, float | None, float | None]]:
     """Each data row of a ``dmon`` log as ``(device, sm, fb)``, in file order.
 
-    ``sm`` and ``fb`` are ``None`` where the row's metrics are missing or non-numeric — a device that
-    refused its query prints ``-``. Such a row still yields its device, because the device index is what
-    marks a sampling interval; dropping it whole would merge two intervals. A row before the name header,
-    or one too short to carry a device index, yields nothing.
+    Each metric is read on its own, so an unreadable column costs only itself: a row carrying utilisation
+    but no framebuffer still contributes its utilisation. A row whose metrics are both unreadable still
+    yields its device, because the device index is what marks a sampling interval; dropping it whole would
+    merge two intervals. A row before the name header, or one too short to carry a device index, yields
+    nothing.
     """
     sm_idx: int | None = None
     fb_idx: int | None = None
@@ -265,10 +275,7 @@ def _dmon_readings(log_path: Path) -> Iterator[tuple[str, float | None, float | 
             device = row[gpu_idx] if gpu_idx is not None else '0'
         except IndexError:
             continue
-        try:
-            yield device, float(row[sm_idx]), float(row[fb_idx])
-        except (IndexError, ValueError):
-            yield device, None, None
+        yield device, _dmon_cell(row, sm_idx), _dmon_cell(row, fb_idx)
 
 
 def _parse_dmon(log_path: Path) -> GpuSummary:
@@ -287,8 +294,9 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
     # the max over per-cycle sums — matching the sim summary's per-sample device sum.
     cycle_fb: dict[str, float] = {}
     cycles: list[dict[str, float]] = []
-    # Every device index the log mentions is the box's complement; the ones that answered are what the mean
-    # covers. A device silent throughout counts towards the first and not the second.
+    # Every device index the log mentions is the box's complement; the ones that reported utilisation are
+    # what the mean covers. A device that never reports it counts towards the first and not the second — and
+    # the two metrics are tracked apart, so a device reporting one and not the other still contributes it.
     devices: set[str] = set()
     answered: set[str] = set()
     # Every device the open cycle has covered, readable metrics or not: an unreadable row marks the interval
@@ -306,11 +314,11 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
             flush_cycle()
         cycle_devices.add(device)
         devices.add(device)
-        if sm is None or fb is None:
-            continue
-        cycle_fb[device] = fb
-        answered.add(device)
-        utils.append(sm)
+        if sm is not None:
+            utils.append(sm)
+            answered.add(device)
+        if fb is not None:
+            cycle_fb[device] = fb
     flush_cycle()
     # The complement is known only once the whole log is read, so completeness is decided here rather than at
     # each flush. A cycle missing a device is a partial box, and the max over partial sums is not a peak: one

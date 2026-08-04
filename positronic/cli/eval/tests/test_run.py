@@ -56,12 +56,15 @@ def test_the_stats_sampler_runs_inside_the_pass_span(tmp_path, monkeypatch):
     """Sampling is bounded by the pass span, so every sample the reduce sees falls in the window it counts.
     Sampling around the span instead leaves its first and last outside — and a run shorter than the sampling
     interval loses its only sample, reporting a GPU box as CPU-only. Asserted as nesting rather than as
-    timestamps because the overlap is a thread race: it is the order that makes it impossible."""
+    timestamps because the overlap is a thread race: it is the order that makes it impossible.
+
+    Construction sits outside the span for the opposite reason: NVML init and counter priming are setup, not
+    eval wall, and charging them to W_pass depresses the real-time factor."""
     order = []
 
     class _RecordingSampler:
         def __init__(self, path):
-            pass
+            order.append('sampler built')
 
         def __enter__(self):
             order.append('sampler in')
@@ -84,4 +87,4 @@ def test_the_stats_sampler_runs_inside_the_pass_span(tmp_path, monkeypatch):
     with _timed_pass(tmp_path, True, object()):
         pass
 
-    assert order == ['pass in', 'sampler in', 'sampler out', 'pass out']
+    assert order == ['sampler built', 'pass in', 'sampler in', 'sampler out', 'pass out']
