@@ -15,6 +15,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from starlette.datastructures import QueryParams
 
+from positronic import keys
 from positronic.policy import Codec, Policy, Recorder
 from positronic.policy.spec import SEQ, ModelSource, Pipeline, split
 from positronic.utils.serialization import deserialise, serialise
@@ -274,7 +275,7 @@ class PolicyServer:
             meta = {
                 **self.metadata,
                 **self._source.meta(rid),
-                'checkpoint_id': rid,
+                keys.CHECKPOINT_ID: rid,
                 **served.meta,
                 **session.meta,
                 'local_stack': local_spec,

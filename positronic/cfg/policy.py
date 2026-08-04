@@ -38,7 +38,9 @@ def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None
     if n_action_steps is not None:
         policy.config.n_action_steps = n_action_steps
 
-    return LerobotPolicy(policy, device, extra_meta={'type': 'act', 'checkpoint_path': fully_specified_checkpoint_dir})
+    return LerobotPolicy(
+        policy, device, extra_meta={keys.TYPE: 'act', keys.CHECKPOINT_PATH: fully_specified_checkpoint_dir}
+    )
 
 
 @cfn.config(

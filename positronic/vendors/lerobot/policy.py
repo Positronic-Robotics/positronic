@@ -5,6 +5,7 @@ import torch
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 
+from positronic import keys
 from positronic.policy import Policy, Session
 
 
@@ -74,7 +75,7 @@ class LerobotPolicy(Policy):
         policy_cls = get_policy_class(config.type)
         self._policy = policy_cls.from_pretrained(checkpoint_path).to(self._device)
         self._preprocessor, self._postprocessor = make_pre_post_processors(config, pretrained_path=checkpoint_path)
-        self._meta = {**(extra_meta or {}), 'type': config.type}
+        self._meta = {**(extra_meta or {}), keys.TYPE: config.type}
 
     def new_session(self, context=None, now=None):
         self._policy.reset()

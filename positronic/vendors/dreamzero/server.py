@@ -16,6 +16,7 @@ import websockets.sync.client
 from huggingface_hub import snapshot_download
 from websockets.exceptions import ConnectionClosed
 
+from positronic import keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Codec, Policy, PolicyWrapper, Session
@@ -308,11 +309,11 @@ class DreamZeroSource(ModelSource):
     def meta(self, model_id: str) -> dict[str, Any]:
         checkpoint_path = self._checkpoint_path(model_id)
         return {
-            'type': 'dreamzero',
+            keys.TYPE: 'dreamzero',
             'backbone': self._backbone,
             'num_gpus': self._num_gpus,
-            'checkpoint_path': checkpoint_path,
-            'experiment_name': _experiment_name(checkpoint_path),
+            keys.CHECKPOINT_PATH: checkpoint_path,
+            keys.EXPERIMENT_NAME: _experiment_name(checkpoint_path),
         }
 
 

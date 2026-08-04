@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import pos3
 
-from positronic import telemetry, telemetry_keys
+from positronic import keys, telemetry, telemetry_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
@@ -101,7 +101,7 @@ class RemoteSession(Session):
 
     @property
     def meta(self) -> dict[str, Any]:
-        return flatten_dict({'type': 'remote', 'server': self._session.metadata})
+        return flatten_dict({keys.TYPE: 'remote', keys.SERVER: self._session.metadata})
 
     def close(self):
         self._session.close()
@@ -147,7 +147,7 @@ class _Endpoint(Policy):
 
     @property
     def meta(self) -> dict[str, Any]:
-        return flatten_dict({'type': 'remote', 'server': self.server_meta()})
+        return flatten_dict({keys.TYPE: 'remote', keys.SERVER: self.server_meta()})
 
     def close(self):
         self._client = None
