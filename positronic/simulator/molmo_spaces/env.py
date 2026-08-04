@@ -148,7 +148,10 @@ class MolmoSpacesEnv(EnvProtocol):
         # The authoritative benchmark prompt, straight from the episode spec — not
         # ``task.get_task_description()``, which upstream reconstructs per task type (e.g. OpeningTask emits
         # "Open the ..." even for a close episode), so a reconstruction could diverge from the benchmark goal.
-        self._meta = {'task': episode.language.task_description, 'house_index': episode.house_index}
+        self._meta = {
+            mapping.META_TASK: episode.language.task_description,
+            mapping.META_HOUSE_INDEX: episode.house_index,
+        }
 
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
         self._build(token[mapping.TOKEN_EPISODE_INDEX], token.get(mapping.TOKEN_SEED))

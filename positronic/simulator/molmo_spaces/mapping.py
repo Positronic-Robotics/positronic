@@ -36,6 +36,10 @@ ASSETS_DIR_ENV = 'MLSPACES_ASSETS_DIR'
 TOKEN_EPISODE_INDEX = 'episode_index'
 TOKEN_SEED = 'seed'
 
+# The reset frame's scene meta: the episode's resolved language goal and the ProcTHOR house it runs in.
+META_TASK = 'task'
+META_HOUSE_INDEX = 'house_index'
+
 # The raw observation payload ``env.py`` reports and ``MolmoAdapter`` reads back.
 OBS_JOINT_POS = 'joint_pos'
 OBS_JOINT_VEL = 'joint_vel'

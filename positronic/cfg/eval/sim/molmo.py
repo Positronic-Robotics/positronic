@@ -58,16 +58,12 @@ def _molmo_eval(
 
     ``timeout`` is not the benchmark horizon — the sim owns that (the benchmark's ``task_horizon_sec``, enforced
     env-side and delivered as a terminal ``done``). It is only a runaway-cost safety net for a sim that never
-    terminates, so it must stay longer than the sim's native horizon; the env reports that horizon at reset and
-    the harness rejects a ``timeout`` that isn't strictly weaker, so a too-short budget fails loud instead of
-    silently truncating a valid episode. Being sim-time, the spare budget costs nothing unless the sim misbehaves.
+    terminates, so it must stay longer than the sim's native horizon. Being sim-time, the spare budget costs
+    nothing unless the sim misbehaves.
 
     ``task_horizon_steps`` optionally pins the episode horizon, mirroring MolmoSpaces' ``--task_horizon_steps`` —
     use it to reproduce a reference run whose horizon differs from the benchmark's declared value. Default
-    (``None``) reads the benchmark's own ``task_horizon_sec`` (DROID Pick = 20 s -> 303 steps). Discrepancy worth
-    knowing: MolmoSpaces' shipped benchmarks carry ``task_horizon_sec`` at the episode level, but its own
-    ``determine_task_horizon`` reads only the task dict and so raises on them — a native run needs this override
-    (or a ``patch_benchmarks`` pass, which defaults PickTask to 20 s and a later patch bumps it to 30 s).
+    (``None``) reads the benchmark's own ``task_horizon_sec`` (DROID Pick = 20 s -> 303 steps).
     """
     if benchmark_dir is None:
         raise ValueError('MolmoSpaces eval needs --eval.benchmark_dir pointing at a dir with benchmark.json')
@@ -105,7 +101,7 @@ def _molmo_eval(
     # The env's full MuJoCo state is recorded as privileged ground truth, never fed to the policy.
     privileged = {mapping.OBS_SIM_STATE: Observation(proxy.privileged[mapping.OBS_SIM_STATE], None)}
     task = Task(
-        instruction=lambda: proxy.meta['task'],
+        instruction=lambda: proxy.meta[mapping.META_TASK],
         timeout=timeout,
         privileged=privileged,
         reset=proxy.reset,

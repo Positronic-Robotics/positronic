@@ -96,13 +96,15 @@ def sample_at(signal: Signal, timestamps: list[int]) -> list:
     return [value for value, _ts in sampled]
 
 
-def replay_commands(benchmark_dir: Path, episode_index: int, commands, grips) -> list:
+def replay_commands(
+    benchmark_dir: Path, episode_index: int, commands: np.ndarray, grips: np.ndarray
+) -> list[np.ndarray]:
     """Step the commands open-loop through a MolmoSpaces env server, returning the sim state each produced.
 
     Stops early if the sim ends the trial, so a caller can tell a full replay from a truncated one by the
     length of what comes back.
     """
-    states: list = []
+    states: list[np.ndarray] = []
     with launcher.serve_molmo_spaces(benchmark_dir) as (host, port):
         conn = EnvConnection(host, port)
         try:
