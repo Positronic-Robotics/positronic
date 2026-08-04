@@ -149,20 +149,24 @@ process, next to the dataset but never inside it: nested spans for the phase spl
 machine-load sampler, wall-clock native, owned by `positronic/telemetry.py`. The pass report is an
 offline reduce over those raw files, so nothing is stored twice and the dataset stays clock-agnostic.
 
-**Benchmarks are native; adoptions are faithful.** A benchmark is a set of tasks defined in real or
-in one particular simulator — object poses, success criteria, and horizons included — and there are
-no cross-sim tasks. The product contract is that one policy wrapper earns every supported benchmark:
-a customer implements a single Positronic policy interface and their model runs on all of them. That
-contract is only honest if a Positronic run of a benchmark reproduces the benchmark's native run —
-otherwise the score belongs to Positronic, not the benchmark, and is not comparable to the
-benchmark's published numbers. So an adoption of a sim env reproduces the native benchmark as closely
-as the env allows: a deterministic env to byte-identical outcomes (modulo wire format), a
-non-deterministic env to at least an identical sim/inference call sequence (same count, same order).
-Every sim-env integration ships a native-vs-Positronic parity test that drives one pinned episode
-through both stacks and asserts this, re-run on every bump of the sim's pinned version. Horizon
-ownership follows: the horizon is part of a task's behavior, so the sim×task owns it — enforces it
-and reports expiry through the same terminal `done` a success uses — while the harness `Task.timeout`
-is a strictly weaker safety net, guarding only against runaway cost when a sim fails to enforce a
-horizon or defines none. That "strictly weaker" is structural, not assumed: an env that enforces a
-horizon reports it at reset, and the harness rejects a `timeout` that is not longer, so a mis-set
-budget fails loud instead of silently truncating a valid episode.
+**An adoption loses nothing.** A task is defined in real or in one simulator, and carries that
+simulator with it — object poses, success criteria and horizons included. What a customer buys is
+one API across all of them: they implement a single Positronic policy interface and their model
+runs on every supported env, giving up nothing the env offers natively. Two requirements hold that
+up, one on each side of the interface:
+
+- Given a policy that already drives an env directly, it must be possible to construct a Positronic
+  `Policy` equivalent to it. This binds policy construction as much as it binds the adoption.
+- An adoption's capabilities match what its env provides natively, so a Positronic run reproduces
+  the env's own run: a deterministic env to byte-identical outcomes (modulo wire format), a
+  non-deterministic env to an identical sim/inference call sequence (same count, same order).
+
+Every sim-env adoption ships a native-vs-Positronic parity test that drives one pinned episode
+through both stacks and asserts this, re-run on every bump of the sim's pinned version.
+
+The episode horizon is one case of that reproduction rather than a rule of its own: a task that
+defines a horizon has it enforced by the env, which reports expiry through the same terminal `done`
+a success uses; a task that defines none leaves nothing to reproduce. The harness `Task.timeout` is
+only a runaway-cost safety net, so an env that enforces a horizon reports it at reset and the
+harness rejects a `timeout` that is not longer — a mis-set budget fails loud instead of silently
+truncating a valid episode.
