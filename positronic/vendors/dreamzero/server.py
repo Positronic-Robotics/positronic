@@ -343,11 +343,12 @@ COMMANDS = {
     # TODO: publish this checkpoint to positronic-public and point here, as the other PhAIL models are
     # (`utilities/release_phail.py`, `positronic.cfg.phail.v1_0.models`). Reading it needs credentials until then.
     'phail': serve.override(
-        pipeline=joints.override(**{
-            'source.model_path': 's3://checkpoints/phail/dreamzero/w22f1_100k_200626/',
-            'source.backbone': 'wan2.2',
-        }),
+        pipeline=joints,
         recording_dir='s3://inference/phail_unified/server_recordings/dreamzero/w22f1_100k_200626/',
+        **{
+            'pipeline.source.model_path': 's3://checkpoints/phail/dreamzero/w22f1_100k_200626/',
+            'pipeline.source.backbone': 'wan2.2',
+        },
     ),
     # Public pretrained DROID checkpoint: wan2.1 backbone (the base default) paired with the DROID
     # pipeline whose codec feeds its required 320x180 frames.
