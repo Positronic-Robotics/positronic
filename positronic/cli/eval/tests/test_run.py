@@ -1,10 +1,12 @@
+import sys
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
 
 from positronic import telemetry, telemetry_keys
-from positronic.cli.eval.run import Driver, _pass_span, main
+from positronic.cli.eval.run import Driver, _pass_span, _timed_pass, main
 from positronic.eval import Embodiment, Eval, Task
 
 
@@ -48,3 +50,38 @@ def test_failed_pass_exported_and_stamped(tmp_path):
 
     spans = {s.name: s for s in telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl')}
     assert spans[telemetry_keys.SPAN_EVAL_PASS].attrs.get(telemetry_keys.ATTR_PASS_FAILED) is True
+
+
+def test_the_stats_sampler_runs_inside_the_pass_span(tmp_path, monkeypatch):
+    """Sampling is bounded by the pass span, so every sample the reduce sees falls in the window it counts.
+    Sampling around the span instead leaves its first and last outside — and a run shorter than the sampling
+    interval loses its only sample, reporting a GPU box as CPU-only. Asserted as nesting rather than as
+    timestamps because the overlap is a thread race: it is the order that makes it impossible."""
+    order = []
+
+    class _RecordingSampler:
+        def __init__(self, path):
+            pass
+
+        def __enter__(self):
+            order.append('sampler in')
+            return self
+
+        def __exit__(self, *exc):
+            order.append('sampler out')
+
+    @contextmanager
+    def _recording_pass(**attrs):
+        order.append('pass in')
+        yield
+        order.append('pass out')
+
+    monkeypatch.setattr(telemetry, 'StatsSampler', _RecordingSampler)
+    # `positronic.cli.eval` binds `run` to the config, shadowing the submodule of that name, so the module
+    # object whose global is being replaced comes from `sys.modules`.
+    monkeypatch.setattr(sys.modules['positronic.cli.eval.run'], '_pass_span', _recording_pass)
+
+    with _timed_pass(tmp_path, True, object()):
+        pass
+
+    assert order == ['pass in', 'sampler in', 'sampler out', 'pass out']

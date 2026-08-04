@@ -76,8 +76,15 @@ class _EpisodeTelemetry:
         telemetry.push_anchor(self._span)
 
     def start_rollout(self, virtual_now: float) -> None:
-        """Anchor the rollout's virtual duration at ``virtual_now``: the reset is done and stepping begins."""
-        self._virtual_start = virtual_now
+        """Anchor the rollout's virtual duration at the first control cycle that has an observation.
+
+        A simulated producer's ``reset`` only arms frame zero, which it publishes on its next turn, and that
+        turn advances the virtual clock by a control period without stepping the environment. Anchoring when
+        the reset returns would charge that period to the rollout while its wall sits under reset, inflating
+        the real-time factor by one control period per episode. Called every cycle; only the first lands.
+        """
+        if self._virtual_start is None:
+            self._virtual_start = virtual_now
 
     def step(self) -> None:
         self._steps += 1
@@ -87,7 +94,6 @@ class _EpisodeTelemetry:
         ``virtual_now`` — captured when the rollout ended, before the flush round advances the sim clock."""
         if self._span is None:
             return
-        assert self._virtual_start is not None  # a clean finish is reached only after the anchor is stamped
         self._close(virtual_now)
         telemetry.force_flush()
 
@@ -112,8 +118,9 @@ class _EpisodeTelemetry:
         telemetry.force_flush()
 
     def _close(self, virtual_now: float) -> None:
-        # A rollout that never started (a reset that raised before the anchor was stamped) has zero virtual
-        # duration; only an anchored rollout measures from its start.
+        # A rollout that never reached its first observation — a reset that raised, or a task already done
+        # before frame zero landed — has zero virtual duration; only an anchored rollout measures from its
+        # start.
         virtual_s = max(virtual_now - self._virtual_start, 0.0) if self._virtual_start is not None else 0.0
         assert self._span is not None
         attrs = {telemetry_keys.ATTR_EPISODE_STEPS: self._steps, telemetry_keys.ATTR_EPISODE_VIRTUAL_S: virtual_s}
@@ -312,7 +319,6 @@ class Harness(pimm.ControlSystem):
         self._policy_session = self.policy.new_session(self.context, clock.now)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
-        self._telemetry.start_rollout(clock.now())
         self.ds_command.emit(DsWriterCommand.START())
 
     def _end_episode(
@@ -419,6 +425,7 @@ class Harness(pimm.ControlSystem):
         obs = self._build_obs(clock)
         if obs is None:
             return
+        self._telemetry.start_rollout(clock.now())
 
         # Advance the (sim) clock by the inference cost so rollouts feel the model's latency. We only
         # sleep on cycles where inference actually ran (session returned a chunk) — otherwise blocked

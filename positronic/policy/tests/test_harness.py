@@ -1444,3 +1444,35 @@ def test_failed_pass_seals_open_episode_span(tmp_path):
     assert episode.parent_id == passes[0].span_id  # parented to the pass, so the reduce does not drop it as an orphan
     resets = [s for s in spans if s.name == telemetry_keys.SPAN_RESET]
     assert resets and all(r.parent_id == episode.span_id for r in resets)  # finished child attributes to its phase
+
+
+@pytest.mark.timeout(3.0)
+def test_episode_virtual_duration_starts_at_the_first_observation(world, tmp_path):
+    """A simulated producer's reset only arms frame zero, which it publishes on a later turn; the rounds in
+    between advance the virtual clock without stepping the environment. The rollout's virtual duration
+    measures from the first cycle that has an observation, so that gap stays reset work instead of inflating
+    the real-time factor the report derives from it."""
+    harness = Harness(ChunkPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    with telemetry.bind(tmp_path, 'harness', 'run-anchor'), _eval_pass('run-anchor'):
+        scheduler = world.start([harness])
+        p['directive_em'].emit(Directive.RUN(task='test'))
+        drive_scheduler(scheduler, steps=1)
+        gap_start = world.clock.now()
+        drive_scheduler(scheduler, steps=40)  # no observation yet: the producer has not published frame zero
+        gap_s = world.clock.now() - gap_start
+        emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
+        drive_scheduler(scheduler, steps=5)
+        p['directive_em'].emit(Directive.FINISH())
+        drive_scheduler(scheduler, steps=3)
+
+    spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
+    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    assert len(episodes) == 1
+    virtual_s = episodes[0].attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S]
+    assert virtual_s > 0.0  # the observed cycles are measured
+    # Five observed rounds against forty unobserved ones: anchoring when the reset returned would swallow the
+    # whole gap into the rollout's virtual duration.
+    assert virtual_s < gap_s
