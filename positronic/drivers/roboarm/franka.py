@@ -212,7 +212,10 @@ class Robot(pimm.ControlSystem):
         else:
             robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
 
-    def _reset(self, robot, robot_state: FrankaState):
+    def _reset(self, robot, robot_state: FrankaState, rate_limiter, should_stop) -> Iterator[pimm.Sleep]:
+        """Home the arm, yielding until it arrives. Drive with ``yield from``."""
+        # The first emit must not ship an unfilled state.
+        robot_state.encode(robot.state())
         robot_state._start_reset()
         self.state.emit(robot_state)
 
@@ -222,7 +225,24 @@ class Robot(pimm.ControlSystem):
                 -np.asarray(self._home_joints_variation), np.asarray(self._home_joints_variation)
             )
             target = target + variation
-        robot.set_target_joints(target, asynchronous=False)
+        robot.set_target_joints(target)
+
+        while True:
+            if should_stop.value:
+                return
+            goal = robot.goal()
+            if goal.status == pf.GoalStatus.REACHED:
+                break
+            if goal.status != pf.GoalStatus.IN_FLIGHT:
+                raise RuntimeError(f'homing failed: {goal.reason or goal.status}')
+
+            st = robot.state()
+            robot_state.encode(st)
+            robot_state._start_reset()  # `encode` clears RESETTING; the arm has not arrived
+            self.state.emit(robot_state)
+            if st.error != 0:
+                robot.recover_from_errors()
+            yield rate_limiter.wait()
 
         robot_state._finish_reset()
         self.state.emit(robot_state)
@@ -264,7 +284,7 @@ class Robot(pimm.ControlSystem):
                 robot_state = FrankaState()
                 rate_limiter = pimm.RateLimiter(clock, hz=2000)
 
-                self._reset(robot, robot_state)
+                yield from self._reset(robot, robot_state, rate_limiter, should_stop)
 
                 in_error = False
                 player = command.TrajectoryPlayer(reduce=command.reduce)
@@ -297,7 +317,7 @@ class Robot(pimm.ControlSystem):
                     if cmd is not None:
                         match cmd:
                             case command.Reset():
-                                self._reset(robot, robot_state)
+                                yield from self._reset(robot, robot_state, rate_limiter, should_stop)
                             case command.CartesianPosition(pose):
                                 target_pose_wxyz = np.asarray([*pose.translation, *pose.rotation.as_quat])
                                 ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
