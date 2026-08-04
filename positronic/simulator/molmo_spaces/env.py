@@ -324,10 +324,16 @@ def _pose_error(target_pos: np.ndarray, target_rot: np.ndarray, cur_pos: np.ndar
 
 
 def _full_physics_state(robot_view: Any) -> np.ndarray:
-    """The scene's full generalized state — ``qpos`` (all positions) then ``qvel`` (all velocities) — a
-    deterministic MuJoCo sim replays from it, and object poses in ``qpos`` let analysis recompute success."""
+    """The scene's complete integrable state: ``mjSTATE_INTEGRATION``, the minimal subset a deterministic
+    MuJoCo sim restores from to reproduce its forward trajectory — positions and velocities, and with them
+    mocap bodies, actuator activation, controls and the solver warm-start. Object poses in it let analysis
+    recompute success. Positions start at index 1, after the scalar time."""
     data = robot_view.mj_data
-    return np.concatenate([np.asarray(data.qpos, dtype=np.float64), np.asarray(data.qvel, dtype=np.float64)])
+    model = data.model
+    spec = mujoco.mjtState.mjSTATE_INTEGRATION  # pyright: ignore[reportAttributeAccessIssue]
+    state = np.empty(mujoco.mj_stateSize(model, spec), dtype=np.float64)  # pyright: ignore[reportAttributeAccessIssue]
+    mujoco.mj_getState(model, data, state, spec)  # pyright: ignore[reportAttributeAccessIssue]
+    return state
 
 
 def _is_rgb_frame(value: Any) -> bool:
