@@ -104,7 +104,6 @@ class Robot(pimm.ControlSystem):
                 self._last_grip = played_grip.value
             played = player.advance(clock.now_ns())
             if played is not None:
-                self.executed_commands.emit([played])
                 match played.value:
                     case roboarm_command.Reset():
                         raise NotImplementedError('Reset not implemented')
@@ -124,6 +123,7 @@ class Robot(pimm.ControlSystem):
                         self.motor_bus.set_target_position(q_with_gripper)
                     case _:
                         raise ValueError(f'Unknown command: {played.value}')
+                self.executed_commands.emit([played])
 
             q = self.motor_bus.position
             dq = self.motor_bus.velocity[:-1]

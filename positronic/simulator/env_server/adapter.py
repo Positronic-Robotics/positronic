@@ -145,6 +145,8 @@ class WireCommandAdapter(EnvAdapter):
         match cmd:
             case roboarm_command.Reset():
                 self._held.pop('robot_command')
+                # The env is sent a hold, so nothing homed and no command ran.
+                executed.pop('robot_command', None)
                 cmd = None
             case roboarm_command.CartesianDelta() | roboarm_command.JointDelta():
                 self._held.pop('robot_command')

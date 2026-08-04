@@ -318,7 +318,6 @@ class Robot(pimm.ControlSystem):
 
                     played = player.advance(clock.now_ns())
                     if played is not None:
-                        self.executed_commands.emit([played])
                         match played.value:
                             case command.Reset():
                                 yield from self._reset(robot, robot_state, rate_limiter, should_stop)
@@ -337,6 +336,7 @@ class Robot(pimm.ControlSystem):
                                 robot.set_target_joints(st.q + joint_delta)
                             case _:
                                 raise NotImplementedError(f'Unsupported command {played.value}')
+                        self.executed_commands.emit([played])
 
                     yield rate_limiter.wait()
             finally:

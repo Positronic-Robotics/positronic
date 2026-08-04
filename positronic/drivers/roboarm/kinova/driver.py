@@ -100,7 +100,7 @@ class Robot(pimm.ControlSystem):
                     player.set(cmd_msg.data)
                 played = player.advance(clock.now_ns())
                 if played is not None:
-                    self.executed_commands.emit([played])
+                    applied = True
                     match played.value:
                         case command.Reset():
                             joint_controller.set_target_qpos(self.home_joints)
@@ -116,6 +116,9 @@ class Robot(pimm.ControlSystem):
                             joint_controller.set_target_qpos(qpos)
                         case _:
                             print(f'Unsuported command: {played.value}')
+                            applied = False
+                    if applied:
+                        self.executed_commands.emit([played])
 
                 torque_command = joint_controller.compute_torque(q, dq, tau)
                 np.divide(torque_command, torque_constant, out=current_command)

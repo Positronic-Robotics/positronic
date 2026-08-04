@@ -205,8 +205,8 @@ class MujocoSim(pimm.ControlSystem):
                 self._grip_player.set(grip_msg.data)
             played_grip = self._grip_player.advance(clock.now_ns())
             if played_grip is not None:
-                self.executed_target_grip.emit([played_grip])
-                self._last_grip = played_grip.value
+                self._last_grip = max(0.0, min(1.0, played_grip.value))
+                self.executed_target_grip.emit([played_grip._replace(value=self._last_grip)])
             self._apply_grip(self._last_grip)
 
             # An env step is the sim advance plus the observations it produces, rendering included
