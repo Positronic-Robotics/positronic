@@ -115,7 +115,8 @@ the input (`<run_dir>` may be an `s3://` URI). It reports:
   stream. The two peaks are box-wide totals, so they need samples that saw every device and read unavailable
   when none did. Utilisation averages every per-device reading taken, so it is biased towards the devices that
   answered; it carries `devices_seen` / `box_devices` with it, and the report prints `util 60% over 1 of 2
-  GPUs` whenever the mean covers part of a box.
+  GPUs` whenever the mean covers part of a box. A box whose devices all refuse their queries still reports as
+  a GPU box, with the metrics unavailable — only a box holding no device at all carries no GPU line.
 
 Shares print as percentages; `timing_summary.json` keeps them as fractions.
 

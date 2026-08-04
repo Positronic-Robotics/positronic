@@ -422,6 +422,40 @@ def test_device_omitted_from_every_sample_excluded_via_recorded_count(tmp_path):
     assert 'util 60% over 1 of 2 GPUs' in _render(report)
 
 
+def test_box_whose_devices_all_refuse_is_reported_with_metrics_unavailable(tmp_path):
+    """A box whose every device refuses its query (a single unsupported MIG device is enough) records a
+    positive ``gpu_count`` with no per-device entries. That is a GPU box with nothing measured, and reporting
+    it as CPU-only — no GPU line at all — hides both the box and the failure."""
+    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir.mkdir()
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
+    stats = [{'t_ns': 1, 'gpu_count': 2, 'gpus': []}, {'t_ns': 2, 'gpu_count': 2, 'gpus': []}]
+    (telemetry_dir / 'harness.stats.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+
+    report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
+
+    sim = report.gpu.sim
+    assert sim is not None
+    assert sim.mean_util_pct is None
+    assert (sim.devices_seen, sim.box_devices) == (0, 2)
+    assert sim.peak_vram_gb is None
+    assert sim.peak_proc_vram_gb is None
+    assert 'util unavailable over 0 of 2 GPUs' in _render(report)
+
+
+def test_cpu_box_has_no_gpu_summary(tmp_path):
+    """A box NVML found no device on records a zero ``gpu_count``, and carries no GPU summary at all."""
+    telemetry_dir = tmp_path / 'telemetry'
+    telemetry_dir.mkdir()
+    _write_lines(telemetry_dir / 'harness.spans.jsonl', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
+    (telemetry_dir / 'harness.stats.jsonl').write_text(json.dumps({'t_ns': 1, 'gpu_count': 0, 'gpus': []}) + '\n')
+
+    report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
+
+    assert report.gpu.sim is None
+    assert 'gpu[sim]' not in _render(report)
+
+
 def test_gpu_samples_outside_pass_windows_excluded(tmp_path):
     """Stats samples taken outside every completed pass's wall window (an earlier run in a reused directory)
     stay out of the GPU summary — the stats twin of the orphan-episode exclusion."""

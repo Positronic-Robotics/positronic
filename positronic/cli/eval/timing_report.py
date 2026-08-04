@@ -67,8 +67,10 @@ class GpuSummary:
     ``mean_util_pct`` averages every per-device reading taken, so a device that never answers biases it
     towards the ones that did. ``devices_seen`` and ``box_devices`` carry that bias with the number instead of
     leaving it to be inferred: they are the devices the mean covers and the devices the box holds, and
-    ``devices_seen < box_devices`` says outright that the figure describes part of a box. A ``dmon`` log
-    declares no complement, so both are the devices its rows mention — a missing one is unknowable there.
+    ``devices_seen < box_devices`` says outright that the figure describes part of a box. It reads ``None``
+    when no device answered at all, which is a box whose GPUs are all unreadable rather than a box with no
+    GPUs. A ``dmon`` log declares no complement, so both are the devices its rows mention — a missing one is
+    unknowable there.
 
     The peaks are box-wide totals — a sample's devices summed, then the max over samples — so each needs a
     sample that saw the whole box, and reads ``None`` when none did. ``peak_proc_vram_gb`` is the share
@@ -76,7 +78,7 @@ class GpuSummary:
     ``dmon`` log, which carries none (only the whole box).
     """
 
-    mean_util_pct: float
+    mean_util_pct: float | None
     devices_seen: int
     box_devices: int
     peak_vram_gb: float | None
@@ -167,7 +169,8 @@ def _read_stats_dir(telemetry_dir: Path) -> list[dict]:
 def _gpu_summary_from_stats(stats: list[dict], pass_windows: list[tuple[int, int]]) -> GpuSummary | None:
     """The sim box's GPU summary from the machine-load stream. Only samples taken inside a completed pass's
     wall window count — a reused directory carries an earlier (possibly killed) run's samples, the stats twin
-    of the orphan-episode exclusion. ``None`` when no counted sample carried a GPU (a CPU sim box)."""
+    of the orphan-episode exclusion. ``None`` when no counted sample held a device at all (a CPU sim box); a
+    box whose devices all refused their queries is a summary with nothing measured, not a CPU box."""
     in_window = [s for s in stats if any(start <= int(s[STAT_T_NS]) <= end for start, end in pass_windows)]
     utils: list[float] = []
     mem: list[float] = []
@@ -175,12 +178,14 @@ def _gpu_summary_from_stats(stats: list[dict], pass_windows: list[tuple[int, int
     seen: set[int] = set()
     box_devices = 0
     for sample in in_window:
+        # The recorded count is the box's NVML handle count, so it stands whether or not any device answered:
+        # taking it before the empty-sample skip is what separates an unreadable GPU box from a CPU one.
+        box_devices = max(box_devices, int(sample[STAT_GPU_COUNT]))
         gpus = sample.get(STAT_GPUS, [])
         if not gpus:
             continue
         utils.extend(float(gpu[GPU_UTIL_PCT]) for gpu in gpus)
         seen.update(int(gpu[GPU_INDEX]) for gpu in gpus)
-        box_devices = max(box_devices, int(sample[STAT_GPU_COUNT]))
         # Either peak is a box-wide total, so it needs a sample that saw the whole box. A device whose NVML
         # query errors mid-run is dropped from the sample entirely, not left ``None``, so a sample covers the
         # box only when its device count equals the ``gpu_count`` the sampler recorded (its NVML handle
@@ -191,9 +196,15 @@ def _gpu_summary_from_stats(stats: list[dict], pass_windows: list[tuple[int, int
         mem.append(sum(float(gpu[GPU_MEM_USED_B]) for gpu in gpus))
         if all(gpu.get(GPU_PROC_MEM_B) is not None for gpu in gpus):
             proc.append(sum(float(gpu[GPU_PROC_MEM_B]) for gpu in gpus))
-    if not utils:
+    if box_devices == 0:
         return None
-    if not mem:
+    if not utils:
+        logger.warning(
+            "none of the box's %d GPU(s) answered a single machine-load query (all refused, as an unsupported "
+            'MIG device does); the box is reported with no metrics rather than as CPU-only',
+            box_devices,
+        )
+    elif not mem:
         logger.warning(
             "no machine-load sample carried all %d of the box's GPUs (an NVML query refused mid-run?); both "
             'peaks are unavailable, and mean utilisation covers the %d device(s) that answered',
@@ -201,7 +212,7 @@ def _gpu_summary_from_stats(stats: list[dict], pass_windows: list[tuple[int, int
             len(seen),
         )
     return GpuSummary(
-        mean_util_pct=float(np.mean(utils)),
+        mean_util_pct=float(np.mean(utils)) if utils else None,
         devices_seen=len(seen),
         box_devices=box_devices,
         peak_vram_gb=(max(mem) / _BYTES_PER_GB) if mem else None,
@@ -277,7 +288,7 @@ def _parse_dmon(log_path: Path) -> GpuSummary:
         utils.append(sm)
     flush_cycle()
     return GpuSummary(
-        mean_util_pct=float(np.mean(utils)) if utils else 0.0,
+        mean_util_pct=float(np.mean(utils)) if utils else None,
         # A dmon log declares no complement, so the devices it mentions are all that can be known of the box.
         devices_seen=len(devices),
         box_devices=len(devices),
@@ -476,7 +487,7 @@ def _render(report: PassReport) -> str:
     for f in fields(GpuReport):
         summary = getattr(report.gpu, f.name)
         if summary is not None:
-            util = f'util {summary.mean_util_pct:.0f}%'
+            util = f'util {summary.mean_util_pct:.0f}%' if summary.mean_util_pct is not None else 'util unavailable'
             # A mean over part of a box says so where it is read, not only in the log: the coverage rides with
             # the number, and appears exactly when it qualifies it.
             if summary.devices_seen < summary.box_devices:
