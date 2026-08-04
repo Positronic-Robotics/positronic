@@ -141,6 +141,7 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
         from opentelemetry.sdk.resources import Resource  # noqa: PLC0415
         from opentelemetry.sdk.trace import TracerProvider  # noqa: PLC0415
         from opentelemetry.sdk.trace.export import BatchSpanProcessor  # noqa: PLC0415
+        from opentelemetry.sdk.trace.sampling import ALWAYS_ON  # noqa: PLC0415
     except ImportError as error:
         raise RuntimeError(_MISSING_EXTRA) from error
     telemetry_dir = Path(out_dir) / TELEMETRY_SUBDIR
@@ -151,7 +152,11 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
         ATTR_PROCESS_PID: os.getpid(),
         ATTR_HOST_NAME: socket.gethostname(),
     })
-    provider = TracerProvider(resource=resource)
+    # Sample every span. Left to its default the SDK reads OTEL_TRACES_SAMPLER, so a host application's
+    # `always_off` or ratio setting would silence this provider too — the sidecar comes back empty or partial
+    # and the report reads a timed run as untimed. What this provider records goes to its own file and nowhere
+    # else, so there is nothing for a sampling budget to protect.
+    provider = TracerProvider(resource=resource, sampler=ALWAYS_ON)
     spans_path = telemetry_dir / f'{process}{SPANS_SUFFIX}'
     # A killed predecessor can leave a truncated final line; seal it so the appending exporter starts a fresh
     # line — otherwise read_spans merges the first new record into the fragment and skips both.

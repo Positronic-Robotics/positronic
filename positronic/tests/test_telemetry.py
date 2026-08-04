@@ -203,6 +203,19 @@ def test_root_span_detaches_from_a_foreign_ambient_span(tmp_path):
     assert spans['probe'].parent_id == spans['eval.pass'].span_id
 
 
+def test_spans_survive_a_host_sampler_in_the_environment(tmp_path, monkeypatch):
+    """OTEL_TRACES_SAMPLER configures the SDK's default sampler, so a host application that turns tracing off
+    would take this provider's spans with it — an empty sidecar on a run that asked to be timed."""
+    monkeypatch.setenv('OTEL_TRACES_SAMPLER', 'always_off')
+    with telemetry.bind(tmp_path, 'harness', 'run-sampler'):
+        with _anchored('eval.pass'):
+            with telemetry.span('probe'):
+                pass
+
+    spans = _spans_by_name(tmp_path / 'telemetry' / 'harness.spans.jsonl')
+    assert set(spans) == {'eval.pass', 'probe'}
+
+
 def _install_fake_nvml(monkeypatch):
     monkeypatch.setattr(pynvml, 'nvmlInit', lambda: None)
     monkeypatch.setattr(pynvml, 'nvmlShutdown', lambda: None)
