@@ -1330,7 +1330,7 @@ def test_shutdown_cancels_trajectory_before_stop(world):
     """Shutdown while recording must cancel buffered trajectories before STOP_EPISODE.
 
     The cancel clears each driver's ``TrajectoryPlayer`` so devices hold position; it must land
-    while the episode is still open (the FINISH/RUN paths already cancel first).
+    while the episode is still open.
     """
     events: list[tuple[str, object]] = []
 
