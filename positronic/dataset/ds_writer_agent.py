@@ -167,7 +167,9 @@ class DsWriterAgent(pimm.ControlSystem):
         poll_hz: float = 1000.0,
         time_mode: TimeMode = TimeMode.CLOCK,
         virtual_time: bool = False,
-        io_context: ContextFactory = nullcontext,
+        # rules-allow: caller-in-name — timing is the only use, and a name for the mechanism alone reads as
+        # a context of unsaid purpose. It generalises when a second kind of caller arrives.
+        telemetry_span: ContextFactory = nullcontext,
     ):
         self.ds_writer = ds_writer
         self._poll_hz = float(poll_hz)
@@ -175,7 +177,7 @@ class DsWriterAgent(pimm.ControlSystem):
         self._virtual_time = virtual_time
         # An opaque context factory wrapped around the writer's serialize+append work; the default is
         # inert. The caller decides what it brackets — the writer never learns.
-        self._io_context = io_context
+        self._telemetry_span = telemetry_span
         self.command = pimm.ControlSystemReceiver[DsWriterCommand](self, default=None)
 
         self._inputs: dict[str, pimm.ControlSystemReceiver[Any]] = {}
@@ -233,7 +235,7 @@ class DsWriterAgent(pimm.ControlSystem):
                             if not isinstance(clock, pimm.world.SystemClock):
                                 extra_ts['world'] = world_time_ns
 
-                            with self._io_context():
+                            with self._telemetry_span():
                                 serializer = self._serializers.get(name)
                                 value = msg.data
                                 if serializer is not None:
@@ -280,7 +282,7 @@ class DsWriterAgent(pimm.ControlSystem):
                     logger.warning('Episode already started, ignoring start command')
             case DsWriterCommandType.STOP_EPISODE:
                 if ep_writer is not None:
-                    with self._io_context():
+                    with self._telemetry_span():
                         for name, ser in self._serializers.items():
                             for sample in ser.flush(now_ns):
                                 _append(ep_writer, name, sample.value, sample.ts, None)

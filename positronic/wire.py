@@ -39,7 +39,7 @@ def wire(  # noqa: C901
         ds_agent = DsWriterAgent(
             dataset_writer,
             time_mode=time_mode,
-            io_context=functools.partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
+            telemetry_span=functools.partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
         )
         for signal_name in cameras.keys():
             ds_agent.add_signal(signal_name, Serializers.camera_images)
@@ -101,7 +101,7 @@ def wire_embodiment(
             dataset_writer,
             time_mode=time_mode,
             virtual_time=embodiment.simulated,
-            io_context=functools.partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
+            telemetry_span=functools.partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
         )
         for name, obs in embodiment.observations.items():
             if isinstance(obs.serializer, StatefulSerializer):

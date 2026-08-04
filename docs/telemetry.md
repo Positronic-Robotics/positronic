@@ -14,7 +14,7 @@ them is an offline reduce over the raw files rather than a second recording.
 The boundary holds in the other direction too: nothing under `positronic/dataset` imports telemetry, its
 vocabulary, or `opentelemetry`, and `positronic/dataset/tests/test_telemetry_boundary.py` fails the build if
 one starts to. Code that needs timing there takes it as an opaque injected context factory — `DsWriterAgent`'s
-`io_context`, inert by default — so the dataset core stays clock-agnostic and names none of this.
+`telemetry_span`, inert by default — so the dataset core stays clock-agnostic and names none of this.
 
 `positronic/telemetry.py` owns the mechanism, and it is domain-blind: spans, anchors and sidecar files, with
 no notion of an episode, a pass or an inference call. An **anchor** is a long-running span its owner holds
