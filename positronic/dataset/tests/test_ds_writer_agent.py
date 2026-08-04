@@ -494,8 +494,6 @@ def test_trajectory_serializer_records_each_waypoint_at_the_tick_that_applied_it
 
 
 def test_trajectory_serializer_carries_the_scheduled_instant_on_its_own_timeline():
-    """The waypoint asked for ts 3 and the device reached it at 5; both survive, so the delivery lag
-    is readable per sample without a second signal."""
     s = TrajectorySerializer(None)
 
     (out,) = s([rcmd.Applied(5, 3, 'a')])
