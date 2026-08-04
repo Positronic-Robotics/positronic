@@ -344,8 +344,8 @@ def main() -> None:
         '--task_horizon_steps', type=int, default=None, help='override the benchmark horizon (steps per episode)'
     )
     args = parser.parse_args()
-    if not os.environ.get('MLSPACES_ASSETS_DIR'):
-        parser.error('MLSPACES_ASSETS_DIR must point at the MolmoSpaces asset packs')
+    if not os.environ.get(mapping.ASSETS_DIR_ENV):
+        parser.error(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
     env = MolmoSpacesEnv(Path(args.benchmark_dir), args.task_horizon_steps)
     EnvServer(env, args.host, args.port).serve_forever()
 
