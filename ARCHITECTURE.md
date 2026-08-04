@@ -6,8 +6,10 @@ are the means, and the invariants and decisions that follow are consequences. Wh
 not settled here, decide it the same way — from the goals, through the principles.
 
 What code here must look like is [CLAUDE.md](CLAUDE.md) and the named rules in
-[CODE_RULES.md](CODE_RULES.md). A component with principles of its own keeps them in its
-`AGENTS.md` — [`positronic/dataset/AGENTS.md`](positronic/dataset/AGENTS.md).
+[CODE_RULES.md](CODE_RULES.md). A component with principles of its own keeps them in an
+architecture document beside its code —
+[`positronic/dataset/ARCHITECTURE.md`](positronic/dataset/ARCHITECTURE.md), which its `AGENTS.md`
+links.
 
 ## Goals
 
