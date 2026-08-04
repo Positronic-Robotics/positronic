@@ -168,9 +168,8 @@ class TrajectoryPlayer(Generic[_T]):
     def advance(self, current_time: int) -> Applied[_T] | None:
         """Collapse every waypoint whose timestamp <= current_time into the one waypoint to apply, or None.
 
-        A device reaches a waypoint at a tick of its own control rate, and several waypoints falling in one
-        tick collapse into a single applied value, so the result is stamped twice: ``ts`` is the tick that
-        applies it and ``scheduled_ts`` is what the newest collapsed waypoint asked for.
+        The result carries both stamps: ``ts`` is ``current_time`` and ``scheduled_ts`` is what the newest
+        collapsed waypoint asked for.
         """
         due = []
         while self._index < len(self._trajectory):
