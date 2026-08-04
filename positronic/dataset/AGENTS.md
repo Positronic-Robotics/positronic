@@ -1,8 +1,10 @@
 # Dataset Library — Design Principles
 
+Repository-wide goals and principles are in [ARCHITECTURE.md](../../ARCHITECTURE.md); the user-facing guide is [README.md](README.md). Only the recording is irreplaceable, and everything else stays re-derivable from it.
+
 ## One API, many backends
 
-The library covers the data path of the robot-learning loop — record → curate/annotate → convert → train → eval → re-score — through a single interface: `Signal`/`Episode`/`Dataset` and the layers composed over them. Storage formats are backends behind that interface (`LocalDataset` is the native one, `RemoteDataset` serves it over HTTP, and foreign formats plug in as read adapters). Never push a capability into a storage format when it can live in a layer above it.
+Raw recordings and the views over them, through a single interface: `Signal`/`Episode`/`Dataset` and the layers composed over them. Storage formats are backends behind that interface (`LocalDataset` is the native one, `RemoteDataset` serves it over HTTP, and foreign formats plug in as read adapters). A foreign format is wrapped into the interface, never the reverse. Never push a capability into a storage format when it can live in a layer above it.
 
 ## Layering: backend → edits → transforms → consumer
 
@@ -13,7 +15,7 @@ Every dataset read composes in this order:
 - **Transforms** compute lazy views over the curated episode. Transforms never persist.
 - **Consumers** (codecs, viewers, converters) see one `Dataset` interface and don't know which layers are present.
 
-The shape mirrors the systems that got this right — Lightroom catalogs over raw photos, video EDLs, git, Delta Lake logs over parquet: identity-keyed (uid, never path or position), time-addressed (absolute ns timestamps, never indices), append-only, dumb plain data with versioned records so a log replays forever.
+The shape is that of Lightroom catalogs over raw photos and Delta Lake logs over parquet: identity-keyed (uid, never path or position), time-addressed (absolute ns timestamps, never indices), append-only, dumb plain data with versioned records so a log replays forever.
 
 ## Episode data model
 
@@ -29,7 +31,7 @@ Every episode is stamped with `meta['uid']` (a uuid4 hex) at recording time — 
 
 ## Edits
 
-Recordings are immutable. All post-hoc modification goes through one mechanism: an append-only edit log (`edits.jsonl` in the dataset directory) of uid-keyed declarative records, applied as a view on read. `EditedDataset(base, edits_dir)` is both that view and the handle that amends it: curated reads (drops hidden, static edits overlaid) plus `set_static`/`drop`/`undrop` methods that append a record and return a fresh view over the same recordings — so a held reference never changes shape underneath a consumer. `load_dataset`/`load_all_datasets` compose it over a `LocalDataset`, while `LocalDataset` itself reads raw recordings. The static overlay primitive (`EditedEpisode`) is backend-agnostic; the edit layer reads a local `edits_dir` for now — when a second edit-storage format appears, `edits_dir` is where the seam reopens.
+Recordings are immutable. All post-hoc modification goes through one mechanism: an append-only edit log (`edits.jsonl` in the dataset directory) of uid-keyed declarative records, applied as a view on read. `EditedDataset(base, edits_dir)` is both that view and the handle that amends it: curated reads (drops hidden, static edits overlaid) plus `set_static`/`drop`/`undrop` methods that append a record and return a fresh view over the same recordings — so a held reference never changes shape underneath a consumer. `load_dataset`/`load_all_datasets` compose it over a `LocalDataset`, while `LocalDataset` itself reads raw recordings. The static overlay primitive (`EditedEpisode`) is backend-agnostic; the edit layer reads a local `edits_dir`, the seam to reopen when a second edit-storage format appears.
 
 - One JSON record per line, each carrying its op and version so a log stays replayable forever. `{"op": "set_static", "v": 1, "ep": "<uid>", "data": {...}}` merges static items over the recorded ones (log order, last write per key wins); `{"op": "drop", "v": 1, "ep": "<uid>"}` removes the episode from the loaded view while the recording stays on disk, and `{"op": "undrop", ...}` restores it — the last drop/undrop per episode wins.
 - The format stays dumb plain data — smarts live in the library — so external editors can write it. The dataset directory assumes a single writer; readers fail loudly on corrupt or unrecognized records.
@@ -42,12 +44,14 @@ Implementations may cache these values internally (e.g. `DiskEpisode` reads a ca
 
 ## Laziness
 
-Nothing expensive should happen until needed. The library is designed around lazy evaluation:
+Nothing expensive happens until needed:
 - Listing episodes should not touch signal data
 - Accessing `duration_ns` should not load signal values
 - Accessing one signal should not load other signals
 
 `SimpleSignal` reads parquet row-group statistics (file footer) for `start_ts`/`last_ts`/`len` without touching actual data. Full timestamps and values are loaded only when indexed or searched.
+
+Laziness is what keeps the layering honest: if reading through the abstraction were expensive, a consumer would reach around it for the backend.
 
 ## Transforms
 
