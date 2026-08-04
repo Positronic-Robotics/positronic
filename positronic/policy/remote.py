@@ -84,11 +84,8 @@ class RemoteSession(Session):
         Single-action server responses are wrapped into a 1-element list to honor
         the ``Session.__call__`` contract (``list[dict] | None``).
         """
-        # The only place ``policy.infer`` is timed: the real remote inference boundary, with in-process terminals
-        # (e.g. ``_LerobotSession``) left uninstrumented by design; ``finally`` times a raising round-trip too.
-        # The span starts after preparation: JPEG-encoding a stack of HD frames is client-side work, and folding
-        # it into the round-trip would inflate the inference percentiles and the policy-server capacity estimate
-        # the report derives from them.
+        # Timed from after preparation: JPEG-encoding a stack of HD frames is client-side work, and folding it
+        # into the round-trip would inflate the inference percentiles. ``finally`` times a raising one too.
         prepared = self._prepare_obs(obs)
         infer_start_ns = time.time_ns()
         try:
