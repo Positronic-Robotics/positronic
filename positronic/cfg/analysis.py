@@ -555,6 +555,7 @@ PHAIL_MODEL_DISPLAY = {
     'groot': 'NVIDIA GR00T N1.6',
     'act': 'Action Chunking Transformer',
     'smolvla': 'Hugging Face SmolVLA',
+    'dreamzero': 'NVIDIA DreamZero',
     'human': HUMAN_MODEL,
     'teleop': TELEOP_MODEL,
 }
