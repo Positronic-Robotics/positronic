@@ -34,13 +34,14 @@ from pathlib import Path
 
 import numpy as np
 
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import launcher
 
 # parity_native.py runs only in MolmoSpaces' venv (it imports the flat, positronic-free ``env``), so reference it
 # by path — importing it into positronic's interpreter would fail on that import.
 _PARITY_NATIVE = Path(__file__).parent / 'parity_native.py'
-_HOLD = {'command': {'type': 'hold'}, 'grip': 0.0}
+_HOLD = {'command': {'type': protocol.HOLD}, 'grip': 0.0}
 _ARRAY_FIELDS = ('joint_pos', 'joint_vel', 'eef_pos', 'eef_quat')
 
 

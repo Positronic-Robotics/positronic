@@ -35,6 +35,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import launcher
 
@@ -72,7 +73,7 @@ def _replay(benchmark_dir: Path, episode_index: int, commands: np.ndarray, grips
             # No seed: the benchmark episode carries its own, exactly as the recorded run left it unset.
             conn.reset({'episode_index': episode_index, 'seed': None})
             for command, grip in zip(commands, grips, strict=True):
-                out = conn.step({'command': {'type': 'joint_pos', 'q': command}, 'grip': float(grip)})
+                out = conn.step({'command': {'type': protocol.JOINT_POS, 'q': command}, 'grip': float(grip)})
                 states.append(np.asarray(out['obs']['sim_state'], dtype=np.float64))
                 if out['done']:
                     break

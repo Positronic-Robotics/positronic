@@ -139,17 +139,13 @@ def wire_command_to_arm_action(
     return target.astype(np.float32)
 
 
-def resolve_camera_key(available: Any, key: str, default: str, variants: tuple[str, ...]) -> str:
+def resolve_camera_key(available: Any, key: str, variants: tuple[str, ...] = ()) -> str:
     """The MolmoSpaces observation key to read for a camera role, mirroring the upstream policy's precedence.
 
-    An explicitly configured non-default key is read as-is; for the default role a present benchmark-variant
-    key wins over the default (matching molmo_spaces pi_policy). Raises with the candidate list on a miss.
+    A present benchmark variant wins over ``key`` (matching molmo_spaces pi_policy); with no variants ``key``
+    is read as-is. Raises with the candidate list on a miss.
     """
     keys = set(available)
-    if key != default:
-        if key not in keys:
-            raise KeyError(f'observation has no camera {key!r}; available: {sorted(keys)}')
-        return key
     for candidate in (*variants, key):
         if candidate in keys:
             return candidate

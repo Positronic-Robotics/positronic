@@ -32,6 +32,7 @@ from pathlib import Path
 # resolver env.py uses. Reaching into env's private helpers is deliberate: the reference must use env.py's exact
 # config + resolver so the comparison isolates the rollout.
 import env  # noqa: E402
+import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import numpy as np
 
 
@@ -64,8 +65,8 @@ def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out
     # is_terminal or horizon expiry. A hold never succeeds, so this drives the horizon case. max_steps bounds a sim
     # that never terminates (a wrong horizon); the caller asserts termination lands below it.
     while not bool(task.is_done()) and step < max_steps:
-        measured_q = np.asarray(robot_view.get_move_group('arm').joint_pos, dtype=np.float32)
-        action = {'arm': measured_q, 'gripper': np.array([0.0], dtype=np.float32)}
+        measured_q = np.asarray(robot_view.get_move_group(mapping.MOLMO_ARM_GROUP).joint_pos, dtype=np.float32)
+        action = {mapping.MOLMO_ARM_GROUP: measured_q, mapping.MOLMO_GRIPPER_GROUP: np.array([0.0], dtype=np.float32)}
         obs, _reward, _term, _trunc, _infos = task.step(action)
         step += 1
         record(obs[0])
