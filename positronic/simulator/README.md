@@ -28,7 +28,7 @@ claim, and holds whether or not the constant is right.
 | Integration | `env_control_frame` | Checked against `default` |
 | --- | --- | --- |
 | RoboLab | `models.DROID_EE_FRAME` | `robolab/validate.py:_check_flange_to_eef`, against RoboLab's own scene |
-| LIBERO | identity — the grip site is taken to be `default` | no |
+| LIBERO | identity — the grip site is taken to be `default` | `libero/validate.py:_check_flange_to_eef`, and it diverges: 38.1 mm and 90° ([#557](https://github.com/Positronic-Robotics/positronic/issues/557)) |
 
 TODO: have the env report the offset itself, so positronic stops restating it from a robot model that is not
 the env's.
