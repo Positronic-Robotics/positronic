@@ -1,10 +1,17 @@
 """Canonical span names and attribute keys of the eval telemetry sidecars.
 
 These literals are the producer↔reducer contract: a producer opens a span (or stamps an attribute) by
-them and the offline reduce (``positronic.cli.eval.timing_report``) matches on the same ones. They are
-defined here once, in a leaf module with no positronic imports, so a rename is a single-site change the
-type checker propagates instead of a string literal duplicated across the harness, the eval CLI, the sim
-adapters and the report.
+them and the offline reduce (``positronic.cli.eval.timing_report``) matches on the same ones. Defining
+them once makes a rename a single-site change the type checker propagates, instead of a string literal
+duplicated across the harness, the eval CLI, the sim adapters and the report.
+
+They live here rather than in ``positronic.telemetry`` because **a name belongs to whoever writes the
+bytes it names**. These are written by eval-domain code THROUGH the mechanism, which passes them opaquely
+and never matches on them; ``positronic.telemetry`` owns the names of what it writes itself — the
+machine-load sample's fields, the sidecar file suffixes, the telemetry subdirectory. That is what keeps
+the mechanism domain-blind: it could not hold ``SPAN_EPISODE`` without knowing what an episode is.
+
+The module imports only the stdlib-only env-server writer, so any producer can reach it.
 """
 
 # ``env.step``/``env.reset`` are owned by the stdlib-only env-server writer — the isolated env interpreter

@@ -21,9 +21,13 @@ no notion of an episode, a pass or an inference call. An **anchor** is a long-ru
 open; the spans an instrumented call site emits parent to the innermost one, which is how a phase span
 emitted by one control system lands under the rollout another control system is running (OTel's ambient
 context does not survive the scheduler's generator hops). Ownership follows the phase: the harness opens,
-stamps and closes the `episode` span, the eval CLI the `eval.pass` span. The vocabulary both sides and the
-reduce agree on — every span name and attribute key in the tables below — is defined once in
-`positronic/telemetry_keys.py`.
+stamps and closes the `episode` span, the eval CLI the `eval.pass` span.
+
+The contract literals split by who writes the bytes they name. Every span name and attribute key in the tables
+below is written by eval-domain code through the span helpers, which pass them opaquely and never match on
+them, so they are defined once in `positronic/telemetry_keys.py` — a module the mechanism does not import,
+which is what lets it stay domain-blind. `positronic/telemetry.py` owns the names of what it writes itself:
+the machine-load sample's fields, the sidecar suffixes and the telemetry subdirectory.
 
 ## Collecting
 

@@ -6,9 +6,14 @@ machine-load sampler (CPU, memory, GPU) — as sidecar files next to the recorde
 The dataset records the robot's world; these files describe the machinery around it, in wall time.
 
 The mechanism is domain-blind: it knows spans, anchors and files, and nothing about episodes, passes or
-inference. The vocabulary its producers and the reduce agree on lives in ``positronic.telemetry_keys``, and a
-long-running span's lifecycle belongs to whoever owns that phase — the harness opens and closes the rollout's
-span, the eval CLI the pass's.
+inference. A long-running span's lifecycle belongs to whoever owns that phase — the harness opens and closes
+the rollout's span, the eval CLI the pass's.
+
+That splits the contract literals by **who writes the bytes they name**. This module owns the names of what it
+writes itself: the machine-load sample's fields, the sidecar suffixes, the telemetry subdirectory. The span
+names and attribute keys are written by eval-domain code THROUGH the span helpers, which pass them opaquely
+and never match on them, so they live in ``positronic.telemetry_keys`` — holding them here would mean knowing
+what an episode is.
 
 Storage is one set of files per process under ``<out_dir>/telemetry/``: ``<process>.spans.jsonl``
 (OTLP/JSON-lines spans, whose resource block carries the process identity) and ``<process>.stats.jsonl`` (one
@@ -66,7 +71,7 @@ _MISSING_EXTRA = (
 TELEMETRY_SUBDIR = 'telemetry'
 
 # The machine-load sample's field names, and the suffix of the file holding one such sample per line. Owned
-# here — ``StatsSampler`` is the only writer — and imported by the reduce, which is the only reader.
+# here because ``StatsSampler`` writes them; the reduce, their only reader, imports them.
 STATS_SUFFIX = '.stats.jsonl'
 STAT_T_NS = 't_ns'
 STAT_CPU_SYS_PCT = 'cpu_sys_pct'
