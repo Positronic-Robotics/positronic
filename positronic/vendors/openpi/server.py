@@ -259,6 +259,8 @@ ee_joints_traj = pipeline.override(codec=codecs.ee_joints_traj)
 joints_traj = pipeline.override(codec=codecs.joints_traj)
 # For checkpoints trained on inverted-grip (1 = open) data, e.g. the sim_stack recordings.
 ee_flip_grip = pipeline.override(**{'codec.flip_grip': True})
+# Both DROID deployments are joint-space, so they declare no frame. An EE-space DROID checkpoint would set
+# ``ee_frame=models.DROID_EE_FRAME`` here.
 droid_pipe = pipeline.override(codec=codecs.droid, **{'source.config_name': 'pi05_droid'})
 droid_jointpos_pipe = pipeline.override(codec=codecs.droid_jointpos, **{'source.config_name': 'pi05_droid_jointpos'})
 libero_pipe = pipeline.override(codec=codecs.libero, **{'source.config_name': 'pi05_libero'})
