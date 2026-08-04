@@ -211,6 +211,7 @@ def test_pose_anchor_reads_a_stated_frame_and_falls_back_to_the_name():
 
 
 def test_frame_transform_rejects_frames_across_movable_joints():
+    # rules-allow: hardcoded-keys — the base link is this test's input, not a name it shares with the code
     with pytest.raises(ValueError, match='movable joints'):
         frame_transform(bundled_franka_model()[keys.URDF], 'link0', EE_LINK)
 
