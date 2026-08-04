@@ -6,8 +6,7 @@
 # ///
 """Render a dataset-viewer page in a headless browser: screenshot each step, print the console.
 
-Run it with ``uv run --script``, which builds the browser dependency an environment of its own —
-nothing here is importable from ``positronic``, and the viewer's own install stays free of it.
+The PEP 723 header carries the browser dependency, so run it with ``uv run --script``.
 
 Two targets:
 
@@ -15,8 +14,7 @@ Two targets:
 
     uv run --script utilities/viewer_probe.py --url https://myhost:8400/episode/5
 
-``--rrd`` serves a recording from disk to the viewer bundled with that server, which is how a
-recording gets bisected: rebuild it with parts left out until the symptom flips::
+``--rrd`` serves a recording from disk to the viewer bundled with that server::
 
     uv run --script utilities/viewer_probe.py --rrd ./episode.rrd --viewer https://myhost:8400
 
