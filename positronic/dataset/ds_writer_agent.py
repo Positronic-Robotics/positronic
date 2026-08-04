@@ -178,8 +178,8 @@ class DsWriterAgent(pimm.ControlSystem):
                                 if serializer is not None:
                                     value = serializer(value)
                                 # Gate on `Timestamped` so plain list-valued samples
-                                # (e.g. list-state vectors) still go through `_append`.
-                                # Empty list matches too — a serializer with nothing to emit yet.
+                                # (e.g. list-state vectors) still go through `_append`. An empty list
+                                # is an empty self-timestamped stream and records nothing.
                                 if isinstance(value, list) and (not value or isinstance(value[0], Timestamped)):
                                     for sample in value:
                                         _append(ep_writer, name, sample.value, sample.ts, sample.extra_ts)
