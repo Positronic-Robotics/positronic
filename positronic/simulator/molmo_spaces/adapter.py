@@ -10,7 +10,7 @@ from typing import Any
 
 import pimm
 from positronic import geom, keys
-from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED
+from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED, EVAL_SUCCESS
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.mujoco.sim import MujocoFrankaState
@@ -55,4 +55,4 @@ class MolmoAdapter(WireCommandAdapter):
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
         # ``done`` covers termination and timeout; ``success`` is the task's judged success, so a timeout stays
         # honest.
-        return {'eval.success': bool(result['success'])} if result['done'] else None
+        return {EVAL_SUCCESS: bool(result['success'])} if result['done'] else None
