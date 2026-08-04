@@ -137,8 +137,7 @@ class MolmoSpacesEnv(EnvProtocol):
         # The sim owns the episode horizon: it is part of the task definition, so resolve the benchmark's own
         # ``task_horizon_sec`` into steps (``mapping.resolve_task_horizon_steps``; DROID Pick = 20 s -> 303 steps).
         # With ``task_horizon`` set, the task enforces it and ``is_done`` reports expiry, so a horizon-expired
-        # trial ends with a terminal ``done`` exactly as the native benchmark scores it. The harness
-        # ``Task.timeout`` is only a weaker safety net above this horizon.
+        # trial ends with a terminal ``done`` exactly as the native benchmark scores it.
         cfg.task_horizon = mapping.resolve_task_horizon_steps(episode, cfg.policy_dt_ms, self._task_horizon_override)
         self._sampler = JsonEvalTaskSampler(cfg, episode)
         self._task = self._sampler.sample_task(house_index=episode.house_index)
@@ -172,25 +171,28 @@ class MolmoSpacesEnv(EnvProtocol):
             action['command'], self._measured_arm_q(), ik=self._ik, current_eef=self._measured_eef_pose()
         )
         gripper = np.array([mapping.grip_command_to_actuator(action['grip'])], dtype=np.float32)
-        obs, _reward, _term, _trunc, _infos = self._task.step({'arm': arm, 'gripper': gripper})
-        # The trial ends on the task's judged success, on any MolmoSpaces terminal (a done action), or on native
-        # horizon expiry — ``is_done`` covers the latter two now that the horizon is enabled (see ``_build``).
-        # ``success`` is added explicitly for end-on-success, the benchmark's scoring semantics: without it a
-        # successful rollout that kept sending joint commands would idle to the horizon and still score success.
-        # ``success`` stays ``judge_success()`` alone, so a horizon expiry ends the trial with ``success=False``,
-        # matching native scoring. The harness reads this ``done`` as the trial's true end; its timeout is a
-        # safety net for a sim that never terminates.
+        obs, _reward, _term, _trunc, _infos = self._task.step({
+            mapping.MOLMO_ARM_GROUP: arm,
+            mapping.MOLMO_GRIPPER_GROUP: gripper,
+        })
+        # The trial ends on the task's judged success, on a MolmoSpaces terminal, or on horizon expiry — the
+        # latter two through ``is_done``. ``success`` is ORed in for end-on-success, the benchmark's scoring
+        # semantics: without it a successful rollout that kept sending joint commands would idle to the horizon.
+        # It stays ``judge_success()`` alone, so a horizon expiry ends the trial with ``success=False``, as
+        # native scoring has it.
         success = bool(self._task.judge_success())
         done = success or bool(self._task.is_done())
         return {'obs': self._observe(obs[0]), 'done': done, 'success': success, 'control_dt': self._control_dt}
 
     def _measured_arm_q(self) -> np.ndarray:
-        return np.asarray(self._robot_view.get_move_group('arm').joint_pos, dtype=np.float32)
+        return np.asarray(self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP).joint_pos, dtype=np.float32)
 
     def _measured_eef_pose(self) -> tuple[np.ndarray, np.ndarray]:
         """The measured grasp-site world pose as ``(translation, 3x3 rotation)`` — the frame a Cartesian
         command targets and the one ``observe_payload`` reports, so command and observation share a frame."""
-        eef_world = np.asarray(self._robot_view.get_move_group('arm').leaf_frame_to_world, dtype=np.float64)
+        eef_world = np.asarray(
+            self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP).leaf_frame_to_world, dtype=np.float64
+        )
         return eef_world[:3, 3].copy(), eef_world[:3, :3].copy()
 
     def _scratch_data(self, move_group: Any) -> Any:
@@ -213,7 +215,7 @@ class MolmoSpacesEnv(EnvProtocol):
         Evaluated on a scratch ``MjData`` seeded from the live scene (objects intact), so the live sim is never
         perturbed: set the arm joints, propagate, read the leaf frame. The inverse of ``_ik``.
         """
-        arm = self._robot_view.get_move_group('arm')
+        arm = self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
         data = self._scratch_data(arm)
         data.qpos[np.asarray(arm.joint_posadr)] = np.asarray(q, dtype=np.float64).reshape(-1)
         mujoco.mj_forward(arm.mj_model, data)  # pyright: ignore[reportAttributeAccessIssue]
@@ -228,7 +230,7 @@ class MolmoSpacesEnv(EnvProtocol):
         move group's limits, and a target the arm cannot reach yields the closest configuration the iteration
         reached rather than raising — an unreachable waypoint holds near the limit instead of aborting a trial.
         """
-        arm = self._robot_view.get_move_group('arm')
+        arm = self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
         model = arm.mj_model
         posadr = np.asarray(arm.joint_posadr)
         veladr = np.asarray(arm.joint_veladr)
@@ -267,7 +269,7 @@ def observe_payload(robot_view: Any, env_obs: dict[str, Any], camera_names: list
     (``parity_native.py``) shares this extraction so its comparison against the env-server path isolates the sim
     rollout, not the observation mapping.
     """
-    arm = robot_view.get_move_group('arm')
+    arm = robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
     eef_world = np.asarray(arm.leaf_frame_to_world, dtype=np.float64)  # 4x4 grasp-site world transform
     eef_quat = np.zeros(4)  # filled wxyz below
     rot9 = np.ascontiguousarray(eef_world[:3, :3].reshape(9))

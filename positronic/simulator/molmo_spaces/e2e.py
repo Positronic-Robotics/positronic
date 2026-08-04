@@ -20,11 +20,13 @@ from pathlib import Path
 import numpy as np
 
 from positronic import keys
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
+from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.adapter import MolmoAdapter
 from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
 
-_CAMERA_DICT = {keys.WRIST_IMAGE: 'wrist_camera', keys.EXTERIOR_IMAGE: 'exo_camera_1'}
+_CAMERA_DICT = {keys.WRIST_IMAGE: mapping.MOLMO_WRIST_CAMERA, keys.EXTERIOR_IMAGE: mapping.MOLMO_EXTERIOR_CAMERA}
 
 
 def _check_sim_state(adapter: MolmoAdapter, raw_obs: dict) -> np.ndarray:
@@ -65,7 +67,7 @@ def run(
                 )
                 out = {'done': False}
                 for _ in range(steps):
-                    out = conn.step({'command': {'type': 'hold'}, 'grip': 0.0})
+                    out = conn.step({'command': {'type': protocol.HOLD}, 'grip': 0.0})
                     adapter.observations(out['obs'])  # the mapping round-trips on step frames too
                     _check_sim_state(adapter, out['obs'])
                 print(f'  episode {i}: {steps} steps ok (done={out["done"]})')

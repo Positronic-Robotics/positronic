@@ -69,8 +69,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
     def horizon(self) -> float | None:
         """The trial's minimum time budget in sim-seconds from the latest ``reset``, or ``None`` if the env
         enforces no horizon: the env's own horizon plus the one control period this proxy spends publishing
-        frame-0 before the first step. A client's ``Task`` exposes it so the harness can reject a timeout that is
-        not strictly longer — the frame-0 tick is included so that floor is exact, not one tick short."""
+        frame-0 before the first step."""
         return self._horizon
 
     def reset(self, context: dict[str, Any]) -> None:

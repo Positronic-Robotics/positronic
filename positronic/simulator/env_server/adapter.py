@@ -80,10 +80,7 @@ def _in_env_control_frame(cmd: Any, env_control_frame: geom.Transform3D) -> Any:
 
 
 def _wire_command(cmd: Any) -> dict[str, Any]:
-    """The held command as a positronic-free payload the server decodes (no ``geom``/``roboarm`` on its side).
-
-    The tags come from ``protocol``, which owns the canonical command contract every env adoption covers.
-    """
+    """The held command as a positronic-free payload the server decodes (no ``geom``/``roboarm`` on its side)."""
     match cmd:
         case roboarm_command.CartesianPosition(pose):
             return {'type': protocol.CARTESIAN, 'pose': pose.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}

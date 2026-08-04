@@ -40,6 +40,7 @@ import numpy as np
 
 from positronic.dataset.local_dataset import DiskEpisode
 from positronic.dataset.signal import Signal
+from positronic.eval import EVAL_EPISODE_INDEX
 
 # Checkpoint stride over the replayed steps: dense enough that drift is caught early rather than only at the
 # end state, sparse enough to keep the fixture small. The final step is always included on top.
@@ -54,9 +55,9 @@ def find_episode_dir(dataset_dir: Path, episode_index: int) -> Path:
     """The recorded episode directory whose spec carries ``episode_index``."""
     for path in sorted(dataset_dir.rglob('static.json')):
         episode_dir = path.parent
-        if DiskEpisode(episode_dir).static.get('eval.episode_index') == episode_index:
+        if DiskEpisode(episode_dir).static.get(EVAL_EPISODE_INDEX) == episode_index:
             return episode_dir
-    raise SystemExit(f'no recorded episode with eval.episode_index={episode_index} under {dataset_dir}')
+    raise SystemExit(f'no recorded episode with {EVAL_EPISODE_INDEX}={episode_index} under {dataset_dir}')
 
 
 def read_benchmark_path(dataset_dir: Path) -> str:
@@ -105,7 +106,7 @@ def build_fixture(episode_dir: Path, benchmark_path: str) -> dict[str, np.ndarra
     steps = np.arange(1, replayable + 1)
     checkpoints = np.unique(np.concatenate([steps[::CHECKPOINT_STRIDE], steps[-1:]]))
     return {
-        'episode_index': np.asarray(episode.static['eval.episode_index'], dtype=np.int32),
+        'episode_index': np.asarray(episode.static[EVAL_EPISODE_INDEX], dtype=np.int32),
         'benchmark_path': np.asarray(benchmark_path),
         'task': np.asarray(episode.static['task']),
         'commands': np.stack(played[:replayable]),

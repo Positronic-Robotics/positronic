@@ -49,7 +49,7 @@ def test_observations_camera_passthrough_no_swap():
 
 def test_observations_resolve_benchmark_variant_camera():
     # A Zed-wrist benchmark replaces the default key; the adapter must still land the reddish wrist view on
-    # image.wrist (regression: hard indexing KeyErrored on those observations).
+    # image.wrist.
     payload = _payload()
     payload['wrist_camera_zed_mini'] = payload.pop('wrist_camera')
     obs = MolmoAdapter(CAMERA_DICT).observations(payload)
@@ -59,7 +59,7 @@ def test_observations_resolve_benchmark_variant_camera():
 
 def test_privileged_forwards_sim_state():
     # The full MuJoCo state is recorded as privileged ground truth (never fed to the policy), so success can be
-    # recomputed offline — regression: the adapter used to drop it entirely.
+    # recomputed offline.
     state = np.arange(10, dtype=np.float64)
     out = MolmoAdapter(CAMERA_DICT).privileged({'sim_state': state})
     assert list(out) == ['sim_state'] and out['sim_state'] is state

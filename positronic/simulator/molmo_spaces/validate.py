@@ -91,7 +91,7 @@ def _check_cartesian_command_is_a_noop_at_the_measured_pose(sim_env) -> None:
     # Commanding the pose the arm already holds must resolve to (essentially) the joints it already holds —
     # the property that makes an absolute Cartesian setpoint stable when a policy re-sends it.
     pos, rot = sim_env._measured_eef_pose()
-    command = {'type': 'cartesian', 'pose': np.concatenate([pos, rot.reshape(-1)])}
+    command = {'type': protocol.CARTESIAN, 'pose': np.concatenate([pos, rot.reshape(-1)])}
     target = env.mapping.wire_command_to_arm_action(command, sim_env._measured_arm_q(), ik=sim_env._ik)
     drift = np.abs(np.asarray(target, dtype=np.float64) - np.asarray(sim_env._measured_arm_q(), dtype=np.float64))
     assert drift.max() < 1e-3, f'holding the measured pose moved the joints by {drift.max()} rad'

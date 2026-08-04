@@ -41,7 +41,7 @@ class MolmoAdapter(WireCommandAdapter):
         state.encode(raw_obs['joint_pos'], raw_obs['joint_vel'], ee_pose)
         obs: dict[str, Any] = {'robot_state': state, 'grip': float(raw_obs['grip'])}
         for logical, molmo_key in self._camera_dict.items():
-            env_key = mapping.resolve_camera_key(raw_obs, molmo_key, molmo_key, _CAMERA_VARIANTS.get(molmo_key, ()))
+            env_key = mapping.resolve_camera_key(raw_obs, molmo_key, _CAMERA_VARIANTS.get(molmo_key, ()))
             frame = raw_obs[env_key]  # MolmoSpaces renders top-down already — no flip
             adapter = pimm.shared_memory.NumpySMAdapter(shape=frame.shape, dtype=frame.dtype)
             adapter.array[:] = frame
