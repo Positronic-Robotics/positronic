@@ -4,7 +4,7 @@ from pathlib import Path
 import configuronic as cfn
 
 from positronic import keys
-from positronic.drivers.roboarm.models import bundled_franka_model
+from positronic.drivers.roboarm.models import GRASP_SITE_LINK, bundled_franka_model
 from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED, EVAL_TRIAL_COUNT, EVAL_TRIAL_INDEX, Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.molmo_spaces.adapter import MolmoAdapter
@@ -86,19 +86,20 @@ def _molmo_eval(
     out_of_range = [i for i in indices if not 0 <= i < count]
     if out_of_range:
         raise ValueError(f'--eval.episodes {out_of_range} out of range for the {count} episodes under {base}')
+    # A non-positive count yields no trials at all, and an empty plan reads to the self-driving harness as a
+    # finished run — the command would exit 0 having evaluated nothing.
+    if trial_count < 1:
+        raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
     proxy = RemoteEnvControlSystem(
         MolmoAdapter(camera_dict), serve_molmo_spaces(base, task_horizon_steps=task_horizon_steps)
     )
     # MolmoSpaces drives a Franka DROID rig; recordings carry the same model (URDF + meshes + joint names +
     # control frame) for the 3D viewer and offline IK, supplied here since the molmo server can't import
-    # positronic to emit it via ``robot_meta``.
-    # HACK: ``bundled_franka_model``'s control frame is the physical FR3 flange, but ``env.py`` reports
-    # ``robot_state.ee_pose`` at MolmoSpaces' gripper grasp site, so recorded episodes mislabel the pose frame
-    # by the flange↔grasp offset and offline IK over them would solve the wrong target — the same known issue as
-    # robolab (https://github.com/Positronic-Robotics/positronic/issues/483). It does not affect the eval: the
-    # pi05 DROID policy is driven by joint commands, not the eef pose. A grasp-site DROID model would fix both.
+    # positronic to emit it via ``robot_meta``. ``DEFAULT_FRAME`` is declared on the gripper's grasp site,
+    # which is where ``env.py`` reports ``robot_state.ee_pose`` and resolves Cartesian targets, so a policy
+    # frame reached from it via ``ChangeEEFrame`` and offline IK over a recording both anchor correctly.
     embodiment = remote_franka_embodiment(
-        proxy, camera_dict, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model()
+        proxy, camera_dict, descriptor='remote.molmo_spaces.droid', static_meta=bundled_franka_model(GRASP_SITE_LINK)
     )
     # The env's full MuJoCo state is the privileged ground truth (recorded, never fed to the policy), so success
     # can be recomputed offline from a rollout. ``horizon`` lets the harness reject a timeout that isn't a strictly
