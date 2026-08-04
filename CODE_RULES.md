@@ -68,3 +68,44 @@ def __init__(self, pose_keys, command_keys): ...
 # Good — one list, handled the same way in both directions
 def __init__(self, keys): ...
 ```
+
+### diff-comments
+
+Write a comment for someone reading the file, not for someone reading the change. Read it back knowing
+nothing about why the line was touched: if it answers "why did you change this?" rather than "what must
+be true here?", delete it.
+
+Two ways it goes wrong. The comment argues for the code — names the alternative rejected, or traces the
+consequences that justify the line; that belongs in the commit message. Or it asserts how code elsewhere
+behaves — another function, another module, the layer below; nothing here keeps that claim true, so it
+rots silently.
+
+What survives is what the code cannot say: an invariant, a constraint from outside the file, a
+precondition. Write it dry — a flat statement, no intensifiers, no rhetorical build, no clause there
+only to make the point land. Usually one line, and often none.
+
+```python
+# Bad — argues the design against what it replaced, and builds to a flourish
+def _reset(self, robot, robot_state, rate_limiter, should_stop):
+    """Home the arm, yielding until it arrives. Drive with ``yield from``.
+
+    A generator rather than a blocking call because the waiting has to keep clearing robot
+    errors. `set_target_joints` returns as soon as the target is published, and the driver's
+    own loop is what notices and clears a reflex — so a wait that parks inside the library
+    stops the only thing that can end the move it is waiting for.
+    """
+
+# Good
+def _reset(self, robot, robot_state, rate_limiter, should_stop):
+    """Home the arm, yielding until it arrives. Drive with ``yield from``."""
+```
+
+```python
+# Bad — asserts what another function does; nothing here keeps it true
+if should_stop.value:
+    return  # shutting down — the caller's `finally` halts the control thread
+
+# Good
+if should_stop.value:
+    return
+```
