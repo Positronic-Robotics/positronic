@@ -4,7 +4,7 @@ from collections.abc import Iterator
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.roboarm.command import Trajectory, TrajectoryPlayer
+from positronic.drivers.roboarm.command import Applied, Trajectory, TrajectoryPlayer
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -23,7 +23,7 @@ class Robotiq2F(pimm.ControlSystem):
         self._port = port
         self.grip = pimm.ControlSystemEmitter(self)
         self.target_grip: pimm.ControlSystemReceiver[Trajectory[float]] = pimm.ControlSystemReceiver(self, default=[])
-        self.executed_target_grip: pimm.ControlSystemEmitter[Trajectory[float]] = pimm.ControlSystemEmitter(self)
+        self.executed_target_grip: pimm.ControlSystemEmitter[list[Applied]] = pimm.ControlSystemEmitter(self)
         self.force = pimm.ControlSystemReceiver(self, default=255)  # device scale 0..255
         self.speed = pimm.ControlSystemReceiver(self, default=255)  # device scale 0..255
 
@@ -47,7 +47,7 @@ class Robotiq2F(pimm.ControlSystem):
                 played = player.advance(clock.now_ns())
                 if played is not None:
                     self.executed_target_grip.emit([played])
-                    pos = int(max(0, min(1, played[1])) * 255)
+                    pos = int(max(0, min(1, played.value)) * 255)
                     spd = int(max(0, min(255, self.speed.value)))
                     frc = int(max(0, min(255, self.force.value)))
 

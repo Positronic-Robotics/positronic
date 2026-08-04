@@ -156,7 +156,7 @@ class FakeRobot(pimm.ControlSystem):
                 played = player.advance(clock.now_ns())
                 if played is not None:
                     self.executed_commands.emit([played])
-                    self._apply(played[1])
+                    self._apply(played.value)
             if self._error_pending:
                 self._status = RobotStatus.ERROR
                 self._error_pending = False
@@ -182,7 +182,7 @@ class FakeGripper(pimm.ControlSystem):
             played = player.advance(clock.now_ns())
             if played is not None:
                 self.executed_target_grip.emit([played])
-                self._grip = float(played[1])
+                self._grip = float(played.value)
             self.grip.emit(self._grip)
             yield pimm.Sleep(CONTROL_PERIOD_S)
 

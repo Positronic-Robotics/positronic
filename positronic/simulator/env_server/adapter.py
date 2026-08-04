@@ -23,7 +23,7 @@ class Action:
     played to produce it."""
 
     raw: dict[str, Any]
-    executed: dict[str, roboarm_command.Trajectory[Any]] = field(default_factory=dict)
+    executed: dict[str, list[roboarm_command.Applied]] = field(default_factory=dict)
 
 
 def fresh_command_players() -> defaultdict[str, roboarm_command.TrajectoryPlayer]:
@@ -125,7 +125,7 @@ class WireCommandAdapter(EnvAdapter):
         """The per-trial RUN context -> the env's opaque reset token; the command state is already cleared."""
 
     def action(self, commands: dict[str, pimm.Message | None], now_ns: int) -> Action:
-        executed: dict[str, roboarm_command.Trajectory[Any]] = {}
+        executed: dict[str, list[roboarm_command.Applied]] = {}
         for name, msg in commands.items():
             player = self._players[name]
             if msg is not None and msg.updated:
@@ -135,7 +135,7 @@ class WireCommandAdapter(EnvAdapter):
             played = player.advance(now_ns)
             if played is not None:
                 executed[name] = [played]
-                self._held[name] = played[1]
+                self._held[name] = played.value
         # The server maps the held command into its controller's action. Reset has no env-side action, so it
         # forwards as a hold; a delta — Cartesian or joint — is a one-shot relative motion, forwarded once then
         # dropped. Re-sending a stale delta would re-compose it against the moving arm every tick (the eef

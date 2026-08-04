@@ -182,7 +182,7 @@ class DsWriterAgent(pimm.ControlSystem):
                                 # Empty list matches too — a serializer with nothing to emit yet.
                                 if isinstance(value, list) and (not value or isinstance(value[0], Timestamped)):
                                     for sample in value:
-                                        _append(ep_writer, name, sample.value, sample.ts, None)
+                                        _append(ep_writer, name, sample.value, sample.ts, sample.extra_ts)
                                 else:
                                     _append(ep_writer, name, value, primary_ts, extra_ts)
 

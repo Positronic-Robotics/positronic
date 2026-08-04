@@ -184,9 +184,9 @@ class Robot(pimm.ControlSystem):
         self._connect = connect
 
         self.commands = pimm.ControlSystemReceiver[command.Trajectory[command.CommandType]](self, default=[])
-        self.executed_commands = pimm.ControlSystemEmitter[command.Trajectory[command.CommandType]](self)
+        self.executed_commands = pimm.ControlSystemEmitter[list[command.Applied]](self)
         self.target_grip = pimm.ControlSystemReceiver[command.Trajectory[float]](self, default=[])
-        self.executed_target_grip = pimm.ControlSystemEmitter[command.Trajectory[float]](self)
+        self.executed_target_grip = pimm.ControlSystemEmitter[list[command.Applied]](self)
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
@@ -215,7 +215,7 @@ class Robot(pimm.ControlSystem):
                 played_grip = grip_player.advance(clock.now_ns())
                 if played_grip is not None:
                     self.executed_target_grip.emit([played_grip])
-                    grip_target = float(played_grip[1])
+                    grip_target = float(played_grip.value)
 
                 obs = arm.get_observations()
                 q = obs['joint_pos']
@@ -223,8 +223,7 @@ class Robot(pimm.ControlSystem):
                 played = player.advance(clock.now_ns())
                 if played is not None:
                     self.executed_commands.emit([played])
-                    _, cmd = played
-                    match cmd:
+                    match played.value:
                         case command.Reset():
                             # Drop the in-flight trajectories so the homed arm holds position rather than
                             # resuming stale waypoints on the next tick.
@@ -244,7 +243,7 @@ class Robot(pimm.ControlSystem):
                             target = command.apply_cartesian_delta(self._base_pose * kin.fk(q), delta)
                             q_target = self._ik_or_hold(kin, target, q, q_target)
                         case _:
-                            raise NotImplementedError(f'Unsupported command {cmd}')
+                            raise NotImplementedError(f'Unsupported command {played.value}')
 
                 arm.command_joint_pos(np.append(q_target, 1.0 - grip_target))
 

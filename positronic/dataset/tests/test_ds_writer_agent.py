@@ -11,7 +11,7 @@ from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.dataset import DatasetWriter, EpisodeWriter
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType, TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
-from positronic.dataset.serializers import Serializers, TrajectorySerializer
+from positronic.dataset.serializers import SCHEDULED_TIMELINE, Serializers, TrajectorySerializer
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as rcmd
 from positronic.tests.testing_coutils import run_scripted_agent
@@ -484,17 +484,29 @@ def test_pickles_with_every_constructor_argument_filled():
         pass
 
 
-def test_trajectory_serializer_records_each_waypoint_at_its_own_timestamp():
+def test_trajectory_serializer_records_each_waypoint_at_the_tick_that_applied_it():
     s = TrajectorySerializer(None)
 
-    assert [(t.ts, t.value) for t in s([(1, 'a'), (2, 'b')])] == [(1, 'a'), (2, 'b')]
+    out = s([rcmd.Applied(1, 0, 'a'), rcmd.Applied(2, 2, 'b')])
+
+    assert [(t.ts, t.value) for t in out] == [(1, 'a'), (2, 'b')]
     assert s([]) == []
+
+
+def test_trajectory_serializer_carries_the_scheduled_instant_on_its_own_timeline():
+    """The waypoint asked for ts 3 and the device reached it at 5; both survive, so the delivery lag
+    is readable per sample without a second signal."""
+    s = TrajectorySerializer(None)
+
+    (out,) = s([rcmd.Applied(5, 3, 'a')])
+
+    assert (out.ts, out.extra_ts) == (5, {SCHEDULED_TIMELINE: 3})
 
 
 def test_trajectory_serializer_encodes_through_its_inner_serializer():
     s = TrajectorySerializer(Serializers.robot_command)
 
-    out = s([(7, rcmd.JointPosition(positions=np.arange(7, dtype=np.float32)))])
+    out = s([rcmd.Applied(7, 7, rcmd.JointPosition(positions=np.arange(7, dtype=np.float32)))])
 
     assert [t.ts for t in out] == [7]
     np.testing.assert_array_equal(out[0].value['.joints'], np.arange(7, dtype=np.float32))

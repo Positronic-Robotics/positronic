@@ -1,7 +1,7 @@
 """Collection of commands that can be sent to the robot."""
 
 from dataclasses import dataclass
-from typing import Any, TypeAlias, TypeVar
+from typing import Any, NamedTuple, TypeAlias, TypeVar
 
 import numpy as np
 
@@ -61,6 +61,15 @@ _T = TypeVar('_T')
 # The wire shape of every command channel: waypoints stamped with absolute clock ns. A single immediate
 # command is the one-waypoint trajectory ``[(clock.now_ns(), value)]``; ``[]`` cancels whatever is in flight.
 Trajectory: TypeAlias = list[tuple[int, _T]]
+
+
+class Applied(NamedTuple):
+    """A waypoint a device applied: the tick it was applied at, the timestamp it was scheduled for, and the
+    value. The two clocks differ by the device's own control period, and by more when a waypoint waited."""
+
+    ts: int
+    scheduled_ts: int
+    value: Any
 
 
 def apply_cartesian_delta(current: geom.Transform3D, delta: geom.Transform3D) -> geom.Transform3D:
@@ -135,12 +144,12 @@ class TrajectoryPlayer:
         self._trajectory = trajectory
         self._index = 0
 
-    def advance(self, current_time: int) -> tuple[int, Any] | None:
+    def advance(self, current_time: int) -> Applied | None:
         """Collapse every waypoint whose timestamp <= current_time into the one waypoint to apply, or None.
 
-        The returned waypoint is stamped with ``current_time``, the tick that applies it, rather than with
-        the timestamp it was scheduled for: a device reaches a waypoint at a tick of its own control rate,
-        and several waypoints falling in one tick collapse into that single applied value.
+        A device reaches a waypoint at a tick of its own control rate, and several waypoints falling in one
+        tick collapse into a single applied value, so the result is stamped twice: ``ts`` is the tick that
+        applies it and ``scheduled_ts`` is what the newest collapsed waypoint asked for.
         """
         due = []
         while self._index < len(self._trajectory):
@@ -149,7 +158,7 @@ class TrajectoryPlayer:
                 break
             self._index += 1
             due.append((ts, value))
-        return (current_time, self._reduce(due)) if due else None
+        return Applied(current_time, due[-1][0], self._reduce(due)) if due else None
 
 
 def from_wire(wire: dict[str, Any]) -> CommandType:

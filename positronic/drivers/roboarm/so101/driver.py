@@ -58,13 +58,13 @@ class Robot(pimm.ControlSystem):
         self.commands: pimm.SignalReceiver[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
             pimm.ControlSystemReceiver(self, default=[])
         )
-        self.executed_commands: pimm.SignalEmitter[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
-            pimm.ControlSystemEmitter(self)
+        self.executed_commands: pimm.ControlSystemEmitter[list[roboarm_command.Applied]] = pimm.ControlSystemEmitter(
+            self
         )
         self.target_grip: pimm.SignalReceiver[roboarm_command.Trajectory[float]] = pimm.ControlSystemReceiver(
             self, default=[]
         )
-        self.executed_target_grip: pimm.SignalEmitter[roboarm_command.Trajectory[float]] = pimm.ControlSystemEmitter(
+        self.executed_target_grip: pimm.ControlSystemEmitter[list[roboarm_command.Applied]] = pimm.ControlSystemEmitter(
             self
         )
         self._last_grip: float = 0.0
@@ -101,12 +101,11 @@ class Robot(pimm.ControlSystem):
             played_grip = grip_player.advance(clock.now_ns())
             if played_grip is not None:
                 self.executed_target_grip.emit([played_grip])
-                self._last_grip = played_grip[1]
+                self._last_grip = played_grip.value
             played = player.advance(clock.now_ns())
             if played is not None:
                 self.executed_commands.emit([played])
-                _, cmd = played
-                match cmd:
+                match played.value:
                     case roboarm_command.Reset():
                         raise NotImplementedError('Reset not implemented')
                     case roboarm_command.CartesianPosition(pose):
@@ -124,7 +123,7 @@ class Robot(pimm.ControlSystem):
                         q_with_gripper = np.concatenate([q_norm, [self._last_grip]])
                         self.motor_bus.set_target_position(q_with_gripper)
                     case _:
-                        raise ValueError(f'Unknown command: {cmd}')
+                        raise ValueError(f'Unknown command: {played.value}')
 
             q = self.motor_bus.position
             dq = self.motor_bus.velocity[:-1]

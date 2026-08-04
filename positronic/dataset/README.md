@@ -363,6 +363,8 @@ A command channel carries a trajectory of waypoints, and a device plays it at it
 
 This is what makes a recording replayable and trainable: every command sample pairs with the observations that follow from it, because the robot moved. It is also why the executing device reports its own stream (`Command.executed`) rather than the recorder tapping the policy's output — only the device knows what it reached, and a recorder watching the intent has to guess.
 
+Each sample also carries the instant it was scheduled for, on a `scheduled` timeline beside its own (`ts_ns.scheduled`, alongside the `message`/`system`/`world` timelines every other signal carries). `applied - scheduled` is that waypoint's delivery lag, which is what a question about the machinery — latency, transport, a device falling behind — needs. A consumer indexing the signal by time never sees it, so training and replay read the played stream and nothing else.
+
 The full prediction history — everything a policy planned, including what it later overrode — is a different signal with a different shape, and would be recorded as its own object-valued one. It is not this signal loosened.
 
 `Serializer` is a pure function that know how to translate the incoming data into a format that `SignalWriter` can accept:
@@ -384,7 +386,7 @@ Built‑in serializers (`positronic.dataset.serializers.Serializers`)
   - `JointMove(positions)` -> `{'.joints': positions}`
   - `Reset()` -> `{'.reset': 1}`
 - `TrajectorySerializer(inner)` -> `list[Timestamped]`
-  - Records a trajectory as one sample per waypoint, each at the waypoint's own timestamp; `inner` serializes the values (`None` records them unchanged). This is how command channels are recorded.
+  - Records the waypoints a device applied, one sample each at the tick that applied it and carrying the instant it was scheduled for on the `scheduled` timeline; `inner` serializes the values (`None` records them unchanged). This is how command channels are recorded.
 
 Lifecycle
 - `START_EPISODE`: allocates a new episode writer and applies provided static

@@ -1298,8 +1298,8 @@ def test_trajectory_player_accumulates_missed_deltas():
     player.set([(10, CartesianDelta(d0)), (20, CartesianDelta(d1))])
     out = player.advance(20)  # both waypoints due in one tick -> summed, not dropped to the last
     assert out is not None
-    assert isinstance(out[1], CartesianDelta)
-    np.testing.assert_allclose(out[1].delta.translation, [0.03, 0.0, 0.0])
+    assert isinstance(out.value, CartesianDelta)
+    np.testing.assert_allclose(out.value.delta.translation, [0.03, 0.0, 0.0])
     assert player.advance(30) is None
 
 
@@ -1309,9 +1309,9 @@ def test_trajectory_player_stamps_the_applied_waypoint_at_the_tick():
     player = TrajectoryPlayer()
     player.set([(10, 'a'), (20, 'b'), (90, 'c')])
 
-    assert player.advance(50) == (50, 'b')
+    assert player.advance(50) == (50, 20, 'b')  # applied at 50, newest collapsed waypoint asked for 20
     assert player.advance(80) is None
-    assert player.advance(100) == (100, 'c')
+    assert player.advance(100) == (100, 90, 'c')
 
 
 @pytest.mark.parametrize('status', [RobotStatus.RESETTING, RobotStatus.ERROR])
