@@ -180,6 +180,8 @@ def resolve_task_horizon_steps(episode: Any, policy_dt_ms: float, override_steps
     episode-level field reproduces the benchmark's declared horizon without that override.
     """
     if override_steps is not None:
+        if override_steps < 1:
+            raise ValueError(f'task_horizon_steps override must be at least 1 step, got {override_steps}')
         return override_steps
     horizon_sec = getattr(episode, 'task_horizon_sec', None)
     if horizon_sec is None:

@@ -65,7 +65,7 @@ def _drive_positronic(benchmark_dir: Path, episode_index: int, seed: int, max_st
         conn = EnvConnection(host, port)
         try:
             frame = conn.reset({mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: seed})
-            reported_horizon = frame['horizon']
+            reported_horizon = frame[protocol.FRAME_HORIZON]
             camera_names = [k for k, v in frame['obs'].items() if _is_rgb(v)]
             cam_hashes = {name: [] for name in camera_names}
             record(frame['obs'])

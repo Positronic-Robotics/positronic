@@ -59,6 +59,7 @@ from typing import Any  # noqa: E402
 import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
+import protocol  # noqa: E402 -- the positronic-free wire contract, on PYTHONPATH
 
 # server resolves to a module without these symbols under positronic's deps (the real one is on the molmo
 # venv's PYTHONPATH), so the symbols read as unknown here.
@@ -161,7 +162,7 @@ class MolmoSpacesEnv(EnvProtocol):
             'meta': self._meta,
             'robot_meta': {},
             'control_dt': self._control_dt,
-            'horizon': self._horizon_sec,
+            protocol.FRAME_HORIZON: self._horizon_sec,
         }
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
