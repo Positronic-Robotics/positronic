@@ -174,6 +174,19 @@ def resolve_camera_key(available: Any, key: str, variants: tuple[str, ...] = ())
     raise KeyError(f'observation has none of {(*variants, key)}; available: {sorted(keys)}')
 
 
+def resolve_episode_seed(episode: Any, episode_index: int, override_seed: int | None = None) -> int:
+    """The seed an episode runs under, mirroring MolmoSpaces' own precedence.
+
+    An explicit ``override_seed`` wins, then the episode spec's own seed. A spec carrying none falls back to
+    the episode index, which is what ``JsonEvalRunner.get_episode_seed`` does — a constant instead would put
+    every unseeded episode of a benchmark on one random stream, and none of them on the native one.
+    """
+    if override_seed is not None:
+        return int(override_seed)
+    spec_seed = getattr(episode, 'seed', None)
+    return int(spec_seed) if spec_seed is not None else int(episode_index)
+
+
 def resolve_task_horizon_steps(episode: Any, policy_dt_ms: float, override_steps: int | None = None) -> int:
     """A benchmark episode's enforced horizon in policy steps, mirroring MolmoSpaces' own precedence.
 

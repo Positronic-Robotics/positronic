@@ -152,8 +152,8 @@ class MolmoSpacesEnv(EnvProtocol):
             self._sampler.close()  # release the prior episode's sim/renderer before building the next
         episode = self._episodes[episode_index]
         cfg = _DroidPickEvalConfig()
-        # Determinism enters at sampler construction (seed_task_sampling); the token's seed overrides the spec's.
-        cfg.seed = int(seed) if seed is not None else (episode.seed if episode.seed is not None else 42)
+        # Determinism enters at sampler construction (seed_task_sampling).
+        cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # The sim owns the episode horizon: it is part of the task definition, so resolve the benchmark's own
         # ``task_horizon_sec`` into steps (``mapping.resolve_task_horizon_steps``).
         # With ``task_horizon`` set, the task enforces it and ``is_done`` reports expiry, so a horizon-expired
