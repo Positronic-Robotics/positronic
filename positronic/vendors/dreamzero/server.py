@@ -21,7 +21,7 @@ from positronic.offboard.server_utils import run_with_progress, wait_for_subproc
 from positronic.policy import Codec, Policy, PolicyWrapper, Session
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
-from positronic.utils.checkpoints import get_latest_checkpoint
+from positronic.utils.checkpoints import list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialize, serialize
 from positronic.vendors.dreamzero import codecs
@@ -49,14 +49,6 @@ def _is_run_directory(model_path: str) -> bool:
     """
     last = model_path.rstrip('/').split('/')[-1]
     return model_path.startswith('s3://') and not last.startswith('checkpoint-')
-
-
-def _resolve_checkpoint_path(model_path: str) -> str:
-    """Latest ``checkpoint-N`` under an ``s3://`` run directory; a pinned checkpoint dir, a HuggingFace repo,
-    or a local path is returned unchanged."""
-    if not _is_run_directory(model_path):
-        return model_path
-    return f'{model_path.rstrip("/")}/{get_latest_checkpoint(model_path, "checkpoint-")}'
 
 
 def _checkpoint_id(checkpoint_path: str) -> str:
@@ -286,7 +278,9 @@ class DreamZeroSource(ModelSource):
         return f'{self._model_path.rstrip("/")}/checkpoint-{model_id}'
 
     def get_models(self) -> list[str]:
-        return [_checkpoint_id(_resolve_checkpoint_path(self._model_path))]
+        if not _is_run_directory(self._model_path):
+            return [_checkpoint_id(self._model_path)]
+        return [_checkpoint_id(c) for c in list_checkpoints(self._model_path, prefix='checkpoint-')]
 
     def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
         checkpoint_path = self._checkpoint_path(model_id)

@@ -23,24 +23,35 @@ class _FakeSubprocess:
 
 
 @pytest.fixture
-def latest(monkeypatch):
-    """Pin what the run directory's newest checkpoint is, and record what ``load`` downloads."""
+def holding(monkeypatch):
+    """Pin the checkpoints the run directory holds, oldest first, and record what ``load`` downloads."""
     downloaded = []
     monkeypatch.setattr(server, 'DreamZeroSubprocess', _FakeSubprocess)
     monkeypatch.setattr(server, '_download_checkpoint', lambda path: downloaded.append(path) or Path('/nonexistent'))
 
-    def _set(step: str) -> list[str]:
-        monkeypatch.setattr(server, 'get_latest_checkpoint', lambda _path, _prefix: f'checkpoint-{step}')
+    def _set(*steps: str) -> list[str]:
+        names = [f'checkpoint-{s}' for s in steps]
+        monkeypatch.setattr(server, 'list_checkpoints', lambda _path, prefix='': list(names))
         return downloaded
 
     return _set
 
 
-def test_run_directory_is_served_at_its_latest_step(latest):
-    latest('100000')
+def test_a_run_directory_advertises_every_checkpoint_it_holds(holding):
+    holding('95000', '100000')
+    source = DreamZeroSource(model_path=RUN_DIR, backbone='wan2.2')
+
+    assert source.get_models() == ['95000', '100000']
+    assert source.resolve(None) == '100000'
+
+
+def test_run_directory_is_served_at_its_latest_step(holding):
+    holding('100000')
     source = DreamZeroSource(model_path=RUN_DIR, backbone='wan2.2')
 
     assert source.get_models() == ['100000']
+    # rules-allow: hardcoded-keys — the wire spelling is what this asserts; reading it from the same
+    # constants the code writes with would pass whatever those constants held.
     assert source.meta('100000') == {
         'type': 'dreamzero',
         'backbone': 'wan2.2',
@@ -50,21 +61,22 @@ def test_run_directory_is_served_at_its_latest_step(latest):
     }
 
 
-def test_a_newer_checkpoint_does_not_displace_the_id_being_loaded(latest):
-    downloaded = latest('105000')
+def test_a_newer_checkpoint_does_not_displace_the_id_being_loaded(holding):
+    downloaded = holding('100000', '105000')
     source = DreamZeroSource(model_path=RUN_DIR, backbone='wan2.2')
 
     source.load('100000')
 
     assert downloaded == [RUN_DIR + 'checkpoint-100000']
+    # rules-allow: hardcoded-keys — as above, the spelling is the assertion.
     assert source.meta('100000')['checkpoint_path'] == RUN_DIR + 'checkpoint-100000'
 
 
-def test_a_run_directory_named_like_a_step_still_serves_its_checkpoint(latest):
-    downloaded = latest('100000')
+def test_a_run_directory_named_like_a_step_still_serves_its_checkpoint(holding):
+    downloaded = holding('100000')
     source = DreamZeroSource(model_path='s3://bucket/100000/', backbone='wan2.2')
 
-    source.load(source.get_models()[0])
+    source.load(source.resolve(None))
 
     assert downloaded == ['s3://bucket/100000/checkpoint-100000']
 
@@ -74,19 +86,20 @@ def test_a_huggingface_repo_is_itself_the_checkpoint():
     assert _experiment_name('GEAR-Dreams/DreamZero-DROID') == 'DreamZero-DROID'
 
 
-def test_a_zero_padded_step_is_reached_by_the_name_its_directory_carries(latest):
-    latest('005000')
+def test_a_zero_padded_step_is_reached_by_the_name_its_directory_carries(holding):
+    holding('005000')
     source = DreamZeroSource(model_path=RUN_DIR, backbone='wan2.2')
-    pinned = source.get_models()[0]
+    pinned = source.resolve(None)
 
-    downloaded = latest('010000')
+    downloaded = holding('005000', '010000')
     source.load(pinned)
 
     assert downloaded == [RUN_DIR + 'checkpoint-005000']
 
 
 def test_meta_does_not_relist_the_bucket(monkeypatch):
-    monkeypatch.setattr(server, 'get_latest_checkpoint', lambda _path, _prefix: pytest.fail('meta must not reach S3'))
+    monkeypatch.setattr(server, 'list_checkpoints', lambda _path, prefix='': pytest.fail('meta must not reach S3'))
     source = DreamZeroSource(model_path=RUN_DIR, backbone='wan2.2')
 
+    # rules-allow: hardcoded-keys — as above, the spelling is the assertion.
     assert source.meta('100000')['experiment_name'] == 'w22f1_100k_200626'
