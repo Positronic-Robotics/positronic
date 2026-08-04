@@ -39,7 +39,7 @@ from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, dri
 def _eval_pass(run_id: str):
     """The eval CLI's pass span, which the harness's episode spans parent to: a span its owner holds open and
     anchors, rather than entering as the OTel-current span."""
-    span = telemetry.start_span(telemetry_keys.SPAN_EVAL_PASS, **{'run.id': run_id})
+    span = telemetry.start_span(telemetry_keys.SPAN_EVAL_PASS, **{telemetry.ATTR_RUN_ID: run_id})
     telemetry.push_anchor(span)
     try:
         yield
