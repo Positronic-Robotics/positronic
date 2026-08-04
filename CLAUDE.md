@@ -2,7 +2,6 @@
 - Read `CODE_RULES.md` before writing code here — the named rules it carries govern authoring, not only
   review, and `check-rules` is how you check a change against them
 - Don't restore code that you wrote and I deleted
-- Don't hide errors with try-catch blocks; let failures surface until asked otherwise
 - Fix a defect when you find it, whether or not a current path reaches it. An unexercised wrong path
   produces no signal until something depends on it, so the failure surfaces later and further from its
   cause. Scope can justify deferring; being latent cannot
@@ -39,12 +38,6 @@
   TODO/HACK comment. Never bridge silently with an extra field, class, or indirection
 - Internal code breaks cleanly — no speculative compat shims. Before a migrate-everywhere change, grep for
   consumers that need the old form; alias or migrate only the real ones
-- A new class, file, or field must earn its place: if existing structure already encodes the distinction (the dict
-  an entry lives in, an enum, the calling context), don't reify the concept into a type. Extend an existing module
-  rather than adding a file
-- That holds for a new file of any kind — module, test, or doc. Find the existing home first; when there is
-  none, surface it rather than restructuring on your own initiative (see Testing)
-- No `X | None` for logically required values — an Optional that is never None in practice lies about the contract
 - After every fix or refactor, re-read the resulting code as a whole, not the diff: fixes create new smells (e.g.
   two classes become structurally identical only after their serializers are unified — merge them)
 
