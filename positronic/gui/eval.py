@@ -165,6 +165,13 @@ class EvalUI(pimm.ControlSystem):
                 [State.WAITING, State.RUNNING],
             )
             dpg.add_spacer(width=self.size(25))
+            self._register(
+                dpg.add_button(label='+1 Moved', callback=self.mark_moved, width=self.size(110), height=self.size(32)),
+                [State.RUNNING],
+            )
+            dpg.add_spacer(width=self.size(10))
+            dpg.add_text('0/1', tag='moved_text')
+            dpg.add_spacer(width=self.size(25))
             with dpg.drawlist(width=self.size(160), height=self.size(46)):
                 dpg.draw_text((0, 0), '0:00', size=self.size(40), tag='time_text')
 
@@ -626,6 +633,13 @@ class EvalUI(pimm.ControlSystem):
 
         self.update_ui()
 
+    def mark_moved(self, sender=None, app_data=None):
+        if self.state != State.RUNNING:
+            return
+        total = dpg.get_value('total_items_input')
+        dpg.set_value('successful_items_input', min(dpg.get_value('successful_items_input') + 1, total))
+        self.update_ui()
+
     # --- UI Update ---
 
     def _set_timer(self, seconds: float):
@@ -656,9 +670,11 @@ class EvalUI(pimm.ControlSystem):
         else:
             dpg.configure_item('object_window', show=False)
 
+        total = dpg.get_value('total_items_input')
         if self.state == State.WAITING:
             dpg.set_value('successful_items_input', 0)
-            self._set_timer(dpg.get_value('total_items_input') * self.cap_per_item)
+            self._set_timer(total * self.cap_per_item)
+        dpg.set_value('moved_text', f'{dpg.get_value("successful_items_input")}/{total}')
 
     # --- Control System Run Loop ---
 
