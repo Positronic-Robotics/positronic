@@ -272,11 +272,18 @@ class DreamZeroSource(ModelSource):
         self._roboarena_port = roboarena_port
         self._enable_dit_cache = enable_dit_cache
 
+    def _checkpoint_path(self, model_id: str) -> str:
+        """The checkpoint directory whose public id is ``model_id``."""
+        resolved = _resolve_checkpoint_path(self._model_path)
+        if _checkpoint_id(resolved) == model_id:
+            return resolved
+        return f'{self._model_path.rstrip("/")}/checkpoint-{model_id}'
+
     def get_models(self) -> list[str]:
         return [_checkpoint_id(_resolve_checkpoint_path(self._model_path))]
 
     def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
-        checkpoint_path = _resolve_checkpoint_path(self._model_path)
+        checkpoint_path = self._checkpoint_path(model_id)
         local_path = run_with_progress(
             lambda: _download_checkpoint(checkpoint_path), 'Downloading DreamZero checkpoint', on_progress
         )
@@ -301,7 +308,7 @@ class DreamZeroSource(ModelSource):
             'type': 'dreamzero',
             'backbone': self._backbone,
             'num_gpus': self._num_gpus,
-            'experiment_name': _experiment_name(_resolve_checkpoint_path(self._model_path)),
+            'experiment_name': _experiment_name(self._checkpoint_path(model_id)),
         }
 
 
