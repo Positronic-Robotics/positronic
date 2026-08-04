@@ -19,6 +19,7 @@ from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
 from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess
+from positronic.simulator.molmo_spaces import mapping
 
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
@@ -91,6 +92,13 @@ def molmo_subprocess_env() -> dict[str, str]:
 
 
 def _spawn(host: str, port: int, benchmark_dir: Path, task_horizon_steps: int | None) -> subprocess.Popen:
+    # env.py exits on these before it binds the port, and a server that dies pre-bind is invisible to the
+    # client, which retries the dead port until its connect deadline. Check them here, where the failure
+    # still has a caller to raise into.
+    if not os.environ.get(mapping.ASSETS_DIR_ENV):
+        raise ValueError(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
+    if not benchmark_dir.is_dir():
+        raise ValueError(f'benchmark dir {benchmark_dir} does not exist')
     python = ensure_molmo_venv()
     command = [
         str(python),
