@@ -176,8 +176,8 @@ class MujocoSim(pimm.ControlSystem):
                 # the recorder samples it before any step advances the sim. ``reset`` already loaded the scene.
                 self._reset_pending = False
                 self._emit_robot_meta()
-                # Frame-0 rendering is part of the reset cost, not overhead: the remote path likewise charges
-                # its reset's rendered first observation to reset, so time this publish there too.
+                # Rendering frame-0 is reset cost: it is work the reset asked for, and left untimed it would
+                # land in overhead.
                 with telemetry.span(telemetry_keys.SPAN_RESET):
                     self._publish_frame()
                 continue
@@ -202,10 +202,9 @@ class MujocoSim(pimm.ControlSystem):
                 self._last_grip = grip
             self._apply_grip(self._last_grip)
 
-            # Charge the sim advance and the observation production it feeds (notably ``_emit_cameras`` ->
-            # rendering) to the env step: the remote env-server path times its whole step, which returns
-            # rendered observations, so an image-heavy native sim must count rendering here too or its wall
-            # split reads rendering as overhead and is not comparable to the remote path.
+            # An env step is the sim advance plus the observations it produces, rendering included
+            # (``_emit_cameras``): on an image-heavy scene the rendering is most of the step, and outside this
+            # span the wall split reads it as overhead.
             with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
                 self.step()
                 self.fps_counter.tick()

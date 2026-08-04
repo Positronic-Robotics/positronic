@@ -11,6 +11,8 @@ from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
 from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
 
 from positronic import telemetry
+from positronic.simulator.env_server.telemetry import ENV_PROCESS
+from positronic.telemetry_keys import HARNESS_PROCESS, SPAN_EVAL_PASS
 
 
 def _spans_by_name(path):
@@ -58,17 +60,17 @@ def test_recording_without_the_telemetry_extra_names_the_extra(tmp_path, without
     """Both entry points ``--timing`` reaches fail with the install command, not an ImportError on a package
     name the operator has no reason to connect to ``--timing``."""
     with pytest.raises(RuntimeError, match='telemetry extra'):
-        with telemetry.bind(tmp_path, 'harness', 'run-no-extra'):
+        with telemetry.bind(tmp_path, HARNESS_PROCESS, 'run-no-extra'):
             pass
     with pytest.raises(RuntimeError, match='telemetry extra'):
-        telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
+        telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
 
 
 def test_nested_spans_round_trip(tmp_path):
     """A bound run's spans parse back with anchor parenting — an unnested span under the innermost anchor, an
     anchor under the anchor enclosing it, one opened inside another under that one — plus hex ids and decoded
     attributes."""
-    with telemetry.bind(tmp_path, 'harness', 'run-xyz'):
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'run-xyz'):
         with _anchored('outer', policy='stub'):
             with _anchored('inner', index=0) as inner:
                 with telemetry.span('probe'):
@@ -78,7 +80,7 @@ def test_nested_spans_round_trip(tmp_path):
                         pass
                 telemetry.set_attrs(inner, steps=5, virtual_s=1.5)
 
-    spans_path = tmp_path / 'telemetry' / 'harness.spans.jsonl'
+    spans_path = telemetry.spans_path(tmp_path, HARNESS_PROCESS)
     spans = _spans_by_name(spans_path)
     assert set(spans) == {'outer', 'inner', 'probe', 'phase', 'sub-phase'}
 
@@ -102,11 +104,11 @@ def test_nested_spans_round_trip(tmp_path):
 def test_mixed_type_attribute_sequence_survives_as_json(tmp_path):
     """OTel drops an attribute array whose elements disagree in type, so a mixed sequence — a trial context
     holding a label beside a number — is JSON-encoded rather than lost between the caller and the sidecar."""
-    with telemetry.bind(tmp_path, 'harness', 'run-mixed'):
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'run-mixed'):
         with telemetry.span('probe', mixed=[1, 'two'], plain=[1, 2]):
             pass
 
-    attrs = _spans_by_name(tmp_path / 'telemetry' / 'harness.spans.jsonl')['probe'].attrs
+    attrs = _spans_by_name(telemetry.spans_path(tmp_path, HARNESS_PROCESS))['probe'].attrs
     assert json.loads(attrs['mixed']) == [1, 'two']
     assert attrs['plain'] == [1, 2]  # a single-type sequence still travels as an array
 
@@ -114,7 +116,7 @@ def test_mixed_type_attribute_sequence_survives_as_json(tmp_path):
 def test_anchor_popped_out_of_order_stops_parenting(tmp_path):
     """An owner closing an anchor that is no longer the innermost — a failure path unwinding several at once —
     drops it from wherever it sits, so no finished span goes on adopting later spans."""
-    with telemetry.bind(tmp_path, 'harness', 'run-unwind'):
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'run-unwind'):
         outer = telemetry.start_span('outer')
         telemetry.push_anchor(outer)
         inner = telemetry.start_span('inner')
@@ -129,7 +131,7 @@ def test_anchor_popped_out_of_order_stops_parenting(tmp_path):
         with telemetry.span('after'):
             pass
 
-    spans = _spans_by_name(tmp_path / 'telemetry' / 'harness.spans.jsonl')
+    spans = _spans_by_name(telemetry.spans_path(tmp_path, HARNESS_PROCESS))
     assert spans['probe'].parent_id == spans['inner'].span_id  # the innermost anchor still stands
     assert spans['after'].parent_id is None  # nothing anchored: the span roots rather than adopting a corpse
 
@@ -145,14 +147,14 @@ def test_unbound_span_is_inert(tmp_path):
 def test_resource_carries_process_identity(tmp_path):
     """Every span document's resource block names the run and the writing process, so a sidecar identifies
     itself without a second file."""
-    with telemetry.bind(tmp_path, 'env', 'run-1'):
+    with telemetry.bind(tmp_path, ENV_PROCESS, 'run-1'):
         with telemetry.span('probe'):
             pass
 
-    line = json.loads((tmp_path / 'telemetry' / 'env.spans.jsonl').read_text().splitlines()[0])
+    line = json.loads((telemetry.spans_path(tmp_path, ENV_PROCESS)).read_text().splitlines()[0])
     attrs = telemetry._decode_attrs(line['resourceSpans'][0]['resource']['attributes'])
     assert attrs[telemetry.ATTR_RUN_ID] == 'run-1'
-    assert attrs[telemetry.ATTR_PROCESS_NAME] == 'env'
+    assert attrs[telemetry.ATTR_PROCESS_NAME] == ENV_PROCESS
     assert attrs[telemetry.ATTR_PROCESS_PID] == os.getpid()
 
 
@@ -187,13 +189,13 @@ def test_anchored_span_ignores_foreign_ambient_span(tmp_path):
     """A host application's current OTel span (a different provider, a different trace) must not adopt our
     spans opened under an anchor: they parent to it, so the report still sees them."""
     foreign = SdkTracerProvider()
-    with telemetry.bind(tmp_path, 'harness', 'run-foreign'):
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'run-foreign'):
         with _anchored('outer'):
             with foreign.get_tracer('host-app').start_as_current_span('host-span'):
                 with telemetry.span('probe'):
                     pass
 
-    spans = _spans_by_name(tmp_path / 'telemetry' / 'harness.spans.jsonl')
+    spans = _spans_by_name(telemetry.spans_path(tmp_path, HARNESS_PROCESS))
     assert 'host-span' not in spans  # the foreign span belongs to the host's provider, not our file
     assert spans['probe'].parent_id == spans['outer'].span_id
 
@@ -204,27 +206,27 @@ def test_root_span_detaches_from_a_foreign_ambient_span(tmp_path):
     span makes the pass non-recording, and every episode and phase anchored beneath it is dropped — an empty
     sidecar, and a report that reads a timed run as untimed."""
     foreign = SdkTracerProvider(sampler=ALWAYS_OFF)
-    with telemetry.bind(tmp_path, 'harness', 'run-foreign-root'):
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'run-foreign-root'):
         with foreign.get_tracer('host-app').start_as_current_span('host-span'):
-            with _anchored('eval.pass'):
+            with _anchored(SPAN_EVAL_PASS):
                 with telemetry.span('probe'):
                     pass
 
-    spans = _spans_by_name(tmp_path / 'telemetry' / 'harness.spans.jsonl')
-    assert spans['eval.pass'].parent_id is None  # a root of our own trace, not a child of the host's
-    assert spans['probe'].parent_id == spans['eval.pass'].span_id
+    spans = _spans_by_name(telemetry.spans_path(tmp_path, HARNESS_PROCESS))
+    assert spans[SPAN_EVAL_PASS].parent_id is None  # a root of our own trace, not a child of the host's
+    assert spans['probe'].parent_id == spans[SPAN_EVAL_PASS].span_id
 
 
 def test_spans_survive_a_host_sampler_in_the_environment(tmp_path, monkeypatch):
     """OTEL_TRACES_SAMPLER configures the SDK's default sampler, so a host application that turns tracing off
     would take this provider's spans with it — an empty sidecar on a run that asked to be timed."""
     monkeypatch.setenv('OTEL_TRACES_SAMPLER', 'always_off')
-    with telemetry.bind(tmp_path, 'harness', 'run-sampler'):
-        with _anchored('eval.pass'):
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'run-sampler'):
+        with _anchored(SPAN_EVAL_PASS):
             with telemetry.span('probe'):
                 pass
 
-    spans = _spans_by_name(tmp_path / 'telemetry' / 'harness.spans.jsonl')
+    spans = _spans_by_name(telemetry.spans_path(tmp_path, HARNESS_PROCESS))
     assert set(spans) == {'eval.pass', 'probe'}
 
 
@@ -247,7 +249,7 @@ def _install_fake_nvml(monkeypatch):
 
 def test_stats_sample_with_fake_gpu(tmp_path, monkeypatch):
     _install_fake_nvml(monkeypatch)
-    sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
     sample = sampler._sample()
     assert set(sample) >= {
         telemetry.STAT_T_NS,
@@ -279,7 +281,7 @@ def test_stats_sample_treats_nvml_sentinel_as_unavailable(tmp_path, monkeypatch)
     sentinel_proc = _FakeProc(os.getpid(), telemetry._NVML_VALUE_NOT_AVAILABLE)
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetComputeRunningProcesses', lambda h: [sentinel_proc])
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetGraphicsRunningProcesses', lambda h: [])
-    sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
     sample = sampler._sample()
     gpu = sample[telemetry.STAT_GPUS][0]
     assert gpu[telemetry.GPU_PROC_MEM_B] is None  # taken verbatim the sentinel reads as ~1.8e19 bytes of process VRAM
@@ -297,7 +299,7 @@ def test_stats_sample_treats_foreign_pid_namespace_as_unavailable(tmp_path, monk
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetComputeRunningProcesses', lambda h: [foreign])
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetGraphicsRunningProcesses', lambda h: [])
     monkeypatch.setattr(psutil, 'pid_exists', lambda pid: pid != foreign.pid)
-    sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
     assert (
         sampler._sample()[telemetry.STAT_GPUS][0][telemetry.GPU_PROC_MEM_B] is None
     )  # a 0 here would be indistinguishable from idle
@@ -314,7 +316,7 @@ def test_stats_sample_treats_a_partly_resolving_pid_set_as_unavailable(tmp_path,
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetComputeRunningProcesses', lambda h: [collision, foreign])
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetGraphicsRunningProcesses', lambda h: [])
     monkeypatch.setattr(psutil, 'pid_exists', lambda pid: pid != foreign.pid)
-    sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
     assert sampler._sample()[telemetry.STAT_GPUS][0][telemetry.GPU_PROC_MEM_B] is None
     sampler._nvml.shutdown()
 
@@ -325,7 +327,7 @@ def test_stats_sample_reports_zero_when_gpu_is_idle(tmp_path, monkeypatch):
     _install_fake_nvml(monkeypatch)
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetComputeRunningProcesses', lambda h: [])
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetGraphicsRunningProcesses', lambda h: [])
-    sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
     assert sampler._sample()[telemetry.STAT_GPUS][0][telemetry.GPU_PROC_MEM_B] == 0
     sampler._nvml.shutdown()
 
@@ -342,7 +344,7 @@ def test_stats_sample_skips_failing_device(tmp_path, monkeypatch):
         return _FakeUtil()
 
     monkeypatch.setattr(pynvml, 'nvmlDeviceGetUtilizationRates', _util)
-    sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
     sample = sampler._sample()
     assert [gpu[telemetry.GPU_INDEX] for gpu in sample[telemetry.STAT_GPUS]] == [1]
     assert isinstance(sample[telemetry.STAT_CPU_SYS_PCT], float)
@@ -354,7 +356,7 @@ def test_stats_sample_without_gpu(tmp_path, monkeypatch):
         raise pynvml.NVMLError(pynvml.NVML_ERROR_DRIVER_NOT_LOADED)
 
     monkeypatch.setattr(pynvml, 'nvmlInit', _raise)
-    sampler = telemetry.StatsSampler(tmp_path / 'harness.stats.jsonl')
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
     sample = sampler._sample()
     assert sample[telemetry.STAT_GPUS] == []
     assert isinstance(sample[telemetry.STAT_CPU_SYS_PCT], float)
@@ -366,7 +368,7 @@ def test_stats_sampler_thread_writes_lines(tmp_path, monkeypatch):
         raise pynvml.NVMLError(pynvml.NVML_ERROR_DRIVER_NOT_LOADED)
 
     monkeypatch.setattr(pynvml, 'nvmlInit', _raise)
-    path = tmp_path / 'harness.stats.jsonl'
+    path = tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}'
     with telemetry.StatsSampler(path, hz=200.0):
         time.sleep(0.1)
     samples = list(telemetry.read_stats(path))
@@ -378,15 +380,15 @@ def test_bind_seals_truncated_predecessor_line(tmp_path):
     """A killed run can leave ``<process>.spans.jsonl`` ending in a truncated fragment with no trailing newline.
     The next bind into the same directory seals that line before its exporter appends, so the first new record
     starts a fresh line instead of concatenating onto the fragment and being skipped along with it."""
-    spans_path = tmp_path / 'telemetry' / 'harness.spans.jsonl'
+    spans_path = telemetry.spans_path(tmp_path, HARNESS_PROCESS)
 
-    with telemetry.bind(tmp_path, 'harness', 'run-1'):
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'run-1'):
         with telemetry.span('first'):
             pass
     with open(spans_path, 'a') as file:
         file.write('{"resourceSpans": [{"scopeSpans": [{"spans": [{"nam')  # crash mid-write, no trailing newline
 
-    with telemetry.bind(tmp_path, 'harness', 'run-2'):
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'run-2'):
         with telemetry.span('second'):
             pass
 
@@ -396,8 +398,8 @@ def test_bind_seals_truncated_predecessor_line(tmp_path):
 
 
 def test_readers_tolerate_truncated_final_line(tmp_path):
-    spans_path = tmp_path / 'telemetry' / 'harness.spans.jsonl'
-    with telemetry.bind(tmp_path, 'harness', 'run-trunc'):
+    spans_path = telemetry.spans_path(tmp_path, HARNESS_PROCESS)
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'run-trunc'):
         with telemetry.span('probe'):
             pass
     with open(spans_path, 'a') as file:

@@ -48,7 +48,7 @@ def test_failed_pass_exported_and_stamped(tmp_path):
             with _pass_span(**{telemetry.ATTR_RUN_ID: 'run-fail'}):
                 raise RuntimeError('sim died')
 
-    spans = {s.name: s for s in telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl')}
+    spans = {s.name: s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))}
     assert spans[telemetry_keys.SPAN_EVAL_PASS].attrs.get(telemetry_keys.ATTR_PASS_FAILED) is True
 
 

@@ -1307,7 +1307,7 @@ def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(tmp_path):
     stop = SimpleNamespace(value=False)
     clock = _ManualClock()
 
-    with telemetry.bind(tmp_path, 'harness', 'run-stop'), _eval_pass('run-stop'):
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-stop'), _eval_pass('run-stop'):
         gen = harness.run(cast(pimm.SignalReceiver, stop), cast(pimm.Clock, clock))
         for _ in range(20):
             next(gen)
@@ -1328,7 +1328,7 @@ def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(tmp_path):
             while True:
                 next(gen)
 
-    spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     assert len(episodes) == 1
     episode = episodes[0]
@@ -1353,11 +1353,11 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
         (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.0)
     ])
 
-    with telemetry.bind(tmp_path, 'harness', 'run-taxonomy'), _eval_pass('run-taxonomy'):
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-taxonomy'), _eval_pass('run-taxonomy'):
         scheduler = world.start([harness, producer])
         drive_scheduler(scheduler, steps=400)
 
-    spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     by_name: dict[str, list] = {}
     for rec in spans:
         by_name.setdefault(rec.name, []).append(rec)
@@ -1387,7 +1387,7 @@ def test_aborted_episode_span_marked_aborted(world, tmp_path):
     p = _pair_all(world, harness)
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
-    with telemetry.bind(tmp_path, 'harness', 'run-abort'):
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-abort'):
         scheduler = world.start([harness])
         p['directive_em'].emit(Directive.RUN(task='test'))
         drive_scheduler(scheduler, steps=1)
@@ -1396,7 +1396,7 @@ def test_aborted_episode_span_marked_aborted(world, tmp_path):
         p['directive_em'].emit(Directive.ABORT())
         drive_scheduler(scheduler, steps=3)
 
-    spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     assert len(episodes) == 1
     assert episodes[0].attrs[telemetry_keys.ATTR_EPISODE_ABORTED] is True
@@ -1422,11 +1422,11 @@ def test_failed_pass_seals_open_episode_span(tmp_path):
     clock = _ManualClock()
 
     with pytest.raises(RuntimeError, match='reset boom'):
-        with telemetry.bind(tmp_path, 'harness', 'run-fail'), _eval_pass('run-fail'):
+        with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-fail'), _eval_pass('run-fail'):
             for _ in harness.run(cast(pimm.SignalReceiver, stop), cast(pimm.Clock, clock)):
                 pass
 
-    spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     assert len(episodes) == 1  # the open span was sealed and exported, not lost with the failure
     episode = episodes[0]
@@ -1456,7 +1456,7 @@ def test_episode_virtual_duration_starts_at_the_first_observation(world, tmp_pat
     p = _pair_all(world, harness)
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
-    with telemetry.bind(tmp_path, 'harness', 'run-anchor'), _eval_pass('run-anchor'):
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-anchor'), _eval_pass('run-anchor'):
         scheduler = world.start([harness])
         p['directive_em'].emit(Directive.RUN(task='test'))
         drive_scheduler(scheduler, steps=1)
@@ -1468,7 +1468,7 @@ def test_episode_virtual_duration_starts_at_the_first_observation(world, tmp_pat
         p['directive_em'].emit(Directive.FINISH())
         drive_scheduler(scheduler, steps=3)
 
-    spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     assert len(episodes) == 1
     virtual_s = episodes[0].attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S]
@@ -1499,12 +1499,12 @@ def test_a_later_episode_waits_for_its_own_first_observation(world, tmp_path):
         drive_scheduler(scheduler, steps=3)
         return gap_s
 
-    with telemetry.bind(tmp_path, 'harness', 'run-anchor-2'), _eval_pass('run-anchor-2'):
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-anchor-2'), _eval_pass('run-anchor-2'):
         scheduler = world.start([harness])
         episode(gap_steps=2)
         gap_s = episode(gap_steps=40)
 
-    spans = list(telemetry.read_spans(tmp_path / 'telemetry' / 'harness.spans.jsonl'))
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     assert len(episodes) == 2
     assert episodes[1].attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S] < gap_s

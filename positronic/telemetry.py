@@ -116,6 +116,16 @@ def _tracer() -> trace.Tracer:
     return _provider.get_tracer(_SCOPE) if _provider is not None else _NOOP_TRACER
 
 
+def spans_path(out_dir: Path | str, process: str) -> Path:
+    """Where ``process`` writes its span sidecar under a run's output dir."""
+    return Path(out_dir) / TELEMETRY_SUBDIR / f'{process}{SPANS_SUFFIX}'
+
+
+def stats_path(out_dir: Path | str, process: str) -> Path:
+    """Where ``process`` writes its machine-load sidecar under a run's output dir."""
+    return Path(out_dir) / TELEMETRY_SUBDIR / f'{process}{STATS_SUFFIX}'
+
+
 def _attr_value(value: Any) -> Any:
     """One span-attribute value coerced to what OTel accepts: a flat scalar or a homogeneous scalar list.
     Anything nested is JSON-encoded, so a call site can pass a trial-context value without a shape check."""
@@ -149,8 +159,8 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
         from opentelemetry.sdk.trace.sampling import ALWAYS_ON  # noqa: PLC0415
     except ImportError as error:
         raise RuntimeError(_MISSING_EXTRA) from error
-    telemetry_dir = Path(out_dir) / TELEMETRY_SUBDIR
-    telemetry_dir.mkdir(parents=True, exist_ok=True)
+    path = spans_path(out_dir, process)
+    path.parent.mkdir(parents=True, exist_ok=True)
     resource = Resource.create({
         ATTR_RUN_ID: run_id,
         ATTR_PROCESS_NAME: process,
@@ -162,11 +172,11 @@ def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerPro
     # and the report reads a timed run as untimed. What this provider records goes to its own file and nowhere
     # else, so there is nothing for a sampling budget to protect.
     provider = TracerProvider(resource=resource, sampler=ALWAYS_ON)
-    spans_path = telemetry_dir / f'{process}{SPANS_SUFFIX}'
+
     # A killed predecessor can leave a truncated final line; seal it so the appending exporter starts a fresh
     # line — otherwise read_spans merges the first new record into the fragment and skips both.
-    _seal_truncated_line(spans_path)
-    provider.add_span_processor(BatchSpanProcessor(FileSpanExporter(spans_path)))
+    _seal_truncated_line(path)
+    provider.add_span_processor(BatchSpanProcessor(FileSpanExporter(path)))
     _provider = provider
     try:
         yield provider

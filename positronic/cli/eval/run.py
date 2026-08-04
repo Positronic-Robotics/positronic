@@ -173,11 +173,9 @@ def _timed_pass(output_dir: str | Path | None, timing: bool, policy):
     os.environ[ENV_TELEMETRY_DIR] = str(timed_dir / telemetry.TELEMETRY_SUBDIR)
     os.environ[ENV_RUN_ID] = run_id
     try:
-        stats_name = f'{telemetry_keys.HARNESS_PROCESS}{telemetry.STATS_SUFFIX}'
-        stats_path = timed_dir / telemetry.TELEMETRY_SUBDIR / stats_name
         # Built outside the pass: the constructor initialises NVML, enumerates its handles and primes the CPU
         # counters, and that setup is not eval wall — charging it to W_pass depresses the real-time factor.
-        sampler = telemetry.StatsSampler(stats_path)
+        sampler = telemetry.StatsSampler(telemetry.stats_path(timed_dir, telemetry_keys.HARNESS_PROCESS))
         # Order is the contract twice over: the pass span closes before the tracer it is bound to shuts its
         # provider down, and the sampler's SAMPLING runs strictly INSIDE the pass span, so every sample it
         # stamps falls in the window the reduce counts. Sampling around the span instead drops its first and

@@ -255,8 +255,7 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     assert env_telemetry.ENV_TELEMETRY_DIR not in os.environ
     assert env_telemetry.ENV_RUN_ID not in os.environ
 
-    telemetry_dir = tmp_path / 'telemetry'
-    spans = list(telemetry.read_spans(telemetry_dir / 'harness.spans.jsonl'))
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     assert {rec.process for rec in spans} == {telemetry_keys.HARNESS_PROCESS}
     by_name: dict[str, list] = {}
     for rec in spans:
@@ -278,7 +277,7 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     for name in (telemetry_keys.SPAN_RESET, telemetry_keys.SPAN_RECORD_IO, telemetry_keys.SPAN_POLICY_INFER):
         assert all(rec.parent_id in episode_ids for rec in by_name[name]), name
 
-    stats = list(telemetry.read_stats(telemetry_dir / 'harness.stats.jsonl'))
+    stats = list(telemetry.read_stats(telemetry.stats_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     assert len(stats) >= 1
     assert all(telemetry.STAT_T_NS in sample and telemetry.STAT_GPUS in sample for sample in stats)
 

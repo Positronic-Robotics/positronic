@@ -108,9 +108,9 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     assert self._frame is not None  # reset() set the frame before arming reset_pending
                     self._reset_pending = False
                     self.robot_meta.emit(self._robot_meta)
-                    # Frame-0 materialisation (allocating shared-memory image buffers and copying each camera
-                    # frame) is part of the reset cost, like the server-side render already timed under reset —
-                    # charge it to reset, not overhead.
+                    # Materialising frame-0 (allocating shared-memory image buffers, copying each camera
+                    # frame) is reset cost: it is work the reset asked for, and left untimed it would land in
+                    # overhead.
                     with telemetry.span(telemetry_keys.SPAN_RESET):
                         self._emit_payload(self._frame['obs'])
                     self.done.emit({})
