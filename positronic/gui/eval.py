@@ -106,7 +106,7 @@ class EvalUI(pimm.ControlSystem):
 
         # Handover state. `_batch_base_count` is the episode count when the current assignment was picked up,
         # so progress against the target counts this batch's recordings rather than the whole output directory.
-        self._assignment: handover.Assignment | None = None
+        self._assignment: handover.Assignment | handover.UnsupportedSchema | None = None
         self._batch_base_count = 0
 
     def size(self, v: int) -> int:
@@ -497,12 +497,12 @@ class EvalUI(pimm.ControlSystem):
 
     def _update_assignment_ui(self):
         assignment = self._assignment
-        dpg.configure_item('hv_body', show=assignment is not None and assignment.supported)
+        dpg.configure_item('hv_body', show=isinstance(assignment, handover.Assignment))
         if assignment is None:
             dpg.set_value('hv_status', 'No active assignment')
             dpg.configure_item('hv_status', color=(140, 140, 140))
             return
-        if not assignment.supported:
+        if isinstance(assignment, handover.UnsupportedSchema):
             dpg.set_value(
                 'hv_status',
                 f'Assignment written for schema_version {assignment.schema_version}; '
@@ -523,17 +523,18 @@ class EvalUI(pimm.ControlSystem):
         self._set_enabled('hv_note', not done)
 
     def _update_assignment_progress(self):
-        if self._assignment is None or not self._assignment.supported:
+        assignment = self._assignment
+        if not isinstance(assignment, handover.Assignment):
             return
         recorded = self._count - self._batch_base_count
-        target = self._assignment.episode_target
+        target = assignment.episode_target
         dpg.set_value('hv_progress', f'Episodes recorded: {recorded} / {target}')
         dpg.configure_item('hv_progress', color=(0, 200, 0) if recorded >= target else (255, 255, 255))
 
     def hand_back(self, sender=None, app_data=None):
         """Write the completion marker for the current assignment."""
         assignment = self._assignment
-        assert assignment is not None, 'the hand-back button is shown only while an assignment is active'
+        assert isinstance(assignment, handover.Assignment), 'the hand-back button shows only for a readable assignment'
         handover.write_completion(self.handover_dir, assignment.batch_id, dpg.get_value('hv_note'))
         self._set_handed_back(True)
 

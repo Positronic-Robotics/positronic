@@ -34,34 +34,35 @@ ASSIGNMENT_NAME = 'assignment.yaml'
 
 @dataclass(frozen=True)
 class Assignment:
-    """A batch of episodes to record, as the launcher described it.
+    """A batch of episodes to record, as the launcher described it."""
 
-    A ``schema_version`` other than ``SCHEMA_VERSION`` leaves every other field empty: the file follows a
-    contract this console does not know, and the version is all it can report about it.
+    batch_id: str
+    task: str
+    episode_target: int
+    notes: str
+    created_at: str
+
+
+@dataclass(frozen=True)
+class UnsupportedSchema:
+    """An assignment written against a ``schema_version`` this module does not implement.
+
+    Its version is the whole of what can be said about such a file: the rest of it follows a contract
+    that is not this one, so reading further would be guesswork.
     """
 
     schema_version: int
-    batch_id: str = ''
-    task: str = ''
-    episode_target: int = 0
-    notes: str = ''
-    created_at: str = ''
-
-    @property
-    def supported(self) -> bool:
-        return self.schema_version == SCHEMA_VERSION
 
 
-def read_assignment(handover_dir: Path) -> Assignment | None:
+def read_assignment(handover_dir: Path) -> Assignment | UnsupportedSchema | None:
     """The assignment in ``handover_dir``, or None when it holds none."""
     path = handover_dir / ASSIGNMENT_NAME
     if not path.exists():
         return None
     raw = yaml.safe_load(path.read_text())
     if raw['schema_version'] != SCHEMA_VERSION:
-        return Assignment(schema_version=raw['schema_version'])
+        return UnsupportedSchema(raw['schema_version'])
     return Assignment(
-        schema_version=SCHEMA_VERSION,
         batch_id=raw['batch_id'],
         task=raw['task'],
         episode_target=raw['episode_target'],

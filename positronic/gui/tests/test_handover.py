@@ -31,24 +31,21 @@ def test_read_assignment_reads_every_field(tmp_path):
     write_assignment(tmp_path, notes='tote on the left')
 
     assignment = handover.read_assignment(tmp_path)
-    assert assignment is not None
 
     assert assignment == handover.Assignment(
-        schema_version=1,
         batch_id='2026-08-05-a',
         task='Pick up objects from the red tote and place them in the green tote.',
         episode_target=20,
         notes='tote on the left',
         created_at='2026-08-05T09:14:03+00:00',
     )
-    assert assignment.supported
 
 
 def test_notes_are_optional(tmp_path):
     write_assignment(tmp_path)
 
     assignment = handover.read_assignment(tmp_path)
-    assert assignment is not None
+    assert isinstance(assignment, handover.Assignment)
 
     assert assignment.notes == ''
 
@@ -56,12 +53,7 @@ def test_notes_are_optional(tmp_path):
 def test_a_newer_schema_version_reports_only_its_version(tmp_path):
     write_assignment(tmp_path, schema_version=handover.SCHEMA_VERSION + 1)
 
-    assignment = handover.read_assignment(tmp_path)
-    assert assignment is not None
-
-    assert not assignment.supported
-    assert assignment.schema_version == handover.SCHEMA_VERSION + 1
-    assert assignment.task == ''
+    assert handover.read_assignment(tmp_path) == handover.UnsupportedSchema(handover.SCHEMA_VERSION + 1)
 
 
 def test_a_missing_required_field_surfaces(tmp_path):
