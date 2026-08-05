@@ -16,7 +16,7 @@ def _episode(ep_dir, widths: dict[str, int]) -> DiskEpisode:
 def test_narrow_signals_are_plotted(tmp_path):
     signals = _collect_signal_groups(_episode(tmp_path / 'ep', {keys.JOINTS: 7, keys.GRIP: 1}))
 
-    assert set(signals.numerics) == {keys.JOINTS, keys.GRIP}
+    assert set(signals.plotted) == {keys.JOINTS, keys.GRIP}
     assert signals.unplotted == {}
 
 
@@ -24,9 +24,16 @@ def test_wide_signal_is_named_instead_of_plotted(tmp_path):
     width = _MAX_PLOTTED_WIDTH + 1
     signals = _collect_signal_groups(_episode(tmp_path / 'ep', {keys.JOINTS: 7, 'sim_state': width}))
 
-    assert signals.numerics == [keys.JOINTS]
-    assert signals.dims == {keys.JOINTS: 7}
+    assert signals.plotted == [keys.JOINTS]
     assert signals.unplotted == {'sim_state': width}
+
+
+def test_wide_signal_still_reaches_the_3d_view(tmp_path):
+    width = _MAX_PLOTTED_WIDTH + 1
+    signals = _collect_signal_groups(_episode(tmp_path / 'ep', {keys.JOINTS: width}))
+
+    assert signals.numerics == [keys.JOINTS]
+    assert signals.dims == {keys.JOINTS: width}
 
 
 def test_notice_names_every_unplotted_signal_and_its_width():

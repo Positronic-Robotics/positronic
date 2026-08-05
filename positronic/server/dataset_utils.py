@@ -59,6 +59,10 @@ class EpisodeSignals:
     poses: list[str]
     unplotted: dict[str, int]  # name -> element count, for signals too wide to plot
 
+    @property
+    def plotted(self) -> list[str]:
+        return [name for name in self.numerics if name not in self.unplotted]
+
 
 def _infer_dims(sig) -> int:
     if len(sig) == 0:
@@ -172,7 +176,6 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
             dim = 1
         if dim > _MAX_PLOTTED_WIDTH:
             signals.unplotted[name] = dim
-            continue
 
         signals.numerics.append(name)
         signals.dims[name] = dim
@@ -182,9 +185,9 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
 
 
 def _group_signals_by_prefix(signals: EpisodeSignals) -> list[tuple[str, list[str]]]:
-    """Group numeric signals by prefix before the first '.'. Preserves insertion order."""
+    """Group plotted signals by prefix before the first '.'. Preserves insertion order."""
     groups: defaultdict[str, list[str]] = defaultdict(list)
-    for sig in signals.numerics:
+    for sig in signals.plotted:
         groups[sig.split('.')[0] if '.' in sig else sig].append(sig)
     return list(groups.items())
 
@@ -256,7 +259,7 @@ def _setup_series_names(signals: EpisodeSignals, ep: Episode) -> None:
     joint_set = _joint_signals(ep)
     joint_names = ep.static.get('joint_names')
     pose_set = set(signals.poses)
-    for key in signals.numerics:
+    for key in signals.plotted:
         dim = signals.dims.get(key, 1)
         is_joint_vel = key.endswith('.dq') and f'{key[: -len(".dq")]}.q' in joint_set
         if (key in joint_set or is_joint_vel) and joint_names:
@@ -350,7 +353,11 @@ def _log_video_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStr
 def _log_numeric_signals(
     ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer
 ) -> Generator[bytes, None, dict[str, tuple[np.ndarray, np.ndarray]]]:
-    """Log numeric time-series via send_columns. Returns pose/joint data for 3D logging."""
+    """Log numeric time-series via send_columns. Returns pose/joint data for 3D logging.
+
+    A signal too wide to plot is still read, so that a joint or pose vector of any width reaches the
+    3D view.
+    """
     pose_set = set(signals.poses)
     gripper = ep.static.get('gripper')
     stash_keys = pose_set | _joint_signals(ep)
@@ -371,12 +378,15 @@ def _log_numeric_signals(
             vals = vals.reshape(-1, 1)
         dim = vals.shape[1]
 
-        time_idx = [rr.TimeColumn('time', timestamp=ts_arr)]
-        if dim == 1:
-            rr.send_columns(f'/signals/{key}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals.ravel()))
-        else:
-            for i in range(dim):
-                rr.send_columns(f'/signals/{key}/{i}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals[:, i]))
+        if key not in signals.unplotted:
+            time_idx = [rr.TimeColumn('time', timestamp=ts_arr)]
+            if dim == 1:
+                rr.send_columns(f'/signals/{key}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals.ravel()))
+            else:
+                for i in range(dim):
+                    rr.send_columns(
+                        f'/signals/{key}/{i}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals[:, i])
+                    )
 
         if key in stash_keys:
             pose_data[key] = (ts_arr, vals)
