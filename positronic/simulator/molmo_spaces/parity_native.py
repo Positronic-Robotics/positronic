@@ -116,18 +116,15 @@ def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out
             break
     sampler.close()
 
-    recorded = {key: np.stack(values) for key, values in fields.items()}
+    recorded: dict = {key: np.stack(values) for key, values in fields.items()}
     recorded.update({f'{mapping.CAM_HASH_PREFIX}{name}': np.array(cam_hashes[name]) for name in camera_names})
-    np.savez(
-        out_path,
-        camera_names=np.array(camera_names),
-        native_horizon=native_horizon,
-        horizon_sec=native_horizon * (cfg.policy_dt_ms / 1000.0),  # the sim-seconds env.py reports at reset
-        termination_step=step,
-        final_success=success,
-        # numpy's savez **kwds stub reads a dict-unpack as possibly supplying ``allow_pickle`` (as in make_fixture.py).
-        **recorded,  # pyright: ignore[reportArgumentType]
-    )
+    recorded[mapping.PARITY_CAMERA_NAMES] = np.array(camera_names)
+    recorded[mapping.PARITY_HORIZON_STEPS] = native_horizon
+    recorded[mapping.PARITY_HORIZON_SEC] = native_horizon * (cfg.policy_dt_ms / 1000.0)  # env.py reports this at reset
+    recorded[mapping.PARITY_TERMINATION_STEP] = step
+    recorded[mapping.PARITY_FINAL_SUCCESS] = success
+    # numpy's savez **kwds stub reads a dict-unpack as possibly supplying ``allow_pickle`` (as in make_fixture.py).
+    np.savez(out_path, **recorded)  # pyright: ignore[reportArgumentType]
 
 
 def main() -> None:

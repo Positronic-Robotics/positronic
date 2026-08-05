@@ -80,11 +80,11 @@ def _drive_positronic(benchmark_dir: Path, episode_index: int, seed: int, max_st
     return {
         **{key: np.stack(fields[key]) for key in _ARRAY_FIELDS},
         mapping.OBS_GRIP: np.array(fields[mapping.OBS_GRIP], dtype=np.float32),
-        'camera_names': camera_names,
+        mapping.PARITY_CAMERA_NAMES: camera_names,
         'cam_hashes': cam_hashes,
         'reported_horizon': reported_horizon,
-        'termination_step': step,
-        'final_success': bool(out[protocol.FRAME_SUCCESS]),
+        mapping.PARITY_TERMINATION_STEP: step,
+        mapping.PARITY_FINAL_SUCCESS: bool(out[protocol.FRAME_SUCCESS]),
     }
 
 
@@ -113,27 +113,32 @@ def _run_native(benchmark_dir: Path, episode_index: int, seed: int, max_steps: i
 
 
 def _assert_parity(native: dict, positronic: dict, max_steps: int) -> None:
-    horizon = int(native['native_horizon'])
-    n_term, p_term = int(native['termination_step']), positronic['termination_step']
+    horizon = int(native[mapping.PARITY_HORIZON_STEPS])
+    n_term = int(native[mapping.PARITY_TERMINATION_STEP])
+    p_term = positronic[mapping.PARITY_TERMINATION_STEP]
     assert n_term < max_steps, f'native never terminated in {max_steps} steps — raise --max_steps above the horizon'
     assert p_term < max_steps, f'positronic never terminated in {max_steps} steps — raise --max_steps above the horizon'
     # The horizon case: holding the arm never succeeds, so both stacks run out the native horizon and stop there.
     assert n_term == horizon == p_term, (
         f'terminating step differs: native {n_term}, horizon {horizon}, positronic {p_term}'
     )
-    assert not bool(native['final_success']) and not positronic['final_success'], 'a held arm must not score success'
+    assert not bool(native[mapping.PARITY_FINAL_SUCCESS]) and not positronic[mapping.PARITY_FINAL_SUCCESS], (
+        'a held arm must not score success'
+    )
     # The env reports its horizon at reset (in sim-seconds); it must match native's and equal timeout's yardstick.
-    n_horizon = float(native['horizon_sec'])
+    n_horizon = float(native[mapping.PARITY_HORIZON_SEC])
     assert n_horizon == positronic['reported_horizon'], (
         f'reported horizon differs: native {n_horizon}s, positronic {positronic["reported_horizon"]}s'
     )
 
-    assert list(native['camera_names']) == positronic['camera_names'], 'camera sets differ between the stacks'
+    assert list(native[mapping.PARITY_CAMERA_NAMES]) == positronic[mapping.PARITY_CAMERA_NAMES], (
+        'camera sets differ between the stacks'
+    )
     for field in (*_ARRAY_FIELDS, mapping.OBS_GRIP):
         n, p = native[field], positronic[field]
         assert n.shape == p.shape, f'{field} shape differs: native {n.shape}, positronic {p.shape}'
         assert np.array_equal(n, p), f'{field} differs between native and positronic rollouts'
-    for name in positronic['camera_names']:
+    for name in positronic[mapping.PARITY_CAMERA_NAMES]:
         n_hashes, p_hashes = list(native[f'{mapping.CAM_HASH_PREFIX}{name}']), positronic['cam_hashes'][name]
         assert n_hashes == p_hashes, f'camera {name} frames differ between native and positronic rollouts'
 
@@ -144,8 +149,9 @@ def run(benchmark_dir: Path, *, episode_index: int = 0, seed: int = 0, max_steps
         native = _run_native(benchmark_dir, episode_index, seed, max_steps, Path(tmp) / 'native.npz')
         positronic = _drive_positronic(benchmark_dir, episode_index, seed, max_steps)
     _assert_parity(native, positronic, max_steps)
-    frames = positronic['termination_step'] + 1
-    print(f'PARITY PASSED — episode {episode_index}: {frames} frames, terminated at horizon {native["native_horizon"]}')
+    frames = positronic[mapping.PARITY_TERMINATION_STEP] + 1
+    horizon = native[mapping.PARITY_HORIZON_STEPS]
+    print(f'PARITY PASSED — episode {episode_index}: {frames} frames, terminated at horizon {horizon}')
 
 
 def main() -> None:
