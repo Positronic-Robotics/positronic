@@ -241,7 +241,7 @@ class Harness(pimm.ControlSystem):
         # sub-policy) and wins on conflict.
         session_meta = self.policy.meta | (self._policy_session.meta if self._policy_session else {})
         for k, v in flatten_dict(session_meta).items():
-            meta[f'inference.policy.{k}'] = v
+            meta[f'{keys.POLICY_META}.{k}'] = v
         meta.update(context)
         return meta
 

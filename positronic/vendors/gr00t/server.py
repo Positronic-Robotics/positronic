@@ -12,6 +12,7 @@ import numpy as np
 import pos3
 import zmq
 
+from positronic import keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Policy, Session
@@ -220,7 +221,7 @@ class Gr00tPolicy(Policy):
 
     @property
     def meta(self):
-        return {'checkpoint_path': self._checkpoint_path}
+        return {keys.CHECKPOINT_PATH: self._checkpoint_path}
 
     def close(self):
         self._groot.stop()
@@ -303,9 +304,9 @@ class Gr00tSource(ModelSource):
 
     def meta(self, model_id: str) -> dict[str, Any]:
         return {
-            'type': 'groot',
+            keys.TYPE: 'groot',
             'modality_config': self.modality_config,
-            'experiment_name': self.checkpoints_dir.split('/')[-1] or '',
+            keys.EXPERIMENT_NAME: self.checkpoints_dir.split('/')[-1] or '',
         }
 
 

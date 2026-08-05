@@ -15,6 +15,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from starlette.datastructures import QueryParams
 
+from positronic import keys
 from positronic.policy import Codec, Policy, Recorder
 from positronic.policy.spec import SEQ, ModelSource, Pipeline, split
 from positronic.utils.serialization import deserialise, serialise
@@ -190,7 +191,7 @@ class PolicyServer:
         self._manager = PolicyManager(self._source)
         self.host = host
         self.port = port
-        self.metadata: dict[str, Any] = {'host': host, 'port': port}
+        self.metadata: dict[str, Any] = {keys.HOST: host, keys.PORT: port}
         # Synced once; each session builds its own ``Recorder`` so concurrent streams never mix.
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
 
@@ -274,7 +275,7 @@ class PolicyServer:
             meta = {
                 **self.metadata,
                 **self._source.meta(rid),
-                'checkpoint_id': rid,
+                keys.CHECKPOINT_ID: rid,
                 **served.meta,
                 **session.meta,
                 'local_stack': local_spec,

@@ -16,12 +16,13 @@ import websockets.sync.client
 from huggingface_hub import snapshot_download
 from websockets.exceptions import ConnectionClosed
 
+from positronic import keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Codec, Policy, PolicyWrapper, Session
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
-from positronic.utils.checkpoints import get_latest_checkpoint
+from positronic.utils.checkpoints import list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialize, serialize
 from positronic.vendors.dreamzero import codecs
@@ -41,13 +42,31 @@ def _download_checkpoint(model_path: str) -> Path:
     return Path(snapshot_download(model_path))
 
 
-def _resolve_checkpoint_path(model_path: str) -> str:
-    """Latest ``checkpoint-N`` under an ``s3://`` run directory; a pinned checkpoint dir, a HuggingFace repo,
-    or a local path is returned unchanged."""
+def _is_run_directory(model_path: str) -> bool:
+    """Whether ``model_path`` holds ``checkpoint-N`` children rather than being one checkpoint itself.
+
+    Decided by shape, not by name: a run directory may be called anything, including the step number of
+    the checkpoint inside it.
+    """
     last = model_path.rstrip('/').split('/')[-1]
-    if not model_path.startswith('s3://') or last.startswith('checkpoint-'):
-        return model_path
-    return f'{model_path.rstrip("/")}/{get_latest_checkpoint(model_path, "checkpoint-")}'
+    return model_path.startswith('s3://') and not last.startswith('checkpoint-')
+
+
+def _checkpoint_id(checkpoint_path: str) -> str:
+    """The public id for a checkpoint: the step a ``checkpoint-N`` directory names, else the path itself.
+
+    The step is kept as the directory writes it, zero-padding and all, so the id maps back to a directory
+    that exists. Anything else — a HuggingFace repo, a local path — names no step and stays whole, since
+    that whole string is the id a client addresses it by.
+    """
+    last = checkpoint_path.rstrip('/').split('/')[-1]
+    return last.removeprefix('checkpoint-') if last.startswith('checkpoint-') else checkpoint_path
+
+
+def _experiment_name(checkpoint_path: str) -> str:
+    """The training run a resolved checkpoint belongs to."""
+    parts = checkpoint_path.rstrip('/').split('/')
+    return parts[-2] if len(parts) >= 2 and parts[-1].startswith('checkpoint-') else parts[-1]
 
 
 # TODO: Extract RoboarenaClient to positronic/offboard/ — roboarena is a cross-vendor
@@ -231,7 +250,8 @@ class DreamZeroSource(ModelSource):
     """DreamZero checkpoints served through a torchrun subprocess speaking the roboarena protocol.
 
     ``model_path`` is an ``s3://`` run directory (served at its latest ``checkpoint-N``), a pinned
-    checkpoint dir, a HuggingFace repo, or a local path.
+    checkpoint dir, a HuggingFace repo, or a local path. Model ids are checkpoint step numbers
+    (``'100000'`` for ``checkpoint-100000``).
     """
 
     def __init__(
@@ -250,12 +270,25 @@ class DreamZeroSource(ModelSource):
         self._roboarena_port = roboarena_port
         self._enable_dit_cache = enable_dit_cache
 
+    def _checkpoint_path(self, model_id: str) -> str:
+        """The checkpoint directory whose public id is ``model_id``.
+
+        Composed rather than looked up: a session handshake reaches here, and must not need the
+        checkpoint bucket to describe weights that are already loaded.
+        """
+        if not _is_run_directory(self._model_path):
+            return self._model_path
+        return f'{self._model_path.rstrip("/")}/checkpoint-{model_id}'
+
     def get_models(self) -> list[str]:
-        return [_resolve_checkpoint_path(self._model_path)]
+        if not _is_run_directory(self._model_path):
+            return [_checkpoint_id(self._model_path)]
+        return [_checkpoint_id(c) for c in list_checkpoints(self._model_path, prefix='checkpoint-')]
 
     def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
+        checkpoint_path = self._checkpoint_path(model_id)
         local_path = run_with_progress(
-            lambda: _download_checkpoint(model_id), 'Downloading DreamZero checkpoint', on_progress
+            lambda: _download_checkpoint(checkpoint_path), 'Downloading DreamZero checkpoint', on_progress
         )
         logger.info(f'Starting DreamZero subprocess with {self._num_gpus} GPUs')
         sp = DreamZeroSubprocess(
@@ -274,7 +307,14 @@ class DreamZeroSource(ModelSource):
         return DreamZeroPolicy(sp)
 
     def meta(self, model_id: str) -> dict[str, Any]:
-        return {'type': 'dreamzero', 'backbone': self._backbone, 'model_path': model_id, 'num_gpus': self._num_gpus}
+        checkpoint_path = self._checkpoint_path(model_id)
+        return {
+            keys.TYPE: 'dreamzero',
+            'backbone': self._backbone,
+            'num_gpus': self._num_gpus,
+            keys.CHECKPOINT_PATH: checkpoint_path,
+            keys.EXPERIMENT_NAME: _experiment_name(checkpoint_path),
+        }
 
 
 dreamzero_source = cfn.Config(DreamZeroSource)
@@ -304,6 +344,18 @@ COMMANDS = {
     'joints_traj': serve.override(pipeline=joints_traj),
     'joints_ik': serve.override(pipeline=joints_ik),
     'joints_ik_sim': serve.override(pipeline=joints_ik_sim),
+    # The PhAIL fine-tune. Trained with the joints_ik codec, whose inference decode is the shared joints
+    # one, so the joints pipeline serves it; the backbone must be the one the run was trained on.
+    # TODO: publish this checkpoint to positronic-public and point here, as the other PhAIL models are
+    # (`utilities/release_phail.py`, `positronic.cfg.phail.v1_0.models`). Reading it needs credentials until then.
+    'phail': serve.override(
+        pipeline=joints,
+        recording_dir='s3://inference/phail_unified/server_recordings/dreamzero/w22f1_100k_200626/',
+        **{
+            'pipeline.source.model_path': 's3://checkpoints/phail/dreamzero/w22f1_100k_200626/',
+            'pipeline.source.backbone': 'wan2.2',
+        },
+    ),
     # Public pretrained DROID checkpoint: wan2.1 backbone (the base default) paired with the DROID
     # pipeline whose codec feeds its required 320x180 frames.
     'droid': serve.override(pipeline=droid.override(**{'source.model_path': 'GEAR-Dreams/DreamZero-DROID'})),

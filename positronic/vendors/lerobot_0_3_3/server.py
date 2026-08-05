@@ -8,6 +8,7 @@ import pos3
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
+from positronic import keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress
 from positronic.policy import Codec, Policy
@@ -66,11 +67,11 @@ class LerobotSource(ModelSource):
             lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {model_id}', on_progress
         )
         policy = self._policy_factory(str(local))
-        meta = {'type': self._model_type, 'checkpoint_path': checkpoint_path}
+        meta = {keys.TYPE: self._model_type, keys.CHECKPOINT_PATH: checkpoint_path}
         return LerobotPolicy(policy, self._device, extra_meta=meta)
 
     def meta(self, model_id: str) -> dict[str, Any]:
-        return {'device': self._device, 'experiment_name': self._experiment_name}
+        return {'device': self._device, keys.EXPERIMENT_NAME: self._experiment_name}
 
 
 lerobot_source = cfn.Config(LerobotSource, policy_factory=act)

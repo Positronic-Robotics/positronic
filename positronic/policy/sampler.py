@@ -5,6 +5,8 @@ from collections import defaultdict
 from collections.abc import Hashable, Sequence
 from typing import Any
 
+from positronic import keys
+
 logger = logging.getLogger(__name__)
 
 
@@ -44,7 +46,7 @@ class EpisodeCounter:
         group = self._counts[self._group(context)]
         return {k: group[k] for k in keys}
 
-    def seed_from(self, dataset: Any, meta_prefix: str = 'inference.policy.') -> int:
+    def seed_from(self, dataset: Any, meta_prefix: str = f'{keys.POLICY_META}.') -> int:
         """Rebuild tallies from recorded episodes in ``dataset``. Returns the number counted.
 
         The episode static stores the key under ``{meta_prefix}{key_field}`` and the

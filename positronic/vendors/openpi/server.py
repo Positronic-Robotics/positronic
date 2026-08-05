@@ -10,7 +10,7 @@ import configuronic as cfn
 import pos3
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
 
-from positronic import geom
+from positronic import geom, keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Codec, Policy, Session
@@ -223,10 +223,10 @@ class OpenpiSource(ModelSource):
 
     def meta(self, model_id: str) -> dict[str, Any]:
         return {
-            'type': 'openpi',
-            'config_name': self.config_name,
-            'checkpoint_path': self.checkpoints_dir if self._passthrough else f'{self.checkpoints_dir}/{model_id}',
-            'experiment_name': self.checkpoints_dir.rsplit('/', 1)[-1],
+            keys.TYPE: 'openpi',
+            keys.CONFIG_NAME: self.config_name,
+            keys.CHECKPOINT_PATH: self.checkpoints_dir if self._passthrough else f'{self.checkpoints_dir}/{model_id}',
+            keys.EXPERIMENT_NAME: self.checkpoints_dir.rsplit('/', 1)[-1],
         }
 
 

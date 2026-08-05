@@ -38,7 +38,9 @@ def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None
     if n_action_steps is not None:
         policy.config.n_action_steps = n_action_steps
 
-    return LerobotPolicy(policy, device, extra_meta={'type': 'act', 'checkpoint_path': fully_specified_checkpoint_dir})
+    return LerobotPolicy(
+        policy, device, extra_meta={keys.TYPE: 'act', keys.CHECKPOINT_PATH: fully_specified_checkpoint_dir}
+    )
 
 
 @cfn.config(
@@ -57,7 +59,7 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
     return SampledPolicy(*origins, weights=weights)
 
 
-remote = cfn.Config(RemotePolicy, url='localhost:8000')
+remote = cfn.Config(RemotePolicy, url='ws://localhost:8000')
 
 
 @cfn.config(balance=2)
@@ -77,12 +79,12 @@ def production(
 ):
     """Routes each episode to one of several remote endpoints, each named for CLI overrides.
 
-    An endpoint is one URL, so `--policy.endpoints.groot=desktop:8000` adds or repoints one without
+    An endpoint is one URL, so `--policy.endpoints.groot=ws://desktop:8000` adds or repoints one without
     restating the others. `weights` name the same endpoints and set their sampling odds; endpoints left
     out of it weigh 1.0.
     """
     if not endpoints:
-        raise ValueError('At least one endpoint must be given, e.g. --policy.endpoints.groot=desktop:8000')
+        raise ValueError('At least one endpoint must be given, e.g. --policy.endpoints.groot=ws://desktop:8000')
     if unknown := weights.keys() - endpoints.keys():
         raise ValueError(f'weights name unknown endpoints: {sorted(unknown)}; known are {sorted(endpoints)}')
     # Every Sampler but the default uniform one picks by episode counts alone, so weights would be dropped.
@@ -95,15 +97,22 @@ def production(
 
 @cfn.config()
 def phail_single(hostname, w_openpi=1.0, w_groot=1.0, w_act=1.0):
-    openpi = RemotePolicy(f'{hostname}:8000')
-    groot = RemotePolicy(f'{hostname}:8001')
-    act = RemotePolicy(f'{hostname}:8002')
+    openpi = RemotePolicy(f'ws://{hostname}:8000')
+    groot = RemotePolicy(f'ws://{hostname}:8001')
+    act = RemotePolicy(f'ws://{hostname}:8002')
 
     return SampledPolicy(openpi, groot, act, weights=[w_openpi, w_groot, w_act])
 
 
 phail_multiple = production.override(
-    endpoints={'smolvla': 'notebook:8000', 'act': 'notebook:8001', 'groot': 'desktop:8000', 'openpi': 'vm-openpi:8000'},
+    endpoints={
+        'smolvla': 'ws://notebook:8000',
+        'act': 'ws://notebook:8001',
+        'groot': 'ws://desktop:8000',
+        'openpi': 'ws://vm-openpi:8000',
+        # DreamZero's 5B wan2.2 needs an H100, so it cannot share the consumer boxes above.
+        'dreamzero': 'ws://vm-train2:8000',
+    },
     sampler=balanced,
     group_fields=[keys.TASK, 'eval.object', 'eval.tote_placement', 'eval.external_camera'],
 )

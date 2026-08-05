@@ -331,8 +331,7 @@ class MujocoSim(pimm.ControlSystem):
         return save_state(self.model, self.data)
 
     def step(self, duration: float | None = None) -> None:
-        duration = duration or self.model.opt.timestep
-        target_time = self.data.time + duration
+        target_time = self.data.time + (duration or self.model.opt.timestep)
         while self.data.time < target_time:
             mj.mj_step(self.model, self.data)
 
