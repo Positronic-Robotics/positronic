@@ -80,7 +80,7 @@ def extract_assets(spec: mujoco.MjSpec, parent_dir: str | None = None) -> dict[s
 # TODO: In theory this could be implemented via series of scene transformations. But this is a bit of a pain. :_)
 def generate_scene(
     table_height: RANGE_OR_VALUE = 0.3, table_size: tuple[float, float, float] = (0.4, 0.6, 0.05), portable: bool = True
-) -> mujoco.MjModel:
+) -> tuple[mujoco.MjSpec, dict[str, Any]]:
     table_height = random_range(table_height)
     table_offset = (-0.3, 0, table_height)
 

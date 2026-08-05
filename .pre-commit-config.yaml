@@ -37,6 +37,15 @@ repos:
         language: system
         files: '(^|/)(test_[^/]+\.py|[^/]+_test\.py)$'
         stages: [pre-commit]
+      - id: mujoco-stubs
+        name: mujoco stubs match the installed mujoco
+        # stubs/mujoco is generated from the binary extension modules, so a version bump silently
+        # invalidates it. Scoped to the lock (where the version moves) and the stubs themselves.
+        entry: env UV_PROJECT_ENVIRONMENT=.venv-typecheck uv run --locked --exact --extra dev python utilities/generate_mujoco_stubs.py --check
+        language: system
+        files: '^(uv\.lock|stubs/mujoco/.*|utilities/generate_mujoco_stubs\.py)$'
+        pass_filenames: false
+        stages: [pre-commit]
       - id: basedpyright-baseline-ratchet
         name: basedpyright baseline is a one-way ratchet
         # Reads the baseline and git directly, so takes no filenames; scoped to fire only when

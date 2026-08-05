@@ -107,10 +107,10 @@ class _Kinematics:
 
     def __init__(self):
         model_path = package_assets_path(_MJCF_PATH)
-        self._model = mj.MjModel.from_xml_path(model_path)  # pyright: ignore[reportAttributeAccessIssue]
-        self._data = mj.MjData(self._model)  # pyright: ignore[reportAttributeAccessIssue]
-        site = mj.mjtObj.mjOBJ_SITE  # pyright: ignore[reportAttributeAccessIssue]
-        self._site_id = mj.mj_name2id(self._model, site, DEFAULT_FRAME)  # pyright: ignore[reportAttributeAccessIssue]
+        self._model = mj.MjModel.from_xml_path(model_path)
+        self._data = mj.MjData(self._model)
+        site = mj.mjtObj.mjOBJ_SITE
+        self._site_id = mj.mj_name2id(self._model, site, DEFAULT_FRAME)
         self._qpos_ids = np.array([self._model.joint(name).qposadr.item() for name in _JOINT_NAMES])
         self._dof_ids = np.array([self._model.joint(name).dofadr.item() for name in _JOINT_NAMES])
         ranges = np.array([self._model.joint(name).range for name in _JOINT_NAMES])
@@ -118,9 +118,9 @@ class _Kinematics:
 
     def fk(self, q: np.ndarray) -> geom.Transform3D:
         self._data.qpos[self._qpos_ids] = q
-        mj.mj_kinematics(self._model, self._data)  # pyright: ignore[reportAttributeAccessIssue]
+        mj.mj_kinematics(self._model, self._data)
         quat = np.empty(4)
-        mj.mju_mat2Quat(quat, self._data.site_xmat[self._site_id].copy())  # pyright: ignore[reportAttributeAccessIssue]
+        mj.mju_mat2Quat(quat, self._data.site_xmat[self._site_id].copy())
         return geom.Transform3D(self._data.site_xpos[self._site_id].copy(), geom.Rotation.from_quat(quat))
 
     def ik(self, target: geom.Transform3D, current_q: np.ndarray) -> np.ndarray | None:
