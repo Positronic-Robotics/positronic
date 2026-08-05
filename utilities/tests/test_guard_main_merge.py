@@ -73,8 +73,12 @@ def git():
     })
 
 
-def verdict(git, cmd, cwd=CLONE):
-    return gmm.analyze(cmd, cwd, GUARDED, git, path_exists=fake_path_exists)
+def no_allow(number, guarded_slug):
+    return False
+
+
+def verdict(git, cmd, cwd=CLONE, allow_merge=no_allow):
+    return gmm.analyze(cmd, cwd, GUARDED, git, path_exists=fake_path_exists, allow_merge=allow_merge)
 
 
 BLOCKED = [
@@ -254,6 +258,87 @@ def test_deny_messages_name_the_operation(git):
     assert 'amend' in verdict(git, 'git commit --amend')
     assert 'gh pr merge' in verdict(git, 'gh pr merge 5')
     assert 'push to main' in verdict(git, 'git push origin main')
+
+
+def test_a_lossily_parsed_merge_is_denied_rather_than_crashing(git):
+    """An unparseable command falls back to a coarse scan, whose words carry shell punctuation."""
+    assert verdict(git, "echo don't && gh pr merge)") is not None
+
+
+def test_a_merge_naming_no_pull_request_says_to_name_one(git):
+    assert 'name the pull request' in verdict(git, 'gh pr merge --squash', allow_merge=lambda *_: True)
+
+
+def test_an_authorized_merge_goes_through(git):
+    assert verdict(git, 'gh pr merge 566 --squash', allow_merge=lambda *_: True) is None
+
+
+def test_the_authorization_is_asked_for_the_pull_request_being_merged(git):
+    asked = []
+    verdict(git, 'gh pr -R o/r merge 566 --delete-branch', allow_merge=lambda n, slug: asked.append((n, slug)) or False)
+    assert asked == [(566, GUARDED.casefold())]
+
+
+def test_a_commit_message_quoting_a_blocked_command_is_not_itself_blocked(git):
+    """A backtick inside a quoted heredoc is prose: the delimiter suppresses every expansion."""
+    cmd = "cd /w/positronic && git commit -F- -- x.py <<'EOF'\nthe guard blocks `gh pr merge` outright\nEOF"
+    assert verdict(git, cmd) is None
+
+
+def test_an_unquoted_heredoc_still_fails_closed(git):
+    """Its body DOES expand, so a substitution in it is a command, not prose."""
+    cmd = 'cd /w/positronic && git commit -F- -- x.py <<EOF\n`git push origin main`\nEOF'
+    assert verdict(git, cmd) is not None
+
+
+def write_allow(directory, number, repo='', issued_at=1_000_000, ttl_s=1800):
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / gmm.RECEIPT_NAME.format(number=number)
+    path.write_text(
+        json.dumps({
+            gmm.RECEIPT_REPO: repo,
+            gmm.RECEIPT_NUMBER: number,
+            gmm.RECEIPT_ISSUED_AT: issued_at,
+            gmm.RECEIPT_TTL_S: ttl_s,
+            'by': 'U0',
+        })
+    )
+    return path
+
+
+def test_an_authorization_is_spent_by_the_merge_it_permits(tmp_path):
+    path = write_allow(tmp_path, 566)
+    assert gmm.consume_merge_allow(566, GUARDED, tmp_path, now=1_000_060)
+    assert not path.exists()
+    assert not gmm.consume_merge_allow(566, GUARDED, tmp_path, now=1_000_060)
+
+
+def test_an_expired_authorization_is_refused_and_cleared(tmp_path):
+    path = write_allow(tmp_path, 566)
+    assert not gmm.consume_merge_allow(566, GUARDED, tmp_path, now=1_002_000)
+    assert not path.exists()
+
+
+def test_an_authorization_for_another_pull_request_does_not_carry(tmp_path):
+    write_allow(tmp_path, 566)
+    assert not gmm.consume_merge_allow(565, GUARDED, tmp_path, now=1_000_060)
+
+
+@pytest.mark.parametrize('repo', ['', 'positronic', 'Positronic-Robotics/positronic'])
+def test_a_reference_naming_this_repository_is_honoured(tmp_path, repo):
+    write_allow(tmp_path, 566, repo=repo)
+    assert gmm.consume_merge_allow(566, GUARDED, tmp_path, now=1_000_060)
+
+
+def test_an_authorization_for_another_repository_is_refused(tmp_path):
+    write_allow(tmp_path, 566, repo='someone/other')
+    assert not gmm.consume_merge_allow(566, GUARDED, tmp_path, now=1_000_060)
+
+
+def test_a_missing_or_unreadable_receipt_is_simply_no_authorization(tmp_path):
+    assert not gmm.consume_merge_allow(566, GUARDED, tmp_path, now=1_000_060)
+    (tmp_path / gmm.RECEIPT_NAME.format(number=566)).write_text('{not json')
+    assert not gmm.consume_merge_allow(566, GUARDED, tmp_path, now=1_000_060)
 
 
 def _init_repo(path, url, branch='main'):

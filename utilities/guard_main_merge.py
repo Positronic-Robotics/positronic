@@ -25,11 +25,20 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
+from pathlib import Path
 
 DENY_TAIL = (
     ' Merging to main requires a PR and an explicit human/operator command — a named human must run the merge'
     ' themselves (e.g. via the `!` prefix or their own shell).'
+)
+MERGE_ESCAPE = (
+    ' A named human can authorize THIS ONE merge from chat with `!allow_merge <pr>`, which the merge then spends.'
+)
+UNNUMBERED_MSG = (
+    'BLOCKED: name the pull request to merge (`gh pr merge <number>`) — an authorization names one pull'
+    ' request, so a merge that names none can never match it.'
 )
 AMEND_MSG = 'BLOCKED: Never amend commits, create new ones instead.'
 
@@ -152,9 +161,9 @@ def _strip_heredoc_bodies(cmd: str) -> str:
     entirely different repos.
 
     Dropping the body loses nothing analyzable, because a QUOTED delimiter suppresses every
-    expansion: the text reaches the command literally and cannot execute. Unquoted `<<EOF` is
-    deliberately left in place — its body DOES expand `$(…)`, so it keeps failing closed, and
-    `_substitution_bodies` still scans the untouched command for what such a body might run.
+    expansion: the text reaches the command literally and cannot execute, so a backtick in such
+    a body is prose rather than a substitution. Unquoted `<<EOF` is deliberately left in place —
+    its body DOES expand `$(…)`, so it keeps failing closed.
     """
     lines = cmd.split('\n')
     kept: list[str] = []
@@ -323,26 +332,68 @@ def _subcmd(words: list[str]) -> tuple[str, list[str]]:
     return '', []
 
 
-def _is_gh_pr_merge(words: list[str]) -> bool:
-    """gh (cobra) accepts persistent flags between `pr` and the subcommand — `gh pr -R o/r merge 1`."""
-    seen_pr = skip = False
+MERGE_ALLOW_DIR = Path.home() / '.local' / 'state' / 'relay' / 'merge_allows'
+# The receipt is written by `listen_chat_receiver/relay/merge_allow.py` in the `os` repository,
+# which cannot import from here and is imported by nothing here — so the file layout is the whole
+# of the contract, and it is named once on each side rather than spelled out at every use.
+RECEIPT_NAME = 'pr{number}.json'
+RECEIPT_NUMBER = 'number'
+RECEIPT_REPO = 'repo'
+RECEIPT_ISSUED_AT = 'issued_at'
+RECEIPT_TTL_S = 'ttl_s'
+
+
+def consume_merge_allow(
+    number: int, guarded_slug: str, directory: Path = MERGE_ALLOW_DIR, now: float | None = None
+) -> bool:
+    """Whether a human has authorized merging this pull request, spending the authorization.
+
+    The relay writes the receipt when a whitelisted human types `!allow_merge` in chat, and
+    refuses to write one for an injected message, so the agent cannot mint its own. An empty
+    repo names only a number, which resolves against the guarded repository.
+    """
+    path = directory / RECEIPT_NAME.format(number=number)
+    try:
+        receipt = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    if receipt.get(RECEIPT_NUMBER) != number:
+        return False
+    repo = str(receipt.get(RECEIPT_REPO) or '').casefold()
+    slug = guarded_slug.casefold()
+    if repo and repo != slug and repo != slug.rpartition('/')[2]:
+        return False
+    issued_at, ttl = receipt.get(RECEIPT_ISSUED_AT, 0), receipt.get(RECEIPT_TTL_S, 0)
+    fresh = (now if now is not None else time.time()) - issued_at < ttl
+    path.unlink(missing_ok=True)
+    return fresh
+
+
+def _gh_positionals(words: list[str]) -> list[str]:
+    """The invocation's positional words: flags dropped, and the values of those that take one."""
+    out, skip = [], False
     for w in words:
         if skip:
             skip = False
-            continue
-        if w.startswith('-'):
-            if w in ('-R', '--repo'):
-                skip = True
-            continue
-        w = re.sub(r'[)}].*$', '', w)
-        if not w:
-            continue
-        if not seen_pr:
-            if w == 'pr':
-                seen_pr = True
-            continue
-        return w == 'merge'
-    return False
+        elif w.startswith('-'):
+            skip = w in ('-R', '--repo')
+        elif bare := re.sub(r'[)}].*$', '', w):  # a lossy parse leaves a closing delimiter glued on
+            out.append(bare)
+    return out
+
+
+def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None]:
+    """Whether this is `gh pr merge`, and the pull request it names — None when it names none.
+
+    gh (cobra) accepts persistent flags between `pr` and the subcommand — `gh pr -R o/r merge 1`.
+    """
+    positional = _gh_positionals(words)
+    if 'pr' not in positional:
+        return False, None
+    after = positional[positional.index('pr') + 1 :]
+    if not after or after[0] != 'merge':
+        return False, None
+    return True, next((int(w) for w in after[1:] if w.isdigit()), None)
 
 
 def _push_dest_slug(inv_dir: str | None, rest: list[str], git: GitInfo) -> str:  # noqa: C901
@@ -397,15 +448,23 @@ def _push_dest_slug(inv_dir: str | None, rest: list[str], git: GitInfo) -> str: 
     return repo_slug(git.remote_url(inv_dir, remote))
 
 
-def analyze(cmd: str, cwd: str, guarded_slug: str, git: GitInfo, path_exists=os.path.isdir, _depth=0) -> str | None:  # noqa: C901
+def analyze(  # noqa: C901
+    cmd: str,
+    cwd: str,
+    guarded_slug: str,
+    git: GitInfo,
+    path_exists=os.path.isdir,
+    _depth=0,
+    allow_merge=consume_merge_allow,
+) -> str | None:
     """The deny message for `cmd`, or None to allow it."""
     guarded_slug = guarded_slug.casefold()
     # A command substitution runs its own command (same cwd) before the outer command, so a git
     # invocation hidden inside `` `…` `` / `$(…)` must be analyzed too. Bounded recursion depth
     # guards against pathological nesting.
     if _depth < 8:
-        for body in _substitution_bodies(cmd):
-            deny = analyze(body, cwd, guarded_slug, git, path_exists, _depth + 1)
+        for body in _substitution_bodies(_strip_heredoc_bodies(cmd)):
+            deny = analyze(body, cwd, guarded_slug, git, path_exists, _depth + 1, allow_merge)
             if deny:
                 return deny
     invs = parse_invocations(cmd, cwd, path_exists)
@@ -430,8 +489,14 @@ def analyze(cmd: str, cwd: str, guarded_slug: str, git: GitInfo, path_exists=os.
         return on_main(inv_dir) or switches_to_main()
 
     for inv in invs:
-        if inv.kind == 'gh' and _is_gh_pr_merge(inv.words):
-            return 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL
+        if inv.kind != 'gh':
+            continue
+        is_merge, number = _gh_pr_merge(inv.words)
+        if is_merge:
+            if number is None:
+                return UNNUMBERED_MSG
+            if not allow_merge(number, guarded_slug):
+                return 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
 
     for inv, sub, rest in git_invs:
         if exempt(inv.dir):
