@@ -89,8 +89,8 @@ Trajectory: TypeAlias = list[tuple[int, _T]]
 
 
 class Applied(NamedTuple, Generic[_T]):
-    """A waypoint a device applied: the tick it was applied at, the timestamp it was scheduled for, and the
-    value."""
+    """A waypoint a device applied: the instant it was applied at, the instant it was scheduled for, and
+    the value."""
 
     ts: int
     scheduled_ts: int
