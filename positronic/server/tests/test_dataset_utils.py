@@ -16,7 +16,7 @@ def _episode(ep_dir, widths: dict[str, int]) -> DiskEpisode:
 def test_narrow_signals_are_plotted(tmp_path):
     signals = _collect_signal_groups(_episode(tmp_path / 'ep', {keys.JOINTS: 7, keys.GRIP: 1}))
 
-    assert set(signals.plotted) == {keys.JOINTS, keys.GRIP}
+    assert signals.plotted == {keys.JOINTS: 7, keys.GRIP: 1}
     assert signals.unplotted == {}
 
 
@@ -24,7 +24,7 @@ def test_wide_signal_is_named_instead_of_plotted(tmp_path):
     width = _MAX_PLOTTED_WIDTH + 1
     signals = _collect_signal_groups(_episode(tmp_path / 'ep', {keys.JOINTS: 7, 'wide_signal': width}))
 
-    assert signals.plotted == [keys.JOINTS]
+    assert signals.plotted == {keys.JOINTS: 7}
     assert signals.unplotted == {'wide_signal': width}
 
 

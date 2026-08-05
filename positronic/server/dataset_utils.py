@@ -65,8 +65,8 @@ class EpisodeSignals:
     poses: list[str]
 
     @property
-    def plotted(self) -> list[str]:
-        return [name for name in self.numerics if self.dims[name] <= _MAX_PLOTTED_WIDTH]
+    def plotted(self) -> dict[str, int]:
+        return {name: self.dims[name] for name in self.numerics if self.dims[name] <= _MAX_PLOTTED_WIDTH}
 
     @property
     def unplotted(self) -> dict[str, int]:
@@ -201,7 +201,7 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
         return rrb.TimeSeriesView(
             name=sig,
             origin=f'/signals/{sig}',
-            plot_legend=rrb.PlotLegend(visible=signals.dims.get(sig, 1) > 1),
+            plot_legend=rrb.PlotLegend(visible=signals.plotted[sig] > 1),
             axis_y=rrb.ScalarAxis(zoom_lock=True),
         )
 
@@ -261,8 +261,7 @@ def _setup_series_names(signals: EpisodeSignals, ep: Episode) -> None:
     joint_set = _joint_signals(ep)
     joint_names = ep.static.get('joint_names')
     pose_set = set(signals.poses)
-    for key in signals.plotted:
-        dim = signals.dims.get(key, 1)
+    for key, dim in signals.plotted.items():
         is_joint_vel = key.endswith('.dq') and f'{key[: -len(".dq")]}.q' in joint_set
         if (key in joint_set or is_joint_vel) and joint_names:
             names = joint_names
