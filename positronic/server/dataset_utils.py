@@ -52,12 +52,26 @@ def _pose_color(name: str) -> list[int]:
     return _POSE_COLORS['default']
 
 
+# A per-element plot of a signal this wide is unreadable, and crowds the video panels out of the
+# recording until they never decode.
+# TODO: a view that plots a chosen few elements of a wide signal, so it stops being all-or-nothing.
+_MAX_PLOTTED_WIDTH = 32
+
+
 @dataclass
 class EpisodeSignals:
     videos: list[str]
     numerics: list[str]
     dims: dict[str, int]
     poses: list[str]
+
+    @property
+    def plotted(self) -> dict[str, int]:
+        return {name: self.dims[name] for name in self.numerics if self.dims[name] <= _MAX_PLOTTED_WIDTH}
+
+    @property
+    def unplotted(self) -> dict[str, int]:
+        return {name: dim for name, dim in self.dims.items() if dim > _MAX_PLOTTED_WIDTH}
 
 
 def _infer_dims(sig) -> int:
@@ -138,20 +152,22 @@ def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeContro
     return rrb.EyeControls3D(position=camera_pos.tolist(), look_target=centroid.tolist())
 
 
-# MuJoCo's privileged full-physics state is a single wide vector recorded for replay/scoring —
-# ``sim_state.mjSTATE_*`` in current recordings, bare ``mjSTATE_*`` in older datasets — not a set of
-# readable channels. Plotting it as one scalar series per channel stalls the viewer, so any signal
-# carrying it is left out of the visualization.
-# TODO: a high-dimensional signal like this has no useful scalar-series view and needs one of its own.
-_HIDDEN_SIGNAL_MARKER = 'mjSTATE'
+_UNPLOTTED_ENTITY = '/unplotted'
+
+
+def _unplotted_notice(unplotted: dict[str, int]) -> str:
+    lines = '\n'.join(f'- `{name}` — {dim} values' for name, dim in sorted(unplotted.items()))
+    return (
+        f'### Not plotted\n\n{lines}\n\n'
+        f'Wider than {_MAX_PLOTTED_WIDTH} values, so a per-element plot is unreadable and crowds out '
+        'the rest of the recording. The signals are in the episode and readable through the dataset API.'
+    )
 
 
 def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
     pose_set = set(ep.static.get('pose_signals', []))
     signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[])
     for name, sig in ep.signals.items():
-        if _HIDDEN_SIGNAL_MARKER in name:
-            continue
         if sig.kind == Kind.IMAGE:
             try:
                 sig[0]
@@ -160,20 +176,21 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
                 pass
             continue
 
-        signals.numerics.append(name)
         try:
-            signals.dims[name] = _infer_dims(sig)
+            dim = _infer_dims(sig)
         except Exception:
-            signals.dims[name] = 1
+            dim = 1
+        signals.numerics.append(name)
+        signals.dims[name] = dim
         if name in pose_set:
             signals.poses.append(name)
     return signals
 
 
 def _group_signals_by_prefix(signals: EpisodeSignals) -> list[tuple[str, list[str]]]:
-    """Group numeric signals by prefix before the first '.'. Preserves insertion order."""
+    """Group plotted signals by prefix before the first '.'. Preserves insertion order."""
     groups: defaultdict[str, list[str]] = defaultdict(list)
-    for sig in signals.numerics:
+    for sig in signals.plotted:
         groups[sig.split('.')[0] if '.' in sig else sig].append(sig)
     return list(groups.items())
 
@@ -185,7 +202,7 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
         return rrb.TimeSeriesView(
             name=sig,
             origin=f'/signals/{sig}',
-            plot_legend=rrb.PlotLegend(visible=signals.dims.get(sig, 1) > 1),
+            plot_legend=rrb.PlotLegend(visible=signals.plotted[sig] > 1),
             axis_y=rrb.ScalarAxis(zoom_lock=True),
         )
 
@@ -197,6 +214,8 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
         else:
             view = rrb.Tabs(*[_ts_view(sig) for sig in sigs], name=group_name)
         series_views.append(view)
+    if signals.unplotted:
+        series_views.append(rrb.TextDocumentView(name='Not plotted', origin=_UNPLOTTED_ENTITY))
 
     # Top row: images (big) + optional 3D (smaller)
     top_items = []
@@ -243,8 +262,7 @@ def _setup_series_names(signals: EpisodeSignals, ep: Episode) -> None:
     joint_set = _joint_signals(ep)
     joint_names = ep.static.get(keys.JOINT_NAMES)
     pose_set = set(signals.poses)
-    for key in signals.numerics:
-        dim = signals.dims.get(key, 1)
+    for key, dim in signals.plotted.items():
         is_joint_vel = key.endswith('.dq') and f'{key[: -len(".dq")]}.q' in joint_set
         if (key in joint_set or is_joint_vel) and joint_names:
             names = joint_names
@@ -334,18 +352,34 @@ def _log_video_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStr
         yield from drainer.drain()
 
 
+def _send_scalar_columns(key: str, ts_arr: np.ndarray, vals: np.ndarray) -> None:
+    time_idx = [rr.TimeColumn('time', timestamp=ts_arr)]
+    if vals.shape[1] == 1:
+        rr.send_columns(f'/signals/{key}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals.ravel()))
+        return
+    for i in range(vals.shape[1]):
+        rr.send_columns(f'/signals/{key}/{i}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals[:, i]))
+
+
 def _log_numeric_signals(
     ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer
 ) -> Generator[bytes, None, dict[str, tuple[np.ndarray, np.ndarray]]]:
-    """Log numeric time-series via send_columns. Returns pose/joint data for 3D logging."""
+    """Log numeric time-series via send_columns. Returns pose/joint data for 3D logging.
+
+    A signal too wide to plot is still read, so that a joint or pose vector of any width reaches the
+    3D view.
+    """
     pose_set = set(signals.poses)
     gripper = ep.static.get('gripper')
     stash_keys = pose_set | _joint_signals(ep)
     if gripper:
         stash_keys.add(gripper['signal'])
     pose_data = {}
+    unplotted = signals.unplotted
 
     for key in signals.numerics:
+        if key in unplotted and key not in stash_keys:  # nothing would read the values
+            continue
         sig = ep.signals[key]
         if len(sig) == 0:
             continue
@@ -356,14 +390,9 @@ def _log_numeric_signals(
             continue
         if vals.ndim == 1:
             vals = vals.reshape(-1, 1)
-        dim = vals.shape[1]
 
-        time_idx = [rr.TimeColumn('time', timestamp=ts_arr)]
-        if dim == 1:
-            rr.send_columns(f'/signals/{key}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals.ravel()))
-        else:
-            for i in range(dim):
-                rr.send_columns(f'/signals/{key}/{i}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals[:, i]))
+        if key not in unplotted:
+            _send_scalar_columns(key, ts_arr, vals)
 
         if key in stash_keys:
             pose_data[key] = (ts_arr, vals)
@@ -527,6 +556,10 @@ def stream_episode_rrd(ds: Dataset, episode_id: int) -> Iterator[bytes]:
     with rec:
         signals = _collect_signal_groups(ep)
         rr.send_blueprint(_build_blueprint(signals, ep))
+        if signals.unplotted:
+            logging.warning(f'Episode {episode_id}: not plotting {signals.unplotted}')
+            notice = _unplotted_notice(signals.unplotted)
+            rr.log(_UNPLOTTED_ENTITY, rr.TextDocument(notice, media_type=rr.MediaType.MARKDOWN), static=True)
         yield from drainer.drain()
 
         _setup_series_names(signals, ep)
