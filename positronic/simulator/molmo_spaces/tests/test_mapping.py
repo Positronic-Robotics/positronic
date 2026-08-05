@@ -105,8 +105,7 @@ def test_task_horizon_reads_the_benchmark_task_dict():
 
 
 def test_task_horizon_missing_raises():
-    # A benchmark declaring no horizon (and no override) fails loud, as upstream's resolver does — the config's
-    # own 500-step default belongs to no benchmark.
+    # The raise mirrors upstream's resolver.
     with pytest.raises(ValueError):
         mapping.resolve_task_horizon_steps(types.SimpleNamespace(task={}), 66.0)
 

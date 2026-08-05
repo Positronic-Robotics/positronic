@@ -59,7 +59,8 @@ def _observe(robot_view, env_obs: dict, camera_names: list[str]) -> dict:
     eef_world = np.asarray(arm.leaf_frame_to_world, dtype=np.float64)
     quat = np.zeros(4)  # wxyz
     mujoco.mju_mat2Quat(quat, np.ascontiguousarray(eef_world[:3, :3].reshape(9)))  # pyright: ignore[reportAttributeAccessIssue]
-    grip = np.clip(env_obs['qpos'][mapping.MOLMO_GRIPPER_GROUP][0] / _GRIPPER_QPOS_CLOSED, 0.0, 1.0)
+    qpos = env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP]
+    grip = np.clip(qpos[0] / _GRIPPER_QPOS_CLOSED, 0.0, 1.0)
     return {
         mapping.OBS_JOINT_POS: np.asarray(arm.joint_pos, dtype=np.float32),
         mapping.OBS_JOINT_VEL: np.asarray(arm.joint_vel, dtype=np.float32),

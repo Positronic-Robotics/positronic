@@ -46,6 +46,10 @@ TOKEN_SEED = 'seed'
 META_TASK = 'task'
 META_HOUSE_INDEX = 'house_index'
 
+# The MolmoSpaces observation field holding the per-move-group joint positions, which is where the
+# gripper closure is read from.
+MOLMO_OBS_QPOS = 'qpos'
+
 # The raw observation payload ``env.py`` reports and ``MolmoAdapter`` reads back.
 OBS_JOINT_POS = 'joint_pos'
 OBS_JOINT_VEL = 'joint_vel'
