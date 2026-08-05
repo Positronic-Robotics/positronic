@@ -37,6 +37,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.tests.make_replay_fixture import replay_commands
 
 FIXTURES = sorted(Path(__file__).parent.glob('replay_ep*.npz'))
@@ -55,9 +56,9 @@ def _benchmark_dir(benchmark_path: str) -> Path:
     the same benchmark name sits under every scene dataset with different episodes, and resolving to the
     wrong one would replay these commands against a different scene.
     """
-    assets = os.environ.get('MLSPACES_ASSETS_DIR')
+    assets = os.environ.get(mapping.ASSETS_DIR_ENV)
     if not assets:
-        pytest.skip('MLSPACES_ASSETS_DIR is unset — MolmoSpaces asset packs are needed to replay')
+        pytest.skip(f'{mapping.ASSETS_DIR_ENV} is unset — MolmoSpaces asset packs are needed to replay')
     benchmark_dir = Path(assets) / 'benchmarks' / benchmark_path
     if not (benchmark_dir / 'benchmark.json').is_file():
         pytest.skip(f'{benchmark_dir} is absent — this asset pack cannot replay the fixture')
