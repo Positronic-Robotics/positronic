@@ -45,6 +45,10 @@ MULTIPLE_MERGES_MSG = (
     'BLOCKED: merge one pull request per command — an authorization names one, and a command'
     ' merging several would have to spend the first before knowing the rest are allowed.'
 )
+MERGE_SUBSTITUTION_MSG = (
+    'BLOCKED: a merge in a command carrying a command substitution cannot be verified — the'
+    ' substitution decides at runtime what is merged, and where.'
+)
 AMEND_MSG = 'BLOCKED: Never amend commits, create new ones instead.'
 
 # git global options that consume the following argument in their space-separated form
@@ -434,6 +438,19 @@ GH_MERGE_VALUE_FLAGS = frozenset({
 })
 
 
+def _carries_substitution(cmd: str) -> bool:
+    """Whether `cmd` carries a command substitution, or quoting that cannot be read.
+
+    A substitution's value exists only at runtime, so it can name the pull request, the
+    repository, or the variable that selects either. None of those can be weighed beforehand.
+    """
+    try:
+        segments = _segments(_strip_heredoc_bodies(cmd))
+    except ValueError:
+        return True
+    return any(word == SUBST for segment in segments for word in segment)
+
+
 def _sets_gh_repo(cmd: str) -> bool:
     """Whether `cmd` sets `GH_REPO` for anything it runs.
 
@@ -553,6 +570,7 @@ def analyze(  # noqa: C901
     git: GitInfo,
     path_exists=os.path.isdir,
     _depth=0,
+    in_substitution=False,
     allow_merge=consume_merge_allow,
     gh_repo_env='',
 ) -> str | None:
@@ -563,7 +581,7 @@ def analyze(  # noqa: C901
     # guards against pathological nesting.
     if _depth < 8:
         for body in _substitution_bodies(_strip_heredoc_bodies(cmd)):
-            deny = analyze(body, cwd, guarded_slug, git, path_exists, _depth + 1, allow_merge, gh_repo_env)
+            deny = analyze(body, cwd, guarded_slug, git, path_exists, _depth + 1, True, allow_merge, gh_repo_env)
             if deny:
                 return deny
     invs = parse_invocations(cmd, cwd, path_exists)
@@ -593,6 +611,8 @@ def analyze(  # noqa: C901
             continue
         is_merge, number, target = _gh_pr_merge(inv.words)
         if is_merge:
+            if in_substitution or _carries_substitution(cmd):
+                return MERGE_SUBSTITUTION_MSG
             if number is None:
                 return UNNUMBERED_MSG
             if pending_merge is not None:

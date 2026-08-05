@@ -326,6 +326,23 @@ def test_an_authorization_is_not_spent_by_a_command_the_guard_blocks_anyway(git)
     assert asked == []
 
 
+def test_a_merge_inside_a_command_substitution_is_refused_and_spends_nothing(git):
+    """The body runs before the outer command, which can then be refused with the receipt gone."""
+    asked = []
+    cmd = 'echo ' + chr(96) + 'gh pr merge 566' + chr(96) + ' && git push origin main'
+    assert verdict(git, cmd, allow_merge=lambda n, slug: asked.append(n) or True) is not None
+    assert asked == []
+
+
+def test_a_merge_beside_a_command_substitution_is_refused(git):
+    """A substituted assignment name reaches the tokens as a sentinel, not as `GH_REPO=`."""
+    asked = []
+    cmd = 'env G' + chr(96) + 'printf H_REPO' + chr(96) + '=someone/other gh pr merge 566'
+    denial = verdict(git, cmd, allow_merge=lambda n, slug: asked.append(n) or True)
+    assert denial is not None and 'command substitution' in denial
+    assert asked == []
+
+
 def test_a_command_merging_two_pull_requests_is_refused(git):
     """One authorization names one merge, and the first would be spent before the rest is known."""
     asked = []
