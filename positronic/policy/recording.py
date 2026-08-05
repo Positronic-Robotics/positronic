@@ -4,20 +4,17 @@ Recordings are written with `rerun <https://rerun.io>`_, a logging/visualization
 tool. Each episode becomes one ``.rrd`` file in the recording directory; open it in
 the rerun viewer to inspect what flowed through the policy.
 
-A :class:`Recorder` hands out lightweight ``tap(name)`` wrappers. A tap inserted
-into a policy pipeline logs the observation passing *down* through it and the action
-chunk coming back *up*, under entity paths prefixed by its ``name``. Placing two
-taps at different points captures both ends of a remote inference round-trip in one
-correlated recording::
+A :class:`Tap` names a seam in a policy pipeline — a point worth recording. It logs
+the observation passing *down* through it and the action chunk coming back *up*,
+under entity paths prefixed by its ``name``, once a :class:`Recorder` binds it::
+
+    pipeline = ChunkedSchedule() | Tap('wire') | remote | codec | source
 
     rec = Recorder(recording_dir)
-    pipeline = rec.tap('raw') | codec | rec.tap('server')
-    policy = pipeline.wrap(remote_policy)
+    stack = from_spec(declared_local_stack, tap=rec.tap)
 
-- the ``raw`` tap (outermost) logs the observation as received and the final action
-  chunk;
-- the ``server`` tap (innermost, next to the remote policy) logs the observation as
-  sent to the server and the chunk as received back.
+Several taps bound to one recorder write to the same file, so seams on either side
+of a transform read as one correlated recording.
 
 Each entity is stamped on the timelines given by ``timelines`` (a mapping of rerun
 timeline name to observation key; by default ``wall_time`` and ``obs_time``
@@ -279,8 +276,26 @@ def _log_ee_pose_chunk(
     return np.concatenate([translations, quats_wxyz], axis=1)
 
 
+class Tap(PolicyWrapper):
+    """A named seam in a policy pipeline: the point whose observations and actions are worth recording.
+
+    A tap names the seam and nothing else; where its entries land is the builder's call
+    (``from_spec(..., tap=...)``). ``Recorder.tap`` returns one bound to a recording; unbound, a tap
+    passes the policy through untouched.
+    """
+
+    def __init__(self, name: str):
+        self._name = name
+
+    def wrap_session(self, inner: Session, context, now) -> Session:
+        return inner
+
+    def to_spec(self) -> dict[str, Any]:
+        return {'name': 'tap', 'args': {'name': self._name}}
+
+
 class Recorder:
-    """Writes one rerun ``.rrd`` file per episode and hands out ``tap(name)`` wrappers.
+    """Writes one rerun ``.rrd`` file per episode, and builds the taps that log into it.
 
     Taps share the recorder's current episode stream, so taps placed at different
     points in one pipeline write to the same recording. The episode boundary is
@@ -335,12 +350,12 @@ class Recorder:
         self._live -= 1
 
 
-class _RecordingTap(PolicyWrapper):
-    """A named tap. Wraps a single session to log its observations and actions."""
+class _RecordingTap(Tap):
+    """A tap bound to a ``Recorder``. Wraps a single session to log its observations and actions."""
 
     def __init__(self, rec: Recorder, name: str):
+        super().__init__(name)
         self._rec = rec
-        self._name = name
 
     def wrap_session(self, inner: Session, context, now) -> Session:
         stream = self._rec._open_stream()

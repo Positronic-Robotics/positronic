@@ -3,12 +3,14 @@ import time
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pos3
 import pytest
 
 from positronic import keys, telemetry, telemetry_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient
-from positronic.policy import RemotePolicy
+from positronic.policy import DelegatingSession, RemotePolicy, Session
 from positronic.policy.codec import ActionHorizon
+from positronic.policy.recording import _RecordingTapSession
 from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule
 
@@ -327,6 +329,66 @@ def test_unknown_declared_entry_fails_before_motion():
     policy, _ = _mock_remote_policy({'local_stack': {'name': 'run_arbitrary_code'}, 'positronic_version': '9.9.9'})
     with pytest.raises(ValueError, match='9.9.9'):
         policy.new_session()
+
+
+WIRE_TAP_STACK = {'local_stack': {'seq': [{'name': 'chunked_schedule'}, {'name': 'tap', 'args': {'name': 'wire'}}]}}
+
+
+def _recording_policy(metadata, tmp_path, **kwargs):
+    """A mocked-wire ``RemotePolicy`` recording into ``tmp_path``."""
+    with pos3.mirror():
+        return _mock_remote_policy(metadata, recording_dir=str(tmp_path), **kwargs)
+
+
+def _tap_session(session: Session) -> _RecordingTapSession:
+    """The tap the declared stack built, under the scheduling wrapper that gates it."""
+    assert isinstance(session, DelegatingSession)
+    tap = session._inner
+    assert isinstance(tap, _RecordingTapSession)
+    return tap
+
+
+def test_declared_tap_records_under_the_seam_it_names(tmp_path):
+    policy, _ = _recording_policy(WIRE_TAP_STACK, tmp_path, infer_return=[{'a': 1, 'timestamp': 0.0}])
+    session = policy.new_session(now=lambda: 0.0)
+    session({'obs_time_ns': 0, 'cam': _make_image(48, 64)})
+
+    assert _tap_session(session)._rec._image_paths == ['wire/cam']
+    assert len(list(tmp_path.glob('*.rrd'))) == 1
+
+
+def test_declared_tap_logs_once_per_inference_not_once_per_tick(tmp_path):
+    """A seam inside the declared stack sits below ``ChunkedSchedule``, so a tick that runs no inference
+    has nothing to log."""
+    policy, _ = _recording_policy(WIRE_TAP_STACK, tmp_path, infer_return=[{'a': 1, 'timestamp': 0.5}])
+    clock = [0.0]
+    session = policy.new_session(now=lambda: clock[0])
+    for t in (0.0, 0.1, 0.2):
+        clock[0] = t
+        session({'obs_time_ns': 0, 'cam': _make_image(48, 64)})
+
+    assert _tap_session(session)._step == 1
+
+
+def test_recording_dir_against_a_server_that_names_no_seam(tmp_path, caplog):
+    """The seams are the served pipeline's to name, so a rig told to record can end up with nothing —
+    say so rather than leaving an empty directory."""
+    policy, _ = _recording_policy(EMPTY_STACK, tmp_path, infer_return=[{'a': 1, 'timestamp': 0.0}])
+    with caplog.at_level(logging.WARNING, logger='positronic.policy.remote'):
+        session = policy.new_session(now=lambda: 0.0)
+    session({'obs_time_ns': 0, 'cam': _make_image(48, 64)})
+
+    assert 'no tap' in caplog.text
+    assert not list(tmp_path.glob('*.rrd'))
+
+
+def test_legacy_server_records_at_the_wire(tmp_path):
+    """A server that declares no stack gets the rig's stand-in, seam included."""
+    policy, _ = _recording_policy({}, tmp_path, infer_return=[{'a': 1, 'timestamp': 0.0}])
+    session = policy.new_session(now=lambda: 0.0)
+    session({'obs_time_ns': 0, 'cam': _make_image(48, 64)})
+
+    assert _tap_session(session)._rec._image_paths == ['wire/cam']
 
 
 def test_operator_local_drives_a_server_that_declares_nothing():

@@ -65,7 +65,7 @@ The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server
 
 `--policy.local=@...` and `--policy.compress_images` are deprecated stand-ins for a server too old to declare either; against a server that does declare, they raise rather than quietly winning. A server that declares no stack at all but still reports `image_sizes` gets a third stand-in: the client bounds frames to those sizes, logging what it did. All three go away once every server declares (see [#514](https://github.com/Positronic-Robotics/positronic/issues/514)).
 
-> **Recording inference I/O:** Pass `--policy.recording_dir=s3://bucket/path` to write a rerun `.rrd` file per episode capturing the raw and server-side observation/action boundaries. Useful for debugging codec behavior and visualizing what the policy actually received.
+> **Recording inference I/O:** Pass `--policy.recording_dir=s3://bucket/path` to write a rerun `.rrd` file per episode. Which points of the rig-side stack it captures is the server's call too: each `Tap` the declared stack names becomes one layer of the recording, under that tap's name. Useful for debugging codec behavior and visualizing what the policy actually received.
 
 ## Local Inference
 

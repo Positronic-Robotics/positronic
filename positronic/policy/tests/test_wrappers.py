@@ -27,6 +27,7 @@ from positronic.policy.codec import (
     RestrictImageSize,
 )
 from positronic.policy.observation import ObservationCodec
+from positronic.policy.recording import Tap
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
 
 
@@ -319,6 +320,20 @@ class TestPipelineSpec:
         rebuilt = spec.from_spec(stack.to_spec())
         assert rebuilt is not None and rebuilt.to_spec() == stack.to_spec()
 
+    def test_declared_seam_is_built_by_the_caller(self):
+        """A tap names a seam; what records there comes from the builder, not the declaration."""
+        seams: list[str] = []
+
+        def tap(name: str) -> PolicyWrapper:
+            seams.append(name)
+            return Tap(name)
+
+        stack = ChunkedSchedule() | Tap('wire')
+        rebuilt = spec.from_spec(stack.to_spec(), tap)
+
+        assert seams == ['wire']
+        assert rebuilt is not None and rebuilt.to_spec() == stack.to_spec()
+
     def test_codec_spec_round_trip(self):
         obs = ObservationCodec(
             state={'observation.state': {'grip': 1}}, images={'left': (keys.WRIST_IMAGE, (224, 224))}
@@ -379,6 +394,7 @@ class TestPipelineSpec:
             'flip_grip': FlipGrip(),
             'restrict_image_size': RestrictImageSize(),
             'observation_codec': ObservationCodec(state={}, images={}),
+            'tap': Tap('wire'),
             'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, 'target_grip'),
             'absolute_joints_action': AbsoluteJointsAction(keys.TARGET_JOINTS, 'target_grip'),
             'relative_position_action': RelativePositionAction(),

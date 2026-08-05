@@ -13,7 +13,7 @@ from positronic.utils.serialization import encode_jpeg
 
 from .base import Policy, PolicyWrapper, Session
 from .codec import RestrictImageSize
-from .recording import Recorder
+from .recording import Recorder, Tap
 from .spec import from_spec
 from .wrappers import ChunkedSchedule
 
@@ -167,7 +167,8 @@ class RemotePolicy(Policy):
     ``local`` — with the ``image_sizes`` such a server reports bounding the wire either way.
 
     ``local`` and ``compress_images`` stand in for a server that declares neither — see
-    ``_operator_override``. ``recording_dir`` taps the raw and wire boundaries around the stack.
+    ``_operator_override``. ``recording_dir`` is where the recording goes; which seams it holds is
+    the declaration's call, one ``.rrd`` entry per ``Tap`` the stack names.
     """
 
     def __init__(
@@ -190,35 +191,42 @@ class RemotePolicy(Policy):
         declared = meta.get('local_stack')
         # Settles the operator's stack against the declaration before either is built.
         _operator_override('local', self._local, declared)
+        rec = Recorder(self._recording_dir) if self._recording_dir is not None else None
+        seams: list[str] = []
+
+        def tap(name: str) -> PolicyWrapper:
+            seams.append(name)
+            return rec.tap(name) if rec is not None else Tap(name)
+
         if declared is not None:
             try:
-                return from_spec(declared)
+                stack = from_spec(declared, tap)
             except Exception as e:
                 version = meta.get('positronic_version', 'unknown')
                 raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
+            if rec is not None and not seams:
+                logger.warning(
+                    'recording_dir is set but the declared stack names no tap, so nothing is recorded; a seam '
+                    'is named by the pipeline the server serves'
+                )
+            return stack
         # The bound is a wire setting rather than part of the stack, so it outlives whichever stack runs.
         stack = ChunkedSchedule() if self._local is None else self._local
         bound = _legacy_bound(meta['image_sizes']) if 'image_sizes' in meta else None
         if bound is None:
             logger.info('Server declares no local stack and names no image geometry; frames go out unbounded')
-            return stack
-        logger.warning(
-            'Server declares no local stack; bounding frames to %r from the image_sizes %r it reports',
-            bound.to_spec()['args'],
-            meta['image_sizes'],
-        )
-        return stack | bound
+        else:
+            logger.warning(
+                'Server declares no local stack; bounding frames to %r from the image_sizes %r it reports',
+                bound.to_spec()['args'],
+                meta['image_sizes'],
+            )
+            stack = stack | bound
+        return stack | tap('wire')
 
     def _policy(self) -> Policy:
         if self._stacked is None:
             stack = self._resolve_stack()
-            if self._recording_dir is not None:
-                rec = Recorder(self._recording_dir)
-                if stack is None:
-                    # With no stack the raw and wire boundaries coincide, so a single tap.
-                    stack = rec.tap('raw')
-                else:
-                    stack = rec.tap('raw') | stack | rec.tap('server')
             self._stacked = stack.wrap(self._endpoint) if stack is not None else self._endpoint
         return self._stacked
 

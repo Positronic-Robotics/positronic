@@ -84,7 +84,8 @@ Upon connection, the server sends a ready packet with metadata:
     "action_horizon_sec": 1.0,
     "local_stack": {"seq": [
       {"name": "chunked_schedule"},
-      {"name": "restrict_image_size", "args": {"width": 224, "height": 224}}
+      {"name": "restrict_image_size", "args": {"width": 224, "height": 224}},
+      {"name": "tap", "args": {"name": "wire"}}
     ]},
     "compress_images": false,
     "positronic_version": "0.2.1"
@@ -104,6 +105,9 @@ This metadata tells the client:
   `positronic.policy.spec.WIRE_WRAPPERS` — an unknown entry fails at connect, before the robot moves.
   An empty declaration (`{"seq": []}`) means the policy needs no rig-side glue; when the key is
   absent the server declares nothing and the client falls back to the standard `ChunkedSchedule`.
+  A `tap` entry names a seam worth recording rather than a transform: a rig given a `recording_dir`
+  logs the observation and action chunk crossing that point under the tap's name, and a rig that
+  records nowhere passes straight through it.
 - `compress_images` — the `remote` marker's own wire setting: whether the rig JPEG-encodes frames before
   sending, for an endpoint behind a proxy with a message-size cap
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
@@ -182,7 +186,7 @@ uv run positronic-inference sim \
 
 **Status Streaming:** Long model loads are handled gracefully with progress updates.
 
-**Server-side recording:** Servers accept an optional `recording_dir`. When set, each WebSocket session writes a rerun `.rrd` file that taps both sides of the codec: `raw` captures the obs/action at the wire boundary, and `inference` captures the encoded observation and raw model output.
+**Recording:** A `Tap` in the pipeline names a seam worth recording; every built-in pipeline names the one at the wire, and a rig given `--policy.recording_dir` writes a rerun `.rrd` per episode holding the observation and action chunk crossing each named seam. Servers additionally accept their own `recording_dir`, writing a separate file that taps both sides of the codec: `raw` captures the obs/action at the wire boundary, and `inference` captures the encoded observation and raw model output.
 
 **Python Client:** We provide a Python client (`positronic.offboard.client.InferenceClient`) that handles the WebSocket protocol automatically. While the API is currently in alpha and may change, we'll do our best to maintain backward compatibility for the inference client.
 
@@ -200,7 +204,7 @@ pipeline = ChunkedSchedule() | remote | PolicySource(my_policy)
 PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()
 ```
 
-`PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the per-session recording taps described above, and `idle_timeout_min` shuts the server down after that many minutes without activity.
+`PolicySource` serves one ready in-process policy; vendors instead define a `ModelSource` over a checkpoint directory. Passing a `cfn.Config` that builds the pipeline — as the vendor servers do with their named pipelines — enables [session parameters](#session-parameters); an instantiated pipeline serves exactly as launched. `recording_dir` enables the server-side recording described above, and `idle_timeout_min` shuts the server down after that many minutes without activity.
 
 ### `server.serve`
 The CLI entry point every vendor server exposes. A vendor binds `pipeline` to each of its named pipelines and lists the results as subcommands, so `<vendor>-server <pipeline>` launches one. Only `--host`, `--port`, `--recording_dir` and `--idle_timeout_min` are flags of `serve` itself; everything the served model is — codec, source, checkpoint directory — is reached through the pipeline (`--pipeline.source.checkpoints_dir=...`), which is also where a deployment preset binds it.
