@@ -98,24 +98,34 @@ def test_camera_key_miss_raises():
         mapping.resolve_camera_key({'other': 1}, mapping.MOLMO_WRIST_CAMERA)
 
 
+def _episodes(*horizons_sec):
+    return [
+        types.SimpleNamespace(task={} if sec is None else {mapping.MOLMO_TASK_HORIZON_SEC: sec}) for sec in horizons_sec
+    ]
+
+
 def test_task_horizon_reads_the_benchmark_task_dict():
     # Where MolmoSpaces' benchmark generator writes it, and where determine_task_horizon reads it.
-    ep = types.SimpleNamespace(task={mapping.MOLMO_TASK_HORIZON_SEC: 30})
-    assert mapping.resolve_task_horizon_steps(ep, 66.0) == 455  # round(30 * 1000 / 66)
+    assert mapping.resolve_task_horizon_steps(_episodes(30, 30), 66.0) == 455  # round(30 * 1000 / 66)
 
 
 def test_task_horizon_missing_raises():
     # The raise mirrors upstream's resolver.
     with pytest.raises(ValueError):
-        mapping.resolve_task_horizon_steps(types.SimpleNamespace(task={}), 66.0)
+        mapping.resolve_task_horizon_steps(_episodes(30, None), 66.0)
+
+
+def test_task_horizon_disagreeing_across_episodes_raises():
+    # The horizon belongs to the benchmark, so one run has one; upstream refuses the same manifest.
+    with pytest.raises(ValueError, match='inconsistent'):
+        mapping.resolve_task_horizon_steps(_episodes(20, 30), 66.0)
 
 
 def test_task_horizon_override_wins():
     # An explicit override pins the horizon, beating the benchmark field (mirrors --task_horizon_steps), and lets
-    # a benchmark that declares none still resolve.
-    ep = types.SimpleNamespace(task={mapping.MOLMO_TASK_HORIZON_SEC: 20})
-    assert mapping.resolve_task_horizon_steps(ep, 66.0, override_steps=500) == 500
-    assert mapping.resolve_task_horizon_steps(types.SimpleNamespace(task={}), 66.0, override_steps=455) == 455
+    # a benchmark that declares none, or disagrees, still resolve.
+    assert mapping.resolve_task_horizon_steps(_episodes(20), 66.0, override_steps=500) == 500
+    assert mapping.resolve_task_horizon_steps(_episodes(20, 30, None), 66.0, override_steps=455) == 455
 
 
 def test_exterior_camera_variants_cover_light_randomization_and_randcam():

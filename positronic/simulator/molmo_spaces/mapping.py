@@ -194,24 +194,27 @@ def resolve_episode_seed(episode: Any, episode_index: int, override_seed: int | 
     return int(spec_seed) if spec_seed is not None else int(episode_index)
 
 
-def resolve_task_horizon_steps(episode: Any, policy_dt_ms: float, override_steps: int | None = None) -> int:
-    """A benchmark episode's enforced horizon in policy steps, mirroring MolmoSpaces' own resolution.
+def resolve_task_horizon_steps(episodes: Any, policy_dt_ms: float, override_steps: int | None = None) -> int:
+    """A benchmark's enforced horizon in policy steps, mirroring MolmoSpaces' own resolution.
 
     Upstream's ``determine_task_horizon`` (``evaluation/eval_main.py``, the entrypoint its README documents)
     resolves in this order and nothing else: an explicit ``--task_horizon_steps`` override, then the benchmark's
-    own ``task_horizon_sec`` from the episode's task dict, converted with ``round(sec * 1000 / policy_dt_ms)`` —
-    and a raise when a benchmark declares neither. This reproduces that, including the raise: the horizon is part
-    of the task definition, and ``JsonBenchmarkEvalConfig.task_horizon``'s 500-step default is a config default
-    upstream overwrites before the runner ever sees it.
+    own ``task_horizon_sec`` from the episodes' task dicts, converted with ``round(sec * 1000 / policy_dt_ms)``.
+    It raises when any episode declares none, and again when the episodes disagree — the horizon belongs to the
+    benchmark, not to an episode within it, so one run has one. This reproduces all three, raises included:
+    ``JsonBenchmarkEvalConfig.task_horizon``'s 500-step default is a config default upstream overwrites before
+    the runner ever sees it.
     """
     if override_steps is not None:
         if override_steps < 1:
             raise ValueError(f'task_horizon_steps override must be at least 1 step, got {override_steps}')
         return override_steps
-    horizon_sec = episode.task.get(MOLMO_TASK_HORIZON_SEC)
-    if horizon_sec is None:
+    declared = {episode.task.get(MOLMO_TASK_HORIZON_SEC) for episode in episodes}
+    if None in declared:
         raise ValueError(
-            'benchmark episode carries no task_horizon_sec in its task dict and no task_horizon_steps override — '
-            'the horizon is part of the task definition; add it to the benchmark or pass an override'
+            'benchmark episodes carry no task_horizon_sec in their task dict and no task_horizon_steps override '
+            '— the horizon is part of the task definition; add it to the benchmark or pass an override'
         )
-    return round(horizon_sec * 1000.0 / policy_dt_ms)
+    if len(declared) != 1:
+        raise ValueError(f'benchmark declares inconsistent task_horizon_sec values {sorted(declared)}')
+    return round(declared.pop() * 1000.0 / policy_dt_ms)
