@@ -343,6 +343,21 @@ def test_a_merge_beside_a_command_substitution_is_refused(git):
     assert asked == []
 
 
+def test_a_process_substitution_hides_a_second_command_in_the_same_segment(git):
+    """`<(` keeps the command it feeds and the one it runs together, where only the first is read."""
+    asked = []
+    cmd = 'gh pr merge 566 --body-file <' + '(gh pr merge 567)'
+    assert verdict(git, cmd, allow_merge=lambda n, slug: asked.append(n) or True) is not None
+    assert asked == []
+
+
+def test_a_spend_mark_cannot_be_taken_twice(tmp_path, as_root):
+    """Exclusive create, so two hooks racing one receipt cannot both find it unspent."""
+    write_allow(tmp_path, 566)
+    assert consume(566, tmp_path)
+    assert not consume(566, tmp_path)
+
+
 def test_a_command_merging_two_pull_requests_is_refused(git):
     """One authorization names one merge, and the first would be spent before the rest is known."""
     asked = []

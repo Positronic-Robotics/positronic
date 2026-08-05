@@ -414,10 +414,12 @@ def consume_merge_allow(
     if not re.fullmatch(r'\w{4,64}', identifier):
         return False
     spent = spent_dir / f'pr{number}-{identifier}'
-    if spent.exists():
-        return False
     spent_dir.mkdir(parents=True, exist_ok=True)
-    spent.touch()
+    try:
+        # Exclusive create, so two hooks racing the same receipt cannot both find it unspent.
+        os.close(os.open(spent, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except FileExistsError:
+        return False
     return True
 
 
@@ -439,16 +441,18 @@ GH_MERGE_VALUE_FLAGS = frozenset({
 
 
 def _carries_substitution(cmd: str) -> bool:
-    """Whether `cmd` carries a command substitution, or quoting that cannot be read.
+    """Whether `cmd` carries a substitution, or quoting that cannot be read.
 
     A substitution's value exists only at runtime, so it can name the pull request, the
     repository, or the variable that selects either. None of those can be weighed beforehand.
+    A PROCESS substitution runs a command of its own besides — and its `<(` keeps that command
+    in the same segment as the one it feeds, where only the first tool word is ever read.
     """
     try:
         segments = _segments(_strip_heredoc_bodies(cmd))
     except ValueError:
         return True
-    return any(word == SUBST for segment in segments for word in segment)
+    return any(word == SUBST or '<(' in word or '>(' in word for segment in segments for word in segment)
 
 
 def _sets_gh_repo(cmd: str) -> bool:
