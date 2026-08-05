@@ -93,7 +93,7 @@ class LiberoEnv(EnvProtocol):
         # Cached at build: model-structure indices, invariant across resets of the same task XML.
         self._qpos_idx = None
         self._qvel_idx = None
-        self._eef_site_id = None
+        self._eef_site_id: int
         self._jnt_low = None
         self._jnt_high = None
         self._grip_open_aperture = None

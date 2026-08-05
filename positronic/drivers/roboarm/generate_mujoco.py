@@ -10,7 +10,7 @@ from positronic.drivers.roboarm.generate_urdf import MotorParameters, create_arm
 
 def convert_urdf_to_mujoco(
     urdf_path: str, wall_mounted: bool = False, kp: float = 1000.0, kv: float = 100.0, actuator_type: str = 'position'
-) -> mj.MjModel:
+) -> mj.MjSpec:
     """
     Convert a URDF file to a Mujoco model.
 
@@ -18,7 +18,7 @@ def convert_urdf_to_mujoco(
         urdf_path: (str) Path to the URDF file to convert
 
     Returns:
-        mj.Model: Compiled MuJoCo model with actuators, sensors, sites, and visuals
+        mj.MjSpec: Scene spec with actuators, sensors, sites, and visuals
     """
     spec = mj.MjSpec.from_file(urdf_path)
 
@@ -30,7 +30,7 @@ def convert_urdf_to_mujoco(
     spec.option.integrator = mj.mjtIntegrator.mjINT_IMPLICITFAST
 
     if wall_mounted:
-        spec.body('link1').quat = [0, 0.707107, 0, 0.707107]
+        spec.body('link1').quat = np.array([0, 0.707107, 0, 0.707107])
 
     return spec
 
@@ -42,18 +42,18 @@ def _add_actuators(spec: mj.MjSpec, kp: float, kv: float, actuator_type: str) ->
             actuator = spec.add_actuator()
             actuator.name = f'actuator_{joint.name.split("_")[1]}'
             actuator.trntype = mj.mjtTrn.mjTRN_JOINT
-            actuator.gainprm = [kp, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # kp
-            actuator.biasprm = [0, -kp, -kv, 0, 0, 0, 0, 0, 0, 0]  # kv
+            actuator.gainprm = np.array([kp, 0, 0, 0, 0, 0, 0, 0, 0, 0])  # kp
+            actuator.biasprm = np.array([0, -kp, -kv, 0, 0, 0, 0, 0, 0, 0])  # kv
             actuator.target = joint.name
             actuator.biastype = mj.mjtBias.mjBIAS_AFFINE
             actuator.forcerange = joint.actfrcrange
-            actuator.ctrlrange = [-np.pi, np.pi]
+            actuator.ctrlrange = np.array([-np.pi, np.pi])
         elif actuator_type == 'torque':
             actuator = spec.add_actuator()
             actuator.name = f'actuator_{joint.name.split("_")[1]}'
             actuator.trntype = mj.mjtTrn.mjTRN_JOINT
-            actuator.gainprm = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # kp
-            actuator.biasprm = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]  # kv
+            actuator.gainprm = np.array([1, 0, 0, 0, 0, 0, 0, 0, 0, 0])  # kp
+            actuator.biasprm = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])  # kv
             actuator.biastype = mj.mjtBias.mjBIAS_NONE
             actuator.gaintype = mj.mjtGain.mjGAIN_FIXED
             actuator.target = joint.name
@@ -72,7 +72,7 @@ def _add_sites(spec: mj.MjSpec) -> None:
 
     end_site = spec.body(f'link{max_link}').add_site()
     end_site.name = 'end_effector'
-    end_site.pos = [0.0, 0.0, 0.0]
+    end_site.pos = np.array([0.0, 0.0, 0.0])
 
 
 def _add_geoms(
