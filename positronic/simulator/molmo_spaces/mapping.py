@@ -53,9 +53,14 @@ MOLMO_OBS_QPOS = 'qpos'
 # The benchmark episode's declared horizon, in sim-seconds, inside its task dict.
 MOLMO_TASK_HORIZON_SEC = 'task_horizon_sec'
 
-# The parity record's per-camera frame-hash fields, one per camera name, written by the native reference
-# and read back by the comparison.
+# The parity record: what the native reference writes about a rollout, and what the comparison reads back.
+# The per-camera frame hashes are one field per camera name, under the prefix.
 CAM_HASH_PREFIX = 'cam_hash__'
+PARITY_CAMERA_NAMES = 'camera_names'
+PARITY_HORIZON_STEPS = 'native_horizon'
+PARITY_HORIZON_SEC = 'horizon_sec'
+PARITY_TERMINATION_STEP = 'termination_step'
+PARITY_FINAL_SUCCESS = 'final_success'
 
 # The raw observation payload ``env.py`` reports and ``MolmoAdapter`` reads back.
 OBS_JOINT_POS = 'joint_pos'
