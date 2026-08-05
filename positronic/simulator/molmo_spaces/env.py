@@ -134,13 +134,9 @@ class MolmoSpacesEnv(EnvProtocol):
 
     def __init__(self, benchmark_dir: Path, task_horizon_steps: int | None = None) -> None:
         self._episodes = load_all_episodes(benchmark_dir)
-        # The horizon belongs to the benchmark, so it is resolved once from every episode: an explicit
-        # ``task_horizon_steps`` (mirroring MolmoSpaces' ``--task_horizon_steps``) or the benchmark's own
-        # ``task_horizon_sec``. Resolving here also rejects a benchmark whose episodes disagree before the
-        # first task is built, rather than on whichever reset first reaches the odd one.
-        self._task_horizon = mapping.resolve_task_horizon_steps(
-            self._episodes, _DroidPickEvalConfig().policy_dt_ms, task_horizon_steps
-        )
+        # An explicit per-run horizon override (steps), mirroring MolmoSpaces' ``--task_horizon_steps``; ``None``
+        # reads the benchmark's own ``task_horizon_sec``.
+        self._task_horizon_override = task_horizon_steps
         self._sampler: Any = None
         self._task: Any = None
         self._robot_view: Any = None
@@ -164,8 +160,11 @@ class MolmoSpacesEnv(EnvProtocol):
         # Determinism enters at sampler construction (seed_task_sampling).
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # With ``task_horizon`` set, the task enforces it and ``is_done`` reports expiry, so a horizon-expired
-        # trial ends with a terminal ``done`` exactly as the native benchmark scores it.
-        cfg.task_horizon = self._task_horizon
+        # trial ends with a terminal ``done`` exactly as the native benchmark scores it. The horizon is the
+        # benchmark's, so every episode is read to resolve it, against the dt of the config that enforces it.
+        cfg.task_horizon = mapping.resolve_task_horizon_steps(
+            self._episodes, cfg.policy_dt_ms, self._task_horizon_override
+        )
         self._sampler = JsonEvalTaskSampler(cfg, episode)
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._robot_view = self._task.env.current_robot.robot_view
