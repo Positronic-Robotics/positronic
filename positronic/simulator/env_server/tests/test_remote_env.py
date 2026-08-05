@@ -296,7 +296,8 @@ def test_the_canonical_contract_is_exactly_what_a_client_can_emit():
         roboarm_command.JointDelta(np.zeros(7)),
         None,  # nothing held: the arm holds where it is
     ]
-    assert {_wire_command(command)['type'] for command in commands} == set(protocol.CANONICAL_COMMAND_TYPES)
+    tags = {_wire_command(command)[protocol.COMMAND_TYPE] for command in commands}
+    assert tags == set(protocol.CANONICAL_COMMAND_TYPES)
 
 
 @pytest.mark.timeout(60.0)
