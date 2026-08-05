@@ -275,8 +275,30 @@ def test_an_authorized_merge_goes_through(git):
 
 def test_the_authorization_is_asked_for_the_pull_request_being_merged(git):
     asked = []
-    verdict(git, 'gh pr -R o/r merge 566 --delete-branch', allow_merge=lambda n, slug: asked.append((n, slug)) or False)
+    verdict(git, 'gh pr merge 566 --delete-branch', allow_merge=lambda n, slug: asked.append((n, slug)) or False)
     assert asked == [(566, GUARDED.casefold())]
+
+
+def test_a_value_taking_flag_does_not_donate_its_value_as_the_pull_request(git):
+    """`gh pr merge --subject 566 999` merges 999; authorizing 566 must not clear it."""
+    asked = []
+    verdict(git, 'gh pr merge --subject 566 999 --squash', allow_merge=lambda n, slug: asked.append(n) or False)
+    assert asked == [999]
+
+
+def test_a_merge_in_another_repository_is_refused_without_consulting_any_authorization(git):
+    """`-R` selects a repository this guard holds no receipts for."""
+    asked = []
+    assert (
+        verdict(git, 'gh pr -R someone/other merge 566', allow_merge=lambda n, slug: asked.append(n) or True)
+        is not None
+    )
+    assert asked == []
+
+
+def test_reading_the_help_is_not_a_merge(git):
+    assert verdict(git, 'gh pr merge --help') is None
+    assert verdict(git, 'gh help pr merge') is None
 
 
 def test_a_commit_message_quoting_a_blocked_command_is_not_itself_blocked(git):
@@ -291,7 +313,7 @@ def test_an_unquoted_heredoc_still_fails_closed(git):
     assert verdict(git, cmd) is not None
 
 
-def write_allow(directory, number, repo='', issued_at=1_000_000, ttl_s=1800):
+def write_allow(directory, number, repo='', issued_at=1_000_000, ttl_s=1800, receipt_id='abcd1234'):
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / gmm.RECEIPT_NAME.format(number=number)
     path.write_text(
@@ -300,45 +322,80 @@ def write_allow(directory, number, repo='', issued_at=1_000_000, ttl_s=1800):
             gmm.RECEIPT_NUMBER: number,
             gmm.RECEIPT_ISSUED_AT: issued_at,
             gmm.RECEIPT_TTL_S: ttl_s,
+            gmm.RECEIPT_ID: receipt_id,
             'by': 'U0',
         })
     )
     return path
 
 
-def test_an_authorization_is_spent_by_the_merge_it_permits(tmp_path):
-    path = write_allow(tmp_path, 566)
-    assert gmm.consume_merge_allow(566, GUARDED, tmp_path, now=1_000_060)
-    assert not path.exists()
-    assert not gmm.consume_merge_allow(566, GUARDED, tmp_path, now=1_000_060)
+@pytest.fixture
+def as_root(monkeypatch):
+    """Stand in for the ownership check: a test cannot create a root-owned file."""
+    monkeypatch.setattr(gmm, '_written_by_root', lambda path, directory: path.exists())
 
 
-def test_an_expired_authorization_is_refused_and_cleared(tmp_path):
-    path = write_allow(tmp_path, 566)
-    assert not gmm.consume_merge_allow(566, GUARDED, tmp_path, now=1_002_000)
-    assert not path.exists()
+def consume(number, tmp_path, now=1_000_060, repo=GUARDED):
+    return gmm.consume_merge_allow(number, repo, tmp_path, tmp_path / 'spent', now=now)
 
 
-def test_an_authorization_for_another_pull_request_does_not_carry(tmp_path):
+def test_an_authorization_is_spent_by_the_merge_it_permits(tmp_path, as_root):
     write_allow(tmp_path, 566)
-    assert not gmm.consume_merge_allow(565, GUARDED, tmp_path, now=1_000_060)
+    assert consume(566, tmp_path)
+    assert not consume(566, tmp_path)
+
+
+def test_a_second_authorization_is_honoured_however_close_it_follows_the_first(tmp_path, as_root):
+    """The spend mark names the authorization, so two of them never collide."""
+    write_allow(tmp_path, 566, receipt_id='aaaa1111')
+    assert consume(566, tmp_path)
+    write_allow(tmp_path, 566, receipt_id='bbbb2222')
+    assert consume(566, tmp_path)
+
+
+@pytest.mark.parametrize('receipt_id', ['', None, 'no', 'has space', 'x' * 65])
+def test_a_receipt_that_names_no_usable_authorization_is_refused(tmp_path, as_root, receipt_id):
+    write_allow(tmp_path, 566, receipt_id=receipt_id)
+    assert not consume(566, tmp_path)
+
+
+def test_a_receipt_that_root_did_not_write_is_no_authorization(tmp_path):
+    """The real check, unpatched: this test's own file is not root's."""
+    write_allow(tmp_path, 566)
+    assert not consume(566, tmp_path)
+
+
+def test_an_expired_authorization_is_refused(tmp_path, as_root):
+    write_allow(tmp_path, 566)
+    assert not consume(566, tmp_path, now=1_002_000)
+
+
+def test_an_authorization_for_another_pull_request_does_not_carry(tmp_path, as_root):
+    write_allow(tmp_path, 566)
+    assert not consume(565, tmp_path)
 
 
 @pytest.mark.parametrize('repo', ['', 'positronic', 'Positronic-Robotics/positronic'])
-def test_a_reference_naming_this_repository_is_honoured(tmp_path, repo):
+def test_a_reference_naming_this_repository_is_honoured(tmp_path, as_root, repo):
     write_allow(tmp_path, 566, repo=repo)
-    assert gmm.consume_merge_allow(566, GUARDED, tmp_path, now=1_000_060)
+    assert consume(566, tmp_path)
 
 
-def test_an_authorization_for_another_repository_is_refused(tmp_path):
+def test_an_authorization_for_another_repository_is_refused(tmp_path, as_root):
     write_allow(tmp_path, 566, repo='someone/other')
-    assert not gmm.consume_merge_allow(566, GUARDED, tmp_path, now=1_000_060)
+    assert not consume(566, tmp_path)
 
 
-def test_a_missing_or_unreadable_receipt_is_simply_no_authorization(tmp_path):
-    assert not gmm.consume_merge_allow(566, GUARDED, tmp_path, now=1_000_060)
+def test_a_missing_or_unreadable_receipt_is_simply_no_authorization(tmp_path, as_root):
+    assert not consume(566, tmp_path)
     (tmp_path / gmm.RECEIPT_NAME.format(number=566)).write_text('{not json')
-    assert not gmm.consume_merge_allow(566, GUARDED, tmp_path, now=1_000_060)
+    assert not consume(566, tmp_path)
+
+
+def test_a_world_writable_receipt_directory_is_not_root_only(tmp_path):
+    path = write_allow(tmp_path, 566)
+    tmp_path.chmod(0o777)
+    assert not gmm._written_by_root(path, tmp_path)
 
 
 def _init_repo(path, url, branch='main'):

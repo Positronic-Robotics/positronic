@@ -3,7 +3,8 @@
 
 Blocks history-rewriting `git commit --amend`, merges / integrating pulls / direct pushes to
 `main`, and `gh pr merge`. Amend rewrites history — create a new commit instead. Integrating
-into main requires an explicit human/operator command run outside the agent's Bash tool.
+into main requires an explicit human/operator command run outside the agent's Bash tool, or a
+receipt a human wrote from chat authorizing one named pull request (see `consume_merge_allow`).
 
 Scope: the git-command guards apply only to invocations that operate on THIS repo — same
 `origin` as the session's project repo, which covers clones and worktrees. A `git -C <dir> …`
@@ -332,7 +333,10 @@ def _subcmd(words: list[str]) -> tuple[str, list[str]]:
     return '', []
 
 
-MERGE_ALLOW_DIR = Path.home() / '.local' / 'state' / 'relay' / 'merge_allows'
+MERGE_ALLOW_DIR = Path('/var/lib/relay/merge_allows')
+# Where an honoured receipt is recorded so it cannot serve a second merge. Separate from the
+# receipts because that directory is root-only-writable and this hook does not run as root.
+MERGE_SPENT_DIR = Path.home() / '.local' / 'state' / 'relay' / 'merge_allows_spent'
 # The receipt is written by `listen_chat_receiver/relay/merge_allow.py` in the `os` repository,
 # which cannot import from here and is imported by nothing here — so the file layout is the whole
 # of the contract, and it is named once on each side rather than spelled out at every use.
@@ -341,18 +345,46 @@ RECEIPT_NUMBER = 'number'
 RECEIPT_REPO = 'repo'
 RECEIPT_ISSUED_AT = 'issued_at'
 RECEIPT_TTL_S = 'ttl_s'
+# Distinct per authorization, which is what a spend mark names. A receipt without one is refused:
+# without it the mark would have to key on something that is not an identity, and a second
+# authorization sharing that value would be read as already spent.
+RECEIPT_ID = 'id'
+
+
+def _written_by_root(path: Path, directory: Path) -> bool:
+    """Whether only root could have put `path` where it is.
+
+    Ownership is the provenance check, so it has to cover the directory too: a file root owns
+    inside a directory anyone may write is a file anyone may replace.
+    """
+    try:
+        file_stat, dir_stat = path.stat(), directory.stat()
+    except OSError:
+        return False
+    return file_stat.st_uid == 0 and dir_stat.st_uid == 0 and not dir_stat.st_mode & 0o022
 
 
 def consume_merge_allow(
-    number: int, guarded_slug: str, directory: Path = MERGE_ALLOW_DIR, now: float | None = None
+    number: int,
+    guarded_slug: str,
+    directory: Path = MERGE_ALLOW_DIR,
+    spent_dir: Path = MERGE_SPENT_DIR,
+    now: float | None = None,
 ) -> bool:
     """Whether a human has authorized merging this pull request, spending the authorization.
 
-    The relay writes the receipt when a whitelisted human types `!allow_merge` in chat, and
-    refuses to write one for an injected message, so the agent cannot mint its own. An empty
-    repo names only a number, which resolves against the guarded repository.
+    The relay writes the receipt as root when a whitelisted human types `!allow_merge` in chat,
+    and refuses to write one for an injected message. A receipt cannot be forged without root,
+    since only root may write into the receipt directory; and it serves one merge, since
+    honouring it records a spend mark this process owns. Neither property holds against root,
+    which any process on this host can reach through the account's sudo.
+
+    An empty repo in the receipt names only a number, which resolves against the guarded
+    repository.
     """
     path = directory / RECEIPT_NAME.format(number=number)
+    if not _written_by_root(path, directory):
+        return False
     try:
         receipt = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
@@ -364,36 +396,65 @@ def consume_merge_allow(
     if repo and repo != slug and repo != slug.rpartition('/')[2]:
         return False
     issued_at, ttl = receipt.get(RECEIPT_ISSUED_AT, 0), receipt.get(RECEIPT_TTL_S, 0)
-    fresh = (now if now is not None else time.time()) - issued_at < ttl
-    path.unlink(missing_ok=True)
-    return fresh
+    if (now if now is not None else time.time()) - issued_at >= ttl:
+        return False
+    identifier = str(receipt.get(RECEIPT_ID) or '')
+    if not re.fullmatch(r'\w{4,64}', identifier):
+        return False
+    spent = spent_dir / f'pr{number}-{identifier}'
+    if spent.exists():
+        return False
+    spent_dir.mkdir(parents=True, exist_ok=True)
+    spent.touch()
+    return True
 
 
-def _gh_positionals(words: list[str]) -> list[str]:
-    """The invocation's positional words: flags dropped, and the values of those that take one."""
-    out, skip = [], False
-    for w in words:
-        if skip:
-            skip = False
-        elif w.startswith('-'):
-            skip = w in ('-R', '--repo')
-        elif bare := re.sub(r'[)}].*$', '', w):  # a lossy parse leaves a closing delimiter glued on
-            out.append(bare)
-    return out
+# `gh pr merge` flags that consume the following argument, so its value is never the pull
+# request being merged: `gh pr merge --subject 566 999` merges 999.
+GH_MERGE_VALUE_FLAGS = frozenset({
+    '-A',
+    '--author-email',
+    '-b',
+    '--body',
+    '-F',
+    '--body-file',
+    '--match-head-commit',
+    '-t',
+    '--subject',
+    '-R',
+    '--repo',
+})
 
 
-def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None]:
-    """Whether this is `gh pr merge`, and the pull request it names — None when it names none.
+def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None, str]:
+    """Whether this is `gh pr merge`, the pull request it names, and the repository it targets.
 
+    The number is None unless the merge target is written as one, and the repository is '' unless
+    `-R` names another — gh takes a URL or a branch there too, which no authorization can name.
     gh (cobra) accepts persistent flags between `pr` and the subcommand — `gh pr -R o/r merge 1`.
     """
-    positional = _gh_positionals(words)
-    if 'pr' not in positional:
-        return False, None
+    positional: list[str] = []
+    repo = pending = ''
+    for w in words:
+        if pending:
+            repo, pending = (w if pending in ('-R', '--repo') else repo), ''
+        elif w.startswith('-'):
+            flag, eq, value = w.partition('=')
+            if flag in ('--help', '-h'):
+                return False, None, ''
+            if flag in ('-R', '--repo') and eq:
+                repo = value
+            elif flag in GH_MERGE_VALUE_FLAGS and not eq:
+                pending = flag
+        elif bare := re.sub(r'[)}].*$', '', w):  # a lossy parse leaves a closing delimiter glued on
+            positional.append(bare)
+    if not positional or positional[0] == 'help' or 'pr' not in positional:
+        return False, None, ''
     after = positional[positional.index('pr') + 1 :]
     if not after or after[0] != 'merge':
-        return False, None
-    return True, next((int(w) for w in after[1:] if w.isdigit()), None)
+        return False, None, ''
+    target = after[1] if len(after) > 1 else ''
+    return True, int(target) if target.isdigit() else None, repo
 
 
 def _push_dest_slug(inv_dir: str | None, rest: list[str], git: GitInfo) -> str:  # noqa: C901
@@ -491,11 +552,14 @@ def analyze(  # noqa: C901
     for inv in invs:
         if inv.kind != 'gh':
             continue
-        is_merge, number = _gh_pr_merge(inv.words)
+        is_merge, number, target = _gh_pr_merge(inv.words)
         if is_merge:
             if number is None:
                 return UNNUMBERED_MSG
-            if not allow_merge(number, guarded_slug):
+            # An authorization is for this repository's pull request; `-R` selects another, whose
+            # merges this guard has no receipt for.
+            elsewhere = target.casefold() not in ('', guarded_slug, guarded_slug.rpartition('/')[2])
+            if elsewhere or not allow_merge(number, guarded_slug):
                 return 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
 
     for inv, sub, rest in git_invs:
