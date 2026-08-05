@@ -188,30 +188,23 @@ def resolve_episode_seed(episode: Any, episode_index: int, override_seed: int | 
 
 
 def resolve_task_horizon_steps(episode: Any, policy_dt_ms: float, override_steps: int | None = None) -> int:
-    """A benchmark episode's enforced horizon in policy steps, mirroring MolmoSpaces' own precedence.
+    """A benchmark episode's enforced horizon in policy steps, mirroring MolmoSpaces' own resolution.
 
-    An explicit ``override_steps`` wins — the way MolmoSpaces' ``--task_horizon_steps`` overrides the benchmark —
-    so an operator can pin the exact horizon a reference run used. Otherwise read the benchmark's own
-    ``task_horizon_sec`` (sim-seconds): shipped DROID benchmarks carry it as an **episode-level** field (a
-    pydantic extra on the loaded spec), so read it there first, falling back to the task dict
-    for layouts that nest it, and convert with ``round(sec * 1000 / policy_dt_ms)`` (MolmoSpaces' own conversion).
-    The horizon is part of the task definition, so a benchmark carrying none and no override fails loud.
-
-    Discrepancy worth knowing: MolmoSpaces' own ``determine_task_horizon`` reads only ``episode.task``, which is
-    absent on the shipped benchmarks, so it raises there and a native run needs ``--task_horizon_steps`` (or a
-    ``patch_benchmarks`` pass that moves the field into ``task``). Reading the
-    episode-level field reproduces the benchmark's declared horizon without that override.
+    Upstream's ``determine_task_horizon`` (``evaluation/eval_main.py``, the entrypoint its README documents)
+    resolves in this order and nothing else: an explicit ``--task_horizon_steps`` override, then the benchmark's
+    own ``task_horizon_sec`` from the episode's task dict, converted with ``round(sec * 1000 / policy_dt_ms)`` —
+    and a raise when a benchmark declares neither. This reproduces that, including the raise: the horizon is part
+    of the task definition, and ``JsonBenchmarkEvalConfig.task_horizon``'s 500-step default is a config default
+    upstream overwrites before the runner ever sees it.
     """
     if override_steps is not None:
         if override_steps < 1:
             raise ValueError(f'task_horizon_steps override must be at least 1 step, got {override_steps}')
         return override_steps
-    horizon_sec = getattr(episode, 'task_horizon_sec', None)
-    if horizon_sec is None:
-        horizon_sec = episode.task.get('task_horizon_sec')
+    horizon_sec = episode.task.get('task_horizon_sec')
     if horizon_sec is None:
         raise ValueError(
-            'benchmark episode carries no task_horizon_sec (neither episode-level nor in its task) and no '
-            'task_horizon_steps override — the horizon is part of the task definition; add it or pass an override'
+            'benchmark episode carries no task_horizon_sec in its task dict and no task_horizon_steps override — '
+            'the horizon is part of the task definition; add it to the benchmark or pass an override'
         )
     return round(horizon_sec * 1000.0 / policy_dt_ms)

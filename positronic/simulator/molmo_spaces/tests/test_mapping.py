@@ -98,29 +98,23 @@ def test_camera_key_miss_raises():
         mapping.resolve_camera_key({'other': 1}, mapping.MOLMO_WRIST_CAMERA)
 
 
-def test_task_horizon_from_episode_level_field():
-    # Shipped DROID benchmarks carry task_horizon_sec at the EPISODE level (a pydantic extra on the spec), NOT
-    # inside the task dict.
-    ep = types.SimpleNamespace(task_horizon_sec=20, task={})
-    assert mapping.resolve_task_horizon_steps(ep, 66.0) == 303  # round(20 * 1000 / 66)
-
-
-def test_task_horizon_falls_back_to_task_dict():
-    # A layout that nests the horizon inside the task dict still resolves.
+def test_task_horizon_reads_the_benchmark_task_dict():
+    # Where MolmoSpaces' benchmark generator writes it, and where determine_task_horizon reads it.
     ep = types.SimpleNamespace(task={'task_horizon_sec': 30})
     assert mapping.resolve_task_horizon_steps(ep, 66.0) == 455  # round(30 * 1000 / 66)
 
 
 def test_task_horizon_missing_raises():
-    # No horizon at either level (and no override) fails loud — the horizon is part of the task definition.
+    # A benchmark declaring no horizon (and no override) fails loud, as upstream's resolver does — the config's
+    # own 500-step default belongs to no benchmark.
     with pytest.raises(ValueError):
         mapping.resolve_task_horizon_steps(types.SimpleNamespace(task={}), 66.0)
 
 
 def test_task_horizon_override_wins():
     # An explicit override pins the horizon, beating the benchmark field (mirrors --task_horizon_steps), and lets
-    # a run without any benchmark field still resolve.
-    ep = types.SimpleNamespace(task_horizon_sec=20, task={})
+    # a benchmark that declares none still resolve.
+    ep = types.SimpleNamespace(task={'task_horizon_sec': 20})
     assert mapping.resolve_task_horizon_steps(ep, 66.0, override_steps=500) == 500
     assert mapping.resolve_task_horizon_steps(types.SimpleNamespace(task={}), 66.0, override_steps=455) == 455
 
