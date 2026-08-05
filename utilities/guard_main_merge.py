@@ -41,6 +41,10 @@ UNNUMBERED_MSG = (
     'BLOCKED: name the pull request to merge (`gh pr merge <number>`) — an authorization names one pull'
     ' request, so a merge that names none can never match it.'
 )
+MULTIPLE_MERGES_MSG = (
+    'BLOCKED: merge one pull request per command — an authorization names one, and a command'
+    ' merging several would have to spend the first before knowing the rest are allowed.'
+)
 AMEND_MSG = 'BLOCKED: Never amend commits, create new ones instead.'
 
 # git global options that consume the following argument in their space-separated form
@@ -59,6 +63,10 @@ SUBST = '\x00subst'
 # A word that names `main` as a push target or checkout target: `main`, `+main`, `HEAD:main`,
 # `origin/main`, `main:other` — but not `mainline` or `feature/main2`.
 MAIN_REF_RE = re.compile(r'(^|[:/+])main(?![\w/\-])')
+
+# gh's own name for the variable that selects a repository, read from the command and from the
+# environment — two places that have to agree with gh and with each other.
+GH_REPO_ENV = 'GH_REPO'
 
 # A heredoc opener whose delimiter is QUOTED — `<<'EOF'`, `<<"EOF"`, `<<-'EOF'`. The quoting is
 # what makes the body inert: it suppresses every expansion, so the text cannot execute.
@@ -426,15 +434,29 @@ GH_MERGE_VALUE_FLAGS = frozenset({
 })
 
 
+def _sets_gh_repo(cmd: str) -> bool:
+    """Whether `cmd` sets `GH_REPO` for anything it runs.
+
+    The shell removes quotes before it reads an assignment, so `G''H_REPO=x` sets the variable
+    while the raw text never spells its name. Quoting the tokenizer cannot read is itself an
+    answer of yes, since what it hides could be the assignment.
+    """
+    try:
+        segments = _segments(_strip_heredoc_bodies(cmd))
+    except ValueError:
+        return True
+    return any(word.startswith(GH_REPO_ENV + '=') for segment in segments for word in segment)
+
+
 def _gh_repo(explicit: str, inv_dir: str | None, git: GitInfo, cmd: str, gh_repo_env: str) -> str:
     """The repository a `gh` invocation acts on, or '' when that cannot be established.
 
-    `-R` names it outright; `GH_REPO` does the same from the environment, and an environment is
-    not something a command can be read for, so its mere mention gives up. Otherwise gh resolves
+    `-R` names it outright, and `GH_REPO` does the same from the environment — which is not
+    something a command can be read for, so either source of it gives up. Otherwise gh resolves
     the repository from the working directory, which is why an unresolvable directory gives up
-    too — a merge is not this repository's just because nothing said otherwise.
+    too: a merge is not this repository's just because nothing said otherwise.
     """
-    if gh_repo_env or 'GH_REPO' in cmd:
+    if gh_repo_env or _sets_gh_repo(cmd):
         return ''
     if explicit:
         return explicit.casefold()
@@ -565,7 +587,7 @@ def analyze(  # noqa: C901
     def targets_main(inv_dir: str | None) -> bool:
         return on_main(inv_dir) or switches_to_main()
 
-    authorized_merge = None
+    pending_merge = None
     for inv in invs:
         if inv.kind != 'gh':
             continue
@@ -573,11 +595,13 @@ def analyze(  # noqa: C901
         if is_merge:
             if number is None:
                 return UNNUMBERED_MSG
+            if pending_merge is not None:
+                return MULTIPLE_MERGES_MSG
             if _gh_repo(target, inv.dir, git, cmd, gh_repo_env) != guarded_slug:
                 return 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
             # Spending it here would pay for a merge a later invocation in the same command can
             # still block, so the authorization is consulted once everything else has passed.
-            authorized_merge = number
+            pending_merge = number
 
     for inv, sub, rest in git_invs:
         if exempt(inv.dir):
@@ -615,7 +639,7 @@ def analyze(  # noqa: C901
             if deny:
                 return deny
 
-    if authorized_merge is not None and not allow_merge(authorized_merge, guarded_slug):
+    if pending_merge is not None and not allow_merge(pending_merge, guarded_slug):
         return 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
     return None
 
@@ -662,7 +686,7 @@ def main() -> int:
     cwd = payload.get('cwd') or os.getcwd()
     git = GitInfo()
     guarded_slug = repo_slug(git.origin_url(os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd()))
-    deny = analyze(cmd, cwd, guarded_slug, git, gh_repo_env=os.environ.get('GH_REPO', ''))
+    deny = analyze(cmd, cwd, guarded_slug, git, gh_repo_env=os.environ.get(GH_REPO_ENV, ''))
     if deny:
         print(deny, file=sys.stderr)
         return 2

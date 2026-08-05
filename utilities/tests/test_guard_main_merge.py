@@ -326,6 +326,31 @@ def test_an_authorization_is_not_spent_by_a_command_the_guard_blocks_anyway(git)
     assert asked == []
 
 
+def test_a_command_merging_two_pull_requests_is_refused(git):
+    """One authorization names one merge, and the first would be spent before the rest is known."""
+    asked = []
+    verdict = gmm.analyze(
+        'gh pr merge 566 && gh pr merge 567',
+        CLONE,
+        GUARDED,
+        git,
+        path_exists=fake_path_exists,
+        allow_merge=lambda n, slug: asked.append(n) or True,
+    )
+    assert verdict is not None and 'one pull request per command' in verdict
+    assert asked == []
+
+
+def test_a_quoted_gh_repo_assignment_is_read_as_the_shell_reads_it(git):
+    """Quote removal happens before the assignment, so the raw text never spells the name."""
+    asked = []
+    assert (
+        verdict(git, "env G''H_REPO=someone/other gh pr merge 566", allow_merge=lambda n, slug: asked.append(n) or True)
+        is not None
+    )
+    assert asked == []
+
+
 def test_gh_repo_in_the_environment_is_enough_to_refuse(git):
     """It selects the repository the way `-R` does, and a command cannot be read for it."""
     asked = []
