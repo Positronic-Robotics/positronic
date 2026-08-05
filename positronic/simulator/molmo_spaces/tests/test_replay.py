@@ -38,6 +38,7 @@ import numpy as np
 import pytest
 
 from positronic.simulator.molmo_spaces import mapping
+from positronic.simulator.molmo_spaces.tests import make_replay_fixture as fixture_fields
 from positronic.simulator.molmo_spaces.tests.make_replay_fixture import replay_commands
 
 FIXTURES = sorted(Path(__file__).parent.glob('replay_ep*.npz'))
@@ -68,19 +69,21 @@ def _benchmark_dir(benchmark_path: str) -> Path:
 @pytest.mark.parametrize('fixture_path', FIXTURES, ids=lambda path: path.stem)
 def test_recorded_rollout_replays_the_pinned_trajectory(fixture_path: Path):
     fixture = np.load(fixture_path, allow_pickle=False)
-    commands, grips = fixture['commands'], fixture['grips']
-    episode_index = int(fixture['episode_index'])
-    states = replay_commands(_benchmark_dir(str(fixture['benchmark_path'])), episode_index, commands, grips)
+    commands, grips = fixture[fixture_fields.FIELD_COMMANDS], fixture[fixture_fields.FIELD_GRIPS]
+    episode_index = int(fixture[fixture_fields.FIELD_EPISODE_INDEX])
+    benchmark_dir = _benchmark_dir(str(fixture[fixture_fields.FIELD_BENCHMARK_PATH]))
+    states = replay_commands(benchmark_dir, episode_index, commands, grips)
 
     # The sim must not end the trial inside the replayed prefix: the recording ran every one of these steps,
     # so an early terminal means the integration now scores or expires the episode differently.
     assert len(states) == len(commands), (
         f'replay of episode {episode_index} terminated after {len(states)} of {len(commands)} recorded steps '
-        f'(its {int(fixture["unreplayable_tail_steps"])} unrecorded tail steps are excluded)'
+        f'(its {int(fixture[fixture_fields.FIELD_UNREPLAYABLE_TAIL_STEPS])} unrecorded tail steps are excluded)'
     )
 
     # Checkpoints along the way, not just the end state: drift shows up long before it would flip a verdict.
-    for step, pinned in zip(fixture['checkpoint_steps'], fixture['checkpoint_sim_state'], strict=True):
+    checkpoint_steps = fixture[fixture_fields.FIELD_CHECKPOINT_STEPS]
+    for step, pinned in zip(checkpoint_steps, fixture[fixture_fields.FIELD_CHECKPOINT_SIM_STATE], strict=True):
         replayed = states[int(step) - 1]  # states[i] holds step i + 1; the fixture indexes steps from 1
         deviation = float(np.max(np.abs(replayed - pinned)))
         assert deviation <= SIM_STATE_TOL, (

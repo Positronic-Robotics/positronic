@@ -51,6 +51,17 @@ from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import launcher, mapping
 
+# The fixture's own fields: what a distilled episode records, and what the replay test reads back.
+FIELD_EPISODE_INDEX = 'episode_index'
+FIELD_BENCHMARK_PATH = 'benchmark_path'
+FIELD_TASK = 'task'
+FIELD_COMMANDS = 'commands'
+FIELD_GRIPS = 'grips'
+FIELD_UNREPLAYABLE_TAIL_STEPS = 'unreplayable_tail_steps'
+FIELD_CHECKPOINT_STEPS = 'checkpoint_steps'
+FIELD_CHECKPOINT_SIM_STATE = 'checkpoint_sim_state'
+FIELD_EXPECTED_SUCCESS = 'expected_success'
+
 # Checkpoint stride over the replayed steps: dense enough that drift is caught early rather than only at the
 # end state, sparse enough to keep the fixture small. The final step is always included on top.
 CHECKPOINT_STRIDE = 8
@@ -155,15 +166,15 @@ def build_fixture(episode_dir: Path, benchmark_path: str, assets_dir: Path) -> d
             'so the recording and the integration no longer agree on the trial length'
         )
     return {
-        'episode_index': np.asarray(episode.static[EVAL_EPISODE_INDEX], dtype=np.int32),
-        'benchmark_path': np.asarray(benchmark_path),
-        'task': np.asarray(episode.static['task']),
-        'commands': played_prefix,
-        'grips': grip_prefix,
-        'unreplayable_tail_steps': np.asarray(len(step_ts) - replayable, dtype=np.int32),
-        'checkpoint_steps': checkpoints.astype(np.int32),
-        'checkpoint_sim_state': np.stack([replayed[int(step) - 1] for step in checkpoints]),
-        'expected_success': np.asarray(episode.static[EVAL_SUCCESS], dtype=bool),
+        FIELD_EPISODE_INDEX: np.asarray(episode.static[EVAL_EPISODE_INDEX], dtype=np.int32),
+        FIELD_BENCHMARK_PATH: np.asarray(benchmark_path),
+        FIELD_TASK: np.asarray(episode.static[mapping.META_TASK]),
+        FIELD_COMMANDS: played_prefix,
+        FIELD_GRIPS: grip_prefix,
+        FIELD_UNREPLAYABLE_TAIL_STEPS: np.asarray(len(step_ts) - replayable, dtype=np.int32),
+        FIELD_CHECKPOINT_STEPS: checkpoints.astype(np.int32),
+        FIELD_CHECKPOINT_SIM_STATE: np.stack([replayed[int(step) - 1] for step in checkpoints]),
+        FIELD_EXPECTED_SUCCESS: np.asarray(episode.static[EVAL_SUCCESS], dtype=bool),
     }
 
 
@@ -185,11 +196,12 @@ def main() -> None:
     benchmark_path = read_benchmark_path(args.dataset_dir)
     for episode_index in args.episode_index:
         fixture = build_fixture(find_episode_dir(args.dataset_dir, episode_index), benchmark_path, Path(assets))
-        if not fixture['expected_success']:
+        if not fixture[FIELD_EXPECTED_SUCCESS]:
             raise SystemExit(f'episode {episode_index} did not succeed — replay fixtures pin successful rollouts')
         out = Path(__file__).parent / f'replay_ep{episode_index:02d}.npz'
         np.savez_compressed(out, **fixture)  # pyright: ignore[reportArgumentType] -- numpy's savez **kwds stub
-        print(f'Wrote {out} ({out.stat().st_size} bytes, {len(fixture["commands"])} steps, {benchmark_path})')
+        steps = len(fixture[FIELD_COMMANDS])
+        print(f'Wrote {out} ({out.stat().st_size} bytes, {steps} steps, {benchmark_path})')
 
 
 if __name__ == '__main__':
