@@ -51,7 +51,7 @@ from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import launcher, mapping
 
-# The fixture's own fields: what a distilled episode records, and what the replay test reads back.
+# The fixture's own fields, as a distilled episode records them.
 FIELD_EPISODE_INDEX = 'episode_index'
 FIELD_BENCHMARK_PATH = 'benchmark_path'
 FIELD_TASK = 'task'
