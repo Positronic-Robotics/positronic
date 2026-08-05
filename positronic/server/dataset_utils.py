@@ -51,17 +51,26 @@ def _pose_color(name: str) -> list[int]:
     return _POSE_COLORS['default']
 
 
+# A per-element plot of a signal this wide is unreadable, and crowds the video panels out of the
+# recording until they never decode.
+# TODO: a view that plots a chosen few elements of a wide signal, so it stops being all-or-nothing.
+_MAX_PLOTTED_WIDTH = 32
+
+
 @dataclass
 class EpisodeSignals:
     videos: list[str]
     numerics: list[str]
     dims: dict[str, int]
     poses: list[str]
-    unplotted: dict[str, int]  # name -> element count, for signals too wide to plot
 
     @property
     def plotted(self) -> list[str]:
-        return [name for name in self.numerics if name not in self.unplotted]
+        return [name for name in self.numerics if self.dims[name] <= _MAX_PLOTTED_WIDTH]
+
+    @property
+    def unplotted(self) -> dict[str, int]:
+        return {name: dim for name, dim in self.dims.items() if dim > _MAX_PLOTTED_WIDTH}
 
 
 def _infer_dims(sig) -> int:
@@ -142,10 +151,6 @@ def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeContro
     return rrb.EyeControls3D(position=camera_pos.tolist(), look_target=centroid.tolist())
 
 
-# A per-element plot of a signal this wide is unreadable, and crowds the video panels out of the
-# recording until they never decode.
-# TODO: a view that plots a chosen few elements of a wide signal, so it stops being all-or-nothing.
-_MAX_PLOTTED_WIDTH = 32
 _UNPLOTTED_ENTITY = '/unplotted'
 
 
@@ -160,7 +165,7 @@ def _unplotted_notice(unplotted: dict[str, int]) -> str:
 
 def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
     pose_set = set(ep.static.get('pose_signals', []))
-    signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[], unplotted={})
+    signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[])
     for name, sig in ep.signals.items():
         if sig.kind == Kind.IMAGE:
             try:
@@ -174,9 +179,6 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
             dim = _infer_dims(sig)
         except Exception:
             dim = 1
-        if dim > _MAX_PLOTTED_WIDTH:
-            signals.unplotted[name] = dim
-
         signals.numerics.append(name)
         signals.dims[name] = dim
         if name in pose_set:
@@ -364,6 +366,7 @@ def _log_numeric_signals(
     if gripper:
         stash_keys.add(gripper['signal'])
     pose_data = {}
+    unplotted = signals.unplotted
 
     for key in signals.numerics:
         sig = ep.signals[key]
@@ -378,7 +381,7 @@ def _log_numeric_signals(
             vals = vals.reshape(-1, 1)
         dim = vals.shape[1]
 
-        if key not in signals.unplotted:
+        if key not in unplotted:
             time_idx = [rr.TimeColumn('time', timestamp=ts_arr)]
             if dim == 1:
                 rr.send_columns(f'/signals/{key}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals.ravel()))
