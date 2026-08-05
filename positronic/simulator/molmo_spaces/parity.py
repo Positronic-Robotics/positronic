@@ -134,7 +134,7 @@ def _assert_parity(native: dict, positronic: dict, max_steps: int) -> None:
         assert n.shape == p.shape, f'{field} shape differs: native {n.shape}, positronic {p.shape}'
         assert np.array_equal(n, p), f'{field} differs between native and positronic rollouts'
     for name in positronic['camera_names']:
-        n_hashes, p_hashes = list(native[f'cam_hash__{name}']), positronic['cam_hashes'][name]
+        n_hashes, p_hashes = list(native[f'{mapping.CAM_HASH_PREFIX}{name}']), positronic['cam_hashes'][name]
         assert n_hashes == p_hashes, f'camera {name} frames differ between native and positronic rollouts'
 
 
