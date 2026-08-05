@@ -9,7 +9,7 @@ import pimm
 from positronic import geom, keys
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.eval import Task
+from positronic.eval import EVAL_SUCCESS, Task
 from positronic.inference import main
 from positronic.policy import Policy, Session
 from positronic.policy.codec import ActionTimestamp
@@ -244,7 +244,7 @@ class _CountdownAdapter(EnvAdapter):
         return {}
 
     def terminal(self, result):
-        return {'eval.success': True} if result[protocol.FRAME_DONE] else None
+        return {EVAL_SUCCESS: True} if result[protocol.FRAME_DONE] else None
 
 
 @pytest.mark.timeout(60.0)
