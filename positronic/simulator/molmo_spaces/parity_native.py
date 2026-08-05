@@ -7,11 +7,17 @@ holding the arm every step, and records the per-step raw sim state, per-camera f
 horizon terminates the episode. ``parity.py`` drives the *same* episode through the positronic env-server path and
 asserts byte-identical outcomes against this reference.
 
-The horizon comes from ``mapping.resolve_task_horizon_steps`` (the benchmark's own ``task_horizon_sec``), the same
-resolver ``env.py`` uses — its correctness is covered by a unit test, not re-derived here (MolmoSpaces' own
-``determine_task_horizon`` reads the wrong field and raises on the shipped benchmarks, so it is not a usable
-reference). Everything except the rollout drive is shared with ``env.py`` (the eval config, the horizon resolver,
-the observation extraction), so the comparison isolates the sim rollout, not the observation mapping.
+The reference derives what it compares from MolmoSpaces, not from the integration: the horizon from upstream's
+own ``determine_task_horizon``, and each observation field read off the robot view here — the gripper closure
+through upstream's own normalisation (``policy/learned_policy/pi_policy.py``). So an integration that resolves
+the horizon or maps an observation differently from MolmoSpaces shows up as a parity failure rather than being
+reproduced on both sides.
+
+One thing is deliberately shared and cannot be otherwise: ``env._DroidPickEvalConfig``, the eval config both
+rollouts build the task from. It is the task definition — two rollouts built from different configs are not
+comparable at all — and MolmoSpaces has no per-benchmark config to derive it from, the config being the
+operator's own input. ``import env`` also runs the GL backend selection and the CGL stub before any
+``molmo_spaces`` import; that decides whether the process renders at all, never what it records.
 
 Needs ``MLSPACES_ASSETS_DIR`` + a GL backend, like ``e2e.py``. Invoked by ``parity.py``; not run by hand.
 """
@@ -27,28 +33,56 @@ import hashlib
 from pathlib import Path
 
 # env.py (imported flat off PYTHONPATH, like mapping/server) sets MUJOCO_GL and installs the CGL stub at import,
-# GL-safely pulling in the molmo_spaces stack — so import it before any other molmo_spaces import. It supplies the
-# shared observation extraction (observe_payload), the DROID eval config, and (via ``env.mapping``) the horizon
-# resolver env.py uses. Reaching into env's private helpers is deliberate: the reference must use env.py's exact
-# config + resolver so the comparison isolates the rollout.
+# GL-safely pulling in the molmo_spaces stack — so import it before any other molmo_spaces import.
 import env  # noqa: E402
 import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
-import numpy as np
+import mujoco  # noqa: E402
+import numpy as np  # noqa: E402
+
+from molmo_spaces.evaluation.benchmark_schema import load_all_episodes  # noqa: E402
+from molmo_spaces.evaluation.eval_main import determine_task_horizon  # noqa: E402
+from molmo_spaces.tasks.json_eval_task_sampler import JsonEvalTaskSampler  # noqa: E402
+
+# The Robotiq finger qpos the DROID observation's closure is normalised against, as MolmoSpaces' own policies
+# read it (``np.clip(obs["qpos"]["gripper"][0] / 0.824033, 0, 1)``, pi_policy.py:126).
+_GRIPPER_QPOS_CLOSED = 0.824033
+
+
+def _is_rgb_frame(value) -> bool:
+    return isinstance(value, np.ndarray) and value.ndim == 3 and value.shape[2] == 3 and value.dtype == np.uint8
+
+
+def _observe(robot_view, env_obs: dict, camera_names: list[str]) -> dict:
+    """One frame's compared values, read off MolmoSpaces directly: measured joints, the grasp-site world pose,
+    the gripper closure, and each camera's frame."""
+    arm = robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
+    eef_world = np.asarray(arm.leaf_frame_to_world, dtype=np.float64)
+    quat = np.zeros(4)  # wxyz
+    mujoco.mju_mat2Quat(quat, np.ascontiguousarray(eef_world[:3, :3].reshape(9)))  # pyright: ignore[reportAttributeAccessIssue]
+    grip = np.clip(env_obs['qpos'][mapping.MOLMO_GRIPPER_GROUP][0] / _GRIPPER_QPOS_CLOSED, 0.0, 1.0)
+    return {
+        mapping.OBS_JOINT_POS: np.asarray(arm.joint_pos, dtype=np.float32),
+        mapping.OBS_JOINT_VEL: np.asarray(arm.joint_vel, dtype=np.float32),
+        mapping.OBS_EEF_POS: eef_world[:3, 3].astype(np.float32),
+        mapping.OBS_EEF_QUAT: quat.astype(np.float32),
+        mapping.OBS_GRIP: np.float32(grip),
+        **{name: np.ascontiguousarray(env_obs[name]) for name in camera_names},
+    }
 
 
 def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out_path: Path) -> None:
-    episodes = env.load_all_episodes(benchmark_dir)
+    episodes = load_all_episodes(benchmark_dir)
     episode = episodes[episode_index]
     cfg = env._DroidPickEvalConfig()
     cfg.seed = seed
-    native_horizon = env.mapping.resolve_task_horizon_steps(episode, cfg.policy_dt_ms)
+    native_horizon = determine_task_horizon([episode], None, cfg.policy_dt_ms)
     cfg.task_horizon = native_horizon
-    sampler = env.JsonEvalTaskSampler(cfg, episode)
+    sampler = JsonEvalTaskSampler(cfg, episode)
     task = sampler.sample_task(house_index=episode.house_index)
     robot_view = task.env.current_robot.robot_view
 
     obs, _info = task.reset()
-    camera_names = [k for k, v in obs[0].items() if env._is_rgb_frame(v)]
+    camera_names = [k for k, v in obs[0].items() if _is_rgb_frame(v)]
     fields: dict[str, list] = {
         k: []
         for k in (
@@ -62,7 +96,7 @@ def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out
     cam_hashes: dict[str, list[str]] = {name: [] for name in camera_names}
 
     def record(env_obs: dict) -> None:
-        payload = env.observe_payload(robot_view, env_obs, camera_names)
+        payload = _observe(robot_view, env_obs, camera_names)
         for key in fields:
             fields[key].append(payload[key])
         for name in camera_names:
