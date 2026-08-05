@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Delete a Nebius Serverless Endpoint by name (releases compute + public IP).
+# Delete a Nebius Serverless Endpoint by name (releases its compute).
 #
-# To pause an endpoint without releasing its static IP, use
-# `nebius ai endpoint stop <id>` directly instead — `start` resumes it later.
+# Deleting retires the endpoint's managed URL; a re-created endpoint of the same
+# name gets a new one. To keep the URL, use `nebius ai endpoint stop <id>`
+# directly instead — it releases the compute too, and `start` resumes on the
+# same URL.
 
 set -euo pipefail
 
@@ -24,4 +26,4 @@ fi
 
 echo "Deleting endpoint '$NAME' ($ID)..."
 nebius ai endpoint delete "$ID"
-echo "Released endpoint and public IP."
+echo "Released endpoint and its managed URL."

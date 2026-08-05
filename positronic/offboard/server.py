@@ -1,8 +1,10 @@
 """The inference server: serves a policy pipeline (see ``positronic.policy.spec``) over the offboard protocol."""
 
 import asyncio
+import hmac
 import json
 import logging
+import os
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -12,7 +14,7 @@ from typing import Any
 import configuronic as cfn
 import pos3
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, WebSocketException, status
 from starlette.datastructures import QueryParams
 
 from positronic import keys
@@ -21,6 +23,11 @@ from positronic.policy.spec import SEQ, ModelSource, Pipeline, split
 from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
+
+#: Environment variable holding the bearer token every route is gated on. Also the payload key of the
+#: MysteryBox secret ``workflows/nebius/serve.sh`` injects it from, and the key Nebius' own
+#: ``--token-secret`` reads, so one name covers server, client and platform.
+AUTH_TOKEN_ENV = 'AUTH_TOKEN'
 
 
 async def _acquire_with_keepalives(lock: asyncio.Lock, websocket: WebSocket | None, message: str):
@@ -204,12 +211,34 @@ class PolicyServer:
 
         self._default_id: str | None = None
 
+        # Gating happens here rather than at the hosting platform's ingress: Nebius answers `--auth token`
+        # by stripping the WebSocket upgrade headers, which leaves the inference route unreachable at any
+        # token. An unset variable serves open; set-but-empty is a broken secret, so fail closed.
+        self._auth_token = os.environ.get(AUTH_TOKEN_ENV)
+        if self._auth_token == '':
+            raise ValueError(f'{AUTH_TOKEN_ENV} is set but empty; unset it to serve open, or inject a real token')
+
         self.app = FastAPI()
-        self.app.get('/api/v1/models')(self.get_models)
-        self.app.websocket('/api/v1/session')(self.default_session)
+        http_auth, ws_auth = [Depends(self._require_http_auth)], [Depends(self._require_ws_auth)]
+        self.app.get('/api/v1/models', dependencies=http_auth)(self.get_models)
+        self.app.websocket('/api/v1/session', dependencies=ws_auth)(self.default_session)
         # ``:path`` so an id that is itself a path (a HuggingFace repo, say) opens under the name
         # ``/api/v1/models`` advertises.
-        self.app.websocket('/api/v1/session/{model_id:path}')(self.model_session)
+        self.app.websocket('/api/v1/session/{model_id:path}', dependencies=ws_auth)(self.model_session)
+
+    def _authorized(self, authorization: str | None) -> bool:
+        if self._auth_token is None:
+            return True
+        return authorization is not None and hmac.compare_digest(authorization, f'Bearer {self._auth_token}')
+
+    def _require_http_auth(self, authorization: str | None = Header(default=None)) -> None:
+        if not self._authorized(authorization):
+            raise HTTPException(status_code=401, detail='Invalid or missing bearer token')
+
+    async def _require_ws_auth(self, websocket: WebSocket) -> None:
+        """Rejects before ``accept()``, so an unauthorized peer never reaches the session handshake."""
+        if not self._authorized(websocket.headers.get('authorization')):
+            raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
 
     async def get_models(self) -> dict:
         return {'models': self._source.get_models()}

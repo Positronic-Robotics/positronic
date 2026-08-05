@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 import uvicorn
 
-from positronic.offboard.server import PolicyServer
+from positronic.offboard.server import AUTH_TOKEN_ENV, PolicyServer
 from positronic.policy import Policy
 from positronic.policy.spec import ModelSource, PolicySource, remote
 from positronic.policy.wrappers import ChunkedSchedule
@@ -24,8 +24,10 @@ StartServer = Callable[..., tuple[str, int, PolicyServer]]
 
 
 @pytest.fixture
-def start_server() -> Generator[StartServer, None, None]:
+def start_server(monkeypatch) -> Generator[StartServer, None, None]:
     """Factory serving pipelines on daemon threads; every started server is stopped and joined at teardown."""
+    # Servers come up open unless a test asks otherwise, whatever the developer has exported.
+    monkeypatch.delenv(AUTH_TOKEN_ENV, raising=False)
     running: list[tuple[uvicorn.Server, threading.Thread]] = []
 
     def start(pipeline, **server_kwargs) -> tuple[str, int, PolicyServer]:

@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 # outlast that compile (still surfacing a stalled/half-open connection), and let callers override per use.
 DEFAULT_INFER_TIMEOUT = 180.0
 
+# A reverse proxy fronting the server drops a connection it has read nothing from for a while — the Nebius
+# managed HTTPS URL at ~90s, well inside one ``DEFAULT_INFER_TIMEOUT`` inference. The pongs answering these
+# pings are the traffic that carries a silent server across a slow call.
+PING_INTERVAL = 20.0
+
 
 class InferenceSession:
     def __init__(self, websocket: Connection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
@@ -165,7 +170,12 @@ class InferenceClient:
         while True:
             ws = None
             try:
-                ws = connect(self.session_url, open_timeout=self.open_timeout, additional_headers=self.headers)
+                ws = connect(
+                    self.session_url,
+                    open_timeout=self.open_timeout,
+                    additional_headers=self.headers,
+                    ping_interval=PING_INTERVAL,
+                )
                 return InferenceSession(ws, infer_timeout=self.infer_timeout)
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
             # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.

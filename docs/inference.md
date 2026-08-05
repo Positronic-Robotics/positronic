@@ -55,6 +55,15 @@ uv run positronic-inference sim \
 
 Accepted forms: `host`, `host:port`, and `https://host[:port][/api/v1/session[/<model_id>]]` (`http`, `ws` and `wss` work too), each with an optional query. `https`/`wss` enable TLS. An omitted port is the scheme's own — 443 for TLS and 80 otherwise — so name the port a server listens on (`:8000` for every vendor server's default). Naming no model id serves the checkpoint the server pinned at startup.
 
+**Credentials stay out of the URL**, which is meant to be safe to paste around. A server gated on a bearer token (every endpoint [`workflows/nebius/serve.sh`](../workflows/nebius/README.md) creates) is reached with `.authed_remote`, which reads the token from `AUTH_TOKEN` and raises if it is unset:
+
+```bash
+uv run positronic-inference sim \
+  --policy=.authed_remote \
+  --policy.url=https://<endpoint-managed-url> \
+  --output_dir=~/datasets/inference_logs/exp_v1
+```
+
 **Session parameters** are the URL's query string: the server applies them as overrides to its pipeline config, so you can tune the served pipeline without restarting the server. Keys are dotted paths into that config and values are JSON literals, forwarded verbatim so they arrive exactly as written (`fps=10`, `pad=false`, `name="s3"`).
 
 The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server launch — `source.*` params are rejected; name a checkpoint in the URL path instead. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).

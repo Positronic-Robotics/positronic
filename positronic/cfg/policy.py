@@ -1,8 +1,11 @@
+import os
+
 import configuronic as cfn
 import pos3
 
 from positronic import keys
 from positronic.cfg import codecs
+from positronic.offboard.server import AUTH_TOKEN_ENV
 from positronic.policy import Codec, Policy, RemotePolicy, SampledPolicy
 from positronic.policy.sampler import Sampler
 from positronic.policy.spec import PolicySource, inline
@@ -60,6 +63,19 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
 
 
 remote = cfn.Config(RemotePolicy, url='ws://localhost:8000')
+
+
+@cfn.config(env_var=AUTH_TOKEN_ENV)
+def bearer_headers(env_var: str):
+    token = os.environ.get(env_var)
+    if not token:
+        raise ValueError(f'{env_var} is not set; export the endpoint token before running inference')
+    return {'Authorization': f'Bearer {token}'}
+
+
+# A served endpoint gated on a bearer token. The URL carries no default: it names one specific endpoint,
+# and a token must not be handed to whichever host a stale default points at.
+authed_remote = cfn.Config(RemotePolicy, headers=bearer_headers)
 
 
 @cfn.config(balance=2)

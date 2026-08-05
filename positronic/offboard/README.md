@@ -6,6 +6,14 @@ This package implements the protocol and utilities for offboard policy inference
 
 The unified WebSocket protocol is built to enable ANY hardware to connect to ANY model. All Positronic inference servers (LeRobot, GR00T, OpenPI) implement this protocol, allowing a single `.remote` policy client to work across all vendors.
 
+### Authentication
+
+A server started with `AUTH_TOKEN` in its environment gates every route below on
+`Authorization: Bearer $AUTH_TOKEN`, answering `401` on the HTTP route and refusing the WebSocket
+upgrade before the session opens. Without the variable it serves open, which is the usual shape on a
+trusted LAN; set-but-empty is a broken secret and refuses to start. `InferenceClient(headers=...)`
+carries the header, and `positronic.cfg.policy.authed_remote` fills it in from the same variable.
+
 ### Endpoints
 
 #### `GET /api/v1/models`

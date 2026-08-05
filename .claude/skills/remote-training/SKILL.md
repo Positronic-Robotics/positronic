@@ -167,11 +167,12 @@ The first job after a dependency change pays the full `uv`/HF cold-download
 
 ### 3. Serve a Checkpoint
 
-`serve.sh <vendor> <unique-endpoint-name> [server args...]` creates a public
-Endpoint on H100 port 8000, blocks until a public IP is allocated, and prints a
-banner containing `Endpoint URL:  http://<IP>` (the endpoint IP), the endpoint
+`serve.sh <vendor> <unique-endpoint-name> [server args...]` creates an Endpoint
+on H100 port 8000, blocks until Nebius allocates its managed `https://` URL, and
+prints a banner containing `Endpoint URL:  https://<managed-url>`, the endpoint
 ID/name, and the teardown command. The container then takes ~10–15 min more
-to `uv sync` and load the model.
+to `uv sync` and load the model. There is no public IP and no open mode: the
+server rejects anything without `Authorization: Bearer $AUTH_TOKEN`.
 
 ```bash
 # Named preset — checkpoint path comes from the vendor's server.py config
@@ -191,38 +192,44 @@ bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d \
   --pipeline.source.checkpoints_dir=<ckpt-dir>
 ```
 
-Sanity-check once warm:
+Load the token once per shell, then sanity-check the endpoint once warm:
 
 ```bash
-curl http://<endpoint-ip>:8000/api/v1/models   # → {"models": ["<step>"]}
+SECRET_ID=$(nebius mysterybox secret list --parent-id "$NEBIUS_PARENT_ID" --format json \
+  | jq -r '.items[] | select(.metadata.name=="positronic-serverless-inference-token") | .metadata.id')
+export AUTH_TOKEN=$(nebius mysterybox payload get-by-key \
+  --secret-id "$SECRET_ID" --key AUTH_TOKEN --format json | jq -r '.data.string_value')
+
+curl -H "Authorization: Bearer $AUTH_TOKEN" \
+  https://<managed-url>/api/v1/models   # → {"models": ["<step>"]}
 ```
 
-Tear down (releases compute + public IP):
+Tear down (releases compute, retires the managed URL):
 
 ```bash
 bash workflows/nebius/stop.sh my-act-demo
 ```
 
-To pause without releasing the static IP: `nebius ai endpoint stop <id>`
-(`start` resumes).
+To pause and keep the URL: `nebius ai endpoint stop <id>` (`start` resumes).
 
 ### 4. Run Inference Client
 
-`serve.sh` prints the endpoint IP in its banner. To read it again later (by
+`serve.sh` prints the managed URL in its banner. To read it again later (by
 endpoint name):
 
 ```bash
 nebius ai endpoint list --parent-id "$NEBIUS_PARENT_ID" --format json \
   | jq -r --arg n "<endpoint-name>" \
-    '.items[] | select(.metadata.name==$n) | .status.public_endpoints[0]'
-# → the public IP; the endpoint serves on port 8000
+    '.items[] | select(.metadata.name==$n)
+     | .status.public_endpoints[] | select(startswith("https://"))'
 ```
 
-Point the `positronic-inference` CLI at the endpoint IP:
+Point the `positronic-inference` CLI at it; `.authed_remote` sends `AUTH_TOKEN`
+as the bearer token and fails fast if the variable is unset:
 
 ```bash
 uv run --locked positronic-inference sim \
-  --policy=.remote --policy.url=<endpoint-ip>:8000 \
+  --policy=.authed_remote --policy.url=https://<managed-url> \
   --output_dir=s3://inference/sim_stack_validation/<run_name>/<vendor>/
 ```
 

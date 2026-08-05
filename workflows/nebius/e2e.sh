@@ -16,6 +16,7 @@ S3_BASE="${E2E_S3_BASE:-s3://tmp/e2e_validation}"
 EXP_NAME="${E2E_EXP_NAME:-e2e_$(date +%Y%m%d_%H%M%S)}"
 LOG_ROOT="${E2E_LOG_ROOT:-/tmp/e2e_logs}"
 DATASET="${E2E_DATASET:-@positronic.cfg.ds.sim.sim_stack_cubes}"
+AUTH_TOKEN_SECRET="${NEBIUS_AUTH_TOKEN_SECRET:-positronic-serverless-inference-token}"
 
 VENDOR="${1:-}"
 if [ -z "$VENDOR" ]; then
@@ -159,14 +160,23 @@ SERVE_URL=$(echo "$SERVE_OUT" | awk '/Endpoint URL:/ {print $3; exit}')
 note "serve URL: $SERVE_URL"
 
 # ---- 4. Smoke /api/v1/models (up to 25 min for warm-up) ----
+SECRET_ID=$(nebius mysterybox secret list --parent-id "$PARENT_ID" --format json \
+  | jq -r --arg n "$AUTH_TOKEN_SECRET" '.items[]? | select(.metadata.name==$n) | .metadata.id')
+[ -z "$SECRET_ID" ] && { note "FAIL: no MysteryBox secret named $AUTH_TOKEN_SECRET"; exit 1; }
+AUTH_TOKEN=$(nebius mysterybox payload get-by-key --secret-id "$SECRET_ID" --key AUTH_TOKEN --format json \
+  | jq -r '.data.string_value')
+
 RESP=""
 for i in $(seq 1 50); do
-  RESP=$(curl --max-time 5 -s "$SERVE_URL/api/v1/models" 2>/dev/null || true)
+  RESP=$(curl --max-time 5 -s -H "Authorization: Bearer $AUTH_TOKEN" "$SERVE_URL/api/v1/models" 2>/dev/null || true)
   [ -n "$RESP" ] && break
   sleep 30
 done
 if [ -n "$RESP" ]; then
   note "infer: $RESP"
+  # The endpoint is gated: the same call without the token must not reach the model list.
+  CODE=$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "$SERVE_URL/api/v1/models" 2>/dev/null || true)
+  [ "$CODE" = "401" ] && note "auth: tokenless request rejected (401)" || note "auth: FAIL, tokenless got $CODE"
 else
   note "infer: TIMEOUT"
 fi
