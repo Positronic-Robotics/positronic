@@ -134,11 +134,11 @@ def wire_command_to_arm_action(
     ``current_eef`` pose the delta composes onto. Both are supplied by ``env.py``, which owns the sim.
     """
     current = np.asarray(current_q, dtype=np.float32).reshape(-1)
-    match command['type']:
+    match command[protocol.COMMAND_TYPE]:
         case protocol.JOINT_POS:
-            target = np.asarray(command['q'], dtype=np.float32).reshape(-1)
+            target = np.asarray(command[protocol.COMMAND_JOINT_POS], dtype=np.float32).reshape(-1)
         case protocol.JOINT_VEL:
-            dq = np.asarray(command['dq'], dtype=np.float32).reshape(-1)
+            dq = np.asarray(command[protocol.COMMAND_JOINT_VEL], dtype=np.float32).reshape(-1)
             if dq.shape[0] != current.shape[0]:
                 raise ValueError(f'joint delta {dq.shape[0]} vs measured joints {current.shape[0]}')
             target = current + dq
@@ -146,12 +146,12 @@ def wire_command_to_arm_action(
             target = current
         case protocol.CARTESIAN:
             solver = _require_ik(ik, protocol.CARTESIAN)
-            target = np.asarray(solver(*unpack_wire_pose(command['pose'])), dtype=np.float32).reshape(-1)
+            target = np.asarray(solver(*unpack_wire_pose(command[protocol.COMMAND_POSE])), dtype=np.float32).reshape(-1)
         case protocol.CARTESIAN_DELTA:
             solver = _require_ik(ik, protocol.CARTESIAN_DELTA)
             if current_eef is None:
                 raise ValueError(f'command {protocol.CARTESIAN_DELTA!r} needs the measured eef pose; none supplied')
-            delta_pos, delta_rot = unpack_wire_pose(command['delta'])
+            delta_pos, delta_rot = unpack_wire_pose(command[protocol.COMMAND_DELTA])
             target_pos, target_rot = compose_world_delta(*current_eef, delta_pos, delta_rot)
             target = np.asarray(solver(target_pos, target_rot), dtype=np.float32).reshape(-1)
         case other:

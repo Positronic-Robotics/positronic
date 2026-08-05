@@ -41,7 +41,7 @@ from positronic.simulator.molmo_spaces import launcher, mapping
 # parity_native.py runs only in MolmoSpaces' venv (it imports the flat, positronic-free ``env``), so reference it
 # by path — importing it into positronic's interpreter would fail on that import.
 _PARITY_NATIVE = Path(__file__).parent / 'parity_native.py'
-_HOLD = {'command': {'type': protocol.HOLD}, 'grip': 0.0}
+_HOLD = {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: 0.0}
 _ARRAY_FIELDS = (mapping.OBS_JOINT_POS, mapping.OBS_JOINT_VEL, mapping.OBS_EEF_POS, mapping.OBS_EEF_QUAT)
 
 
@@ -51,7 +51,7 @@ def _is_rgb(value: object) -> bool:
 
 def _drive_positronic(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int) -> dict:
     """Drive one episode through launcher -> env server -> wire, holding the arm to the sim's own ``done``."""
-    fields: dict[str, list] = {k: [] for k in (*_ARRAY_FIELDS, 'grip')}
+    fields: dict[str, list] = {k: [] for k in (*_ARRAY_FIELDS, mapping.OBS_GRIP)}
     camera_names: list[str] = []
     cam_hashes: dict[str, list[str]] = {}
 
@@ -66,15 +66,15 @@ def _drive_positronic(benchmark_dir: Path, episode_index: int, seed: int, max_st
         try:
             frame = conn.reset({mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: seed})
             reported_horizon = frame[protocol.FRAME_HORIZON]
-            camera_names = [k for k, v in frame['obs'].items() if _is_rgb(v)]
+            camera_names = [k for k, v in frame[protocol.FRAME_OBS].items() if _is_rgb(v)]
             cam_hashes = {name: [] for name in camera_names}
-            record(frame['obs'])
-            out = {'done': False, 'success': False}
+            record(frame[protocol.FRAME_OBS])
+            out = {protocol.FRAME_DONE: False, protocol.FRAME_SUCCESS: False}
             step = 0
-            while not out['done'] and step < max_steps:
+            while not out[protocol.FRAME_DONE] and step < max_steps:
                 out = conn.step(_HOLD)
                 step += 1
-                record(out['obs'])
+                record(out[protocol.FRAME_OBS])
         finally:
             conn.close()
     return {
@@ -84,7 +84,7 @@ def _drive_positronic(benchmark_dir: Path, episode_index: int, seed: int, max_st
         'cam_hashes': cam_hashes,
         'reported_horizon': reported_horizon,
         'termination_step': step,
-        'final_success': bool(out['success']),
+        'final_success': bool(out[protocol.FRAME_SUCCESS]),
     }
 
 
@@ -129,7 +129,7 @@ def _assert_parity(native: dict, positronic: dict, max_steps: int) -> None:
     )
 
     assert list(native['camera_names']) == positronic['camera_names'], 'camera sets differ between the stacks'
-    for field in (*_ARRAY_FIELDS, 'grip'):
+    for field in (*_ARRAY_FIELDS, mapping.OBS_GRIP):
         n, p = native[field], positronic[field]
         assert n.shape == p.shape, f'{field} shape differs: native {n.shape}, positronic {p.shape}'
         assert np.array_equal(n, p), f'{field} differs between native and positronic rollouts'

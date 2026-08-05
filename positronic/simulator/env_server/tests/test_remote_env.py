@@ -74,8 +74,17 @@ def test_transport_is_transparent(env_server):
 
     direct = make_mujoco_env(list(CAMERAS.values()))
     direct_reset = direct.reset(seed)
-    base = np.asarray(direct_reset['obs']['q'])
-    actions = [{'command': {'type': 'joint_pos', 'q': base + 0.03 * i}, 'grip': 0.2 * (i % 2)} for i in range(1, 6)]
+    base = np.asarray(direct_reset[protocol.FRAME_OBS]['q'])
+    actions = [
+        {
+            protocol.ACTION_COMMAND: {
+                protocol.COMMAND_TYPE: protocol.JOINT_POS,
+                protocol.COMMAND_JOINT_POS: base + 0.03 * i,
+            },
+            protocol.ACTION_GRIP: 0.2 * (i % 2),
+        }
+        for i in range(1, 6)
+    ]
     direct_steps = [direct.step(action) for action in actions]
     direct.close()
 
@@ -84,24 +93,24 @@ def test_transport_is_transparent(env_server):
     socket_steps = [conn.step(action) for action in actions]
     conn.close()
 
-    assert direct_reset['control_dt'] == socket_reset['control_dt']
-    _assert_obs_equal(direct_reset['obs'], socket_reset['obs'])
+    assert direct_reset[protocol.FRAME_CONTROL_DT] == socket_reset[protocol.FRAME_CONTROL_DT]
+    _assert_obs_equal(direct_reset[protocol.FRAME_OBS], socket_reset[protocol.FRAME_OBS])
     for direct_step, socket_step in zip(direct_steps, socket_steps, strict=True):
-        _assert_obs_equal(direct_step['obs'], socket_step['obs'])
-        assert direct_step['done'] == socket_step['done']
-        assert direct_step['control_dt'] == socket_step['control_dt']
+        _assert_obs_equal(direct_step[protocol.FRAME_OBS], socket_step[protocol.FRAME_OBS])
+        assert direct_step[protocol.FRAME_DONE] == socket_step[protocol.FRAME_DONE]
+        assert direct_step[protocol.FRAME_CONTROL_DT] == socket_step[protocol.FRAME_CONTROL_DT]
 
 
-_HOLD = {'command': {'type': 'hold'}, 'grip': 0.0}
+_HOLD = {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: 0.0}
 
 
 def _settle(env, action: dict, steps: int) -> np.ndarray:
     """Apply ``action`` once, then idle ``steps`` ticks while the position actuators settle; return the final eef."""
     env.step(action)
-    out = {'obs': None}
+    out = {protocol.FRAME_OBS: None}
     for _ in range(steps):
         out = env.step(_HOLD)
-    return np.asarray(out['obs']['ee_pos'])
+    return np.asarray(out[protocol.FRAME_OBS]['ee_pos'])
 
 
 class TestEnvControlFrame:
@@ -117,13 +126,13 @@ class TestEnvControlFrame:
     def test_an_absolute_pose_arrives_in_the_env_frame(self):
         pose = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
         wired = _wire_command(_in_env_control_frame(roboarm_command.CartesianPosition(pose), self.frame))
-        np.testing.assert_allclose(wired['pose'], (pose * self.frame).as_vector(self.rotmat), atol=1e-12)
+        np.testing.assert_allclose(wired[protocol.COMMAND_POSE], (pose * self.frame).as_vector(self.rotmat), atol=1e-12)
 
     def test_a_delta_already_in_the_env_frame_wires_bare(self):
         delta = geom.Transform3D(np.array([0.0, 0.0, 0.04]), geom.Rotation.identity)
         cmd = roboarm_command.CartesianDelta(delta, frame=self.frame)
         wired = _wire_command(_in_env_control_frame(cmd, self.frame))
-        np.testing.assert_allclose(wired['delta'], delta.as_vector(self.rotmat), atol=1e-12)
+        np.testing.assert_allclose(wired[protocol.COMMAND_DELTA], delta.as_vector(self.rotmat), atol=1e-12)
 
     def test_a_delta_outside_the_env_frame_is_refused(self):
         """The env anchors on its own measured pose, so a delta meant for another frame has no wire form."""
@@ -157,15 +166,28 @@ def test_cartesian_delta_matches_absolute_target():
 
     abs_env = make_mujoco_env(list(CAMERAS.values()))
     reset = abs_env.reset(seed)
-    ee0 = np.asarray(reset['obs']['ee_pos'])
-    target = geom.Transform3D(ee0 + lift, geom.Rotation.from_quat(reset['obs']['ee_quat']))
-    ee_abs = _settle(abs_env, {'command': {'type': 'cartesian', 'pose': target.as_vector(rotmat)}, 'grip': 0.0}, settle)
+    ee0 = np.asarray(reset[protocol.FRAME_OBS]['ee_pos'])
+    target = geom.Transform3D(ee0 + lift, geom.Rotation.from_quat(reset[protocol.FRAME_OBS]['ee_quat']))
+    absolute = {
+        protocol.ACTION_COMMAND: {
+            protocol.COMMAND_TYPE: protocol.CARTESIAN,
+            protocol.COMMAND_POSE: target.as_vector(rotmat),
+        },
+        protocol.ACTION_GRIP: 0.0,
+    }
+    ee_abs = _settle(abs_env, absolute, settle)
     abs_env.close()
 
     delta_env = make_mujoco_env(list(CAMERAS.values()))
     delta_env.reset(seed)
     delta = geom.Transform3D(lift, geom.Rotation.identity)
-    delta_action = {'command': {'type': 'cartesian_delta', 'delta': delta.as_vector(rotmat)}, 'grip': 0.0}
+    delta_action = {
+        protocol.ACTION_COMMAND: {
+            protocol.COMMAND_TYPE: protocol.CARTESIAN_DELTA,
+            protocol.COMMAND_DELTA: delta.as_vector(rotmat),
+        },
+        protocol.ACTION_GRIP: 0.0,
+    }
     ee_delta = _settle(delta_env, delta_action, settle)
     ee_idle = _settle(delta_env, _HOLD, 50)  # the delta already fired; idling must not re-compose it
     delta_env.close()
@@ -189,16 +211,20 @@ class _CountdownEnv(EnvProtocol):
         self._steps = 0
         meta = {'task': 'countdown'}  # scene meta the env reports only at reset; ``step`` omits it
         return {
-            'obs': {'q': np.full(7, self._steps, dtype=np.float64)},
-            'meta': meta,
-            'robot_meta': {},
-            'control_dt': self._control_dt,
+            protocol.FRAME_OBS: {'q': np.full(7, self._steps, dtype=np.float64)},
+            protocol.FRAME_META: meta,
+            protocol.FRAME_ROBOT_META: {},
+            protocol.FRAME_CONTROL_DT: self._control_dt,
         }
 
     def step(self, action):
         self._steps += 1
         done = self._done_after is not None and self._steps >= self._done_after
-        return {'obs': {'q': np.full(7, self._steps, dtype=np.float64)}, 'done': done, 'control_dt': self._control_dt}
+        return {
+            protocol.FRAME_OBS: {'q': np.full(7, self._steps, dtype=np.float64)},
+            protocol.FRAME_DONE: done,
+            protocol.FRAME_CONTROL_DT: self._control_dt,
+        }
 
     def close(self):
         pass
@@ -218,7 +244,7 @@ class _CountdownAdapter(EnvAdapter):
         return {}
 
     def terminal(self, result):
-        return {'eval.success': True} if result['done'] else None
+        return {'eval.success': True} if result[protocol.FRAME_DONE] else None
 
 
 @pytest.mark.timeout(60.0)
@@ -334,7 +360,7 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     ``chunk_len`` control periods apart."""
     host, port = env_server
     probe = make_mujoco_env([])
-    control_dt = probe.reset(0)['control_dt']
+    control_dt = probe.reset(0)[protocol.FRAME_CONTROL_DT]
     probe.close()
 
     chunk_len = 5

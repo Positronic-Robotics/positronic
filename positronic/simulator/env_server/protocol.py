@@ -26,9 +26,28 @@ JOINT_VEL = 'joint_vel'
 HOLD = 'hold'
 CANONICAL_COMMAND_TYPES = (CARTESIAN, CARTESIAN_DELTA, JOINT_POS, JOINT_VEL, HOLD)
 
-# The reset frame's horizon: the trial's minimum time budget in sim-seconds, or absent when the env enforces
-# none. An env venv's ``env.py`` writes it and positronic's proxy reads it, so both sides import it here.
+# The action a client puts on the wire: the tagged arm command, and the gripper closure alongside it.
+ACTION_COMMAND = 'command'
+ACTION_GRIP = 'grip'
+
+# The tagged command's own fields: the tag, and the one value each tag carries (``hold`` carries none).
+COMMAND_TYPE = 'type'
+COMMAND_POSE = 'pose'  # CARTESIAN — an absolute pose, [t(3), R(9)]
+COMMAND_DELTA = 'delta'  # CARTESIAN_DELTA — a relative pose, same encoding
+COMMAND_JOINT_POS = 'q'  # JOINT_POS — absolute joint targets
+COMMAND_JOINT_VEL = 'dq'  # JOINT_VEL — per-step joint deltas
+
+# The frames an env reports back. ``reset`` carries the observation, the scene meta, the robot model identity
+# and the control period; ``step`` carries the observation, the terminal, the control period, and — where the
+# env judges one — its success. ``horizon`` is the trial's minimum time budget in sim-seconds, absent when the
+# env enforces none.
+FRAME_OBS = 'obs'
+FRAME_META = 'meta'
+FRAME_ROBOT_META = 'robot_meta'
+FRAME_CONTROL_DT = 'control_dt'
 FRAME_HORIZON = 'horizon'
+FRAME_DONE = 'done'
+FRAME_SUCCESS = 'success'
 
 
 def _pack(obj):
