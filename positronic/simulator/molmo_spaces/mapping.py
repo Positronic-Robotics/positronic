@@ -53,6 +53,10 @@ MOLMO_OBS_QPOS = 'qpos'
 # The benchmark episode's declared horizon, in sim-seconds, inside its task dict.
 MOLMO_TASK_HORIZON_SEC = 'task_horizon_sec'
 
+# The parity record's per-camera frame-hash fields, one per camera name, written by the native reference
+# and read back by the comparison.
+CAM_HASH_PREFIX = 'cam_hash__'
+
 # The raw observation payload ``env.py`` reports and ``MolmoAdapter`` reads back.
 OBS_JOINT_POS = 'joint_pos'
 OBS_JOINT_VEL = 'joint_vel'

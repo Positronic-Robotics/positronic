@@ -117,7 +117,7 @@ def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out
     sampler.close()
 
     recorded = {key: np.stack(values) for key, values in fields.items()}
-    recorded.update({f'cam_hash__{name}': np.array(cam_hashes[name]) for name in camera_names})
+    recorded.update({f'{mapping.CAM_HASH_PREFIX}{name}': np.array(cam_hashes[name]) for name in camera_names})
     np.savez(
         out_path,
         camera_names=np.array(camera_names),
