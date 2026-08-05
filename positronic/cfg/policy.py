@@ -132,8 +132,9 @@ runway_anton = production.override(
 
 runway_ziyi = production.override(
     endpoints={
-        'nm82k_us': 'wss://runway-pythagoras-dev--gyros-nm82k-us-gyrosserver-web.modal.run',
-        'fm82k_us': 'wss://runway-pythagoras-dev--gyros-fm82k-us-gyrosserver-web.modal.run',
+        'fm112k_us': 'wss://runway-pythagoras-dev--gyros-fm112k-us-gyrosserver-web.modal.run',
+        'fm_actuni_112k': 'wss://runway-pythagoras-dev--gyros-fm-actuni-112k-gyrosserver-web.modal.run',
+        'fm_tsu_actuni_112k': 'wss://runway-pythagoras-dev--gyros-fm-tsu-actuni-112k-gyrosserver-web.modal.run',
     },
     sampler=balanced,
     group_fields=EVAL_GROUP_FIELDS,
