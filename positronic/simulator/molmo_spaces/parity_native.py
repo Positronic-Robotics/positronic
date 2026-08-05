@@ -116,20 +116,17 @@ def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out
             break
     sampler.close()
 
+    recorded = {key: np.stack(values) for key, values in fields.items()}
+    recorded.update({f'cam_hash__{name}': np.array(cam_hashes[name]) for name in camera_names})
     np.savez(
         out_path,
-        joint_pos=np.stack(fields[mapping.OBS_JOINT_POS]),
-        joint_vel=np.stack(fields[mapping.OBS_JOINT_VEL]),
-        eef_pos=np.stack(fields[mapping.OBS_EEF_POS]),
-        eef_quat=np.stack(fields[mapping.OBS_EEF_QUAT]),
-        grip=np.array(fields[mapping.OBS_GRIP], dtype=np.float32),
         camera_names=np.array(camera_names),
         native_horizon=native_horizon,
         horizon_sec=native_horizon * (cfg.policy_dt_ms / 1000.0),  # the sim-seconds env.py reports at reset
         termination_step=step,
         final_success=success,
         # numpy's savez **kwds stub reads a dict-unpack as possibly supplying ``allow_pickle`` (as in make_fixture.py).
-        **{f'cam_hash__{name}': np.array(cam_hashes[name]) for name in camera_names},  # pyright: ignore[reportArgumentType]
+        **recorded,  # pyright: ignore[reportArgumentType]
     )
 
 
