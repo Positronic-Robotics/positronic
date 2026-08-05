@@ -161,7 +161,7 @@ class MolmoSpacesEnv(EnvProtocol):
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # With ``task_horizon`` set, the task enforces it and ``is_done`` reports expiry, so a horizon-expired
         # trial ends with a terminal ``done`` exactly as the native benchmark scores it. The horizon is the
-        # benchmark's, so every episode is read to resolve it, against the dt of the config that enforces it.
+        # benchmark's, not an episode's.
         cfg.task_horizon = mapping.resolve_task_horizon_steps(
             self._episodes, cfg.policy_dt_ms, self._task_horizon_override
         )
