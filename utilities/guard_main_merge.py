@@ -426,6 +426,21 @@ GH_MERGE_VALUE_FLAGS = frozenset({
 })
 
 
+def _gh_repo(explicit: str, inv_dir: str | None, git: GitInfo, cmd: str, gh_repo_env: str) -> str:
+    """The repository a `gh` invocation acts on, or '' when that cannot be established.
+
+    `-R` names it outright; `GH_REPO` does the same from the environment, and an environment is
+    not something a command can be read for, so its mere mention gives up. Otherwise gh resolves
+    the repository from the working directory, which is why an unresolvable directory gives up
+    too — a merge is not this repository's just because nothing said otherwise.
+    """
+    if gh_repo_env or 'GH_REPO' in cmd:
+        return ''
+    if explicit:
+        return explicit.casefold()
+    return repo_slug(git.origin_url(inv_dir)) if inv_dir is not None else ''
+
+
 def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None, str]:
     """Whether this is `gh pr merge`, the pull request it names, and the repository it targets.
 
@@ -517,6 +532,7 @@ def analyze(  # noqa: C901
     path_exists=os.path.isdir,
     _depth=0,
     allow_merge=consume_merge_allow,
+    gh_repo_env='',
 ) -> str | None:
     """The deny message for `cmd`, or None to allow it."""
     guarded_slug = guarded_slug.casefold()
@@ -525,7 +541,7 @@ def analyze(  # noqa: C901
     # guards against pathological nesting.
     if _depth < 8:
         for body in _substitution_bodies(_strip_heredoc_bodies(cmd)):
-            deny = analyze(body, cwd, guarded_slug, git, path_exists, _depth + 1, allow_merge)
+            deny = analyze(body, cwd, guarded_slug, git, path_exists, _depth + 1, allow_merge, gh_repo_env)
             if deny:
                 return deny
     invs = parse_invocations(cmd, cwd, path_exists)
@@ -549,6 +565,7 @@ def analyze(  # noqa: C901
     def targets_main(inv_dir: str | None) -> bool:
         return on_main(inv_dir) or switches_to_main()
 
+    authorized_merge = None
     for inv in invs:
         if inv.kind != 'gh':
             continue
@@ -556,11 +573,11 @@ def analyze(  # noqa: C901
         if is_merge:
             if number is None:
                 return UNNUMBERED_MSG
-            # An authorization is for this repository's pull request; `-R` selects another, whose
-            # merges this guard has no receipt for.
-            elsewhere = target.casefold() not in ('', guarded_slug, guarded_slug.rpartition('/')[2])
-            if elsewhere or not allow_merge(number, guarded_slug):
+            if _gh_repo(target, inv.dir, git, cmd, gh_repo_env) != guarded_slug:
                 return 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
+            # Spending it here would pay for a merge a later invocation in the same command can
+            # still block, so the authorization is consulted once everything else has passed.
+            authorized_merge = number
 
     for inv, sub, rest in git_invs:
         if exempt(inv.dir):
@@ -597,6 +614,9 @@ def analyze(  # noqa: C901
             deny = _check_push_refspecs(rest, targets_main(inv.dir))
             if deny:
                 return deny
+
+    if authorized_merge is not None and not allow_merge(authorized_merge, guarded_slug):
+        return 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
     return None
 
 
@@ -642,7 +662,7 @@ def main() -> int:
     cwd = payload.get('cwd') or os.getcwd()
     git = GitInfo()
     guarded_slug = repo_slug(git.origin_url(os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd()))
-    deny = analyze(cmd, cwd, guarded_slug, git)
+    deny = analyze(cmd, cwd, guarded_slug, git, gh_repo_env=os.environ.get('GH_REPO', ''))
     if deny:
         print(deny, file=sys.stderr)
         return 2

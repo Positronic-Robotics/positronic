@@ -77,8 +77,10 @@ def no_allow(number, guarded_slug):
     return False
 
 
-def verdict(git, cmd, cwd=CLONE, allow_merge=no_allow):
-    return gmm.analyze(cmd, cwd, GUARDED, git, path_exists=fake_path_exists, allow_merge=allow_merge)
+def verdict(git, cmd, cwd=CLONE, allow_merge=no_allow, gh_repo_env=''):
+    return gmm.analyze(
+        cmd, cwd, GUARDED, git, path_exists=fake_path_exists, allow_merge=allow_merge, gh_repo_env=gh_repo_env
+    )
 
 
 BLOCKED = [
@@ -291,6 +293,46 @@ def test_a_merge_in_another_repository_is_refused_without_consulting_any_authori
     asked = []
     assert (
         verdict(git, 'gh pr -R someone/other merge 566', allow_merge=lambda n, slug: asked.append(n) or True)
+        is not None
+    )
+    assert asked == []
+
+
+def test_a_merge_run_from_another_repo_is_not_this_repository_s(git):
+    """gh resolves the repository from the working directory when nothing names one."""
+    asked = []
+    assert (
+        verdict(git, f'cd {INFRA} && gh pr merge 566', allow_merge=lambda n, slug: asked.append(n) or True) is not None
+    )
+    assert asked == []
+
+
+def test_a_merge_whose_repository_cannot_be_established_is_refused(git):
+    asked = []
+    for cmd in ('cd /missing; gh pr merge 566', 'GH_REPO=someone/other gh pr merge 566'):
+        assert verdict(git, cmd, allow_merge=lambda n, slug: asked.append(n) or True) is not None
+    assert asked == []
+
+
+def test_an_authorization_is_not_spent_by_a_command_the_guard_blocks_anyway(git):
+    """The merge never runs, so the human's one authorization must survive the refusal."""
+    asked = []
+    assert (
+        verdict(
+            git, 'gh pr merge 566 --squash && git push origin main', allow_merge=lambda n, slug: asked.append(n) or True
+        )
+        is not None
+    )
+    assert asked == []
+
+
+def test_gh_repo_in_the_environment_is_enough_to_refuse(git):
+    """It selects the repository the way `-R` does, and a command cannot be read for it."""
+    asked = []
+    assert (
+        verdict(
+            git, 'gh pr merge 566', gh_repo_env='someone/other', allow_merge=lambda n, slug: asked.append(n) or True
+        )
         is not None
     )
     assert asked == []
