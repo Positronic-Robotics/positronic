@@ -1,3 +1,5 @@
+# Generated from the installed `mujoco` by utilities/generate_mujoco_stubs.py — do not edit.
+# Regenerate: uv run --locked --extra dev python utilities/generate_mujoco_stubs.py
 from __future__ import annotations
 import collections.abc
 import mujoco._enums
@@ -291,7 +293,7 @@ class MjSpec:
           An MjSpec object.
         """
     @staticmethod
-    def resolve_orientation(degree: bool, sequence: MjCharVec = None, orientation: MjsOrientation) -> typing.Annotated[list[float], "FixedSize(4)"]:
+    def resolve_orientation(degree: bool, sequence: MjCharVec, orientation: MjsOrientation) -> typing.Annotated[list[float], "FixedSize(4)"]:
         ...
     @staticmethod
     def to_zip(spec: MjSpec, file: typing.Union[str, typing.IO[bytes]]) -> None:
@@ -1015,7 +1017,6 @@ class MjStringVec:
     def __setitem__(self, arg0: typing.SupportsInt, arg1: str) -> None:
         ...
 class MjVisual:
-    global: mujoco._structs.MjVisual.Global
     global_: mujoco._structs.MjVisual.Global
     headlight: MjVisualHeadlight
     map: mujoco._structs.MjVisual.Map
@@ -1220,7 +1221,7 @@ class MjsActuator:
         ...
     def set_to_motor(self) -> None:
         ...
-    def set_to_muscle(self, timeconst: typing.SupportsFloat = -1, tausmooth: typing.SupportsFloat, range: typing.SupportsFloat = [-1.0, -1.0], force: typing.SupportsFloat = -1, scale: typing.SupportsFloat = -1, lmin: typing.SupportsFloat = -1, lmax: typing.SupportsFloat = -1, vmax: typing.SupportsFloat = -1, fpmax: typing.SupportsFloat = -1, fvmax: typing.SupportsFloat = -1) -> None:
+    def set_to_muscle(self, timeconst: typing.SupportsFloat, tausmooth: typing.SupportsFloat, range: typing.SupportsFloat = [-1.0, -1.0], force: typing.SupportsFloat = -1, scale: typing.SupportsFloat = -1, lmin: typing.SupportsFloat = -1, lmax: typing.SupportsFloat = -1, vmax: typing.SupportsFloat = -1, fpmax: typing.SupportsFloat = -1, fvmax: typing.SupportsFloat = -1) -> None:
         ...
     def set_to_position(self, kp: typing.SupportsFloat, kv: typing.SupportsFloat = -1, dampratio: typing.SupportsFloat = -1, timeconst: typing.SupportsFloat = -1, inheritrange: bool = False) -> None:
         ...

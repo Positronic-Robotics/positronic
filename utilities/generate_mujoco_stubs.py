@@ -10,7 +10,9 @@ directory and compares instead of rewriting the stubs.
 """
 
 import argparse
+import ast
 import difflib
+import keyword
 import shutil
 import subprocess
 import sys
@@ -51,6 +53,93 @@ def _normalise(text: str) -> str:
     return '\n'.join(lines).rstrip('\n') + '\n'
 
 
+def _spans(text: str):
+    """Yield (index, char, depth) over `text`, with characters inside string literals skipped."""
+    depth, quote = 0, ''
+    for i, char in enumerate(text):
+        if quote:
+            if char == quote:
+                quote = ''
+            continue
+        if char in '"\'':
+            quote = char
+            continue
+        if char in '([{':
+            depth += 1
+        elif char in ')]}':
+            depth -= 1
+        yield i, char, depth
+
+
+def _split_params(params: str) -> list[str]:
+    """Split a parameter list at its own commas — not at those inside annotations or defaults."""
+    out, start = [], 0
+    for i, char, depth in _spans(params):
+        if char == ',' and depth == 0:
+            out.append(params[start:i])
+            start = i + 1
+    return [*out, params[start:]]
+
+
+def _default_at(param: str) -> int:
+    """Index of the `=` introducing this parameter's default, or -1 when it has none."""
+    return next((i for i, char, depth in _spans(param) if char == '=' and depth == 0), -1)
+
+
+def _drop_unusable_defaults(line: str) -> str:
+    """Drop a positional parameter's default when a later positional parameter has none.
+
+    pybind11 emits such a default, which Python's grammar rejects; the call it would describe is
+    impossible anyway, since the required argument after it leaves nothing to skip.
+    """
+    opening = line.index('(', line.index('def '))
+    closing = next((i for i, char, depth in _spans(line[opening:]) if char == ')' and depth == 0), -1)
+    if closing == -1:  # a signature this walker cannot read
+        return line
+    closing += opening
+    params = [p.strip() for p in _split_params(line[opening + 1 : closing])]
+    # Keyword-only parameters end the run: past a `*` the grammar already allows either order.
+    positional = next((i for i, p in enumerate(params) if p.startswith('*')), len(params))
+
+    required = False
+    for i in reversed(range(positional)):
+        default = _default_at(params[i])
+        if default == -1:
+            required = True
+        elif required:
+            params[i] = params[i][:default].strip()
+    return line[: opening + 1] + ', '.join(params) + line[closing:]
+
+
+def _is_keyword_attribute(line: str) -> bool:
+    """Whether `line` annotates an attribute whose name is a Python keyword.
+
+    pybind11 exposes `MjVisual.global`, which no Python source can name and no parser accepts. The
+    `global_` alias beside it carries the same type, so the line is dropped rather than renamed.
+    """
+    name, _, annotation = line.strip().partition(':')
+    return keyword.iskeyword(name) and bool(annotation.strip())
+
+
+def _parseable(text: str, name: str) -> str:
+    """Return `text` with every construct Python's grammar rejects removed, or raise if one stays."""
+    lines = []
+    for line in text.split('\n'):
+        if line.lstrip().startswith('def '):
+            lines.append(_drop_unusable_defaults(line))
+        elif not _is_keyword_attribute(line):
+            lines.append(line)
+    text = '\n'.join(lines)
+    ast.parse(text, filename=name)
+    return text
+
+
+HEADER = f"""\
+# Generated from the installed `{PACKAGE}` by utilities/generate_mujoco_stubs.py — do not edit.
+# Regenerate: uv run --locked --extra dev python utilities/generate_mujoco_stubs.py
+"""
+
+
 def generate() -> dict[str, str]:
     """Return the stub tree as {filename: contents}, generated fresh from the installed package."""
     # pybind11 leaks raw C++ names into a handful of mujoco docstrings, and pybind11-stubgen renders each
@@ -64,7 +153,8 @@ def generate() -> dict[str, str]:
         subprocess.run(cmd, check=True)
         keep = _extension_modules()
         generated = Path(tmp) / PACKAGE
-        return {p.name: _normalise(p.read_text()) for p in sorted(generated.glob('*.pyi')) if p.stem in keep}
+        stubs = {p.name: p.read_text() for p in sorted(generated.glob('*.pyi')) if p.stem in keep}
+        return {name: HEADER + _parseable(_normalise(text), name) for name, text in stubs.items()}
 
 
 def write(stubs: dict[str, str]) -> None:
