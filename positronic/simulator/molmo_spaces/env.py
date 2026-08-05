@@ -65,6 +65,11 @@ import protocol  # noqa: E402 -- the positronic-free wire contract, on PYTHONPAT
 # venv's PYTHONPATH), so the symbols read as unknown here.
 from server import EnvProtocol, EnvServer  # noqa: E402  # pyright: ignore[reportAttributeAccessIssue]
 
+# Imported for its import-time ``_assert_data_versions_match()``: MolmoSpaces pins the asset versions a
+# benchmark may be evaluated against, and this is the only place upstream enforces it. Driving the sampler
+# directly skips the native entrypoint, so without this a run on mismatched asset packs would score where
+# MolmoSpaces itself refuses to.
+import molmo_spaces.evaluation.eval_main  # noqa: E402, F401
 import molmo_spaces.evaluation.json_eval_runner  # noqa: E402, F401 -- load first: breaks a circular import that importing json_eval_task_sampler directly hits
 from molmo_spaces.configs.policy_configs import DummyPolicyConfig  # noqa: E402
 from molmo_spaces.configs.robot_configs import ActionNoiseConfig, FrankaRobotConfig  # noqa: E402
@@ -129,9 +134,13 @@ class MolmoSpacesEnv(EnvProtocol):
 
     def __init__(self, benchmark_dir: Path, task_horizon_steps: int | None = None) -> None:
         self._episodes = load_all_episodes(benchmark_dir)
-        # An explicit per-run horizon override (steps), mirroring MolmoSpaces' ``--task_horizon_steps``; ``None``
-        # reads the benchmark's own ``task_horizon_sec``.
-        self._task_horizon_override = task_horizon_steps
+        # The horizon belongs to the benchmark, so it is resolved once from every episode: an explicit
+        # ``task_horizon_steps`` (mirroring MolmoSpaces' ``--task_horizon_steps``) or the benchmark's own
+        # ``task_horizon_sec``. Resolving here also rejects a benchmark whose episodes disagree before the
+        # first task is built, rather than on whichever reset first reaches the odd one.
+        self._task_horizon = mapping.resolve_task_horizon_steps(
+            self._episodes, _DroidPickEvalConfig().policy_dt_ms, task_horizon_steps
+        )
         self._sampler: Any = None
         self._task: Any = None
         self._robot_view: Any = None
@@ -154,11 +163,9 @@ class MolmoSpacesEnv(EnvProtocol):
         cfg = _DroidPickEvalConfig()
         # Determinism enters at sampler construction (seed_task_sampling).
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
-        # The sim owns the episode horizon: it is part of the task definition, so resolve the benchmark's own
-        # ``task_horizon_sec`` into steps (``mapping.resolve_task_horizon_steps``).
         # With ``task_horizon`` set, the task enforces it and ``is_done`` reports expiry, so a horizon-expired
         # trial ends with a terminal ``done`` exactly as the native benchmark scores it.
-        cfg.task_horizon = mapping.resolve_task_horizon_steps(episode, cfg.policy_dt_ms, self._task_horizon_override)
+        cfg.task_horizon = self._task_horizon
         self._sampler = JsonEvalTaskSampler(cfg, episode)
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._robot_view = self._task.env.current_robot.robot_view
