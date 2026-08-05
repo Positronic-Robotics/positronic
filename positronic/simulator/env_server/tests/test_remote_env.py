@@ -1,3 +1,6 @@
+import socket
+import subprocess
+import sys
 from contextlib import nullcontext
 from dataclasses import replace
 
@@ -18,6 +21,7 @@ from positronic.policy.wrappers import ChunkedSchedule
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import EnvAdapter, _in_env_control_frame, _wire_command
 from positronic.simulator.env_server.client import EnvConnection
+from positronic.simulator.env_server.launcher import serve_subprocess
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.env_server.tests.conftest import serve_env
@@ -63,6 +67,26 @@ def _assert_obs_equal(a: dict, b: dict) -> None:
     assert a['sim_state'].keys() == b['sim_state'].keys()
     for key in a['sim_state']:
         np.testing.assert_array_equal(a['sim_state'][key], b['sim_state'][key])
+
+
+@pytest.mark.timeout(30.0)
+def test_serve_subprocess_reports_a_server_that_dies_before_binding():
+    """A server that raises during startup never binds, so its port stays closed exactly as a slow boot's
+    does."""
+    spawn = lambda host, port: subprocess.Popen([sys.executable, '-c', 'raise SystemExit(3)'])  # noqa: E731
+    with pytest.raises(RuntimeError, match='status 3'), serve_subprocess(spawn, 'localhost'):
+        pass
+
+
+@pytest.mark.timeout(30.0)
+def test_serve_subprocess_yields_once_the_port_accepts():
+    script = (
+        'import socket,sys,time\ns=socket.socket()\ns.bind(("localhost",int(sys.argv[1])))\ns.listen()\ntime.sleep(30)'
+    )
+    spawn = lambda host, port: subprocess.Popen([sys.executable, '-c', script, str(port)])  # noqa: E731
+    with serve_subprocess(spawn, 'localhost') as (host, port):
+        with socket.create_connection((host, port), timeout=1.0):
+            pass
 
 
 @pytest.mark.timeout(60.0)
