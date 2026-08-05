@@ -22,10 +22,10 @@ def test_narrow_signals_are_plotted(tmp_path):
 
 def test_wide_signal_is_named_instead_of_plotted(tmp_path):
     width = _MAX_PLOTTED_WIDTH + 1
-    signals = _collect_signal_groups(_episode(tmp_path / 'ep', {keys.JOINTS: 7, 'sim_state': width}))
+    signals = _collect_signal_groups(_episode(tmp_path / 'ep', {keys.JOINTS: 7, 'wide_signal': width}))
 
     assert signals.plotted == [keys.JOINTS]
-    assert signals.unplotted == {'sim_state': width}
+    assert signals.unplotted == {'wide_signal': width}
 
 
 def test_wide_signal_still_reaches_the_3d_view(tmp_path):
@@ -37,7 +37,7 @@ def test_wide_signal_still_reaches_the_3d_view(tmp_path):
 
 
 def test_notice_names_every_unplotted_signal_and_its_width():
-    notice = _unplotted_notice({'sim_state': 866, 'contacts': 120})
+    notice = _unplotted_notice({'wide_signal': 866, 'wider_signal': 120})
 
-    assert '`sim_state` — 866 values' in notice
-    assert '`contacts` — 120 values' in notice
+    assert '`wide_signal` — 866 values' in notice
+    assert '`wider_signal` — 120 values' in notice

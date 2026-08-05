@@ -352,6 +352,15 @@ def _log_video_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStr
         yield from drainer.drain()
 
 
+def _send_scalar_columns(key: str, ts_arr: np.ndarray, vals: np.ndarray) -> None:
+    time_idx = [rr.TimeColumn('time', timestamp=ts_arr)]
+    if vals.shape[1] == 1:
+        rr.send_columns(f'/signals/{key}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals.ravel()))
+        return
+    for i in range(vals.shape[1]):
+        rr.send_columns(f'/signals/{key}/{i}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals[:, i]))
+
+
 def _log_numeric_signals(
     ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer
 ) -> Generator[bytes, None, dict[str, tuple[np.ndarray, np.ndarray]]]:
@@ -369,6 +378,8 @@ def _log_numeric_signals(
     unplotted = signals.unplotted
 
     for key in signals.numerics:
+        if key in unplotted and key not in stash_keys:  # nothing would read the values
+            continue
         sig = ep.signals[key]
         if len(sig) == 0:
             continue
@@ -379,17 +390,9 @@ def _log_numeric_signals(
             continue
         if vals.ndim == 1:
             vals = vals.reshape(-1, 1)
-        dim = vals.shape[1]
 
         if key not in unplotted:
-            time_idx = [rr.TimeColumn('time', timestamp=ts_arr)]
-            if dim == 1:
-                rr.send_columns(f'/signals/{key}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals.ravel()))
-            else:
-                for i in range(dim):
-                    rr.send_columns(
-                        f'/signals/{key}/{i}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals[:, i])
-                    )
+            _send_scalar_columns(key, ts_arr, vals)
 
         if key in stash_keys:
             pose_data[key] = (ts_arr, vals)
