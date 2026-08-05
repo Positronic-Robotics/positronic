@@ -333,7 +333,9 @@ def observe_payload(robot_view: Any, env_obs: dict[str, Any], camera_names: list
         mapping.OBS_JOINT_VEL: np.asarray(arm.joint_vel, dtype=np.float32),
         mapping.OBS_EEF_POS: eef_world[:3, 3].astype(np.float32),
         mapping.OBS_EEF_QUAT: eef_quat.astype(np.float32),
-        mapping.OBS_GRIP: np.float32(mapping.normalize_grip_qpos(env_obs['qpos'][mapping.MOLMO_GRIPPER_GROUP])),
+        mapping.OBS_GRIP: np.float32(
+            mapping.normalize_grip_qpos(env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP])
+        ),
         # The full MuJoCo generalized state: every body's pose + velocity, objects included.
         mapping.OBS_SIM_STATE: _full_physics_state(robot_view),
     }

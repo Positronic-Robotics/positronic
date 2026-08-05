@@ -56,13 +56,14 @@ def run(
             for i in range(episodes):
                 frame = conn.reset({mapping.TOKEN_EPISODE_INDEX: i, mapping.TOKEN_SEED: None})
                 obs = adapter.observations(frame[protocol.FRAME_OBS])
-                assert 'robot_state' in obs and 'grip' in obs, f'missing contract keys: {sorted(obs)}'
+                assert 'robot_state' in obs and keys.GRIP in obs, f'missing contract keys: {sorted(obs)}'
                 assert all(logical in obs for logical in camera_dict), f'missing cameras: {sorted(obs)}'
                 q = obs['robot_state'].q
                 assert q.shape == (7,), f'unexpected joint shape {q.shape}'
                 sim_state = _check_sim_state(adapter, frame[protocol.FRAME_OBS])
                 print(
-                    f'  episode {i}: reset ok — task={frame["meta"]["task"]!r} grip={obs["grip"]:.3f} '
+                    f'  episode {i}: reset ok — task={frame[protocol.FRAME_META][mapping.META_TASK]!r} '
+                    f'grip={obs[keys.GRIP]:.3f} '
                     f'q0={q[0]:.4f} sim_state={sim_state.size}d'
                 )
                 out = {protocol.FRAME_DONE: False}
@@ -71,7 +72,7 @@ def run(
                     out = conn.step(hold)
                     adapter.observations(out[protocol.FRAME_OBS])  # the mapping round-trips on step frames too
                     _check_sim_state(adapter, out[protocol.FRAME_OBS])
-                print(f'  episode {i}: {steps} steps ok (done={out["done"]})')
+                print(f'  episode {i}: {steps} steps ok (done={out[protocol.FRAME_DONE]})')
         finally:
             conn.close()
     print('E2E PASSED')

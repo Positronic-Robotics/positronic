@@ -397,7 +397,9 @@ def test_server_failure_crosses_as_error_frame(env_server):
     conn = EnvConnection(host, port)
     conn.reset(7)
     with pytest.raises(RuntimeError, match='bogus'):
-        conn.step({'command': {'type': 'bogus'}, 'grip': 0.0})
+        conn.step({protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: 'bogus'}, protocol.ACTION_GRIP: 0.0})
     # The socket is still usable after a delivered failure.
-    assert 'obs' in conn.step({'command': {'type': 'joint_pos', 'q': np.zeros(7)}, 'grip': 0.0})
+    joints = {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: np.zeros(7)}
+    step = conn.step({protocol.ACTION_COMMAND: joints, protocol.ACTION_GRIP: 0.0})
+    assert protocol.FRAME_OBS in step
     conn.close()
