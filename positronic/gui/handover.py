@@ -45,11 +45,7 @@ class Assignment:
 
 @dataclass(frozen=True)
 class UnsupportedSchema:
-    """An assignment written against a ``schema_version`` this module does not implement.
-
-    Its version is the whole of what can be said about such a file: the rest of it follows a contract
-    that is not this one, so reading further would be guesswork.
-    """
+    """An assignment written against a ``schema_version`` this module does not implement."""
 
     schema_version: int
 
