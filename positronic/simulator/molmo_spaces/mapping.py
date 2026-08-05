@@ -35,8 +35,14 @@ MOLMO_GRIPPER_GROUP = 'gripper'
 # A scene prefixes every model name with the robot's namespace (``robot_0/``), so the live name ends with this.
 MOLMO_GRASP_SITE = 'gripper/grasp_site'
 
-# Where the MolmoSpaces asset packs live.
+# Where the MolmoSpaces asset packs live, and the subdirectory of that root holding the benchmarks.
 ASSETS_DIR_ENV = 'MLSPACES_ASSETS_DIR'
+ASSETS_BENCHMARKS_DIR = 'benchmarks'
+
+# MuJoCo's backend selector, and the backend this adoption asks for: the launcher sets it for the
+# subprocess and ``env.py`` defaults it, so a direct invocation still boots. A GPU-less box overrides it.
+GL_BACKEND_ENV = 'MUJOCO_GL'
+GL_BACKEND_DEFAULT = 'egl'
 
 # The reset token: which benchmark episode to build, and the seed overriding the episode spec's own.
 TOKEN_EPISODE_INDEX = 'episode_index'

@@ -40,8 +40,8 @@ def test_observations_camera_passthrough_no_swap():
     payload = _payload()
     obs = MolmoAdapter(CAMERA_DICT).observations(payload)
     # Frames pass through untouched (no resize/flip — the codec/client own preprocessing/transport).
-    assert np.array_equal(obs[keys.WRIST_IMAGE].array, payload['wrist_camera'])
-    assert np.array_equal(obs[keys.EXTERIOR_IMAGE].array, payload['exo_camera_1'])
+    assert np.array_equal(obs[keys.WRIST_IMAGE].array, payload[mapping.MOLMO_WRIST_CAMERA])
+    assert np.array_equal(obs[keys.EXTERIOR_IMAGE].array, payload[mapping.MOLMO_EXTERIOR_CAMERA])
     # Fixture marks wrist reddish, exterior greenish; a swap would flip the dominant channel.
     wrist_mean = obs[keys.WRIST_IMAGE].array.reshape(-1, 3).mean(axis=0)
     exterior_mean = obs[keys.EXTERIOR_IMAGE].array.reshape(-1, 3).mean(axis=0)
@@ -53,7 +53,7 @@ def test_observations_resolve_benchmark_variant_camera():
     # A Zed-wrist benchmark replaces the default key; the adapter must still land the reddish wrist view on
     # image.wrist.
     payload = _payload()
-    payload['wrist_camera_zed_mini'] = payload.pop('wrist_camera')
+    payload[mapping.MOLMO_WRIST_CAMERA_VARIANTS[0]] = payload.pop(mapping.MOLMO_WRIST_CAMERA)
     obs = MolmoAdapter(CAMERA_DICT).observations(payload)
     wrist_mean = obs[keys.WRIST_IMAGE].array.reshape(-1, 3).mean(axis=0)
     assert wrist_mean[0] > wrist_mean[1]
