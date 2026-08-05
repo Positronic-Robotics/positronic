@@ -13,11 +13,8 @@ through upstream's own normalisation (``policy/learned_policy/pi_policy.py``). S
 the horizon or maps an observation differently from MolmoSpaces shows up as a parity failure rather than being
 reproduced on both sides.
 
-One thing is deliberately shared and cannot be otherwise: ``env._DroidPickEvalConfig``, the eval config both
-rollouts build the task from. It is the task definition — two rollouts built from different configs are not
-comparable at all — and MolmoSpaces has no per-benchmark config to derive it from, the config being the
-operator's own input. ``import env`` also runs the GL backend selection and the CGL stub before any
-``molmo_spaces`` import; that decides whether the process renders at all, never what it records.
+Both rollouts build the task from ``env._DroidPickEvalConfig``: the comparison needs one task definition,
+and MolmoSpaces has no per-benchmark config to derive a second from.
 
 Needs ``MLSPACES_ASSETS_DIR`` + a GL backend, like ``e2e.py``. Invoked by ``parity.py``; not run by hand.
 """
