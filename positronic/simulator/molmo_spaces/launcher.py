@@ -87,7 +87,7 @@ def molmo_subprocess_env() -> dict[str, str]:
     return {
         **os.environ,
         'PYTHONPATH': os.pathsep.join([str(_ENV_SERVER_DIR), str(_MAPPING_DIR)]),
-        'MUJOCO_GL': os.environ.get('MUJOCO_GL', 'egl'),
+        mapping.GL_BACKEND_ENV: os.environ.get(mapping.GL_BACKEND_ENV, mapping.GL_BACKEND_DEFAULT),
     }
 
 

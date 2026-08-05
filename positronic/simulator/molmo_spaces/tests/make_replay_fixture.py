@@ -95,9 +95,9 @@ def read_benchmark_path(dataset_dir: Path) -> str:
     if match is None:
         raise SystemExit(f'{metadata[-1]} records no --eval.benchmark_dir')
     parts = Path(match.group(1)).parts
-    if 'benchmarks' not in parts:
+    if mapping.ASSETS_BENCHMARKS_DIR not in parts:
         raise SystemExit(f'evaluated benchmark {match.group(1)} is not under a benchmarks/ asset root')
-    return str(Path(*parts[parts.index('benchmarks') + 1 :]))
+    return str(Path(*parts[parts.index(mapping.ASSETS_BENCHMARKS_DIR) + 1 :]))
 
 
 def sample_at(signal: Signal, timestamps: list[int]) -> list:
@@ -140,7 +140,8 @@ def replay_commands(
 
 def build_fixture(episode_dir: Path, benchmark_path: str, assets_dir: Path) -> dict[str, np.ndarray]:
     episode = DiskEpisode(episode_dir)
-    states, commands, grips = episode['sim_state'], episode['robot_command.joints'], episode['target_grip']
+    states = episode[mapping.OBS_SIM_STATE]
+    commands, grips = episode['robot_command.joints'], episode['target_grip']
     # Frame 0 is the reset observation; every later frame is one step.
     frame_ts = [ts for _value, ts in states]
     step_ts = frame_ts[1:]
@@ -159,7 +160,8 @@ def build_fixture(episode_dir: Path, benchmark_path: str, assets_dir: Path) -> d
     episode_index = int(episode.static[EVAL_EPISODE_INDEX])
     played_prefix = np.stack(played[:replayable])
     grip_prefix = np.array(grip[:replayable], dtype=np.float32)
-    replayed = replay_commands(assets_dir / 'benchmarks' / benchmark_path, episode_index, played_prefix, grip_prefix)
+    benchmark_dir = assets_dir / mapping.ASSETS_BENCHMARKS_DIR / benchmark_path
+    replayed = replay_commands(benchmark_dir, episode_index, played_prefix, grip_prefix)
     if len(replayed) != replayable:
         raise SystemExit(
             f'episode {episode_index}: the sim ended after {len(replayed)} of {replayable} replayable steps, '

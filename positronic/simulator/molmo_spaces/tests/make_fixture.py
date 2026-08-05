@@ -41,8 +41,8 @@ def build_payload() -> dict[str, Any]:  # grip is a float32 scalar, the rest are
         # Identity orientation, scalar-first (wxyz) as env.py reports via mju_mat2Quat.
         mapping.OBS_EEF_QUAT: np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
         mapping.OBS_GRIP: np.float32(0.5),
-        'wrist_camera': _marked_frame((200, 40, 40)),  # reddish wrist view
-        'exo_camera_1': _marked_frame((40, 160, 40)),  # greenish exterior view
+        mapping.MOLMO_WRIST_CAMERA: _marked_frame((200, 40, 40)),  # reddish wrist view
+        mapping.MOLMO_EXTERIOR_CAMERA: _marked_frame((40, 160, 40)),  # greenish exterior view
     }
 
 

@@ -29,10 +29,17 @@ import os
 import sys
 import types
 
+import mapping  # positronic-free wire mappings, on PYTHONPATH; numpy only, so it pulls in no GL
+
 # MolmoSpaces renders MuJoCo scenes, so the GL backend must be selected before any mujoco/molmo_spaces import.
-# The launcher sets MUJOCO_GL in the subprocess env (egl by default); default it here too so a direct invocation
-# (e.g. a validate/e2e run) still boots. Set before the imports below.
-os.environ.setdefault('MUJOCO_GL', 'egl')
+# The launcher sets it in the subprocess env; default it here too so a direct invocation (e.g. a validate/e2e
+# run) still boots. Set before the imports below.
+os.environ.setdefault(mapping.GL_BACKEND_ENV, mapping.GL_BACKEND_DEFAULT)
+
+
+# MolmoSpaces' renderer module, which the stub below stands in for on Linux.
+_CGL_PACKAGE = 'mujoco.cgl'
+_CGL_MODULE = f'{_CGL_PACKAGE}.cgl'
 
 
 def _install_cgl_noop_stub() -> None:
@@ -41,14 +48,14 @@ def _install_cgl_noop_stub() -> None:
     # crashes at renderer init on Linux — so a CPU-rendered server (MUJOCO_GL=osmesa or mesa software EGL)
     # dies before the first observation. CGL locking is a no-op off macOS, so stub the module: the import
     # resolves and the (un)lock does nothing. Untouched on a GPU box, where the EGL path never imports it.
-    if 'mujoco.cgl' in sys.modules:
+    if _CGL_PACKAGE in sys.modules:
         return
-    cgl = types.ModuleType('mujoco.cgl.cgl')
+    cgl = types.ModuleType(_CGL_MODULE)
     cgl.CGLLockContext = cgl.CGLUnlockContext = lambda *args, **kwargs: None  # pyright: ignore[reportAttributeAccessIssue]
-    package = types.ModuleType('mujoco.cgl')
+    package = types.ModuleType(_CGL_PACKAGE)
     package.cgl = cgl  # pyright: ignore[reportAttributeAccessIssue]
-    sys.modules['mujoco.cgl'] = package
-    sys.modules['mujoco.cgl.cgl'] = cgl
+    sys.modules[_CGL_PACKAGE] = package
+    sys.modules[_CGL_MODULE] = cgl
 
 
 _install_cgl_noop_stub()
@@ -56,7 +63,6 @@ _install_cgl_noop_stub()
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
-import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
 import protocol  # noqa: E402 -- the positronic-free wire contract, on PYTHONPATH
@@ -111,11 +117,15 @@ def _assert_measures_at_grasp_site(robot_view: Any) -> None:
     frame a policy asks for.
     """
     arm = robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
-    if arm.leaf_frame_type != 'site':
+    if arm.leaf_frame_type != _SITE_FRAME:
         raise ValueError(f'arm move group measures at a {arm.leaf_frame_type}, not the expected site')
     name = mujoco.mj_id2name(arm.mj_model, mujoco.mjtObj.mjOBJ_SITE, arm.leaf_frame_id)  # pyright: ignore[reportAttributeAccessIssue]
     if name != mapping.MOLMO_GRASP_SITE and not name.endswith(f'/{mapping.MOLMO_GRASP_SITE}'):
         raise ValueError(f'arm move group measures at site {name!r}, expected {mapping.MOLMO_GRASP_SITE!r}')
+
+
+# MolmoSpaces reports a move group's leaf frame as one of MuJoCo's frame kinds; the arm's is a site.
+_SITE_FRAME = 'site'
 
 
 def _is_rgb_frame(value: Any) -> bool:
@@ -292,7 +302,7 @@ class MolmoSpacesEnv(EnvProtocol):
         Mirrors the move group's own ``get_jacobian`` but against a caller-supplied ``MjData``, which the IK
         iteration needs (the group's method is bound to the live one).
         """
-        if move_group.leaf_frame_type == 'site':
+        if move_group.leaf_frame_type == _SITE_FRAME:
             mujoco.mj_jacSite(model, data, out[:3], out[3:], move_group.leaf_frame_id)  # pyright: ignore[reportAttributeAccessIssue]
         else:
             mujoco.mj_jacBody(model, data, out[:3], out[3:], move_group.leaf_frame_id)  # pyright: ignore[reportAttributeAccessIssue]
@@ -353,7 +363,7 @@ def observe_payload(robot_view: Any, env_obs: dict[str, Any], camera_names: list
 def _leaf_pose(move_group: Any, data: Any) -> tuple[np.ndarray, np.ndarray]:
     """A move group's leaf-frame world pose read off *data* — which may be a scratch ``MjData``, unlike the
     group's own ``leaf_frame_to_world``, so IK can probe candidate joints without touching the live sim."""
-    if move_group.leaf_frame_type == 'site':
+    if move_group.leaf_frame_type == _SITE_FRAME:
         pos, mat = data.site_xpos[move_group.leaf_frame_id], data.site_xmat[move_group.leaf_frame_id]
     else:
         pos, mat = data.xpos[move_group.leaf_frame_id], data.xmat[move_group.leaf_frame_id]
