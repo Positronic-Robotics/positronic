@@ -39,8 +39,7 @@ MOLMO_GRASP_SITE = 'gripper/grasp_site'
 ASSETS_DIR_ENV = 'MLSPACES_ASSETS_DIR'
 ASSETS_BENCHMARKS_DIR = 'benchmarks'
 
-# MuJoCo's backend selector, and the backend this adoption asks for: the launcher sets it for the
-# subprocess and ``env.py`` defaults it, so a direct invocation still boots. A GPU-less box overrides it.
+# MuJoCo's backend selector, and the backend this adoption asks for.
 GL_BACKEND_ENV = 'MUJOCO_GL'
 GL_BACKEND_DEFAULT = 'egl'
 

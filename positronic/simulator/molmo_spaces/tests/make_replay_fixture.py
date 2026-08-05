@@ -44,6 +44,7 @@ from pathlib import Path
 
 import numpy as np
 
+from positronic import keys
 from positronic.dataset.local_dataset import DiskEpisode
 from positronic.dataset.signal import Signal
 from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SUCCESS
@@ -141,7 +142,9 @@ def replay_commands(
 def build_fixture(episode_dir: Path, benchmark_path: str, assets_dir: Path) -> dict[str, np.ndarray]:
     episode = DiskEpisode(episode_dir)
     states = episode[mapping.OBS_SIM_STATE]
-    commands, grips = episode['robot_command.joints'], episode['target_grip']
+    # rules-allow: hardcoded-keys — 'target_grip' is a canonical channel name spelled across every
+    # adoption and the eval configs; it belongs in positronic.keys, as its own sweep (internal#211).
+    commands, grips = episode[keys.TARGET_JOINTS], episode['target_grip']
     # Frame 0 is the reset observation; every later frame is one step.
     frame_ts = [ts for _value, ts in states]
     step_ts = frame_ts[1:]
