@@ -13,6 +13,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED
+from positronic.simulator.env_server import protocol
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.adapter import MolmoAdapter
 
@@ -68,9 +69,12 @@ def test_privileged_forwards_sim_state():
 
 def test_terminal_reports_success_only_when_done():
     adapter = MolmoAdapter(CAMERA_DICT)
-    assert adapter.terminal({'done': True, 'success': True}) == {'eval.success': True}
-    assert adapter.terminal({'done': True, 'success': False}) == {'eval.success': False}
-    assert adapter.terminal({'done': False, 'success': False}) is None
+    done_ok = {protocol.FRAME_DONE: True, protocol.FRAME_SUCCESS: True}
+    done_fail = {protocol.FRAME_DONE: True, protocol.FRAME_SUCCESS: False}
+    running = {protocol.FRAME_DONE: False, protocol.FRAME_SUCCESS: False}
+    assert adapter.terminal(done_ok) == {'eval.success': True}
+    assert adapter.terminal(done_fail) == {'eval.success': False}
+    assert adapter.terminal(running) is None
 
 
 def test_reset_token_carries_episode_and_seed():

@@ -91,13 +91,13 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         for _, receiver in self.commands.items():
             receiver.read()
         self._frame = self._conn.reset(self._adapter.reset_token(context))
-        self._meta = self._frame['meta']
-        self._robot_meta = self._frame['robot_meta']
+        self._meta = self._frame[protocol.FRAME_META]
+        self._robot_meta = self._frame[protocol.FRAME_ROBOT_META]
         # Optional: only envs that enforce a horizon report one. Fold in the one control period this proxy spends
         # publishing frame-0 before the first step — the env reaches its horizon a tick after the harness arms the
         # deadline, so the timeout floor must clear the horizon plus that tick, not the bare horizon.
         sim_horizon = self._frame.get(protocol.FRAME_HORIZON)
-        self._horizon = None if sim_horizon is None else sim_horizon + self._frame['control_dt']
+        self._horizon = None if sim_horizon is None else sim_horizon + self._frame[protocol.FRAME_CONTROL_DT]
         self._reset_pending = True
         self._active = True
         # Clear any terminal the previous trial left on the wire: the env can reach ``done`` while the proxy
@@ -117,7 +117,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                 # The proxy is the eval's sole time-master: it sleeps one control period every turn —
                 # stepping, publishing frame-0, or idle between trials alike. Before the first reset the
                 # env's ``control_dt`` is unknown, so it paces at ``_IDLE_DT`` until reset reports the real one.
-                yield pimm.Sleep(self._frame['control_dt'] if self._frame is not None else _IDLE_DT)
+                yield pimm.Sleep(self._frame[protocol.FRAME_CONTROL_DT] if self._frame is not None else _IDLE_DT)
                 if self._reset_pending:
                     # The reset is this turn's step: publish the env's frame-0 (no step) and clear the prior
                     # terminal, so the recorder samples it before any step advances the env.
@@ -128,7 +128,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     # frame) is reset cost: it is work the reset asked for, and left untimed it would land in
                     # overhead.
                     with telemetry.span(telemetry_keys.SPAN_RESET):
-                        self._emit_payload(self._frame['obs'])
+                        self._emit_payload(self._frame[protocol.FRAME_OBS])
                     self.done.emit({})
                 elif self._active:
                     # ``env.step`` spans the whole client-observed step; ``materialize`` nests the client-side
@@ -137,7 +137,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
                         self._frame = self._step_env(clock)
                         with telemetry.span(telemetry_keys.SPAN_MATERIALIZE):
-                            self._emit_payload(self._frame['obs'])
+                            self._emit_payload(self._frame[protocol.FRAME_OBS])
         finally:
             # Closes the connection then the server, in that order (reverse of acquisition); a no-op if no reset
             # ever connected.

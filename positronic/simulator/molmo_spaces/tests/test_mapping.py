@@ -36,7 +36,9 @@ def test_grip_command_to_actuator():
 def test_wire_command_joint_pos_passthrough():
     current = np.arange(mapping.NUM_ARM_JOINTS, dtype=np.float32)
     q = np.full(mapping.NUM_ARM_JOINTS, 0.3, dtype=np.float32)
-    out = mapping.wire_command_to_arm_action({'type': protocol.JOINT_POS, 'q': q}, current)
+    out = mapping.wire_command_to_arm_action(
+        {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: q}, current
+    )
     assert out.dtype == np.float32 and out.shape == (mapping.NUM_ARM_JOINTS,)
     assert np.array_equal(out, q)  # absolute target, independent of the measured joints
 
@@ -44,26 +46,33 @@ def test_wire_command_joint_pos_passthrough():
 def test_wire_command_joint_vel_integrates_onto_measured():
     current = np.arange(mapping.NUM_ARM_JOINTS, dtype=np.float32)
     dq = np.full(mapping.NUM_ARM_JOINTS, 0.1, dtype=np.float32)
-    out = mapping.wire_command_to_arm_action({'type': protocol.JOINT_VEL, 'dq': dq}, current)
+    out = mapping.wire_command_to_arm_action(
+        {protocol.COMMAND_TYPE: protocol.JOINT_VEL, protocol.COMMAND_JOINT_VEL: dq}, current
+    )
     assert np.allclose(out, current + dq)  # positronic applies JointDelta as q + dq
 
 
 def test_wire_command_hold_recommands_measured():
     current = np.linspace(-1.0, 1.0, mapping.NUM_ARM_JOINTS, dtype=np.float32)
-    out = mapping.wire_command_to_arm_action({'type': protocol.HOLD}, current)
+    out = mapping.wire_command_to_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, current)
     assert np.array_equal(out, current)
 
 
 def test_wire_command_joint_count_mismatch_raises():
     current = np.zeros(mapping.NUM_ARM_JOINTS, dtype=np.float32)
     with pytest.raises(ValueError):
-        mapping.wire_command_to_arm_action({'type': protocol.JOINT_VEL, 'dq': np.zeros(6, dtype=np.float32)}, current)
+        mapping.wire_command_to_arm_action(
+            {protocol.COMMAND_TYPE: protocol.JOINT_VEL, protocol.COMMAND_JOINT_VEL: np.zeros(6, dtype=np.float32)},
+            current,
+        )
 
 
 def test_wire_command_cartesian_unsupported():
     current = np.zeros(mapping.NUM_ARM_JOINTS, dtype=np.float32)
     with pytest.raises(ValueError):
-        mapping.wire_command_to_arm_action({'type': protocol.CARTESIAN, 'pose': np.zeros(12)}, current)
+        mapping.wire_command_to_arm_action(
+            {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: np.zeros(12)}, current
+        )
 
 
 def test_camera_key_default_and_variant_precedence():
@@ -158,7 +167,10 @@ def test_cartesian_command_resolves_through_the_supplied_ik():
         return solved
 
     rot = np.eye(3)
-    cmd = {'type': protocol.CARTESIAN, 'pose': np.concatenate([[0.4, 0.1, 0.3], rot.reshape(-1)])}
+    cmd = {
+        protocol.COMMAND_TYPE: protocol.CARTESIAN,
+        protocol.COMMAND_POSE: np.concatenate([[0.4, 0.1, 0.3], rot.reshape(-1)]),
+    }
     out = mapping.wire_command_to_arm_action(cmd, np.zeros(mapping.NUM_ARM_JOINTS), ik=ik)
     assert out.dtype == np.float32 and np.allclose(out, solved)
     assert np.allclose(seen['pos'], [0.4, 0.1, 0.3]) and np.allclose(seen['rot'], rot)
@@ -172,7 +184,10 @@ def test_cartesian_delta_composes_onto_the_measured_eef_before_solving():
         seen['pos'], seen['rot'] = pos, rot
         return np.zeros(mapping.NUM_ARM_JOINTS)
 
-    cmd = {'type': protocol.CARTESIAN_DELTA, 'delta': np.concatenate([[0.0, 0.1, 0.0], np.eye(3).reshape(-1)])}
+    cmd = {
+        protocol.COMMAND_TYPE: protocol.CARTESIAN_DELTA,
+        protocol.COMMAND_DELTA: np.concatenate([[0.0, 0.1, 0.0], np.eye(3).reshape(-1)]),
+    }
     mapping.wire_command_to_arm_action(
         cmd, np.zeros(mapping.NUM_ARM_JOINTS), ik=ik, current_eef=(np.array([0.5, 0.0, 0.2]), np.eye(3))
     )
@@ -181,14 +196,17 @@ def test_cartesian_delta_composes_onto_the_measured_eef_before_solving():
 
 def test_cartesian_without_an_ik_solver_raises():
     # A caller that holds no model cannot resolve a Cartesian target — fail loud rather than silently holding.
-    cmd = {'type': protocol.CARTESIAN, 'pose': np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])}
+    cmd = {
+        protocol.COMMAND_TYPE: protocol.CARTESIAN,
+        protocol.COMMAND_POSE: np.concatenate([np.zeros(3), np.eye(3).reshape(-1)]),
+    }
     with pytest.raises(ValueError, match='ik solver'):
         mapping.wire_command_to_arm_action(cmd, np.zeros(mapping.NUM_ARM_JOINTS))
 
 
 def test_unknown_command_names_the_canonical_contract():
     with pytest.raises(ValueError, match='cartesian'):  # the message lists the contract the tag is not part of
-        mapping.wire_command_to_arm_action({'type': 'wrench'}, np.zeros(mapping.NUM_ARM_JOINTS))
+        mapping.wire_command_to_arm_action({protocol.COMMAND_TYPE: 'wrench'}, np.zeros(mapping.NUM_ARM_JOINTS))
 
 
 @pytest.mark.parametrize('command_type', protocol.CANONICAL_COMMAND_TYPES)
@@ -198,15 +216,15 @@ def test_every_canonical_command_type_converts_to_joint_targets(command_type):
     the same types through the real IK against a live scene."""
     pose = np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])
     payload = {
-        protocol.JOINT_POS: {'q': np.zeros(mapping.NUM_ARM_JOINTS)},
-        protocol.JOINT_VEL: {'dq': np.zeros(mapping.NUM_ARM_JOINTS)},
+        protocol.JOINT_POS: {protocol.COMMAND_JOINT_POS: np.zeros(mapping.NUM_ARM_JOINTS)},
+        protocol.JOINT_VEL: {protocol.COMMAND_JOINT_VEL: np.zeros(mapping.NUM_ARM_JOINTS)},
         protocol.HOLD: {},
-        protocol.CARTESIAN: {'pose': pose},
-        protocol.CARTESIAN_DELTA: {'delta': pose},
+        protocol.CARTESIAN: {protocol.COMMAND_POSE: pose},
+        protocol.CARTESIAN_DELTA: {protocol.COMMAND_DELTA: pose},
     }[command_type]
 
     target = mapping.wire_command_to_arm_action(
-        {'type': command_type, **payload},
+        {protocol.COMMAND_TYPE: command_type, **payload},
         np.zeros(mapping.NUM_ARM_JOINTS),
         ik=lambda _pos, _rot: np.zeros(mapping.NUM_ARM_JOINTS),
         current_eef=(np.zeros(3), np.eye(3)),

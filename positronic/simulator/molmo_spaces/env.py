@@ -182,18 +182,18 @@ class MolmoSpacesEnv(EnvProtocol):
         # robot_meta is empty: this venv cannot import positronic to emit the Franka model, so the eval supplies
         # it via ``static_meta`` (``bundled_franka_model``).
         return {
-            'obs': self._observe(env_obs),
-            'meta': self._meta,
-            'robot_meta': {},
-            'control_dt': self._control_dt,
+            protocol.FRAME_OBS: self._observe(env_obs),
+            protocol.FRAME_META: self._meta,
+            protocol.FRAME_ROBOT_META: {},
+            protocol.FRAME_CONTROL_DT: self._control_dt,
             protocol.FRAME_HORIZON: self._horizon_sec,
         }
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         arm = mapping.wire_command_to_arm_action(
-            action['command'], self._measured_arm_q(), ik=self._ik, current_eef=self._measured_eef_pose()
+            action[protocol.ACTION_COMMAND], self._measured_arm_q(), ik=self._ik, current_eef=self._measured_eef_pose()
         )
-        gripper = np.array([mapping.grip_command_to_actuator(action['grip'])], dtype=np.float32)
+        gripper = np.array([mapping.grip_command_to_actuator(action[protocol.ACTION_GRIP])], dtype=np.float32)
         obs, _reward, _term, _trunc, _infos = self._task.step({
             mapping.MOLMO_ARM_GROUP: arm,
             mapping.MOLMO_GRIPPER_GROUP: gripper,
@@ -205,7 +205,12 @@ class MolmoSpacesEnv(EnvProtocol):
         # native scoring has it.
         success = bool(self._task.judge_success())
         done = success or bool(self._task.is_done())
-        return {'obs': self._observe(obs[0]), 'done': done, 'success': success, 'control_dt': self._control_dt}
+        return {
+            protocol.FRAME_OBS: self._observe(obs[0]),
+            protocol.FRAME_DONE: done,
+            protocol.FRAME_SUCCESS: success,
+            protocol.FRAME_CONTROL_DT: self._control_dt,
+        }
 
     def _measured_arm_q(self) -> np.ndarray:
         return np.asarray(self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP).joint_pos, dtype=np.float32)

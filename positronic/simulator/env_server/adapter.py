@@ -83,22 +83,25 @@ def _wire_command(cmd: Any) -> dict[str, Any]:
     """The held command as a positronic-free payload the server decodes (no ``geom``/``roboarm`` on its side)."""
     match cmd:
         case roboarm_command.CartesianPosition(pose):
-            return {'type': protocol.CARTESIAN, 'pose': pose.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
+            return {
+                protocol.COMMAND_TYPE: protocol.CARTESIAN,
+                protocol.COMMAND_POSE: pose.as_vector(geom.Rotation.Representation.ROTATION_MATRIX),
+            }
         case roboarm_command.JointPosition(positions):
-            return {'type': protocol.JOINT_POS, 'q': positions}
+            return {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: positions}
         case roboarm_command.JointDelta(velocities):
-            return {'type': protocol.JOINT_VEL, 'dq': velocities}
+            return {protocol.COMMAND_TYPE: protocol.JOINT_VEL, protocol.COMMAND_JOINT_VEL: velocities}
         case roboarm_command.CartesianDelta(delta, frame):
             # The env anchors a delta on the pose it measures, which is its control frame and nowhere else, so
             # a delta still expressed somewhere else has no faithful wire form.
             if not np.allclose(frame.as_matrix, np.eye(4)):
                 raise ValueError('CartesianDelta outside the env control frame cannot be sent to a remote env')
             return {
-                'type': protocol.CARTESIAN_DELTA,
-                'delta': delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX),
+                protocol.COMMAND_TYPE: protocol.CARTESIAN_DELTA,
+                protocol.COMMAND_DELTA: delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX),
             }
         case None:
-            return {'type': protocol.HOLD}
+            return {protocol.COMMAND_TYPE: protocol.HOLD}
         case other:
             raise ValueError(f'no wire encoding for robot_command {type(other).__name__}')
 
@@ -161,4 +164,7 @@ class WireCommandAdapter(EnvAdapter):
                 self._held.pop(keys.ROBOT_COMMAND)
         if 'target_grip' in self._held:
             self._grip = float(self._held['target_grip'])
-        return {'command': _wire_command(_in_env_control_frame(cmd, self.env_control_frame)), 'grip': self._grip}
+        return {
+            protocol.ACTION_COMMAND: _wire_command(_in_env_control_frame(cmd, self.env_control_frame)),
+            protocol.ACTION_GRIP: self._grip,
+        }

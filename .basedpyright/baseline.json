@@ -9456,8 +9456,8 @@
             {
                 "code": "reportOptionalMemberAccess",
                 "range": {
-                    "startColumn": 60,
-                    "endColumn": 64,
+                    "startColumn": 73,
+                    "endColumn": 77,
                     "lineCount": 1
                 }
             },
@@ -9475,7 +9475,7 @@
                 "code": "reportOptionalSubscript",
                 "range": {
                     "startColumn": 22,
-                    "endColumn": 32,
+                    "endColumn": 45,
                     "lineCount": 1
                 }
             },

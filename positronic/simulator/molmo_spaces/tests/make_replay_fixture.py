@@ -111,9 +111,16 @@ def replay_commands(
             # No seed: the benchmark episode carries its own, exactly as the recorded run left it unset.
             conn.reset({mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: None})
             for command, grip in zip(commands, grips, strict=True):
-                out = conn.step({'command': {'type': protocol.JOINT_POS, 'q': command}, 'grip': float(grip)})
+                action = {
+                    protocol.ACTION_COMMAND: {
+                        protocol.COMMAND_TYPE: protocol.JOINT_POS,
+                        protocol.COMMAND_JOINT_POS: command,
+                    },
+                    protocol.ACTION_GRIP: float(grip),
+                }
+                out = conn.step(action)
                 states.append(np.asarray(out['obs'][mapping.OBS_SIM_STATE], dtype=np.float64))
-                if out['done']:
+                if out[protocol.FRAME_DONE]:
                     break
         finally:
             conn.close()
