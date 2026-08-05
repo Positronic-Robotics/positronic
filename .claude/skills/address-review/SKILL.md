@@ -1,6 +1,6 @@
 ---
 name: address-review
-description: Respond to GitHub PR review comments in one pass — fetch, triage (agree or disagree), fix the valid ones, commit, push, reply to all, and resolve only the threads you fixed (declines, defers, and discussion questions stay open for the human). Use when a PR has reviewer or bot (e.g. Codex) comments to address.
+description: Respond to GitHub PR review comments in one pass — fetch, triage (agree or disagree), fix the valid ones, commit, push, reply to all, and resolve every thread that is settled, leaving open only what still needs a human's answer. Use when a PR has reviewer or bot (e.g. Codex) comments to address.
 allowed-tools: Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git diff:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(awk:*), Bash(gh api:*), Bash(gh pr:*), Bash(gh repo:*), Bash(gh run:*), Bash(uv run:*), Bash(bash .claude/skills/address-review/watch.sh:*), Edit, Write
 ---
 
@@ -8,8 +8,8 @@ allowed-tools: Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git d
 
 One full cycle of responding to review feedback on the current branch's PR: read every
 unresolved comment, decide on the merits, fix what is worth fixing, then commit, push,
-reply, and resolve **only the threads you fixed**. Declines, defers, and discussion /
-question comments get a reasoned reply and stay **open** — closing them is the human's call.
+reply, and resolve every thread that is **settled**. What stays **open** is what a human still
+owes an answer on — a decline they have not ratified, a question they asked.
 
 The `push-pr` skill delegates here when review comments arrive. After each push this skill
 watches **both CI (GitHub Actions on the pushed commit) and the reviewer's asynchronous
@@ -29,16 +29,14 @@ needs their call. A red build is never "done", no matter what the reviewer says.
   intentional.
 - **Fix → push → reply → resolve, in that order.** Reply text references the commit that
   fixed it, so the fix must land first.
-- **Every thread you fixed MUST be resolved — and only those.** Once a bot comment's fix is
-  pushed and you have replied referencing the commit, resolve its thread: a fixed Codex
-  thread left open reads as still-broken to anyone scanning the PR and leaves the conversation
-  cluttered with items already handled. The two directions are symmetric and both mandatory:
-  **fixed → resolve**, and **declines,
-  defers, and discussion / question comments stay OPEN** — those get a reasoned reply, but
-  resolving them closes a conversation that is the human's to close (especially a reviewer's
-  "why…?" or "should we…?", which is an invitation to discuss, not a change request). Never
-  resolve a thread just to clear the queue, and never leave a thread you fixed unresolved.
-  When a comment is on the fence, leave it open.
+- **An OPEN thread means a human still owes an answer here — nothing else.** So the question
+  per thread is not "was this a fix or a decline" but "is a person's answer still outstanding".
+  **Settled → resolve**: a fix you pushed, a decline or deferral the human has ratified. **Not
+  settled → open**: a decline or defer on your own judgement that they have not seen yet, a
+  question they asked, a design call you escalated. Both directions are mandatory. A fixed
+  thread left open reads as still-broken to anyone scanning the PR; a PR whose open threads mix
+  live questions with settled arguments teaches its reader that open means nothing, so the one
+  thread that did need them goes unread. Never resolve a thread just to clear the queue.
 - **Stay scoped** to the feedback. Don't sprawl into unrelated refactors.
 - **Follow the repo's commit conventions** (see the `push-pr` skill). CRITICAL: never add
   `Co-Authored-By` or any AI / Claude / assistant attribution to commits, replies, or PRs.
@@ -102,9 +100,9 @@ For each open comment, decide and note severity if the bot tagged one (e.g. Code
 - **Partial / alternative** — valid concern, but a different fix than suggested → explain;
   resolve only if you land a concrete change, else leave open.
 - **Decline** — wrong, not applicable, or contradicts a deliberate decision → reasoned
-  reply, **leave open**.
-- **Defer** — valid but out of scope for this PR → reply (note where it's tracked),
-  **leave open**.
+  reply; **leave open** until the human ratifies it, **resolve** once they have.
+- **Defer** — valid but out of scope for this PR → reply naming where it is tracked; same
+  rule — **open** until they agree the deferral is right, **resolved** after.
 - **Discuss** — the reviewer is asking a question or opening a design discussion, not
   requesting a change → answer it, **leave open** for them to respond.
 
@@ -213,17 +211,17 @@ query($owner:String!,$repo:String!,$num:Int!,$after:String){
 gh api graphql -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:$id}){ thread { isResolved } } }' -f id=<thread_node_id>
 ```
 
-**Leave declined, deferred, and discussion threads OPEN** — each carries a reasoned reply,
-but closing the conversation is the human's call (resolving a "why…?"/"should we…?" thread
-preempts a discussion they opened on purpose). The reply records your reasoning either way,
-and the human resolves when satisfied.
+**Resolve a settled thread whichever way it settled** — a landed fix, or a decline/deferral
+the human has ratified (the reply records the reasoning either way). **Leave open** only what
+still needs them: a decline they have not seen, a "why…?"/"should we…?" they opened on purpose,
+a design call you escalated.
 
 ## Step 6: Report
 
 Summarize:
 - a table of comment → verdict → fix (with commit SHA),
 - what was pushed,
-- which threads you resolved (fixes only) vs left open (declines / defers / discussion),
+- which threads you resolved (settled) vs left open, each with what the human owes on it,
 - any follow-ups the user should track.
 
 A bot will re-review on push and may add comments. **Don't hand the watch back to the
