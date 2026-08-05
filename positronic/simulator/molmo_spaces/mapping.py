@@ -50,6 +50,9 @@ META_HOUSE_INDEX = 'house_index'
 # gripper closure is read from.
 MOLMO_OBS_QPOS = 'qpos'
 
+# The benchmark episode's declared horizon, in sim-seconds, inside its task dict.
+MOLMO_TASK_HORIZON_SEC = 'task_horizon_sec'
+
 # The raw observation payload ``env.py`` reports and ``MolmoAdapter`` reads back.
 OBS_JOINT_POS = 'joint_pos'
 OBS_JOINT_VEL = 'joint_vel'
@@ -205,7 +208,7 @@ def resolve_task_horizon_steps(episode: Any, policy_dt_ms: float, override_steps
         if override_steps < 1:
             raise ValueError(f'task_horizon_steps override must be at least 1 step, got {override_steps}')
         return override_steps
-    horizon_sec = episode.task.get('task_horizon_sec')
+    horizon_sec = episode.task.get(MOLMO_TASK_HORIZON_SEC)
     if horizon_sec is None:
         raise ValueError(
             'benchmark episode carries no task_horizon_sec in its task dict and no task_horizon_steps override — '
