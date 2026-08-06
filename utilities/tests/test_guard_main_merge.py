@@ -320,15 +320,21 @@ def test_a_merge_word_the_shell_builds_is_refused(git):
         'gh pr merge 566 $(echo -R someone/other)',
         'gh pr merge 566 {-R,someone/other}',
         f'gh pr merge 566 --repo {GUARDED} --body-file /tmp/pr*.md',
+        # `NAME=` is an assignment only ahead of the command word; written as an argument the shell
+        # splits it like any other, so `x=junk -R someone/other` reaches gh.
+        f'gh pr merge 566 --repo {GUARDED} --body x=$EXTRA',
     ):
         assert verdict(git, cmd, allow_merge=lambda n, slug: asked.append(n) or True) is not None, cmd
     assert asked == []
 
 
 def test_a_quoted_dollar_is_a_literal_the_shell_never_builds(git):
-    """Quoting decides whether a `$` expands, and the tokenizer removes the quotes."""
-    cmd = f"gh pr merge 566 --repo {GUARDED} --subject 'Read $EXTRA as text'"
-    assert verdict(git, cmd, allow_merge=lambda *_: True) is None
+    """Quoting decides whether a `$` expands, wherever in the word the quote opens."""
+    for cmd in (
+        f"gh pr merge 566 --repo {GUARDED} --subject 'Read $EXTRA as text'",
+        f"gh pr merge 566 --repo {GUARDED} --subject='Read $EXTRA as text'",
+    ):
+        assert verdict(git, cmd, allow_merge=lambda *_: True) is None, cmd
 
 
 def test_a_merge_reading_its_token_from_a_substitution_still_passes(git):

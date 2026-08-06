@@ -445,9 +445,9 @@ def _carries_substitution(cmd: str) -> bool:
 # Shell syntax that turns one written word into arguments the text does not spell out: a parameter
 # expansion, whose value is word-split; a brace list; a glob, which matches as many names as it finds.
 EXPANDING_CHARS = '$*?[{'
-# `NAME=value` before the command word. Its value reaches the environment whole — never word-split
-# into arguments — so an expansion there says nothing about what the command is asked to do.
-ASSIGNMENT_RE = re.compile(r'\w+=')
+# Characters that end one command and start the next, so the word after them can be an assignment
+# prefix again. Braces are NOT among them: `{-R,o/r}` is one word, and the brace is what gives it away.
+COMMAND_SEPARATORS = ';&|\n()'
 
 
 def _expands(word: str) -> bool:
@@ -472,19 +472,71 @@ def _expands(word: str) -> bool:
     return False
 
 
+def _raw_words(cmd: str) -> list[str]:
+    """`cmd` cut into words and command separators, with its quoting left in place.
+
+    `shlex` cannot serve: posix mode removes the quotes that decide whether a `$` expands, and
+    non-posix mode opens a quoted region only at a word boundary, so `--subject='a $b'` comes back
+    as fragments carrying a bare `$b` that never expands. Raises ValueError on unbalanced quoting.
+    """
+    words: list[str] = []
+    word = quote = ''
+    i = 0
+    while i < len(cmd):
+        c = cmd[i]
+        if quote:
+            word += c
+            quote = '' if c == quote else quote
+        elif c == '\\':
+            word += cmd[i : i + 2]
+            i += 1
+        elif c in '\'"':
+            word, quote = word + c, c
+        elif c.isspace() or c in COMMAND_SEPARATORS:
+            if word:
+                words.append(word)
+                word = ''
+            if not c.isspace():
+                words.append(c)
+        else:
+            word += c
+        i += 1
+    if quote:
+        raise ValueError('unbalanced quoting')
+    if word:
+        words.append(word)
+    return words
+
+
+# `NAME=value` ahead of the command word. Its value reaches the environment whole — never word-split
+# into arguments — while the same shape written as an argument (`--body x=$V`) is word-split like any
+# other, so the position is half of the meaning.
+ASSIGNMENT_RE = re.compile(r'\w+=')
+
+
 def _carries_expansion(cmd: str) -> bool:
     """Whether `cmd` hands the shell an argument its own text does not spell out.
 
     `EXTRA='-R other/repo'; gh pr merge 566 $EXTRA` reaches gh as a repository selector no
-    authorization named, and `{-R,other/repo}` and a glob do the same with no `$` in sight. The
-    quoting that would make each one literal is removed before a word reaches `_segments`, so this
-    reads the command's own text.
+    authorization named, and `{-R,other/repo}` and a glob do the same with no `$` in sight. An
+    assignment is exempt only where it stands before a command word, since there its value reaches
+    the environment whole; written as an argument, `--body x=$EXTRA` is split like anything else.
     """
     try:
-        words = shlex.split(_strip_heredoc_bodies(cmd), posix=False)
+        words = _raw_words(_strip_heredoc_bodies(cmd))
     except ValueError:
         return True
-    return any(_expands(w) for w in words if not ASSIGNMENT_RE.match(w))
+    at_command_start = True
+    for w in words:
+        if w in COMMAND_SEPARATORS:
+            at_command_start = True
+        elif at_command_start and ASSIGNMENT_RE.match(w):
+            continue
+        else:
+            at_command_start = False
+            if _expands(w):
+                return True
+    return False
 
 
 def _sets_gh_repo(cmd: str) -> bool:
