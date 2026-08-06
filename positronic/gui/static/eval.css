@@ -152,7 +152,6 @@ body {
   font-size: 0.82rem;
 }
 
-/* Legend rows — one per keybinding, generated from KEY_MAP. */
 .legend-rows {
   display: flex;
   flex-direction: column;

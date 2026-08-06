@@ -1642,8 +1642,7 @@ def test_begin_episode_yields_before_the_blocking_handshake():
 
     The UI is a peer control system in the same cooperative loop and the status channel holds one
     slot, so an emit with no scheduling point before a blocking call is never drained: the surface
-    sits on the previous phase for the whole handshake and then sees 'running'. With the console's
-    controls driven by that phase, "still idle" reads as "teleop is live" while an episode begins.
+    sits on the previous phase for the whole handshake and then sees 'running'.
     """
     handshakes: list[str] = []
 
@@ -1668,7 +1667,7 @@ def test_begin_episode_yields_before_the_blocking_handshake():
 
 def test_begin_episode_does_not_yield_when_nobody_consumes_status():
     """The tick is for a status consumer. Unattended sim binds no status port, and an extra
-    scheduling point there costs recorded samples — the golden pipeline catches exactly that."""
+    scheduling point there costs recorded samples."""
     harness = Harness(StubPolicy(), make_embodiment())  # status left unbound, as in sim/unattended
     gen = harness._begin_episode({}, pimm.world.SystemClock())
     with pytest.raises(StopIteration):
@@ -1676,10 +1675,10 @@ def test_begin_episode_does_not_yield_when_nobody_consumes_status():
 
 
 def test_begin_episode_does_not_yield_in_sim_even_with_a_status_consumer():
-    """An ATTENDED sim run binds status, so the consumer check alone does not exclude it — and in
+    """An attended sim run binds status, so the consumer check alone does not exclude it, and in
     sim the tick is not free: producers are scheduled after the harness, so one would emit its
     first observation before START, the recorder would drop it as pre-START, and inference would
-    begin from a later state. A loading badge is not worth moving the rollout."""
+    begin from a later state."""
     embodiment = make_embodiment()
     object.__setattr__(embodiment, 'simulated', True)
     harness = Harness(StubPolicy(), embodiment)

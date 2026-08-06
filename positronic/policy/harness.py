@@ -245,8 +245,8 @@ class Harness(pimm.ControlSystem):
         # Privileged stop-signal: a truthy value within a trial's time budget ends it,
         # recording ``eval.terminated`` True plus that dict in the episode's static data.
         self.done = pimm.ControlSystemReceiver[dict](self, default={})
-        # Live status for an operator surface (e.g. WebEvalUI): episode phase + whether the policy is
-        # currently producing actions. Additive and best-effort — left unconnected in sim/unattended.
+        # Live status for an operator surface: episode phase + whether the policy is producing actions.
+        # May be unbound.
         self.status = pimm.ControlSystemEmitter(self)
         self._chunk_end_s: float | None = None  # last waypoint time of the current chunk = its drive horizon
         self._directives_handled = 0
