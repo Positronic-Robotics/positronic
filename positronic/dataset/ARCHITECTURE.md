@@ -1,6 +1,6 @@
 # Dataset Library — Design Principles
 
-Repository-wide goals and principles are in [ARCHITECTURE.md](../../ARCHITECTURE.md); the user-facing guide is [README.md](README.md). The recording is irreplaceable, and so is the edit log — a human's verdict on an episode cannot be recomputed. Everything else stays re-derivable from the two.
+Repository-wide goals and principles are in [ARCHITECTURE.md](../../ARCHITECTURE.md); the user-facing guide is [README.md](README.md). Of what this library holds, the recording and the edit log are irreplaceable — a human's verdict on an episode cannot be recomputed — and every view over them is re-derivable.
 
 ## One API, many backends
 
