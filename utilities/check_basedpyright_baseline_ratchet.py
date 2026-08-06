@@ -175,7 +175,7 @@ def main(argv: list[str]) -> int:
 
     print('basedpyright baseline is a one-way ratchet — a file may shrink, never grow per code.', file=sys.stderr)
     print('These files gained baseline diagnostics; fix the new issue instead of grandfathering it', file=sys.stderr)
-    print('(see the no_grandfather_new_code discipline):', file=sys.stderr)
+    print('(CODE_RULES.md, grandfathered-violation):', file=sys.stderr)
     for path, code, base_n, cur_n in grown:
         print(f'  {path}: {code} {base_n} -> {cur_n}', file=sys.stderr)
     return 1
