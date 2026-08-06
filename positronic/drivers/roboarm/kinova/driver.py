@@ -71,6 +71,9 @@ class Robot(pimm.ControlSystem):
         self.commands: pimm.SignalReceiver[command.Trajectory[command.CommandType]] = pimm.ControlSystemReceiver(
             self, default=[]
         )
+        self.executed_commands: pimm.ControlSystemEmitter[list[command.Applied[command.CommandType]]] = (
+            pimm.ControlSystemEmitter(self)
+        )
         self.state: pimm.SignalEmitter[KinovaState] = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
@@ -95,9 +98,10 @@ class Robot(pimm.ControlSystem):
                 cmd_msg = self.commands.read()
                 if cmd_msg.updated:
                     player.set(cmd_msg.data)
-                cmd = player.advance(clock.now_ns())
-                if cmd is not None:
-                    match cmd:
+                played = player.advance(clock.now_ns())
+                if played is not None:
+                    applied = True
+                    match played.value:
                         case command.Reset():
                             joint_controller.set_target_qpos(self.home_joints)
                         case command.CartesianPosition(pose):
@@ -111,7 +115,10 @@ class Robot(pimm.ControlSystem):
                             qpos = np.array(positions, dtype=np.float32)
                             joint_controller.set_target_qpos(qpos)
                         case _:
-                            print(f'Unsuported command: {cmd}')
+                            print(f'Unsuported command: {played.value}')
+                            applied = False
+                    if applied:
+                        self.executed_commands.emit([played])
 
                 torque_command = joint_controller.compute_torque(q, dq, tau)
                 np.divide(torque_command, torque_constant, out=current_command)

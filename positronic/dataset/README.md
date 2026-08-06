@@ -357,6 +357,18 @@ Key ideas
 - A separate `command` channel controls episode lifecycle.
 - `time_mode` selects how timestamps are recorded: `CLOCK` (default) stamps samples when the agent ingests them (useful during live data collection so every signal reflects when the recorder could act on it), while `MESSAGE` preserves the timestamp attached by the emitting control system (ideal for analysing inference latency by keeping original emission times).
 
+### Command signals record what the device played
+
+A command channel carries a trajectory of waypoints, and a device plays it at its own control rate: each cycle it applies whatever is due, collapsing several waypoints into one where several fall in the same cycle, and it never reaches the waypoints a newer trajectory overrides or a cancel drops. A recorded command signal is that played stream — one sample per waypoint the device applied, at the instant it applied it. A waypoint that was scheduled but never played is a prediction, not an action, and is absent.
+
+This is what makes a recording replayable and trainable: every command sample pairs with the observations that follow from it, because the robot moved. It is also why the executing device reports its own stream (`Command.executed`) rather than the recorder tapping the policy's output — only the device knows what it reached, and a recorder watching the intent has to guess.
+
+Each sample also carries the instant it was scheduled for, on a `scheduled` timeline beside its own (`ts_ns.scheduled`, alongside the `message`/`system`/`world` timelines every other signal carries). `applied - scheduled` is that waypoint's delivery lag, which is what a question about the machinery — latency, transport, a device falling behind — needs. A consumer indexing the signal by time never sees it, so training and replay read the played stream and nothing else.
+
+The stream can lose a sample, and the bound is worth knowing. Every recorder input is a one-message channel (`world.connect` sizes it from the receiver, and `add_signal` asks for no more), and a full channel discards the older message — so a device that applies two waypoints between two of the recorder's reads records only the second, and a backlog does not survive the episode's close. The recorder reads at `poll_hz` (1 kHz by default), and a policy's waypoints come at the action period — 15 Hz in the shipped codecs — so on the inference path a loss needs the recorder to miss tens of consecutive reads, which its own video encoding is the only plausible cause of. Teleoperation is the tight case: the operator's commands and the recorder's reads run at the same 1 kHz, so a sample can be lost to ordinary jitter.
+
+The full prediction history — everything a policy planned, including what it later overrode — is a different signal with a different shape, and would be recorded as its own object-valued one. It is not this signal loosened.
+
 `Serializer` is a pure function that know how to translate the incoming data into a format that `SignalWriter` can accept:
 - A serializer receives the latest value for the input and can return:
   - Transformed value: recorded under the same input name.
@@ -375,6 +387,8 @@ Built‑in serializers (`positronic.dataset.serializers.Serializers`)
   - `CartesianMove(pose)` -> `{'.pose': transform_3d(pose)}`
   - `JointMove(positions)` -> `{'.joints': positions}`
   - `Reset()` -> `{'.reset': 1}`
+- `TrajectorySerializer(inner)` -> `list[Timestamped]`
+  - Records applied waypoints, each at the instant it was applied and carrying the instant it was scheduled for on the `scheduled` timeline; `inner` serializes the values (`None` records them unchanged). This is how command channels are recorded.
 
 Lifecycle
 - `START_EPISODE`: allocates a new episode writer and applies provided static

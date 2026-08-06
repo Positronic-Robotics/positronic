@@ -8,6 +8,7 @@ import pimm
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm.command import (
+    Applied,
     CartesianDelta,
     CartesianPosition,
     CommandType,
@@ -27,17 +28,22 @@ from positronic.drivers.roboarm.command import (
 #         - any dict entry with value None is skipped
 #     * None -> the sample is dropped
 #     * a list[Timestamped] -> a self-timestamped stream (recording only): each item is
-#       recorded at its own ``ts_ns``. An empty list defers; a StatefulSerializer may emit
-#       the remainder later from ``flush()``. The per-item ``value`` follows the rules above.
+#       recorded at its own ``ts_ns`` and an empty list records nothing. The per-item
+#       ``value`` follows the rules above.
 Serializer = Callable[[Any], Any | dict[str, Any]]
+
+
+# The timeline a played waypoint carries beside its own: the instant it was scheduled for.
+SCHEDULED_TIMELINE = 'scheduled'
 
 
 @dataclass
 class Timestamped:
-    """A sample paired with its own absolute timestamp (ns)."""
+    """A sample paired with its own absolute timestamp (ns), and any further timelines it sits on."""
 
     ts: int
     value: Any
+    extra_ts: dict[str, int] | None = None
 
 
 class StatefulSerializer:
@@ -54,16 +60,6 @@ class StatefulSerializer:
     def __call__(self, value: Any) -> Any | dict[str, Any] | list['Timestamped']:
         raise NotImplementedError
 
-    def flush(self, now_ns: int | None = None) -> list['Timestamped']:
-        """Drain any buffered samples at episode end (mirror of ``reset``).
-
-        Called once on ``STOP_EPISODE`` before the episode is finalized. ``now_ns``
-        is the episode-end time; serializers that buffer future-scheduled samples
-        use it to drop the un-executed tail. The default keeps stateless
-        serializers a no-op.
-        """
-        return []
-
 
 class _PureSerializer(StatefulSerializer):
     """Wraps a plain callable so every serializer has a uniform interface."""
@@ -73,6 +69,25 @@ class _PureSerializer(StatefulSerializer):
 
     def __call__(self, value: Any) -> Any | dict[str, Any]:
         return self._fn(value)
+
+
+class TrajectorySerializer:
+    """Records applied waypoints, each at the instant it was applied, carrying the instant it was
+    scheduled for on the ``scheduled`` timeline.
+
+    ``inner`` serializes the waypoint values; ``None`` records them unchanged.
+    """
+
+    def __init__(self, inner: Serializer | None):
+        self._inner = inner
+
+    def __call__(self, waypoints: list[Applied]) -> list['Timestamped']:
+        return [
+            Timestamped(
+                w.ts, w.value if self._inner is None else self._inner(w.value), {SCHEDULED_TIMELINE: w.scheduled_ts}
+            )
+            for w in waypoints
+        ]
 
 
 class Serializers:

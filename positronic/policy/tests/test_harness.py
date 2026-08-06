@@ -8,8 +8,9 @@ import pytest
 
 import pimm
 from positronic import keys, telemetry, telemetry_keys, wire
-from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType
-from positronic.dataset.serializers import Serializers
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType
+from positronic.dataset.serializers import Serializers, TrajectorySerializer
+from positronic.dataset.tests.test_ds_writer_agent import FakeDatasetWriter
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import (
@@ -63,8 +64,8 @@ def make_embodiment(descriptor: str = '', cameras=('image.cam',), static_meta=No
     for cam in cameras:
         observations[cam] = Observation(pimm.NoOpEmitter(), Serializers.camera_images)
     commands = {
-        keys.ROBOT_COMMAND: Command(pimm.NoOpReceiver(), Reset(), Serializers.robot_command),
-        'target_grip': Command(pimm.NoOpReceiver(), 0.0, None),
+        keys.ROBOT_COMMAND: Command(pimm.NoOpReceiver(), pimm.NoOpEmitter(), Reset(), Serializers.robot_command),
+        'target_grip': Command(pimm.NoOpReceiver(), pimm.NoOpEmitter(), 0.0, None),
     }
     return Embodiment(descriptor, observations, commands, static_meta or {}, pimm.NoOpEmitter())
 
@@ -749,7 +750,7 @@ def test_policy_first_obs_is_frame0(world):
     embodiment = Embodiment(
         descriptor='',
         observations={'frame': Observation(device.state, None)},
-        commands={keys.ROBOT_COMMAND: Command(device.cmd, Reset(), None)},
+        commands={keys.ROBOT_COMMAND: Command(device.cmd, pimm.NoOpEmitter(), Reset(), None)},
         static_meta={},
         meta_source=device.meta,
         control_systems=(device,),
@@ -792,7 +793,7 @@ def test_task_done_terminates_through_wire_embodiment(world):
     embodiment = Embodiment(
         descriptor='',
         observations={'x': Observation(device.state, None)},
-        commands={'x': Command(device.cmd, 0.0, None)},
+        commands={'x': Command(device.cmd, pimm.NoOpEmitter(), 0.0, None)},
         static_meta={},
         meta_source=None,
     )
@@ -1007,12 +1008,11 @@ def test_task_instruction_reaches_session_context_after_reset(world):
 
 @pytest.mark.timeout(3.0)
 def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
-    """FINISH must cancel the recording's trajectory tail *before* `STOP_EPISODE`.
+    """FINISH must cancel the in-flight chunk *before* `STOP_EPISODE`.
 
-    `STOP_EPISODE` calls `flush()` on `TrajectoryOverrideSerializer`, which
-    commits whatever is still buffered. The harness must emit `[]` on
-    `robot_command`/`target_grip` first, so the serializer drops its tail and
-    canceled waypoints are not recorded.
+    The `[]` on `robot_command`/`target_grip` is what stops the drivers: each
+    `TrajectoryPlayer` clears its buffer and the device holds position. Cancelling after
+    the recording closed would leave the devices playing waypoints nothing records.
     """
 
     class _LabeledRecorder(pimm.SignalEmitter):
@@ -1056,8 +1056,131 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
     assert cancels, 'FINISH did not emit a cancel on robot_command'
     assert stops, 'FINISH did not emit STOP_EPISODE'
     assert cancels[0] < stops[0], (
-        f'cancel ({cancels[0]}) must precede STOP_EPISODE ({stops[0]}); otherwise flush() commits canceled waypoints'
+        f'cancel ({cancels[0]}) must precede STOP_EPISODE ({stops[0]}); otherwise the devices go on playing '
+        f'waypoints after the recording closed'
     )
+
+
+class _GripDevice(pimm.ControlSystem):
+    """A gripper that plays the trajectory it is given and reports every waypoint it applied."""
+
+    def __init__(self, period_s: float = 0.005):
+        self._period_s = period_s
+        self.target_grip = pimm.ControlSystemReceiver(self, default=[])
+        self.executed_target_grip = pimm.ControlSystemEmitter(self)
+
+    def run(self, should_stop, clock):
+        player = TrajectoryPlayer[float]()
+        while not should_stop.value:
+            msg = self.target_grip.read()
+            if msg is not None and msg.updated:
+                player.set(msg.data)
+            played = player.advance(clock.now_ns())
+            if played is not None:
+                self.executed_target_grip.emit([played])
+            yield pimm.Sleep(self._period_s)
+
+
+def _record_grip_through(world, device, policy_wrapper) -> tuple[list[float], ChunkPolicy]:
+    """Run [harness -> device -> recorder] through one episode; return the recorded grip stream."""
+    policy = ChunkPolicy()
+    harness = Harness(policy_wrapper.wrap(policy), make_embodiment())
+
+    ds = FakeDatasetWriter()
+    agent = DsWriterAgent(ds)
+    agent.add_signal('target_grip', TrajectorySerializer(None))
+    world.connect(harness.commands['target_grip'], device.target_grip)
+    world.connect(device.executed_target_grip, agent.inputs['target_grip'])
+    world.connect(harness.ds_command, agent.command)
+    world.pair(harness.commands[keys.ROBOT_COMMAND])
+
+    frame_em = world.pair(harness.observations['image.cam'])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations[keys.GRIP])
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    script = [
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.15),
+        (partial(directive_em.emit, Directive.FINISH()), 0.1),
+    ]
+    scheduler = world.start([harness, device, agent, ManualDriver(script)])
+    drive_scheduler(scheduler, steps=1000)
+
+    return [v for (name, v, _, _) in ds.created[-1].appends if name == 'target_grip'], policy
+
+
+@pytest.mark.timeout(3.0)
+def test_recorded_commands_reach_the_episode_end(world):
+    """[harness + device + recorder] the recording keeps every waypoint the device ran, up to the episode's end.
+
+    ``ChunkedSchedule`` re-infers only once a chunk has played out, so a whole chunk is still in flight at
+    FINISH. Its played prefix is part of the episode and belongs in the recording; without it every
+    episode's command stream ends a chunk short of its observations.
+    """
+    recorded, policy = _record_grip_through(world, _GripDevice(), ChunkedSchedule())
+
+    # ``ChunkPolicy`` encodes the chunk number in every grip value, so the last chunk is identifiable.
+    assert policy.counter >= 2, 'the policy must have run several chunks for one to still be in flight'
+    in_flight = [v for v in recorded if v >= policy.counter * 100.0]
+    assert in_flight, 'the chunk in flight at FINISH was dropped from the recording'
+    # Only the part that already played: a contiguous prefix of that chunk's waypoints.
+    assert in_flight == [policy.counter * 100.0 + i for i in range(len(in_flight))]
+
+
+@pytest.mark.timeout(3.0)
+def test_recording_holds_nothing_a_device_never_played(world):
+    """A device that plays nothing records nothing — the policy's intent alone never reaches the dataset."""
+
+    class _DeafDevice(_GripDevice):
+        def run(self, should_stop, clock):
+            while not should_stop.value:
+                self.target_grip.read()
+                yield pimm.Sleep(self._period_s)
+
+    recorded, policy = _record_grip_through(world, _DeafDevice(), ChunkedSchedule())
+
+    assert policy.counter >= 1, 'the policy must have emitted a chunk for the device to ignore'
+    assert recorded == []
+
+
+@pytest.mark.timeout(3.0)
+def test_recording_holds_only_the_waypoints_a_device_accepted(world):
+    """A waypoint a device rejects — an unreachable pose, a target outside its range — is not an action, so
+    it stays out of the recording even though the device was given it."""
+
+    class _PickyDevice(_GripDevice):
+        """Applies only every second waypoint, reporting exactly those."""
+
+        def __init__(self):
+            super().__init__()
+            self.reached = []
+            self.applied = []
+
+        def run(self, should_stop, clock):
+            player = TrajectoryPlayer[float]()
+            while not should_stop.value:
+                msg = self.target_grip.read()
+                if msg is not None and msg.updated:
+                    player.set(msg.data)
+                played = player.advance(clock.now_ns())
+                if played is not None:
+                    self.reached.append(played.value)
+                    if len(self.reached) % 2 == 0:
+                        self.applied.append(played.value)
+                        self.executed_target_grip.emit([played])
+                yield pimm.Sleep(self._period_s)
+
+    device = _PickyDevice()
+    recorded, policy = _record_grip_through(world, device, ChunkedSchedule())
+
+    assert policy.counter >= 1, 'the policy must have emitted a chunk for the device to accept half of'
+    assert device.applied, 'the device must have accepted something'
+    assert len(device.reached) > len(device.applied), 'the device must have rejected something'
+    # The episode holds every accepted waypoint; the device also plays the home command that follows FINISH.
+    assert device.applied[: len(recorded)] == recorded
+    assert device.applied[len(recorded) :] == [0.0]
 
 
 @pytest.mark.timeout(3.0)
@@ -1296,9 +1419,21 @@ def test_trajectory_player_accumulates_missed_deltas():
     player = TrajectoryPlayer(reduce=reduce)
     player.set([(10, CartesianDelta(d0)), (20, CartesianDelta(d1))])
     out = player.advance(20)  # both waypoints due in one tick -> summed, not dropped to the last
-    assert isinstance(out, CartesianDelta)
-    np.testing.assert_allclose(out.delta.translation, [0.03, 0.0, 0.0])
+    assert out is not None
+    assert isinstance(out.value, CartesianDelta)
+    np.testing.assert_allclose(out.value.delta.translation, [0.03, 0.0, 0.0])
     assert player.advance(30) is None
+
+
+def test_trajectory_player_stamps_the_applied_waypoint_at_the_tick():
+    """A waypoint is applied at the tick that reaches it, not at the instant it was scheduled for, and
+    waypoints collapsed into one tick share that one stamp."""
+    player = TrajectoryPlayer()
+    player.set([(10, 'a'), (20, 'b'), (90, 'c')])
+
+    assert player.advance(50) == (50, 20, 'b')  # applied at 50, newest collapsed waypoint asked for 20
+    assert player.advance(80) is None
+    assert player.advance(100) == (100, 90, 'c')
 
 
 @pytest.mark.parametrize('status', [RobotStatus.RESETTING, RobotStatus.ERROR])
@@ -1316,9 +1451,8 @@ def test_robot_state_serializer_available_has_no_error_key():
 def test_shutdown_cancels_trajectory_before_stop(world):
     """Shutdown while recording must cancel buffered trajectories before STOP_EPISODE.
 
-    ``STOP_EPISODE`` flushes ``TrajectoryOverrideSerializer``; without a prior
-    cancel it would commit the unexecuted tail of an in-flight chunk (the
-    FINISH/RUN paths already cancel first).
+    The cancel clears each driver's ``TrajectoryPlayer`` so devices hold position; it must land
+    while the episode is still open.
     """
     events: list[tuple[str, object]] = []
 

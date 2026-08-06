@@ -137,6 +137,9 @@ class Robot(pimm.ControlSystem):
         self.commands: pimm.SignalReceiver[command.Trajectory[command.CommandType]] = pimm.ControlSystemReceiver(
             self, default=[]
         )
+        self.executed_commands: pimm.ControlSystemEmitter[list[command.Applied[command.CommandType]]] = (
+            pimm.ControlSystemEmitter(self)
+        )
         self.state: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self._load = load
@@ -314,9 +317,9 @@ class Robot(pimm.ControlSystem):
                         yield rate_limiter.wait()
                         continue
 
-                    cmd = player.advance(clock.now_ns())
-                    if cmd is not None:
-                        match cmd:
+                    played = player.advance(clock.now_ns())
+                    if played is not None:
+                        match played.value:
                             case command.Reset():
                                 yield from self._reset(robot, robot_state, rate_limiter, should_stop)
                             case command.CartesianPosition(pose):
@@ -333,7 +336,8 @@ class Robot(pimm.ControlSystem):
                             case command.JointDelta(velocities=joint_delta):
                                 robot.set_target_joints(st.q + joint_delta)
                             case _:
-                                raise NotImplementedError(f'Unsupported command {cmd}')
+                                raise NotImplementedError(f'Unsupported command {played.value}')
+                        self.executed_commands.emit([played])
 
                     yield rate_limiter.wait()
             finally:

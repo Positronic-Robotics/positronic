@@ -1,7 +1,8 @@
 """Collection of commands that can be sent to the robot."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, TypeAlias, TypeVar
+from typing import Any, Generic, NamedTuple, TypeAlias, TypeVar
 
 import numpy as np
 
@@ -87,6 +88,15 @@ _T = TypeVar('_T')
 Trajectory: TypeAlias = list[tuple[int, _T]]
 
 
+class Applied(NamedTuple, Generic[_T]):
+    """A waypoint a device applied: the instant it was applied at, the instant it was scheduled for, and
+    the value."""
+
+    ts: int
+    scheduled_ts: int
+    value: _T
+
+
 def _combine(acc: CommandType, cmd: CommandType) -> CommandType:
     match (acc, cmd):
         case (CartesianDelta(a, frame_a), CartesianDelta(b, frame_b)):
@@ -115,7 +125,7 @@ def reduce(due: Trajectory[CommandType]) -> CommandType:
     return result
 
 
-def _reduce_last(due: Trajectory[Any]) -> Any:
+def _reduce_last(due: Trajectory[_T]) -> _T:
     """The trailing value wins -- the right collapse for absolute setpoints and gripper targets."""
     return due[-1][1]
 
@@ -138,7 +148,7 @@ def to_wire(command: CommandType) -> dict[str, Any]:
             }
 
 
-class TrajectoryPlayer:
+class TrajectoryPlayer(Generic[_T]):
     """Plays back a timestamped trajectory at the driver's control rate.
 
     Call ``set()`` when a new trajectory arrives, then ``advance(now)`` each tick to get the single command to
@@ -146,17 +156,21 @@ class TrajectoryPlayer:
     one by default; the arm channels pass ``command.reduce`` to accumulate due deltas instead of dropping them).
     """
 
-    def __init__(self, reduce=_reduce_last):
-        self._trajectory: Trajectory[Any] = []
+    def __init__(self, reduce: Callable[[Trajectory[_T]], _T] = _reduce_last):
+        self._trajectory: Trajectory[_T] = []
         self._index: int = 0
         self._reduce = reduce
 
-    def set(self, trajectory: Trajectory[Any]):
+    def set(self, trajectory: Trajectory[_T]):
         self._trajectory = trajectory
         self._index = 0
 
-    def advance(self, current_time: int):
-        """Collapse every waypoint whose timestamp <= current_time into the single value to apply, or None."""
+    def advance(self, current_time: int) -> Applied[_T] | None:
+        """Collapse every waypoint whose timestamp <= current_time into the one waypoint to apply, or None.
+
+        The result carries both stamps: ``ts`` is ``current_time`` and ``scheduled_ts`` is what the newest
+        collapsed waypoint asked for.
+        """
         due = []
         while self._index < len(self._trajectory):
             ts, value = self._trajectory[self._index]
@@ -164,7 +178,7 @@ class TrajectoryPlayer:
                 break
             self._index += 1
             due.append((ts, value))
-        return self._reduce(due) if due else None
+        return Applied(current_time, due[-1][0], self._reduce(due)) if due else None
 
 
 def from_wire(wire: dict[str, Any]) -> CommandType:

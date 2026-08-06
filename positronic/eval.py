@@ -31,13 +31,15 @@ class Observation:
 
 @dataclass
 class Command:
-    """A policy action channel: where its waypoints go and how it homes/records.
+    """A policy action channel: where its waypoints go, what the device played, and how it homes/records.
 
-    ``home`` is the value emitted to send this channel to its safe state; ``serializer``
-    serializes the channel's values, recorded under the channel's own key.
+    ``dest`` receives the policy's waypoints and ``executed`` carries back the ones the device applied,
+    each stamped with the instant it was applied. ``home`` is the value emitted to send this channel to its
+    safe state; ``serializer`` serializes the channel's values, recorded under the channel's own key.
     """
 
     dest: pimm.SignalReceiver
+    executed: pimm.SignalEmitter
     home: Any
     serializer: Serializer | None
 

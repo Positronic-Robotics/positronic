@@ -37,6 +37,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._conn: EnvConnection | None = None
 
         self.commands: pimm.ReceiverDict = pimm.ReceiverDict(self, default=[])
+        self.executed: pimm.EmitterDict = pimm.EmitterDict(self)
         self.observations: pimm.EmitterDict = pimm.EmitterDict(self)
         self.privileged: pimm.EmitterDict = pimm.EmitterDict(self)
         self.robot_meta: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
@@ -129,7 +130,10 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
 
     def _step_env(self, clock: pimm.Clock) -> dict[str, Any]:
         commands = {name: receiver.read() for name, receiver in self.commands.items()}
-        result = self._conn.step(self._adapter.action(commands, clock.now_ns()))
+        action = self._adapter.action(commands, clock.now_ns())
+        for name, waypoints in action.executed.items():
+            self.executed[name].emit(waypoints)
+        result = self._conn.step(action.raw)
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues
             self.done.emit(payload)
@@ -158,9 +162,12 @@ def remote_franka_embodiment(
     }
     commands = {
         keys.ROBOT_COMMAND: Command(
-            proxy.commands[keys.ROBOT_COMMAND], roboarm_command.Reset(), Serializers.robot_command
+            proxy.commands[keys.ROBOT_COMMAND],
+            proxy.executed[keys.ROBOT_COMMAND],
+            roboarm_command.Reset(),
+            Serializers.robot_command,
         ),
-        'target_grip': Command(proxy.commands['target_grip'], 0.0, None),
+        'target_grip': Command(proxy.commands['target_grip'], proxy.executed['target_grip'], 0.0, None),
     }
     return Embodiment(
         descriptor=descriptor,

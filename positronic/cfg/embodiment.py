@@ -30,8 +30,10 @@ def droid(robot_arm, gripper, cameras):
         **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
     }
     commands = {
-        keys.ROBOT_COMMAND: Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
-        'target_grip': Command(gripper.target_grip, 0.0, None),
+        keys.ROBOT_COMMAND: Command(
+            robot_arm.commands, robot_arm.executed_commands, roboarm_command.Reset(), Serializers.robot_command
+        ),
+        'target_grip': Command(gripper.target_grip, gripper.executed_target_grip, 0.0, None),
     }
     return Embodiment(
         descriptor='',
@@ -53,8 +55,10 @@ def yam(robot_arm, cameras):
         **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
     }
     commands = {
-        keys.ROBOT_COMMAND: Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
-        'target_grip': Command(robot_arm.target_grip, 0.0, None),
+        keys.ROBOT_COMMAND: Command(
+            robot_arm.commands, robot_arm.executed_commands, roboarm_command.Reset(), Serializers.robot_command
+        ),
+        'target_grip': Command(robot_arm.target_grip, robot_arm.executed_target_grip, 0.0, None),
     }
     return Embodiment(
         descriptor='yam',
@@ -101,10 +105,14 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
     }
     commands = {
         **{
-            f'robot_command.{s}': Command(arm.commands, roboarm_command.Reset(), Serializers.robot_command)
+            f'robot_command.{s}': Command(
+                arm.commands, arm.executed_commands, roboarm_command.Reset(), Serializers.robot_command
+            )
             for s, arm in arms.items()
         },
-        **{f'target_grip.{s}': Command(arm.target_grip, 0.0, None) for s, arm in arms.items()},
+        **{
+            f'target_grip.{s}': Command(arm.target_grip, arm.executed_target_grip, 0.0, None) for s, arm in arms.items()
+        },
     }
     static_meta = {
         'joint_signals': [f'robot_state.{s}.q' for s in arms],
@@ -139,8 +147,8 @@ def mujoco_franka(sim, camera_dict):
     # trial's end state right when the operator reviews it.
     home = roboarm_command.JointPosition(np.array(sim.initial_ctrl[:7]))
     commands = {
-        keys.ROBOT_COMMAND: Command(sim.commands, home, Serializers.robot_command),
-        'target_grip': Command(sim.target_grip, 0.0, None),
+        keys.ROBOT_COMMAND: Command(sim.commands, sim.executed_commands, home, Serializers.robot_command),
+        'target_grip': Command(sim.target_grip, sim.executed_target_grip, 0.0, None),
     }
     return Embodiment(
         descriptor='mujoco.franka',

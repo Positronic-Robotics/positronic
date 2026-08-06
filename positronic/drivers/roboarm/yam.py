@@ -185,7 +185,9 @@ class Robot(pimm.ControlSystem):
         self._connect = connect
 
         self.commands = pimm.ControlSystemReceiver[command.Trajectory[command.CommandType]](self, default=[])
+        self.executed_commands = pimm.ControlSystemEmitter[list[command.Applied[command.CommandType]]](self)
         self.target_grip = pimm.ControlSystemReceiver[command.Trajectory[float]](self, default=[])
+        self.executed_target_grip = pimm.ControlSystemEmitter[list[command.Applied[float]]](self)
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
@@ -200,7 +202,7 @@ class Robot(pimm.ControlSystem):
             robot_state = YamState()
             limiter = pimm.RateLimiter(clock, hz=100)
             player = command.TrajectoryPlayer(reduce=command.reduce)
-            grip_player = command.TrajectoryPlayer()
+            grip_player = command.TrajectoryPlayer[float]()
 
             q_target = self._reset(arm, kin, robot_state)
             grip_target = 0.0
@@ -211,23 +213,26 @@ class Robot(pimm.ControlSystem):
                 if (grip_msg := self.target_grip.read()) is not None and grip_msg.updated:
                     grip_player.set(grip_msg.data)
 
-                grip = grip_player.advance(clock.now_ns())
-                if grip is not None:
-                    grip_target = float(grip)
+                played_grip = grip_player.advance(clock.now_ns())
+                if played_grip is not None:
+                    grip_target = float(played_grip.value)
 
                 obs = arm.get_observations()
                 q = obs['joint_pos']
 
-                cmd = player.advance(clock.now_ns())
-                if cmd is not None:
-                    match cmd:
+                played = player.advance(clock.now_ns())
+                if played is not None:
+                    applied = True
+                    match played.value:
                         case command.Reset():
                             # Drop the in-flight trajectories so the homed arm holds position rather than
                             # resuming stale waypoints on the next tick.
                             player.set([])
                             grip_player.set([])
                             q_target = self._reset(arm, kin, robot_state)
+                            # Homing opens the gripper, so a grip played this cycle never reaches the chain.
                             grip_target = 0.0
+                            played_grip = None
                             obs = arm.get_observations()
                             q = obs['joint_pos']
                         case command.JointPosition(positions):
@@ -235,12 +240,16 @@ class Robot(pimm.ControlSystem):
                         case command.JointDelta(velocities=delta):
                             q_target = q + np.asarray(delta, dtype=np.float64)
                         case command.CartesianPosition(pose):
-                            q_target = self._ik_or_hold(kin, pose, q, q_target)
+                            q_target, applied = self._ik_or_hold(kin, pose, q, q_target)
                         case command.CartesianDelta() as delta_cmd:
                             target = delta_cmd.apply(self._base_pose * kin.fk(q))
-                            q_target = self._ik_or_hold(kin, target, q, q_target)
+                            q_target, applied = self._ik_or_hold(kin, target, q, q_target)
                         case _:
-                            raise NotImplementedError(f'Unsupported command {cmd}')
+                            raise NotImplementedError(f'Unsupported command {played.value}')
+                    if applied:
+                        self.executed_commands.emit([played])
+                if played_grip is not None:
+                    self.executed_target_grip.emit([played_grip])
 
                 arm.command_joint_pos(np.append(q_target, 1.0 - grip_target))
 
@@ -263,13 +272,14 @@ class Robot(pimm.ControlSystem):
 
     def _ik_or_hold(
         self, kin: _Kinematics, world_pose: geom.Transform3D, q: np.ndarray, hold: np.ndarray
-    ) -> np.ndarray:
-        """IK in the arm-base frame; on failure hold the previous joint target rather than jump."""
+    ) -> tuple[np.ndarray, bool]:
+        """IK in the arm-base frame, and whether it solved; on failure hold the previous joint target
+        rather than jump."""
         solution = kin.ik(self._base_pose.inv * world_pose, q)
         if solution is None:
             logging.warning(f'IK failed for target {world_pose}, holding previous joint target')
-            return hold
-        return solution
+            return hold, False
+        return solution, True
 
 
 class _FakeYam:

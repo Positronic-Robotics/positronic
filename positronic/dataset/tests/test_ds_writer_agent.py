@@ -1,6 +1,6 @@
 import pickle
 from functools import partial
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -9,15 +9,9 @@ import pytest
 import pimm
 from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.dataset import DatasetWriter, EpisodeWriter
-from positronic.dataset.ds_writer_agent import (
-    DsWriterAgent,
-    DsWriterCommand,
-    DsWriterCommandType,
-    TimeMode,
-    TrajectoryOverrideSerializer,
-)
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType, TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
-from positronic.dataset.serializers import Serializers
+from positronic.dataset.serializers import SCHEDULED_TIMELINE, Serializers, TrajectorySerializer
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as rcmd
 from positronic.tests.testing_coutils import run_scripted_agent
@@ -77,9 +71,11 @@ def build_agent_with_pipes(
     agent = DsWriterAgent(ds_writer, time_mode=time_mode)
     for name, serializer in signals_spec.items():
         agent.add_signal(name, serializer)
-    emitters: dict[str, pimm.SignalEmitter[Any]] = {name: world.pair(agent.inputs[name]) for name in signals_spec}
+    # ``pair`` returns the counterpart of whatever it is given, so its static type is the
+    # emitter/receiver union; every port handed to it here is a receiver, so every peer is an emitter.
+    emitters = {name: cast(pimm.SignalEmitter[Any], world.pair(agent.inputs[name])) for name in signals_spec}
 
-    cmd_em = world.pair(agent.command)
+    cmd_em = cast(pimm.SignalEmitter[Any], world.pair(agent.command))
 
     return agent, cmd_em, emitters
 
@@ -482,7 +478,7 @@ def test_pickles_with_every_constructor_argument_filled():
         virtual_time=True,
         telemetry_span=partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
     )
-    agent.add_signal('robot_command', TrajectoryOverrideSerializer(Serializers.robot_command))
+    agent.add_signal('robot_command', TrajectorySerializer(Serializers.robot_command))
     agent.add_signal('robot_state', Serializers.robot_state)
 
     loaded = pickle.loads(pickle.dumps(agent))
@@ -492,19 +488,30 @@ def test_pickles_with_every_constructor_argument_filled():
         pass
 
 
-def test_trajectory_override_serializer():
-    s = TrajectoryOverrideSerializer(None)
-    s.reset()
+def test_trajectory_serializer_records_each_waypoint_at_the_instant_it_was_applied():
+    s = TrajectorySerializer(None)
 
-    # First trajectory: nothing is final yet (could be overridden).
-    assert s([(1, 'a'), (2, 'b'), (3, 'c')]) == []
+    out = s([rcmd.Applied(1, 0, 'a'), rcmd.Applied(2, 2, 'b')])
 
-    # Next trajectory starts at ts=2 -> only ts<2 ('a') is final; 'b','c' overridden.
-    out = s([(2, 'B'), (3, 'C'), (4, 'D')])
-    assert [(t.ts, t.value) for t in out] == [(1, 'a')]
+    assert [(t.ts, t.value) for t in out] == [(1, 'a'), (2, 'b')]
+    assert s([]) == []
 
-    # Episode end drains the still-live buffer.
-    assert [(t.ts, t.value) for t in s.flush()] == [(2, 'B'), (3, 'C'), (4, 'D')]
+
+def test_trajectory_serializer_carries_the_scheduled_instant_on_its_own_timeline():
+    s = TrajectorySerializer(None)
+
+    (out,) = s([rcmd.Applied(5, 3, 'a')])
+
+    assert (out.ts, out.extra_ts) == (5, {SCHEDULED_TIMELINE: 3})
+
+
+def test_trajectory_serializer_encodes_through_its_inner_serializer():
+    s = TrajectorySerializer(Serializers.robot_command)
+
+    out = s([rcmd.Applied(7, 7, rcmd.JointPosition(positions=np.arange(7, dtype=np.float32)))])
+
+    assert [t.ts for t in out] == [7]
+    np.testing.assert_array_equal(out[0].value['.joints'], np.arange(7, dtype=np.float32))
 
 
 def test_serializer_plain_list_value(world):
@@ -529,50 +536,17 @@ def test_serializer_plain_list_value(world):
     assert [(s, v) for (s, v, _, _) in w.appends] == [('v', [1, 2, 3])]
 
 
-def test_trajectory_override_serializer_empty_cancels_buffer():
-    """Empty trajectory is the Harness STOP cancel signal: drop the buffered tail."""
-    s = TrajectoryOverrideSerializer(None)
-    s.reset()
-
-    # Buffer a trajectory (nothing committed yet).
-    assert s([(1, 'a'), (2, 'b'), (3, 'c')]) == []
-    # Empty trajectory = cancel: nothing committed AND buffer cleared.
-    assert s([]) == []
-    # Subsequent flush must not emit the canceled waypoints.
-    assert s.flush() == []
-
-
-def test_trajectory_override_serializer_flush_cutoff():
-    """flush(now_ns) commits only points already due; the future tail is dropped."""
-    s = TrajectoryOverrideSerializer(None)
-    s.reset()
-
-    # Buffer a chunk scheduled at ts 1..4 (nothing committed yet).
-    assert s([(1, 'a'), (2, 'b'), (3, 'c'), (4, 'd')]) == []
-
-    # Episode ends at ts=2: only the due points (ts <= 2) are committed; 'c','d' dropped.
-    assert [(t.ts, t.value) for t in s.flush(now_ns=2)] == [(1, 'a'), (2, 'b')]
-
-    # No cutoff keeps the legacy "commit everything" behavior.
-    s.reset()
-    assert s([(1, 'a'), (2, 'b')]) == []
-    assert [(t.ts, t.value) for t in s.flush()] == [(1, 'a'), (2, 'b')]
-
-
-def test_stop_commits_due_drops_future_trajectory(world):
-    """A mid-trajectory STOP commits already-due samples and drops the un-executed tail."""
+def test_empty_list_reaches_the_serializer(world):
+    """An empty sample is a value like any other: a serializer that maps it to something
+    recordable still records it."""
     ds = FakeDatasetWriter()
-    agent, cmd_em, emitters = build_agent_with_pipes({'traj': TrajectoryOverrideSerializer(None)}, ds, world)
+    agent, cmd_em, emitters = build_agent_with_pipes({'v': lambda seq: len(seq)}, ds, world)
 
-    future = 10**18  # far beyond the test clock, so it stays an un-executed tail
     script = [
         (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (partial(emitters['traj'].emit, [(0, 'due'), (future, 'tail')]), 0.001),
+        (partial(emitters['v'].emit, []), 0.001),
         (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
     run_scripted_agent(agent, script, world=world)
 
-    w = ds.created[-1]
-    # 'due' (ts <= stop time) is committed; the future 'tail' is dropped.
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('traj', 'due')]
-    assert w.exited is True
+    assert [(s, v) for (s, v, _, _) in ds.created[-1].appends] == [('v', 0)]

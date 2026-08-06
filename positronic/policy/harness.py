@@ -277,15 +277,12 @@ class Harness(pimm.ControlSystem):
             s = getattr(s, '_inner', None)
 
     def _cancel_trajectories(self) -> None:
-        """Drop any in-flight chunk from drivers and from the recording's tail.
+        """Drop any in-flight chunk from the drivers.
 
-        Emits ``[]`` on every command channel so each driver's
-        ``TrajectoryPlayer`` clears its buffer (devices hold position) and
-        ``TrajectoryOverrideSerializer`` drops its uncommitted tail. Must
-        precede ``STOP_EPISODE``, which ``flush()``​es the recording's
-        serializers and would otherwise commit canceled waypoints. Also
-        cancels the active session's scheduling state so the next inference
-        is not held back by stale trajectory_end.
+        Emits ``[]`` on every command channel so each driver's ``TrajectoryPlayer`` clears its
+        buffer and the device holds position. Must precede ``STOP_EPISODE``: a device left playing
+        past it moves under a closed recording. Also cancels the active session's scheduling state
+        so the next inference is not held back by stale trajectory_end.
         """
         self._emit_commands([])
         if self._policy_session is not None:

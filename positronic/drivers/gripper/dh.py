@@ -3,7 +3,7 @@ from ctypes import c_uint16
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.roboarm.command import Trajectory, TrajectoryPlayer
+from positronic.drivers.roboarm.command import Applied, Trajectory, TrajectoryPlayer
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -14,6 +14,7 @@ class DHGripper(pimm.ControlSystem):
         self.port = port
         self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self.target_grip: pimm.SignalReceiver[Trajectory[float]] = pimm.ControlSystemReceiver(self, default=[])
+        self.executed_target_grip: pimm.ControlSystemEmitter[list[Applied[float]]] = pimm.ControlSystemEmitter(self)
         self.force: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=100)
         self.speed: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=100)
 
@@ -33,7 +34,7 @@ class DHGripper(pimm.ControlSystem):
             while _state_g() != 1 and _state_r() != 1:
                 yield pimm.Sleep(0.1)
 
-        player = TrajectoryPlayer()
+        player = TrajectoryPlayer[float]()
         last_grip = 0.0
 
         # TODO: We must translate these to physical units (N and m/s)
@@ -42,10 +43,11 @@ class DHGripper(pimm.ControlSystem):
                 grip_msg = self.target_grip.read()
                 if grip_msg.updated:
                     player.set(grip_msg.data)
-                grip = player.advance(clock.now_ns())
-                if grip is not None:
-                    last_grip = grip
-                width = round((1 - max(0, min(last_grip, 1))) * 1000)
+                played = player.advance(clock.now_ns())
+                if played is not None:
+                    last_grip = max(0.0, min(1.0, played.value))
+                    self.executed_target_grip.emit([played._replace(value=last_grip)])
+                width = round((1 - last_grip) * 1000)
                 client.write_register(0x103, c_uint16(width).value, slave=1)
                 client.write_register(0x101, c_uint16(self.force.value).value, slave=1)
                 client.write_register(0x104, c_uint16(self.speed.value).value, slave=1)

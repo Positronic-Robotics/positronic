@@ -169,3 +169,29 @@ def _as_transform(value):
 if not isinstance(transform, Transform3D):
     transform = Transform3D.from_vector(np.asarray(transform), QUAT)
 ```
+
+### borrowed-vocabulary
+
+Describe a thing in the vocabulary of the layer it lives in. A docstring, comment or test name that
+reaches for another layer's word — a control loop's *tick*, a robot model's *frame*, a policy's
+*chunk* — for something that has no such concept states a dependency that is not there, and goes
+stale when that layer renames it.
+
+The test: could this code do its job in a system where that concept did not exist? If yes, the word is
+borrowed — say what the thing is in the terms the file already uses. Judge the layer by what the code
+holds rather than the directory it sits in: a recorder that is itself a control system may talk about
+its own loop.
+
+Two near neighbours stay. A thing that genuinely is the other layer's concept keeps that word — a
+parameter holding a kinematic frame name is `control_frame`, and a video container's `ticks_per_frame`
+counts real ticks. And prose stating the contract with an adjacent layer must name that layer:
+"recorded, never fed to the policy" is what the sentence is for. The smell is a *local* thing
+described in *foreign* terms.
+
+```python
+# Bad — this layer has samples and timestamps, and no control loop to have ticks
+"""Records applied waypoints, each at the tick that applied it."""
+
+# Good
+"""Records applied waypoints, each at the instant it was applied."""
+```
