@@ -11,7 +11,7 @@ Needs the MolmoSpaces asset packs (``MLSPACES_ASSETS_DIR``) and a GL backend (``
 mesa software EGL — ``EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1``). Run on a box with those::
 
     MLSPACES_ASSETS_DIR=... MUJOCO_GL=egl EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 \
-        uv run --locked python -m positronic.simulator.molmo_spaces.e2e --benchmark_dir <dir>
+        uv run --locked python -m positronic.simulator.molmo_spaces.tests.e2e --benchmark_dir <dir>
 """
 
 import argparse
@@ -23,10 +23,8 @@ from positronic import keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import mapping
-from positronic.simulator.molmo_spaces.adapter import MolmoAdapter
+from positronic.simulator.molmo_spaces.adapter import DEFAULT_CAMERA_DICT, MolmoAdapter
 from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
-
-_CAMERA_DICT = {keys.WRIST_IMAGE: mapping.MOLMO_WRIST_CAMERA, keys.EXTERIOR_IMAGE: mapping.MOLMO_EXTERIOR_CAMERA}
 
 
 def _check_sim_state(adapter: MolmoAdapter, raw_obs: dict) -> np.ndarray:
@@ -48,7 +46,7 @@ def run(
     task_horizon_steps: int | None = None,
 ) -> None:
     """Reset + step the first ``episodes`` benchmark episodes over the socket, mapping each frame with the adapter."""
-    camera_dict = camera_dict or _CAMERA_DICT
+    camera_dict = camera_dict or DEFAULT_CAMERA_DICT
     adapter = MolmoAdapter(camera_dict)
     with serve_molmo_spaces(benchmark_dir, task_horizon_steps=task_horizon_steps) as (host, port):
         conn = EnvConnection(host, port)

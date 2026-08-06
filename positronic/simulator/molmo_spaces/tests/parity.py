@@ -23,11 +23,12 @@ mesa software EGL — ``EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1``), and
 ``task_horizon_sec`` (the horizon the sim owns). Run on a box with those::
 
     MLSPACES_ASSETS_DIR=... MUJOCO_GL=egl EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 \
-        uv run --locked python -m positronic.simulator.molmo_spaces.parity --benchmark_dir <dir>
+        uv run --locked python -m positronic.simulator.molmo_spaces.tests.parity --benchmark_dir <dir>
 """
 
 import argparse
 import hashlib
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -37,16 +38,13 @@ import numpy as np
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import launcher, mapping
+from positronic.simulator.molmo_spaces.tests import parity_record
 
 # parity_native.py runs only in MolmoSpaces' venv (it imports the flat, positronic-free ``env``), so reference it
 # by path — importing it into positronic's interpreter would fail on that import.
 _PARITY_NATIVE = Path(__file__).parent / 'parity_native.py'
 _HOLD = {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protocol.ACTION_GRIP: 0.0}
 _ARRAY_FIELDS = (mapping.OBS_JOINT_POS, mapping.OBS_JOINT_VEL, mapping.OBS_EEF_POS, mapping.OBS_EEF_QUAT)
-
-
-def _is_rgb(value: object) -> bool:
-    return isinstance(value, np.ndarray) and value.ndim == 3 and value.shape[2] == 3 and value.dtype == np.uint8
 
 
 def _drive_positronic(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int) -> dict:
@@ -66,7 +64,7 @@ def _drive_positronic(benchmark_dir: Path, episode_index: int, seed: int, max_st
         try:
             frame = conn.reset({mapping.TOKEN_EPISODE_INDEX: episode_index, mapping.TOKEN_SEED: seed})
             reported_horizon = frame[protocol.FRAME_HORIZON]
-            camera_names = [k for k, v in frame[protocol.FRAME_OBS].items() if _is_rgb(v)]
+            camera_names = [k for k, v in frame[protocol.FRAME_OBS].items() if mapping.is_rgb_frame(v)]
             cam_hashes = {name: [] for name in camera_names}
             record(frame[protocol.FRAME_OBS])
             out = {protocol.FRAME_DONE: False, protocol.FRAME_SUCCESS: False}
@@ -80,12 +78,22 @@ def _drive_positronic(benchmark_dir: Path, episode_index: int, seed: int, max_st
     return {
         **{key: np.stack(fields[key]) for key in _ARRAY_FIELDS},
         mapping.OBS_GRIP: np.array(fields[mapping.OBS_GRIP], dtype=np.float32),
-        mapping.PARITY_CAMERA_NAMES: camera_names,
+        parity_record.CAMERA_NAMES: camera_names,
         'cam_hashes': cam_hashes,
         'reported_horizon': reported_horizon,
-        mapping.PARITY_TERMINATION_STEP: step,
-        mapping.PARITY_FINAL_SUCCESS: bool(out[protocol.FRAME_SUCCESS]),
+        parity_record.TERMINATION_STEP: step,
+        parity_record.FINAL_SUCCESS: bool(out[protocol.FRAME_SUCCESS]),
     }
+
+
+def _native_env() -> dict[str, str]:
+    """The molmo-venv environment plus this directory, so the reference resolves ``parity_record`` flat.
+
+    The launcher's PYTHONPATH carries what the *server* needs; ``parity_record`` is the comparison's own, so the
+    comparison adds it rather than the launcher knowing about a check.
+    """
+    env = launcher.molmo_subprocess_env()
+    return {**env, 'PYTHONPATH': os.pathsep.join([env['PYTHONPATH'], str(Path(__file__).parent)])}
 
 
 def _run_native(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out_path: Path) -> dict:
@@ -106,40 +114,40 @@ def _run_native(benchmark_dir: Path, episode_index: int, seed: int, max_steps: i
             '--out',
             str(out_path),
         ],
-        env=launcher.molmo_subprocess_env(),
+        env=_native_env(),
         check=True,
     )
     return dict(np.load(out_path, allow_pickle=False))
 
 
 def _assert_parity(native: dict, positronic: dict, max_steps: int) -> None:
-    horizon = int(native[mapping.PARITY_HORIZON_STEPS])
-    n_term = int(native[mapping.PARITY_TERMINATION_STEP])
-    p_term = positronic[mapping.PARITY_TERMINATION_STEP]
+    horizon = int(native[parity_record.HORIZON_STEPS])
+    n_term = int(native[parity_record.TERMINATION_STEP])
+    p_term = positronic[parity_record.TERMINATION_STEP]
     assert n_term < max_steps, f'native never terminated in {max_steps} steps — raise --max_steps above the horizon'
     assert p_term < max_steps, f'positronic never terminated in {max_steps} steps — raise --max_steps above the horizon'
     # The horizon case: holding the arm never succeeds, so both stacks run out the native horizon and stop there.
     assert n_term == horizon == p_term, (
         f'terminating step differs: native {n_term}, horizon {horizon}, positronic {p_term}'
     )
-    assert not bool(native[mapping.PARITY_FINAL_SUCCESS]) and not positronic[mapping.PARITY_FINAL_SUCCESS], (
+    assert not bool(native[parity_record.FINAL_SUCCESS]) and not positronic[parity_record.FINAL_SUCCESS], (
         'a held arm must not score success'
     )
     # The env reports its horizon at reset (in sim-seconds); it must match native's and equal timeout's yardstick.
-    n_horizon = float(native[mapping.PARITY_HORIZON_SEC])
+    n_horizon = float(native[parity_record.HORIZON_SEC])
     assert n_horizon == positronic['reported_horizon'], (
         f'reported horizon differs: native {n_horizon}s, positronic {positronic["reported_horizon"]}s'
     )
 
-    assert list(native[mapping.PARITY_CAMERA_NAMES]) == positronic[mapping.PARITY_CAMERA_NAMES], (
+    assert list(native[parity_record.CAMERA_NAMES]) == positronic[parity_record.CAMERA_NAMES], (
         'camera sets differ between the stacks'
     )
     for field in (*_ARRAY_FIELDS, mapping.OBS_GRIP):
         n, p = native[field], positronic[field]
         assert n.shape == p.shape, f'{field} shape differs: native {n.shape}, positronic {p.shape}'
         assert np.array_equal(n, p), f'{field} differs between native and positronic rollouts'
-    for name in positronic[mapping.PARITY_CAMERA_NAMES]:
-        n_hashes, p_hashes = list(native[f'{mapping.CAM_HASH_PREFIX}{name}']), positronic['cam_hashes'][name]
+    for name in positronic[parity_record.CAMERA_NAMES]:
+        n_hashes, p_hashes = list(native[f'{parity_record.CAM_HASH_PREFIX}{name}']), positronic['cam_hashes'][name]
         assert n_hashes == p_hashes, f'camera {name} frames differ between native and positronic rollouts'
 
 
@@ -149,8 +157,8 @@ def run(benchmark_dir: Path, *, episode_index: int = 0, seed: int = 0, max_steps
         native = _run_native(benchmark_dir, episode_index, seed, max_steps, Path(tmp) / 'native.npz')
         positronic = _drive_positronic(benchmark_dir, episode_index, seed, max_steps)
     _assert_parity(native, positronic, max_steps)
-    frames = positronic[mapping.PARITY_TERMINATION_STEP] + 1
-    horizon = native[mapping.PARITY_HORIZON_STEPS]
+    frames = positronic[parity_record.TERMINATION_STEP] + 1
+    horizon = native[parity_record.HORIZON_STEPS]
     print(f'PARITY PASSED — episode {episode_index}: {frames} frames, terminated at horizon {horizon}')
 
 

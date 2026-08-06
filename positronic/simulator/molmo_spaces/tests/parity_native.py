@@ -35,18 +35,16 @@ import env  # noqa: E402
 import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
+import parity_record  # noqa: E402 -- the record's field names, on PYTHONPATH beside this file
 
 from molmo_spaces.evaluation.benchmark_schema import load_all_episodes  # noqa: E402
 from molmo_spaces.evaluation.eval_main import determine_task_horizon  # noqa: E402
 from molmo_spaces.tasks.json_eval_task_sampler import JsonEvalTaskSampler  # noqa: E402
 
 # The Robotiq finger qpos the DROID observation's closure is normalised against, as MolmoSpaces' own policies
-# read it (``np.clip(obs["qpos"]["gripper"][0] / 0.824033, 0, 1)``, pi_policy.py:126).
+# read it (``np.clip(obs["qpos"]["gripper"][0] / 0.824033, 0, 1)``, pi_policy.py:126). Transcribed from upstream
+# rather than read from ``mapping``, so a wrong value there is what this reference catches instead of sharing.
 _GRIPPER_QPOS_CLOSED = 0.824033
-
-
-def _is_rgb_frame(value) -> bool:
-    return isinstance(value, np.ndarray) and value.ndim == 3 and value.shape[2] == 3 and value.dtype == np.uint8
 
 
 def _observe(robot_view, env_obs: dict, camera_names: list[str]) -> dict:
@@ -80,7 +78,7 @@ def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out
     robot_view = task.env.current_robot.robot_view
 
     obs, _info = task.reset()
-    camera_names = [k for k, v in obs[0].items() if _is_rgb_frame(v)]
+    camera_names = [k for k, v in obs[0].items() if mapping.is_rgb_frame(v)]
     fields: dict[str, list] = {
         k: []
         for k in (
@@ -117,12 +115,12 @@ def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out
     sampler.close()
 
     recorded: dict = {key: np.stack(values) for key, values in fields.items()}
-    recorded.update({f'{mapping.CAM_HASH_PREFIX}{name}': np.array(cam_hashes[name]) for name in camera_names})
-    recorded[mapping.PARITY_CAMERA_NAMES] = np.array(camera_names)
-    recorded[mapping.PARITY_HORIZON_STEPS] = native_horizon
-    recorded[mapping.PARITY_HORIZON_SEC] = native_horizon * (cfg.policy_dt_ms / 1000.0)  # env.py reports this at reset
-    recorded[mapping.PARITY_TERMINATION_STEP] = step
-    recorded[mapping.PARITY_FINAL_SUCCESS] = success
+    recorded.update({f'{parity_record.CAM_HASH_PREFIX}{name}': np.array(cam_hashes[name]) for name in camera_names})
+    recorded[parity_record.CAMERA_NAMES] = np.array(camera_names)
+    recorded[parity_record.HORIZON_STEPS] = native_horizon
+    recorded[parity_record.HORIZON_SEC] = native_horizon * (cfg.policy_dt_ms / 1000.0)  # env.py reports this at reset
+    recorded[parity_record.TERMINATION_STEP] = step
+    recorded[parity_record.FINAL_SUCCESS] = success
     # numpy's savez **kwds stub reads a dict-unpack as possibly supplying ``allow_pickle`` (as in make_fixture.py).
     np.savez(out_path, **recorded)  # pyright: ignore[reportArgumentType]
 
