@@ -41,7 +41,7 @@ def main() -> int:
     except (json.JSONDecodeError, UnicodeDecodeError):
         return 0
     if advises(payload):
-        print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'additionalContext': ADVICE}}))
+        print(json.dumps(hook_payload.additional_context(ADVICE)))
     return 0
 
 

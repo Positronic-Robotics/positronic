@@ -14,6 +14,10 @@ COMMAND = 'command'
 FILE_PATH = 'file_path'
 NOTEBOOK_PATH = 'notebook_path'
 CWD = 'cwd'
+HOOK_SPECIFIC_OUTPUT = 'hookSpecificOutput'
+HOOK_EVENT_NAME = 'hookEventName'
+ADDITIONAL_CONTEXT = 'additionalContext'
+PRE_TOOL_USE = 'PreToolUse'
 
 
 def command(payload: dict) -> str:
@@ -25,3 +29,11 @@ def target_path(payload: dict) -> str:
     """The file a write-shaped tool call targets, or '' when it names none."""
     tool_input = payload.get(TOOL_INPUT) or {}
     return str(tool_input.get(FILE_PATH) or tool_input.get(NOTEBOOK_PATH) or '')
+
+
+def additional_context(text: str) -> dict:
+    """A PreToolUse reply putting `text` in front of the model and deciding nothing else.
+
+    A hook's plain stdout reaches the debug log, so anything a model must read goes here.
+    """
+    return {HOOK_SPECIFIC_OUTPUT: {HOOK_EVENT_NAME: PRE_TOOL_USE, ADDITIONAL_CONTEXT: text}}

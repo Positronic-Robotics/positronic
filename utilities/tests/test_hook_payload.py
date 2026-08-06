@@ -18,3 +18,8 @@ def test_a_payload_carrying_neither_reads_empty():
     for payload in ({}, {'tool_input': {}}, {'tool_input': None}):
         assert hook_payload.command(payload) == ''
         assert hook_payload.target_path(payload) == ''
+
+
+def test_the_reply_carries_the_text_where_the_harness_reads_it():
+    reply = hook_payload.additional_context('read the rules first')
+    assert reply == {'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'additionalContext': 'read the rules first'}}

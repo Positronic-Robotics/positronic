@@ -5,6 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import advise_code_rules_edit as advise  # noqa: E402
+import hook_payload  # noqa: E402
 
 HOOK = Path(__file__).resolve().parents[1] / 'advise_code_rules_edit.py'
 
@@ -38,9 +39,9 @@ def test_it_allows_the_edit_and_reaches_the_model_with_the_skill_s_name():
         text=True,
     )
     assert run.returncode == 0
-    emitted = json.loads(run.stdout)['hookSpecificOutput']
-    assert emitted['hookEventName'] == 'PreToolUse'
-    assert 'add-rule' in emitted['additionalContext']
+    emitted = json.loads(run.stdout)[hook_payload.HOOK_SPECIFIC_OUTPUT]
+    assert emitted[hook_payload.HOOK_EVENT_NAME] == hook_payload.PRE_TOOL_USE
+    assert 'add-rule' in emitted[hook_payload.ADDITIONAL_CONTEXT]
 
 
 def test_an_unreadable_payload_is_silent():
