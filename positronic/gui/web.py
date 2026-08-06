@@ -1,7 +1,10 @@
 import asyncio
+import dataclasses
 import queue
 import threading
 from collections.abc import Iterator
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -17,7 +20,7 @@ from pydantic import BaseModel, Field
 import pimm
 from positronic import geom, keys, utils
 from positronic.drivers.roboarm import command
-from positronic.policy.harness import Directive
+from positronic.policy.harness import Directive, HarnessStatus, Phase
 
 
 class _JogBody(BaseModel):
@@ -40,6 +43,25 @@ _ROTATION_AXES = {'rx': 0, 'ry': 1, 'rz': 2}
 # needs longer to home.
 _FINISH_FINALIZE_TIMEOUT_S = 30.0
 _FINISH_HOME_SETTLE_S = 5.0
+
+# Serves GET /status until the harness emits, so the endpoint's shape never varies.
+_NO_STATUS = HarnessStatus(
+    phase=Phase.IDLE, waiting_for_policy=False, last_action_age_s=None, robot_error=False, directives_handled=0
+)
+
+
+class _WrapUpState(StrEnum):
+    IDLE = 'idle'
+    FINALIZING = 'finalizing'
+    FAILED = 'failed'
+
+
+@dataclass(frozen=True)
+class _WrapUpStatus:
+    """How the run-level wrap-up is going, published on GET /wrap_up for the console's overlay."""
+
+    state: _WrapUpState
+    detail: str = ''
 
 
 def _pkg_path(*parts: str) -> str:
@@ -234,7 +256,8 @@ class WebEvalUI(pimm.ControlSystem):
         latest: dict[str, np.ndarray] = {}
         # Latest harness status, refreshed in the run loop and served by GET /status (cross-thread:
         # a single dict swap, safe under the GIL for this poll-and-render use).
-        status_holder: dict = {'value': None}
+        status_holder: dict[str, HarnessStatus | None] = {'value': None}
+        wrap_up_holder: dict[str, _WrapUpStatus] = {'value': _WrapUpStatus(_WrapUpState.IDLE)}
 
         app = FastAPI()
         app.mount('/static', StaticFiles(directory=_shared_static()), name='static')
@@ -298,7 +321,11 @@ class WebEvalUI(pimm.ControlSystem):
 
         @app.get('/status')
         async def status():
-            return status_holder['value'] or {'phase': 'idle'}
+            return dataclasses.asdict(status_holder['value'] or _NO_STATUS)
+
+        @app.get('/wrap_up')
+        async def wrap_up():
+            return dataclasses.asdict(wrap_up_holder['value'])
 
         @app.get('/ping')
         async def ping():  # tiny + no work, so its round-trip measures the browser<->robot-host link
@@ -306,49 +333,38 @@ class WebEvalUI(pimm.ControlSystem):
 
         @app.post('/finish_run')
         async def finish_run():
-            # Wrap up the whole run from the browser (or `curl -X POST .../finish_run`), no terminal
-            # needed. Returns immediately (the browser shows the wrap-up overlay on this 200); the actual
-            # shutdown runs as a background task so a live episode is ended CLEANLY first.
-            #
-            # We must NOT just set the shared stop event: that bypasses Harness._end_episode (which
-            # finalizes the recording AND homes the arm), so the DsWriterAgent can abort a still-open
-            # recording (episode lost) and the arm is left wherever it was. Always route through the
-            # episode-end path so the arm homes as the button + overlay promise:
-            #   - active episode -> FINISH: commit the recording, then home;
-            #   - idle (possibly after manual jogging, so NOT necessarily at home) -> ABORT: nothing to
-            #     finalize, but it still runs _end_episode -> _home.
-            # Wait for the harness to report idle (episode committed), let the commanded home reach the
-            # arm, and only THEN stop the World. Setting the event (not a signal) always works even under
-            # a nohup launch where SIGINT is SIG_IGN.
+            # The World may only stop once the harness has acknowledged finalizing the live episode and
+            # homing: stopping it directly aborts an open recording and leaves the arm where it stands.
+            # Returns as soon as the wrap-up is scheduled; the console follows it on GET /wrap_up.
             async def _wrap_up():
-                if (status_holder['value'] or {}).get('phase') != 'idle':
-                    self.directive.emit(Directive.FINISH(), clock.now_ns())
-                    for _ in range(int(_FINISH_FINALIZE_TIMEOUT_S / 0.1)):
-                        if (status_holder['value'] or {}).get('phase') == 'idle':
-                            break
-                        await asyncio.sleep(0.1)
-                    else:
-                        # Timed out: the episode did NOT finalize, so the harness is wedged. Do NOT force
-                        # the stop — that aborts the still-open recording (episode lost) and skips homing,
-                        # the exact failures this path exists to prevent. Leave the run up so the operator
-                        # can retry Finish (re-emits FINISH) or investigate; a wedged harness needs a human,
-                        # not a data-losing stop.
-                        print(
-                            f'finish_run: episode did not finalize within {_FINISH_FINALIZE_TIMEOUT_S:.0f}s; '
-                            'leaving the run up instead of force-stopping (a stop here would lose the open '
-                            'episode and skip homing). Retry Finish or investigate the harness.'
-                        )
-                        return
+                handled = (status_holder['value'] or _NO_STATUS).directives_handled
+                wrap_up_holder['value'] = _WrapUpStatus(_WrapUpState.FINALIZING)
+                self.directive.emit(Directive.FINISH(), clock.now_ns())
+                for _ in range(int(_FINISH_FINALIZE_TIMEOUT_S / 0.1)):
+                    current = status_holder['value']
+                    # The harness's own directive count is what marks this FINISH handled. An idle phase
+                    # does not: the status is a periodic sample, so it can predate the emit above.
+                    if current is not None and current.directives_handled > handled and current.phase == Phase.IDLE:
+                        break
+                    await asyncio.sleep(0.1)
                 else:
-                    self.directive.emit(Directive.ABORT(), clock.now_ns())  # idle: nothing to save; ABORT homes
-                # Only reached on a clean finalize (idle) or the idle-ABORT path: let the commanded home
-                # reach the arm, then stop the World.
+                    # A stop here would abort the still-open recording and skip homing, the failures this
+                    # path exists to prevent, so a wedged harness is left up for a human.
+                    _fail(
+                        f'The episode did not finalize within {_FINISH_FINALIZE_TIMEOUT_S:.0f}s, so the run '
+                        'was left up. Retry, or investigate the harness on the robot host.'
+                    )
+                    return
                 await asyncio.sleep(_FINISH_HOME_SETTLE_S)
                 # Setting the event is the only stop that survives a nohup launch, where SIGINT is SIG_IGN.
                 if isinstance(should_stop, pimm.world.EventReceiver):
                     should_stop._event.set()
                 else:
-                    print('finish_run: stop signal is not event-backed; leaving the World running.')
+                    _fail('The stop signal is not event-backed, so the run was left up. Stop it on the host.')
+
+            def _fail(detail: str) -> None:
+                wrap_up_holder['value'] = _WrapUpStatus(_WrapUpState.FAILED, detail)
+                print(f'finish_run: {detail}')
 
             asyncio.create_task(_wrap_up())
             return {'wrapping_up': True}

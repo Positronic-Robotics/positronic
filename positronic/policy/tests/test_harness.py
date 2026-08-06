@@ -30,7 +30,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import Directive, DirectiveType, Harness
+from positronic.policy.harness import Directive, DirectiveType, Harness, Phase
 from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -971,6 +971,46 @@ def test_run_while_running_is_ignored(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_finish_while_idle_homes_and_finalizes_nothing(world):
+    """FINISH ends the run from any phase, so a sender that only knows a sampled phase never has to
+    choose between finishing and discarding: there is nothing to finalize while idle, and it homes."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+
+    driver = ManualDriver([(partial(p['directive_em'].emit, Directive.FINISH()), 0.0), (None, 0.02)])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=20)
+
+    assert _ds_types(p) == []
+    assert isinstance(_last_command(p), Reset)
+
+
+@pytest.mark.timeout(3.0)
+def test_status_counts_the_directives_the_harness_handled(world):
+    """The count is how a sender tells a status that reflects its own directive from one sampled
+    before it — the phase alone cannot, since an unchanged phase and a stale sample look alike."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    statuses = RecordingEmitter()
+    harness.status._bind(statuses)
+
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.0),
+        (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),
+        (None, 0.02),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=20)
+
+    counts = [s.directives_handled for _ts, s in statuses.emitted]
+    assert counts == sorted(counts)
+    assert counts[-1] == 2
+    assert [s.phase for _ts, s in statuses.emitted][-1] == Phase.IDLE
+
+
+@pytest.mark.timeout(3.0)
 def test_run_calls_policy_reset_with_context(world):
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment())
@@ -1619,7 +1659,7 @@ def test_begin_episode_yields_before_the_blocking_handshake():
     gen = harness._begin_episode({}, pimm.world.SystemClock())
     next(gen)  # runs up to the yield
     assert handshakes == [], 'new_session ran before the UI could be scheduled'
-    assert [s['phase'] for _ts, s in statuses.emitted] == ['starting']
+    assert [s.phase for _ts, s in statuses.emitted] == [Phase.STARTING]
 
     with pytest.raises(StopIteration):
         next(gen)

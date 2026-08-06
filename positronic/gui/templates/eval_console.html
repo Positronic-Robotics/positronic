@@ -47,9 +47,9 @@
       .wrapup-overlay .box { max-width:34rem; }
       .wrapup-overlay h2 { color:#fbbf24; margin:0 0 0.8rem; }
       .wrapup-overlay p { margin:0.4rem 0; font-size:0.95rem; line-height:1.5; }
-      /* Tap targets for keyboardless / touch surfaces (a tablet at the rig): the jog + grip-step
-         legend rows are clickable — same actuator as the key — and hold-to-repeat mirrors holding
-         the key. Keyboard still works everywhere. */
+      .wrapup-overlay button { margin:0.8rem 0.3rem 0; }
+      .wrapup-overlay [hidden] { display:none; }
+      /* A tappable row is held down to repeat, so it must not scroll or select under the press. */
       .jog-hint { font-size:0.75rem; color:var(--text-secondary,#94a3b8); margin:0 0 0.5rem; line-height:1.35; }
       .legend-row.is-tappable { cursor:pointer; user-select:none; -webkit-user-select:none;
         touch-action:none; min-height:2.1rem; border-radius:0.35rem; }
@@ -123,6 +123,10 @@
         <p>Finalizing the current episode, uploading the dataset to S3, homing + locking the arm, and
            releasing control. This can take a few minutes for a large recording.</p>
         <p id="wrapup-sub" style="color:#94a3b8"></p>
+        <div id="wrapup-actions" hidden>
+          <button id="wrapup-retry">Retry finish</button>
+          <button id="wrapup-back">Back to console</button>
+        </div>
       </div>
     </div>
 
@@ -167,14 +171,15 @@
       let scale = 'fine';
       let running = false;
 
-      // Set while the arm is homing after a directive that homes. The console has no signal for
-      // "the arm reached home": the harness publishes idle as soon as it ISSUES the home, and the
-      // driver then executes the motion synchronously in its own process. So teleop stays disabled
-      // until the human watching the arm says it is parked — a jog queued during that motion
-      // executes after the reset and leaves the arm off-home. A harness-side homing phase would
-      // make this automatic; guessing a settle time in the browser would not.
+      // Set while the arm is homing after a directive that homes. Idle means the harness ISSUED the home,
+      // not that the arm reached it, and there is no signal for the arrival — so teleop stays disabled
+      // until the human watching the arm confirms it, a jog sent meanwhile executing after the motion.
       let awaitingPark = false;
       const resumeBtn = document.getElementById('resume-teleop');
+      // The confirmation only appears once the harness has acknowledged the directive by going idle,
+      // which is when it issues the home: offered earlier, it can be clicked before the arm has begun
+      // homing, and teleop is then live for the motion it is meant to wait out.
+      const offerPark = () => { resumeBtn.hidden = !(awaitingPark && !pendingAck && serverPhase() === 'idle'); };
 
       const setRunning = (value) => {
         running = value;
@@ -184,7 +189,7 @@
 
       resumeBtn.addEventListener('click', () => {
         awaitingPark = false;
-        resumeBtn.hidden = true;
+        offerPark();
       });
 
       // ─── Episode control buttons + directive-ack toast ───────────────────────────────────────────────
@@ -200,48 +205,54 @@
         ackTimer = setTimeout(() => { ackToast.hidden = true; }, 5000);  // 5s
       };
 
-      // Ack a directive from the harness's ACTUAL phase transition (via /status), NOT the HTTP 200: an
-      // out-of-phase directive (Start during an episode, Save/Discard while idle) still returns 200 but is
-      // silently ignored by Harness._handle_directive. pendingAck is resolved in renderStatus when the
-      // phase moves (recognized) or the window elapses without it (ignored).
-      let pendingAck = null;   // { label, ok:(phase)=>bool, deadline }
+      // Ack a directive from what the harness DID, not from the HTTP 200, which only says the POST was
+      // received: a directive the harness ignores still returns 200. renderStatus resolves this once the
+      // harness reports a directive handled since the click and the phase the click aimed at.
+      let pendingAck = null;   // { label, ok:(phase)=>bool, deadline, sentAt, handled }
       const isActivePhase = (p) => p === 'starting' || p === 'running';
       const serverPhase = () => (lastStatus && typeof lastStatus === 'object' ? lastStatus.phase : undefined);
+      const directiveButtons = document.querySelectorAll('button[data-action]');
+      // One directive at a time. The harness queues up to three and the phase driving these decisions is up
+      // to one refresh stale, so a second click lands on a phase the first has already invalidated: Discard
+      // then Save queues both, the episode is discarded, and the idle that follows satisfies Save's target.
+      const setAckPending = (ack) => {
+        pendingAck = ack;
+        for (const button of directiveButtons) button.disabled = ack !== null;
+      };
 
-      for (const button of document.querySelectorAll('button[data-action]')) {
+      for (const button of directiveButtons) {
         button.addEventListener('click', () => {
           const action = button.dataset.action;
           const from = serverPhase();
           // Predict whether the harness will act, so the ack reflects the real transition rather than the
-          // transport response (which only says the POST was received). Mirror Harness._handle_directive
-          // exactly: RUN is guarded on idle, FINISH on an active episode, and ABORT is guarded on NOTHING —
-          // it homes the arm from any phase. Reporting "ignored" for a discard while idle told the operator
-          // nothing happened while the arm was in fact homing.
-          const willAct =
-            action === 'abort' ? true : action === 'start' ? !isActivePhase(from) : isActivePhase(from);
+          // transport response, which only says the POST was received. Mirrors Harness._handle_directive:
+          // only RUN is guarded, on an episode already being live.
+          const willAct = action === 'start' ? !isActivePhase(from) : true;
           const target = action === 'start' ? isActivePhase : (p) => p === 'idle';
           if (!willAct) {
-            // Do NOT send a directive we are about to call ignored. The phase this decision rests
-            // on is up to one refresh stale, and the harness queues directives: click Save & Home
-            // during an episode, then Start before the refresh, and the harness processes the
-            // FINISH, goes idle, then finds the queued RUN valid — a new episode and a driving arm
-            // after the operator was told the click did nothing. Not sending cannot surprise
-            // anyone; the opposite race just costs a click the operator repeats.
+            // A directive the harness would ignore is not queued: it would be handled on a later phase
+            // where it is valid, starting an episode the operator was told did not start.
             showAck(`${ACK[action]} — not sent (phase is ${from ?? 'unknown'})`, false);
-            pendingAck = null;
+            setAckPending(null);
             return;  // nothing sent, so nothing about the arm changed — leave the controls alone
           }
           fetch('/directive/' + action, { method: 'POST' })
-            .then((r) => { if (!r.ok) { showAck(`${ACK[action]} — FAILED (${r.status})`, false); pendingAck = null; } })
-            .catch(() => { showAck(`${ACK[action]} — no response`, false); pendingAck = null; });
+            .then((r) => { if (!r.ok) { showAck(`${ACK[action]} — FAILED (${r.status})`, false); setAckPending(null); } })
+            .catch(() => { showAck(`${ACK[action]} — no response`, false); setAckPending(null); });
           showAck(`${ACK[action]} — sent…`, true);
-          // `sentAt` is what stops a CACHED status resolving this: renderStatus also runs on a 200ms
-          // ticker over the last sample, which predates the click and would report "recognized"
-          // before the harness had seen the directive at all.
-          pendingAck = { label: ACK[action], ok: target, deadline: performance.now() + 5000, sentAt: performance.now() };
+          // `sentAt` and `handled` are what stop a status sampled before the click resolving this: the
+          // 200ms re-render runs over the last sample, and a phase this directive leaves unchanged is
+          // indistinguishable from one it has not reached yet.
+          setAckPending({
+            label: ACK[action],
+            ok: target,
+            deadline: performance.now() + 5000,
+            sentAt: performance.now(),
+            handled: lastStatus && typeof lastStatus === 'object' ? lastStatus.directives_handled : undefined,
+          });
           if (action !== 'start') {  // both Save & Home and Discard & Home end with the arm homing
             awaitingPark = true;
-            resumeBtn.hidden = false;
+            offerPark();
           }
           // The harness homes the gripper open (target_grip 0) on every episode boundary, but this
           // browser-side setpoint is never updated by policy/homing — resync it so the next grip step
@@ -352,16 +363,19 @@
         flashRow(code);
         sendJog(jogKey.axis, jogKey.sign);   // fires per key-repeat / hold tick -> continuous jog
       };
-      // dir: +1 = close a step (Space), -1 = open a step (Shift+Space). Steps from the LIVE setpoint so a
-      // slider drag in between is respected.
-      const doGripStep = (dir) => {
+      // Steps from the LIVE setpoint, so a slider drag in between is respected.
+      const doGripStep = (code) => {
         if (running) return;
-        const step = (scale === 'coarse' ? GRIP_STEP.coarse : GRIP_STEP.fine) * dir;
+        const gripKey = GRIP_KEYS[code];
+        if (!gripKey) return;
+        const step = (scale === 'coarse' ? GRIP_STEP.coarse : GRIP_STEP.fine) * gripKey.dir;
         const next = Math.min(1, Math.max(0, grip + step));
-        flashRow(dir > 0 ? 'Space' : 'ShiftSpace');
+        flashRow(code);
         reflectGrip(next);
         sendGrip(next);
       };
+      // A grip binding is named for the key plus the modifier held with it, which is how an event finds it.
+      const gripCode = (event) => (event.shiftKey ? 'Shift' : '') + event.code;
 
       // Hold-to-repeat, shared by a held key (the OS auto-repeat drives keydown) and a held tap/press
       // (this interval). Only one hold is ever active; any pointerup / cancel / blur ends it.
@@ -370,7 +384,6 @@
         if (!hold) return;
         clearInterval(hold.timer);
         unflashRow(hold.code);
-        if (hold.code === 'Space' || hold.code === 'ShiftSpace') { unflashRow('Space'); unflashRow('ShiftSpace'); }
         hold = null;
       };
       const startHold = (code, fn) => {
@@ -382,8 +395,7 @@
       // Wire every jog / grip-step legend row to the same actuator as its key (press-and-hold to repeat).
       for (const row of jog.querySelectorAll('.legend-row')) {
         const code = row.dataset.key;
-        const fn = code === 'Space' ? () => doGripStep(1)
-                 : code === 'ShiftSpace' ? () => doGripStep(-1)
+        const fn = GRIP_KEYS[code] ? () => doGripStep(code)
                  : JOG_KEYS[code] ? () => doJog(code)
                  : null;
         if (!fn) continue;
@@ -414,9 +426,9 @@
           return;
         }
 
-        if (event.code === 'Space') {
+        if (GRIP_KEYS[gripCode(event)]) {
           event.preventDefault();
-          doGripStep(event.shiftKey ? -1 : 1);   // shift = open, plain = close; auto-repeat keeps stepping
+          doGripStep(gripCode(event));           // fires on auto-repeat too, so holding a key keeps stepping
           return;
         }
 
@@ -427,11 +439,9 @@
       });
 
       document.addEventListener('keyup', (event) => {
+        // A modifier can be released before its key, so which binding flashed is no longer derivable.
         unflashRow(event.code);
-        if (event.code === 'Space') {
-          unflashRow('Space');
-          unflashRow('ShiftSpace');
-        }
+        unflashRow('Shift' + event.code);
       });
       // A held key/tap can miss its release (e.g. the window loses focus mid-press); stop any hold and
       // clear every flash on blur.
@@ -454,17 +464,19 @@
         // Resolve a pending directive ack from the real phase (see the directive handler): recognized once
         // the harness moves to the expected phase, ignored if the window elapses without it.
         if (pendingAck && s && typeof s === 'object' && lastFetchAt > pendingAck.sentAt) {
-          if (pendingAck.ok(s.phase)) { showAck(`${pendingAck.label} — recognized`, true); pendingAck = null; }
-          else if (performance.now() > pendingAck.deadline) {
-            showAck(`${pendingAck.label} — no phase change (ignored?)`, false); pendingAck = null;
+          const handled = typeof s.directives_handled === 'number' && typeof pendingAck.handled === 'number'
+            ? s.directives_handled > pendingAck.handled
+            : true;   // no count to correlate against: fall back to the phase alone
+          if (handled && pendingAck.ok(s.phase)) {
+            showAck(`${pendingAck.label} — recognized`, true); setAckPending(null);
+          } else if (performance.now() > pendingAck.deadline) {
+            showAck(`${pendingAck.label} — no phase change (ignored?)`, false); setAckPending(null);
           }
         }
-        // Teleop follows the harness's phase, not the button: idle is the harness saying the
-        // episode-end path (including the home command) is done. A status we cannot read leaves the
-        // controls as they are — an unreadable status is not evidence the arm is parked. And not
-        // while our own directive is still in flight: the phase we are reading predates it (Start
-        // blocks on the policy handshake before publishing 'starting'), so acting on it would
-        // re-enable teleop for the whole model load, during which an episode is already beginning.
+        offerPark();
+        // Teleop follows the harness's phase, never the button: idle is the harness saying the
+        // episode-end path, home command included, is done. Neither a pending acknowledgment nor a
+        // status we cannot read is evidence the arm is parked, so both leave the controls as they are.
         if (!pendingAck && !awaitingPark && s && typeof s === 'object' && typeof s.phase === 'string') {
           setRunning(s.phase !== 'idle');
         }
@@ -521,19 +533,38 @@
       const wrapOverlay = document.getElementById('wrapup-overlay');
       const wrapTitle = document.getElementById('wrapup-title');
       const wrapSub = document.getElementById('wrapup-sub');
-      // The UI server tears down during the upload, so /ping stops answering — that IS the progress signal.
+      const wrapActions = document.getElementById('wrapup-actions');
+      // The console tears down with the run, so an unanswered poll is what says the wrap-up got through. A
+      // wrap-up that reports failure has left the run up, so the overlay hands the controls back rather
+      // than sitting on "finalizing" over a run that is still live.
       const beginWrapup = () => {
         wrapOverlay.hidden = false;
+        wrapActions.hidden = true;
+        wrapTitle.textContent = 'Wrapping up…';
         let gone = 0;
         const iv = setInterval(() => {
-          fetch('/ping', { cache: 'no-store' })
-            .then(() => { gone = 0; wrapSub.textContent = 'Finalizing + uploading… (console still up)'; })
+          fetch('/wrap_up', { cache: 'no-store' })
+            .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+            .then((w) => {
+              gone = 0;
+              if (w.state !== 'failed') { wrapSub.textContent = 'Finalizing + uploading… (console still up)'; return; }
+              clearInterval(iv);
+              wrapTitle.textContent = 'Wrap-up FAILED — the run is still active';
+              wrapSub.textContent = w.detail;
+              wrapActions.hidden = false;
+            })
             .catch(() => { gone += 1; if (gone >= 2) { clearInterval(iv);
               wrapTitle.textContent = 'Session closing';
               wrapSub.textContent = 'Console shut down; the final upload is completing on the robot host. ' +
                                     'Safe to close this tab.'; } });
         }, 1000);
       };
+      document.getElementById('wrapup-retry').addEventListener('click', () => {
+        fetch('/finish_run', { method: 'POST' })
+          .then((r) => { if (r.ok) beginWrapup(); else wrapSub.textContent = `Retry failed (${r.status}).`; })
+          .catch(() => { wrapSub.textContent = 'Retry got no response.'; });
+      });
+      document.getElementById('wrapup-back').addEventListener('click', () => { wrapOverlay.hidden = true; });
       document.getElementById('finish-run').addEventListener('click', () => {
         if (!confirm('Finish the WHOLE run? This finalizes + uploads everything, homes + locks the arm, ' +
                      'releases control, and ends the session (a relaunch is needed to run again). ' +

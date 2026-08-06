@@ -1,7 +1,7 @@
 import time
 from collections.abc import Callable, Generator, Iterable, Iterator
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any
 
 from opentelemetry.trace import Span
@@ -39,13 +39,37 @@ class Directive:
 
     @classmethod
     def FINISH(cls, **kwargs) -> 'Directive':
-        """Finalize the recording with optional eval data, then home devices."""
+        """Finalize the live recording, if any, with optional eval data, then home devices."""
         return cls(DirectiveType.FINISH, kwargs)
 
     @classmethod
     def ABORT(cls) -> 'Directive':
         """Discard the live recording and home the devices."""
         return cls(DirectiveType.ABORT)
+
+
+class Phase(StrEnum):
+    """Episode phase of a harness."""
+
+    IDLE = 'idle'
+    STARTING = 'starting'
+    RUNNING = 'running'
+
+
+@dataclass(frozen=True)
+class HarnessStatus:
+    """Live episode state published on ``Harness.status`` for an operator surface.
+
+    ``robot_error`` is true only for the cycles a safety reflex is tripped, since the driver clears
+    one every control cycle. ``directives_handled`` counts the directives the harness has processed,
+    so a sender can tell a status that reflects its own directive from one sampled before it.
+    """
+
+    phase: Phase
+    waiting_for_policy: bool
+    last_action_age_s: float | None
+    robot_error: bool
+    directives_handled: int
 
 
 class _EpisodeTelemetry:
@@ -227,43 +251,42 @@ class Harness(pimm.ControlSystem):
         self.status = pimm.ControlSystemEmitter(self)
         self._last_action_ts: float | None = None
         self._chunk_end_s: float | None = None  # last waypoint time of the current chunk = its drive horizon
+        self._directives_handled = 0
 
-    def _emit_status(self, clock: pimm.Clock, phase: str | None = None) -> None:
+    def _emit_status(self, clock: pimm.Clock, phase: Phase | None = None) -> None:
         """Best-effort live status for an operator surface. Never raises into the run loop."""
         try:
-            phase = phase or ('running' if self._running else 'idle')
+            phase = phase or (Phase.RUNNING if self._running else Phase.IDLE)
             age = (time.monotonic() - self._last_action_ts) if (self._running and self._last_action_ts) else None
-            # "Driving" while the latest chunk still has horizon left to play (its last waypoint is in the
-            # future), plus a 0.5s grace so the brief inter-chunk inference gap doesn't flicker to "waiting".
-            # A chunked policy emits ONE chunk then plays it for its whole span, so timing "waiting" off the
-            # last emit (age) wrongly reads mid-chunk playback — the arm actively driving — as a stall.
+            # A chunked policy emits one chunk and then plays it for its whole span, so a policy that is
+            # driving looks idle from the last emit alone: the chunk's remaining horizon is what says it is
+            # driving, plus a 0.5s grace covering the inter-chunk inference gap.
             driving = self._chunk_end_s is not None and clock.now() <= self._chunk_end_s + 0.5
             self.status.emit(
-                {
-                    'phase': phase,
-                    'waiting_for_policy': bool(self._running and not driving),
-                    'last_action_age_s': age,
-                    # RobotStatus.ERROR: a safety reflex (e.g. cartesian_reflex) aborted the current
-                    # motion. The driver self-recovers each control cycle (franka.py recover_from_errors),
-                    # so this is momentary per trip — the operator surface decays it so REPEATED tripping
-                    # (which makes jog/policy feel dead as each command is dropped) shows as a steady flag.
-                    'robot_error': self._robot_in_error(),
-                },
+                HarnessStatus(
+                    phase=phase,
+                    waiting_for_policy=bool(self._running and not driving),
+                    last_action_age_s=age,
+                    robot_error=self._robot_in_error(),
+                    directives_handled=self._directives_handled,
+                ),
                 clock.now_ns(),
             )
         except Exception:
             pass
 
     def _robot_in_error(self) -> bool:
-        """Best-effort read of the latest robot_state: True iff it reports ``RobotStatus.ERROR``.
-        Additive and safe — any gap (no observation yet, or a state of another shape) returns
-        False, so it never raises a false alarm and never breaks the status emit."""
+        """Best-effort read of the latest robot state: True iff it reports ``RobotStatus.ERROR``.
+
+        Any gap — no observation yet, or a state of another shape — is False, so a status emit never
+        raises and never raises a false alarm.
+        """
         try:
             # noqa: PLC0415 — lazy on purpose: the status path stays driver-agnostic, so a harness
             # used with a non-roboarm embodiment never imports the driver package.
             from positronic.drivers.roboarm import RobotStatus, State  # noqa: PLC0415
 
-            state = self.observations['robot_state'].value
+            state = self.observations[keys.ROBOT_STATE].value
             return isinstance(state, State) and state.status == RobotStatus.ERROR
         except Exception:
             return False
@@ -369,23 +392,14 @@ class Harness(pimm.ControlSystem):
                 self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
-        # Fresh episode: no policy action yet (-> "waiting for policy" until the first chunk). Emit the
-        # 'starting' phase BEFORE new_session, whose handshake blocks until the model is loaded — so an
-        # operator surface can show "loading policy" during that block.
+        # Fresh episode: no policy action yet, so "waiting for policy" until the first chunk.
         self._last_action_ts = None
         self._chunk_end_s = None
-        self._emit_status(clock, phase='starting')
-        # YIELD before the blocking handshake, or the emit above is unobservable: the surface is a
-        # peer control system in this same loop and the status channel holds one slot, so without a
-        # scheduling point it never runs, and 'starting' is overwritten by 'running' once setup ends.
-        # An operator surface would sit on the stale phase for the whole model load — reading, with
-        # the console's phase-driven controls, as "still idle, teleop live" while an episode begins.
-        # Never in sim, and only when something consumes status. In sim the tick is not free: the
-        # simulated producers are scheduled after the harness, so a yield here lets one emit its
-        # first observation BEFORE ds_command START — the recorder drops it as pre-START and
-        # inference begins from a later state, moving the rollout and the recorded alignment. An
-        # attended sim run binds status too, so `num_bound` alone does not exclude it. Sim
-        # handshakes are local and fast; the loading badge is not worth a perturbed rollout.
+        self._emit_status(clock, phase=Phase.STARTING)
+        # The status channel holds one slot and a surface is a peer in this loop, so this phase is only
+        # observable if a scheduling point precedes ``new_session``, whose handshake blocks until the model
+        # is loaded. Not in sim: simulated producers are scheduled after the harness, so a yield here lets
+        # one publish its first observation before ``ds_command`` START, which the recorder then drops.
         if self.status.num_bound and not self._embodiment.simulated:
             yield self._pace()
         self._policy_session = self.policy.new_session(self.context, clock.now)
@@ -430,18 +444,23 @@ class Harness(pimm.ControlSystem):
         self._running = False
 
     def _handle_directive(self, directive: Directive, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
-        """Dispatch a directive to the episode lifecycle; updates ``_running``."""
+        """Dispatch a directive to the episode lifecycle; updates ``_running``.
+
+        FINISH and ABORT both end whatever is open and home, from any phase, so a sender that only
+        knows a sampled phase cannot lose an episode opened since that sample. Only RUN is guarded,
+        against restarting an episode that is already live.
+        """
         match directive.type:
             case DirectiveType.RUN:
-                if not self._running:  # a RUN mid-trial is ignored — the operator finishes before starting anew
+                if not self._running:
                     yield from self._begin_episode(directive.payload or {}, clock)
             case DirectiveType.FINISH:
-                if self._running:  # a FINISH while idle is ignored — nothing to finalize
-                    yield from self._end_episode(clock, directive.payload)
+                yield from self._end_episode(clock, directive.payload)
             case DirectiveType.ABORT:
                 yield from self._end_episode(clock, abort=True)
             case _:
                 raise ValueError(f'Unknown directive type: {directive.type}')
+        self._directives_handled += 1
 
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any] | None:
         """Read every observation channel and assemble the policy input dict.
