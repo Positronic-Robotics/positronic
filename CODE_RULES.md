@@ -263,8 +263,13 @@ The cost is not the lines. Every new type is another thing a reader holds, anoth
 live, and another edge to keep in sync; a field duplicating what its caller already knows goes stale
 the first time only one of the two is set.
 
-Extend the module that owns the subject rather than adding a file beside it. Where nothing owns it,
-that is a finding about the layout — say so, rather than restructuring on your own initiative.
+A genuinely new distinction still has to land somewhere, and usually the structure says where:
+beside its siblings, in the module that owns the subject — extend that rather than adding a file
+next to it. Put it there and carry on; this rule is against a concept with no work to do, not
+against growth. Only where nothing suggests a natural home is there something to say, and then it
+is a finding about the layout, for a human rather than for a restructuring of your own.
+
+A project still laying its structure out is not the subject: there is nothing yet to fit into.
 
 ### large-indent
 
