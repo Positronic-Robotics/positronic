@@ -270,13 +270,9 @@ The cost is not the lines. Every new type is another thing a reader holds, anoth
 live, and another edge to keep in sync; a field duplicating what its caller already knows goes stale
 the first time only one of the two is set.
 
-A genuinely new distinction still has to land somewhere, and usually the structure says where:
-beside its siblings, in the module that owns the subject — extend that rather than adding a file
-next to it. Put it there and carry on; this rule is against a concept with no work to do, not
-against growth. Only where nothing suggests a natural home is there something to say, and then it
-is a finding about the layout, for a human rather than for a restructuring of your own.
-
-A project still laying its structure out is not the subject: there is nothing yet to fit into.
+A new distinction lands beside its siblings, in the module that owns the subject. Put it there
+without asking. Raise it only when nothing suggests a home: that is a finding about the layout, and
+a human decides it. This rule does not apply to a repository still laying out its structure.
 
 ### large-indent
 
