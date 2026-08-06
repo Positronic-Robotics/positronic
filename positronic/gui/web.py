@@ -364,48 +364,78 @@ class WebEvalUI(pimm.ControlSystem):
         async def ping():  # tiny + no work, so its round-trip measures the browser<->robot-host link
             return {}
 
-        # How long the harness gets to report the FINISH handled, and how long the home it then commands
-        # gets to reach the arm. Tune the settle at the rig if a far pose needs longer to home.
+        # How long the harness gets to report the FINISH handled, how long the arm then gets to report
+        # itself homing and to arrive, and the settle allowed instead to an embodiment whose arm never
+        # reports resetting at all.
         finalize_timeout_s = 30.0
+        home_start_grace_s = 3.0
+        home_arrive_timeout_s = 60.0
         home_settle_s = 5.0
+
+        async def _wrap_up():
+            nonlocal wrap_up_status
+            handled = status.directives_handled if status is not None else 0
+            wrap_up_status = _WrapUpStatus(_WrapUpState.FINALIZING)
+            self.directive.emit(Directive.FINISH(), clock.now_ns())
+            for _ in range(int(finalize_timeout_s / 0.1)):
+                current = status
+                # The harness's own directive count is what marks this FINISH handled. An idle phase
+                # does not: the status is a periodic sample, so it can predate the emit above.
+                if current is not None and current.directives_handled > handled and current.phase == Phase.IDLE:
+                    break
+                await asyncio.sleep(0.1)
+            else:
+                # A stop here would abort the still-open recording and skip homing, the failures this
+                # path exists to prevent, so a wedged harness is left up for a human.
+                _fail(
+                    f'The episode did not finalize within {finalize_timeout_s:.0f}s, so the run '
+                    'was left up. Retry, or investigate the harness on the robot host.'
+                )
+                return
+            if not await _homed():
+                return
+            # Setting the event is the only stop that survives a nohup launch, where SIGINT is SIG_IGN.
+            if isinstance(should_stop, pimm.world.EventReceiver):
+                should_stop._event.set()
+            else:
+                _fail('The stop signal is not event-backed, so the run was left up. Stop it on the host.')
+
+        async def _homed() -> bool:
+            """Wait for the commanded home to finish, reporting whether the World may now stop.
+
+            The arm reports itself resetting while it travels and stops reporting it on arrival, so a
+            fixed wait would be a guess about a distance — and a stop mid-motion parks the brakes
+            short of home, which is what this whole path exists to avoid.
+            """
+            for _ in range(int(home_start_grace_s / 0.1)):
+                if status is not None and status.robot_resetting:
+                    break
+                await asyncio.sleep(0.1)
+            else:
+                # Nothing reported it moving: an embodiment whose arm has no such state, or a home
+                # already reached. Neither can be waited on, so allow the settle and stop.
+                await asyncio.sleep(home_settle_s)
+                return True
+            for _ in range(int(home_arrive_timeout_s / 0.1)):
+                if status is not None and not status.robot_resetting:
+                    return True
+                await asyncio.sleep(0.1)
+            _fail(
+                f'The arm was still homing {home_arrive_timeout_s:.0f}s after the episode finalized, so the '
+                'run was left up rather than stopped mid-motion. Check the arm on the robot host.'
+            )
+            return False
+
+        def _fail(detail: str) -> None:
+            nonlocal wrap_up_status
+            wrap_up_status = _WrapUpStatus(_WrapUpState.FAILED, detail)
+            print(f'finish_run: {detail}')
 
         @app.post('/finish_run')
         async def finish_run():
             # The World may only stop once the harness has acknowledged finalizing the live episode and
             # homing: stopping it directly aborts an open recording and leaves the arm where it stands.
             # Returns as soon as the wrap-up is scheduled; the console follows it on GET /wrap_up.
-            async def _wrap_up():
-                nonlocal wrap_up_status
-                handled = status.directives_handled if status is not None else 0
-                wrap_up_status = _WrapUpStatus(_WrapUpState.FINALIZING)
-                self.directive.emit(Directive.FINISH(), clock.now_ns())
-                for _ in range(int(finalize_timeout_s / 0.1)):
-                    current = status
-                    # The harness's own directive count is what marks this FINISH handled. An idle phase
-                    # does not: the status is a periodic sample, so it can predate the emit above.
-                    if current is not None and current.directives_handled > handled and current.phase == Phase.IDLE:
-                        break
-                    await asyncio.sleep(0.1)
-                else:
-                    # A stop here would abort the still-open recording and skip homing, the failures this
-                    # path exists to prevent, so a wedged harness is left up for a human.
-                    _fail(
-                        f'The episode did not finalize within {finalize_timeout_s:.0f}s, so the run '
-                        'was left up. Retry, or investigate the harness on the robot host.'
-                    )
-                    return
-                await asyncio.sleep(home_settle_s)
-                # Setting the event is the only stop that survives a nohup launch, where SIGINT is SIG_IGN.
-                if isinstance(should_stop, pimm.world.EventReceiver):
-                    should_stop._event.set()
-                else:
-                    _fail('The stop signal is not event-backed, so the run was left up. Stop it on the host.')
-
-            def _fail(detail: str) -> None:
-                nonlocal wrap_up_status
-                wrap_up_status = _WrapUpStatus(_WrapUpState.FAILED, detail)
-                print(f'finish_run: {detail}')
-
             asyncio.create_task(_wrap_up())
             return {'wrapping_up': True}
 

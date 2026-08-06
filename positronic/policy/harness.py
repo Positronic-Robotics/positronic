@@ -10,6 +10,7 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
+from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy, Session
@@ -63,13 +64,14 @@ class HarnessStatus:
     ``robot_error`` is true only for the cycles a safety reflex is tripped, since the driver clears
     one every control cycle. ``directives_handled`` counts the directives the harness has processed,
     so a sender can tell a status that reflects its own directive from one sampled before it.
-    ``homes_commanded`` counts the home commands issued; the arm is still travelling to home for some
-    time after each one, and nothing here observes it arrive.
+    ``homes_commanded`` counts the home commands issued, and ``robot_resetting`` is the arm's own report
+    that it is still travelling to that home.
     """
 
     phase: Phase
     waiting_for_policy: bool
     robot_error: bool
+    robot_resetting: bool
     directives_handled: int
     homes_commanded: int
 
@@ -258,6 +260,7 @@ class Harness(pimm.ControlSystem):
     def _emit_status(self, clock: pimm.Clock, phase: Phase | None = None) -> None:
         """Publish the live episode state for an operator surface. Emits nowhere when nothing is bound."""
         phase = phase or (Phase.RUNNING if self._running else Phase.IDLE)
+        robot_status = self._robot_status()
         # A chunked policy emits one chunk and then plays it for its whole span, so a policy that is
         # driving looks idle from the last emit alone: the chunk's remaining horizon is what says it is
         # driving, plus a 0.5s grace covering the inter-chunk inference gap.
@@ -266,29 +269,26 @@ class Harness(pimm.ControlSystem):
             HarnessStatus(
                 phase=phase,
                 waiting_for_policy=bool(self._running and not driving),
-                robot_error=self._robot_in_error(),
+                robot_error=robot_status is RobotStatus.ERROR,
+                robot_resetting=robot_status is RobotStatus.RESETTING,
                 directives_handled=self._directives_handled,
                 homes_commanded=self._homes_commanded,
             ),
             clock.now_ns(),
         )
 
-    def _robot_in_error(self) -> bool:
-        """True iff the latest robot state reports ``RobotStatus.ERROR``.
+    def _robot_status(self) -> RobotStatus | None:
+        """The arm's latest reported status, or ``None`` where there is no arm state to read.
 
-        An embodiment with no robot state, or one that has not delivered yet, is not in error.
+        An embodiment with no robot state, or one that has not delivered yet, reports nothing.
         """
         if keys.ROBOT_STATE not in self.observations:
-            return False
-        # noqa: PLC0415 — lazy on purpose: the status path stays driver-agnostic, so a harness used
-        # with a non-roboarm embodiment never imports the driver package.
-        from positronic.drivers.roboarm import RobotStatus, State  # noqa: PLC0415
-
+            return None
         try:
             state = self.observations[keys.ROBOT_STATE].value
         except pimm.NoValueException:
-            return False
-        return isinstance(state, State) and state.status == RobotStatus.ERROR
+            return None
+        return state.status if isinstance(state, State) else None
 
     def _statics(self) -> dict[str, Any]:
         """What is known about the rig before the episode runs, live values winning."""
