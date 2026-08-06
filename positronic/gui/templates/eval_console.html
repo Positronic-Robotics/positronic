@@ -343,8 +343,7 @@
 
       // ─── Manual teleop: keyboard AND on-screen taps share ONE action path ─────────────────────────────
       // Manual commands are honoured by the harness only while it is idle, so both paths are inert during a
-      // run. doJog / doGripStep are the single actuators; keydown and the tappable legend rows both call
-      // them, so a keyboardless / touch surface (a tablet at the rig) drives the arm identically.
+      // run.
       const JOG_KEYS = { ...KEY_MAP.side, ...KEY_MAP.gripper };
 
       const flashRow = (code) => {
@@ -361,7 +360,7 @@
         const jogKey = JOG_KEYS[code];
         if (!jogKey) return;
         flashRow(code);
-        sendJog(jogKey.axis, jogKey.sign);   // fires per key-repeat / hold tick -> continuous jog
+        sendJog(jogKey.axis, jogKey.sign);
       };
       // Steps from the LIVE setpoint, so a slider drag in between is respected.
       const doGripStep = (code) => {
