@@ -37,7 +37,9 @@ as a named constant in a shared module.
 
 The same holds for any literal two pieces of code must spell identically — an environment-variable
 name, a filename two processes agree on, a wire field. Hoist it at the first duplication, into the module every
-consumer can import, usually the most constrained of them. Not a third copy neither side imports.
+consumer can import, usually the most constrained of them. Not a third copy neither side imports —
+and where there is no shared module at all, as across languages, name it once on each side, beside
+the code that parses it.
 
 Exception: a name the component itself owns and defines, rather than one it reads from its input.
 
