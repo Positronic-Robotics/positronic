@@ -134,7 +134,6 @@ runway_ziyi = production.override(
     endpoints={
         'fm150k_us': 'wss://runway-pythagoras-dev--gyros-fm150k-us-gyrosserver-web.modal.run',
         'fm_tsu_actuni_150k': 'wss://runway-pythagoras-dev--gyros-fm-tsu-actuni-150k-gyrosserver-web.modal.run',
-        'nm_n60_50k': 'wss://runway-pythagoras-dev--gyros-nm-n60-50k-gyrosserver-web.modal.run',
     },
     sampler=balanced,
     group_fields=EVAL_GROUP_FIELDS,
