@@ -442,14 +442,49 @@ def _carries_substitution(cmd: str) -> bool:
     return any(word == SUBST or '<(' in word or '>(' in word for segment in segments for word in segment)
 
 
-def _carries_expansion(words: list[str]) -> bool:
-    """Whether the shell builds any of `words` at runtime.
+# Shell syntax that turns one written word into arguments the text does not spell out: a parameter
+# expansion, whose value is word-split; a brace list; a glob, which matches as many names as it finds.
+EXPANDING_CHARS = '$*?[{'
+# `NAME=value` before the command word. Its value reaches the environment whole — never word-split
+# into arguments — so an expansion there says nothing about what the command is asked to do.
+ASSIGNMENT_RE = re.compile(r'\w+=')
 
-    An expansion's value is unknown before the command runs, and the shell word-SPLITS it after
-    it: `EXTRA='-R other/repo'; gh pr merge 566 $EXTRA` reaches gh as a repository selector no
-    authorization named. `$(…)` leaves a bare `$` among the tokens, which this reads the same way.
+
+def _expands(word: str) -> bool:
+    """Whether the shell builds `word` into something other than its own text.
+
+    Quoting is what decides, and it is per REGION rather than per word: `--subject='$x'` is a
+    literal while `--subject=$x` is not. A backslash escapes the character after it.
     """
-    return any('$' in word for word in words)
+    quote = ''
+    i = 0
+    while i < len(word):
+        c = word[i]
+        if quote:
+            quote = '' if c == quote else quote
+        elif c == '\\':
+            i += 1
+        elif c in '\'"':
+            quote = c
+        elif c in EXPANDING_CHARS:
+            return True
+        i += 1
+    return False
+
+
+def _carries_expansion(cmd: str) -> bool:
+    """Whether `cmd` hands the shell an argument its own text does not spell out.
+
+    `EXTRA='-R other/repo'; gh pr merge 566 $EXTRA` reaches gh as a repository selector no
+    authorization named, and `{-R,other/repo}` and a glob do the same with no `$` in sight. The
+    quoting that would make each one literal is removed before a word reaches `_segments`, so this
+    reads the command's own text.
+    """
+    try:
+        words = shlex.split(_strip_heredoc_bodies(cmd), posix=False)
+    except ValueError:
+        return True
+    return any(_expands(w) for w in words if not ASSIGNMENT_RE.match(w))
 
 
 def _sets_gh_repo(cmd: str) -> bool:
@@ -481,6 +516,9 @@ def _gh_repo(explicit: str, inv_dir: str | None, git: GitInfo, cmd: str, gh_repo
     return repo_slug(git.origin_url(inv_dir)) if inv_dir is not None else ''
 
 
+# gh's own spellings of the flag that selects a repository — the one value a merge is read for,
+# so every reader of it agrees here rather than repeating the pair.
+GH_REPO_FLAGS = ('-R', '--repo')
 # `gh pr merge` flags that consume the following argument, so its value is never the pull
 # request being merged: `gh pr merge --subject 566 999` merges 999.
 GH_MERGE_VALUE_FLAGS = frozenset({
@@ -493,8 +531,7 @@ GH_MERGE_VALUE_FLAGS = frozenset({
     '--match-head-commit',
     '-t',
     '--subject',
-    '-R',
-    '--repo',
+    *GH_REPO_FLAGS,
 })
 
 
@@ -526,7 +563,7 @@ def _gh_flag(word: str) -> tuple[bool, str, str]:
     if flag in GH_MERGE_VALUE_FLAGS:
         if not eq:
             return False, '', flag
-        return False, value if flag in ('-R', '--repo') else '', ''
+        return False, value if flag in GH_REPO_FLAGS else '', ''
     if word.startswith('--'):
         return False, '', ''
     short, attached = _gh_shorthand(word)
@@ -534,7 +571,7 @@ def _gh_flag(word: str) -> tuple[bool, str, str]:
         return True, '', ''
     if not attached:
         return False, '', short
-    return False, attached if short == '-R' else '', ''
+    return False, attached if short in GH_REPO_FLAGS else '', ''
 
 
 def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None, str]:
@@ -548,7 +585,7 @@ def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None, str]:
     repo = pending = ''
     for w in words:
         if pending:
-            repo, pending = (w if pending in ('-R', '--repo') else repo), ''
+            repo, pending = (w if pending in GH_REPO_FLAGS else repo), ''
         elif w.startswith('-'):
             asks_help, named, pending = _gh_flag(w)
             if asks_help:
@@ -667,7 +704,7 @@ def analyze(  # noqa: C901
         if is_merge:
             if in_substitution or _carries_substitution(cmd):
                 return MERGE_SUBSTITUTION_MSG
-            if _carries_expansion(inv.words):
+            if _carries_expansion(cmd):
                 return MERGE_EXPANSION_MSG
             if number is None:
                 return UNNUMBERED_MSG

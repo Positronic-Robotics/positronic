@@ -312,12 +312,23 @@ def test_a_repository_shorthand_selects_it_however_pflag_writes_it(git):
     assert verdict(git, f'gh pr merge 566 -dR{GUARDED}', allow_merge=lambda *_: True) is None
 
 
-def test_a_merge_word_the_shell_expands_is_refused(git):
-    """The shell splits an expansion into further arguments, `-R other/repo` among them."""
+def test_a_merge_word_the_shell_builds_is_refused(git):
+    """A brace list, a glob and an expansion each hand gh an argument the text does not spell out."""
     asked = []
-    for cmd in ('gh pr merge 566 $EXTRA', 'gh pr merge 566 $(echo -R someone/other)'):
+    for cmd in (
+        'gh pr merge 566 $EXTRA',
+        'gh pr merge 566 $(echo -R someone/other)',
+        'gh pr merge 566 {-R,someone/other}',
+        f'gh pr merge 566 --repo {GUARDED} --body-file /tmp/pr*.md',
+    ):
         assert verdict(git, cmd, allow_merge=lambda n, slug: asked.append(n) or True) is not None, cmd
     assert asked == []
+
+
+def test_a_quoted_dollar_is_a_literal_the_shell_never_builds(git):
+    """Quoting decides whether a `$` expands, and the tokenizer removes the quotes."""
+    cmd = f"gh pr merge 566 --repo {GUARDED} --subject 'Read $EXTRA as text'"
+    assert verdict(git, cmd, allow_merge=lambda *_: True) is None
 
 
 def test_a_merge_reading_its_token_from_a_substitution_still_passes(git):
