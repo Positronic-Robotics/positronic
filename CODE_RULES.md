@@ -35,8 +35,8 @@ Two remedies, by who owns the name. When callers may legitimately use different 
 parameter with a default for the usual one. When everyone must agree on the same name, define it once
 as a named constant in a shared module.
 
-The same holds for any literal two scopes must spell identically — an environment-variable name, a
-filename two processes agree on, a wire field. Hoist it at the first duplication, into the module every
+The same holds for any literal two pieces of code must spell identically — an environment-variable
+name, a filename two processes agree on, a wire field. Hoist it at the first duplication, into the module every
 consumer can import, usually the most constrained of them. Not a third copy neither side imports.
 
 Exception: a name the component itself owns and defines, rather than one it reads from its input.
