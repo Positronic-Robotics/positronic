@@ -296,13 +296,19 @@ Where a change must be referenced, cite something durable — a ticket, a tag, a
 that look like history and stay: a footgun the reader can still walk into, and a current limitation
 with its workaround.
 
-### baseline-grandfather
+### grandfathered-violation
 
-Never add an entry to `.basedpyright/baseline.json` for code in your own change — fix the diagnostic
-instead. The baseline holds the debt that existed when the ratchet landed: a file you write or touch
-lands clean, and typing an old file removes its entries.
+Don't silence a violation in code you write or touch — fix it. An exception list, whether a
+type-check baseline, a lint allowlist or a suppression file, is for one thing: a gate introduced
+over a codebase that already breaks it, where fixing everything first is impractical. It records
+the debt standing at that moment, and shrinks from there.
 
-The hook compares per-file counts, so it cannot see one diagnostic swapped for another under the same
-code, and re-anchoring line numbers absorbs new findings silently. That part is yours to hold. An
-import that genuinely cannot resolve takes a narrow `# pyright: ignore[reportMissingImports]` with a
-reason, so every other diagnostic in the file stays live.
+So a change may only remove entries. A file you add lands clean, and a file you touch loses the
+entries your change covers. The exception is a large refactor, which moves code it did not write:
+re-typing all of it would bury the change, so it may leave a touched file's existing entries alone.
+
+A limitation outside the code takes the narrowest suppression the tool offers, at the site, with a
+reason — an import that cannot resolve gets `# pyright: ignore[reportMissingImports]`, so every
+other diagnostic in that file stays live. `.basedpyright/baseline.json` is this repository's
+instance, and its hook compares per-file counts, so re-anchoring line numbers can absorb a new
+finding silently. That part is yours to hold.
