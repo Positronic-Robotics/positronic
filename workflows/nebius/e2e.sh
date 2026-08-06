@@ -175,16 +175,25 @@ for i in $(seq 1 50); do
   [ -n "$RESP" ] && break
   sleep 30
 done
+STATUS=0
 if [ -n "$RESP" ]; then
   note "infer: $RESP"
   # The endpoint is gated: the same call without the token must not reach the model list.
-  CODE=$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "$SERVE_URL/api/v1/models" 2>/dev/null || true)
-  [ "$CODE" = "401" ] && note "auth: tokenless request rejected (401)" || note "auth: FAIL, tokenless got $CODE"
+  CODE=$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "$SERVE_URL/api/v1/models")
+  if [ "$CODE" = "401" ]; then
+    note "auth: tokenless request rejected (401)"
+  else
+    note "auth: FAIL, tokenless got $CODE"
+    STATUS=1
+  fi
 else
   note "infer: TIMEOUT"
+  STATUS=1
 fi
 
 # ---- 5. Teardown ----
+# Runs whatever the smoke stage found, so a failure never leaves an H100 endpoint behind.
 note "teardown -> $ENDPOINT_NAME"
 bash "$SCRIPT_DIR/stop.sh" "$ENDPOINT_NAME" >> "$LOG" 2>&1 || true
 note "DONE"
+exit "$STATUS"

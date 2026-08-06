@@ -98,7 +98,7 @@ then `cd ../positronic/docker && make push-openpi`. See `docker/CONTEXTS.md`.
 The pipeline reads credentials from Nebius MysteryBox secrets and uses a shared
 filesystem for `uv`/HF/openpi caches. This is already provisioned for the
 Positronic-internal project. To (re)create it for a different project, follow
-"One-time setup" in `workflows/nebius/README.md` (four MysteryBox secrets +
+"One-time setup" in `workflows/nebius/README.md` (five MysteryBox secrets +
 one `network_ssd` filesystem).
 
 Defaults point at the Positronic-internal project; override via env when needed:
@@ -108,6 +108,7 @@ Defaults point at the Positronic-internal project; override via env when needed:
 | `NEBIUS_PARENT_ID` | `project-e00f38wexevrr52b8j` | Project to create jobs/endpoints in |
 | `NEBIUS_SUBNET_ID` | `vpcsubnet-e00pk1j1x6hjmr4m92` | VPC subnet |
 | `WANDB_SECRET` | `positronic-serverless-wandb-api-key` | MysteryBox name for WandB key. Set empty to disable wandb. |
+| `NEBIUS_AUTH_TOKEN_SECRET` | `positronic-serverless-inference-token` | MysteryBox name (payload key `AUTH_TOKEN`) for the token gating served endpoints. No open-endpoint mode. |
 | `NEBIUS_CACHE_FS` | `computefilesystem-e00f6jyfr5wkawyrab` | Shared cache filesystem **ID** (mounted RW at `/cache`) |
 
 ## Pipeline
