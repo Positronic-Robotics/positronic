@@ -239,7 +239,8 @@ diagnose than one that raises, and a fallback becomes the path everything quietl
 
 This is about hiding a failure, and neither an exception nor an absence is always one. Where a
 contract says the value may not be there — `Empty` from a non-blocking `get`, a cache the format
-declares optional — reading that and going on is how the contract is used, not a fallback.
+declares optional — reading that and going on is how the contract is used, not a fallback. A retry
+that re-raises when it gives up hides nothing either: the failure still reaches the caller.
 
 Where a failure genuinely must not stop the caller — one malformed file in a scan, an optional
 feature, a cleanup — catch that specific exception, log it at ERROR with what failed, and say in one
