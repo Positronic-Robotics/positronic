@@ -254,42 +254,40 @@ class Harness(pimm.ControlSystem):
         self._directives_handled = 0
 
     def _emit_status(self, clock: pimm.Clock, phase: Phase | None = None) -> None:
-        """Best-effort live status for an operator surface. Never raises into the run loop."""
-        try:
-            phase = phase or (Phase.RUNNING if self._running else Phase.IDLE)
-            age = (time.monotonic() - self._last_action_ts) if (self._running and self._last_action_ts) else None
-            # A chunked policy emits one chunk and then plays it for its whole span, so a policy that is
-            # driving looks idle from the last emit alone: the chunk's remaining horizon is what says it is
-            # driving, plus a 0.5s grace covering the inter-chunk inference gap.
-            driving = self._chunk_end_s is not None and clock.now() <= self._chunk_end_s + 0.5
-            self.status.emit(
-                HarnessStatus(
-                    phase=phase,
-                    waiting_for_policy=bool(self._running and not driving),
-                    last_action_age_s=age,
-                    robot_error=self._robot_in_error(),
-                    directives_handled=self._directives_handled,
-                ),
-                clock.now_ns(),
-            )
-        except Exception:
-            pass
+        """Publish the live episode state for an operator surface. Emits nowhere when nothing is bound."""
+        phase = phase or (Phase.RUNNING if self._running else Phase.IDLE)
+        age = (time.monotonic() - self._last_action_ts) if (self._running and self._last_action_ts) else None
+        # A chunked policy emits one chunk and then plays it for its whole span, so a policy that is
+        # driving looks idle from the last emit alone: the chunk's remaining horizon is what says it is
+        # driving, plus a 0.5s grace covering the inter-chunk inference gap.
+        driving = self._chunk_end_s is not None and clock.now() <= self._chunk_end_s + 0.5
+        self.status.emit(
+            HarnessStatus(
+                phase=phase,
+                waiting_for_policy=bool(self._running and not driving),
+                last_action_age_s=age,
+                robot_error=self._robot_in_error(),
+                directives_handled=self._directives_handled,
+            ),
+            clock.now_ns(),
+        )
 
     def _robot_in_error(self) -> bool:
-        """Best-effort read of the latest robot state: True iff it reports ``RobotStatus.ERROR``.
+        """True iff the latest robot state reports ``RobotStatus.ERROR``.
 
-        Any gap — no observation yet, or a state of another shape — is False, so a status emit never
-        raises and never raises a false alarm.
+        An embodiment with no robot state, or one that has not delivered yet, is not in error.
         """
-        try:
-            # noqa: PLC0415 — lazy on purpose: the status path stays driver-agnostic, so a harness
-            # used with a non-roboarm embodiment never imports the driver package.
-            from positronic.drivers.roboarm import RobotStatus, State  # noqa: PLC0415
-
-            state = self.observations[keys.ROBOT_STATE].value
-            return isinstance(state, State) and state.status == RobotStatus.ERROR
-        except Exception:
+        if keys.ROBOT_STATE not in self.observations:
             return False
+        # noqa: PLC0415 — lazy on purpose: the status path stays driver-agnostic, so a harness used
+        # with a non-roboarm embodiment never imports the driver package.
+        from positronic.drivers.roboarm import RobotStatus, State  # noqa: PLC0415
+
+        try:
+            state = self.observations[keys.ROBOT_STATE].value
+        except pimm.NoValueException:
+            return False
+        return isinstance(state, State) and state.status == RobotStatus.ERROR
 
     def _statics(self) -> dict[str, Any]:
         """What is known about the rig before the episode runs, live values winning."""

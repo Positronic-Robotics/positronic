@@ -36,14 +36,6 @@ class _GripBody(BaseModel):
 _TRANSLATION_AXES = {'x': 0, 'y': 1, 'z': 2}
 _ROTATION_AXES = {'rx': 0, 'ry': 1, 'rz': 2}
 
-# /finish_run, when an episode is live, ends it via the harness FINISH path (finalize + home) BEFORE
-# stopping the World; these bound that wait. FINALIZE_TIMEOUT caps how long we wait for the harness to
-# report idle (episode committed + home commanded); HOME_SETTLE then lets the commanded home motion
-# actually reach the arm before the World stops the robot. Tune HOME_SETTLE at the rig if a far pose
-# needs longer to home.
-_FINISH_FINALIZE_TIMEOUT_S = 30.0
-_FINISH_HOME_SETTLE_S = 5.0
-
 # Serves GET /status until the harness emits, so the endpoint's shape never varies.
 _NO_STATUS = HarnessStatus(
     phase=Phase.IDLE, waiting_for_policy=False, last_action_age_s=None, robot_error=False, directives_handled=0
@@ -331,6 +323,11 @@ class WebEvalUI(pimm.ControlSystem):
         async def ping():  # tiny + no work, so its round-trip measures the browser<->robot-host link
             return {}
 
+        # How long the harness gets to report the FINISH handled, and how long the home it then commands
+        # gets to reach the arm. Tune the settle at the rig if a far pose needs longer to home.
+        finalize_timeout_s = 30.0
+        home_settle_s = 5.0
+
         @app.post('/finish_run')
         async def finish_run():
             # The World may only stop once the harness has acknowledged finalizing the live episode and
@@ -340,7 +337,7 @@ class WebEvalUI(pimm.ControlSystem):
                 handled = (status_holder['value'] or _NO_STATUS).directives_handled
                 wrap_up_holder['value'] = _WrapUpStatus(_WrapUpState.FINALIZING)
                 self.directive.emit(Directive.FINISH(), clock.now_ns())
-                for _ in range(int(_FINISH_FINALIZE_TIMEOUT_S / 0.1)):
+                for _ in range(int(finalize_timeout_s / 0.1)):
                     current = status_holder['value']
                     # The harness's own directive count is what marks this FINISH handled. An idle phase
                     # does not: the status is a periodic sample, so it can predate the emit above.
@@ -351,11 +348,11 @@ class WebEvalUI(pimm.ControlSystem):
                     # A stop here would abort the still-open recording and skip homing, the failures this
                     # path exists to prevent, so a wedged harness is left up for a human.
                     _fail(
-                        f'The episode did not finalize within {_FINISH_FINALIZE_TIMEOUT_S:.0f}s, so the run '
+                        f'The episode did not finalize within {finalize_timeout_s:.0f}s, so the run '
                         'was left up. Retry, or investigate the harness on the robot host.'
                     )
                     return
-                await asyncio.sleep(_FINISH_HOME_SETTLE_S)
+                await asyncio.sleep(home_settle_s)
                 # Setting the event is the only stop that survives a nohup launch, where SIGINT is SIG_IGN.
                 if isinstance(should_stop, pimm.world.EventReceiver):
                     should_stop._event.set()
