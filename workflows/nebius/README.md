@@ -309,7 +309,7 @@ endpoint proxies WebSockets fine; it is the combination that fails.
 
 That ingress also closes any connection it has read nothing from for ~90 seconds. Longer than
 that passes during a cold checkpoint's first inference, so the client holds sessions open with
-WebSocket pings (`PING_INTERVAL` in `positronic/offboard/client.py`).
+WebSocket pings (the `ping_interval` its `connect` call passes, in `positronic/offboard/client.py`).
 
 Rotate the token by adding a new primary version:
 

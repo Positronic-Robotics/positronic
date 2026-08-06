@@ -18,10 +18,6 @@ logger = logging.getLogger(__name__)
 # outlast that compile (still surfacing a stalled/half-open connection), and let callers override per use.
 DEFAULT_INFER_TIMEOUT = 180.0
 
-# A proxy between client and server closes a connection it has read nothing from, often after 60s — well
-# inside one ``DEFAULT_INFER_TIMEOUT`` inference, which sends nothing until it answers.
-PING_INTERVAL = 20.0
-
 
 class InferenceSession:
     def __init__(self, websocket: Connection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
@@ -169,11 +165,14 @@ class InferenceClient:
         while True:
             ws = None
             try:
+                # A proxy between here and the server closes a connection it has read nothing from, often
+                # after 60s — well inside one ``infer_timeout`` inference, which sends nothing until it
+                # answers. The pings keep it open.
                 ws = connect(
                     self.session_url,
                     open_timeout=self.open_timeout,
                     additional_headers=self.headers,
-                    ping_interval=PING_INTERVAL,
+                    ping_interval=20.0,
                 )
                 return InferenceSession(ws, infer_timeout=self.infer_timeout)
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
