@@ -28,9 +28,9 @@ from positronic.utils import merge_dicts
 
 _QUAT = geom.Rotation.Representation.QUAT
 
-# LeRobot's reserved dataset column for the language prompt, and the default model-input field the codecs
-# emit it under. Distinct from the raw wire key ``keys.TASK`` the prompt is read from — same string, different
-# namespace (a checkpoint may serve the prompt under another field, e.g. openpi's ``prompt``).
+# LeRobot's reserved dataset column for the language prompt, hence the default field a codec serves it under —
+# a checkpoint trained elsewhere overrides that (openpi's DROID models read ``prompt``). Distinct from
+# ``keys.TASK``, the wire key the prompt is read from: same string, different namespace.
 LEROBOT_TASK = 'task'
 
 
