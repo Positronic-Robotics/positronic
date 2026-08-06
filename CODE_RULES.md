@@ -1,6 +1,13 @@
 # Code Rules
 
-Judgment rules for this repository — the checks a linter cannot make.
+Judgment rules for Positronic code — the checks a linter cannot make. They hold in every Positronic
+repository, not only this one. This file is the only copy: a repository that carries no
+`CODE_RULES.md` of its own is checked against this one, read from `main`.
+
+So every rule here is general. One that turns on a single repository's architecture, layout or
+tooling is not a code rule and belongs in that repository's own docs, beside its subject. An
+*example* drawn from this repository is not that, and stays — a rule is easier to apply from real
+code than from an abstraction.
 
 Every rule has an **id** — its heading. Cite it when reporting, fixing, or waiving a violation. Add and
 recalibrate rules through the `add-rule` skill.
@@ -35,6 +42,12 @@ Two remedies, by who owns the name. When callers may legitimately use different 
 parameter with a default for the usual one. When everyone must agree on the same name, define it once
 as a named constant in a shared module.
 
+The same holds for any literal two pieces of code must spell identically — an environment-variable
+name, a filename two processes agree on, a wire field. Hoist it at the first duplication, into the module every
+consumer can import, usually the most constrained of them. Not a third copy neither side imports —
+and where there is no shared module at all, as across languages, name it once on each side, beside
+the code that parses it.
+
 Exception: a name the component itself owns and defines, rather than one it reads from its input.
 
 ```python
@@ -60,6 +73,10 @@ Generalise until it simplifies, and stop there. Past that point the signature st
 and the caller must read the implementation to know what to pass — the same mistake pointed the other
 way. This is a matter of taste and does not reduce to a measurement: judge the result as a reader, not
 by counting.
+
+Widening what a component accepts is not the same as weakening how its values are typed. Sharpening a
+type is `primitive-type` and is never overspecification: it constrains what a value may be, not what
+the component may be asked to do.
 
 ```python
 # Bad — assumes every key belongs to exactly one category, and that the categories need different handling
@@ -169,3 +186,147 @@ def _as_transform(value):
 if not isinstance(transform, Transform3D):
     transform = Transform3D.from_vector(np.asarray(transform), QUAT)
 ```
+### primitive-type
+
+Don't leave a value typed by its representation when its domain has a type of its own: a filesystem
+path is a `Path`, a bounded set of strings is an enum, a return a caller can only read by position is
+a named struct. The primitive carries none of the domain's meaning or operations, so every consumer
+re-derives what the value holds.
+
+Some domains own a primitive, and then the primitive is the specific type. This is about a
+representation standing in for a domain, not about preferring the richer-looking type. A pair
+unpacked where it is called, each element typed, re-derives nothing either: a struct over
+`(emitter, receiver)` would restate the call site (`earn-its-place`).
+
+An enum is the case that can go either way. If this code dispatches on the set — a `match`, an `if`
+ladder against literals — the set is closed and the type only says so; a value this code passes
+through untouched is not yours to close. Once it is an enum, iterate it rather than restating its
+members.
+
+Convert once, where the value enters: a CLI token, an environment variable, a wire field. A union of
+a type with its own string form is that conversion left undone, pushed onto every consumer. Don't
+let the annotation lie — where a framework hands the value through uncoerced, keep the honest `str`
+and convert immediately inside, or fix the framework.
+
+```python
+# Bad
+def record(recording_dir: str | Path): ...
+
+if state == 'OPEN': ...
+elif state == 'CLOSED': ...
+
+# Good
+def record(recording_dir: Path): ...
+
+if state is GripperState.OPEN: ...
+```
+
+### optional-lie
+
+Don't type a value `X | None` when it is never `None`. The annotation says `None` is a case this code
+handles, so every consumer writes the guard — and the guard that matters is then indistinguishable
+from the ones that are dead.
+
+Where the value really is sometimes absent, say when it is: a default in the signature, or a
+distinct state. `None` meaning both "not supplied" and "not applicable" is the same lie one level
+down.
+
+### swallowed-error
+
+Don't catch an exception so the code can carry on, and don't fall back to a second path when the first
+comes back empty. Let the failure surface: a pipeline that silently yields nothing is harder to
+diagnose than one that raises, and a fallback becomes the path everything quietly runs through.
+
+This is about hiding a failure, and neither an exception nor an absence is always one. Where a
+contract says the value may not be there — `Empty` from a non-blocking `get`, a cache the format
+declares optional — reading that and going on is how the contract is used, not a fallback. A retry
+that re-raises when it gives up hides nothing either: the failure still reaches the caller.
+
+Where a failure genuinely must not stop the caller — one malformed file in a scan, an optional
+feature, a cleanup — catch that specific exception, log it at ERROR with what failed, and say in one
+line why continuing is correct. `except Exception: pass` says none of it.
+
+```python
+# Bad
+try:
+    meta = _read_meta(path)
+except Exception:
+    continue
+
+# Good
+try:
+    meta = _read_meta(path)
+except json.JSONDecodeError:
+    logger.error('Skipping %s: malformed episode meta', path)
+    continue
+```
+
+### earn-its-place
+
+Don't add a class, file, field or parameter for a distinction the code already encodes. Check each of
+the places one can already live — the dict an entry sits in, an enum member, the calling context, a
+module that owns the subject — and use that instead.
+
+The cost is not the lines. Every new type is another thing a reader holds, another place a value can
+live, and another edge to keep in sync; a field duplicating what its caller already knows goes stale
+the first time only one of the two is set.
+
+A new distinction lands beside its siblings, in the module that owns the subject. Put it there
+without asking. Raise it only when nothing suggests a home: that is a finding about the layout, and
+a human decides it. This rule does not apply to a repository still laying out its structure.
+
+### large-indent
+
+Don't let a block grow into a wall of indented code. A long loop or branch body is a function
+waiting to be named and extracted, a long `try` is the same with the boundary in the wrong place,
+and a whole function body inside a `with` is a decorator. What is left then reads as what it does,
+with no enclosing condition to hold in mind.
+
+Keep the `with` where no decorator can be reached: a decorator is evaluated where the function is
+defined, so it never sees `self._lock`, and only a `ContextDecorator` works as one. Keep it too
+where the `as` value is used, or where the context must wrap the work rather than the call — a
+`ContextDecorator` on an `async def` opens and closes while the coroutine is merely being created,
+and on a generator it spans the call rather than the `yield`s.
+
+```python
+# Bad
+def step(self, action):
+    with telemetry.span('env.step'):
+        ...
+
+# Good
+@telemetry.traced('env.step')
+def step(self, action):
+    ...
+```
+
+### stale-doc
+
+Don't write a document against its own past — no "previously", no "this PR", no "as of this writing",
+no resolved-while-writing note, no struck-through section kept for context. State what holds now. The
+reader has no access to the past state, so prose written against it is noise that ages into a lie.
+
+Don't keep worklogs — status, progress or implementation-summary files. Move what is still true
+into the document that owns the subject, and delete the rest. A changelog is the exception: history
+is its subject.
+
+Where a change must be referenced, cite something durable — a ticket, a tag, a version. Two things
+that look like history and stay: a footgun the reader can still walk into, and a current limitation
+with its workaround.
+
+### grandfathered-violation
+
+Don't silence a violation in code you write or touch — fix it. An exception list — a type-check
+baseline, a lint allowlist, a suppression file — is for one case: a gate landing on a codebase that
+already breaks it, where fixing everything first is impractical. It records the debt standing that
+day, and shrinks from there.
+
+So a change may only remove entries. A file you add lands clean, and a file you touch loses the
+entries your change covers. The exception is a large refactor, which moves code it did not write:
+re-typing all of it would bury the change, so it may leave a touched file's existing entries alone.
+
+A limitation outside the code takes the narrowest suppression the tool offers, at the site, with a
+reason: an import that cannot resolve gets `# pyright: ignore[reportMissingImports]`, leaving every
+other diagnostic in that file live. Where the gate compares per-file counts rather than entries —
+`.basedpyright/baseline.json` is one such baseline — re-anchoring line numbers can absorb a new
+finding without it noticing, so check that yourself.

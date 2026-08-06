@@ -40,12 +40,22 @@ The incident is also where the rule's example comes from, so capture it before i
 
 ## Step 2: Rule out the cheaper homes
 
-Two checks, both of which kill the rule if they hit: whether ruff or basedpyright already covers it
-(`pyproject.toml`), and whether an existing rule does (`CODE_RULES.md`).
+Three checks, each of which kills the rule if it hits: whether ruff or basedpyright already covers it
+(`pyproject.toml`), whether an existing rule does (`CODE_RULES.md`), and whether it is general at all.
 
 If ruff or basedpyright could catch it, enable the check there instead and stop. If an existing rule
 covers it, sharpen that rule rather than adding a second one — overlapping rules make findings
 ambiguous about which one was violated.
+
+**And if it only holds in one repository, it does not go here.** `CODE_RULES.md` is read by every
+Positronic repository, so a rule turning on one repository's architecture, layout or tooling spends
+every other repository's review attention on something that cannot apply to it — and fires there as
+a false positive, which is how a rule set stops being read. Write it in that repository's own
+architecture doc or `AGENTS.md`, where its subject lives, and say that is where it went.
+
+The test: strip the names of the modules, directories and tools it mentions. If nothing is left, the
+rule was about this repository's shape. An *example* from real code is not that — a rule stated
+generally and illustrated concretely is the shape to aim for.
 
 ## Step 3: Draft it
 

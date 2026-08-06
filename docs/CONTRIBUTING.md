@@ -119,6 +119,19 @@ uv run ruff check --fix .   # Auto-fix linting issues
 uv run ruff format .         # Format code
 ```
 
+## Code Rules
+
+[CODE_RULES.md](../CODE_RULES.md) carries the judgment rules Ruff cannot check. Each rule has an id,
+and a review cites that id, applying the rules in force on the day. Where a rule is genuinely wrong
+for one line, waive it at that line:
+
+```python
+# rules-allow: <rule-id> — <why this instance is correct>
+```
+
+[ARCHITECTURE.md](../ARCHITECTURE.md) says what a policy, a driver, a simulator and a recording may
+assume about each other. Read it before adding one of them.
+
 ## Testing
 
 All new features should include tests. Run the test suite with:
@@ -140,7 +153,7 @@ uv run pytest --cov=positronic --cov=pimm --cov-report=term-missing
 - Include tests for new functionality
 - Update documentation as needed
 - All CI checks must pass
-- Follow the existing code style
+- Follow the code style above and the named rules in [CODE_RULES.md](../CODE_RULES.md)
 
 ## Questions?
 
