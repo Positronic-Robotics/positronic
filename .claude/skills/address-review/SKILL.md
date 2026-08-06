@@ -286,12 +286,15 @@ When the watcher exits and you are re-invoked:
   your prior reasoning, then **stop and surface it for the user**; never loop into forcing a
   fix you disagree with.
 - **exit 20** — converged: CI is green on the pushed commit, a reviewer signed off (Codex 👍
-  newer than your push, or a human approval), and every comment carries your reply. The sign-off
-  is the ratification a declined or deferred thread was waiting for, so **resolve those before
-  reporting** — what stays open is only what a person has still not answered: a question they
-  asked, a call escalated to them. Give the final report and **notify the user** (a push
-  notification if available) that the review loop is done — they walked away expecting to be
-  pinged.
+  newer than your push, or a human approval), and every comment carries your reply. A sign-off
+  ratifies a decline only where it comes from the party the decline is owed to: a **human's**
+  approval settles what you declined of a **bot's** findings, and a human's own comment is
+  settled by that human alone — a bot's 👍 says nothing about whether they accepted your
+  reasoning, and neither does a second reviewer's approval about the first one's thread.
+  **Resolve what is ratified before reporting**; what stays open is what a person has still not
+  answered — a question they asked, a call escalated to them, a decline of their own comment.
+  Give the final report and **notify the user** (a push notification if available) that the
+  review loop is done — they walked away expecting to be pinged.
 - **exit 30** — a quiet interval elapsed with no CI failure, new round, or sign-off. The PR
   isn't done, so **don't stop**: relaunch the watcher to keep waiting (reviewers and slow CI can
   take far longer than one interval). Only after several consecutive quiet cycles — i.e. a long
