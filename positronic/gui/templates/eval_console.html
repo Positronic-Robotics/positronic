@@ -17,8 +17,7 @@
       .status-warn .dot { background:#fbbf24; box-shadow:0 0 8px #fbbf24; }
       .status-bad  .dot { background:#f87171; box-shadow:0 0 8px #f87171; }
       .status-idle .dot { background:#60a5fa; }
-      /* Reflex / robot-error banner: a latched safety error aborts every move (jog + policy)
-         while a jog still returns 200, so it must be unmistakable. */
+      /* Banner for a tripped safety reflex. */
       .reflex-banner { background:#b91c1c; color:#fff; font-weight:600; font-size:0.9rem;
         padding:0.6rem 1rem; border-radius:0.4rem; margin-bottom:0.6rem; line-height:1.35;
         border:1px solid #fca5a5; animation:reflexpulse 1.1s ease-in-out infinite; }
@@ -444,7 +443,7 @@
       const statusBadge = document.getElementById('status-badge');
       const statusText = document.getElementById('status-text');
       // The "waiting/loading" elapsed is timed client-side, so it keeps ticking while the harness is
-      // blocked: anything measured on its side stops with it, which is when the operator most wants it.
+      // blocked: anything measured on its side stops with it.
       let lastStatus = undefined;   // undefined = /status 404 (old backend); null = fetch error; else the object
       let lastFetchAt = 0;          // when the last sample came off the wire — the 200ms re-render does not count
       let waitSince = null;         // client timestamp when the current waiting/loading stretch began
