@@ -221,7 +221,7 @@ gh api graphql -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:
 ```
 
 **Resolve a settled thread whichever way it settled** — a landed fix, or a ratified decline/deferral (the reply records the reasoning either way). **Leave open** only what
-still needs them: a decline they have not seen, a "why…?"/"should we…?" they opened on purpose,
+still needs them: a decline they have not answered, a "why…?"/"should we…?" they opened on purpose,
 a design call you escalated.
 
 ## Step 6: Report
