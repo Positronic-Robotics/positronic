@@ -36,11 +36,6 @@ class _GripBody(BaseModel):
 _TRANSLATION_AXES = {'x': 0, 'y': 1, 'z': 2}
 _ROTATION_AXES = {'rx': 0, 'ry': 1, 'rz': 2}
 
-# Serves GET /status until the harness emits, so the endpoint's shape never varies.
-_NO_STATUS = HarnessStatus(
-    phase=Phase.IDLE, waiting_for_policy=False, last_action_age_s=None, robot_error=False, directives_handled=0
-)
-
 
 class _WrapUpState(StrEnum):
     IDLE = 'idle'
@@ -313,7 +308,12 @@ class WebEvalUI(pimm.ControlSystem):
 
         @app.get('/status')
         async def status():
-            return dataclasses.asdict(status_holder['value'] or _NO_STATUS)
+            current = status_holder['value']
+            # A harness that has published nothing is not an idle harness: answering idle here would
+            # enable teleop over a rollout whose status never reached this process.
+            if current is None:
+                raise HTTPException(status_code=503, detail='the harness has published no status')
+            return dataclasses.asdict(current)
 
         @app.get('/wrap_up')
         async def wrap_up():
@@ -334,7 +334,8 @@ class WebEvalUI(pimm.ControlSystem):
             # homing: stopping it directly aborts an open recording and leaves the arm where it stands.
             # Returns as soon as the wrap-up is scheduled; the console follows it on GET /wrap_up.
             async def _wrap_up():
-                handled = (status_holder['value'] or _NO_STATUS).directives_handled
+                before = status_holder['value']
+                handled = before.directives_handled if before is not None else 0
                 wrap_up_holder['value'] = _WrapUpStatus(_WrapUpState.FINALIZING)
                 self.directive.emit(Directive.FINISH(), clock.now_ns())
                 for _ in range(int(finalize_timeout_s / 0.1)):

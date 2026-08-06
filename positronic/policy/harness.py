@@ -67,7 +67,6 @@ class HarnessStatus:
 
     phase: Phase
     waiting_for_policy: bool
-    last_action_age_s: float | None
     robot_error: bool
     directives_handled: int
 
@@ -249,14 +248,12 @@ class Harness(pimm.ControlSystem):
         # Live status for an operator surface (e.g. WebEvalUI): episode phase + whether the policy is
         # currently producing actions. Additive and best-effort — left unconnected in sim/unattended.
         self.status = pimm.ControlSystemEmitter(self)
-        self._last_action_ts: float | None = None
         self._chunk_end_s: float | None = None  # last waypoint time of the current chunk = its drive horizon
         self._directives_handled = 0
 
     def _emit_status(self, clock: pimm.Clock, phase: Phase | None = None) -> None:
         """Publish the live episode state for an operator surface. Emits nowhere when nothing is bound."""
         phase = phase or (Phase.RUNNING if self._running else Phase.IDLE)
-        age = (time.monotonic() - self._last_action_ts) if (self._running and self._last_action_ts) else None
         # A chunked policy emits one chunk and then plays it for its whole span, so a policy that is
         # driving looks idle from the last emit alone: the chunk's remaining horizon is what says it is
         # driving, plus a 0.5s grace covering the inter-chunk inference gap.
@@ -265,7 +262,6 @@ class Harness(pimm.ControlSystem):
             HarnessStatus(
                 phase=phase,
                 waiting_for_policy=bool(self._running and not driving),
-                last_action_age_s=age,
                 robot_error=self._robot_in_error(),
                 directives_handled=self._directives_handled,
             ),
@@ -391,7 +387,6 @@ class Harness(pimm.ControlSystem):
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
         # Fresh episode: no policy action yet, so "waiting for policy" until the first chunk.
-        self._last_action_ts = None
         self._chunk_end_s = None
         self._emit_status(clock, phase=Phase.STARTING)
         # The status channel holds one slot and a surface is a peer in this loop, so this phase is only
@@ -537,7 +532,6 @@ class Harness(pimm.ControlSystem):
         actions = self._policy_session(frozen_view(obs))
         if actions is None:
             return
-        self._last_action_ts = time.monotonic()  # policy responded with a chunk -> it is communicating
         delay = self._inference_delay(wall_start)
         if delay > 0.0:
             yield pimm.Sleep(delay)

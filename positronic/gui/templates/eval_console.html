@@ -220,54 +220,47 @@
         for (const button of directiveButtons) button.disabled = ack !== null;
       };
 
-      for (const button of directiveButtons) {
-        button.addEventListener('click', () => {
-          const action = button.dataset.action;
-          const from = serverPhase();
-          // Predict whether the harness will act, so the ack reflects the real transition rather than the
-          // transport response, which only says the POST was received. Mirrors Harness._handle_directive:
-          // only RUN is guarded, on an episode already being live.
-          const willAct = action === 'start' ? !isActivePhase(from) : true;
-          const target = action === 'start' ? isActivePhase : (p) => p === 'idle';
-          if (!willAct) {
-            // A directive the harness would ignore is not queued: it would be handled on a later phase
-            // where it is valid, starting an episode the operator was told did not start.
-            showAck(`${ACK[action]} — not sent (phase is ${from ?? 'unknown'})`, false);
-            setAckPending(null);
-            return;  // nothing sent, so nothing about the arm changed — leave the controls alone
-          }
-          fetch('/directive/' + action, { method: 'POST' })
-            .then((r) => { if (!r.ok) { showAck(`${ACK[action]} — FAILED (${r.status})`, false); setAckPending(null); } })
-            .catch(() => { showAck(`${ACK[action]} — no response`, false); setAckPending(null); });
-          showAck(`${ACK[action]} — sent…`, true);
-          // `sentAt` and `handled` are what stop a status sampled before the click resolving this: the
-          // 200ms re-render runs over the last sample, and a phase this directive leaves unchanged is
-          // indistinguishable from one it has not reached yet.
-          setAckPending({
-            label: ACK[action],
-            ok: target,
-            deadline: performance.now() + 5000,
-            sentAt: performance.now(),
-            handled: lastStatus && typeof lastStatus === 'object' ? lastStatus.directives_handled : undefined,
-          });
-          if (action !== 'start') {  // both Save & Home and Discard & Home end with the arm homing
-            awaitingPark = true;
-            offerPark();
-          }
-          // The harness homes the gripper open (target_grip 0) on every episode boundary, but this
-          // browser-side setpoint is never updated by policy/homing — resync it so the next grip step
-          // starts from 0, not a stale pre-episode value (e.g. a full-close instead of a fine step).
-          // Past the early return the harness WILL act, so the home is coming: an ignored directive
-          // homes nothing, and zeroing the setpoint there would make the next fine close command 0.1
-          // and OPEN a gripper the operator had just closed by hand.
-          reflectGrip(0);
-          // A click may only ever DISABLE teleop, never enable it. Save/Discard leaves the harness busy:
-          // _end_episode yields before issuing _home, and a manual command sent in that gap sits in the
-          // last-value-wins channel and is applied on the first idle iteration AFTER the home — moving the
-          // arm back off home while the button claimed it homed. Re-enabling is renderStatus's job, off the
-          // harness's own phase, which turns idle only once _end_episode has issued the home.
-          setRunning(true);
+      const sendDirective = (action) => {
+        const from = serverPhase();
+        // Predict whether the harness will act, so the ack reflects the real transition rather than the
+        // transport response, which only says the POST was received. Mirrors Harness._handle_directive:
+        // only RUN is guarded, on an episode already being live.
+        const willAct = action === 'start' ? !isActivePhase(from) : true;
+        const target = action === 'start' ? isActivePhase : (p) => p === 'idle';
+        if (!willAct) {
+          // A directive the harness would ignore is not queued: it would be handled on a later phase
+          // where it is valid, starting an episode the operator was told did not start.
+          showAck(`${ACK[action]} — not sent (phase is ${from ?? 'unknown'})`, false);
+          setAckPending(null);
+          return;  // nothing sent, so nothing about the arm changed — leave the controls alone
+        }
+        fetch('/directive/' + action, { method: 'POST' })
+          .then((r) => { if (!r.ok) { showAck(`${ACK[action]} — FAILED (${r.status})`, false); setAckPending(null); } })
+          .catch(() => { showAck(`${ACK[action]} — no response`, false); setAckPending(null); });
+        showAck(`${ACK[action]} — sent…`, true);
+        // `sentAt` and `handled` are what stop a status sampled before the click resolving this: the
+        // 200ms re-render runs over the last sample, and a phase this directive leaves unchanged is
+        // indistinguishable from one it has not reached yet.
+        setAckPending({
+          label: ACK[action],
+          ok: target,
+          deadline: performance.now() + 5000,
+          sentAt: performance.now(),
+          handled: lastStatus && typeof lastStatus === 'object' ? lastStatus.directives_handled : undefined,
         });
+        if (action !== 'start') {  // both Save & Home and Discard & Home end with the arm homing
+          awaitingPark = true;
+          offerPark();
+        }
+        // The harness homes the gripper open on every episode boundary, and nothing else updates this
+        // setpoint, so the next step would start from a stale pre-episode value.
+        reflectGrip(0);
+        // A click may only ever DISABLE teleop, never enable it: the harness is busy until it publishes
+        // idle, and a manual command sent meanwhile is applied after the home it queues behind.
+        setRunning(true);
+      };
+      for (const button of directiveButtons) {
+        button.addEventListener('click', () => sendDirective(button.dataset.action));
       }
 
       // ─── Fine/Coarse step toggle ─────────────────────────────────────────────────────────────────────
@@ -292,7 +285,6 @@
 
       const gripSlider = document.getElementById('grip-slider');
       const gripButtons = document.querySelectorAll('[data-grip]');
-      let grip = Number(gripSlider.value);   // single source of truth for the gripper setpoint (0..1)
 
       const sendGrip = (value) => {
         fetch('/grip', {
@@ -303,7 +295,6 @@
       };
 
       const reflectGrip = (value) => {
-        grip = value;   // every grip change (slider, buttons, Space) flows through here -> stays current
         for (const button of gripButtons) {
           button.classList.toggle('is-active', Number(button.dataset.grip) === value);
         }
@@ -368,7 +359,7 @@
         const gripKey = GRIP_KEYS[code];
         if (!gripKey) return;
         const step = (scale === 'coarse' ? GRIP_STEP.coarse : GRIP_STEP.fine) * gripKey.dir;
-        const next = Math.min(1, Math.max(0, grip + step));
+        const next = Math.min(1, Math.max(0, Number(gripSlider.value) + step));
         flashRow(code);
         reflectGrip(next);
         sendGrip(next);
@@ -452,8 +443,8 @@
       // ─── Live status badge (polls /status, harness-fed; graceful if the endpoint isn't there yet) ─────
       const statusBadge = document.getElementById('status-badge');
       const statusText = document.getElementById('status-text');
-      // The "waiting/loading" elapsed is timed CLIENT-SIDE (from waitSince) so it always ticks — the
-      // server's last_action_age_s freezes whenever the harness is blocked and not re-emitting.
+      // The "waiting/loading" elapsed is timed client-side, so it keeps ticking while the harness is
+      // blocked: anything measured on its side stops with it, which is when the operator most wants it.
       let lastStatus = undefined;   // undefined = /status 404 (old backend); null = fetch error; else the object
       let lastFetchAt = 0;          // when the last sample came off the wire — the 200ms re-render does not count
       let waitSince = null;         // client timestamp when the current waiting/loading stretch began
@@ -540,22 +531,36 @@
         wrapOverlay.hidden = false;
         wrapActions.hidden = true;
         wrapTitle.textContent = 'Wrapping up…';
-        let gone = 0;
+        let unreachable = 0;
         const iv = setInterval(() => {
           fetch('/wrap_up', { cache: 'no-store' })
             .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
             .then((w) => {
-              gone = 0;
+              unreachable = 0;
               if (w.state !== 'failed') { wrapSub.textContent = 'Finalizing + uploading… (console still up)'; return; }
               clearInterval(iv);
               wrapTitle.textContent = 'Wrap-up FAILED — the run is still active';
               wrapSub.textContent = w.detail;
               wrapActions.hidden = false;
             })
-            .catch(() => { gone += 1; if (gone >= 2) { clearInterval(iv);
-              wrapTitle.textContent = 'Session closing';
-              wrapSub.textContent = 'Console shut down; the final upload is completing on the robot host. ' +
-                                    'Safe to close this tab.'; } });
+            .catch((status) => {
+              // An answering server that reports a failure is a live run, not a shutdown. Only losing the
+              // server altogether says the wrap-up got past finalizing, since the console dies with the run
+              // — and a dropped link looks the same from here, so keep polling and say only what is known.
+              if (typeof status === 'number') {
+                wrapTitle.textContent = 'Wrap-up state unreadable';
+                wrapSub.textContent = `The console answered ${status}. The run may still be active — ` +
+                                      'check the robot host before closing this tab.';
+                wrapActions.hidden = false;
+                return;
+              }
+              unreachable += 1;
+              if (unreachable < 2) return;
+              wrapTitle.textContent = 'Console unreachable';
+              wrapSub.textContent = 'The console shuts down as the run ends, so this is expected once the ' +
+                                    'wrap-up is past finalizing; the final upload completes on the robot ' +
+                                    'host. A dropped link looks the same — this updates if it answers again.';
+            });
         }, 1000);
       };
       document.getElementById('wrapup-retry').addEventListener('click', () => {
