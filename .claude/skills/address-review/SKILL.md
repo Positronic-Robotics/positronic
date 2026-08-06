@@ -298,8 +298,9 @@ When the watcher exits and you are re-invoked:
   is what ratifies a decline, for the threads it is owed to (Principles), so **resolve those
   before reporting**; what stays open is what a person has still not answered — a question they
   asked, a call escalated to them, a decline of their own comment. Give the final report and
-  **notify the user** (a push notification if available) that the review loop is done — they
-  walked away expecting to be pinged.
+  **notify the user** (a push notification if available) that the review loop is done, naming
+  what is still waiting on them — they walked away expecting to be pinged, and "done" here means
+  the agent has nothing left to do, not that the PR is clean.
 - **exit 30** — a quiet interval elapsed with no CI failure, new round, or sign-off. The PR
   isn't done, so **don't stop**: relaunch the watcher to keep waiting (reviewers and slow CI can
   take far longer than one interval). Only after several consecutive quiet cycles — i.e. a long
