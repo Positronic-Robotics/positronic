@@ -6,9 +6,11 @@ training) and Endpoints for HTTP inference servers. Same containers, same script
 lifecycle to manage and no idle compute cost.
 
 This page mirrors all three cloud-side steps of
-[docs/training-workflow.md](../../docs/training-workflow.md): Convert, Train, Serve. Step 4
-(running inference from your robot or simulator against the served policy) is unchanged — see
-[docs/inference.md](../../docs/inference.md).
+[docs/training-workflow.md](../../docs/training-workflow.md): Convert, Train, Serve. Step 4 —
+running inference from your robot or simulator against the served policy — works as
+[docs/inference.md](../../docs/inference.md) describes, except that an endpoint served here is
+reached at a managed `https://` URL and gated on a bearer token: see
+[Authenticated inference](#authenticated-inference).
 
 ## Prerequisites
 
