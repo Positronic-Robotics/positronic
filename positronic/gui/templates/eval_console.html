@@ -168,15 +168,12 @@
       let scale = 'fine';
       let running = false;
 
-      // Set while the arm is homing after a directive that homes. Idle means the harness ISSUED the home,
-      // not that the arm reached it, and there is no signal for the arrival — so teleop stays disabled
-      // until the human watching the arm confirms it, a jog sent meanwhile executing after the motion.
-      let awaitingPark = false;
+      // The server answers whether a commanded home is still unconfirmed, so a reload does not clear the
+      // guard while the arm travels. The confirmation appears only once the harness is idle, which is when
+      // it has issued the home: offered earlier it could be clicked before the arm had begun moving.
+      const awaitingPark = () => !!(lastStatus && typeof lastStatus === 'object' && lastStatus.awaiting_park);
       const resumeBtn = document.getElementById('resume-teleop');
-      // The confirmation only appears once the harness has acknowledged the directive by going idle,
-      // which is when it issues the home: offered earlier, it can be clicked before the arm has begun
-      // homing, and teleop is then live for the motion it is meant to wait out.
-      const offerPark = () => { resumeBtn.hidden = !(awaitingPark && !pendingAck && serverPhase() === 'idle'); };
+      const offerPark = () => { resumeBtn.hidden = !(awaitingPark() && !pendingAck && serverPhase() === 'idle'); };
 
       const setRunning = (value) => {
         running = value;
@@ -185,8 +182,8 @@
       };
 
       resumeBtn.addEventListener('click', () => {
-        awaitingPark = false;
-        offerPark();
+        resumeBtn.hidden = true;   // the next status decides; hide it so it cannot be clicked twice
+        fetch('/parked', { method: 'POST' }).then(pollStatus).catch(() => showAck('Arm parked — no response', false));
       });
 
       // ─── Episode control buttons + directive-ack toast ───────────────────────────────────────────────
@@ -245,10 +242,6 @@
           sentAt: performance.now(),
           handled: lastStatus && typeof lastStatus === 'object' ? lastStatus.directives_handled : undefined,
         });
-        if (action !== 'start') {  // both Save & Home and Discard & Home end with the arm homing
-          awaitingPark = true;
-          offerPark();
-        }
         // The harness homes the gripper open on every episode boundary, and nothing else updates this
         // setpoint, so the next step would start from a stale pre-episode value.
         reflectGrip(0);
@@ -464,8 +457,8 @@
         // Teleop follows the harness's phase, never the button: idle is the harness saying the
         // episode-end path, home command included, is done. Neither a pending acknowledgment nor a
         // status we cannot read is evidence the arm is parked, so both leave the controls as they are.
-        if (!pendingAck && !awaitingPark && s && typeof s === 'object' && typeof s.phase === 'string') {
-          setRunning(s.phase !== 'idle');
+        if (!pendingAck && s && typeof s === 'object' && typeof s.phase === 'string') {
+          setRunning(s.phase !== 'idle' || !!s.awaiting_park);
         }
         const waiting = !!s && (s.phase === 'starting' || (s.phase === 'running' && s.waiting_for_policy));
         if (waiting) { if (waitSince === null) waitSince = performance.now(); }

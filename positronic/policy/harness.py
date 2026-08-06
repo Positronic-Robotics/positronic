@@ -63,12 +63,15 @@ class HarnessStatus:
     ``robot_error`` is true only for the cycles a safety reflex is tripped, since the driver clears
     one every control cycle. ``directives_handled`` counts the directives the harness has processed,
     so a sender can tell a status that reflects its own directive from one sampled before it.
+    ``homes_commanded`` counts the home commands issued; the arm is still travelling to home for some
+    time after each one, and nothing here observes it arrive.
     """
 
     phase: Phase
     waiting_for_policy: bool
     robot_error: bool
     directives_handled: int
+    homes_commanded: int
 
 
 class _EpisodeTelemetry:
@@ -250,6 +253,7 @@ class Harness(pimm.ControlSystem):
         self.status = pimm.ControlSystemEmitter(self)
         self._chunk_end_s: float | None = None  # last waypoint time of the current chunk = its drive horizon
         self._directives_handled = 0
+        self._homes_commanded = 0
 
     def _emit_status(self, clock: pimm.Clock, phase: Phase | None = None) -> None:
         """Publish the live episode state for an operator surface. Emits nowhere when nothing is bound."""
@@ -264,6 +268,7 @@ class Harness(pimm.ControlSystem):
                 waiting_for_policy=bool(self._running and not driving),
                 robot_error=self._robot_in_error(),
                 directives_handled=self._directives_handled,
+                homes_commanded=self._homes_commanded,
             ),
             clock.now_ns(),
         )
@@ -308,6 +313,7 @@ class Harness(pimm.ControlSystem):
         return meta
 
     def _home(self, clock):
+        self._homes_commanded += 1
         now = clock.now_ns()
         for name, value in self._embodiment.home.items():
             self.commands[name].emit([(now, value)])

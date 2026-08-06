@@ -263,6 +263,10 @@ class WebEvalUI(pimm.ControlSystem):
         # swap, which the GIL makes atomic for this poll-and-render use.
         status: HarnessStatus | None = None
         wrap_up_status = _WrapUpStatus(_WrapUpState.IDLE)
+        # The last home a human confirmed the arm reached. Idle means the harness ISSUED the home, not
+        # that the arm is there, and nothing reports the arrival — so teleop waits on this, and it lives
+        # here rather than in a page, which a reload would clear while the arm is still travelling.
+        confirmed_homes = 0
 
         app = FastAPI()
         app.mount('/static', StaticFiles(directory=_shared_static()), name='static')
@@ -330,11 +334,18 @@ class WebEvalUI(pimm.ControlSystem):
             # enable teleop over a rollout whose status never reached this process.
             if status is None:
                 raise HTTPException(status_code=503, detail='the harness has published no status')
-            return dataclasses.asdict(status)
+            # Serialized together because the console reads them together; the wire is where a payload
+            # may hold what two owners know.
+            return {**dataclasses.asdict(status), 'awaiting_park': status.homes_commanded > confirmed_homes}
 
         @app.get('/wrap_up')
         async def get_wrap_up():
             return dataclasses.asdict(wrap_up_status)
+
+        @app.post('/parked')
+        async def parked():
+            nonlocal confirmed_homes
+            confirmed_homes = status.homes_commanded if status is not None else 0
 
         @app.get('/ping')
         async def ping():  # tiny + no work, so its round-trip measures the browser<->robot-host link

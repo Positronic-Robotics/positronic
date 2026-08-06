@@ -1011,6 +1011,29 @@ def test_status_counts_the_directives_the_harness_handled(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_status_counts_the_homes_commanded(world):
+    """Nothing reports the arm reaching home, so a surface that must not drive during the motion waits on
+    this count — including for the home before the first episode, which no directive asked for."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    statuses = RecordingEmitter()
+    harness.status._bind(statuses)
+
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.0),
+        (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),
+        (None, 0.02),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=20)
+
+    homes = [s.homes_commanded for _ts, s in statuses.emitted]
+    assert homes[0] == 1  # the startup home precedes every status, so a fresh surface already waits
+    assert homes[-1] == 2  # and the FINISH homes again
+
+
+@pytest.mark.timeout(3.0)
 def test_run_calls_policy_reset_with_context(world):
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment())
