@@ -105,7 +105,7 @@ def _run_world(
             world.connect(driver.directives, harness.directive, emitter_wrapper=driver.directive_wrapper)
             if driver.manual_commands is not None:
                 world.connect(driver.manual_commands, harness.manual_command)
-            if driver.status is not None:  # an operator surface that shows live harness status
+            if driver.status is not None:
                 world.connect(harness.status, driver.status)
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)

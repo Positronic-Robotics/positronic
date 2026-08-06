@@ -196,7 +196,6 @@ body {
   color: var(--text-muted);
 }
 
-/* Held-key feedback; also doubles as calibration confirmation ("which key did I just press?"). */
 .legend-row.is-pressed {
   background: var(--accent-soft);
   border-color: var(--accent);
