@@ -191,10 +191,8 @@ code already dispatches on the set: a `match` or an `if` ladder against literals
 closed and the type only states it, while a value this code passes through untouched is not yours to
 close. Once it is an enum, iterate it rather than restating its members.
 
-A time on the robot's timeline is `int` nanoseconds — the specific type here, not a fall back to a
-primitive. The clock is monotonic with an arbitrary epoch, so `datetime` misdescribes what the number
-is and holds only microseconds; recordings are addressed by timestamp, and `float` seconds neither
-compares nor joins exactly.
+Where a domain's own type is a primitive, that primitive is the specific one. What this names is a
+representation standing in for a domain, never the choice of a plain type over a richer-looking one.
 
 Convert once, where the value enters. A CLI token, an environment variable or a wire field arrives as
 a string: parse it at that edge and everything inside is typed. A union of a type with its own string
@@ -289,9 +287,10 @@ Don't write a document against its own past — no "previously", no "this PR", n
 no resolved-while-writing note, no struck-through section kept for context. State what holds now. The
 reader has no access to the past state, so prose written against it is noise that ages into a lie.
 
-Don't leave a worklog in the tree either. Fold a status, progress, implementation-summary or
-completed-plan file into the document that owns its subject, then delete it. A changelog is the
-exception, history being its subject.
+A worklog is not a document the tree keeps — no status, progress, implementation-summary or
+completed-plan file. Whatever such a file holds that is still true is stated as current fact in the
+document that owns the subject, and the account of how the work went goes with the file. A changelog
+is the exception, history being its subject.
 
 Where a change must be referenced, cite something durable — a ticket, a tag, a version. Two things
 that look like history and stay: a footgun the reader can still walk into, and a current limitation
