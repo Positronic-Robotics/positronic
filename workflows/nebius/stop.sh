@@ -7,8 +7,7 @@
 # same URL.
 
 set -euo pipefail
-
-PARENT_ID="${NEBIUS_PARENT_ID:-project-e00f38wexevrr52b8j}"
+source "$(dirname "$0")/common.sh"
 
 if [ $# -ne 1 ]; then
   echo "Usage: bash workflows/nebius/stop.sh <endpoint-name>" >&2

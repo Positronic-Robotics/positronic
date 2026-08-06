@@ -21,10 +21,9 @@
 # corrupt it — seed the cache with one run before fanning out (same rule as the
 # shared uv cache, see e2e.sh).
 #
-# Hardcoded: the AWS MysteryBox secret names, S3 endpoint URL. Override-able via
-# env: NEBIUS_PARENT_ID, NEBIUS_SUBNET_ID, NEBIUS_PLATFORM, NEBIUS_PRESET,
-# NEBIUS_IMAGE_REPO, NEBIUS_IMAGE_TAG, NEBIUS_CACHE_FS, NEBIUS_JOB_TIMEOUT,
-# NEBIUS_AUTH_TOKEN_SECRET.
+# Settings of its own, via env: NEBIUS_IMAGE_REPO, NEBIUS_PLATFORM,
+# NEBIUS_PRESET, NEBIUS_JOB_TIMEOUT. Everything shared with the other scripts
+# here lives in common.sh.
 #
 # NEBIUS_IMAGE_REPO defaults to the Docker Hub `positro/robolab`; set it to an
 # in-region registry path (e.g. cr.<region>.nebius.cloud/<registry-id>/robolab,
@@ -33,17 +32,14 @@
 
 set -euo pipefail
 
-PARENT_ID="${NEBIUS_PARENT_ID:-project-e00f38wexevrr52b8j}"
-SUBNET_ID="${NEBIUS_SUBNET_ID:-vpcsubnet-e00pk1j1x6hjmr4m92}"
-CACHE_FS="${NEBIUS_CACHE_FS:-computefilesystem-e00f6jyfr5wkawyrab}"
+source "$(dirname "$0")/common.sh"
+
 IMAGE_REPO="${NEBIUS_IMAGE_REPO:-positro/robolab}"
-IMAGE_TAG="${NEBIUS_IMAGE_TAG:-latest}"
 # RTX-class platform: Isaac Sim's RTX renderer needs RT cores. gpu-l40s-d is the
 # Intel-host L40S; gpu-l40s-a is the AMD-host variant with the same GPU.
 PLATFORM="${NEBIUS_PLATFORM:-gpu-l40s-d}"
 PRESET="${NEBIUS_PRESET:-1gpu-16vcpu-96gb}"
 JOB_TIMEOUT="${NEBIUS_JOB_TIMEOUT:-24h}"
-AUTH_TOKEN_SECRET="${NEBIUS_AUTH_TOKEN_SECRET:-positronic-serverless-inference-token}"
 
 if [ $# -lt 1 ]; then
   cat >&2 <<'EOF'
@@ -83,8 +79,5 @@ nebius ai job create \
   --working-dir /positronic \
   --volume "${CACHE_FS}:/root/.cache:rw" \
   --env PYTHONUNBUFFERED=1 \
-  --env-secret AWS_ACCESS_KEY_ID=positronic-serverless-aws-access-key-id \
-  --env-secret AWS_SECRET_ACCESS_KEY=positronic-serverless-aws-secret-access-key \
-  --env-secret "AUTH_TOKEN=${AUTH_TOKEN_SECRET}" \
-  --env AWS_ENDPOINT_URL=https://storage.eu-north1.nebius.cloud:443 \
-  --env AWS_DEFAULT_REGION=eu-north1
+  --env-secret "${AUTH_TOKEN_KEY}=${AUTH_TOKEN_SECRET}" \
+  "${S3_ENV_FLAGS[@]}"

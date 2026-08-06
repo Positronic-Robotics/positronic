@@ -376,8 +376,11 @@ of on operator laptops. Compute is released the moment a job finishes — idle c
 
 ## Configuration
 
-The script defaults point at Positronic Robotics' own Nebius project — **external users must
-override them** with their own project + subnet IDs:
+Everything the scripts share — the project, subnet, cache filesystem, image tag, the auth token
+secret, and the S3 credential flags — is defined once in
+[`common.sh`](common.sh), which each script sources; a setting only one script means (a preset, a
+timeout, a platform) stays in that script. The defaults point at Positronic Robotics' own Nebius
+project — **external users must override them** with their own project + subnet IDs:
 
 | Variable | Default (Positronic-internal) | Purpose |
 |---|---|---|
@@ -389,9 +392,9 @@ override them** with their own project + subnet IDs:
 | `NEBIUS_IMAGE_REPO` | `positro/robolab` | *(`eval.sh` only)* Image repository the RoboLab eval job pulls, without the tag. Defaults to the Docker Hub `positro/robolab`; set it to an in-region Nebius Container Registry path (`cr.<region>.nebius.cloud/<registry-id>/robolab`) to skip the cross-cloud Docker Hub pull. `<registry-id>` is the Container Registry ID **without** the `registry-` prefix (from `nebius registry list`) — NOT the project ID. Combined with `NEBIUS_IMAGE_TAG` as `${NEBIUS_IMAGE_REPO}:${NEBIUS_IMAGE_TAG}`. |
 | `NEBIUS_IMAGE_TAG` | `latest` | Docker image tag the job/endpoint pulls (`positro/<image>:<tag>`). `cd docker && make push-* IMAGE_TAG=<branch>` pushes that tag unconditionally; set `NEBIUS_IMAGE_TAG=<branch>` to run a branch build remotely without clobbering `:latest`. `make push-*` only updates `:latest` when run with `CI` set. Note `convert.sh openpi` chains a stats job on the `positro/openpi` image, so with `NEBIUS_IMAGE_TAG=<branch>` you must also have pushed `positro/openpi:<branch>` (not just `positro/positronic:<branch>`); otherwise leave `NEBIUS_IMAGE_TAG` unset so stats uses `:latest`. |
 
-Other operational settings (platform/preset, MysteryBox secret names, S3 endpoint URL, region)
-are hardcoded — change them by editing the script directly. The vendor positional arg selects
-the container image and `uv` extras:
+Settings with no environment override — platform, preset, the AWS MysteryBox secret names, the S3
+endpoint URL and region — are changed by editing `common.sh` if they are shared, or the script
+itself if they are its own. The vendor positional arg selects the container image and `uv` extras:
 
 | Vendor | Image | `uv` extra |
 |---|---|---|

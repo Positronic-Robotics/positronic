@@ -11,12 +11,12 @@
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-PARENT_ID="${NEBIUS_PARENT_ID:-project-e00f38wexevrr52b8j}"
+source "$SCRIPT_DIR/common.sh"
+
 S3_BASE="${E2E_S3_BASE:-s3://tmp/e2e_validation}"
 EXP_NAME="${E2E_EXP_NAME:-e2e_$(date +%Y%m%d_%H%M%S)}"
 LOG_ROOT="${E2E_LOG_ROOT:-/tmp/e2e_logs}"
 DATASET="${E2E_DATASET:-@positronic.cfg.ds.sim.sim_stack_cubes}"
-AUTH_TOKEN_SECRET="${NEBIUS_AUTH_TOKEN_SECRET:-positronic-serverless-inference-token}"
 
 VENDOR="${1:-}"
 if [ -z "$VENDOR" ]; then
@@ -171,10 +171,10 @@ note "serve URL: $SERVE_URL"
 SECRET_ID=$(nebius mysterybox secret list --parent-id "$PARENT_ID" --format json \
   | jq -r --arg n "$AUTH_TOKEN_SECRET" '.items[]? | select(.metadata.name==$n) | .metadata.id')
 [ -z "$SECRET_ID" ] && { note "FAIL: no MysteryBox secret named $AUTH_TOKEN_SECRET"; exit 1; }
-AUTH_TOKEN=$(nebius mysterybox payload get-by-key --secret-id "$SECRET_ID" --key AUTH_TOKEN --format json \
+AUTH_TOKEN=$(nebius mysterybox payload get-by-key --secret-id "$SECRET_ID" --key "$AUTH_TOKEN_KEY" --format json \
   | jq -r '.data.string_value')
 case "$AUTH_TOKEN" in
-  ''|null) note "FAIL: no AUTH_TOKEN payload in $AUTH_TOKEN_SECRET"; exit 1 ;;
+  ''|null) note "FAIL: no $AUTH_TOKEN_KEY payload in $AUTH_TOKEN_SECRET"; exit 1 ;;
 esac
 
 # Only a 200 is the model list. A warming endpoint answers 502/503 and a bad token answers 401, both

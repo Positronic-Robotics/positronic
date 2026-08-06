@@ -11,27 +11,16 @@
 # ingress mode strips the WebSocket upgrade headers and so cannot pass inference
 # sessions at all.
 #
-# Hardcoded: GPU platform, the AWS MysteryBox secret names, S3 endpoint URL,
-# container port. Vendor selects image + uv extra. Override-able via env:
-# NEBIUS_PARENT_ID, NEBIUS_SUBNET_ID, NEBIUS_AUTH_TOKEN_SECRET.
+# Hardcoded: GPU platform, container port. Vendor selects image + uv extra. One
+# setting of its own, via env: NEBIUS_PRESET. Everything shared with the other
+# scripts here lives in common.sh.
 
 set -euo pipefail
+source "$(dirname "$0")/common.sh"
 
-PARENT_ID="${NEBIUS_PARENT_ID:-project-e00f38wexevrr52b8j}"
-SUBNET_ID="${NEBIUS_SUBNET_ID:-vpcsubnet-e00pk1j1x6hjmr4m92}"
-# Shared filesystem (RWX) holding the uv / HF / openpi caches across cold starts.
-# pos3's cache stays on local disk (~/.cache/positronic/s3) — never redirected here.
-CACHE_FS="${NEBIUS_CACHE_FS:-computefilesystem-e00f6jyfr5wkawyrab}"
-# Docker image tag pulled by the endpoint. `make push-*` only updates `:latest`
-# under CI; locally it pushes `:<branch>`/`:<sha>`. To serve a branch build:
-# `make push-<x> IMAGE_TAG=<branch>` then run with `NEBIUS_IMAGE_TAG=<branch>`.
-IMAGE_TAG="${NEBIUS_IMAGE_TAG:-latest}"
 # Nebius GPU preset. Default is one H100; multi-GPU presets must match the server's GPU count
 # (DreamZero's --num_gpus runs torchrun --nproc_per_node, so an 8-GPU server needs an 8-GPU preset).
 PRESET="${NEBIUS_PRESET:-1gpu-16vcpu-200gb}"
-# MysteryBox secret holding the bearer token, under the payload key AUTH_TOKEN. Injected under that same
-# name as the container's env var, which is where the server reads it.
-AUTH_TOKEN_SECRET="${NEBIUS_AUTH_TOKEN_SECRET:-positronic-serverless-inference-token}"
 
 if [ $# -lt 2 ]; then
   cat >&2 <<'EOF'
@@ -111,11 +100,8 @@ nebius ai endpoint create \
   --env UV_CACHE_DIR=/cache/uv \
   --env HF_HOME=/cache/hf \
   --env OPENPI_DATA_HOME=/cache/openpi \
-  --env-secret AWS_ACCESS_KEY_ID=positronic-serverless-aws-access-key-id \
-  --env-secret AWS_SECRET_ACCESS_KEY=positronic-serverless-aws-secret-access-key \
-  --env-secret "AUTH_TOKEN=${AUTH_TOKEN_SECRET}" \
-  --env AWS_ENDPOINT_URL=https://storage.eu-north1.nebius.cloud:443 \
-  --env AWS_DEFAULT_REGION=eu-north1 >/dev/null
+  --env-secret "${AUTH_TOKEN_KEY}=${AUTH_TOKEN_SECRET}" \
+  "${S3_ENV_FLAGS[@]}" >/dev/null
 
 ID=$(nebius ai endpoint list --parent-id "$PARENT_ID" --format json \
   | jq -r --arg n "$NAME" '.items[]? | select(.metadata.name==$n) | .metadata.id')
