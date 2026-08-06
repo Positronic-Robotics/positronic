@@ -180,9 +180,11 @@ if not isinstance(transform, Transform3D):
 ### primitive-type
 
 Don't leave a value typed by its representation when its domain has a type of its own. A filesystem
-path is a `Path`, a bounded set of strings is an enum, a multi-element return is a named struct. The
-primitive carries none of the domain's meaning and none of its operations, so every consumer
-re-derives what the value holds.
+path is a `Path`, a bounded set of strings is an enum, a return whose elements a caller can tell
+apart only by position is a named struct. The primitive carries none of the domain's meaning and
+none of its operations, so every consumer re-derives what the value holds. A pair whose elements are
+typed and unpacked where it is called — `(emitter, receiver)` — is not that: nothing is re-derived,
+and a struct over it would restate the call site (`earn-its-place`).
 
 This governs what a value **is**; what an interface may assume about its **use** is `overspecific`,
 and the two never trade against each other. A truer type refuses nothing a caller could legitimately
@@ -227,6 +229,10 @@ state. `None` standing for both "not supplied" and "not applicable" is the same 
 Don't catch an exception so the code can carry on, and don't fall back to a second path when the first
 comes back empty. Let the failure surface: a pipeline that silently yields nothing is harder to
 diagnose than one that raises, and a fallback becomes the path everything quietly runs through.
+
+An exception is not always a failure. Where an API reports an expected state by raising — `Empty`
+from a non-blocking `get`, `StopIteration` — catching it is how that state is read, and none of this
+applies.
 
 Where a failure genuinely must not stop the caller — one malformed file in a scan, an optional
 feature, a cleanup — catch that specific exception, log it at ERROR with what failed, and say in one
