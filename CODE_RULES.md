@@ -1,6 +1,13 @@
 # Code Rules
 
-Judgment rules for this repository — the checks a linter cannot make.
+Judgment rules for Positronic code — the checks a linter cannot make. They hold in every Positronic
+repository, not only this one. This file is the only copy: a repository that carries no
+`CODE_RULES.md` of its own is checked against this one, read from `main`.
+
+So every rule here is general. One that turns on a single repository's architecture, layout or
+tooling is not a code rule and belongs in that repository's own docs, beside its subject. An
+*example* drawn from this repository is not that, and stays — a rule is easier to apply from real
+code than from an abstraction.
 
 Every rule has an **id** — its heading. Cite it when reporting, fixing, or waiving a violation. Add and
 recalibrate rules through the `add-rule` skill.
@@ -323,6 +330,6 @@ re-typing all of it would bury the change, so it may leave a touched file's exis
 
 A limitation outside the code takes the narrowest suppression the tool offers, at the site, with a
 reason: an import that cannot resolve gets `# pyright: ignore[reportMissingImports]`, leaving every
-other diagnostic in that file live. `.basedpyright/baseline.json` is this repository's instance. Its
-hook compares per-file counts, so re-anchoring line numbers can absorb a new finding without it
-noticing — check that yourself.
+other diagnostic in that file live. Where the gate compares per-file counts rather than entries —
+`.basedpyright/baseline.json` is one such baseline — re-anchoring line numbers can absorb a new
+finding without it noticing, so check that yourself.
