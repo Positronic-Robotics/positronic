@@ -265,24 +265,25 @@
       }
 
       // ─── Jog / grip actuators ────────────────────────────────────────────────────────────────────────
-      const sendJog = (axis, sign) => {
-        fetch('/jog', {
+      // The server refuses a manual command unless the harness is idle and the home is confirmed, so a
+      // refusal is what a client acting on a status it has not read yet gets back. Say so rather than
+      // leaving a key press look as though it moved the arm.
+      const sendManual = (path, body) => {
+        fetch(path, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ axis, sign, scale }),
-        });
+          body: JSON.stringify(body),
+        })
+          .then((r) => r.json().then((d) => { if (!r.ok) showAck(`Not sent — ${d.detail ?? r.status}`, false); }))
+          .catch(() => showAck('Manual command — no response', false));
       };
+
+      const sendJog = (axis, sign) => sendManual('/jog', { axis, sign, scale });
 
       const gripSlider = document.getElementById('grip-slider');
       const gripButtons = document.querySelectorAll('[data-grip]');
 
-      const sendGrip = (value) => {
-        fetch('/grip', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ value }),
-        });
-      };
+      const sendGrip = (value) => sendManual('/grip', { value });
 
       const reflectGrip = (value) => {
         for (const button of gripButtons) {
@@ -387,14 +388,22 @@
           startHold(code, fn);
         });
       }
+      // A clicked button keeps focus, and would then own Space for every later press.
+      document.addEventListener('click', (event) => {
+        const button = event.target instanceof Element ? event.target.closest('button') : null;
+        if (button) button.blur();
+      });
       window.addEventListener('pointerup', stopHold);
       window.addEventListener('pointercancel', stopHold);
 
-      // The range slider is not a text field — keys (Space/jog) must still work while it holds focus.
-      const isTyping = (target) => target instanceof Element && target.matches('input:not([type="range"]), textarea, select');
+      // A focused control owns the keyboard: Space activates a button, and a teleop binding that took it
+      // would both swallow the click and move the arm. The range slider is exempt, so jog keys keep
+      // working while it holds focus.
+      const ownsKeyboard = (target) => target instanceof Element
+        && target.matches('button, a[href], select, textarea, [contenteditable], input:not([type="range"])');
 
       document.addEventListener('keydown', (event) => {
-        if (running || isTyping(event.target)) return;
+        if (running || ownsKeyboard(event.target)) return;
         // Ignore Ctrl/Meta/Alt combos so browser shortcuts (Ctrl/Cmd+W, Alt+Left, …) never jog the real
         // arm and we never swallow the intended browser action. Shift is NOT excluded — Shift+Space (open
         // gripper) is a supported binding.

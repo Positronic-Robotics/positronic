@@ -310,8 +310,21 @@ class WebEvalUI(pimm.ControlSystem):
                 case _:
                     raise HTTPException(status_code=404)
 
+        def _require_parked() -> None:
+            """Refuse a manual command while the arm may still be moving to home.
+
+            The console disables its own controls, but that state is a page's and a client that has not
+            read it yet — one just loaded, or not this console at all — would otherwise have its command
+            queued behind the home and applied after it.
+            """
+            if status is None or status.phase is not Phase.IDLE:
+                raise HTTPException(status_code=409, detail='the harness is not idle')
+            if status.homes_commanded > confirmed_homes:
+                raise HTTPException(status_code=409, detail='the arm is homing; confirm it parked first')
+
         @app.post('/jog')
         async def jog(body: _JogBody):
+            _require_parked()
             if body.axis in _TRANSLATION_AXES:
                 step = self.translation_fine if body.scale is _Step.FINE else self.translation_coarse
                 translation = np.zeros(3)
@@ -326,6 +339,7 @@ class WebEvalUI(pimm.ControlSystem):
 
         @app.post('/grip')
         async def grip(body: _GripBody):
+            _require_parked()
             self.manual_command.emit({keys.TARGET_GRIP: body.value}, clock.now_ns())
 
         @app.get('/status')
