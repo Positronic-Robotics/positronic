@@ -323,6 +323,8 @@ def test_a_merge_word_the_shell_builds_is_refused(git):
         # `NAME=` is an assignment only ahead of the command word; written as an argument the shell
         # splits it like any other, so `x=junk -R someone/other` reaches gh.
         f'gh pr merge 566 --repo {GUARDED} --body x=$EXTRA',
+        # double quotes suppress a glob but not a parameter expansion
+        'gh pr merge 566 "$EXTRA" someone/other',
     ):
         assert verdict(git, cmd, allow_merge=lambda n, slug: asked.append(n) or True) is not None, cmd
     assert asked == []
@@ -335,6 +337,12 @@ def test_a_quoted_dollar_is_a_literal_the_shell_never_builds(git):
         f"gh pr merge 566 --repo {GUARDED} --subject='Read $EXTRA as text'",
     ):
         assert verdict(git, cmd, allow_merge=lambda *_: True) is None, cmd
+
+
+def test_an_expansion_beside_the_merge_cannot_reach_its_arguments(git):
+    """A separator ends the command, so a later word is never one of gh's."""
+    cmd = f'gh pr merge 566 --repo {GUARDED} --squash && echo $HOME'
+    assert verdict(git, cmd, allow_merge=lambda *_: True) is None
 
 
 def test_a_merge_reading_its_token_from_a_substitution_still_passes(git):

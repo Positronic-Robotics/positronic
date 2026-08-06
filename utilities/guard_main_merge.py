@@ -453,17 +453,22 @@ COMMAND_SEPARATORS = ';&|\n()'
 def _expands(word: str) -> bool:
     """Whether the shell builds `word` into something other than its own text.
 
-    Quoting is what decides, and it is per REGION rather than per word: `--subject='$x'` is a
-    literal while `--subject=$x` is not. A backslash escapes the character after it.
+    Quoting decides, per REGION rather than per word, and the two quotes differ: single quotes
+    suppress everything, while double quotes still expand a parameter — `"$EXTRA"` reaches gh as
+    whatever EXTRA holds. A backslash escapes the character after it.
     """
     quote = ''
     i = 0
     while i < len(word):
         c = word[i]
-        if quote:
-            quote = '' if c == quote else quote
+        if quote == "'":
+            quote = '' if c == "'" else quote
         elif c == '\\':
             i += 1
+        elif quote == '"':
+            quote = '' if c == '"' else quote
+            if c == '$':
+                return True
         elif c in '\'"':
             quote = c
         elif c in EXPANDING_CHARS:
@@ -514,29 +519,39 @@ def _raw_words(cmd: str) -> list[str]:
 ASSIGNMENT_RE = re.compile(r'\w+=')
 
 
+def _builds_arguments(words: list[str]) -> bool:
+    """Whether one command's words carry an argument its own text does not spell out.
+
+    An assignment is exempt only where it stands before the command word, since there its value
+    reaches the environment whole; written as an argument, `--body x=$EXTRA` is split like anything
+    else.
+    """
+    at_command_start = True
+    for w in words:
+        if at_command_start and ASSIGNMENT_RE.match(w):
+            continue
+        at_command_start = False
+        if _expands(w):
+            return True
+    return False
+
+
 def _carries_expansion(cmd: str) -> bool:
-    """Whether `cmd` hands the shell an argument its own text does not spell out.
+    """Whether a `gh` command in `cmd` is handed an argument its own text does not spell out.
 
     `EXTRA='-R other/repo'; gh pr merge 566 $EXTRA` reaches gh as a repository selector no
-    authorization named, and `{-R,other/repo}` and a glob do the same with no `$` in sight. An
-    assignment is exempt only where it stands before a command word, since there its value reaches
-    the environment whole; written as an argument, `--body x=$EXTRA` is split like anything else.
+    authorization named, and `{-R,other/repo}` and a glob do the same with no `$` in sight. Only
+    the command that runs gh is read: an expansion in a `&& echo $HOME` beside it cannot reach
+    gh's arguments.
     """
     try:
         words = _raw_words(_strip_heredoc_bodies(cmd))
     except ValueError:
         return True
-    at_command_start = True
+    segments: list[list[str]] = [[]]
     for w in words:
-        if w in COMMAND_SEPARATORS:
-            at_command_start = True
-        elif at_command_start and ASSIGNMENT_RE.match(w):
-            continue
-        else:
-            at_command_start = False
-            if _expands(w):
-                return True
-    return False
+        segments.append([]) if w in COMMAND_SEPARATORS else segments[-1].append(w)
+    return any(_builds_arguments(s) for s in segments if any(os.path.basename(w) == 'gh' for w in s))
 
 
 def _sets_gh_repo(cmd: str) -> bool:
