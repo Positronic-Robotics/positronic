@@ -9,7 +9,7 @@
 # The server is gated on a bearer token (AUTH_TOKEN, from MysteryBox). Auth is
 # in-process rather than `nebius ai endpoint create --auth token`, because that
 # ingress mode strips the WebSocket upgrade headers and so cannot pass inference
-# sessions at all (verified 2026-08-05; plain HTTP routes are gated correctly).
+# sessions at all.
 #
 # Hardcoded: GPU platform, MysteryBox secret names, S3 endpoint URL,
 # container port. Vendor selects image + uv extra. Override-able via env:

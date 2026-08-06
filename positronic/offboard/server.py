@@ -24,10 +24,15 @@ from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
 
-#: Environment variable holding the bearer token every route is gated on. Also the payload key of the
-#: MysteryBox secret ``workflows/nebius/serve.sh`` injects it from, and the key Nebius' own
-#: ``--token-secret`` reads, so one name covers server, client and platform.
+#: Environment variable ``serve`` reads the bearer token from.
 AUTH_TOKEN_ENV = 'AUTH_TOKEN'
+
+AUTH_HEADER = 'Authorization'
+
+
+def bearer(token: str) -> str:
+    """The ``AUTH_HEADER`` value carrying ``token``, as the client sends it and the server compares it."""
+    return f'Bearer {token}'
 
 
 async def _acquire_with_keepalives(lock: asyncio.Lock, websocket: WebSocket | None, message: str):
@@ -183,6 +188,7 @@ class PolicyServer:
         port: int = 8000,
         recording_dir: str | None = None,
         idle_timeout_min: float | None = None,
+        auth_token: str | None = None,
     ):
         self._pipeline_cfg = pipeline if isinstance(pipeline, cfn.Config) else None
         self._pipeline = pipeline.instantiate() if isinstance(pipeline, cfn.Config) else pipeline
@@ -213,10 +219,10 @@ class PolicyServer:
 
         # Gating happens here rather than at the hosting platform's ingress: Nebius answers `--auth token`
         # by stripping the WebSocket upgrade headers, which leaves the inference route unreachable at any
-        # token. An unset variable serves open; set-but-empty is a broken secret, so fail closed.
-        self._auth_token = os.environ.get(AUTH_TOKEN_ENV)
-        if self._auth_token == '':
-            raise ValueError(f'{AUTH_TOKEN_ENV} is set but empty; unset it to serve open, or inject a real token')
+        # token. ``None`` serves open; empty is a broken secret, so fail closed rather than read as open.
+        if auth_token == '':
+            raise ValueError('auth_token is empty; pass None to serve open, or a real token to gate')
+        self._auth_token = auth_token
 
         self.app = FastAPI()
         http_auth, ws_auth = [Depends(self._require_http_auth)], [Depends(self._require_ws_auth)]
@@ -229,15 +235,15 @@ class PolicyServer:
     def _authorized(self, authorization: str | None) -> bool:
         if self._auth_token is None:
             return True
-        return authorization is not None and hmac.compare_digest(authorization, f'Bearer {self._auth_token}')
+        return authorization is not None and hmac.compare_digest(authorization, bearer(self._auth_token))
 
-    def _require_http_auth(self, authorization: str | None = Header(default=None)) -> None:
+    def _require_http_auth(self, authorization: str | None = Header(default=None, alias=AUTH_HEADER)) -> None:
         if not self._authorized(authorization):
             raise HTTPException(status_code=401, detail='Invalid or missing bearer token')
 
     async def _require_ws_auth(self, websocket: WebSocket) -> None:
         """Rejects before ``accept()``, so an unauthorized peer never reaches the session handshake."""
-        if not self._authorized(websocket.headers.get('authorization')):
+        if not self._authorized(websocket.headers.get(AUTH_HEADER)):
             raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
 
     async def get_models(self) -> dict:
@@ -417,5 +423,15 @@ def serve(pipeline: cfn.Config, host: str, port: int, recording_dir: str | None,
     Only the socket and the recording taps are flags of their own; everything the served model is —
     codec, source, checkpoint directory — is reached through the pipeline itself
     (``--pipeline.source.checkpoints_dir=...``), so each of those values has exactly one name.
+
+    The bearer token gating the server comes from ``AUTH_TOKEN_ENV`` rather than a flag, which would put
+    a secret in the process arguments; unset serves open.
     """
-    PolicyServer(pipeline, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
+    PolicyServer(
+        pipeline,
+        host=host,
+        port=port,
+        recording_dir=recording_dir,
+        idle_timeout_min=idle_timeout_min,
+        auth_token=os.environ.get(AUTH_TOKEN_ENV),
+    ).serve()

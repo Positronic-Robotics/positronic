@@ -165,6 +165,9 @@ SECRET_ID=$(nebius mysterybox secret list --parent-id "$PARENT_ID" --format json
 [ -z "$SECRET_ID" ] && { note "FAIL: no MysteryBox secret named $AUTH_TOKEN_SECRET"; exit 1; }
 AUTH_TOKEN=$(nebius mysterybox payload get-by-key --secret-id "$SECRET_ID" --key AUTH_TOKEN --format json \
   | jq -r '.data.string_value')
+case "$AUTH_TOKEN" in
+  ''|null) note "FAIL: no AUTH_TOKEN payload in $AUTH_TOKEN_SECRET"; exit 1 ;;
+esac
 
 RESP=""
 for i in $(seq 1 50); do
