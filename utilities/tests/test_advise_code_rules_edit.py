@@ -28,8 +28,9 @@ def test_a_payload_it_cannot_read_is_not_a_rules_edit():
     assert not advise.advises({'tool_input': {}})
 
 
-def test_it_allows_the_edit_and_names_the_skill():
-    """Advisory: the skill's own last step is an edit to this file, so a refusal would block it."""
+def test_it_allows_the_edit_and_reaches_the_model_with_the_skill_s_name():
+    """Advisory, so exit 0 — and as `additionalContext`, since a PreToolUse hook's plain stdout
+    reaches the debug log and nothing else."""
     run = subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(payload('/w/positronic/CODE_RULES.md')),
@@ -37,7 +38,9 @@ def test_it_allows_the_edit_and_names_the_skill():
         text=True,
     )
     assert run.returncode == 0
-    assert 'add-rule' in run.stdout
+    emitted = json.loads(run.stdout)['hookSpecificOutput']
+    assert emitted['hookEventName'] == 'PreToolUse'
+    assert 'add-rule' in emitted['additionalContext']
 
 
 def test_an_unreadable_payload_is_silent():

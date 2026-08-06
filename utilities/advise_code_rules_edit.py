@@ -7,9 +7,11 @@ check, an existing rule), and shows the wording for approval before writing. Edi
 directly skips all three, and nothing about the edit itself reveals that it did.
 
 Advisory, never a refusal — the skill's own final step is an edit to this file, so a hook that
-blocked would block the remedy it names. Wired in `.claude/settings.json` (PreToolUse, matcher
-Edit|Write|MultiEdit): reads the hook payload on stdin, prints to stdout, exits 0. Stdlib-only so
-it runs without the project venv.
+blocked would block the remedy it names. The advice is emitted as `additionalContext`, because a
+PreToolUse hook's plain stdout reaches the debug log and nothing else.
+
+Wired in `.claude/settings.json` (PreToolUse, matcher Edit|Write|MultiEdit): reads the hook payload
+on stdin, prints JSON to stdout, exits 0. Stdlib-only so it runs without the project venv.
 """
 
 from __future__ import annotations
@@ -17,6 +19,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+
+import hook_payload
 
 RULES_FILE = 'CODE_RULES.md'
 ADVICE = (
@@ -28,9 +32,7 @@ ADVICE = (
 
 def advises(payload: dict) -> bool:
     """Whether this tool call writes the rules file."""
-    tool_input = payload.get('tool_input') or {}
-    path = tool_input.get('file_path') or tool_input.get('notebook_path') or ''
-    return os.path.basename(str(path)) == RULES_FILE
+    return os.path.basename(hook_payload.target_path(payload)) == RULES_FILE
 
 
 def main() -> int:
@@ -39,7 +41,7 @@ def main() -> int:
     except (json.JSONDecodeError, UnicodeDecodeError):
         return 0
     if advises(payload):
-        print(ADVICE)
+        print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'additionalContext': ADVICE}}))
     return 0
 
 
