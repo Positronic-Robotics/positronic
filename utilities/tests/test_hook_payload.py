@@ -4,6 +4,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import hook_payload  # noqa: E402
 
+# rules-allow: hardcoded-keys — these tests spell the harness's field names rather than importing
+# the constants under test. Asserting a constant against itself passes however far it has drifted
+# from what the harness actually sends; the literal is the independent statement of the wire.
+
 
 def test_it_reads_the_command_a_bash_call_runs():
     assert hook_payload.command({'tool_input': {'command': 'git push'}}) == 'git push'
