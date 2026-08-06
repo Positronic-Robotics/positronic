@@ -89,6 +89,40 @@ Positronic provides two interactive drivers for managing inference episodes (see
 
 **Eval UI driver:** Dedicated evaluation interface for policy assessment. The default for `phail` — graphical controls and metrics visualization. Useful for systematic policy evaluation with visual feedback.
 
+## Driving a Simulated Rig
+
+The driver and the embodiment are independent axes: `--embodiment=.sim_mujoco` puts a MuJoCo Franka behind any of the drivers above, so an operator surface can be exercised with no robot present.
+
+```bash
+# The dearpygui console against a simulated arm, with a recording in place of a served model
+uv run positronic-inference phail \
+  --embodiment=.sim_mujoco \
+  --policy=.replay --policy.dataset_path=~/datasets/inference_logs/run1 \
+  --output_dir=~/datasets/sim_console
+
+# The same rig behind the web console instead
+uv run positronic-inference phail --driver=.web --driver.task='Pick up the green cube and place it on the red cube.' \
+  --embodiment=.sim_mujoco --policy=.replay --policy.dataset_path=~/datasets/inference_logs/run1
+```
+
+**An attended run is paced by the wall clock.** A simulated embodiment normally runs under a virtual clock, as fast as the machine allows; attach a driver and the world runs on wall time instead, so a second at the operator's console is a second of the episode whatever the machine's real-time factor. The simulator paces itself by the `control_period` it steps in — `.sim_mujoco` steps at 15 Hz, the rate a Franka rollout is driven at — and falls behind on a box that cannot render that fast, rather than drifting off the recorded timeline. Unattended sweeps keep the virtual clock.
+
+**Rendering is what costs.** The physics of the Franka table scene runs ~100x real time on four CPU cores; the three camera streams are the expense, and shadows, multisampling and specular reflections are most of it under a software GL stack. `.sim_mujoco` therefore builds its scene through `low_render_quality`, which drops all three (`SetRenderQuality`) for a 7x cheaper frame — 49 ms rather than 348 ms per three-camera set at 320x240. Pass the bare loaders (`--embodiment.sim.loaders=@positronic.cfg.simulator.stack_cubes_loaders`) on a box with a GPU, or where those effects are part of what is being evaluated.
+
+**The replay policy** (`--policy=.replay --policy.dataset_path=<dataset>`, plus `--policy.episode=N`) plays a recorded episode's commands back through the policy interface, so the arm moves with nothing served. Every episode replays the recording from its first waypoint at the cadence it was recorded at; when it runs out the rig holds. The recording must be one the replaying embodiment can execute — a run recorded in the same sim is the faithful case, and the recorded action space is re-issued verbatim (joint targets replay exactly, pose targets go back through the driver's IK).
+
+## Following a Run From Its Log
+
+The harness logs one line per episode boundary at INFO, so a watcher can follow a run it has no other view of — no console endpoint, no dataset scan:
+
+```
+harness: directive start id=<n> task=<task>
+harness: directive finish id=<n> outcome=<saved|discarded|aborted>
+harness: run finish
+```
+
+`id` counts episodes within the run from 0, pairing a start with its finish. `saved` means the episode was committed to the dataset, `discarded` that the operator dropped it, `aborted` that a failure abandoned it mid-flight. `run finish` is logged only when the run ends of its own accord, so a crashed run is distinguishable from a completed one. The task is last on the line and free-form to its end.
+
 ## Recording and Replay
 
 Specify `--output_dir` to record runs as Positronic datasets. Recorded data includes robot state, camera feeds, actions, gripper commands, and timing information.

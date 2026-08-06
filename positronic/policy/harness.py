@@ -1,3 +1,4 @@
+import logging
 import time
 from collections.abc import Callable, Generator, Iterable, Iterator
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ from positronic.policy.base import Policy, Session
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils import flatten_dict, frozen_view
 
+logger = logging.getLogger(__name__)
+
 # How far from now an action may be scheduled. A chunk spans seconds, so this is loose enough that no real
 # trajectory approaches it, and tight enough to catch a rig-side stack that left timestamps relative to the
 # chunk (decades behind) or anchored them twice (decades ahead).
@@ -30,6 +33,21 @@ def _assert_anchored(actions: list[dict[str, Any]], now: float) -> None:
             f'Action scheduled {skew:.0f}s from now, over the {MAX_ACTION_SKEW_SEC:.0f}s bound: the rig-side '
             f'stack is not anchoring chunks to the harness clock'
         )
+
+
+# The run log is the episode boundary a run watcher reads: it is the only account of a rollout that
+# exists while the rollout is still going, and the harness is the one place that sees every episode of
+# every driver. A watcher pairs a ``start`` with the ``finish`` carrying the same id, and takes
+# ``run finish`` as the run having ended of its own accord. The three prefixes are the contract; keep
+# them stable, and keep the free-form task last so a parser can read it to end of line.
+LOG_DIRECTIVE_START = 'harness: directive start'
+LOG_DIRECTIVE_FINISH = 'harness: directive finish'
+LOG_RUN_FINISH = 'harness: run finish'
+
+# What became of an episode, on its ``directive finish`` line.
+OUTCOME_SAVED = 'saved'  # finalized and committed to the dataset
+OUTCOME_DISCARDED = 'discarded'  # an ABORT directive: the operator dropped the recording
+OUTCOME_ABORTED = 'aborted'  # abandoned mid-flight by a failure, so it never completed
 
 
 class DirectiveType(Enum):
@@ -191,6 +209,10 @@ class Harness(pimm.ControlSystem):
         self._rollout_started = False
         # Wall-clock telemetry for the live rollout, opened under ``--timing`` and inert otherwise.
         self._telemetry = _EpisodeTelemetry()
+        # Episodes begun in this run, counted from 0 — the id pairing a logged start with its finish.
+        # It counts this run's episodes, so it matches a dataset index only for a run into a fresh
+        # output directory.
+        self._episode_index = -1
         # Channels that have not delivered since this episode's reset. A receiver latches its last value, so
         # emptying this set is what keeps the first inference off the previous episode's final frame.
         self._awaiting_obs: set[str] = set()
@@ -288,6 +310,9 @@ class Harness(pimm.ControlSystem):
         # period) to the closing episode — the cooperative scheduler cannot give the recorder a turn alone.
         self._telemetry.end(virtual_now)
 
+    def _log_finish(self, outcome: str) -> None:
+        logger.info('%s id=%d outcome=%s', LOG_DIRECTIVE_FINISH, self._episode_index, outcome)
+
     def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> None:
         """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
 
@@ -312,6 +337,10 @@ class Harness(pimm.ControlSystem):
             self.context = {**self.context, keys.TASK: self._task.instruction}
         self._policy_session = self.policy.new_session(self.context, clock.now)
         self._running = True
+        self._episode_index += 1
+        # Logged once the episode is genuinely live, so a reset or a session open that raises leaves no
+        # start with no finish to pair it — and so the task it names is the one the policy was given.
+        logger.info('%s id=%d task=%s', LOG_DIRECTIVE_START, self._episode_index, self.context.get(keys.TASK, ''))
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
         self.ds_command.emit(DsWriterCommand.START())
 
@@ -324,6 +353,7 @@ class Harness(pimm.ControlSystem):
         the offboard server's per-session cleanup (active-session decrement, idle watchdog) runs now.
         """
         if self._running:
+            self._log_finish(OUTCOME_DISCARDED if abort else OUTCOME_SAVED)
             if abort:
                 self._cancel_trajectories()  # abort has no finalize to do it — stop drivers before the home
                 self.ds_command.emit(DsWriterCommand.ABORT())
@@ -470,8 +500,13 @@ class Harness(pimm.ControlSystem):
             # A failure mid-rollout unwinds past the normal span close. Seal the open span before the
             # exception reaches ``bind``'s exit flush, or it never exports and its finished children orphan,
             # losing their phases and charging the episode's wall to between_episodes.
+            if self._running:
+                self._log_finish(OUTCOME_ABORTED)
             self._telemetry.seal(clock.now())
             raise
+        # Only the clean return: a run that unwound above is not one that finished, and a watcher reading
+        # this line would otherwise call a crash a completed run.
+        logger.info(LOG_RUN_FINISH)
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:  # noqa: C901
         while not should_stop.value:
@@ -506,6 +541,7 @@ class Harness(pimm.ControlSystem):
             yield self._pace()
 
         if self._running:
+            self._log_finish(OUTCOME_SAVED)  # a shutdown mid-episode still commits it
             yield from self._finalize_recording(clock)
         if self._policy_session:
             self._policy_session.close()
