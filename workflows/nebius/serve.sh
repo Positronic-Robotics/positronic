@@ -11,9 +11,9 @@
 # ingress mode strips the WebSocket upgrade headers and so cannot pass inference
 # sessions at all.
 #
-# Hardcoded: GPU platform, MysteryBox secret names, S3 endpoint URL,
+# Hardcoded: GPU platform, the AWS MysteryBox secret names, S3 endpoint URL,
 # container port. Vendor selects image + uv extra. Override-able via env:
-# NEBIUS_PARENT_ID, NEBIUS_SUBNET_ID.
+# NEBIUS_PARENT_ID, NEBIUS_SUBNET_ID, NEBIUS_AUTH_TOKEN_SECRET.
 
 set -euo pipefail
 
