@@ -11,11 +11,11 @@ HOOK = Path(__file__).resolve().parents[1] / 'advise_code_rules_edit.py'
 
 
 def payload(path):
-    return {'tool_name': 'Edit', hook_payload.TOOL_INPUT: {hook_payload.FILE_PATH: path}}
+    return {hook_payload.TOOL_INPUT: {hook_payload.FILE_PATH: path}}
 
 
 def bash(command):
-    return {'tool_name': 'Bash', hook_payload.TOOL_INPUT: {hook_payload.COMMAND: command}}
+    return {hook_payload.TOOL_INPUT: {hook_payload.COMMAND: command}}
 
 
 def test_it_advises_on_the_rules_file_wherever_the_checkout_sits():

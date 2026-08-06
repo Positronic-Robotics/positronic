@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""The Claude Code hook payload, named once.
+"""The field names of the JSON a Claude Code hook is handed on stdin, and readers for them.
 
-A hook is handed JSON on stdin whose field names belong to the harness, not to this repository, and
-both hooks here read them. The harness runs each hook by path, which puts this directory on
-`sys.path`, so both import these names rather than spelling them again. Stdlib-only, so a hook that
-imports it still runs without the project venv.
+The names belong to the harness. Stdlib-only, so a hook that imports this still runs without the
+project venv; the harness runs a hook by path, which puts this directory on `sys.path`.
 """
 
 from __future__ import annotations
