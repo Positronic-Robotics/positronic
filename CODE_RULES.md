@@ -37,7 +37,7 @@ as a named constant in a shared module.
 
 The same holds for any literal two scopes must spell identically — an environment-variable name, a
 filename two processes agree on, a wire field. Hoist it at the first duplication, into the module every
-consumer can import, usually the most constrained of them. Never a third copy neither side reaches.
+consumer can import, usually the most constrained of them. Not a third copy neither side imports.
 
 Exception: a name the component itself owns and defines, rather than one it reads from its input.
 
@@ -179,28 +179,25 @@ if not isinstance(transform, Transform3D):
 ```
 ### primitive-type
 
-Don't leave a value typed by its representation when its domain has a type of its own. A filesystem
-path is a `Path`, a bounded set of strings is an enum, a return whose elements a caller can tell
-apart only by position is a named struct. The primitive carries none of the domain's meaning and
-none of its operations, so every consumer re-derives what the value holds. A pair whose elements are
-typed and unpacked where it is called — `(emitter, receiver)` — is not that: nothing is re-derived,
-and a struct over it would restate the call site (`earn-its-place`).
+Don't leave a value typed by its representation when its domain has a type of its own: a filesystem
+path is a `Path`, a bounded set of strings is an enum, a return a caller can only read by position is
+a named struct. The primitive carries none of the domain's meaning or operations, so every consumer
+re-derives what the value holds.
 
-This governs what a value **is**; what an interface may assume about its **use** is `overspecific`,
-and the two never trade against each other. A truer type refuses nothing a caller could legitimately
-have passed — every path is a `Path`. The enum is the case that can go either way, so ask whether this
-code already dispatches on the set: a `match` or an `if` ladder against literals means the set is
-closed and the type only states it, while a value this code passes through untouched is not yours to
-close. Once it is an enum, iterate it rather than restating its members.
+Some domains own a primitive, and then the primitive is the specific type. This is about a
+representation standing in for a domain, not about preferring the richer-looking type. A pair
+unpacked where it is called, each element typed, re-derives nothing either: a struct over
+`(emitter, receiver)` would restate the call site (`earn-its-place`).
 
-Where a domain's own type is a primitive, that primitive is the specific one. What this names is a
-representation standing in for a domain, never the choice of a plain type over a richer-looking one.
+An enum is the case that can go either way. If this code dispatches on the set — a `match`, an `if`
+ladder against literals — the set is closed and the type only says so; a value this code passes
+through untouched is not yours to close. Once it is an enum, iterate it rather than restating its
+members.
 
-Convert once, where the value enters. A CLI token, an environment variable or a wire field arrives as
-a string: parse it at that edge and everything inside is typed. A union of a type with its own string
-form is that conversion left undone, pushing it onto every consumer. The annotation must not lie —
-where a framework hands the value through uncoerced, keep the honest `str` on the parameter it lands
-on and convert immediately inside, or fix the framework.
+Convert once, where the value enters: a CLI token, an environment variable, a wire field. A union of
+a type with its own string form is that conversion left undone, pushed onto every consumer. Don't
+let the annotation lie — where a framework hands the value through uncoerced, keep the honest `str`
+and convert immediately inside, or fix the framework.
 
 ```python
 # Bad
@@ -221,8 +218,9 @@ Don't type a value `X | None` when it is never `None`. The annotation says `None
 handles, so every consumer writes the guard — and the guard that matters is then indistinguishable
 from the ones that are dead.
 
-Where the value is genuinely absent sometimes, say when: a default in the signature, or a distinct
-state. `None` standing for both "not supplied" and "not applicable" is the same lie one level down.
+Where the value really is sometimes absent, say when it is: a default in the signature, or a
+distinct state. `None` meaning both "not supplied" and "not applicable" is the same lie one level
+down.
 
 ### swallowed-error
 
@@ -273,9 +271,9 @@ waiting to be named and extracted, a long `try` is the same with the boundary in
 and a whole function body inside a `with` is a decorator. What is left then reads as what it does,
 with no enclosing condition to hold in mind.
 
-Keep the `with` where no decorator can be reached — one evaluated where the function is defined
-cannot see `self._lock`, and only a `ContextDecorator` works as one at all — or where the `as`
-value is used, or a generator needs the context per `yield`.
+Keep the `with` where no decorator can be reached: a decorator is evaluated where the function is
+defined, so it never sees `self._lock`, and only a `ContextDecorator` works as one. Keep it too
+where the `as` value is used, or a generator needs the context per `yield`.
 
 ```python
 # Bad
@@ -305,17 +303,17 @@ with its workaround.
 
 ### grandfathered-violation
 
-Don't silence a violation in code you write or touch — fix it. An exception list, whether a
-type-check baseline, a lint allowlist or a suppression file, is for one thing: a gate introduced
-over a codebase that already breaks it, where fixing everything first is impractical. It records
-the debt standing at that moment, and shrinks from there.
+Don't silence a violation in code you write or touch — fix it. An exception list — a type-check
+baseline, a lint allowlist, a suppression file — is for one case: a gate landing on a codebase that
+already breaks it, where fixing everything first is impractical. It records the debt standing that
+day, and shrinks from there.
 
 So a change may only remove entries. A file you add lands clean, and a file you touch loses the
 entries your change covers. The exception is a large refactor, which moves code it did not write:
 re-typing all of it would bury the change, so it may leave a touched file's existing entries alone.
 
 A limitation outside the code takes the narrowest suppression the tool offers, at the site, with a
-reason — an import that cannot resolve gets `# pyright: ignore[reportMissingImports]`, so every
-other diagnostic in that file stays live. `.basedpyright/baseline.json` is this repository's
-instance, and its hook compares per-file counts, so re-anchoring line numbers can absorb a new
-finding silently. That part is yours to hold.
+reason: an import that cannot resolve gets `# pyright: ignore[reportMissingImports]`, leaving every
+other diagnostic in that file live. `.basedpyright/baseline.json` is this repository's instance. Its
+hook compares per-file counts, so re-anchoring line numbers can absorb a new finding without it
+noticing — check that yourself.
