@@ -244,7 +244,7 @@
         });
         // The harness homes the gripper open on every episode boundary, and nothing else updates this
         // setpoint, so the next step would start from a stale pre-episode value.
-        reflectGrip(0);
+        adoptGrip(0);
         // A click may only ever DISABLE teleop, never enable it: the harness is busy until it publishes
         // idle, and a manual command sent meanwhile is applied after the home it queues behind.
         setRunning(true);
@@ -268,41 +268,55 @@
       // The server refuses a manual command unless the harness is idle and the home is confirmed, so a
       // refusal is what a client acting on a status it has not read yet gets back. Say so rather than
       // leaving a key press look as though it moved the arm.
-      const sendManual = (path, body) => {
+      const sendManual = (path, body) =>
         fetch(path, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         })
-          .then((r) => r.json().then((d) => { if (!r.ok) showAck(`Not sent — ${d.detail ?? r.status}`, false); }))
-          .catch(() => showAck('Manual command — no response', false));
-      };
+          .then((r) => r.json().then((d) => {
+            if (!r.ok) showAck(`Not sent — ${(d && d.detail) || r.status}`, false);
+            return r.ok;
+          }))
+          .catch(() => { showAck('Manual command — no response', false); return false; });
 
       const sendJog = (axis, sign) => sendManual('/jog', { axis, sign, scale });
 
       const gripSlider = document.getElementById('grip-slider');
       const gripButtons = document.querySelectorAll('[data-grip]');
 
-      const sendGrip = (value) => sendManual('/grip', { value });
+      // The setpoint the robot took. A refused command leaves it alone, and the controls snap back to it,
+      // so a step never compounds from a value the gripper never had.
+      let acceptedGrip = Number(gripSlider.value);
 
-      const reflectGrip = (value) => {
+      const showGrip = (value) => {
         for (const button of gripButtons) {
           button.classList.toggle('is-active', Number(button.dataset.grip) === value);
         }
         gripSlider.value = value;
       };
 
+      const commitGrip = (value) =>
+        sendManual('/grip', { value }).then((ok) => {
+          if (ok) acceptedGrip = value;
+          showGrip(acceptedGrip);
+        });
+
+      // The harness homes the gripper open on every episode boundary: the robot's setpoint moves with no
+      // command from here.
+      const adoptGrip = (value) => { acceptedGrip = value; showGrip(value); };
+
       for (const button of gripButtons) {
         button.addEventListener('click', () => {
           const value = Number(button.dataset.grip);
-          reflectGrip(value);
-          sendGrip(value);
+          showGrip(value);
+          commitGrip(value);
         });
       }
 
-      gripSlider.addEventListener('input', () => reflectGrip(Number(gripSlider.value)));
-      gripSlider.addEventListener('change', () => sendGrip(Number(gripSlider.value)));
-      reflectGrip(Number(gripSlider.value));
+      gripSlider.addEventListener('input', () => showGrip(Number(gripSlider.value)));
+      gripSlider.addEventListener('change', () => commitGrip(Number(gripSlider.value)));
+      showGrip(acceptedGrip);
 
       // ─── Legends (rendered from KEY_MAP, so they can't drift from the bindings) ───────────────────────
       const renderLegend = (name, entries) => {
@@ -350,10 +364,10 @@
         const gripKey = GRIP_KEYS[code];
         if (!gripKey) return;
         const step = (scale === 'coarse' ? GRIP_STEP.coarse : GRIP_STEP.fine) * gripKey.dir;
-        const next = Math.min(1, Math.max(0, Number(gripSlider.value) + step));
+        const next = Math.min(1, Math.max(0, acceptedGrip + step));
         flashRow(code);
-        reflectGrip(next);
-        sendGrip(next);
+        showGrip(next);
+        commitGrip(next);
       };
       // A grip binding is named for the key plus the modifier held with it, which is how an event finds it.
       const gripCode = (event) => (event.shiftKey ? 'Shift' : '') + event.code;
