@@ -334,8 +334,7 @@ class WebEvalUI(pimm.ControlSystem):
             # enable teleop over a rollout whose status never reached this process.
             if status is None:
                 raise HTTPException(status_code=503, detail='the harness has published no status')
-            # Serialized together because the console reads them together; the wire is where a payload
-            # may hold what two owners know.
+            # Derived here rather than carried on the status: `confirmed_homes` lives in this process.
             return {**dataclasses.asdict(status), 'awaiting_park': status.homes_commanded > confirmed_homes}
 
         @app.get('/wrap_up')
