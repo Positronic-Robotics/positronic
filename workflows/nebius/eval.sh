@@ -21,9 +21,10 @@
 # corrupt it — seed the cache with one run before fanning out (same rule as the
 # shared uv cache, see e2e.sh).
 #
-# Hardcoded: MysteryBox secret names, S3 endpoint URL. Override-able via env:
-# NEBIUS_PARENT_ID, NEBIUS_SUBNET_ID, NEBIUS_PLATFORM, NEBIUS_PRESET,
-# NEBIUS_IMAGE_REPO, NEBIUS_IMAGE_TAG, NEBIUS_CACHE_FS, NEBIUS_JOB_TIMEOUT.
+# Hardcoded: the AWS MysteryBox secret names, S3 endpoint URL. Override-able via
+# env: NEBIUS_PARENT_ID, NEBIUS_SUBNET_ID, NEBIUS_PLATFORM, NEBIUS_PRESET,
+# NEBIUS_IMAGE_REPO, NEBIUS_IMAGE_TAG, NEBIUS_CACHE_FS, NEBIUS_JOB_TIMEOUT,
+# NEBIUS_AUTH_TOKEN_SECRET.
 #
 # NEBIUS_IMAGE_REPO defaults to the Docker Hub `positro/robolab`; set it to an
 # in-region registry path (e.g. cr.<region>.nebius.cloud/<registry-id>/robolab,
