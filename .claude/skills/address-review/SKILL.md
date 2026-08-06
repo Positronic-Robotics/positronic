@@ -37,11 +37,15 @@ needs their call. A red build is never "done", no matter what the reviewer says.
   thread left open reads as still-broken to anyone scanning the PR; a PR whose open threads mix
   live questions with settled arguments teaches its reader that open means nothing, so the one
   thread that did need them goes unread. Never resolve a thread just to clear the queue.
-- **Ratified means the party the decline is owed to has answered it** — nobody else can.
-  A **human's** approval settles what you declined of a **bot's** findings; a human's own
-  comment is settled by that human alone. A bot's 👍 says nothing about whether a person accepted
-  your reasoning, and on a PR with two reviewers one approval says nothing about the other's
-  thread. Read a sign-off for whose it is before it settles anything.
+- **Ratified means the party the decline is owed to has answered it, after it was made** —
+  nobody else can, and nothing earlier can. A **human's** approval settles what you declined of a
+  **bot's** findings; a human's own comment is settled by that human alone. A bot's 👍 says
+  nothing about whether a person accepted your reasoning, and on a PR with two reviewers one
+  approval says nothing about the other's thread. Nor does an approval reach backwards: a round
+  that lands findings on an already-approved commit and is answered by declines produces no new
+  commit, so the old approval still stands against that SHA while postdating nothing — it was
+  given before the argument it would be settling existed. Read a sign-off for whose it is and
+  when it was given, before it settles anything.
 - **Stay scoped** to the feedback. Don't sprawl into unrelated refactors.
 - **Follow the repo's commit conventions** (see the `push-pr` skill). CRITICAL: never add
   `Co-Authored-By` or any AI / Claude / assistant attribution to commits, replies, or PRs.

@@ -105,7 +105,11 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     echo "WATCH 10: new reviewer round — run another address-review pass (Steps 1-6)"; exit 10
   fi
   # --- convergence: CI green (all checks done, none failing) AND a reviewer sign-off. A human
-  # signs off via an APPROVED review pinned to the exact SHA (commit_id == $SHA). Codex signs off
+  # signs off via an APPROVED review pinned to the exact SHA (commit_id == $SHA). SHA-pinned is
+  # not time-ordered: a round that lands findings on an already-approved commit makes no new
+  # commit, so this approval keeps matching while predating the argument. It is a wake signal,
+  # never per-thread evidence — whether it ratifies a given decline is the resolve-time judgment
+  # the skill makes (Principles), which reads when the sign-off was given. Codex signs off
   # with a 👍 (+1) reaction, which carries no commit id and so can't be SHA-pinned like a review.
   # Anchor it on the PUSH: pushed_at = the earliest check-SUITE created_at on this SHA. GitHub
   # creates the suite the moment it receives the push, before any runner queues — so this tracks
