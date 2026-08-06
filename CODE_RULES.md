@@ -280,7 +280,9 @@ with no enclosing condition to hold in mind.
 
 Keep the `with` where no decorator can be reached: a decorator is evaluated where the function is
 defined, so it never sees `self._lock`, and only a `ContextDecorator` works as one. Keep it too
-where the `as` value is used, or a generator needs the context per `yield`.
+where the `as` value is used, or where the context must wrap the work rather than the call — a
+`ContextDecorator` on an `async def` opens and closes while the coroutine is merely being created,
+and on a generator it spans the call rather than the `yield`s.
 
 ```python
 # Bad
