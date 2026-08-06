@@ -122,8 +122,8 @@ class InferenceClient:
     session — the model id it names and the query it carries as session params — reaches the server exactly
     as written, so every session opened here serves that model with those params.
 
-    ``headers`` carry auth for an endpoint behind a reverse proxy — credentials stay out of the URL, which
-    is meant to be safe to hand around.
+    ``headers`` carry auth, whether the server checks it or a proxy in front of it does — credentials stay
+    out of the URL, which is meant to be safe to hand around.
 
     The timeouts describe this connection, not any one session: ``open_timeout`` bounds the TCP/TLS
     handshake alone, ``connect_deadline`` how long a cold backend may take to answer across retries, and

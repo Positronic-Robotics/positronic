@@ -24,14 +24,13 @@ from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
 
-#: Environment variable ``serve`` reads the bearer token from.
 AUTH_TOKEN_ENV = 'AUTH_TOKEN'
 
 AUTH_HEADER = 'Authorization'
 
 
 def bearer(token: str) -> str:
-    """The ``AUTH_HEADER`` value carrying ``token``, as the client sends it and the server compares it."""
+    """The ``AUTH_HEADER`` value carrying ``token``."""
     return f'Bearer {token}'
 
 
