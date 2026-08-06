@@ -286,10 +286,12 @@ When the watcher exits and you are re-invoked:
   your prior reasoning, then **stop and surface it for the user**; never loop into forcing a
   fix you disagree with.
 - **exit 20** — converged: CI is green on the pushed commit, a reviewer signed off (Codex 👍
-  newer than your push, or a human approval), and every comment carries your reply (open
-  declines / defers / discussions are fine). Give the final report and **notify the user** (a
-  push notification if available) that the review loop is done — they walked away expecting to
-  be pinged.
+  newer than your push, or a human approval), and every comment carries your reply. The sign-off
+  is the ratification a declined or deferred thread was waiting for, so **resolve those before
+  reporting** — what stays open is only what a person has still not answered: a question they
+  asked, a call escalated to them. Give the final report and **notify the user** (a push
+  notification if available) that the review loop is done — they walked away expecting to be
+  pinged.
 - **exit 30** — a quiet interval elapsed with no CI failure, new round, or sign-off. The PR
   isn't done, so **don't stop**: relaunch the watcher to keep waiting (reviewers and slow CI can
   take far longer than one interval). Only after several consecutive quiet cycles — i.e. a long
