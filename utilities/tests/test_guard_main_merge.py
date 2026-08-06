@@ -73,8 +73,14 @@ def git():
     })
 
 
-def verdict(git, cmd, cwd=CLONE):
-    return gmm.analyze(cmd, cwd, GUARDED, git, path_exists=fake_path_exists)
+def no_allow(number, guarded_slug):
+    return False
+
+
+def verdict(git, cmd, cwd=CLONE, allow_merge=no_allow, gh_repo_env=''):
+    return gmm.analyze(
+        cmd, cwd, GUARDED, git, path_exists=fake_path_exists, allow_merge=allow_merge, gh_repo_env=gh_repo_env
+    )
 
 
 BLOCKED = [
@@ -254,6 +260,241 @@ def test_deny_messages_name_the_operation(git):
     assert 'amend' in verdict(git, 'git commit --amend')
     assert 'gh pr merge' in verdict(git, 'gh pr merge 5')
     assert 'push to main' in verdict(git, 'git push origin main')
+
+
+def test_a_lossily_parsed_merge_is_denied_rather_than_crashing(git):
+    """An unparseable command falls back to a coarse scan, whose words carry shell punctuation."""
+    assert verdict(git, "echo don't && gh pr merge)") is not None
+
+
+def test_a_merge_naming_no_pull_request_says_to_name_one(git):
+    assert 'name the pull request' in verdict(git, 'gh pr merge --squash', allow_merge=lambda *_: True)
+
+
+def test_an_authorized_merge_goes_through(git):
+    assert verdict(git, 'gh pr merge 566 --squash', allow_merge=lambda *_: True) is None
+
+
+def test_the_authorization_is_asked_for_the_pull_request_being_merged(git):
+    asked = []
+    verdict(git, 'gh pr merge 566 --delete-branch', allow_merge=lambda n, slug: asked.append((n, slug)) or False)
+    assert asked == [(566, GUARDED.casefold())]
+
+
+def test_a_value_taking_flag_does_not_donate_its_value_as_the_pull_request(git):
+    """`gh pr merge --subject 566 999` merges 999; authorizing 566 must not clear it."""
+    asked = []
+    verdict(git, 'gh pr merge --subject 566 999 --squash', allow_merge=lambda n, slug: asked.append(n) or False)
+    assert asked == [999]
+
+
+def test_a_merge_in_another_repository_is_refused_without_consulting_any_authorization(git):
+    """`-R` selects a repository this guard holds no receipts for."""
+    asked = []
+    assert (
+        verdict(git, 'gh pr -R someone/other merge 566', allow_merge=lambda n, slug: asked.append(n) or True)
+        is not None
+    )
+    assert asked == []
+
+
+def test_a_merge_run_from_another_repo_is_not_this_repository_s(git):
+    """gh resolves the repository from the working directory when nothing names one."""
+    asked = []
+    assert (
+        verdict(git, f'cd {INFRA} && gh pr merge 566', allow_merge=lambda n, slug: asked.append(n) or True) is not None
+    )
+    assert asked == []
+
+
+def test_a_merge_whose_repository_cannot_be_established_is_refused(git):
+    asked = []
+    for cmd in ('cd /missing; gh pr merge 566', 'GH_REPO=someone/other gh pr merge 566'):
+        assert verdict(git, cmd, allow_merge=lambda n, slug: asked.append(n) or True) is not None
+    assert asked == []
+
+
+def test_an_authorization_is_not_spent_by_a_command_the_guard_blocks_anyway(git):
+    """The merge never runs, so the human's one authorization must survive the refusal."""
+    asked = []
+    assert (
+        verdict(
+            git, 'gh pr merge 566 --squash && git push origin main', allow_merge=lambda n, slug: asked.append(n) or True
+        )
+        is not None
+    )
+    assert asked == []
+
+
+def test_a_merge_inside_a_command_substitution_is_refused_and_spends_nothing(git):
+    """The body runs before the outer command, which can then be refused with the receipt gone."""
+    asked = []
+    cmd = 'echo ' + chr(96) + 'gh pr merge 566' + chr(96) + ' && git push origin main'
+    assert verdict(git, cmd, allow_merge=lambda n, slug: asked.append(n) or True) is not None
+    assert asked == []
+
+
+def test_a_merge_beside_a_command_substitution_is_refused(git):
+    """A substituted assignment name reaches the tokens as a sentinel, not as `GH_REPO=`."""
+    asked = []
+    cmd = 'env G' + chr(96) + 'printf H_REPO' + chr(96) + '=someone/other gh pr merge 566'
+    denial = verdict(git, cmd, allow_merge=lambda n, slug: asked.append(n) or True)
+    assert denial is not None and 'command substitution' in denial
+    assert asked == []
+
+
+def test_a_process_substitution_hides_a_second_command_in_the_same_segment(git):
+    """`<(` keeps the command it feeds and the one it runs together, where only the first is read."""
+    asked = []
+    cmd = 'gh pr merge 566 --body-file <' + '(gh pr merge 567)'
+    assert verdict(git, cmd, allow_merge=lambda n, slug: asked.append(n) or True) is not None
+    assert asked == []
+
+
+def test_a_spend_mark_cannot_be_taken_twice(tmp_path, as_root):
+    """Exclusive create, so two hooks racing one receipt cannot both find it unspent."""
+    write_allow(tmp_path, 566)
+    assert consume(566, tmp_path)
+    assert not consume(566, tmp_path)
+
+
+def test_a_command_merging_two_pull_requests_is_refused(git):
+    """One authorization names one merge, and the first would be spent before the rest is known."""
+    asked = []
+    verdict = gmm.analyze(
+        'gh pr merge 566 && gh pr merge 567',
+        CLONE,
+        GUARDED,
+        git,
+        path_exists=fake_path_exists,
+        allow_merge=lambda n, slug: asked.append(n) or True,
+    )
+    assert verdict is not None and 'one pull request per command' in verdict
+    assert asked == []
+
+
+def test_a_quoted_gh_repo_assignment_is_read_as_the_shell_reads_it(git):
+    """Quote removal happens before the assignment, so the raw text never spells the name."""
+    asked = []
+    assert (
+        verdict(git, "env G''H_REPO=someone/other gh pr merge 566", allow_merge=lambda n, slug: asked.append(n) or True)
+        is not None
+    )
+    assert asked == []
+
+
+def test_gh_repo_in_the_environment_is_enough_to_refuse(git):
+    """It selects the repository the way `-R` does, and a command cannot be read for it."""
+    asked = []
+    assert (
+        verdict(
+            git, 'gh pr merge 566', gh_repo_env='someone/other', allow_merge=lambda n, slug: asked.append(n) or True
+        )
+        is not None
+    )
+    assert asked == []
+
+
+def test_reading_the_help_is_not_a_merge(git):
+    assert verdict(git, 'gh pr merge --help') is None
+    assert verdict(git, 'gh help pr merge') is None
+
+
+def test_a_commit_message_quoting_a_blocked_command_is_not_itself_blocked(git):
+    """A backtick inside a quoted heredoc is prose: the delimiter suppresses every expansion."""
+    cmd = "cd /w/positronic && git commit -F- -- x.py <<'EOF'\nthe guard blocks `gh pr merge` outright\nEOF"
+    assert verdict(git, cmd) is None
+
+
+def test_an_unquoted_heredoc_still_fails_closed(git):
+    """Its body DOES expand, so a substitution in it is a command, not prose."""
+    cmd = 'cd /w/positronic && git commit -F- -- x.py <<EOF\n`git push origin main`\nEOF'
+    assert verdict(git, cmd) is not None
+
+
+def write_allow(directory, number, repo='', issued_at=1_000_000, ttl_s=1800, receipt_id='abcd1234'):
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / gmm.RECEIPT_NAME.format(number=number)
+    path.write_text(
+        json.dumps({
+            gmm.RECEIPT_REPO: repo,
+            gmm.RECEIPT_NUMBER: number,
+            gmm.RECEIPT_ISSUED_AT: issued_at,
+            gmm.RECEIPT_TTL_S: ttl_s,
+            gmm.RECEIPT_ID: receipt_id,
+            'by': 'U0',
+        })
+    )
+    return path
+
+
+@pytest.fixture
+def as_root(monkeypatch):
+    """Stand in for the ownership check: a test cannot create a root-owned file."""
+    monkeypatch.setattr(gmm, '_written_by_root', lambda path, directory: path.exists())
+
+
+def consume(number, tmp_path, now=1_000_060, repo=GUARDED):
+    return gmm.consume_merge_allow(number, repo, tmp_path, tmp_path / 'spent', now=now)
+
+
+def test_an_authorization_is_spent_by_the_merge_it_permits(tmp_path, as_root):
+    write_allow(tmp_path, 566)
+    assert consume(566, tmp_path)
+    assert not consume(566, tmp_path)
+
+
+def test_a_second_authorization_is_honoured_however_close_it_follows_the_first(tmp_path, as_root):
+    """The spend mark names the authorization, so two of them never collide."""
+    write_allow(tmp_path, 566, receipt_id='aaaa1111')
+    assert consume(566, tmp_path)
+    write_allow(tmp_path, 566, receipt_id='bbbb2222')
+    assert consume(566, tmp_path)
+
+
+@pytest.mark.parametrize('receipt_id', ['', None, 'no', 'has space', 'x' * 65])
+def test_a_receipt_that_names_no_usable_authorization_is_refused(tmp_path, as_root, receipt_id):
+    write_allow(tmp_path, 566, receipt_id=receipt_id)
+    assert not consume(566, tmp_path)
+
+
+def test_a_receipt_that_root_did_not_write_is_no_authorization(tmp_path):
+    """The real check, unpatched: this test's own file is not root's."""
+    write_allow(tmp_path, 566)
+    assert not consume(566, tmp_path)
+
+
+def test_an_expired_authorization_is_refused(tmp_path, as_root):
+    write_allow(tmp_path, 566)
+    assert not consume(566, tmp_path, now=1_002_000)
+
+
+def test_an_authorization_for_another_pull_request_does_not_carry(tmp_path, as_root):
+    write_allow(tmp_path, 566)
+    assert not consume(565, tmp_path)
+
+
+@pytest.mark.parametrize('repo', ['', 'positronic', 'Positronic-Robotics/positronic'])
+def test_a_reference_naming_this_repository_is_honoured(tmp_path, as_root, repo):
+    write_allow(tmp_path, 566, repo=repo)
+    assert consume(566, tmp_path)
+
+
+def test_an_authorization_for_another_repository_is_refused(tmp_path, as_root):
+    write_allow(tmp_path, 566, repo='someone/other')
+    assert not consume(566, tmp_path)
+
+
+def test_a_missing_or_unreadable_receipt_is_simply_no_authorization(tmp_path, as_root):
+    assert not consume(566, tmp_path)
+    (tmp_path / gmm.RECEIPT_NAME.format(number=566)).write_text('{not json')
+    assert not consume(566, tmp_path)
+
+
+def test_a_world_writable_receipt_directory_is_not_root_only(tmp_path):
+    path = write_allow(tmp_path, 566)
+    tmp_path.chmod(0o777)
+    assert not gmm._written_by_root(path, tmp_path)
 
 
 def _init_repo(path, url, branch='main'):

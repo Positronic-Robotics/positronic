@@ -3,7 +3,8 @@
 
 Blocks history-rewriting `git commit --amend`, merges / integrating pulls / direct pushes to
 `main`, and `gh pr merge`. Amend rewrites history — create a new commit instead. Integrating
-into main requires an explicit human/operator command run outside the agent's Bash tool.
+into main requires an explicit human/operator command run outside the agent's Bash tool, or a
+receipt a human wrote from chat authorizing one named pull request (see `consume_merge_allow`).
 
 Scope: the git-command guards apply only to invocations that operate on THIS repo — same
 `origin` as the session's project repo, which covers clones and worktrees. A `git -C <dir> …`
@@ -25,11 +26,28 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
+from pathlib import Path
 
 DENY_TAIL = (
     ' Merging to main requires a PR and an explicit human/operator command — a named human must run the merge'
     ' themselves (e.g. via the `!` prefix or their own shell).'
+)
+MERGE_ESCAPE = (
+    ' A named human can authorize THIS ONE merge from chat with `!allow_merge <pr>`, which the merge then spends.'
+)
+UNNUMBERED_MSG = (
+    'BLOCKED: name the pull request to merge (`gh pr merge <number>`) — an authorization names one pull'
+    ' request, so a merge that names none can never match it.'
+)
+MULTIPLE_MERGES_MSG = (
+    'BLOCKED: merge one pull request per command — an authorization names one, and a command'
+    ' merging several would have to spend the first before knowing the rest are allowed.'
+)
+MERGE_SUBSTITUTION_MSG = (
+    'BLOCKED: a merge in a command carrying a command substitution cannot be verified — the'
+    ' substitution decides at runtime what is merged, and where.'
 )
 AMEND_MSG = 'BLOCKED: Never amend commits, create new ones instead.'
 
@@ -49,6 +67,10 @@ SUBST = '\x00subst'
 # A word that names `main` as a push target or checkout target: `main`, `+main`, `HEAD:main`,
 # `origin/main`, `main:other` — but not `mainline` or `feature/main2`.
 MAIN_REF_RE = re.compile(r'(^|[:/+])main(?![\w/\-])')
+
+# gh's own name for the variable that selects a repository, read from the command and from the
+# environment — two places that have to agree with gh and with each other.
+GH_REPO_ENV = 'GH_REPO'
 
 # A heredoc opener whose delimiter is QUOTED — `<<'EOF'`, `<<"EOF"`, `<<-'EOF'`. The quoting is
 # what makes the body inert: it suppresses every expansion, so the text cannot execute.
@@ -152,9 +174,9 @@ def _strip_heredoc_bodies(cmd: str) -> str:
     entirely different repos.
 
     Dropping the body loses nothing analyzable, because a QUOTED delimiter suppresses every
-    expansion: the text reaches the command literally and cannot execute. Unquoted `<<EOF` is
-    deliberately left in place — its body DOES expand `$(…)`, so it keeps failing closed, and
-    `_substitution_bodies` still scans the untouched command for what such a body might run.
+    expansion: the text reaches the command literally and cannot execute, so a backtick in such
+    a body is prose rather than a substitution. Unquoted `<<EOF` is deliberately left in place —
+    its body DOES expand `$(…)`, so it keeps failing closed.
     """
     lines = cmd.split('\n')
     kept: list[str] = []
@@ -323,26 +345,174 @@ def _subcmd(words: list[str]) -> tuple[str, list[str]]:
     return '', []
 
 
-def _is_gh_pr_merge(words: list[str]) -> bool:
-    """gh (cobra) accepts persistent flags between `pr` and the subcommand — `gh pr -R o/r merge 1`."""
-    seen_pr = skip = False
+MERGE_ALLOW_DIR = Path('/var/lib/relay/merge_allows')
+# Where an honoured receipt is recorded so it cannot serve a second merge. Separate from the
+# receipts because that directory is root-only-writable and this hook does not run as root.
+MERGE_SPENT_DIR = Path.home() / '.local' / 'state' / 'relay' / 'merge_allows_spent'
+# The receipt is written by `listen_chat_receiver/relay/merge_allow.py` in the `os` repository,
+# which cannot import from here and is imported by nothing here — so the file layout is the whole
+# of the contract, and it is named once on each side rather than spelled out at every use.
+RECEIPT_NAME = 'pr{number}.json'
+RECEIPT_NUMBER = 'number'
+RECEIPT_REPO = 'repo'
+RECEIPT_ISSUED_AT = 'issued_at'
+RECEIPT_TTL_S = 'ttl_s'
+# Distinct per authorization, which is what a spend mark names. A receipt without one is refused:
+# without it the mark would have to key on something that is not an identity, and a second
+# authorization sharing that value would be read as already spent.
+RECEIPT_ID = 'id'
+
+
+def _written_by_root(path: Path, directory: Path) -> bool:
+    """Whether only root could have put `path` where it is.
+
+    Ownership is the provenance check, so it has to cover the directory too: a file root owns
+    inside a directory anyone may write is a file anyone may replace.
+    """
+    try:
+        file_stat, dir_stat = path.stat(), directory.stat()
+    except OSError:
+        return False
+    return file_stat.st_uid == 0 and dir_stat.st_uid == 0 and not dir_stat.st_mode & 0o022
+
+
+def consume_merge_allow(
+    number: int,
+    guarded_slug: str,
+    directory: Path = MERGE_ALLOW_DIR,
+    spent_dir: Path = MERGE_SPENT_DIR,
+    now: float | None = None,
+) -> bool:
+    """Whether a human has authorized merging this pull request, spending the authorization.
+
+    The relay writes the receipt as root when a whitelisted human types `!allow_merge` in chat,
+    and refuses to write one for an injected message. A receipt cannot be forged without root,
+    since only root may write into the receipt directory; and it serves one merge, since
+    honouring it records a spend mark this process owns. Neither property holds against root,
+    which any process on this host can reach through the account's sudo.
+
+    An empty repo in the receipt names only a number, which resolves against the guarded
+    repository.
+    """
+    path = directory / RECEIPT_NAME.format(number=number)
+    if not _written_by_root(path, directory):
+        return False
+    try:
+        receipt = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    if receipt.get(RECEIPT_NUMBER) != number:
+        return False
+    repo = str(receipt.get(RECEIPT_REPO) or '').casefold()
+    slug = guarded_slug.casefold()
+    if repo and repo != slug and repo != slug.rpartition('/')[2]:
+        return False
+    issued_at, ttl = receipt.get(RECEIPT_ISSUED_AT, 0), receipt.get(RECEIPT_TTL_S, 0)
+    if (now if now is not None else time.time()) - issued_at >= ttl:
+        return False
+    identifier = str(receipt.get(RECEIPT_ID) or '')
+    if not re.fullmatch(r'\w{4,64}', identifier):
+        return False
+    spent = spent_dir / f'pr{number}-{identifier}'
+    spent_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        # Exclusive create, so two hooks racing the same receipt cannot both find it unspent.
+        os.close(os.open(spent, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except FileExistsError:
+        return False
+    return True
+
+
+# `gh pr merge` flags that consume the following argument, so its value is never the pull
+# request being merged: `gh pr merge --subject 566 999` merges 999.
+GH_MERGE_VALUE_FLAGS = frozenset({
+    '-A',
+    '--author-email',
+    '-b',
+    '--body',
+    '-F',
+    '--body-file',
+    '--match-head-commit',
+    '-t',
+    '--subject',
+    '-R',
+    '--repo',
+})
+
+
+def _carries_substitution(cmd: str) -> bool:
+    """Whether `cmd` carries a substitution, or quoting that cannot be read.
+
+    A substitution's value exists only at runtime, so it can name the pull request, the
+    repository, or the variable that selects either. None of those can be weighed beforehand.
+    A PROCESS substitution runs a command of its own besides — and its `<(` keeps that command
+    in the same segment as the one it feeds, where only the first tool word is ever read.
+    """
+    try:
+        segments = _segments(_strip_heredoc_bodies(cmd))
+    except ValueError:
+        return True
+    return any(word == SUBST or '<(' in word or '>(' in word for segment in segments for word in segment)
+
+
+def _sets_gh_repo(cmd: str) -> bool:
+    """Whether `cmd` sets `GH_REPO` for anything it runs.
+
+    The shell removes quotes before it reads an assignment, so `G''H_REPO=x` sets the variable
+    while the raw text never spells its name. Quoting the tokenizer cannot read is itself an
+    answer of yes, since what it hides could be the assignment.
+    """
+    try:
+        segments = _segments(_strip_heredoc_bodies(cmd))
+    except ValueError:
+        return True
+    return any(word.startswith(GH_REPO_ENV + '=') for segment in segments for word in segment)
+
+
+def _gh_repo(explicit: str, inv_dir: str | None, git: GitInfo, cmd: str, gh_repo_env: str) -> str:
+    """The repository a `gh` invocation acts on, or '' when that cannot be established.
+
+    `-R` names it outright, and `GH_REPO` does the same from the environment — which is not
+    something a command can be read for, so either source of it gives up. Otherwise gh resolves
+    the repository from the working directory, which is why an unresolvable directory gives up
+    too: a merge is not this repository's just because nothing said otherwise.
+    """
+    if gh_repo_env or _sets_gh_repo(cmd):
+        return ''
+    if explicit:
+        return explicit.casefold()
+    return repo_slug(git.origin_url(inv_dir)) if inv_dir is not None else ''
+
+
+def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None, str]:
+    """Whether this is `gh pr merge`, the pull request it names, and the repository it targets.
+
+    The number is None unless the merge target is written as one, and the repository is '' unless
+    `-R` names another — gh takes a URL or a branch there too, which no authorization can name.
+    gh (cobra) accepts persistent flags between `pr` and the subcommand — `gh pr -R o/r merge 1`.
+    """
+    positional: list[str] = []
+    repo = pending = ''
     for w in words:
-        if skip:
-            skip = False
-            continue
-        if w.startswith('-'):
-            if w in ('-R', '--repo'):
-                skip = True
-            continue
-        w = re.sub(r'[)}].*$', '', w)
-        if not w:
-            continue
-        if not seen_pr:
-            if w == 'pr':
-                seen_pr = True
-            continue
-        return w == 'merge'
-    return False
+        if pending:
+            repo, pending = (w if pending in ('-R', '--repo') else repo), ''
+        elif w.startswith('-'):
+            flag, eq, value = w.partition('=')
+            if flag in ('--help', '-h'):
+                return False, None, ''
+            if flag in ('-R', '--repo') and eq:
+                repo = value
+            elif flag in GH_MERGE_VALUE_FLAGS and not eq:
+                pending = flag
+        elif bare := re.sub(r'[)}].*$', '', w):  # a lossy parse leaves a closing delimiter glued on
+            positional.append(bare)
+    if not positional or positional[0] == 'help' or 'pr' not in positional:
+        return False, None, ''
+    after = positional[positional.index('pr') + 1 :]
+    if not after or after[0] != 'merge':
+        return False, None, ''
+    target = after[1] if len(after) > 1 else ''
+    return True, int(target) if target.isdigit() else None, repo
 
 
 def _push_dest_slug(inv_dir: str | None, rest: list[str], git: GitInfo) -> str:  # noqa: C901
@@ -397,15 +567,25 @@ def _push_dest_slug(inv_dir: str | None, rest: list[str], git: GitInfo) -> str: 
     return repo_slug(git.remote_url(inv_dir, remote))
 
 
-def analyze(cmd: str, cwd: str, guarded_slug: str, git: GitInfo, path_exists=os.path.isdir, _depth=0) -> str | None:  # noqa: C901
+def analyze(  # noqa: C901
+    cmd: str,
+    cwd: str,
+    guarded_slug: str,
+    git: GitInfo,
+    path_exists=os.path.isdir,
+    _depth=0,
+    in_substitution=False,
+    allow_merge=consume_merge_allow,
+    gh_repo_env='',
+) -> str | None:
     """The deny message for `cmd`, or None to allow it."""
     guarded_slug = guarded_slug.casefold()
     # A command substitution runs its own command (same cwd) before the outer command, so a git
     # invocation hidden inside `` `…` `` / `$(…)` must be analyzed too. Bounded recursion depth
     # guards against pathological nesting.
     if _depth < 8:
-        for body in _substitution_bodies(cmd):
-            deny = analyze(body, cwd, guarded_slug, git, path_exists, _depth + 1)
+        for body in _substitution_bodies(_strip_heredoc_bodies(cmd)):
+            deny = analyze(body, cwd, guarded_slug, git, path_exists, _depth + 1, True, allow_merge, gh_repo_env)
             if deny:
                 return deny
     invs = parse_invocations(cmd, cwd, path_exists)
@@ -429,9 +609,23 @@ def analyze(cmd: str, cwd: str, guarded_slug: str, git: GitInfo, path_exists=os.
     def targets_main(inv_dir: str | None) -> bool:
         return on_main(inv_dir) or switches_to_main()
 
+    pending_merge = None
     for inv in invs:
-        if inv.kind == 'gh' and _is_gh_pr_merge(inv.words):
-            return 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL
+        if inv.kind != 'gh':
+            continue
+        is_merge, number, target = _gh_pr_merge(inv.words)
+        if is_merge:
+            if in_substitution or _carries_substitution(cmd):
+                return MERGE_SUBSTITUTION_MSG
+            if number is None:
+                return UNNUMBERED_MSG
+            if pending_merge is not None:
+                return MULTIPLE_MERGES_MSG
+            if _gh_repo(target, inv.dir, git, cmd, gh_repo_env) != guarded_slug:
+                return 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
+            # Spending it here would pay for a merge a later invocation in the same command can
+            # still block, so the authorization is consulted once everything else has passed.
+            pending_merge = number
 
     for inv, sub, rest in git_invs:
         if exempt(inv.dir):
@@ -468,6 +662,9 @@ def analyze(cmd: str, cwd: str, guarded_slug: str, git: GitInfo, path_exists=os.
             deny = _check_push_refspecs(rest, targets_main(inv.dir))
             if deny:
                 return deny
+
+    if pending_merge is not None and not allow_merge(pending_merge, guarded_slug):
+        return 'BLOCKED: gh pr merge is not allowed.' + DENY_TAIL + MERGE_ESCAPE
     return None
 
 
@@ -513,7 +710,7 @@ def main() -> int:
     cwd = payload.get('cwd') or os.getcwd()
     git = GitInfo()
     guarded_slug = repo_slug(git.origin_url(os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd()))
-    deny = analyze(cmd, cwd, guarded_slug, git)
+    deny = analyze(cmd, cwd, guarded_slug, git, gh_repo_env=os.environ.get(GH_REPO_ENV, ''))
     if deny:
         print(deny, file=sys.stderr)
         return 2
