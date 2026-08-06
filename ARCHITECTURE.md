@@ -5,8 +5,8 @@ real rig — follows from what is below: the goals state what the system guarant
 are the means, and the invariants and decisions that follow are consequences. When a new case is
 not settled here, decide it the same way — from the goals, through the principles.
 
-What code here must look like is [CLAUDE.md](CLAUDE.md) and the named rules in
-[CODE_RULES.md](CODE_RULES.md). A component with principles of its own keeps them in an
+[CLAUDE.md](CLAUDE.md) is how code here is written; the named rules in
+[CODE_RULES.md](CODE_RULES.md) are what a review cites. A component with principles of its own keeps them in an
 architecture document beside its code —
 [`positronic/dataset/ARCHITECTURE.md`](positronic/dataset/ARCHITECTURE.md), which its `AGENTS.md`
 links.
