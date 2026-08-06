@@ -228,9 +228,9 @@ Don't catch an exception so the code can carry on, and don't fall back to a seco
 comes back empty. Let the failure surface: a pipeline that silently yields nothing is harder to
 diagnose than one that raises, and a fallback becomes the path everything quietly runs through.
 
-An exception is not always a failure. Where an API reports an expected state by raising — `Empty`
-from a non-blocking `get`, `StopIteration` — catching it is how that state is read, and none of this
-applies.
+This is about hiding a failure, and neither an exception nor an absence is always one. Where a
+contract says the value may not be there — `Empty` from a non-blocking `get`, a cache the format
+declares optional — reading that and going on is how the contract is used, not a fallback.
 
 Where a failure genuinely must not stop the caller — one malformed file in a scan, an optional
 feature, a cleanup — catch that specific exception, log it at ERROR with what failed, and say in one
