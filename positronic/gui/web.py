@@ -23,32 +23,36 @@ from positronic.drivers.roboarm import command
 from positronic.policy.harness import Directive, HarnessStatus, Phase
 
 
+class _Axis(StrEnum):
+    """A jog axis, in the frame the console's key map is expressed in."""
+
+    X = 'x'
+    Y = 'y'
+    Z = 'z'
+    RX = 'rx'
+    RY = 'ry'
+    RZ = 'rz'
+
+
+class _Step(StrEnum):
+    """Which of the two configured step sizes a jog moves by."""
+
+    FINE = 'fine'
+    COARSE = 'coarse'
+
+
 class _JogBody(BaseModel):
-    axis: Literal['x', 'y', 'z', 'rx', 'ry', 'rz']
+    axis: _Axis
     sign: Literal[-1, 1]
-    scale: Literal['fine', 'coarse']
+    scale: _Step
 
 
 class _GripBody(BaseModel):
     value: float = Field(ge=0.0, le=1.0)
 
 
-_TRANSLATION_AXES = {'x': 0, 'y': 1, 'z': 2}
-_ROTATION_AXES = {'rx': 0, 'ry': 1, 'rz': 2}
-
-
-class _WrapUpState(StrEnum):
-    IDLE = 'idle'
-    FINALIZING = 'finalizing'
-    FAILED = 'failed'
-
-
-@dataclass(frozen=True)
-class _WrapUpStatus:
-    """How the run-level wrap-up is going, published on GET /wrap_up for the console's overlay."""
-
-    state: _WrapUpState
-    detail: str = ''
+_TRANSLATION_AXES = {_Axis.X: 0, _Axis.Y: 1, _Axis.Z: 2}
+_ROTATION_AXES = {_Axis.RX: 0, _Axis.RY: 1, _Axis.RZ: 2}
 
 
 def _pkg_path(*parts: str) -> str:
@@ -199,6 +203,20 @@ class _CameraStream:
         self._container.close()
 
 
+class _WrapUpState(StrEnum):
+    IDLE = 'idle'
+    FINALIZING = 'finalizing'
+    FAILED = 'failed'
+
+
+@dataclass(frozen=True)
+class _WrapUpStatus:
+    """How the run-level wrap-up is going, published on GET /wrap_up for the console's overlay."""
+
+    state: _WrapUpState
+    detail: str = ''
+
+
 class WebEvalUI(pimm.ControlSystem):
     """Headless web operator surface for attended evals.
 
@@ -291,12 +309,12 @@ class WebEvalUI(pimm.ControlSystem):
         @app.post('/jog')
         async def jog(body: _JogBody):
             if body.axis in _TRANSLATION_AXES:
-                step = self.translation_fine if body.scale == 'fine' else self.translation_coarse
+                step = self.translation_fine if body.scale is _Step.FINE else self.translation_coarse
                 translation = np.zeros(3)
                 translation[_TRANSLATION_AXES[body.axis]] = body.sign * step
                 delta = geom.Transform3D(translation=translation)
             elif body.axis in _ROTATION_AXES:
-                angle = self.rotation_fine if body.scale == 'fine' else self.rotation_coarse
+                angle = self.rotation_fine if body.scale is _Step.FINE else self.rotation_coarse
                 rotvec = np.zeros(3)
                 rotvec[_ROTATION_AXES[body.axis]] = np.deg2rad(body.sign * angle)
                 delta = geom.Transform3D(rotation=geom.Rotation.from_rotvec(rotvec))
@@ -304,7 +322,7 @@ class WebEvalUI(pimm.ControlSystem):
 
         @app.post('/grip')
         async def grip(body: _GripBody):
-            self.manual_command.emit({'target_grip': body.value}, clock.now_ns())
+            self.manual_command.emit({keys.TARGET_GRIP: body.value}, clock.now_ns())
 
         @app.get('/status')
         async def get_status():

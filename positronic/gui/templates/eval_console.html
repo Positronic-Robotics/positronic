@@ -131,13 +131,11 @@
 
     <script>
       // ─── SCREEN → WORLD KEY MAP ──────────────────────────────────────────────────────────────────────
-      // The ONE place to calibrate manual teleop. Each keyboard `event.code` maps to a world-frame jog
-      // {axis, sign}; the step size comes from the active Fine/Coarse mode, not from here.
-      //
-      // The screen->world axis/sign assignment below is a BEST GUESS. It is only correct if each camera is
-      // mounted the way we assumed (world x = depth toward the wall, y = horizontal-left, z = up). Calibrate
-      // at the rig: press a key, watch the arm, and flip `axis`/`sign` on that one line until it matches.
-      // `glyph`/`label` drive the on-screen legend, so a fixed binding stays self-documenting.
+      // Each `event.code` maps to a world-frame jog {axis, sign}; the step size comes from the Fine/Coarse
+      // mode. The axes are the arm's world frame — x depth toward the wall, y horizontal-left, z up — so a
+      // line is correct only for a camera mounted as that frame assumes, and every `GUESS` below is an
+      // uncalibrated assignment: press the key, watch the arm, flip `axis`/`sign` on that line.
+      // `glyph`/`label` render the legend, so a binding documents itself.
       const KEY_MAP = {
         // Side-view camera -> world translation. WASD = the viewing plane, QE = depth.
         side: {

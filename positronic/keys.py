@@ -13,6 +13,7 @@ configs, adapters and datasets.
 ROBOT_COMMAND = 'robot_command'
 TARGET_EE_POSE = f'{ROBOT_COMMAND}.pose'
 TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
+TARGET_GRIP = 'target_grip'
 
 # The arm's state channel, and the signals its serializer unfolds it into.
 ROBOT_STATE = 'robot_state'
