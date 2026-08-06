@@ -266,18 +266,16 @@ the first time only one of the two is set.
 Extend the module that owns the subject rather than adding a file beside it. Where nothing owns it,
 that is a finding about the layout — say so, rather than restructuring on your own initiative.
 
-### whole-body-with
+### large-indent
 
-Where a context manager can be written as a decorator, don't wrap a whole function body in a `with`.
-Decorate the function instead: that the whole call runs inside it belongs at the signature, where a
-reader meets it first, not as an indent around everything.
+Don't let a block grow into a wall of indented code. A long loop or branch body is a function
+waiting to be named and extracted, a long `try` is the same with the boundary in the wrong place,
+and a whole function body inside a `with` is a decorator. What is left then reads as what it does,
+with no enclosing condition to hold in mind.
 
-Much of the time it cannot. A decorator is evaluated where the function is defined, so a manager
-reached through the instance — `with self._lock` — is not available to one, and a manager is usable
-as a decorator at all only as a `ContextDecorator`, which `@contextlib.contextmanager` returns and an
-ordinary `__enter__`/`__exit__` class does not. Keep the `with` in those cases, and equally when code
-runs outside the block, when the `as` value is used, or when a generator or coroutine needs the
-context scoped per `yield`/`await` — a decorator scopes it per call.
+Keep the `with` where no decorator can be reached — one evaluated where the function is defined
+cannot see `self._lock`, and only a `ContextDecorator` works as one at all — or where the `as`
+value is used, or a generator needs the context per `yield`.
 
 ```python
 # Bad
