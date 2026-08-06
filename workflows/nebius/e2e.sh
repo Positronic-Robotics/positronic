@@ -153,6 +153,14 @@ wait_job "$TRAIN_ID" "train" || exit 1
 
 # ---- 3. Serve ----
 note "serve -> $ENDPOINT_NAME"
+# Armed before the endpoint can exist: from here on every exit, including a `serve.sh` that created
+# one and then failed, has to release the GPU rather than leave it billing.
+teardown() {
+  note "teardown -> $ENDPOINT_NAME"
+  bash "$SCRIPT_DIR/stop.sh" "$ENDPOINT_NAME" >> "$LOG" 2>&1 || true
+  note "DONE"
+}
+trap teardown EXIT
 SERVE_OUT=$(bash "$SCRIPT_DIR/serve.sh" "$VENDOR" "$ENDPOINT_NAME" "${SERVE_SUBCMD[@]}" 2>&1)
 echo "$SERVE_OUT" >> "$LOG"
 SERVE_URL=$(echo "$SERVE_OUT" | awk '/Endpoint URL:/ {print $3; exit}')
@@ -169,31 +177,30 @@ case "$AUTH_TOKEN" in
   ''|null) note "FAIL: no AUTH_TOKEN payload in $AUTH_TOKEN_SECRET"; exit 1 ;;
 esac
 
+# Only a 200 is the model list. A warming endpoint answers 502/503 and a bad token answers 401, both
+# with a body of their own, so "got bytes back" would call either one a passing smoke test.
 RESP=""
+CODE=""
 for i in $(seq 1 50); do
-  RESP=$(curl --max-time 5 -s -H "Authorization: Bearer $AUTH_TOKEN" "$SERVE_URL/api/v1/models" 2>/dev/null || true)
-  [ -n "$RESP" ] && break
+  OUT=$(curl --max-time 5 -s -w '\n%{http_code}' -H "Authorization: Bearer $AUTH_TOKEN" "$SERVE_URL/api/v1/models" || true)
+  CODE=${OUT##*$'\n'}
+  if [ "$CODE" = "200" ]; then RESP=${OUT%$'\n'*}; break; fi
   sleep 30
 done
 STATUS=0
-if [ -n "$RESP" ]; then
+if [ "$CODE" = "200" ]; then
   note "infer: $RESP"
   # The endpoint is gated: the same call without the token must not reach the model list.
-  CODE=$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "$SERVE_URL/api/v1/models")
-  if [ "$CODE" = "401" ]; then
+  TOKENLESS=$(curl --max-time 10 -s -o /dev/null -w '%{http_code}' "$SERVE_URL/api/v1/models")
+  if [ "$TOKENLESS" = "401" ]; then
     note "auth: tokenless request rejected (401)"
   else
-    note "auth: FAIL, tokenless got $CODE"
+    note "auth: FAIL, tokenless got $TOKENLESS"
     STATUS=1
   fi
 else
-  note "infer: TIMEOUT"
+  note "infer: FAILED, last status ${CODE:-none}"
   STATUS=1
 fi
 
-# ---- 5. Teardown ----
-# Runs whatever the smoke stage found, so a failure never leaves an H100 endpoint behind.
-note "teardown -> $ENDPOINT_NAME"
-bash "$SCRIPT_DIR/stop.sh" "$ENDPOINT_NAME" >> "$LOG" 2>&1 || true
-note "DONE"
 exit "$STATUS"
