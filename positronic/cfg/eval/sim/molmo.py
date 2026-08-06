@@ -3,12 +3,11 @@ from pathlib import Path
 
 import configuronic as cfn
 
-from positronic import keys
 from positronic.drivers.roboarm.models import GRASP_SITE_LINK, bundled_franka_model
 from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED, EVAL_TRIAL_COUNT, EVAL_TRIAL_INDEX, Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.molmo_spaces import mapping
-from positronic.simulator.molmo_spaces.adapter import MolmoAdapter
+from positronic.simulator.molmo_spaces.adapter import DEFAULT_CAMERA_DICT, MolmoAdapter
 from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
 
 
@@ -26,7 +25,7 @@ def _episode_count(benchmark_dir: Path) -> int:
 
 
 @cfn.config(
-    camera_dict={keys.WRIST_IMAGE: mapping.MOLMO_WRIST_CAMERA, keys.EXTERIOR_IMAGE: mapping.MOLMO_EXTERIOR_CAMERA},
+    camera_dict=DEFAULT_CAMERA_DICT,
     benchmark_dir=None,
     episodes=None,
     trial_count=1,

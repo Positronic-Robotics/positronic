@@ -15,10 +15,10 @@ from positronic import keys
 from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED, EVAL_SUCCESS
 from positronic.simulator.env_server import protocol
 from positronic.simulator.molmo_spaces import mapping
+from positronic.simulator.molmo_spaces.adapter import DEFAULT_CAMERA_DICT as CAMERA_DICT
 from positronic.simulator.molmo_spaces.adapter import MolmoAdapter
 
 FIXTURE = Path(__file__).parent / 'droid_obs.npz'
-CAMERA_DICT = {keys.WRIST_IMAGE: mapping.MOLMO_WRIST_CAMERA, keys.EXTERIOR_IMAGE: mapping.MOLMO_EXTERIOR_CAMERA}
 
 
 def _payload() -> dict:

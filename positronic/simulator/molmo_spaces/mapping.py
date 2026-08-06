@@ -58,15 +58,6 @@ MOLMO_OBS_QPOS = 'qpos'
 # The benchmark episode's declared horizon, in sim-seconds, inside its task dict.
 MOLMO_TASK_HORIZON_SEC = 'task_horizon_sec'
 
-# The parity record: what the native reference writes about a rollout, and what the comparison reads back.
-# The per-camera frame hashes are one field per camera name, under the prefix.
-CAM_HASH_PREFIX = 'cam_hash__'
-PARITY_CAMERA_NAMES = 'camera_names'
-PARITY_HORIZON_STEPS = 'native_horizon'
-PARITY_HORIZON_SEC = 'horizon_sec'
-PARITY_TERMINATION_STEP = 'termination_step'
-PARITY_FINAL_SUCCESS = 'final_success'
-
 # The raw observation payload ``env.py`` reports and ``MolmoAdapter`` reads back.
 OBS_JOINT_POS = 'joint_pos'
 OBS_JOINT_VEL = 'joint_vel'
@@ -92,6 +83,12 @@ GRIPPER_QPOS_CLOSED = 0.824033
 # The Robotiq gripper actuator is a single command, 0 fully open .. 255 fully closed (franka_droid_view.py:43).
 ROBOTIQ_OPEN = 0.0
 ROBOTIQ_CLOSED = 255.0
+
+
+def is_rgb_frame(value: Any) -> bool:
+    """Whether an observation entry is a rendered camera frame — which is how the camera keys are discovered,
+    since MolmoSpaces names them per benchmark and the obs dict carries no other HWC uint8 array."""
+    return isinstance(value, np.ndarray) and value.ndim == 3 and value.shape[2] == 3 and value.dtype == np.uint8
 
 
 def normalize_grip_qpos(gripper_qpos: Any, gripper_qpos_closed: float = GRIPPER_QPOS_CLOSED) -> float:

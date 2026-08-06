@@ -23,6 +23,10 @@ _CAMERA_VARIANTS = {
     mapping.MOLMO_EXTERIOR_CAMERA: mapping.MOLMO_EXTERIOR_CAMERA_VARIANTS,
 }
 
+# Which MolmoSpaces camera each logical observation reads, for the DROID rig's two default cameras. An eval may
+# configure others; this is the pairing the benchmarks record and the variants above resolve.
+DEFAULT_CAMERA_DICT = {keys.WRIST_IMAGE: mapping.MOLMO_WRIST_CAMERA, keys.EXTERIOR_IMAGE: mapping.MOLMO_EXTERIOR_CAMERA}
+
 
 class MolmoAdapter(WireCommandAdapter):
     def __init__(self, camera_dict: dict[str, str]) -> None:

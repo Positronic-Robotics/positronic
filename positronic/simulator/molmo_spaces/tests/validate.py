@@ -6,8 +6,8 @@ solver is arithmetic over the live MuJoCo model, which no unit test can reach (`
 routing with a stub solver, not the kinematics), so it is checked here against a real benchmark scene — the
 same shape of check ``simulator/libero/validate.py`` runs for the LIBERO rig.
 
-Four properties. The kinematic three read the arm's grasp site (the frame ``observe_payload`` reports, so
-command and observation share a frame); the fourth is the adoption's coverage of the command contract:
+Four properties. The kinematic three read the arm's grasp site (the frame the env observes in, so command and
+observation share a frame); the fourth is the adoption's coverage of the command contract:
 
 - **FK identity** — the scratch-``MjData`` recompute of the measured joints reproduces the live grasp-site read,
   confirming the scratch evaluation is seeded correctly and reads the same frame.
@@ -28,7 +28,7 @@ way ``parity.py`` launches the native reference — the venv python under ``laun
     import subprocess
     from positronic.simulator.molmo_spaces import launcher
     subprocess.run([str(launcher.ensure_molmo_venv()),
-                    'positronic/simulator/molmo_spaces/validate.py', '--benchmark_dir', '<dir>'],
+                    'positronic/simulator/molmo_spaces/tests/validate.py', '--benchmark_dir', '<dir>'],
                    env=launcher.molmo_subprocess_env(), check=True)"
 """
 

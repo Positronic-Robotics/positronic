@@ -128,10 +128,6 @@ def _assert_measures_at_grasp_site(robot_view: Any) -> None:
 _SITE_FRAME = 'site'
 
 
-def _is_rgb_frame(value: Any) -> bool:
-    return isinstance(value, np.ndarray) and value.ndim == 3 and value.shape[2] == 3 and value.dtype == np.uint8
-
-
 class MolmoSpacesEnv(EnvProtocol):
     """A MolmoSpaces benchmark episode behind the gym-style ``reset``/``step``/``close`` the env server serves.
 
@@ -194,7 +190,7 @@ class MolmoSpacesEnv(EnvProtocol):
         self._build(token[mapping.TOKEN_EPISODE_INDEX], token.get(mapping.TOKEN_SEED))
         obs, _info = self._task.reset()  # obs is a list, one dict per env; n_batch == 1
         env_obs = obs[0]
-        self._camera_names = [k for k, v in env_obs.items() if _is_rgb_frame(v)]
+        self._camera_names = [k for k, v in env_obs.items() if mapping.is_rgb_frame(v)]
         # robot_meta is empty: this venv cannot import positronic to emit the Franka model, so the eval supplies
         # it via ``static_meta`` (``bundled_franka_model``).
         return {
@@ -233,7 +229,7 @@ class MolmoSpacesEnv(EnvProtocol):
 
     def _measured_eef_pose(self) -> tuple[np.ndarray, np.ndarray]:
         """The measured grasp-site world pose as ``(translation, 3x3 rotation)`` — the frame a Cartesian
-        command targets and the one ``observe_payload`` reports, so command and observation share a frame."""
+        command targets and the one ``_observe`` reports, so command and observation share a frame."""
         eef_world = np.asarray(
             self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP).leaf_frame_to_world, dtype=np.float64
         )
@@ -308,56 +304,49 @@ class MolmoSpacesEnv(EnvProtocol):
             mujoco.mj_jacBody(model, data, out[:3], out[3:], move_group.leaf_frame_id)  # pyright: ignore[reportAttributeAccessIssue]
 
     def _observe(self, env_obs: dict[str, Any]) -> dict[str, Any]:
-        return observe_payload(self._robot_view, env_obs, self._camera_names)
+        """The raw observation payload for one env frame: measured joints, the eef world pose, grip, camera frames.
+
+        MolmoSpaces' obs carries the joint positions/velocities and camera frames; the eef *world* pose is read
+        from the arm move group's grasp-site frame, since obs exposes only a robot-relative tcp pose.
+        """
+        arm = self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
+        eef_world = np.asarray(arm.leaf_frame_to_world, dtype=np.float64)  # 4x4 grasp-site world transform
+        eef_quat = np.zeros(4)  # filled wxyz below
+        rot9 = np.ascontiguousarray(eef_world[:3, :3].reshape(9))
+        # mju_mat2Quat is a C binding absent from mujoco's type stubs, so pyright can't see the attribute.
+        mujoco.mju_mat2Quat(eef_quat, rot9)  # pyright: ignore[reportAttributeAccessIssue]
+        payload = {
+            mapping.OBS_JOINT_POS: np.asarray(arm.joint_pos, dtype=np.float32),
+            mapping.OBS_JOINT_VEL: np.asarray(arm.joint_vel, dtype=np.float32),
+            mapping.OBS_EEF_POS: eef_world[:3, 3].astype(np.float32),
+            mapping.OBS_EEF_QUAT: eef_quat.astype(np.float32),
+            mapping.OBS_GRIP: np.float32(
+                mapping.normalize_grip_qpos(env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP])
+            ),
+            # The full MuJoCo generalized state: every body's pose + velocity, objects included.
+            mapping.OBS_SIM_STATE: self._full_physics_state(),
+        }
+        for name in self._camera_names:
+            payload[name] = np.ascontiguousarray(env_obs[name])
+        return payload
+
+    def _full_physics_state(self) -> np.ndarray:
+        """The scene's complete integrable state: ``mjSTATE_INTEGRATION``, the minimal subset a deterministic
+        MuJoCo sim restores from to reproduce its forward trajectory — positions and velocities, and with them
+        mocap bodies, actuator activation, controls and the solver warm-start. Object poses in it let analysis
+        recompute success. Positions start at index 1, after the scalar time."""
+        data = self._robot_view.mj_data
+        model = data.model
+        spec = mujoco.mjtState.mjSTATE_INTEGRATION  # pyright: ignore[reportAttributeAccessIssue]
+        state = np.empty(mujoco.mj_stateSize(model, spec), dtype=np.float64)  # pyright: ignore[reportAttributeAccessIssue]
+        mujoco.mj_getState(model, data, state, spec)  # pyright: ignore[reportAttributeAccessIssue]
+        return state
 
     def close(self) -> None:
         if self._sampler is not None:
             self._sampler.close()
             self._sampler = None
             self._task = None
-
-
-def _full_physics_state(robot_view: Any) -> np.ndarray:
-    """The scene's complete integrable state: ``mjSTATE_INTEGRATION``, the minimal subset a deterministic
-    MuJoCo sim restores from to reproduce its forward trajectory — positions and velocities, and with them
-    mocap bodies, actuator activation, controls and the solver warm-start. Object poses in it let analysis
-    recompute success. Positions start at index 1, after the scalar time."""
-    data = robot_view.mj_data
-    model = data.model
-    spec = mujoco.mjtState.mjSTATE_INTEGRATION  # pyright: ignore[reportAttributeAccessIssue]
-    state = np.empty(mujoco.mj_stateSize(model, spec), dtype=np.float64)  # pyright: ignore[reportAttributeAccessIssue]
-    mujoco.mj_getState(model, data, state, spec)  # pyright: ignore[reportAttributeAccessIssue]
-    return state
-
-
-def observe_payload(robot_view: Any, env_obs: dict[str, Any], camera_names: list[str]) -> dict[str, Any]:
-    """The raw observation payload for one env frame: measured joints, the eef world pose, grip, camera frames.
-
-    MolmoSpaces' obs carries the joint positions/velocities and camera frames; the eef *world* pose is read from
-    the arm move group's grasp-site frame (obs only exposes a robot-relative tcp pose). The parity reference
-    (``parity_native.py``) shares this extraction so its comparison against the env-server path isolates the sim
-    rollout, not the observation mapping.
-    """
-    arm = robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
-    eef_world = np.asarray(arm.leaf_frame_to_world, dtype=np.float64)  # 4x4 grasp-site world transform
-    eef_quat = np.zeros(4)  # filled wxyz below
-    rot9 = np.ascontiguousarray(eef_world[:3, :3].reshape(9))
-    # mju_mat2Quat is a C binding absent from mujoco's type stubs, so pyright can't see the attribute.
-    mujoco.mju_mat2Quat(eef_quat, rot9)  # pyright: ignore[reportAttributeAccessIssue]
-    payload = {
-        mapping.OBS_JOINT_POS: np.asarray(arm.joint_pos, dtype=np.float32),
-        mapping.OBS_JOINT_VEL: np.asarray(arm.joint_vel, dtype=np.float32),
-        mapping.OBS_EEF_POS: eef_world[:3, 3].astype(np.float32),
-        mapping.OBS_EEF_QUAT: eef_quat.astype(np.float32),
-        mapping.OBS_GRIP: np.float32(
-            mapping.normalize_grip_qpos(env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP])
-        ),
-        # The full MuJoCo generalized state: every body's pose + velocity, objects included.
-        mapping.OBS_SIM_STATE: _full_physics_state(robot_view),
-    }
-    for name in camera_names:
-        payload[name] = np.ascontiguousarray(env_obs[name])
-    return payload
 
 
 def _leaf_pose(move_group: Any, data: Any) -> tuple[np.ndarray, np.ndarray]:
