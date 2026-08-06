@@ -49,6 +49,10 @@ MERGE_SUBSTITUTION_MSG = (
     'BLOCKED: a merge in a command carrying a command substitution cannot be verified — the'
     ' substitution decides at runtime what is merged, and where.'
 )
+MERGE_EXPANSION_MSG = (
+    'BLOCKED: a merge whose words the shell expands cannot be verified — the expansion is split'
+    ' into further arguments, which can select a repository the authorization never named.'
+)
 AMEND_MSG = 'BLOCKED: Never amend commits, create new ones instead.'
 
 # git global options that consume the following argument in their space-separated form
@@ -423,23 +427,6 @@ def consume_merge_allow(
     return True
 
 
-# `gh pr merge` flags that consume the following argument, so its value is never the pull
-# request being merged: `gh pr merge --subject 566 999` merges 999.
-GH_MERGE_VALUE_FLAGS = frozenset({
-    '-A',
-    '--author-email',
-    '-b',
-    '--body',
-    '-F',
-    '--body-file',
-    '--match-head-commit',
-    '-t',
-    '--subject',
-    '-R',
-    '--repo',
-})
-
-
 def _carries_substitution(cmd: str) -> bool:
     """Whether `cmd` carries a substitution, or quoting that cannot be read.
 
@@ -453,6 +440,16 @@ def _carries_substitution(cmd: str) -> bool:
     except ValueError:
         return True
     return any(word == SUBST or '<(' in word or '>(' in word for segment in segments for word in segment)
+
+
+def _carries_expansion(words: list[str]) -> bool:
+    """Whether the shell builds any of `words` at runtime.
+
+    An expansion's value is unknown before the command runs, and the shell word-SPLITS it after
+    it: `EXTRA='-R other/repo'; gh pr merge 566 $EXTRA` reaches gh as a repository selector no
+    authorization named. `$(…)` leaves a bare `$` among the tokens, which this reads the same way.
+    """
+    return any('$' in word for word in words)
 
 
 def _sets_gh_repo(cmd: str) -> bool:
@@ -484,6 +481,62 @@ def _gh_repo(explicit: str, inv_dir: str | None, git: GitInfo, cmd: str, gh_repo
     return repo_slug(git.origin_url(inv_dir)) if inv_dir is not None else ''
 
 
+# `gh pr merge` flags that consume the following argument, so its value is never the pull
+# request being merged: `gh pr merge --subject 566 999` merges 999.
+GH_MERGE_VALUE_FLAGS = frozenset({
+    '-A',
+    '--author-email',
+    '-b',
+    '--body',
+    '-F',
+    '--body-file',
+    '--match-head-commit',
+    '-t',
+    '--subject',
+    '-R',
+    '--repo',
+})
+
+
+def _gh_shorthand(word: str) -> tuple[str, str]:
+    """The value-taking shorthand in a `-abc` cluster, and the value written onto it.
+
+    pflag clusters shorthands and takes a value attached to the last of them, so
+    `-dRowner/repo` is `--delete-branch --repo owner/repo`. An empty value means the next word
+    carries it. ('', '') when the cluster takes none, and ('-h', '') for help, which merges nothing.
+    """
+    for i, letter in enumerate(word[1:], 1):
+        short = '-' + letter
+        if short == '-h':
+            return short, ''
+        if short in GH_MERGE_VALUE_FLAGS:
+            return short, word[i + 1 :].removeprefix('=')
+    return '', ''
+
+
+def _gh_flag(word: str) -> tuple[bool, str, str]:
+    """How one flag word bears on a merge.
+
+    Whether it asks for help — which makes gh print it and merge nothing — the repository it
+    names, and the value-taking flag it leaves for the NEXT word to fill.
+    """
+    flag, eq, value = word.partition('=')
+    if flag in ('--help', '-h'):
+        return True, '', ''
+    if flag in GH_MERGE_VALUE_FLAGS:
+        if not eq:
+            return False, '', flag
+        return False, value if flag in ('-R', '--repo') else '', ''
+    if word.startswith('--'):
+        return False, '', ''
+    short, attached = _gh_shorthand(word)
+    if short == '-h':
+        return True, '', ''
+    if not attached:
+        return False, '', short
+    return False, attached if short == '-R' else '', ''
+
+
 def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None, str]:
     """Whether this is `gh pr merge`, the pull request it names, and the repository it targets.
 
@@ -497,13 +550,10 @@ def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None, str]:
         if pending:
             repo, pending = (w if pending in ('-R', '--repo') else repo), ''
         elif w.startswith('-'):
-            flag, eq, value = w.partition('=')
-            if flag in ('--help', '-h'):
+            asks_help, named, pending = _gh_flag(w)
+            if asks_help:
                 return False, None, ''
-            if flag in ('-R', '--repo') and eq:
-                repo = value
-            elif flag in GH_MERGE_VALUE_FLAGS and not eq:
-                pending = flag
+            repo = named or repo
         elif bare := re.sub(r'[)}].*$', '', w):  # a lossy parse leaves a closing delimiter glued on
             positional.append(bare)
     if not positional or positional[0] == 'help' or 'pr' not in positional:
@@ -617,6 +667,8 @@ def analyze(  # noqa: C901
         if is_merge:
             if in_substitution or _carries_substitution(cmd):
                 return MERGE_SUBSTITUTION_MSG
+            if _carries_expansion(inv.words):
+                return MERGE_EXPANSION_MSG
             if number is None:
                 return UNNUMBERED_MSG
             if pending_merge is not None:
