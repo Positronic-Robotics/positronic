@@ -31,12 +31,17 @@ needs their call. A red build is never "done", no matter what the reviewer says.
   fixed it, so the fix must land first.
 - **An OPEN thread means a human still owes an answer here — nothing else.** So the question
   per thread is not "was this a fix or a decline" but "is a person's answer still outstanding".
-  **Settled → resolve**: a fix you pushed, a decline or deferral the human has ratified. **Not
-  settled → open**: a decline or defer on your own judgement that they have not seen yet, a
+  **Settled → resolve**: a fix you pushed, a decline or deferral that has been ratified. **Not
+  settled → open**: a decline or defer on your own judgement nobody has answered yet, a
   question they asked, a design call you escalated. Both directions are mandatory. A fixed
   thread left open reads as still-broken to anyone scanning the PR; a PR whose open threads mix
   live questions with settled arguments teaches its reader that open means nothing, so the one
   thread that did need them goes unread. Never resolve a thread just to clear the queue.
+- **Ratified means the party the decline is owed to has answered it** — nobody else can.
+  A **human's** approval settles what you declined of a **bot's** findings; a human's own
+  comment is settled by that human alone. A bot's 👍 says nothing about whether a person accepted
+  your reasoning, and on a PR with two reviewers one approval says nothing about the other's
+  thread. Read a sign-off for whose it is before it settles anything.
 - **Stay scoped** to the feedback. Don't sprawl into unrelated refactors.
 - **Follow the repo's commit conventions** (see the `push-pr` skill). CRITICAL: never add
   `Co-Authored-By` or any AI / Claude / assistant attribution to commits, replies, or PRs.
@@ -100,9 +105,9 @@ For each open comment, decide and note severity if the bot tagged one (e.g. Code
 - **Partial / alternative** — valid concern, but a different fix than suggested → explain;
   resolve only if you land a concrete change, else leave open.
 - **Decline** — wrong, not applicable, or contradicts a deliberate decision → reasoned
-  reply; **leave open** until the human ratifies it, **resolve** once they have.
+  reply; **leave open** until it is ratified, **resolve** once it is.
 - **Defer** — valid but out of scope for this PR → reply naming where it is tracked; same
-  rule — **open** until they agree the deferral is right, **resolved** after.
+  rule — **open** until the deferral is ratified, **resolved** after.
 - **Discuss** — the reviewer is asking a question or opening a design discussion, not
   requesting a change → answer it, **leave open** for them to respond.
 
@@ -211,8 +216,7 @@ query($owner:String!,$repo:String!,$num:Int!,$after:String){
 gh api graphql -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:$id}){ thread { isResolved } } }' -f id=<thread_node_id>
 ```
 
-**Resolve a settled thread whichever way it settled** — a landed fix, or a decline/deferral
-the human has ratified (the reply records the reasoning either way). **Leave open** only what
+**Resolve a settled thread whichever way it settled** — a landed fix, or a ratified decline/deferral (the reply records the reasoning either way). **Leave open** only what
 still needs them: a decline they have not seen, a "why…?"/"should we…?" they opened on purpose,
 a design call you escalated.
 
@@ -287,14 +291,11 @@ When the watcher exits and you are re-invoked:
   fix you disagree with.
 - **exit 20** — converged: CI is green on the pushed commit, a reviewer signed off (Codex 👍
   newer than your push, or a human approval), and every comment carries your reply. A sign-off
-  ratifies a decline only where it comes from the party the decline is owed to: a **human's**
-  approval settles what you declined of a **bot's** findings, and a human's own comment is
-  settled by that human alone — a bot's 👍 says nothing about whether they accepted your
-  reasoning, and neither does a second reviewer's approval about the first one's thread.
-  **Resolve what is ratified before reporting**; what stays open is what a person has still not
-  answered — a question they asked, a call escalated to them, a decline of their own comment.
-  Give the final report and **notify the user** (a push notification if available) that the
-  review loop is done — they walked away expecting to be pinged.
+  is what ratifies a decline, for the threads it is owed to (Principles), so **resolve those
+  before reporting**; what stays open is what a person has still not answered — a question they
+  asked, a call escalated to them, a decline of their own comment. Give the final report and
+  **notify the user** (a push notification if available) that the review loop is done — they
+  walked away expecting to be pinged.
 - **exit 30** — a quiet interval elapsed with no CI failure, new round, or sign-off. The PR
   isn't done, so **don't stop**: relaunch the watcher to keep waiting (reviewers and slow CI can
   take far longer than one interval). Only after several consecutive quiet cycles — i.e. a long
