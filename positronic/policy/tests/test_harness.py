@@ -1004,7 +1004,7 @@ def test_status_counts_the_directives_the_harness_handled(world):
     scheduler = world.start([harness, driver])
     drive_scheduler(scheduler, steps=20)
 
-    counts = [s.directives_handled for _ts, s in statuses.emitted]
+    counts = [s.directives_taken for _ts, s in statuses.emitted]
     assert counts == sorted(counts)
     assert counts[-1] == 2
     assert [s.phase for _ts, s in statuses.emitted][-1] == Phase.IDLE

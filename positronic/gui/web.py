@@ -374,14 +374,14 @@ class WebEvalUI(pimm.ControlSystem):
 
         async def _wrap_up():
             nonlocal wrap_up_status
-            handled = status.directives_handled if status is not None else 0
+            taken = status.directives_taken if status is not None else 0
             wrap_up_status = _WrapUpStatus(_WrapUpState.FINALIZING)
             self.directive.emit(Directive.FINISH(), clock.now_ns())
             for _ in range(int(finalize_timeout_s / 0.1)):
                 current = status
-                # The harness's own directive count is what marks this FINISH handled. An idle phase
-                # does not: the status is a periodic sample, so it can predate the emit above.
-                if current is not None and current.directives_handled > handled and current.phase == Phase.IDLE:
+                # The count marks the FINISH taken and the idle phase marks it finished; the phase alone
+                # would not, since the status is a periodic sample that can predate the emit above.
+                if current is not None and current.directives_taken > taken and current.phase == Phase.IDLE:
                     break
                 await asyncio.sleep(0.1)
             else:
@@ -403,21 +403,22 @@ class WebEvalUI(pimm.ControlSystem):
         async def _homed() -> bool:
             """Wait for the commanded home to finish, reporting whether the World may now stop.
 
-            The arm reports itself resetting while it travels and stops reporting it on arrival, so a
-            fixed wait would be a guess about a distance — and a stop mid-motion parks the brakes
-            short of home, which is what this whole path exists to avoid.
+            A fixed wait would be a guess about a distance, and a stop mid-motion parks the brakes short
+            of home, which is what this whole path exists to avoid. Drivers name the motion differently —
+            resetting on one arm, moving on another — so this waits on the ready they agree on rather
+            than on any one name for being busy.
             """
             for _ in range(int(home_start_grace_s / 0.1)):
-                if status is not None and status.robot_resetting:
+                if status is not None and not status.robot_ready:
                     break
                 await asyncio.sleep(0.1)
             else:
-                # Nothing reported it moving: an embodiment whose arm has no such state, or a home
+                # Nothing reported it moving: an embodiment whose arm publishes no state, or a home
                 # already reached. Neither can be waited on, so allow the settle and stop.
                 await asyncio.sleep(home_settle_s)
                 return True
             for _ in range(int(home_arrive_timeout_s / 0.1)):
-                if status is not None and not status.robot_resetting:
+                if status is not None and status.robot_ready:
                     return True
                 await asyncio.sleep(0.1)
             _fail(

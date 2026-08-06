@@ -62,17 +62,18 @@ class HarnessStatus:
     """Live episode state published on ``Harness.status`` for an operator surface.
 
     ``robot_error`` is true only for the cycles a safety reflex is tripped, since the driver clears
-    one every control cycle. ``directives_handled`` counts the directives the harness has processed,
-    so a sender can tell a status that reflects its own directive from one sampled before it.
-    ``homes_commanded`` counts the home commands issued, and ``robot_resetting`` is the arm's own report
-    that it is still travelling to that home.
+    one every control cycle.
+    ``homes_commanded`` counts the home commands issued, and ``robot_ready`` is the arm's own report that
+    it has stopped moving — the drivers name a motion differently, but all report ready when it ends.
+    ``directives_taken`` counts the directives picked off the queue, which is what a sender correlates
+    against: a directive whose execution blocks has still been taken.
     """
 
     phase: Phase
     waiting_for_policy: bool
     robot_error: bool
-    robot_resetting: bool
-    directives_handled: int
+    robot_ready: bool
+    directives_taken: int
     homes_commanded: int
 
 
@@ -254,7 +255,7 @@ class Harness(pimm.ControlSystem):
         # May be unbound.
         self.status = pimm.ControlSystemEmitter(self)
         self._chunk_end_s: float | None = None  # last waypoint time of the current chunk = its drive horizon
-        self._directives_handled = 0
+        self._directives_taken = 0
         self._homes_commanded = 0
 
     def _emit_status(self, clock: pimm.Clock, phase: Phase | None = None) -> None:
@@ -270,8 +271,8 @@ class Harness(pimm.ControlSystem):
                 phase=phase,
                 waiting_for_policy=bool(self._running and not driving),
                 robot_error=robot_status is RobotStatus.ERROR,
-                robot_resetting=robot_status is RobotStatus.RESETTING,
-                directives_handled=self._directives_handled,
+                robot_ready=robot_status is RobotStatus.AVAILABLE,
+                directives_taken=self._directives_taken,
                 homes_commanded=self._homes_commanded,
             ),
             clock.now_ns(),
@@ -448,7 +449,11 @@ class Harness(pimm.ControlSystem):
         FINISH and ABORT both end whatever is open and home, from any phase, so a sender that only
         knows a sampled phase cannot lose an episode opened since that sample. Only RUN is guarded,
         against restarting an episode that is already live.
+
+        The count rises before dispatch, so a sender sees its directive taken even while the work it
+        started blocks — a policy handshake holds RUN open for as long as the model takes to load.
         """
+        self._directives_taken += 1
         match directive.type:
             case DirectiveType.RUN:
                 if not self._running:
@@ -459,7 +464,6 @@ class Harness(pimm.ControlSystem):
                 yield from self._end_episode(clock, abort=True)
             case _:
                 raise ValueError(f'Unknown directive type: {directive.type}')
-        self._directives_handled += 1
 
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any] | None:
         """Read every observation channel and assemble the policy input dict.

@@ -240,7 +240,7 @@
           ok: target,
           deadline: performance.now() + 5000,
           sentAt: performance.now(),
-          handled: lastStatus && typeof lastStatus === 'object' ? lastStatus.directives_handled : undefined,
+          handled: lastStatus && typeof lastStatus === 'object' ? lastStatus.directives_taken : undefined,
         });
         // The harness homes the gripper open on every episode boundary, and nothing else updates this
         // setpoint, so the next step would start from a stale pre-episode value.
@@ -467,8 +467,8 @@
         // Resolve a pending directive ack from the real phase (see the directive handler): recognized once
         // the harness moves to the expected phase, ignored if the window elapses without it.
         if (pendingAck && s && typeof s === 'object' && lastFetchAt > pendingAck.sentAt) {
-          const handled = typeof s.directives_handled === 'number' && typeof pendingAck.handled === 'number'
-            ? s.directives_handled > pendingAck.handled
+          const handled = typeof s.directives_taken === 'number' && typeof pendingAck.handled === 'number'
+            ? s.directives_taken > pendingAck.handled
             : true;   // no count to correlate against: fall back to the phase alone
           if (handled && pendingAck.ok(s.phase)) {
             showAck(`${pendingAck.label} — recognized`, true); setAckPending(null);
