@@ -241,10 +241,10 @@ class WebEvalUI(pimm.ControlSystem):
         names = list(self.cameras)
         stream = _CameraStream(self.fps, self.keyframe_interval, self.bitrate)
         latest: dict[str, np.ndarray] = {}
-        # Latest harness status, refreshed in the run loop and served by GET /status (cross-thread:
-        # a single dict swap, safe under the GIL for this poll-and-render use).
-        status_holder: dict[str, HarnessStatus | None] = {'value': None}
-        wrap_up_holder: dict[str, _WrapUpStatus] = {'value': _WrapUpStatus(_WrapUpState.IDLE)}
+        # Read by the endpoints on the server thread and rebound by the run loop below: one reference
+        # swap, which the GIL makes atomic for this poll-and-render use.
+        status: HarnessStatus | None = None
+        wrap_up_status = _WrapUpStatus(_WrapUpState.IDLE)
 
         app = FastAPI()
         app.mount('/static', StaticFiles(directory=_shared_static()), name='static')
@@ -307,17 +307,16 @@ class WebEvalUI(pimm.ControlSystem):
             self.manual_command.emit({'target_grip': body.value}, clock.now_ns())
 
         @app.get('/status')
-        async def status():
-            current = status_holder['value']
+        async def get_status():
             # A harness that has published nothing is not an idle harness: answering idle here would
             # enable teleop over a rollout whose status never reached this process.
-            if current is None:
+            if status is None:
                 raise HTTPException(status_code=503, detail='the harness has published no status')
-            return dataclasses.asdict(current)
+            return dataclasses.asdict(status)
 
         @app.get('/wrap_up')
-        async def wrap_up():
-            return dataclasses.asdict(wrap_up_holder['value'])
+        async def get_wrap_up():
+            return dataclasses.asdict(wrap_up_status)
 
         @app.get('/ping')
         async def ping():  # tiny + no work, so its round-trip measures the browser<->robot-host link
@@ -334,12 +333,12 @@ class WebEvalUI(pimm.ControlSystem):
             # homing: stopping it directly aborts an open recording and leaves the arm where it stands.
             # Returns as soon as the wrap-up is scheduled; the console follows it on GET /wrap_up.
             async def _wrap_up():
-                before = status_holder['value']
-                handled = before.directives_handled if before is not None else 0
-                wrap_up_holder['value'] = _WrapUpStatus(_WrapUpState.FINALIZING)
+                nonlocal wrap_up_status
+                handled = status.directives_handled if status is not None else 0
+                wrap_up_status = _WrapUpStatus(_WrapUpState.FINALIZING)
                 self.directive.emit(Directive.FINISH(), clock.now_ns())
                 for _ in range(int(finalize_timeout_s / 0.1)):
-                    current = status_holder['value']
+                    current = status
                     # The harness's own directive count is what marks this FINISH handled. An idle phase
                     # does not: the status is a periodic sample, so it can predate the emit above.
                     if current is not None and current.directives_handled > handled and current.phase == Phase.IDLE:
@@ -361,7 +360,8 @@ class WebEvalUI(pimm.ControlSystem):
                     _fail('The stop signal is not event-backed, so the run was left up. Stop it on the host.')
 
             def _fail(detail: str) -> None:
-                wrap_up_holder['value'] = _WrapUpStatus(_WrapUpState.FAILED, detail)
+                nonlocal wrap_up_status
+                wrap_up_status = _WrapUpStatus(_WrapUpState.FAILED, detail)
                 print(f'finish_run: {detail}')
 
             asyncio.create_task(_wrap_up())
@@ -391,7 +391,7 @@ class WebEvalUI(pimm.ControlSystem):
                         changed = True
                 status_msg = self.status.read()
                 if status_msg is not None and status_msg.updated and status_msg.data is not None:
-                    status_holder['value'] = status_msg.data
+                    status = status_msg.data
                 if changed and len(latest) == len(names):
                     stream.push(_tile([latest[name] for name in names], self.width))
                 if not server_thread.is_alive():

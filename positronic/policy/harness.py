@@ -550,8 +550,7 @@ class Harness(pimm.ControlSystem):
         # TODO(hardcoded-keys): the waypoint-time name is a literal at every site that reads an action dict
         # (here and above, plus ``policy/recording.py`` and ``policy/codec.py``, which writes it). It belongs
         # in ``positronic.keys`` with the rest of the wire, migrated across those readers at once.
-        # rules-allow: hardcoded-keys — naming it here alone leaves the same file's two other reads on the
-        # literal, so the contract would have two spellings in flight rather than one
+        # rules-allow: hardcoded-keys — a name here alone leaves this file's two other reads on the literal
         self._chunk_end_s = max((a['timestamp'] for a in actions), default=self._chunk_end_s)
 
     def _trial_terminal(self, clock: pimm.Clock) -> dict[str, Any] | None:
