@@ -11,7 +11,11 @@ HOOK = Path(__file__).resolve().parents[1] / 'advise_code_rules_edit.py'
 
 
 def payload(path):
-    return {'tool_name': 'Edit', 'tool_input': {'file_path': path}}
+    return {'tool_name': 'Edit', hook_payload.TOOL_INPUT: {hook_payload.FILE_PATH: path}}
+
+
+def bash(command):
+    return {'tool_name': 'Bash', hook_payload.TOOL_INPUT: {hook_payload.COMMAND: command}}
 
 
 def test_it_advises_on_the_rules_file_wherever_the_checkout_sits():
@@ -27,17 +31,17 @@ def test_it_says_nothing_about_any_other_file():
 def test_it_advises_on_a_shell_command_that_could_write_the_file():
     """A heredoc, a redirect or an in-place edit reaches the file without a file_path."""
     for command in ('cat > CODE_RULES.md <<EOF', "sed -i s/x/y/ CODE_RULES.md", 'tee ../CODE_RULES.md'):
-        assert advise.advises({'tool_input': {'command': command}}), command
+        assert advise.advises(bash(command)), command
 
 
 def test_it_says_nothing_about_a_shell_command_that_does_not_name_it():
     for command in ('git status', 'cat CLAUDE.md', 'pytest utilities/tests/'):
-        assert not advise.advises({'tool_input': {'command': command}}), command
+        assert not advise.advises(bash(command)), command
 
 
 def test_a_payload_it_cannot_read_is_not_a_rules_edit():
     assert not advise.advises({})
-    assert not advise.advises({'tool_input': {}})
+    assert not advise.advises({hook_payload.TOOL_INPUT: {}})
 
 
 def test_it_allows_the_edit_and_reaches_the_model_with_the_skill_s_name():
