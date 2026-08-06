@@ -516,9 +516,10 @@ def _gh_repo(explicit: str, inv_dir: str | None, git: GitInfo, cmd: str, gh_repo
     return repo_slug(git.origin_url(inv_dir)) if inv_dir is not None else ''
 
 
-# gh's own spellings of the flag that selects a repository — the one value a merge is read for,
-# so every reader of it agrees here rather than repeating the pair.
+# gh's own spellings of the flag that selects a repository.
 GH_REPO_FLAGS = ('-R', '--repo')
+# Asking for help makes gh print it and merge nothing.
+GH_HELP_FLAGS = ('--help', '-h')
 # `gh pr merge` flags that consume the following argument, so its value is never the pull
 # request being merged: `gh pr merge --subject 566 999` merges 999.
 GH_MERGE_VALUE_FLAGS = frozenset({
@@ -536,42 +537,27 @@ GH_MERGE_VALUE_FLAGS = frozenset({
 
 
 def _gh_shorthand(word: str) -> tuple[str, str]:
-    """The value-taking shorthand in a `-abc` cluster, and the value written onto it.
+    """The flag a `-abc` cluster names, and the value written onto it.
 
-    pflag clusters shorthands and takes a value attached to the last of them, so
-    `-dRowner/repo` is `--delete-branch --repo owner/repo`. An empty value means the next word
-    carries it. ('', '') when the cluster takes none, and ('-h', '') for help, which merges nothing.
+    pflag clusters shorthands and takes a value attached to the last of them, so `-dRowner/repo`
+    is `--delete-branch --repo owner/repo`.
     """
     for i, letter in enumerate(word[1:], 1):
         short = '-' + letter
-        if short == '-h':
-            return short, ''
-        if short in GH_MERGE_VALUE_FLAGS:
+        if short in GH_HELP_FLAGS or short in GH_MERGE_VALUE_FLAGS:
             return short, word[i + 1 :].removeprefix('=')
     return '', ''
 
 
-def _gh_flag(word: str) -> tuple[bool, str, str]:
-    """How one flag word bears on a merge.
+def _gh_flag(word: str) -> tuple[str, str]:
+    """The flag one word names, and the value written onto it.
 
-    Whether it asks for help — which makes gh print it and merge nothing — the repository it
-    names, and the value-taking flag it leaves for the NEXT word to fill.
+    An empty value means the next word carries it; ('', '') is a word naming no flag read here.
     """
     flag, eq, value = word.partition('=')
-    if flag in ('--help', '-h'):
-        return True, '', ''
-    if flag in GH_MERGE_VALUE_FLAGS:
-        if not eq:
-            return False, '', flag
-        return False, value if flag in GH_REPO_FLAGS else '', ''
-    if word.startswith('--'):
-        return False, '', ''
-    short, attached = _gh_shorthand(word)
-    if short == '-h':
-        return True, '', ''
-    if not attached:
-        return False, '', short
-    return False, attached if short in GH_REPO_FLAGS else '', ''
+    if flag in GH_HELP_FLAGS or flag in GH_MERGE_VALUE_FLAGS:
+        return flag, value if eq else ''
+    return ('', '') if word.startswith('--') else _gh_shorthand(word)
 
 
 def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None, str]:
@@ -587,10 +573,12 @@ def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None, str]:
         if pending:
             repo, pending = (w if pending in GH_REPO_FLAGS else repo), ''
         elif w.startswith('-'):
-            asks_help, named, pending = _gh_flag(w)
-            if asks_help:
+            flag, value = _gh_flag(w)
+            if flag in GH_HELP_FLAGS:
                 return False, None, ''
-            repo = named or repo
+            pending = flag if flag and not value else ''
+            if value and flag in GH_REPO_FLAGS:
+                repo = value
         elif bare := re.sub(r'[)}].*$', '', w):  # a lossy parse leaves a closing delimiter glued on
             positional.append(bare)
     if not positional or positional[0] == 'help' or 'pr' not in positional:
