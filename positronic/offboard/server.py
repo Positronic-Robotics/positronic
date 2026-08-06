@@ -217,9 +217,7 @@ class PolicyServer:
 
         self._default_id: str | None = None
 
-        # Gating happens here rather than at the hosting platform's ingress: Nebius answers `--auth token`
-        # by stripping the WebSocket upgrade headers, which leaves the inference route unreachable at any
-        # token. ``None`` serves open; empty is a broken secret, so fail closed rather than read as open.
+        # ``None`` serves open; empty is a broken secret, so fail closed rather than read as open.
         if auth_token == '':
             raise ValueError('auth_token is empty; pass None to serve open, or a real token to gate')
         self._auth_token = auth_token

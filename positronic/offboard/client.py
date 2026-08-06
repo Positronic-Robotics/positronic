@@ -18,9 +18,8 @@ logger = logging.getLogger(__name__)
 # outlast that compile (still surfacing a stalled/half-open connection), and let callers override per use.
 DEFAULT_INFER_TIMEOUT = 180.0
 
-# A reverse proxy fronting the server drops a connection it has read nothing from for a while — the Nebius
-# managed HTTPS URL at ~90s, well inside one ``DEFAULT_INFER_TIMEOUT`` inference. The pongs answering these
-# pings are the traffic that carries a silent server across a slow call.
+# A proxy between client and server closes a connection it has read nothing from, often after 60s — well
+# inside one ``DEFAULT_INFER_TIMEOUT`` inference, which sends nothing until it answers.
 PING_INTERVAL = 20.0
 
 
