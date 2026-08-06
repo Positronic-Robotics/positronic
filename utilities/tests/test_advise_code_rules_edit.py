@@ -24,6 +24,17 @@ def test_it_says_nothing_about_any_other_file():
         assert not advise.advises(payload(path)), path
 
 
+def test_it_advises_on_a_shell_command_that_could_write_the_file():
+    """A heredoc, a redirect or an in-place edit reaches the file without a file_path."""
+    for command in ('cat > CODE_RULES.md <<EOF', "sed -i s/x/y/ CODE_RULES.md", 'tee ../CODE_RULES.md'):
+        assert advise.advises({'tool_input': {'command': command}}), command
+
+
+def test_it_says_nothing_about_a_shell_command_that_does_not_name_it():
+    for command in ('git status', 'cat CLAUDE.md', 'pytest utilities/tests/'):
+        assert not advise.advises({'tool_input': {'command': command}}), command
+
+
 def test_a_payload_it_cannot_read_is_not_a_rules_edit():
     assert not advise.advises({})
     assert not advise.advises({'tool_input': {}})
