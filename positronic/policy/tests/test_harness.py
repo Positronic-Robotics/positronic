@@ -1650,3 +1650,154 @@ def test_doubly_anchored_chunk_is_refused():
 def test_anchored_chunk_passes():
     """A real chunk spans seconds around now, and a late action sits just behind it."""
     _assert_anchored([{'timestamp': 1.7e9 - 0.2}, {'timestamp': 1.7e9 + 1.5}], now=1.7e9)
+
+
+# --- The run log's episode-boundary contract ---
+#
+# A run watcher outside this repo reads these lines to follow a rollout it cannot see any other way,
+# so they are a contract with a consumer that does not import this package: the prefixes and the
+# fields are pinned here rather than left to whatever the logger happens to emit.
+#
+# rules-allow: hardcoded-keys — the expected lines are spelled out rather than built from the
+# ``LOG_*`` constants on purpose. A watcher that cannot import them matches the literal text, so a
+# test written against the constants would follow an edit to them and let the wire format change
+# with nothing failing. Spelling them here is what makes that edit break a test.
+
+
+def _harness_log(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == 'positronic.policy.harness']
+
+
+def _directive_log(caplog) -> list[str]:
+    """The episode-boundary lines alone: the run-level line depends on when the scheduler was pumped out."""
+    return [m for m in _harness_log(caplog) if m.startswith('harness: directive')]
+
+
+@pytest.mark.timeout(3.0)
+def test_a_saved_episode_logs_a_paired_start_and_finish(world, caplog):
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='stack-blocks')), 0.01),
+        (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),
+        (None, 0.02),
+    ])
+
+    with caplog.at_level('INFO', logger='positronic.policy.harness'):
+        drive_scheduler(world.start([harness, driver]), steps=25)
+
+    assert _directive_log(caplog) == [
+        'harness: directive start id=0 task=stack-blocks',
+        'harness: directive finish id=0 outcome=saved',
+    ]
+
+
+@pytest.mark.timeout(3.0)
+def test_an_aborted_episode_logs_a_discarded_outcome(world, caplog):
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='t')), 0.01),
+        (partial(p['directive_em'].emit, Directive.ABORT()), 0.02),
+        (None, 0.02),
+    ])
+
+    with caplog.at_level('INFO', logger='positronic.policy.harness'):
+        drive_scheduler(world.start([harness, driver]), steps=25)
+
+    assert _directive_log(caplog)[-1] == 'harness: directive finish id=0 outcome=discarded'
+
+
+@pytest.mark.timeout(3.0)
+def test_episode_ids_count_up_across_a_run(world, caplog):
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='a')), 0.01),
+        (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),
+        (partial(p['directive_em'].emit, Directive.RUN(task='b')), 0.02),
+        (partial(p['directive_em'].emit, Directive.ABORT()), 0.02),
+        (None, 0.02),
+    ])
+
+    with caplog.at_level('INFO', logger='positronic.policy.harness'):
+        drive_scheduler(world.start([harness, driver]), steps=40)
+
+    assert _directive_log(caplog) == [
+        'harness: directive start id=0 task=a',
+        'harness: directive finish id=0 outcome=saved',
+        'harness: directive start id=1 task=b',
+        'harness: directive finish id=1 outcome=discarded',
+    ]
+
+
+@pytest.mark.timeout(3.0)
+def test_an_abort_while_idle_logs_nothing(world, caplog):
+    """There is no live episode to pair a finish with, so the log stays silent about it."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    driver = ManualDriver([(partial(p['directive_em'].emit, Directive.ABORT()), 0.01), (None, 0.02)])
+
+    with caplog.at_level('INFO', logger='positronic.policy.harness'):
+        drive_scheduler(world.start([harness, driver]), steps=20)
+
+    assert _directive_log(caplog) == []
+
+
+@pytest.mark.timeout(3.0)
+def test_a_task_less_episode_logs_an_empty_task(world, caplog):
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    driver = ManualDriver([(partial(p['directive_em'].emit, Directive.RUN()), 0.01), (None, 0.02)])
+
+    with caplog.at_level('INFO', logger='positronic.policy.harness'):
+        drive_scheduler(world.start([harness, driver]), steps=20)
+
+    assert _directive_log(caplog)[0] == 'harness: directive start id=0 task='
+
+
+@pytest.mark.timeout(3.0)
+def test_an_exhausted_trial_plan_logs_the_run_finishing(world, caplog):
+    """The run ends of its own accord, which is what the trial plan running out means."""
+    task = Task(instruction='sweep', timeout=0.05)
+    harness = Harness(StubPolicy(), make_embodiment(), task=task, trials=[{}])
+
+    with caplog.at_level('INFO', logger='positronic.policy.harness'):
+        drive_scheduler(world.start([harness]), steps=200)
+
+    log = _harness_log(caplog)
+    assert log[0] == 'harness: directive start id=0 task=sweep'
+    # rules-allow: hardcoded-keys — spelled out rather than read from LOG_RUN_FINISH: a watcher that
+    # cannot import the constant matches this text, so a test built on the constant would follow an
+    # edit to it and let the wire format change with nothing failing.
+    assert log[-1] == 'harness: run finish'
+
+
+@pytest.mark.timeout(3.0)
+def test_a_run_that_raises_mid_episode_logs_an_aborted_outcome_and_no_run_finish(world, caplog):
+    """A crash is not a run that finished, so a watcher can tell the two apart."""
+
+    class _RaisingSession(Session):
+        def __call__(self, obs):
+            raise RuntimeError('inference exploded')
+
+    class _RaisingPolicy(Policy):
+        def new_session(self, context=None, now=None):
+            return _RaisingSession()
+
+    harness = Harness(_RaisingPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='t')), 0.01),
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
+        (None, 0.02),
+    ])
+
+    with caplog.at_level('INFO', logger='positronic.policy.harness'), pytest.raises(RuntimeError):
+        drive_scheduler(world.start([harness, driver]), steps=40)
+
+    assert _harness_log(caplog) == [
+        'harness: directive start id=0 task=t',
+        'harness: directive finish id=0 outcome=aborted',
+    ]  # no run finish: the run did not end of its own accord

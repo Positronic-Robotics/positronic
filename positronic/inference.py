@@ -101,11 +101,7 @@ def _internal_main():
         'real': run_cfg,  # `real` is the documented name for the hardware path
         'sim': run.override(eval=stack_cubes),
         'web': run_cfg.override(driver=web),
-        'phail': run_cfg.override(
-            policy=policy_cfg.phail_multiple,
-            driver=eval_ui,
-            **{'driver.ui_scale': 3, 'embodiment.robot_arm.collision_coeff': 2.0},
-        ),
+        'phail': run_cfg.override(policy=policy_cfg.phail_multiple, driver=eval_ui, **{'driver.ui_scale': 3}),
         'stats': stats,
     })
 

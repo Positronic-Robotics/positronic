@@ -1,7 +1,6 @@
 import configuronic as cfn
 
 import positronic.cfg.simulator
-from positronic import keys
 from positronic.cfg.embodiment import mujoco_franka
 from positronic.cfg.eval import build_trials
 from positronic.eval import Eval, Observation, Task
@@ -13,11 +12,7 @@ from positronic.utils import package_assets_path
     mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
     loaders=positronic.cfg.simulator.stack_cubes_loaders,
     camera_fps=15,
-    camera_dict={
-        keys.WRIST_IMAGE: 'handcam_left_ph',
-        keys.EXTERIOR_IMAGE: 'back_view_ph',
-        'image.agent_view': 'agentview',
-    },
+    camera_dict=positronic.cfg.simulator.MUJOCO_FRANKA_CAMERAS,
     timeout=15,
     seed=None,
     trial_count=1,

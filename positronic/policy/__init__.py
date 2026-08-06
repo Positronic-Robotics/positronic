@@ -2,6 +2,7 @@ from .base import DelegatingPolicy, DelegatingSession, Policy, PolicyWrapper, Sa
 from .codec import ActionHorizon, ActionTimestamp, ActionTiming, Codec, is_action
 from .recording import Recorder
 from .remote import RemotePolicy
+from .replay import ReplayPolicy
 from .sampler import BalancedSampler, Sampler, UniformSampler
 
 __all__ = [
@@ -12,6 +13,7 @@ __all__ = [
     'PolicyWrapper',
     'SampledPolicy',
     'RemotePolicy',
+    'ReplayPolicy',
     'Codec',
     'ActionTimestamp',
     'ActionHorizon',
