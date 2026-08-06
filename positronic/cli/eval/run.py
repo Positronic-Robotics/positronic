@@ -85,9 +85,11 @@ def _run_world(
     harness = Harness(policy, embodiment, task=task, trials=trials, on_episode_complete=on_complete)
     gui = driver.gui if driver is not None else (dpg_ui() if show_gui else None)
 
+    # An operator drives against the wall clock, so an attended run cannot own a virtual one.
+    virtual_time = embodiment.simulated and driver is None
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
-    with writer_cm as dataset_writer, pimm.World(virtual_time=embodiment.simulated) as world:
+    with writer_cm as dataset_writer, pimm.World(virtual_time=virtual_time) as world:
         privileged = task.privileged if task is not None else {}
         done = task.done if task is not None else None
         ds_agent = wire.wire_embodiment(

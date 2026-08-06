@@ -99,9 +99,18 @@ class MujocoSim(pimm.ControlSystem):
 
     ``reset`` rebuilds the scene and flags frame-0 publication; the run loop publishes that post-reset
     scene on its next turn — in sequence, before any step — so the first inference reads it and the
-    recorder logs it. Every other turn applies the due command waypoints, steps once, and emits the due
-    streams (post-step, Gym-style). The sim sleeps one control period each turn, so it is the eval's sole
-    time-master. Each stream has an independent rate (``*_fps``, ``None`` = every physics tick).
+    recorder logs it. Every other turn applies the due command waypoints, advances one control period of
+    physics, and emits the due streams (post-step, Gym-style). The sim sleeps that control period each
+    turn, so it is the eval's sole time-master. Each stream has an independent rate (``*_fps``, ``None`` =
+    every control period).
+
+    ``control_period`` is the wall/virtual seconds one turn covers, and defaults to the model's physics
+    timestep — one ``mj_step`` per turn, and so one scheduler round per 2 ms of a typical model. That
+    default is the finest resolution the sim offers and the cheapest to reason about, but it charges the
+    whole loop (the harness's inference, the recorder's writes, the scheduler itself) 500 times a second,
+    which no rig's control loop asks for and a CPU-only box cannot afford at wall-clock pace. Set it to
+    the rate the embodiment is actually driven at (a real Franka rollout runs at 15 Hz) and each turn
+    steps the physics that far in one go.
     """
 
     def __init__(
@@ -117,11 +126,13 @@ class MujocoSim(pimm.ControlSystem):
         state_fps: float | None = None,
         grip_fps: float | None = None,
         sim_state_fps: float | None = None,
+        control_period: float | None = None,
     ):
         self.mujoco_model_path = mujoco_model_path
         self.loaders = loaders
         self.warmup_steps = 1000
         self.fps_counter = pimm.utils.RateCounter('MujocoSim')
+        self._control_period = control_period
 
         self._ee_name = f'end_effector{suffix}'
         self._joint_names = [f'joint{i}{suffix}' for i in range(1, 8)]
@@ -170,7 +181,7 @@ class MujocoSim(pimm.ControlSystem):
         cameras_due = _Cadence(self._camera_fps)
 
         while not should_stop.value:
-            yield pimm.Sleep(self.model.opt.timestep)
+            yield pimm.Sleep(self.control_period)
             if self._reset_pending:
                 # The reset is this turn's step: publish the prepared scene as frame-0 (no ``mj_step``), so
                 # the recorder samples it before any step advances the sim. ``reset`` already loaded the scene.
@@ -206,7 +217,7 @@ class MujocoSim(pimm.ControlSystem):
             # (``_emit_cameras``): on an image-heavy scene the rendering is most of the step, and outside this
             # span the wall split reads it as overhead.
             with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
-                self.step()
+                self.step(self.control_period)
                 self.fps_counter.tick()
                 if state_due(now):
                     self._emit_state()
@@ -220,6 +231,11 @@ class MujocoSim(pimm.ControlSystem):
         if self._renderer is not None:
             self._renderer.close()
             self._renderer = None
+
+    @property
+    def control_period(self) -> float:
+        """Seconds of simulated time one turn covers — the model's physics timestep unless one was given."""
+        return self._control_period if self._control_period is not None else self.model.opt.timestep
 
     def reset(self, seed: int | None = None):
         """Re-randomize the scene from ``seed`` and arm frame-0 publication for the next turn.

@@ -31,6 +31,35 @@ class MujocoSceneTransform(abc.ABC):
         pass
 
 
+class SetRenderQuality(MujocoSceneTransform):
+    """Set the scene's render-cost knobs; ``None`` leaves one as the model declares it.
+
+    Shadow mapping, multisampling and specular reflections dominate offscreen render time under a
+    software GL stack, where they cost far more than the geometry pass they decorate. Measured on
+    the Franka table scene at 320x240, three cameras, on four CPU cores: 348 ms per frame set as
+    declared, 105 ms with ``shadowsize=0, offsamples=0``, 49 ms adding ``reflectance=0``. Resolution
+    barely moves any of them — the passes are geometry-bound, not fill-bound.
+
+    ``reflectance`` applies to every material in the scene, so it flattens deliberate specular
+    materials along with incidental ones.
+    """
+
+    def __init__(self, shadowsize: int | None = None, offsamples: int | None = None, reflectance: float | None = None):
+        self.shadowsize = shadowsize
+        self.offsamples = offsamples
+        self.reflectance = reflectance
+
+    def apply(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
+        if self.shadowsize is not None:
+            spec.visual.quality.shadowsize = self.shadowsize
+        if self.offsamples is not None:
+            spec.visual.quality.offsamples = self.offsamples
+        if self.reflectance is not None:
+            for material in spec.materials:
+                material.reflectance = self.reflectance
+        return spec
+
+
 class AddCameras(MujocoSceneTransform):
     def __init__(self, additional_cameras: dict[str, dict[str, Any]]):
         self.additional_cameras = additional_cameras

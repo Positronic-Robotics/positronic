@@ -3,7 +3,7 @@ import pos3
 
 from positronic import keys
 from positronic.cfg import codecs
-from positronic.policy import Codec, Policy, RemotePolicy, SampledPolicy
+from positronic.policy import Codec, Policy, RemotePolicy, ReplayPolicy, SampledPolicy
 from positronic.policy.sampler import Sampler
 from positronic.policy.spec import PolicySource, inline
 from positronic.policy.wrappers import ChunkedSchedule
@@ -60,6 +60,9 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
 
 
 remote = cfn.Config(RemotePolicy, url='ws://localhost:8000')
+
+# A recorded episode in place of a served model: `--policy=.replay --policy.dataset_path=<dataset>`.
+replay = cfn.Config(ReplayPolicy)
 
 
 @cfn.config(balance=2)
