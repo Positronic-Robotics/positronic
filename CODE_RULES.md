@@ -295,10 +295,9 @@ Don't write a document against its own past — no "previously", no "this PR", n
 no resolved-while-writing note, no struck-through section kept for context. State what holds now. The
 reader has no access to the past state, so prose written against it is noise that ages into a lie.
 
-A worklog is not a document the tree keeps — no status, progress, implementation-summary or
-completed-plan file. Whatever such a file holds that is still true is stated as current fact in the
-document that owns the subject, and the account of how the work went goes with the file. A changelog
-is the exception, history being its subject.
+Don't keep worklogs — status, progress or implementation-summary files. Move what is still true
+into the document that owns the subject, and delete the rest. A changelog is the exception: history
+is its subject.
 
 Where a change must be referenced, cite something durable — a ticket, a tag, a version. Two things
 that look like history and stay: a footgun the reader can still walk into, and a current limitation
