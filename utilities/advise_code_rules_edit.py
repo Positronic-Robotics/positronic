@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
-"""Claude Code PreToolUse hook: an edit to `CODE_RULES.md` goes through the `add-rule` skill.
+"""Claude Code PreToolUse hook: advise the `add-rule` skill on a write to `CODE_RULES.md`.
 
-The rules file is read on every review in every Positronic repository, so what it says is worth a
-process: the skill asks what real code triggered the change, rules out the cheaper homes (a Ruff
-check, an existing rule), and shows the wording for approval before writing. Editing the file
-directly skips all three, and nothing about the edit itself reveals that it did.
-
-Advisory, never a refusal — the skill's own final step is an edit to this file, so a hook that
-blocked would block the remedy it names. The advice is emitted as `additionalContext`, because a
-PreToolUse hook's plain stdout reaches the debug log and nothing else.
+Advisory, never a refusal: the skill's own final step is a write to that file. The advice goes out
+as `additionalContext` because a PreToolUse hook's plain stdout reaches the debug log and nothing
+else.
 
 Wired in `.claude/settings.json` (PreToolUse, matcher Edit|Write|MultiEdit): reads the hook payload
 on stdin, prints JSON to stdout, exits 0. Stdlib-only so it runs without the project venv.
