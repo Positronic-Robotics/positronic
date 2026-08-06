@@ -30,6 +30,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import hook_payload
+
 DENY_TAIL = (
     ' Merging to main requires a PR and an explicit human/operator command — a named human must run the merge'
     ' themselves (e.g. via the `!` prefix or their own shell).'
@@ -848,10 +850,10 @@ def main() -> int:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, UnicodeDecodeError):
         return 0
-    cmd = (payload.get('tool_input') or {}).get('command') or ''
+    cmd = hook_payload.command(payload)
     if not cmd:
         return 0
-    cwd = payload.get('cwd') or os.getcwd()
+    cwd = payload.get(hook_payload.CWD) or os.getcwd()
     git = GitInfo()
     guarded_slug = repo_slug(git.origin_url(os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd()))
     deny = analyze(cmd, cwd, guarded_slug, git, gh_repo_env=os.environ.get(GH_REPO_ENV, ''))
