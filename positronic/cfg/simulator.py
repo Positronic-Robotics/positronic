@@ -19,7 +19,7 @@ from positronic.utils import package_assets_path
 MUJOCO_FRANKA_CAMERAS = {
     keys.WRIST_IMAGE: 'handcam_left_ph',
     keys.EXTERIOR_IMAGE: 'back_view_ph',
-    'image.agent_view': 'agentview',
+    keys.AGENT_VIEW_IMAGE: 'agentview',
 }
 
 

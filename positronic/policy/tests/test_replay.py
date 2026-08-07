@@ -45,12 +45,37 @@ def test_load_actions_rebuilds_joint_commands_at_recorded_cadence(tmp_path):
     actions = load_actions(_joint_fixture(tmp_path))
 
     assert len(actions) == 5
-    assert [a['timestamp'] for a in actions] == pytest.approx([0.0, 0.1, 0.2, 0.3, 0.4])
+    assert [a[keys.ACTION_TIMESTAMP] for a in actions] == pytest.approx([0.0, 0.1, 0.2, 0.3, 0.4])
     for i, action in enumerate(actions):
         command = action[keys.ROBOT_COMMAND]
         assert isinstance(command, roboarm_command.JointPosition)
         assert command.positions[0] == pytest.approx(i)
         assert action[keys.TARGET_GRIP] == pytest.approx(i / 5)
+
+
+def test_load_actions_omits_the_grip_on_waypoints_before_the_grip_channel_starts(tmp_path):
+    """A grip command is only ever applied at or after the instant it was recorded at.
+
+    The arm can start streaming before the gripper does. The only grip sample available to those early
+    waypoints is a future one, and attaching it would move the gripper earlier than the recording did.
+    """
+    step = int(1e9 / HZ)
+    start = 1_000_000_000
+    q = np.zeros(7, dtype=np.float32)
+    episode = _write(
+        tmp_path,
+        {
+            keys.TARGET_JOINTS: [(q, start + i * step) for i in range(4)],
+            # The gripper closes at the third arm waypoint and not before.
+            keys.TARGET_GRIP: [(np.float32(1.0), start + 2 * step)],
+        },
+    )
+
+    actions = load_actions(episode)
+
+    assert [keys.TARGET_GRIP in a for a in actions] == [False, False, True, True]
+    assert actions[2][keys.TARGET_GRIP] == pytest.approx(1.0)
+    assert actions[3][keys.TARGET_GRIP] == pytest.approx(1.0)
 
 
 def test_load_actions_rebuilds_pose_commands(tmp_path):
@@ -113,8 +138,8 @@ def test_session_hands_out_the_recording_in_chunks_then_holds(tmp_path):
     # Waypoint 2 opens the second chunk as well as closing the first: the boundary is handed over, not spent.
     assert [a[keys.ROBOT_COMMAND].positions[0] for a in played] == pytest.approx([0, 1, 2, 2, 3, 4])
     # Each chunk's timestamps restart at its own first waypoint — the scheduling wrapper anchors them.
-    assert [a['timestamp'] for a in chunks[0]] == pytest.approx([0.0, 0.1, 0.2])
-    assert [a['timestamp'] for a in chunks[1]] == pytest.approx([0.0, 0.1, 0.2])
+    assert [a[keys.ACTION_TIMESTAMP] for a in chunks[0]] == pytest.approx([0.0, 0.1, 0.2])
+    assert [a[keys.ACTION_TIMESTAMP] for a in chunks[1]] == pytest.approx([0.0, 0.1, 0.2])
 
 
 def test_a_chunk_longer_than_the_recording_plays_it_in_one_go(tmp_path):
@@ -149,14 +174,14 @@ def test_the_scheduling_wrapper_paces_playback_against_the_clock(tmp_path):
 
     first = session({'obs_time_ns': 0})
     assert first is not None
-    assert [a['timestamp'] for a in first] == pytest.approx([100.0, 100.1, 100.2])
+    assert [a[keys.ACTION_TIMESTAMP] for a in first] == pytest.approx([100.0, 100.1, 100.2])
     assert session({'obs_time_ns': 0}) is None  # the chunk is still playing
 
     now = 100.2
     second = session({'obs_time_ns': 0})
     assert second is not None
     # The handed-over waypoint keeps the instant it had in the first chunk, so the re-issue changes no timing.
-    assert [a['timestamp'] for a in second] == pytest.approx([100.2, 100.3, 100.4])
+    assert [a[keys.ACTION_TIMESTAMP] for a in second] == pytest.approx([100.2, 100.3, 100.4])
     assert second[0][keys.ROBOT_COMMAND].positions[0] == first[-1][keys.ROBOT_COMMAND].positions[0]
 
 
@@ -173,7 +198,7 @@ def test_every_waypoint_plays_when_a_new_chunk_lands_before_the_last_one_is_appl
         clock = 100.0 + tick * (0.5 / HZ)
         chunk = session({'obs_time_ns': int(clock * 1e9)})
         if chunk is not None:
-            player.set([(int(a['timestamp'] * 1e9), a[keys.ROBOT_COMMAND]) for a in chunk])
+            player.set([(int(a[keys.ACTION_TIMESTAMP] * 1e9), a[keys.ROBOT_COMMAND]) for a in chunk])
         command = player.advance(int(clock * 1e9))
         if command is not None:
             played.append(float(command.positions[0]))
