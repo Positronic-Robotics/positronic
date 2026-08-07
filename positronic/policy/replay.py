@@ -28,19 +28,30 @@ _ARM_SIGNALS = (
 )
 
 
-def _arm_signal(episode: Episode) -> tuple[Signal[np.ndarray], Any]:
-    """The episode's arm-command signal and the command type that rebuilds it."""
+def _arm_commands(episode: Episode) -> dict[int, Any]:
+    """Every recorded arm command, keyed by the instant it was issued at.
+
+    ``Serializers.robot_command`` maps each command type to its own suffix, so one command writes one
+    signal, and a recording whose action space changed mid-episode carries commands in more than one —
+    each covering its own stretch of the timeline. Every supported signal contributes its waypoints.
+    """
+    commands: dict[int, Any] = {}
     for name, command_type in _ARM_SIGNALS:
         signal = episode.signals.get(name)
-        if signal is not None and len(signal) > 0:
-            return signal, command_type
-    recorded = sorted(episode.signals)
-    raise ValueError(
-        f'Episode records no replayable arm command: expected one of '
-        f'{[name for name, _ in _ARM_SIGNALS]}, and it carries {recorded}. An episode recorded from '
-        f'delta commands cannot be replayed — deltas only mean anything against the state they were '
-        f'issued from.'
-    )
+        if signal is None or len(signal) == 0:
+            continue
+        for value, ts in signal:
+            # ``_ARM_SIGNALS`` is most-faithful-first, so an instant already claimed keeps its command.
+            commands.setdefault(ts, _rebuild(command_type, value))
+    if not commands:
+        recorded = sorted(episode.signals)
+        raise ValueError(
+            f'Episode records no replayable arm command: expected one of '
+            f'{[name for name, _ in _ARM_SIGNALS]}, and it carries {recorded}. An episode recorded from '
+            f'delta commands cannot be replayed — deltas only mean anything against the state they were '
+            f'issued from.'
+        )
+    return commands
 
 
 def _rebuild(command_type: Any, value: np.ndarray) -> Any:
@@ -52,25 +63,33 @@ def _rebuild(command_type: Any, value: np.ndarray) -> Any:
 
 
 def load_actions(episode: Episode) -> list[dict[str, Any]]:
-    """The episode's commands as an action list: one entry per recorded arm waypoint.
+    """The episode's commands as an action list: one entry per instant either channel was commanded at.
 
-    ``keys.ACTION_TIMESTAMP`` is seconds from the first waypoint, so the list replays at the cadence it
-    was recorded at. The grip is sampled at or before each waypoint's time (the two channels are emitted
-    together, so in practice they land on the same instants); a waypoint earlier than the grip's first
-    sample carries no grip at all, and an episode with no grip channel replays the arm alone.
+    Each channel keeps the timing it was recorded with rather than the other's cadence, so a grip
+    command issued between two arm waypoints falls due between them, and one issued after the last of
+    them still falls due.
+
+    ``keys.ACTION_TIMESTAMP`` is seconds from the earliest instant, so the list replays at the cadence
+    it was recorded at. An action carries a channel only where the recording commanded it: the arm
+    where a command was issued at that instant, the grip from its first sample onwards (sampled at or
+    before the instant, since a grip holds until changed). An action omitting a channel emits nothing
+    on it, so the rig holds what it has there, which is what commanding nothing means. In practice the
+    two channels are emitted together and land on the same instants, and an episode with no grip
+    channel replays the arm alone.
     """
-    arm, command_type = _arm_signal(episode)
+    arm = _arm_commands(episode)
     grip = episode.signals.get(keys.TARGET_GRIP)
-    first_ts = arm.start_ts
+    grip_stamps = {ts for _, ts in grip} if grip is not None and len(grip) > 0 else set()
+    stamps = sorted(arm.keys() | grip_stamps)
+    first_ts = stamps[0]
+    grip_start = min(grip_stamps) if grip_stamps else 0
     actions = []
-    for value, ts in arm:
-        action = {keys.ACTION_TIMESTAMP: (ts - first_ts) / 1e9, keys.ROBOT_COMMAND: _rebuild(command_type, value)}
-        if grip is not None and len(grip) > 0 and ts >= grip.start_ts:
-            # Sampled at or before the waypoint. An arm waypoint that precedes the grip's first sample
-            # gets no grip field: the recording commanded none there, so the only grip available is a
-            # future one, and attaching it would close the gripper earlier than the recording did. An
-            # action omitting the channel emits nothing on it, so the rig holds the grip it has.
-            sample = cast(tuple[Any, int], grip.time[ts])
+    for ts in stamps:
+        action: dict[str, Any] = {keys.ACTION_TIMESTAMP: (ts - first_ts) / 1e9}
+        if ts in arm:
+            action[keys.ROBOT_COMMAND] = arm[ts]
+        if grip_stamps and ts >= grip_start:
+            sample = cast(tuple[Any, int], cast(Signal[np.ndarray], grip).time[ts])
             action[keys.TARGET_GRIP] = float(sample[0])
         actions.append(action)
     return actions
