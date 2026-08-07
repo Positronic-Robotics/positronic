@@ -1,3 +1,4 @@
+import time
 from collections import deque
 from collections.abc import Iterator
 from datetime import datetime
@@ -40,6 +41,39 @@ SIDES = ['left', 'right', 'NA']
 
 EDITOR_POLL_SEC = 0.5
 
+# Extent of the panel at `ui_scale=1`, in pixels: the taller of the two tabs, with one camera feed.
+# Obtained by reading `get_item_rect_size` of the window's top group after a frame. The fixed padding
+# inside it does not follow the font scale, so the extent per unit of scale falls as the scale rises and
+# fitting against this over-estimates what a larger scale needs — never the other way round.
+CONTENT_SIZE = (1317, 657)
+
+# Below this the panel is unscaled, which is the size it was laid out at.
+MIN_UI_SCALE = 1.0
+
+MAXIMIZE_WAIT_SEC = 1.0
+
+
+def fit_ui_scale(requested: float, viewport_size: tuple[int, int]) -> float:
+    """The largest scale up to `requested` at which the panel fits a viewport of this size."""
+    fits = min(avail / need for avail, need in zip(viewport_size, CONTENT_SIZE, strict=True))
+    return min(requested, max(fits, MIN_UI_SCALE))
+
+
+def maximized_viewport_size() -> tuple[int, int]:
+    """Client size of the viewport once maximizing it has taken effect.
+
+    Maximizing is a request to the window manager, answered through the event queue some frames later —
+    or not at all where nothing manages the window, so the wait is bounded and the created size stands.
+    """
+    created = (dpg.get_viewport_client_width(), dpg.get_viewport_client_height())
+    deadline = time.monotonic() + MAXIMIZE_WAIT_SEC
+    while time.monotonic() < deadline:
+        dpg.render_dearpygui_frame()
+        size = (dpg.get_viewport_client_width(), dpg.get_viewport_client_height())
+        if size != created:
+            return size
+    return created
+
 
 # TODO(#433): split this into a reusable review surface (episode navigation + per-field edits over the dataset's
 # edit log) and the lifecycle driver (RUN/FINISH/HOME + time budget). The review half is the sharable one — ideally
@@ -62,7 +96,7 @@ class EvalUI(pimm.ControlSystem):
         self.state = State.WAITING
         self.output_dir = output_dir
         self.ui_scale = ui_scale
-        self.max_im_size = (self.size(max_im_size[0]), self.size(max_im_size[1]))
+        self.max_im_size = max_im_size
 
         # --- Inputs/Outputs ---
         self.cameras = pimm.ReceiverDict(self, default=None)
@@ -171,7 +205,9 @@ class EvalUI(pimm.ControlSystem):
     def _build_configuration(self):
         dpg.add_text('Configuration')
         with dpg.group(horizontal=True):
-            with dpg.child_window(height=self.size(210), width=self.size(480), border=True):
+            # Autosized rather than given a width: the task labels are whole sentences, and a width in
+            # pixels cuts them off at whatever the font scale turns out to be.
+            with dpg.child_window(height=self.size(210), auto_resize_x=True, border=True):
                 dpg.add_text('Task')
                 self._register(
                     dpg.add_radio_button(
@@ -671,8 +707,22 @@ class EvalUI(pimm.ControlSystem):
         with dpg.texture_registry(show=False):
             dpg.add_raw_texture(320, 240, default_value=self.rv_texture, format=dpg.mvFormat_Float_rgba, tag='rv_tex')
 
-        # Window
-        with dpg.window(label='Evaluation Control', width=self.size(1200), height=self.size(800), tag='main_window'):
+        dpg.create_viewport(title='Eval UI', width=self.size(CONTENT_SIZE[0]), height=self.size(CONTENT_SIZE[1]))
+        dpg.set_viewport_vsync(True)
+        dpg.configure_app(keyboard_navigation=True)
+        dpg.setup_dearpygui()
+        dpg.show_viewport()
+        dpg.maximize_viewport()
+
+        # The requested scale is an upper bound: nothing pans the viewport, so a panel wider than it
+        # puts the stop controls out of reach.
+        self.ui_scale = fit_ui_scale(self.ui_scale, maximized_viewport_size())
+        if self.ui_scale != 1.0:
+            dpg.set_global_font_scale(self.ui_scale)
+
+        # Window. It fills the viewport and scrolls, so anything the fitted scale still leaves oversized —
+        # a camera feed joining after the fit widens the panel — stays reachable.
+        with dpg.window(label='Evaluation Control', horizontal_scrollbar=True, tag='main_window'):
             with dpg.group(horizontal=True):
                 # Left side: live camera feeds, fixed in place across tabs so the operator's view never jumps.
                 with dpg.group(horizontal=False, tag='image_grid_group'):
@@ -696,16 +746,8 @@ class EvalUI(pimm.ControlSystem):
                             dpg.add_spacer(height=self.size(10))
                             self._build_editor()
 
+        dpg.set_primary_window('main_window', True)
         self._setup_key_handlers()
-
-        dpg.create_viewport(title='Eval UI', width=self.size(520), height=self.size(850))
-        dpg.set_viewport_vsync(True)
-        dpg.configure_app(keyboard_navigation=True)
-        if self.ui_scale != 1.0:
-            dpg.set_global_font_scale(self.ui_scale)
-        dpg.setup_dearpygui()
-        dpg.show_viewport()
-        dpg.maximize_viewport()
 
         # Initialize UI state; open the editor on the newest episode of an existing dataset
         self.update_ui()
@@ -737,7 +779,7 @@ class EvalUI(pimm.ControlSystem):
                         orig_height, orig_width = image.shape[:2]
 
                         # Calculate display size (downsample if needed)
-                        max_width, max_height = self.max_im_size
+                        max_width, max_height = (self.size(v) for v in self.max_im_size)
                         scale = min(max_width / orig_width, max_height / orig_height, 1.0)
                         display_width = int(orig_width * scale)
                         display_height = int(orig_height * scale)
