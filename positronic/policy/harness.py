@@ -1,3 +1,4 @@
+import logging
 import time
 from collections.abc import Callable, Generator, Iterable, Iterator
 from dataclasses import dataclass
@@ -15,6 +16,8 @@ from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy, Session
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils import flatten_dict, frozen_view
+
+logger = logging.getLogger(__name__)
 
 
 class DirectiveType(Enum):
@@ -135,6 +138,12 @@ class _EpisodeTelemetry:
         self._span = None
 
 
+# How long after a home is commanded a requested finish waits before stopping the World. Covers the
+# travel an embodiment's home motion takes; see ``Harness._may_finish`` for why it is a bound rather
+# than a report of arrival.
+FINISH_HOME_GRACE_NS = int(10.0 * 1e9)
+
+
 class Harness(pimm.ControlSystem):
     """Control system that manages episode lifecycle and forwards trajectories to drivers.
 
@@ -192,6 +201,9 @@ class Harness(pimm.ControlSystem):
         self._policy_session: Session | None = None
         # True between RUN and FINISH/ABORT: the trial is live — stepping and recording happen together.
         self._running = False
+        # Set by every ``_home``; read only by ``_may_finish``. Never None: ``run`` homes before the
+        # first episode, so a requested finish always has a real instant to measure from.
+        self._homed_at_ns = 0
         # ``inference_latency`` is delivered on the RUN context (sim-only): ``True`` advances the
         # (sim) clock by the wall-clock cost of the inference call; a float is a fixed deterministic
         # delay (used by the reproducible golden). Sleep is yielded BEFORE ``ChunkedSchedule`` reads
@@ -222,6 +234,11 @@ class Harness(pimm.ControlSystem):
         # Privileged stop-signal: a truthy value within a trial's time budget ends it,
         # recording ``eval.terminated`` True plus that dict in the episode's static data.
         self.done = pimm.ControlSystemReceiver[dict](self, default={})
+        # An orchestrator outside this process asking the run to end (``cli.eval.finish_request``).
+        # It is a REQUEST, not a stop: it is honoured between episodes, so the episode in progress
+        # is recorded whole rather than truncated into a short one that scores like a real failure.
+        # Unwired by default, which is every run nobody asked to end.
+        self.finish_requested = pimm.ControlSystemReceiver[bool](self, default=False)
 
     def _statics(self) -> dict[str, Any]:
         """What is known about the rig before the episode runs, live values winning."""
@@ -247,6 +264,10 @@ class Harness(pimm.ControlSystem):
 
     def _home(self, clock):
         now = clock.now_ns()
+        # When the last home was COMMANDED. ``_home`` publishes targets and returns; the arm is still
+        # travelling afterwards, and a World that unwinds while it travels parks the brakes wherever
+        # it got to. A requested finish waits this out (``_may_finish``).
+        self._homed_at_ns = now
         for name, value in self._embodiment.home.items():
             self.commands[name].emit([(now, value)])
 
@@ -506,8 +527,40 @@ class Harness(pimm.ControlSystem):
             self._telemetry.seal(clock.now())
             raise
 
+    def _may_finish(self, clock: pimm.Clock) -> bool:
+        """Whether a requested finish may be acted on this round.
+
+        Two conditions, and each answers a way an early stop damages the run. Not mid-episode, or the
+        loop's exit path finalizes a partial recording and it lands in the dataset indistinguishable
+        from an episode the policy actually failed. Not while the arm is still travelling to home,
+        because ``_home`` only publishes the targets — the World unwinding under a moving arm parks
+        the brakes short of home, and the next run then begins somewhere the operator did not leave it.
+
+        The home wait is a BOUND, not a confirmation of arrival: the arm's own readiness is not
+        readable from here under a name every embodiment shares, so this waits long enough for the
+        motion rather than watching it. A run whose arm needs longer stops mid-travel, which is the
+        pre-existing behaviour of every other way this run can end.
+
+        A SIMULATED embodiment waits for neither: it has no travel to finish, and its clock is the
+        world's own — one that advances only when something asks it to, so a wait measured on it can
+        be waited out forever by a sim that is otherwise idle. This is the same real/simulated split
+        ``_pace`` makes, for the same reason: the wait exists for hardware.
+        """
+        if not self.finish_requested.value or self._running:
+            return False
+        if self._embodiment.simulated:
+            return True
+        return clock.now_ns() - self._homed_at_ns >= FINISH_HOME_GRACE_NS
+
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:  # noqa: C901
         while not should_stop.value:
+            # Checked before the directive read, so a finish and a queued directive cannot both act in
+            # one round. A directive arriving now is the operator's, and hers outranks the request:
+            # ``_running`` goes True and the next rounds run her episode, exactly as if the finish had
+            # been asked for a moment later.
+            if self._may_finish(clock):
+                logger.info('finish requested and the rig is idle — ending the run')
+                break
             # One action per round, mutually exclusive: handle a directive, start the next trial (or exit
             # when the plan is done), finish a self-driven trial that is out of budget or done, or step the
             # policy. Starting takes its own round so a begin never shares a round with a step — inference

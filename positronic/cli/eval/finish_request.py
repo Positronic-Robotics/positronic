@@ -1,0 +1,165 @@
+"""Ending an attended run from outside it, without a signal.
+
+An attended run is ended by its operator surface: the web console POSTs `/finish_run` to itself.
+A run driven by the local eval UI has no such surface — it serves no port — so the only way to end
+one from outside the process was a signal, and a signal is not a finish: nothing unwinds the World,
+so the recording is not closed, the dataset is not uploaded, and the arm is left as it stands with
+its control token held.
+
+This is the surface an orchestrator uses instead. It writes a small file; the run polls it and, once
+the episode in progress has completed, stops the way a plan running out stops. What follows is the
+ordinary shutdown — the World unwinds, the recorder commits, the mirror uploads on process exit, and
+the arm's driver releases control.
+
+THE CONTRACT, which a writer in another repository implements against:
+
+  path     `/run/lock/positronic_rollout_finish`, overridable by `ROLLOUT_FINISH_REQUEST_PATH`.
+           Absolute, because the writer and the run are different accounts on a rig that gives each
+           actor its own home — a `$HOME`-relative path is a different file per actor and reaches
+           nobody. On tmpfs, so a request cannot outlive a reboot as stale state, and in a
+           world-writable sticky directory, so neither account needs root or a shared group.
+  content  one JSON object: `{"action": "finish", "run_id": "<id>"}`. Further keys are ignored, so a
+           writer may record its own diagnostics (when it asked, who asked) without a format change.
+  writer   creates and REMOVES it, world-readable (mode 0644 — a `077` umask would leave it 0600 and
+           unreadable by the run, which is silent). The run never writes or unlinks it: the sticky
+           bit means only the owner can, so a run that tried would fail every time.
+  reader   this module, in the run's process, read-only.
+  identity `run_id` must equal the run's own `ROLLOUT_RUN_ID`. Without it a request left behind by a
+           crashed writer would end the NEXT run the instant it started, and the two are hard to tell
+           apart afterwards: both are clean finishes with fewer episodes than asked for.
+
+It FAILS CLOSED, where closed means the run keeps running: an absent file, an unreadable one, one
+that does not parse, one naming another run, and one whose action is not `finish` are all ignored,
+each logged once. The failure this ordering prevents is a run stopped by something that was never a
+request — the mirror of the writer's own problem, which is a request that is never picked up, and
+which the writer answers with a bounded wait rather than by assuming this side acted.
+
+Nothing is installed when `ROLLOUT_RUN_ID` is unset, so an ordinary local run is untouched.
+"""
+
+import json
+import logging
+import os
+import time
+from pathlib import Path
+
+import pimm
+
+logger = logging.getLogger(__name__)
+
+# The default path. Overridable so a test, or a rig running more than one simulated run, can use a
+# directory of its own rather than the one real path every run on a machine would share.
+FINISH_REQUEST_PATH_ENV = 'ROLLOUT_FINISH_REQUEST_PATH'
+DEFAULT_FINISH_REQUEST_PATH = '/run/lock/positronic_rollout_finish'
+# The run's own identity, set by whatever launched it. Its absence is what makes this inert.
+RUN_ID_ENV = 'ROLLOUT_RUN_ID'
+
+# The object's two required fields and the only action understood. A second action (discard the open
+# episode and stop) would be a new value here rather than a second file.
+ACTION_KEY = 'action'
+RUN_ID_KEY = 'run_id'
+FINISH_ACTION = 'finish'
+
+# How often the file is read. The wait it adds to a finish is bounded by this, and the cost of it is
+# one `open` on tmpfs, so it is short enough not to be noticed and long enough not to matter.
+POLL_INTERVAL_S = 2.0
+
+# Printed to the run's log the moment a request is granted, and part of the contract: it is the only
+# way the writer can tell a request still being worked through — the run is mid-episode, which can
+# take minutes — from one that never arrived at all, because the path is wrong, the file is
+# unreadable, or this run predates the poller. Those need opposite responses from whoever asked, and
+# from outside the process both look like a run that is still running.
+ACK_LOG_MARKER = 'rollout finish request granted'
+
+
+def request_path() -> Path:
+    return Path(os.environ.get(FINISH_REQUEST_PATH_ENV, DEFAULT_FINISH_REQUEST_PATH))
+
+
+def run_id() -> str | None:
+    """This run's identity, or None where nothing gave it one."""
+    return os.environ.get(RUN_ID_ENV) or None
+
+
+def requested_for(path: Path, this_run: str) -> bool:
+    """Whether `path` currently holds a finish request addressed to `this_run`.
+
+    Every negative answer is a reason to keep running, so they are not distinguished to the caller;
+    they are distinguished in the log, because "the request is there and the run ignored it" and
+    "the request never arrived" look identical from the writer's side and have different fixes.
+    """
+    try:
+        raw = path.read_text()
+    except FileNotFoundError:
+        return False
+    except OSError as e:
+        # Unreadable is not absent: a request written by another account with a restrictive umask
+        # lands here, and it is the one negative a reader cannot fix by waiting.
+        logger.error('finish request at %s could not be read (%s); continuing to run', path, e)
+        return False
+    try:
+        request = json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.error('finish request at %s did not parse (%s); continuing to run', path, e)
+        return False
+    if not isinstance(request, dict):
+        logger.error('finish request at %s is %s, not an object; continuing to run', path, type(request).__name__)
+        return False
+    if request.get(ACTION_KEY) != FINISH_ACTION:
+        logger.error(
+            'finish request at %s names action %r, not %r; continuing to run',
+            path,
+            request.get(ACTION_KEY),
+            FINISH_ACTION,
+        )
+        return False
+    addressee = request.get(RUN_ID_KEY)
+    if addressee != this_run:
+        # The stale-request case, and the only one that is routine rather than a fault: the previous
+        # run's request outliving it. Logged at INFO for that reason.
+        logger.info('finish request at %s names run %r, not %r; continuing to run', path, addressee, this_run)
+        return False
+    return True
+
+
+class FinishRequest(pimm.ControlSystem):
+    """Emits True once a finish request addressed to this run appears, and keeps emitting it.
+
+    It never finishes its own loop. A control system that returns sets the world's stop event, which
+    would end the run wherever it happened to be — the mid-episode stop this exists to replace. The
+    harness owns when it is safe to stop; this only reports that someone asked.
+    """
+
+    def __init__(self, path: Path, this_run: str, poll_interval_s: float = POLL_INTERVAL_S):
+        self.requested = pimm.ControlSystemEmitter[bool](self)
+        self._path = path
+        self._run = this_run
+        self._poll_interval_s = poll_interval_s
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        # Paced on the WALL clock, not the world's. Under virtual time the world runs as fast as the
+        # machine allows, so a `Sleep` of two simulated seconds is no wait at all and this would read
+        # the file on a tight loop.
+        last_read = 0.0
+        granted = False
+        while not should_stop.value:
+            if not granted and time.monotonic() - last_read >= self._poll_interval_s:
+                last_read = time.monotonic()
+                granted = requested_for(self._path, self._run)
+                if granted:
+                    logger.info('%s: run %s stops after the current episode', ACK_LOG_MARKER, self._run)
+            if granted:
+                # Re-emitted every round rather than once: the harness reads a signal, and a single
+                # emit that landed before it bound would be a request that silently never arrives.
+                self.requested.emit(True, clock.now_ns())
+            yield pimm.Sleep(self._poll_interval_s)
+
+
+def from_env() -> FinishRequest | None:
+    """The control system this run should carry, or None where nothing named the run."""
+    this_run = run_id()
+    if this_run is None:
+        return None
+    path = request_path()
+    logger.info('run %s will stop after the current episode if %s asks it to', this_run, path)
+    return FinishRequest(path, this_run)

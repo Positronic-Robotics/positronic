@@ -13,6 +13,8 @@ import pimm
 import positronic.cfg.policy as policy_cfg
 from positronic import telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import placeholder
+from positronic.cli.eval.finish_request import FinishRequest
+from positronic.cli.eval.finish_request import from_env as finish_request_from_env
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.eval import Embodiment, Eval, Task
@@ -76,11 +78,16 @@ def _run_world(
     output_dir: Path | None,
     show_gui: bool,
     on_complete,
+    finish: FinishRequest | None = None,
 ):
     """Wire one embodiment under a fresh Harness + World and run it to completion.
 
     ``driver`` (attended) and ``trials`` (unattended self-driving) are the two lifecycle sources, mutually
     exclusive per the caller. The shared ``policy``'s lifetime stays with ``main``.
+
+    ``finish`` is the out-of-process request to end the run, built once per invocation and passed to every
+    World of a sweep: a request outlives the World that was up when it arrived, and one that ended a single
+    eval and let the sweep continue would be a finish nobody asked for.
     """
     harness = Harness(policy, embodiment, task=task, trials=trials, on_episode_complete=on_complete)
     gui = driver.gui if driver is not None else (dpg_ui() if show_gui else None)
@@ -104,6 +111,8 @@ def _run_world(
             world.connect(driver.directives, harness.directive, emitter_wrapper=driver.directive_wrapper)
             if driver.manual_commands is not None:
                 world.connect(driver.manual_commands, harness.manual_command)
+        if finish is not None:
+            world.connect(finish.requested, harness.finish_requested)
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)
 
@@ -117,10 +126,15 @@ def _run_world(
         # driver, and GUI placement is otherwise identical.
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         foreground = driver.control_systems if driver is not None else []
+        # In the FOREGROUND, with the harness, on both paths. It reads a file every couple of seconds and
+        # yields a Sleep, which the scheduler wakes from at the nearest deadline, so it paces nothing; as a
+        # background control system it would be a subprocess whose only job is one `open`, and under the
+        # virtual clock it would not share the world's timeline with the harness it answers.
+        watch = [finish] if finish is not None else []
         if embodiment.simulated:
-            world.run([*foreground, harness, ds_agent, *producers], gui)
+            world.run([*foreground, harness, ds_agent, *producers, *watch], gui)
         else:
-            world.run([harness, *foreground], [*producers, ds_agent, gui])
+            world.run([harness, *foreground, *watch], [*producers, ds_agent, gui])
 
 
 def _validate_timing(embodiments: Iterable[Embodiment], output_dir: str | Path | None) -> None:
@@ -245,15 +259,24 @@ def main(
     # over the whole sweep.
     on_complete = _completion_sink(policy)
 
+    # Built once, before any World: an orchestrator addresses the RUN, and a sweep is one run however many
+    # Worlds it raises. None unless something named this run (`ROLLOUT_RUN_ID`), which is every ordinary
+    # invocation.
+    finish = finish_request_from_env()
+
     try:
         with _timed_pass(output_dir, timing, policy):
             if driver is not None:
                 assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
-                _run_world(policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete)
+                _run_world(
+                    policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete, finish
+                )
             else:
                 assert evals is not None  # driver/evals XOR asserted up front
                 for ev in evals:
-                    _run_world(policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete)
+                    _run_world(
+                        policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete, finish
+                    )
     finally:
         policy.close()
 
