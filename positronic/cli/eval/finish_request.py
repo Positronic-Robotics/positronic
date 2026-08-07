@@ -81,45 +81,38 @@ def run_id() -> str | None:
     return os.environ.get(RUN_ID_ENV) or None
 
 
-def requested_for(path: Path, this_run: str) -> bool:
-    """Whether `path` currently holds a finish request addressed to `this_run`.
+def evaluate(path: Path, this_run: str) -> tuple[bool, str]:
+    """Whether `path` holds a finish request addressed to `this_run`, and why not when it does not.
 
-    Every negative answer is a reason to keep running, so they are not distinguished to the caller;
-    they are distinguished in the log, because "the request is there and the run ignored it" and
-    "the request never arrived" look identical from the writer's side and have different fixes.
+    Every negative is a reason to keep running, so the caller acts on the bool alone; the reason is
+    for the log, because "the request is there and the run ignored it" and "the request never
+    arrived" look identical from the writer's side and have different fixes. It is returned rather
+    than logged here so the caller can report a persistent one once instead of on every poll —
+    a request addressed to a dead run would otherwise fill the log for the life of this one.
     """
     try:
         raw = path.read_text()
     except FileNotFoundError:
-        return False
+        return False, ''
     except OSError as e:
         # Unreadable is not absent: a request written by another account with a restrictive umask
         # lands here, and it is the one negative a reader cannot fix by waiting.
-        logger.error('finish request at %s could not be read (%s); continuing to run', path, e)
-        return False
+        return False, f'finish request at {path} could not be read ({e}); continuing to run'
     try:
         request = json.loads(raw)
     except json.JSONDecodeError as e:
-        logger.error('finish request at %s did not parse (%s); continuing to run', path, e)
-        return False
+        return False, f'finish request at {path} did not parse ({e}); continuing to run'
     if not isinstance(request, dict):
-        logger.error('finish request at %s is %s, not an object; continuing to run', path, type(request).__name__)
-        return False
+        return False, f'finish request at {path} is {type(request).__name__}, not an object; continuing to run'
     if request.get(ACTION_KEY) != FINISH_ACTION:
-        logger.error(
-            'finish request at %s names action %r, not %r; continuing to run',
-            path,
-            request.get(ACTION_KEY),
-            FINISH_ACTION,
-        )
-        return False
+        action = request.get(ACTION_KEY)
+        return False, f'finish request at {path} names action {action!r}, not {FINISH_ACTION!r}; continuing to run'
     addressee = request.get(RUN_ID_KEY)
     if addressee != this_run:
-        # The stale-request case, and the only one that is routine rather than a fault: the previous
-        # run's request outliving it. Logged at INFO for that reason.
-        logger.info('finish request at %s names run %r, not %r; continuing to run', path, addressee, this_run)
-        return False
-    return True
+        # The stale-request case, and the only one that is routine rather than a fault: a previous
+        # run's request outliving it.
+        return False, f'finish request at {path} names run {addressee!r}, not {this_run!r}; continuing to run'
+    return True, ''
 
 
 class FinishRequest(pimm.ControlSystem):
@@ -135,6 +128,10 @@ class FinishRequest(pimm.ControlSystem):
         self._path = path
         self._run = this_run
         self._poll_interval_s = poll_interval_s
+        # The last refusal reported, so a request that stays wrong is logged when it appears and not
+        # on every poll for the life of the run. Reported again when the reason CHANGES, which is what
+        # a replaced file looks like from here.
+        self._reported = ''
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         # Paced on the WALL clock, not the world's. Under virtual time the world runs as fast as the
@@ -145,9 +142,13 @@ class FinishRequest(pimm.ControlSystem):
         while not should_stop.value:
             if not granted and time.monotonic() - last_read >= self._poll_interval_s:
                 last_read = time.monotonic()
-                granted = requested_for(self._path, self._run)
+                granted, reason = evaluate(self._path, self._run)
                 if granted:
                     logger.info('%s: run %s stops after the current episode', ACK_LOG_MARKER, self._run)
+                elif reason != self._reported:
+                    self._reported = reason
+                    if reason:
+                        logger.error(reason)
             if granted:
                 # Re-emitted every round rather than once: the harness reads a signal, and a single
                 # emit that landed before it bound would be a request that silently never arrives.

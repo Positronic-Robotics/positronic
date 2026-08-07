@@ -201,9 +201,11 @@ class Harness(pimm.ControlSystem):
         self._policy_session: Session | None = None
         # True between RUN and FINISH/ABORT: the trial is live — stepping and recording happen together.
         self._running = False
-        # Set by every ``_home``; read only by ``_may_finish``. Never None: ``run`` homes before the
-        # first episode, so a requested finish always has a real instant to measure from.
+        # When the last home was COMMANDED, and whether anything has moved the arm since. Both are read
+        # only by ``_wind_down``, which owes the run an arm at home whichever reason it is stopping for.
+        # ``run`` homes before the first episode, so the instant is never a guess.
         self._homed_at_ns = 0
+        self._moved_since_home = False
         # ``inference_latency`` is delivered on the RUN context (sim-only): ``True`` advances the
         # (sim) clock by the wall-clock cost of the inference call; a float is a fixed deterministic
         # delay (used by the reproducible golden). Sleep is yielded BEFORE ``ChunkedSchedule`` reads
@@ -264,15 +266,18 @@ class Harness(pimm.ControlSystem):
 
     def _home(self, clock):
         now = clock.now_ns()
-        # When the last home was COMMANDED. ``_home`` publishes targets and returns; the arm is still
-        # travelling afterwards, and a World that unwinds while it travels parks the brakes wherever
-        # it got to. A requested finish waits this out (``_may_finish``).
+        # ``_home`` publishes targets and returns, so the arm is still travelling after this. ``_wind_down``
+        # waits that out rather than letting the World unwind under a moving arm.
         self._homed_at_ns = now
+        self._moved_since_home = False
         for name, value in self._embodiment.home.items():
             self.commands[name].emit([(now, value)])
 
     def _apply_manual(self, action: dict[str, Any], clock: pimm.Clock) -> None:
         now = clock.now_ns()
+        # Nothing homes after a manual command — an episode's own ``_end_episode`` does, and this runs
+        # between episodes. So the arm is left where it is put, and ``_wind_down`` is what brings it back.
+        self._moved_since_home = True
         for name, value in action.items():
             self.commands[name].emit([(now, value)])
 
@@ -527,42 +532,61 @@ class Harness(pimm.ControlSystem):
             self._telemetry.seal(clock.now())
             raise
 
-    def _may_finish(self, clock: pimm.Clock) -> bool:
-        """Whether a requested finish may be acted on this round.
+    def _idle_step(self, manual_msg, clock: pimm.Clock) -> bool:
+        """Decide what a harness with no episode open does this round; True means wind down and stop.
 
-        Two conditions, and each answers a way an early stop damages the run. Not mid-episode, or the
-        loop's exit path finalizes a partial recording and it lands in the dataset indistinguishable
-        from an episode the policy actually failed. Not while the arm is still travelling to home,
-        because ``_home`` only publishes the targets — the World unwinding under a moving arm parks
-        the brakes short of home, and the next run then begins somewhere the operator did not leave it.
-
-        The home wait is a BOUND, not a confirmation of arrival: the arm's own readiness is not
-        readable from here under a name every embodiment shares, so this waits long enough for the
-        motion rather than watching it. A run whose arm needs longer stops mid-travel, which is the
-        pre-existing behaviour of every other way this run can end.
-
-        A SIMULATED embodiment waits for neither: it has no travel to finish, and its clock is the
-        world's own — one that advances only when something asks it to, so a wait measured on it can
-        be waited out forever by a sim that is otherwise idle. This is the same real/simulated split
-        ``_pace`` makes, for the same reason: the wait exists for hardware.
+        The order IS the priority. The operator's own input goes first, so a jog she has just sent is
+        applied rather than dropped by a stop taken in the same round. A pending finish comes next, and
+        crucially BEFORE the plan advances: taken after, a request would start one more episode and then
+        be blocked by it, which on a long plan means the run cannot be ended at all. The plan running out
+        is the third way to arrive at the same answer, and it returns the same True — so both reasons to
+        stop leave through one route (``_wind_down``) rather than two that must be kept in step.
         """
-        if not self.finish_requested.value or self._running:
+        if manual_msg.updated and manual_msg.data is not None:
+            self._apply_manual(manual_msg.data, clock)
             return False
-        if self._embodiment.simulated:
+        if self.finish_requested.value:
+            logger.info('finish requested and no episode is open — ending the run')
             return True
-        return clock.now_ns() - self._homed_at_ns >= FINISH_HOME_GRACE_NS
+        if self._trials is None:
+            return False
+        trial = next(self._trials, None)
+        if trial is None:
+            return True
+        self._begin_episode(trial, clock)
+        return False
 
-    def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:  # noqa: C901
+    def _wind_down(self, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
+        """Everything between deciding to stop and stopping, for every reason the loop stops.
+
+        Three things, each answering a way an abrupt stop damages the run:
+
+        - **Home the arm if anything has moved it since the last home command.** ``_apply_manual``
+          publishes a pose and never homes, so a jog between episodes leaves the arm where the operator
+          put it; stopping there ends the run somewhere she did not leave it and starts the next one
+          from a pose nothing recorded.
+        - **Give the recorder a round** to commit the episode that just closed.
+        - **Let a real arm travel.** ``_home`` publishes targets and returns, so the arm is still moving
+          when this is reached; a World that unwinds under it parks the brakes wherever it got to.
+
+        The travel wait is a BOUND, not a report of arrival: the arm's readiness is not readable here
+        under a name every embodiment shares. An arm whose home motion takes longer than
+        ``FINISH_HOME_GRACE_NS`` can still be stopped mid-travel. A simulated embodiment has no travel
+        to wait for, and its clock advances only when something asks it to, so a wait measured on it
+        would never end — the same real/simulated split ``_pace`` makes, for the same reason.
+        """
+        if self._moved_since_home:
+            self._home(clock)
+        yield pimm.Sleep(0.5)
+        if self._embodiment.simulated:
+            return
+        while (remaining_ns := FINISH_HOME_GRACE_NS - (clock.now_ns() - self._homed_at_ns)) > 0:
+            yield pimm.Sleep(min(remaining_ns / 1e9, 0.1))
+
+    def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         while not should_stop.value:
-            # Checked before the directive read, so a finish and a queued directive cannot both act in
-            # one round. A directive arriving now is the operator's, and hers outranks the request:
-            # ``_running`` goes True and the next rounds run her episode, exactly as if the finish had
-            # been asked for a moment later.
-            if self._may_finish(clock):
-                logger.info('finish requested and the rig is idle — ending the run')
-                break
-            # One action per round, mutually exclusive: handle a directive, start the next trial (or exit
-            # when the plan is done), finish a self-driven trial that is out of budget or done, or step the
+            # One action per round, mutually exclusive: handle a directive, decide what an idle harness
+            # does (``_idle_step``), finish a self-driven trial that is out of budget or done, or step the
             # policy. Starting takes its own round so a begin never shares a round with a step — inference
             # waits for the producer's post-reset frame-0, which the recorder logs once its open-turn drain
             # has cleared the channels of the pre-reset frame.
@@ -573,14 +597,9 @@ class Harness(pimm.ControlSystem):
             if directive_msg.updated:
                 yield from self._handle_directive(directive_msg.data, clock)
             elif not self._running:
-                if manual_msg.updated and manual_msg.data is not None:
-                    self._apply_manual(manual_msg.data, clock)
-                elif self._trials is not None:
-                    trial = next(self._trials, None)
-                    if trial is None:  # plan exhausted — let the recorder commit the final episode, then exit
-                        yield pimm.Sleep(0.5)
-                        break
-                    self._begin_episode(trial, clock)
+                if self._idle_step(manual_msg, clock):
+                    yield from self._wind_down(clock)
+                    break
             elif self._deadline is not None and (terminal := self._trial_terminal(clock)) is not None:
                 yield from self._end_episode(clock, terminal)
             else:
