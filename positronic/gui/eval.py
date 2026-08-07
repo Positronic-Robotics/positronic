@@ -59,22 +59,6 @@ def fit_ui_scale(requested: float, viewport_size: tuple[int, int]) -> float:
     return min(requested, max(fits, MIN_UI_SCALE))
 
 
-def maximized_viewport_size() -> tuple[int, int]:
-    """Client size of the viewport once maximizing it has taken effect.
-
-    Maximizing is a request to the window manager, answered through the event queue some frames later —
-    or not at all where nothing manages the window, so the wait is bounded and the created size stands.
-    """
-    created = (dpg.get_viewport_client_width(), dpg.get_viewport_client_height())
-    deadline = time.monotonic() + MAXIMIZE_WAIT_SEC
-    while time.monotonic() < deadline:
-        dpg.render_dearpygui_frame()
-        size = (dpg.get_viewport_client_width(), dpg.get_viewport_client_height())
-        if size != created:
-            return size
-    return created
-
-
 # TODO(#433): split this into a reusable review surface (episode navigation + per-field edits over the dataset's
 # edit log) and the lifecycle driver (RUN/FINISH/HOME + time budget). The review half is the sharable one — ideally
 # the positronic server grows into it — and owning `output_dir` there frees the driver from the factory closure.
@@ -207,7 +191,10 @@ class EvalUI(pimm.ControlSystem):
         with dpg.group(horizontal=True):
             # Autosized rather than given a width: the task labels are whole sentences, and a width in
             # pixels cuts them off at whatever the font scale turns out to be.
-            with dpg.child_window(height=self.size(210), auto_resize_x=True, border=True):
+            # dearpygui declares its context managers as `int | str`, so the `with` is unanalysable.
+            with dpg.child_window(  # pyright: ignore[reportGeneralTypeIssues]
+                height=self.size(210), auto_resize_x=True, border=True
+            ):
                 dpg.add_text('Task')
                 self._register(
                     dpg.add_radio_button(
@@ -698,6 +685,22 @@ class EvalUI(pimm.ControlSystem):
 
     # --- Control System Run Loop ---
 
+    @staticmethod
+    def _maximized_viewport_size() -> tuple[int, int]:
+        """Client size of the viewport once maximizing it has taken effect.
+
+        Maximizing is a request to the window manager, answered through the event queue some frames later —
+        or not at all where nothing manages the window, so the wait is bounded and the created size stands.
+        """
+        created = (dpg.get_viewport_client_width(), dpg.get_viewport_client_height())
+        deadline = time.monotonic() + MAXIMIZE_WAIT_SEC
+        while time.monotonic() < deadline:
+            dpg.render_dearpygui_frame()
+            size = (dpg.get_viewport_client_width(), dpg.get_viewport_client_height())
+            if size != created:
+                return size
+        return created
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         self.clock = clock
         # Initialize DPG Context
@@ -716,13 +719,16 @@ class EvalUI(pimm.ControlSystem):
 
         # The requested scale is an upper bound: nothing pans the viewport, so a panel wider than it
         # puts the stop controls out of reach.
-        self.ui_scale = fit_ui_scale(self.ui_scale, maximized_viewport_size())
+        self.ui_scale = fit_ui_scale(self.ui_scale, self._maximized_viewport_size())
         if self.ui_scale != 1.0:
             dpg.set_global_font_scale(self.ui_scale)
 
         # Window. It fills the viewport and scrolls, so anything the fitted scale still leaves oversized —
         # a camera feed joining after the fit widens the panel — stays reachable.
-        with dpg.window(label='Evaluation Control', horizontal_scrollbar=True, tag='main_window'):
+        # dearpygui declares its context managers as `int | str`, so the `with` is unanalysable.
+        with dpg.window(  # pyright: ignore[reportGeneralTypeIssues]
+            label='Evaluation Control', horizontal_scrollbar=True, tag='main_window'
+        ):
             with dpg.group(horizontal=True):
                 # Left side: live camera feeds, fixed in place across tabs so the operator's view never jumps.
                 with dpg.group(horizontal=False, tag='image_grid_group'):
