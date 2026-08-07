@@ -18,6 +18,7 @@ from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
 
@@ -53,6 +54,9 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         # The robot model identity the env reports at ``reset`` (URDF / joint names) — emitted on the
         # ``robot_meta`` port into the episode; distinct from the scene ``meta`` above.
         self._robot_meta: dict[str, Any] | None = None
+        # The env's sim-enforced episode horizon in sim-seconds from the latest ``reset``, or ``None`` when the
+        # env enforces none.
+        self._horizon: float | None = None
         # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
         self._reset_pending = False
 
@@ -61,6 +65,13 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         """The env's scene meta from the latest ``reset`` (suite, task, …); a client reads its task from here."""
         assert self._meta is not None, 'meta read before the first reset'
         return self._meta
+
+    @property
+    def horizon(self) -> float | None:
+        """The trial's minimum time budget in sim-seconds from the latest ``reset``, or ``None`` if the env
+        enforces no horizon: the env's own horizon plus the one control period this proxy spends publishing
+        frame-0 before the first step."""
+        return self._horizon
 
     def reset(self, context: dict[str, Any]) -> None:
         """Re-randomize the env from the trial context and arm frame-0 publication for the next turn (the ``RUN`` hook).
@@ -80,8 +91,13 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         for _, receiver in self.commands.items():
             receiver.read()
         self._frame = self._conn.reset(self._adapter.reset_token(context))
-        self._meta = self._frame['meta']
-        self._robot_meta = self._frame['robot_meta']
+        self._meta = self._frame[protocol.FRAME_META]
+        self._robot_meta = self._frame[protocol.FRAME_ROBOT_META]
+        # Optional: only envs that enforce a horizon report one. Fold in the one control period this proxy spends
+        # publishing frame-0 before the first step — the env reaches its horizon a tick after the harness arms the
+        # deadline, so the timeout floor must clear the horizon plus that tick, not the bare horizon.
+        sim_horizon = self._frame.get(protocol.FRAME_HORIZON)
+        self._horizon = None if sim_horizon is None else sim_horizon + self._frame[protocol.FRAME_CONTROL_DT]
         self._reset_pending = True
         self._active = True
         # Clear any terminal the previous trial left on the wire: the env can reach ``done`` while the proxy
@@ -101,7 +117,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                 # The proxy is the eval's sole time-master: it sleeps one control period every turn —
                 # stepping, publishing frame-0, or idle between trials alike. Before the first reset the
                 # env's ``control_dt`` is unknown, so it paces at ``_IDLE_DT`` until reset reports the real one.
-                yield pimm.Sleep(self._frame['control_dt'] if self._frame is not None else _IDLE_DT)
+                yield pimm.Sleep(self._frame[protocol.FRAME_CONTROL_DT] if self._frame is not None else _IDLE_DT)
                 if self._reset_pending:
                     # The reset is this turn's step: publish the env's frame-0 (no step) and clear the prior
                     # terminal, so the recorder samples it before any step advances the env.
@@ -112,7 +128,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     # frame) is reset cost: it is work the reset asked for, and left untimed it would land in
                     # overhead.
                     with telemetry.span(telemetry_keys.SPAN_RESET):
-                        self._emit_payload(self._frame['obs'])
+                        self._emit_payload(self._frame[protocol.FRAME_OBS])
                     self.done.emit({})
                 elif self._active:
                     # ``env.step`` spans the whole client-observed step; ``materialize`` nests the client-side
@@ -121,15 +137,22 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
                         self._frame = self._step_env(clock)
                         with telemetry.span(telemetry_keys.SPAN_MATERIALIZE):
-                            self._emit_payload(self._frame['obs'])
+                            self._emit_payload(self._frame[protocol.FRAME_OBS])
         finally:
             # Closes the connection then the server, in that order (reverse of acquisition); a no-op if no reset
             # ever connected.
             self._cleanup.close()
 
     def _step_env(self, clock: pimm.Clock) -> dict[str, Any]:
-        commands = {name: receiver.read() for name, receiver in self.commands.items()}
-        result = self._conn.step(self._adapter.action(commands, clock.now_ns()))
+        # Every command receiver is built with ``default=[]``, so ``read()`` is total here — it returns ``None``
+        # only for a receiver with no default.
+        commands: dict[str, pimm.Message] = {}
+        for name, receiver in self.commands.items():
+            message = receiver.read()
+            assert message is not None, f'{name} receiver carries a default, so its read cannot be empty'
+            commands[name] = message
+        action = self._adapter.action(commands, clock.now_ns())
+        result = self._conn.step(action)
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues
             self.done.emit(payload)

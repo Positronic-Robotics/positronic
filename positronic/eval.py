@@ -9,6 +9,16 @@ from positronic.dataset.serializers import Serializer
 # Embodiment-level static meta: how recorded signals map to the canonical robot fields.
 ROBOT_STATIC_META = {'joint_signal': keys.JOINTS, 'pose_signals': [keys.EE_POSE, keys.TARGET_EE_POSE]}
 
+# Per-trial context keys the trial builders set and the sim adapters read from each trial's reset context.
+EVAL_SEED = 'eval.seed'
+EVAL_EPISODE_INDEX = 'eval.episode_index'
+EVAL_TRIAL_INDEX = 'eval.trial_index'
+EVAL_TRIAL_COUNT = 'eval.trial_count'
+
+# The trial's verdict, put in a terminal ``done`` payload by an adapter and landing verbatim in the episode's
+# static data, where analysis reads it.
+EVAL_SUCCESS = 'eval.success'
+
 
 @dataclass
 class Observation:
@@ -78,6 +88,13 @@ class Task:
     ground-truth source to capture (the sim's full ``save_state``, a real scale) — recorded but never fed to
     the policy.
 
+    Two tiers own the trial's end. For a benchmark sim the env owns the horizon — the task's native horizon is
+    part of its definition, and the env enforces it and reports expiry as a terminal ``done``; ``timeout`` is
+    then only a runaway-cost safety net, set deliberately longer than any healthy sim horizon so it fires solely
+    when the sim never terminates. For a real or attended eval there is no such terminal, so ``timeout`` is the
+    actual budget. A ``done`` within budget ends the trial and records ``eval.terminated`` True; the budget
+    lapsing records it False, distinguishing a safety-net cutoff from a genuine terminal.
+
     ``reset`` re-randomizes the scene for a new trial from the per-trial run context, reading the keys it
     needs (e.g. ``eval.seed``, and ``eval.task_id`` for a multi-task suite); ``None`` on real embodiments,
     where reset is physical/human.
@@ -85,6 +102,12 @@ class Task:
     ``done`` is the optional terminating signal: a source that delivers a dict payload when the
     trial ends. The Harness reads it to stop the trial early and records the payload into the
     episode's static data.
+
+    ``horizon`` is the optional trial time budget (sim-seconds) — the sim-enforced episode horizon plus the env's
+    own framing overhead — resolved live per trial like ``instruction`` from what a benchmark env reports at reset
+    (see the two-tier design above). The Harness reads it once a trial is armed and rejects a ``timeout`` that is
+    not strictly longer, so the safety net cannot silently truncate a valid episode. ``None`` for real/attended
+    tasks and envs that enforce no horizon.
     """
 
     def __init__(
@@ -94,16 +117,23 @@ class Task:
         privileged: dict[str, Observation] | None = None,
         reset: Callable[[dict[str, Any]], None] | None = None,
         done: pimm.SignalEmitter | None = None,
+        horizon: Callable[[], float | None] | None = None,
     ):
         self._instruction = (lambda: instruction) if isinstance(instruction, str) else instruction
         self.timeout = timeout
         self.privileged = privileged or {}
         self.reset = reset
         self.done = done
+        self._horizon = horizon
 
     @property
     def instruction(self) -> str:
         return self._instruction()
+
+    @property
+    def horizon(self) -> float | None:
+        """The env's sim-enforced episode horizon (sim-seconds) for the current trial, or ``None`` if none."""
+        return self._horizon() if self._horizon is not None else None
 
 
 @dataclass

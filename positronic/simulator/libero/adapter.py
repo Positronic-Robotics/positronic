@@ -12,6 +12,8 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
+from positronic.eval import EVAL_SUCCESS
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
@@ -56,4 +58,4 @@ class LiberoAdapter(WireCommandAdapter):
         return {'sim_state': raw_obs['sim_state']}
 
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
-        return {'eval.success': True} if result['done'] else None
+        return {EVAL_SUCCESS: True} if result[protocol.FRAME_DONE] else None
