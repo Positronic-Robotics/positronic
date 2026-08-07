@@ -662,3 +662,15 @@ def test_wire_command_leaves_a_typed_command_and_a_sentinel_alone():
     assert isinstance(typed[obs_keys.ROBOT_COMMAND], command.Reset)
 
     assert WireCommand().decode({'timestamp': 1.6}) == {'timestamp': 1.6}
+
+
+def test_wire_command_passes_the_observation_through_untouched():
+    """It is composed in front of every remote endpoint, so an observation crosses it on the way out. An
+    action-only codec that does not say so contributes nothing, and the server is handed an empty obs."""
+    obs = {obs_keys.EE_POSE: np.zeros(7, dtype=np.float32), 'image.wrist': np.zeros((4, 4, 3), dtype=np.uint8)}
+
+    assert WireCommand().encode(obs) == obs
+
+    # And composed the way `RemotePolicy` composes it — the stack first, this codec innermost.
+    composed = ActionTimestamp(fps=10.0) | WireCommand()
+    assert set(composed.encode(obs)) == set(obs)
