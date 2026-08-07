@@ -323,6 +323,31 @@ class Harness(pimm.ControlSystem):
     def _log_finish(self, outcome: str) -> None:
         logger.info('%s id=%d outcome=%s', LOG_DIRECTIVE_FINISH, self._episode_index, outcome)
 
+    def _commit_episode(self, clock: pimm.Clock, *, abort: bool = False) -> Generator[pimm.Command, None, None]:
+        """Give the recorder the round that commits the queued STOP/ABORT, then log the episode's finish.
+
+        The episode leaves the live state before that round and its line is logged after it, because the line
+        is the account of a committed episode: logged first, it can precede the artifact it claims and a
+        failure during the commit adds a contradicting ``aborted`` finish under the same id.
+        """
+        # The rollout's virtual duration ends here — the flush round below advances the sim clock, and that
+        # advance belongs to no rollout.
+        virtual_now = clock.now()
+        self._running = False
+        # The recorder commits the STOP/ABORT before the next START (they share ``ds_command`` — without a
+        # round between, last-value-wins would drop one) and before the home command, so homing stays out of
+        # the recording.
+        yield self._pace()
+        self._log_finish(OUTCOME_DISCARDED if abort else OUTCOME_SAVED)
+        # End the episode span after that round, so the recorder's STOP-time record.io span (which parents
+        # to the episode) is captured while it is still in flight. Accepted skew: a producer that also
+        # steps during that shared round charges one more span (≤ one control period per episode) to the
+        # closing episode — the cooperative scheduler cannot give the recorder a turn alone.
+        if abort:
+            self._telemetry.abort()
+        else:
+            self._telemetry.end(virtual_now)
+
     def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> None:
         """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
 
@@ -372,27 +397,11 @@ class Harness(pimm.ControlSystem):
                 self.ds_command.emit(DsWriterCommand.ABORT())
             else:
                 self._finalize_recording(payload)
-            self._log_finish(OUTCOME_DISCARDED if abort else OUTCOME_SAVED)
-            # The rollout's virtual duration ends here — the flush round below advances the sim clock, and that
-            # advance belongs to no rollout.
-            virtual_now = clock.now()
-            # Let the recorder commit the STOP/ABORT before the next START (they share ``ds_command`` —
-            # without a round between, last-value-wins would drop one) and before the home command, so
-            # homing stays out of the recording.
-            yield self._pace()
-            # End the episode span after that round, so the recorder's STOP-time record.io span (which parents
-            # to the episode) is captured while it is still in flight. Accepted skew: a producer that also
-            # steps during that shared round charges one more span (≤ one control period per episode) to the
-            # closing episode — the cooperative scheduler cannot give the recorder a turn alone.
-            if abort:
-                self._telemetry.abort()
-            else:
-                self._telemetry.end(virtual_now)
+            yield from self._commit_episode(clock, abort=abort)
         if self._policy_session:
             self._policy_session.close()
             self._policy_session = None
         self._home(clock)
-        self._running = False
 
     def _handle_directive(self, directive: Directive, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         """Dispatch a directive to the episode lifecycle; updates ``_running``."""
@@ -572,14 +581,8 @@ class Harness(pimm.ControlSystem):
             yield self._pace()
 
         if self._running:
-            self._finalize_recording()
-            self._log_finish(OUTCOME_SAVED)  # a shutdown mid-episode still commits it
-            virtual_now = clock.now()  # the flush round's clock advance belongs to no rollout
-            # Let the recorder commit the queued STOP while the episode span is still open — the same close
-            # order as ``_end_episode`` — so its shutdown-flush record.io span parents to the episode, not
-            # the pass.
-            yield self._pace()
-            self._telemetry.end(virtual_now)
+            self._finalize_recording()  # a shutdown mid-episode still commits it
+            yield from self._commit_episode(clock)
         if self._policy_session:
             self._policy_session.close()
         # The harness does not own the policy's lifetime: the caller may run several harnesses over
