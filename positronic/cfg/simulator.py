@@ -14,8 +14,7 @@ from positronic.simulator.mujoco.transforms import (
 from positronic.utils import package_assets_path
 
 # The MuJoCo camera ports of the Franka table scene, under the canonical observation names. Three of
-# them because MuJoCo does not render the second image when only two cameras are bound. Owned here
-# because both the sim evals and the CLI-addressable sim embodiment bind the same scene.
+# them because MuJoCo does not render the second image when only two cameras are bound.
 MUJOCO_FRANKA_CAMERAS = {
     keys.WRIST_IMAGE: 'handcam_left_ph',
     keys.EXTERIOR_IMAGE: 'back_view_ph',
