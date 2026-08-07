@@ -17,6 +17,12 @@ TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
 # The gripper's command channel: a scalar target beside the arm's ``ROBOT_COMMAND``.
 TARGET_GRIP = 'target_grip'
 
+# When an action falls due, in seconds. Every action an inference hands back carries it: the scheduling
+# wrapper anchors it to the live clock and the harness converts it to the nanoseconds its command channels
+# take. It names a field of the action dict rather than a signal, so it is a different contract from the
+# ``timestamp`` column a stored vector signal is written under.
+ACTION_TIMESTAMP = 'timestamp'
+
 
 def is_robot_command(name: str) -> bool:
     """Whether ``name`` is in the robot-command family: ``robot_command``, or an arm's ``robot_command.{side}``.
@@ -33,6 +39,8 @@ GRIP = 'grip'
 TASK = 'task'
 WRIST_IMAGE = 'image.wrist'
 EXTERIOR_IMAGE = 'image.exterior'
+# The scene camera a sim binds beside the two an arm carries: a fixed view of the whole workspace.
+AGENT_VIEW_IMAGE = 'image.agent_view'
 
 # The harness stamps each observation with the control clock's time (``OBS_TIME_NS``) and the wall
 # clock's (``WALL_TIME_NS``); recording timelines and action scheduling read time back off them.

@@ -54,21 +54,23 @@ def _rebuild(command_type: Any, value: np.ndarray) -> Any:
 def load_actions(episode: Episode) -> list[dict[str, Any]]:
     """The episode's commands as an action list: one entry per recorded arm waypoint.
 
-    ``timestamp`` is seconds from the first waypoint, so the list replays at the cadence it was
-    recorded at. The grip is sampled at or before each waypoint's time (the two channels are emitted
-    together, so in practice they land on the same instants); an episode with no grip channel replays
-    the arm alone.
+    ``keys.ACTION_TIMESTAMP`` is seconds from the first waypoint, so the list replays at the cadence it
+    was recorded at. The grip is sampled at or before each waypoint's time (the two channels are emitted
+    together, so in practice they land on the same instants); a waypoint earlier than the grip's first
+    sample carries no grip at all, and an episode with no grip channel replays the arm alone.
     """
     arm, command_type = _arm_signal(episode)
     grip = episode.signals.get(keys.TARGET_GRIP)
     first_ts = arm.start_ts
     actions = []
     for value, ts in arm:
-        action = {'timestamp': (ts - first_ts) / 1e9, keys.ROBOT_COMMAND: _rebuild(command_type, value)}
-        if grip is not None and len(grip) > 0:
-            # Clamped: the arm's first waypoint can precede the grip's, and a sample at or before it is
-            # what the rig held at that instant either way.
-            sample = cast(tuple[Any, int], grip.time[max(ts, grip.start_ts)])
+        action = {keys.ACTION_TIMESTAMP: (ts - first_ts) / 1e9, keys.ROBOT_COMMAND: _rebuild(command_type, value)}
+        if grip is not None and len(grip) > 0 and ts >= grip.start_ts:
+            # Sampled at or before the waypoint. An arm waypoint that precedes the grip's first sample
+            # gets no grip field: the recording commanded none there, so the only grip available is a
+            # future one, and attaching it would close the gripper earlier than the recording did. An
+            # action omitting the channel emits nothing on it, so the rig holds the grip it has.
+            sample = cast(tuple[Any, int], grip.time[ts])
             action[keys.TARGET_GRIP] = float(sample[0])
         actions.append(action)
     return actions
@@ -89,7 +91,7 @@ class ReplaySession(Session):
     def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
         if self._cursor >= len(self._actions):
             return None  # spent: no new trajectory, so the rig holds where the recording left it
-        start = self._actions[self._cursor]['timestamp']
+        start = self._actions[self._cursor][keys.ACTION_TIMESTAMP]
         chunk = []
         while self._cursor < len(self._actions):
             action = self._actions[self._cursor]
@@ -98,10 +100,10 @@ class ReplaySession(Session):
             # both in one process the new trajectory replaces the playing one before the waypoint is
             # applied — so a chunk that ended on it would lose it. Re-issuing an absolute target the rig
             # has already reached commands nothing new.
-            if len(chunk) > 1 and action['timestamp'] - start >= self._chunk_sec:
+            if len(chunk) > 1 and action[keys.ACTION_TIMESTAMP] - start >= self._chunk_sec:
                 self._cursor -= 1
                 break
-            chunk.append({**action, 'timestamp': action['timestamp'] - start})
+            chunk.append({**action, keys.ACTION_TIMESTAMP: action[keys.ACTION_TIMESTAMP] - start})
             self._cursor += 1
         return chunk
 
@@ -142,7 +144,7 @@ class ReplayPolicy(Policy):
                     f'{self._dataset_path} holds {len(dataset)} episode(s); no episode {self._episode_index}'
                 )
             self._actions = load_actions(cast(Episode, dataset[self._episode_index]))
-            span = self._actions[-1]['timestamp'] if self._actions else 0.0
+            span = self._actions[-1][keys.ACTION_TIMESTAMP] if self._actions else 0.0
             logger.info(
                 'Replaying %s episode %d: %d waypoints over %.1fs',
                 self._dataset_path,
