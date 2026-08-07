@@ -334,6 +334,8 @@ class MujocoSim(pimm.ControlSystem):
         mj.mj_resetData(self.model, self.data)
         for spec in STATE_SPECS:
             mj.mj_setState(self.model, self.data, np.array(state[spec.name]), spec)
+        # The carry is owed against the time the last ``step`` ran to, which the restored state replaces.
+        self._step_overshoot = 0.0
 
         if reset_time:
             self.data.time = 0
