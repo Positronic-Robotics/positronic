@@ -1799,3 +1799,20 @@ def test_an_episode_that_fails_while_committing_is_not_also_logged_aborted(world
         drive_scheduler(world.start([harness, driver]), steps=40)
 
     assert [m for m in _directive_log(caplog) if 'finish' in m] == []
+
+
+@pytest.mark.timeout(3.0)
+def test_a_multiline_task_stays_one_log_line(world, caplog):
+    """The free-form field ends the record, so a task carrying line breaks must not end it early."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='pick up the cube\nthen\tput it down\r')), 0.01),
+        (None, 0.02),
+    ])
+
+    with caplog.at_level('INFO', logger='positronic.policy.harness'):
+        drive_scheduler(world.start([harness, driver]), steps=20)
+
+    assert _directive_log(caplog)[0] == 'harness: directive start id=0 task=pick up the cube\\nthen\\tput it down\\r'
+    assert all('\n' not in message for message in _harness_log(caplog))
