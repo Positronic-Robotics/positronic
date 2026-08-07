@@ -28,26 +28,18 @@ LOG_DIRECTIVE_START = 'harness: directive start'
 LOG_DIRECTIVE_FINISH = 'harness: directive finish'
 LOG_RUN_FINISH = 'harness: run finish'
 
-# What became of an episode, on its ``directive finish`` line. They report what the harness did with the
-# episode, which is all the harness knows: the recorder writes the artifact and tells nobody when it lands.
-# So ``saved`` is not a claim that the artifact exists yet, and a reader that needs the artifact reads the
-# dataset rather than this line.
-OUTCOME_SAVED = 'saved'  # finalized, and handed to the recorder to commit
-OUTCOME_DISCARDED = 'discarded'  # an ABORT directive: the operator dropped the recording
-OUTCOME_ABORTED = 'aborted'  # abandoned mid-flight by a failure, so it never completed
 
-# What a free-form field may not contain, since the line it ends is one record to a reader that splits
-# on line breaks: the breaks themselves, the rest of the C0 controls, and the backslash introducing them.
-_ESCAPED = (
-    {ord('\\'): '\\\\', ord('\n'): '\\n', ord('\r'): '\\r', ord('\t'): '\\t'}
-    | {code: f'\\x{code:02x}' for code in range(0x20) if code not in (0x09, 0x0A, 0x0D)}
-    | {0x7F: '\\x7f'}
-)
+class Outcome(Enum):
+    """What became of an episode, on its ``directive finish`` line.
 
+    These report what the harness did with the episode, which is all the harness knows: the recorder
+    writes the artifact and tells nobody when it lands. So ``saved`` is not a claim that the artifact
+    exists yet, and a reader that needs the artifact reads the dataset rather than this line.
+    """
 
-def escape_field(text: str) -> str:
-    """``text`` with everything that would end the record it sits in written as an escape."""
-    return text.translate(_ESCAPED)
+    SAVED = 'saved'  # finalized, and handed to the recorder to commit
+    DISCARDED = 'discarded'  # an ABORT directive: the operator dropped the recording
+    ABORTED = 'aborted'  # abandoned mid-flight by a failure, so it never completed
 
 
 class DirectiveType(Enum):
@@ -166,6 +158,20 @@ class _EpisodeTelemetry:
         self._span.end()
         telemetry.pop_anchor(self._span)
         self._span = None
+
+
+# What a free-form field may not contain, since the line it ends is one record to a reader that splits
+# on line breaks: the breaks themselves, the rest of the C0 controls, and the backslash introducing them.
+_ESCAPED = (
+    {ord('\\'): '\\\\', ord('\n'): '\\n', ord('\r'): '\\r', ord('\t'): '\\t'}
+    | {code: f'\\x{code:02x}' for code in range(0x20) if code not in (0x09, 0x0A, 0x0D)}
+    | {0x7F: '\\x7f'}
+)
+
+
+def escape_field(text: str) -> str:
+    """``text`` with everything that would end the record it sits in written as an escape."""
+    return text.translate(_ESCAPED)
 
 
 class Harness(pimm.ControlSystem):
@@ -336,8 +342,8 @@ class Harness(pimm.ControlSystem):
         self._cancel_trajectories()
         self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(self.context), **(payload or {})}))
 
-    def _log_finish(self, outcome: str) -> None:
-        logger.info('%s id=%d outcome=%s', LOG_DIRECTIVE_FINISH, self._episode_index, outcome)
+    def _log_finish(self, outcome: Outcome) -> None:
+        logger.info('%s id=%d outcome=%s', LOG_DIRECTIVE_FINISH, self._episode_index, outcome.value)
 
     def _commit_episode(self, clock: pimm.Clock, *, abort: bool = False) -> Generator[pimm.Command, None, None]:
         """Give the recorder the round in which to take the queued STOP/ABORT, then log the episode's finish.
@@ -356,7 +362,7 @@ class Harness(pimm.ControlSystem):
         # round between, last-value-wins would drop one) and before the home command, so homing stays out of
         # the recording.
         yield self._pace()
-        self._log_finish(OUTCOME_DISCARDED if abort else OUTCOME_SAVED)
+        self._log_finish(Outcome.DISCARDED if abort else Outcome.SAVED)
         # End the episode span after that round, so the recorder's STOP-time record.io span (which parents
         # to the episode) is captured while it is still in flight. Accepted skew: a producer that also
         # steps during that shared round charges one more span (≤ one control period per episode) to the
@@ -561,7 +567,7 @@ class Harness(pimm.ControlSystem):
             # reaches ``bind``'s exit flush, or it never exports and its finished children orphan — losing
             # their phases and charging the episode's wall to between_episodes.
             if self._running:
-                self._log_finish(OUTCOME_ABORTED)
+                self._log_finish(Outcome.ABORTED)
             self._telemetry.seal(clock.now())
             raise
         # Only the clean return: a run that unwound above is not one that finished, and a watcher reading
