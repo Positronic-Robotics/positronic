@@ -47,10 +47,9 @@ EDITOR_POLL_SEC = 0.5
 # fitting against this over-estimates what a larger scale needs — never the other way round.
 CONTENT_SIZE = (1317, 657)
 
-# Below this the panel is unscaled, which is the size it was laid out at.
+# The fit stops here rather than shrinking text below the size the panel was laid out at; a display
+# that cannot hold it at 1 gets scrollbars instead.
 MIN_UI_SCALE = 1.0
-
-MAXIMIZE_WAIT_SEC = 1.0
 
 
 def fit_ui_scale(requested: float, viewport_size: tuple[int, int]) -> float:
@@ -685,6 +684,8 @@ class EvalUI(pimm.ControlSystem):
 
     # --- Control System Run Loop ---
 
+    MAXIMIZE_WAIT_SEC = 1.0
+
     @staticmethod
     def _maximized_viewport_size() -> tuple[int, int]:
         """Client size of the viewport once maximizing it has taken effect.
@@ -693,7 +694,7 @@ class EvalUI(pimm.ControlSystem):
         or not at all where nothing manages the window, so the wait is bounded and the created size stands.
         """
         created = (dpg.get_viewport_client_width(), dpg.get_viewport_client_height())
-        deadline = time.monotonic() + MAXIMIZE_WAIT_SEC
+        deadline = time.monotonic() + EvalUI.MAXIMIZE_WAIT_SEC
         while time.monotonic() < deadline:
             dpg.render_dearpygui_frame()
             size = (dpg.get_viewport_client_width(), dpg.get_viewport_client_height())
