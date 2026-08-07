@@ -8,7 +8,7 @@ from positronic import keys
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.policy.replay import GRIP_COMMAND, ReplayPolicy, ReplaySession, load_actions
+from positronic.policy.replay import ReplayPolicy, ReplaySession, load_actions
 
 HZ = 10  # waypoints per second in the fixtures below
 
@@ -38,7 +38,7 @@ def _joint_fixture(root, count: int = 5, start_ts: int = 1_000_000_000):
         q[0] = np.float32(i)
         joints.append((q, start_ts + i * step))
         grips.append((np.float32(i / count), start_ts + i * step))
-    return _write(root, {keys.TARGET_JOINTS: joints, GRIP_COMMAND: grips})
+    return _write(root, {keys.TARGET_JOINTS: joints, keys.TARGET_GRIP: grips})
 
 
 def test_load_actions_rebuilds_joint_commands_at_recorded_cadence(tmp_path):
@@ -50,7 +50,7 @@ def test_load_actions_rebuilds_joint_commands_at_recorded_cadence(tmp_path):
         command = action[keys.ROBOT_COMMAND]
         assert isinstance(command, roboarm_command.JointPosition)
         assert command.positions[0] == pytest.approx(i)
-        assert action[GRIP_COMMAND] == pytest.approx(i / 5)
+        assert action[keys.TARGET_GRIP] == pytest.approx(i / 5)
 
 
 def test_load_actions_rebuilds_pose_commands(tmp_path):
@@ -63,7 +63,7 @@ def test_load_actions_rebuilds_pose_commands(tmp_path):
     command = actions[0][keys.ROBOT_COMMAND]
     assert isinstance(command, roboarm_command.CartesianPosition)
     assert command.pose.translation == pytest.approx([0.3, 0.0, 0.5], abs=1e-6)
-    assert GRIP_COMMAND not in actions[0]  # the fixture records no grip channel
+    assert keys.TARGET_GRIP not in actions[0]  # the fixture records no grip channel
 
 
 def test_load_actions_prefers_joints_over_pose(tmp_path):
@@ -91,13 +91,13 @@ def test_load_actions_holds_the_grip_recorded_before_the_first_waypoint(tmp_path
         tmp_path,
         {
             keys.TARGET_JOINTS: [(q, 2_000_000_000)],
-            GRIP_COMMAND: [(np.float32(0.25), 1_000_000_000), (np.float32(0.75), 3_000_000_000)],
+            keys.TARGET_GRIP: [(np.float32(0.25), 1_000_000_000), (np.float32(0.75), 3_000_000_000)],
         },
     )
 
     actions = load_actions(episode)
 
-    assert actions[0][GRIP_COMMAND] == pytest.approx(0.25)
+    assert actions[0][keys.TARGET_GRIP] == pytest.approx(0.25)
 
 
 def test_session_hands_out_the_recording_in_chunks_then_holds(tmp_path):
