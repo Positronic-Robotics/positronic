@@ -28,6 +28,14 @@ _ARM_SIGNALS = (
 )
 
 
+def _rebuild(command_type: Any, value: np.ndarray) -> Any:
+    if command_type is roboarm_command.CartesianPosition:
+        # The quaternion representation ``Serializers.transform_3d`` wrote it in.
+        pose = geom.Transform3D.from_vector(np.asarray(value), geom.Rotation.Representation.QUAT)
+        return roboarm_command.CartesianPosition(pose)
+    return roboarm_command.JointPosition(np.asarray(value))
+
+
 def _arm_commands(episode: Episode) -> dict[int, Any]:
     """Every recorded arm command, keyed by the instant it was issued at.
 
@@ -52,14 +60,6 @@ def _arm_commands(episode: Episode) -> dict[int, Any]:
             f'issued from.'
         )
     return commands
-
-
-def _rebuild(command_type: Any, value: np.ndarray) -> Any:
-    if command_type is roboarm_command.CartesianPosition:
-        # The quaternion representation ``Serializers.transform_3d`` wrote it in.
-        pose = geom.Transform3D.from_vector(np.asarray(value), geom.Rotation.Representation.QUAT)
-        return roboarm_command.CartesianPosition(pose)
-    return roboarm_command.JointPosition(np.asarray(value))
 
 
 def load_actions(episode: Episode) -> list[dict[str, Any]]:
