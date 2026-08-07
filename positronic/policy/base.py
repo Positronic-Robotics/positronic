@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from collections import Counter
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from operator import attrgetter
 from typing import Any
 
 from positronic.policy.sampler import EpisodeCounter, Sampler, UniformSampler
+
+logger = logging.getLogger(__name__)
 
 Now = Callable[[], float]
 
@@ -258,7 +263,12 @@ class SampledPolicy(Policy):
 
     def _get_keys(self) -> tuple[str, ...]:
         if self._keys is None:
-            keys = tuple(p.meta.get(self._key_field, str(i)) for i, p in enumerate(self._policies))
+            # A sub-policy's meta can cost a whole model load to read: a remote one holds a session open
+            # until its backend answers. Read them at once, so the first ``new_session`` waits out the
+            # slowest sub-policy rather than the sum of all of them.
+            with ThreadPoolExecutor(max_workers=len(self._policies)) as pool:
+                metas = list(pool.map(attrgetter('meta'), self._policies))
+            keys = tuple(meta.get(self._key_field, str(i)) for i, meta in enumerate(metas))
             duplicates = sorted(k for k, n in Counter(keys).items() if n > 1)
             if duplicates:
                 raise ValueError(
@@ -271,7 +281,11 @@ class SampledPolicy(Policy):
     def new_session(self, context=None, now=None):
         keys = self._get_keys()
         ctx = context or {}
-        key = self.sampler.sample(keys, ctx, self.counter.counts(keys, ctx))
+        counts = self.counter.counts(keys, ctx)
+        key = self.sampler.sample(keys, ctx, counts)
+        # Which sub-policy ran is the same fact whichever strategy picked it, so it is reported here rather
+        # than per sampler. It names the episode's policy, so a blinded operator must not watch this log.
+        logger.info('Sampled %r; completed so far: %s', key, counts)
         policy = self._policies[keys.index(key)]
         session = policy.new_session(context, now)
         return _KeyedSession(session, policy.meta, self._key_field, key)

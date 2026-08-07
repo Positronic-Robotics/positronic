@@ -168,12 +168,17 @@ class RemotePolicy(Policy):
 
     ``local`` and ``compress_images`` stand in for a server that declares neither — see
     ``_operator_override``. ``recording_dir`` taps the raw and wire boundaries around the stack.
+
+    ``label`` is the operator's name for this endpoint, reported as its own meta field. Two deployments
+    of one checkpoint differ only in how they serve it, so the server's own metadata cannot tell them
+    apart — the operator's name is what distinguishes them, in sampling and in the recorded episodes.
     """
 
     def __init__(
         self,
         url: str,
         *,
+        label: str | None = None,
         local: PolicyWrapper | None = None,
         recording_dir: str | None = None,
         headers: dict[str, str] | None = None,
@@ -181,6 +186,7 @@ class RemotePolicy(Policy):
         compress_images: bool | None = None,
     ):
         self._endpoint = _Endpoint(url, headers=headers, infer_timeout=infer_timeout, compress_images=compress_images)
+        self._label = label
         self._local = local
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
         self._stacked: Policy | None = None
@@ -227,7 +233,8 @@ class RemotePolicy(Policy):
 
     @property
     def meta(self) -> dict[str, Any]:
-        return self._policy().meta
+        meta = self._policy().meta
+        return meta if self._label is None else meta | {'label': self._label}
 
     def close(self):
         self._endpoint.close()

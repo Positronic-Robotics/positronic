@@ -69,19 +69,23 @@ def balanced(balance: int):
     return BalancedSampler(balance=balance)
 
 
-@cfn.config(endpoints={}, weights={}, recording_dir=None, sampler=None, group_fields=None)
+@cfn.config(endpoints={}, weights={}, recording_dir=None, sampler=None, group_fields=None, headers=None)
 def production(
     endpoints: dict[str, str],
     weights: dict[str, float],
     recording_dir: str | None,
     sampler: Sampler | None,
     group_fields: list[str] | None,
+    headers: dict[str, str] | None,
 ):
     """Routes each episode to one of several remote endpoints, each named for CLI overrides.
 
     An endpoint is one URL, so `--policy.endpoints.groot=ws://desktop:8000` adds or repoints one without
     restating the others. `weights` name the same endpoints and set their sampling odds; endpoints left
-    out of it weigh 1.0.
+    out of it weigh 1.0. `headers` reach every endpoint, since one set of credentials fronts them all.
+
+    The endpoint's name is what identifies it — the sampling key, and the field recorded on each episode.
+    Two deployments of one checkpoint report the same server metadata, so only the name tells them apart.
     """
     if not endpoints:
         raise ValueError('At least one endpoint must be given, e.g. --policy.endpoints.groot=ws://desktop:8000')
@@ -90,9 +94,11 @@ def production(
     # Every Sampler but the default uniform one picks by episode counts alone, so weights would be dropped.
     if weights and sampler is not None:
         raise ValueError(f'weights cannot be combined with {type(sampler).__name__}, which samples by count')
-    policies = [RemotePolicy(url, recording_dir=recording_dir) for url in endpoints.values()]
+    policies = [
+        RemotePolicy(url, label=name, recording_dir=recording_dir, headers=headers) for name, url in endpoints.items()
+    ]
     w = [weights.get(name, 1.0) for name in endpoints] if weights else None
-    return SampledPolicy(*policies, weights=w, sampler=sampler, group_fields=group_fields)
+    return SampledPolicy(*policies, weights=w, sampler=sampler, group_fields=group_fields, key_field='label')
 
 
 @cfn.config()
@@ -104,6 +110,8 @@ def phail_single(hostname, w_openpi=1.0, w_groot=1.0, w_act=1.0):
     return SampledPolicy(openpi, groot, act, weights=[w_openpi, w_groot, w_act])
 
 
+EVAL_GROUP_FIELDS = [keys.TASK, 'eval.object', 'eval.tote_placement', 'eval.external_camera']
+
 phail_multiple = production.override(
     endpoints={
         'smolvla': 'ws://notebook:8000',
@@ -114,5 +122,28 @@ phail_multiple = production.override(
         'dreamzero': 'ws://vm-train2:8000',
     },
     sampler=balanced,
-    group_fields=[keys.TASK, 'eval.object', 'eval.tote_placement', 'eval.external_camera'],
+    group_fields=EVAL_GROUP_FIELDS,
+)
+
+# The blind set each Runway owner is asking the rig for right now. They ship a new batch of checkpoints every
+# few days, so repoint theirs rather than adding a preset per batch, and the eval CLI stays one line. These
+# deployments sit behind the workspace's proxy, so pass --policy.headers with its token.
+runway_anton = production.override(
+    endpoints={
+        'ged112k': 'wss://runway-pythagoras-dev--curie-ged112k-curieserver-web.modal.run',
+        'gd127k': 'wss://runway-pythagoras-dev--curie-gd127k-curieserver-web.modal.run',
+        'gdf127k': 'wss://runway-pythagoras-dev--curie-gdf127k-curieserver-web.modal.run',
+        'gdl142k': 'wss://runway-pythagoras-dev--curie-gdl142k-curieserver-web.modal.run',
+    },
+    sampler=balanced,
+    group_fields=EVAL_GROUP_FIELDS,
+)
+
+runway_ziyi = production.override(
+    endpoints={
+        'fm150k_us': 'wss://runway-pythagoras-dev--gyros-fm150k-us-gyrosserver-web.modal.run',
+        'fm_tsu_actuni_150k': 'wss://runway-pythagoras-dev--gyros-fm-tsu-actuni-150k-gyrosserver-web.modal.run',
+    },
+    sampler=balanced,
+    group_fields=EVAL_GROUP_FIELDS,
 )

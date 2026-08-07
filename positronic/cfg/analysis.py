@@ -45,6 +45,11 @@ def _model_label_from_path(model_type: str, checkpoint_path: str) -> str | None:
 
 
 def model(ep: Episode) -> str:
+    # The operator's name for the endpoint that served the episode. Two deployments of one checkpoint share
+    # everything derived from that checkpoint, so the name outranks it.
+    if label := ep.get(f'{keys.POLICY_META}.label', ''):
+        return label
+
     policy_type = ep.get(f'{keys.POLICY_META}.{keys.TYPE}', '')
 
     if policy_type == 'remote':
