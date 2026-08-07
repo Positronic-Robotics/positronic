@@ -28,8 +28,11 @@ LOG_DIRECTIVE_START = 'harness: directive start'
 LOG_DIRECTIVE_FINISH = 'harness: directive finish'
 LOG_RUN_FINISH = 'harness: run finish'
 
-# What became of an episode, on its ``directive finish`` line.
-OUTCOME_SAVED = 'saved'  # finalized and committed to the dataset
+# What became of an episode, on its ``directive finish`` line. They report what the harness did with the
+# episode, which is all the harness knows: the recorder writes the artifact and tells nobody when it lands.
+# So ``saved`` is not a claim that the artifact exists yet, and a reader that needs the artifact reads the
+# dataset rather than this line.
+OUTCOME_SAVED = 'saved'  # finalized, and handed to the recorder to commit
 OUTCOME_DISCARDED = 'discarded'  # an ABORT directive: the operator dropped the recording
 OUTCOME_ABORTED = 'aborted'  # abandoned mid-flight by a failure, so it never completed
 
@@ -337,11 +340,13 @@ class Harness(pimm.ControlSystem):
         logger.info('%s id=%d outcome=%s', LOG_DIRECTIVE_FINISH, self._episode_index, outcome)
 
     def _commit_episode(self, clock: pimm.Clock, *, abort: bool = False) -> Generator[pimm.Command, None, None]:
-        """Give the recorder the round that commits the queued STOP/ABORT, then log the episode's finish.
+        """Give the recorder the round in which to take the queued STOP/ABORT, then log the episode's finish.
 
-        The episode leaves the live state before that round and its line is logged after it, because the line
-        is the account of a committed episode: logged first, it can precede the artifact it claims and a
-        failure during the commit adds a contradicting ``aborted`` finish under the same id.
+        The episode leaves the live state before that round and its line is logged after it, so a failure
+        during the commit cannot add a contradicting ``aborted`` finish under the same id.
+
+        That round is the commit only where the recorder shares this scheduler; where it runs in the
+        background the round is one control period and the finish line orders this harness's state alone.
         """
         # The rollout's virtual duration ends here — the flush round below advances the sim clock, and that
         # advance belongs to no rollout.

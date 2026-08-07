@@ -18,6 +18,12 @@ TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
 # and a recorded episode holds it under this name.
 TARGET_GRIP = 'target_grip'
 
+# When an action falls due, in seconds. Every action an inference hands back carries it: the scheduling
+# wrapper anchors it to the live clock and the harness converts it to the nanoseconds its command channels
+# take. It names a field of the action dict rather than a signal, so it is a different contract from the
+# ``timestamp`` column a stored vector signal is written under.
+ACTION_TIMESTAMP = 'timestamp'
+
 JOINTS = 'robot_state.q'
 JOINT_VEL = 'robot_state.dq'
 EE_POSE = 'robot_state.ee_pose'
@@ -25,6 +31,8 @@ GRIP = 'grip'
 TASK = 'task'
 WRIST_IMAGE = 'image.wrist'
 EXTERIOR_IMAGE = 'image.exterior'
+# The scene camera a sim binds beside the two an arm carries: a fixed view of the whole workspace.
+AGENT_VIEW_IMAGE = 'image.agent_view'
 
 # The robot model, carried in episode statics for the transforms that solve against it (``IKJointsAction``).
 # ``CONTROL_FRAME`` names the frame in ``URDF`` that the embodiment reports ``EE_POSE`` in; every embodiment
