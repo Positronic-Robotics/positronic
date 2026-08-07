@@ -494,6 +494,35 @@ class RestrictImageSize(Codec):
         return {'name': 'restrict_image_size', 'args': {'width': self._width, 'height': self._height}}
 
 
+class WireCommand(Codec):
+    """Turn a robot command that arrived over the wire into the typed command everything above expects.
+
+    A served policy answers across a transport that carries no Python types, so its robot command reaches us
+    as the mapping ``command.from_wire`` reads — ``{'type': 'cartesian_pos', 'pose': [...]}``. Every consumer
+    above this point matches on ``command.*`` objects instead: ``ChangeEEFrame`` re-expresses them by case,
+    the recorder serializes them by type, and each roboarm driver dispatches on them and raises on anything
+    else. So the mapping becomes a command HERE, closest to the wire, and one boundary serves every endpoint
+    and every driver rather than each driver learning to read wire form.
+
+    An action whose command is already typed passes through untouched: a local policy produces one, as does a
+    server whose transport tags commands for ``utils.serialization``. An action carrying no command at all —
+    a chunk's end-of-validity sentinel — passes through too.
+    """
+
+    def _decode_single(self, data: dict, context: dict | None) -> dict:
+        wire = data.get(obs_keys.ROBOT_COMMAND)
+        if not isinstance(wire, cabc.Mapping):
+            return data
+        # The wire has no arrays, only sequences, and `from_wire` reads its vectors as arrays. Coercing is
+        # this boundary's job for the same reason the decode is: nothing above it should know a transport
+        # was involved. `type` is the one entry that stays a string.
+        decoded = {k: v if isinstance(v, str) else np.asarray(v) for k, v in wire.items()}
+        return {**data, obs_keys.ROBOT_COMMAND: command.from_wire(decoded)}
+
+    def to_spec(self):
+        return {'name': 'wire_command'}
+
+
 class ChangeEEFrame(Codec):
     """Convert poses between the embodiment's ``default`` frame and the frame the policy speaks.
 
