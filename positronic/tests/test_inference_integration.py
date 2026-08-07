@@ -377,6 +377,21 @@ def test_sim_state_reconstructs_dynamics():
         np.testing.assert_array_equal(sim.data.qvel, qvel)
 
 
+def test_sim_steps_a_fractional_control_period_without_drifting():
+    """A control period that is not a whole number of physics timesteps keeps sim time on the clock.
+
+    15 Hz on a 2 ms timestep needs 33 1/3 steps, so every call lands past its target; measuring the next
+    target from the overshoot instead of carrying it makes the sim run 2% ahead of the scheduler and the
+    trajectory players, which read wall time.
+    """
+    sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
+    period = 1 / 15
+    start = sim.data.time
+    for turn in range(1, 46):
+        sim.step(period)
+        assert sim.data.time - start == pytest.approx(turn * period, abs=sim.model.opt.timestep)
+
+
 def test_recorded_urdf_matches_sim_kinematics():
     """The model the sim records for the viewer and IK reproduces the MuJoCo model the sim runs:
     the arm link frames and the ``end_effector`` control frame agree with ``panda.xml`` across joint
