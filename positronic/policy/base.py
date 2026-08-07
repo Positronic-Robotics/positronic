@@ -95,7 +95,11 @@ class Policy(ABC):
 
     @property
     def meta(self) -> dict[str, Any]:
-        """Static metadata about this policy/model."""
+        """Metadata about this policy/model, resolved on first read.
+
+        Resolving is not free: a served policy performs its handshake here and a replay fetches its
+        recording, so reading this is what brings a policy up.
+        """
         return {}
 
     def close(self):  # noqa: B027

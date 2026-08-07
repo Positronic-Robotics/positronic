@@ -160,4 +160,12 @@ class ReplayPolicy(Policy):
 
     @property
     def meta(self) -> dict[str, Any]:
+        """What this policy is. Reading it fetches the recording and checks the episode exists.
+
+        Resolving here is the contract ``RemotePolicy.meta`` keeps, where the read performs the
+        server handshake. A ``SampledPolicy`` reads every sub-policy's meta to key them, so a
+        warm-up brings the whole set up; a pure property would leave a replay fetching inside the
+        first episode that selects it, with the operator surface already running.
+        """
+        self._load()
         return {keys.TYPE: 'replay', 'replay.dataset_path': self._dataset_path, 'replay.episode': self._episode_index}

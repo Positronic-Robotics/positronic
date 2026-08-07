@@ -1,3 +1,4 @@
+import shutil
 from typing import Any, cast
 
 import numpy as np
@@ -8,6 +9,7 @@ from positronic import keys
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.policy.base import SampledPolicy
 from positronic.policy.replay import ReplayPolicy, ReplaySession, load_actions
 
 HZ = 10  # waypoints per second in the fixtures below
@@ -188,6 +190,27 @@ def test_missing_episode_names_what_the_dataset_holds(tmp_path):
 
     with pytest.raises(IndexError, match='holds 1 episode'):
         policy.new_session()
+    # From `meta` too, which a run resolves before hardware, so a missing episode is named at startup.
+    with pytest.raises(IndexError, match='holds 1 episode'):
+        _ = ReplayPolicy(str(tmp_path), episode=7).meta
+
+
+def test_reading_meta_fetches_the_recording_so_a_sampled_set_warms_together(tmp_path):
+    """A warm-up opens a session on the one endpoint the sampler picks and reaches the others only
+    through the `meta` it reads to key them, so `meta` is where a replay does its fetching."""
+    a, b = tmp_path / 'a', tmp_path / 'b'
+    _joint_fixture(a, count=3)
+    _joint_fixture(b, count=3)
+    policies = [ReplayPolicy(str(a), chunk_sec=10.0), ReplayPolicy(str(b), chunk_sec=10.0)]
+
+    SampledPolicy(*policies).new_session(now=lambda: 100.0).close()
+
+    # With the datasets gone, a policy that still had fetching to do could not play.
+    shutil.rmtree(a)
+    shutil.rmtree(b)
+    for policy in policies:
+        chunk = policy.new_session(now=lambda: 100.0)({'obs_time_ns': 0})
+        assert chunk is not None and len(chunk) == 3
 
 
 def test_meta_names_the_recording_it_plays(tmp_path):
