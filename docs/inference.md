@@ -138,6 +138,8 @@ A `remote` endpoint takes a `url` and a `replay` endpoint a `dataset` plus optio
 
 Passing the whole mapping replaces the endpoints the config carries; the per-key form (`--policy.endpoints.arm_a=…`) adds to them, which is how a run ends up sampling an endpoint nobody asked for.
 
+Give a `dataset` as an absolute path or a URI. A leading dot is configuronic's relative-import sigil inside an override value, so `"./run"` in the whole-mapping form is read as a config to import and the override raises before the run starts.
+
 **The names address endpoints on the command line and do not reach the recording.** Each episode records the identity its policy reports — a served endpoint's checkpoint path under `inference.policy.server.checkpoint_path`, a replay's `inference.policy.replay.dataset_path` and `.episode` — which is what tells the episodes of one endpoint from another's after the fact. A policy reporting no checkpoint path of its own, a replay among them, is keyed by its position in the mapping.
 
 ## Following a Run From Its Log

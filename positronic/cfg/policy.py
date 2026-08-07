@@ -135,6 +135,10 @@ def production(
     adds to them. `weights` name the same endpoints and set their sampling odds; endpoints left out of it
     weigh 1.0.
 
+    Give a `dataset` as an absolute path or a URI. A leading dot is configuronic's relative-import
+    sigil inside an override value, so `"./run"` in the whole-mapping form is read as a config to
+    import and the override raises before the run starts.
+
     The names are for addressing endpoints here, and do not reach the recording: an episode records the
     identity its policy reports — a served endpoint's checkpoint path, a replay's dataset and episode —
     which is what joins it back to the endpoint that produced it.
