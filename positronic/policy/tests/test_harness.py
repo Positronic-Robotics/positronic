@@ -1,3 +1,4 @@
+import logging
 from contextlib import contextmanager
 from functools import partial
 from types import SimpleNamespace
@@ -1801,3 +1802,58 @@ def test_a_run_that_raises_mid_episode_logs_an_aborted_outcome_and_no_run_finish
         'harness: directive start id=0 task=t',
         'harness: directive finish id=0 outcome=aborted',
     ]  # no run finish: the run did not end of its own accord
+
+
+class _CommitSpy(pimm.ControlSystem):
+    """The recorder's place in the round order: logs each dataset command the round it reads it."""
+
+    def __init__(self) -> None:
+        self.command = pimm.ControlSystemReceiver[DsWriterCommand](self, default=None)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        while not should_stop.value:
+            message = self.command.read()
+            if message is not None and message.updated and message.data is not None:
+                logging.getLogger('test.recorder').info('recorder: committed %s', message.data.type.name)
+            yield pimm.Sleep(0.001)
+
+
+@pytest.mark.timeout(3.0)
+def test_a_saved_episode_is_logged_only_once_the_recorder_has_committed_it(world, caplog):
+    """A watcher reads the finish line as the episode's artifact existing, so the commit comes first."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    recorder = _CommitSpy()
+    world.connect(harness.ds_command, recorder.command)
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='t')), 0.01),
+        (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),
+        (None, 0.02),
+    ])
+
+    with caplog.at_level('INFO'):
+        drive_scheduler(world.start([harness, recorder, driver]), steps=40)
+
+    log = [r.getMessage() for r in caplog.records if r.name in ('positronic.policy.harness', 'test.recorder')]
+    assert log.index('recorder: committed STOP_EPISODE') < log.index('harness: directive finish id=0 outcome=saved')
+
+
+@pytest.mark.timeout(3.0)
+def test_an_episode_that_fails_while_committing_is_not_also_logged_aborted(world, caplog):
+    """One id, one finish: the episode is out of the live state before the round that commits it."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+
+    def _explode():
+        raise RuntimeError('the recorder fell over')
+
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='t')), 0.01),
+        (partial(p['directive_em'].emit, Directive.FINISH()), 0.01),
+        (_explode, 0.01),  # raises in the round the harness gave the recorder to commit
+    ])
+
+    with caplog.at_level('INFO', logger='positronic.policy.harness'), pytest.raises(RuntimeError):
+        drive_scheduler(world.start([harness, driver]), steps=40)
+
+    assert [m for m in _directive_log(caplog) if 'finish' in m] == []
