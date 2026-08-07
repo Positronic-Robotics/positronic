@@ -49,6 +49,19 @@ OUTCOME_SAVED = 'saved'  # finalized and committed to the dataset
 OUTCOME_DISCARDED = 'discarded'  # an ABORT directive: the operator dropped the recording
 OUTCOME_ABORTED = 'aborted'  # abandoned mid-flight by a failure, so it never completed
 
+# What a free-form field may not contain, since the line it ends is one record to a reader that splits
+# on line breaks: the breaks themselves, the rest of the C0 controls, and the backslash introducing them.
+_ESCAPED = (
+    {ord('\\'): '\\\\', ord('\n'): '\\n', ord('\r'): '\\r', ord('\t'): '\\t'}
+    | {code: f'\\x{code:02x}' for code in range(0x20) if code not in (0x09, 0x0A, 0x0D)}
+    | {0x7F: '\\x7f'}
+)
+
+
+def escape_field(text: str) -> str:
+    """``text`` with everything that would end the record it sits in written as an escape."""
+    return text.translate(_ESCAPED)
+
 
 class DirectiveType(Enum):
     RUN = 'run'
@@ -355,7 +368,8 @@ class Harness(pimm.ControlSystem):
         self._episode_index += 1
         # Logged once the episode is genuinely live, so a reset or a session open that raises leaves no
         # start with no finish to pair it — and so the task it names is the one the policy was given.
-        logger.info('%s id=%d task=%s', LOG_DIRECTIVE_START, self._episode_index, self.context.get(keys.TASK, ''))
+        task = escape_field(str(self.context.get(keys.TASK, '')))
+        logger.info('%s id=%d task=%s', LOG_DIRECTIVE_START, self._episode_index, task)
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
         self.ds_command.emit(DsWriterCommand.START())
 
