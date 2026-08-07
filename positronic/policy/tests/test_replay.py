@@ -186,7 +186,7 @@ def test_session_hands_out_the_recording_in_chunks_then_holds(tmp_path):
     # The bare session, without the scheduling wrapper: one call, one chunk.
     session = ReplaySession(load_actions(_joint_fixture(tmp_path, count=5)), chunk_sec=0.25)
 
-    chunks = [session({'obs_time_ns': 0}) for _ in range(4)]
+    chunks = [session({}) for _ in range(4)]
 
     assert chunks[2] is None and chunks[3] is None  # spent: no new trajectory, so the rig holds
     assert chunks[0] is not None and chunks[1] is not None
@@ -202,10 +202,10 @@ def test_session_hands_out_the_recording_in_chunks_then_holds(tmp_path):
 def test_a_chunk_longer_than_the_recording_plays_it_in_one_go(tmp_path):
     session = ReplaySession(load_actions(_joint_fixture(tmp_path, count=5)), chunk_sec=10.0)
 
-    chunk = session({'obs_time_ns': 0})
+    chunk = session({})
 
     assert chunk is not None and len(chunk) == 5
-    assert session({'obs_time_ns': 0}) is None
+    assert session({}) is None
 
 
 def test_each_session_replays_the_recording_from_the_start(tmp_path):
