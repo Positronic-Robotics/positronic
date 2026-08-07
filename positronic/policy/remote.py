@@ -122,14 +122,23 @@ class _Endpoint(Policy):
         self._server_meta: dict[str, Any] | None = None
         self._compress: bool | None = None
 
-    def server_meta(self) -> dict[str, Any]:
+    def server_meta(self, ready_deadline: float | None = None) -> dict[str, Any]:
         if self._server_meta is None:
-            ws_session = self._client.new_session()
+            ws_session = self._client.new_session(ready_deadline)
             try:
                 self._server_meta = dict(ws_session.metadata)
             finally:
                 ws_session.close()
         return self._server_meta
+
+    def wait_ready(self, timeout: float) -> None:
+        """Wait for this server to report itself ready, bounded, or raise naming it and its last state.
+
+        The wait IS the handshake: a session's metadata arrives in the ``ready`` frame, so reaching
+        that frame and being able to serve are the same event, and the metadata is kept — the stack
+        this endpoint runs is resolved from it later without a second connection.
+        """
+        self.server_meta(ready_deadline=time.monotonic() + timeout)
 
     def _compression(self) -> bool:
         """Whether the rig JPEG-encodes frames: what the server declared, or the operator's stand-in."""
@@ -228,6 +237,20 @@ class RemotePolicy(Policy):
     @property
     def meta(self) -> dict[str, Any]:
         return self._policy().meta
+
+    def wait_ready(self, timeout: float) -> None:
+        """Wait for the server, then build the stack it declared — both, because either can refuse.
+
+        A server that is ready can still declare a local stack this rig cannot build: an unknown
+        wrapper, arguments its constructor rejects, a declaration contradicting the operator's
+        ``local`` override. `_resolve_stack` raises on each, and it would otherwise first run at the
+        opening of the first episode — which is the moment this gate exists to take work away from.
+
+        The stack is resolved from the metadata the wait itself collected, so this costs no second
+        connection.
+        """
+        self._endpoint.wait_ready(timeout)
+        self._policy()
 
     def close(self):
         self._endpoint.close()
