@@ -235,10 +235,11 @@ def main(
         _validate_timing(embodiments, output_dir)
         virtual_clock = driver is None and all(e.simulated for e in embodiments)
 
-    # Drive the policy's remote endpoints through their cold start before hardware and the operator
-    # surface come up: opening a session blocks on the server handshake, which returns only once the
-    # model is loaded, and a SampledPolicy reaches every sub-policy. The first episode then begins
-    # warm instead of stalling on an on-request endpoint's model load while the robot waits.
+    # Drive the policy through its cold start before hardware and the operator surface come up, so the
+    # first episode begins warm rather than stalling while the robot waits. A ``SampledPolicy`` opens a
+    # session on the one endpoint it samples and reads every sub-policy's ``meta`` to key them, and
+    # resolving that is what performs a served endpoint's handshake and a replay's fetch — so the whole
+    # set comes up here.
     # TODO: a policy with recording taps (recording_dir set) records this throwaway warmup session —
     # an empty .rrd plus a bump to the recorder's episode counter — but warmup is not a real episode.
     logger.info('Warming up policy endpoints')
