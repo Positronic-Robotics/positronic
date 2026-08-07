@@ -1,13 +1,25 @@
 import configuronic as cfn
 
+from positronic import keys
+from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import (
     AddBox,
     AddCameras,
     AddObjectsInTote,
     AddTote,
     SetBodyPosition,
+    SetRenderQuality,
     SetTwoObjectsPositions,
 )
+from positronic.utils import package_assets_path
+
+# The MuJoCo camera ports of the Franka table scene, under the canonical observation names. Three of
+# them because MuJoCo does not render the second image when only two cameras are bound.
+MUJOCO_FRANKA_CAMERAS = {
+    keys.WRIST_IMAGE: 'handcam_left_ph',
+    keys.EXTERIOR_IMAGE: 'back_view_ph',
+    keys.AGENT_VIEW_IMAGE: 'agentview',
+}
 
 
 @cfn.config()
@@ -57,3 +69,28 @@ def multi_tote_loaders(num_objects: int):
             rgba=[0, 0, 1, 1],
         ),
     ]
+
+
+@cfn.config(loaders=stack_cubes_loaders, shadowsize=0, offsamples=0, reflectance=0.0)
+def low_render_quality(loaders, shadowsize: int, offsamples: int, reflectance: float):
+    """``loaders`` with the render-cost knobs turned down.
+
+    Shadows, multisampling and specular reflections are most of an offscreen frame under a software GL
+    stack; dropping them renders the Franka table scene 7x faster (``SetRenderQuality``), which is what
+    lets a CPU-only box keep an attended sim at wall-clock pace. Pass the bare loaders instead where
+    the box has a GPU or where those effects are part of what is being evaluated.
+    """
+    return [*loaders, SetRenderQuality(shadowsize, offsamples, reflectance)]
+
+
+# The rate a Franka rollout is driven at, in Hz: one scheduler round, one camera frame and one inference
+# per control period, matching what the real rig does.
+MUJOCO_FRANKA_CONTROL_HZ = 15
+
+mujoco_franka_sim = cfn.Config(
+    MujocoSim,
+    mujoco_model_path=package_assets_path('assets/mujoco/franka_table.xml'),
+    loaders=low_render_quality,
+    camera_fps=MUJOCO_FRANKA_CONTROL_HZ,
+    control_period=1 / MUJOCO_FRANKA_CONTROL_HZ,
+)

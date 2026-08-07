@@ -4,6 +4,7 @@ import numpy as np
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
+import positronic.cfg.simulator
 from positronic import keys
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
@@ -151,3 +152,9 @@ def mujoco_franka(sim, camera_dict):
         control_systems=(sim,),
         simulated=True,
     )
+
+
+@cfn.config(sim=positronic.cfg.simulator.mujoco_franka_sim, camera_dict=positronic.cfg.simulator.MUJOCO_FRANKA_CAMERAS)
+def sim_mujoco(sim, camera_dict):
+    """MuJoCo single-arm Franka as a CLI-addressable embodiment: ``--embodiment=.sim_mujoco``."""
+    return mujoco_franka(sim, camera_dict)
