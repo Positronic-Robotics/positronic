@@ -17,8 +17,6 @@ from .wrappers import ChunkedSchedule
 
 logger = logging.getLogger(__name__)
 
-GRIP_COMMAND = 'target_grip'
-
 # The recorded arm-command signals this reads back, most faithful first. Joint targets replay exactly;
 # pose targets go back through the driver's IK, so they land on the joint solution of the replaying rig
 # rather than the recorded one. The delta forms (``.pose_delta``, ``.joint_deltas``) are deliberately
@@ -62,7 +60,7 @@ def load_actions(episode: Episode) -> list[dict[str, Any]]:
     the arm alone.
     """
     arm, command_type = _arm_signal(episode)
-    grip = episode.signals.get(GRIP_COMMAND)
+    grip = episode.signals.get(keys.TARGET_GRIP)
     first_ts = arm.start_ts
     actions = []
     for value, ts in arm:
@@ -71,7 +69,7 @@ def load_actions(episode: Episode) -> list[dict[str, Any]]:
             # Clamped: the arm's first waypoint can precede the grip's, and a sample at or before it is
             # what the rig held at that instant either way.
             sample = cast(tuple[Any, int], grip.time[max(ts, grip.start_ts)])
-            action[GRIP_COMMAND] = float(sample[0])
+            action[keys.TARGET_GRIP] = float(sample[0])
         actions.append(action)
     return actions
 
