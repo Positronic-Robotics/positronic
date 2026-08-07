@@ -3,6 +3,7 @@ import pytest
 
 import positronic.drivers.roboarm.command as cmd_module
 from positronic import keys as obs_keys
+from positronic.drivers.roboarm import command
 from positronic.cfg.codecs import compose
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
@@ -14,6 +15,7 @@ from positronic.policy.codec import (
     ActionTimestamp,
     ActionTiming,
     BinarizeGripInference,
+    WireCommand,
     BinarizeGripTraining,
     Codec,
     FlipGrip,
@@ -624,3 +626,39 @@ def test_groot_joints_codec_decodes_modality_keyed_actions():
         assert obs_keys.ROBOT_COMMAND in d
         assert 'target_grip' in d
     assert decoded[-1] == {'timestamp': pytest.approx(3 / 15.0)}  # timestamp sentinel
+
+
+def test_wire_command_decodes_a_served_command_into_the_typed_one_drivers_dispatch_on():
+    """A served policy's command crosses a transport with no Python types, so it arrives as a mapping.
+    Every consumer above the wire — the frame codec, the recorder's serializers, each roboarm driver's
+    `match` — dispatches on `command.*` and raises on anything else, so the mapping has to become one."""
+    pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
+    action = {obs_keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}, 'target_grip': 0.5, 'timestamp': 0.0}
+
+    decoded = WireCommand().decode(action)
+
+    assert isinstance(decoded[obs_keys.ROBOT_COMMAND], command.CartesianPosition)
+    np.testing.assert_allclose(decoded[obs_keys.ROBOT_COMMAND].pose.translation, [0.4, 0.0, 0.6], atol=1e-6)
+    assert decoded['target_grip'] == 0.5 and decoded['timestamp'] == 0.0  # the rest of the action survives
+
+
+def test_wire_command_accepts_the_wire_as_a_plain_sequence():
+    """A transport may hand the vector back as a list rather than an array; the boundary coerces, because
+    nothing above it should have to know a transport was involved."""
+    pose = np.asarray([0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1], dtype=np.float32)
+
+    from_array = WireCommand().decode({obs_keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}})
+    from_list = WireCommand().decode({obs_keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose.tolist()}})
+
+    np.testing.assert_allclose(
+        from_list[obs_keys.ROBOT_COMMAND].pose.translation, from_array[obs_keys.ROBOT_COMMAND].pose.translation, atol=1e-6
+    )
+
+
+def test_wire_command_leaves_a_typed_command_and_a_sentinel_alone():
+    """It is composed for every remote policy, so it meets actions that need nothing done: a local policy's
+    typed command, and the chunk's end-of-validity sentinel, which carries no command at all."""
+    typed = WireCommand().decode({obs_keys.ROBOT_COMMAND: command.Reset()})
+    assert isinstance(typed[obs_keys.ROBOT_COMMAND], command.Reset)
+
+    assert WireCommand().decode({'timestamp': 1.6}) == {'timestamp': 1.6}

@@ -11,6 +11,7 @@ from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
 from .base import Policy, PolicyWrapper, Session
+from .codec import WireCommand
 from .recording import Recorder
 from .spec import from_spec
 
@@ -149,6 +150,10 @@ class RemotePolicy(Policy):
             if self._recording_dir is not None:
                 rec = Recorder(self._recording_dir)
                 stack = rec.tap('raw') | stack | rec.tap('server')
+            # Innermost, so it decodes FIRST on the way back (composition decodes right to left): the
+            # server-declared stack, the recorder taps and every driver above them are written against typed
+            # commands, and a served policy's command arrives as a wire mapping.
+            stack = stack | WireCommand()
             self._stacked = stack.wrap(self._endpoint)
         return self._stacked
 

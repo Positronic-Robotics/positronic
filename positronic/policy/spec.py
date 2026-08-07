@@ -42,6 +42,7 @@ from positronic.policy.codec import (
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
+    WireCommand,
     FlipGrip,
     RestrictImageSize,
 )
@@ -158,6 +159,7 @@ WIRE_WRAPPERS: dict[str, type[PolicyWrapper]] = {
     'flip_grip': FlipGrip,
     'restrict_image_size': RestrictImageSize,
     'change_ee_frame': ChangeEEFrame,
+    'wire_command': WireCommand,
     'observation_codec': ObservationCodec,
     'absolute_position_action': AbsolutePositionAction,
     'absolute_joints_action': AbsoluteJointsAction,
