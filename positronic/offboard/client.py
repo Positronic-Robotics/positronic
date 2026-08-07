@@ -9,6 +9,7 @@ from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidSta
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
+from positronic.offboard.protocol import ERROR, MESSAGE, META, PENDING_STATUSES, READY, RESULT, STATUS
 from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
@@ -18,39 +19,93 @@ logger = logging.getLogger(__name__)
 # outlast that compile (still surfacing a stalled/half-open connection), and let callers override per use.
 DEFAULT_INFER_TIMEOUT = 180.0
 
+# How long a server may take to reach ``ready`` before the wait is given up on. The per-message timeout below
+# bounds SILENCE, not the handshake: a server that keeps sending ``loading`` frames inside it never trips one,
+# so without an overall bound the wait has none, and a stuck load is indistinguishable from a slow one until
+# somebody gives up by hand. Sits between the two bounds already here — longer than one inference round trip
+# (``DEFAULT_INFER_TIMEOUT``), well short of the connect deadline a retry cycle may spend — and is a parameter
+# because how long a legitimate cold start takes is a fact about a deployment's checkpoint and hardware.
+DEFAULT_READY_TIMEOUT = 300.0
+
+
+class ServerNotReady(RuntimeError):
+    """A server did not reach ``ready`` within the time allowed, and what it was doing when the wait ended.
+
+    Distinct from the timeouts around it because it means something different: a per-message timeout is a
+    server that went silent, which a reconnect may well fix, while this is a server that kept talking and
+    never became able to serve. So it is not retried, and it carries the last status frame — the only
+    evidence of what it was doing — for whoever reads the failure.
+    """
+
+    def __init__(self, url: str, status: str, message: str, waited_s: float):
+        self.url = url
+        self.status = status
+        self.message = message
+        self.waited_s = waited_s
+        last = f'{status}: {message}' if message else status
+        super().__init__(f'{url} did not become ready within {waited_s:.0f}s; last status was [{last}]')
+
 
 class InferenceSession:
-    def __init__(self, websocket: Connection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
+    def __init__(
+        self,
+        websocket: Connection,
+        infer_timeout: float = DEFAULT_INFER_TIMEOUT,
+        *,
+        url: str = '',
+        ready_deadline: float | None = None,
+    ):
         self._websocket = websocket
         self._infer_timeout = infer_timeout
-        self._metadata = self._handshake()
+        self._metadata = self._handshake(url=url, ready_deadline=ready_deadline)
 
-    def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
-        """Receive status updates until server is ready.
+    def _handshake(
+        self, timeout_per_message: float = 30.0, *, url: str = '', ready_deadline: float | None = None
+    ) -> dict[str, Any]:
+        """Receive status updates until the server reports itself ready.
+
+        ``ready`` is the one frame that means the server can serve: our own server sends it only once the
+        checkpoint is loaded and a session reset (``PolicyServer._serve_session``). Everything before it —
+        the TCP connect, the TLS handshake, the websocket upgrade — completes while the model is still
+        loading, which is why none of them answers whether a policy can answer.
 
         Args:
-            timeout_per_message: Timeout for each individual message (default: 30s).
-                               Server must send updates at least this frequently.
+            timeout_per_message: how long the server may stay SILENT between frames (default: 30s).
+            url: the endpoint being waited on, for the failure to name.
+            ready_deadline: monotonic deadline for reaching ``ready`` at all. ``None`` waits as long as
+                the server keeps talking, which is right for a caller carrying its own bound.
         """
+        started = time.monotonic()
+        status, message = 'no status frame', ''
         try:
             while True:
-                response = deserialise(self._websocket.recv(timeout=timeout_per_message))
-                status = response.get('status')
+                timeout = timeout_per_message
+                if ready_deadline is not None:
+                    remaining = ready_deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise ServerNotReady(url, status, message, time.monotonic() - started)
+                    timeout = min(timeout, remaining)
+                response = deserialise(self._websocket.recv(timeout=timeout))
+                status = response.get(STATUS)
 
-                if status == 'ready':
-                    return response['meta']
+                if status == READY:
+                    return response[META]
 
-                if status in ('waiting', 'loading'):
-                    message = response.get('message', status)
+                if status in PENDING_STATUSES:
+                    message = response.get(MESSAGE, status)
                     logger.info(f'Server status: [{status}] {message}')
                     continue
 
-                if status == 'error' or 'error' in response:
-                    raise RuntimeError(f'Server error: {response.get("error", "Unknown error")}')
+                if status == ERROR or ERROR in response:
+                    raise RuntimeError(f'Server error: {response.get(ERROR, "Unknown error")}')
 
                 raise RuntimeError(f'Unexpected server response: {response}')
 
         except TimeoutError:
+            # A recv bounded by the deadline rather than by the per-message allowance is the deadline
+            # expiring, not the server going quiet; the two have different answers, so say which happened.
+            if ready_deadline is not None and time.monotonic() >= ready_deadline:
+                raise ServerNotReady(url, status, message, time.monotonic() - started) from None
             raise TimeoutError(
                 f'Server did not send status update within {timeout_per_message}s. '
                 f'Server may have crashed or model loading is taking too long without progress updates.'
@@ -84,10 +139,10 @@ class InferenceSession:
             ) from None
         logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
 
-        if isinstance(response, dict) and 'error' in response:
-            raise RuntimeError(f'Server error: {response["error"]}')
+        if isinstance(response, dict) and ERROR in response:
+            raise RuntimeError(f'Server error: {response[ERROR]}')
 
-        return response['result']
+        return response[RESULT]
 
     def close(self):
         self._websocket.close()
@@ -158,23 +213,37 @@ class InferenceClient:
         self.connect_deadline = connect_deadline
         self.infer_timeout = infer_timeout
 
-    def new_session(self) -> InferenceSession:
-        """Creates a new inference session on the model the URL names."""
+    def new_session(self, ready_deadline: float | None = None) -> InferenceSession:
+        """Creates a new inference session on the model the URL names.
+
+        ``ready_deadline`` is a monotonic deadline bounding the whole wait for a servable session,
+        reconnects included, not each handshake separately. ``None`` leaves ``connect_deadline`` as
+        the only bound.
+        """
         deadline = time.monotonic() + self.connect_deadline
+        if ready_deadline is not None:
+            deadline = min(deadline, ready_deadline)
         backoff = 1.0
         while True:
             ws = None
+            session = None
             try:
+                # Capped by the deadline: an unanswered connect otherwise spends its own fixed timeout
+                # past the bound the caller set, and the bound is the whole point of giving one.
+                open_timeout = min(self.open_timeout, max(deadline - time.monotonic(), 0.0))
                 # A proxy between here and the server closes a connection it has read nothing from, often
                 # after 60s — well inside one ``infer_timeout`` inference, which sends nothing until it
                 # answers. The pings keep it open.
                 ws = connect(
                     self.session_url,
-                    open_timeout=self.open_timeout,
+                    open_timeout=open_timeout,
                     additional_headers=self.headers,
                     ping_interval=20.0,
                 )
-                return InferenceSession(ws, infer_timeout=self.infer_timeout)
+                session = InferenceSession(
+                    ws, infer_timeout=self.infer_timeout, url=self.session_url, ready_deadline=ready_deadline
+                )
+                return session
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
             # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.
             except ssl.SSLCertVerificationError as e:
@@ -185,8 +254,6 @@ class InferenceClient:
             # handshake inside ``InferenceSession`` (``ConnectionClosed``/``TimeoutError``). All mean "not ready
             # yet", so retry within the deadline instead of letting one kill the run.
             except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
-                if ws is not None:
-                    ws.close()
                 # A non-101 upgrade response only means "not ready" when it's a 5xx or 429; any other status
                 # (401/403/404, …) is permanent misconfiguration and surfaces immediately.
                 if isinstance(e, InvalidStatus) and not (
@@ -200,6 +267,12 @@ class InferenceClient:
                 backoff = min(backoff * 2, 30.0)
             except OSError as e:
                 raise type(e)(f'{e} (connecting to {self.session_url})') from e
+            finally:
+                # Every path that leaves without a session leaves the socket open otherwise —
+                # including ``ServerNotReady``, which is deliberately not one of the retried
+                # exceptions above and so passes straight through them.
+                if session is None and ws is not None:
+                    ws.close()
 
     def list_models(self) -> list[str]:
         """List available models from the server."""
