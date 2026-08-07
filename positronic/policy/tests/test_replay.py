@@ -108,12 +108,13 @@ def test_session_hands_out_the_recording_in_chunks_then_holds(tmp_path):
 
     assert chunks[2] is None and chunks[3] is None  # spent: no new trajectory, so the rig holds
     assert chunks[0] is not None and chunks[1] is not None
-    assert [len(chunks[0]), len(chunks[1])] == [3, 2]
+    assert [len(chunks[0]), len(chunks[1])] == [3, 3]
     played = [action for chunk in chunks[:2] if chunk for action in chunk]
-    assert [a[keys.ROBOT_COMMAND].positions[0] for a in played] == pytest.approx([0, 1, 2, 3, 4])
+    # Waypoint 2 opens the second chunk as well as closing the first: the boundary is handed over, not spent.
+    assert [a[keys.ROBOT_COMMAND].positions[0] for a in played] == pytest.approx([0, 1, 2, 2, 3, 4])
     # Each chunk's timestamps restart at its own first waypoint — the scheduling wrapper anchors them.
     assert [a['timestamp'] for a in chunks[0]] == pytest.approx([0.0, 0.1, 0.2])
-    assert [a['timestamp'] for a in chunks[1]] == pytest.approx([0.0, 0.1])
+    assert [a['timestamp'] for a in chunks[1]] == pytest.approx([0.0, 0.1, 0.2])
 
 
 def test_a_chunk_longer_than_the_recording_plays_it_in_one_go(tmp_path):
@@ -154,7 +155,31 @@ def test_the_scheduling_wrapper_paces_playback_against_the_clock(tmp_path):
     now = 100.2
     second = session({'obs_time_ns': 0})
     assert second is not None
-    assert [a['timestamp'] for a in second] == pytest.approx([100.2, 100.3])
+    # The handed-over waypoint keeps the instant it had in the first chunk, so the re-issue changes no timing.
+    assert [a['timestamp'] for a in second] == pytest.approx([100.2, 100.3, 100.4])
+    assert second[0][keys.ROBOT_COMMAND].positions[0] == first[-1][keys.ROBOT_COMMAND].positions[0]
+
+
+def test_every_waypoint_plays_when_a_new_chunk_lands_before_the_last_one_is_applied(tmp_path):
+    """The order a rig running both in one process gives them: the harness hands the player a new trajectory
+    in the round the previous chunk's last waypoint falls due, before the player applies it."""
+    _joint_fixture(tmp_path, count=9)
+    clock = 100.0
+    session = ReplayPolicy(str(tmp_path), chunk_sec=0.25).new_session(now=lambda: clock)
+    player = roboarm_command.TrajectoryPlayer()
+
+    played = []
+    for tick in range(40):  # half a waypoint apart, so no tick collapses two of them
+        clock = 100.0 + tick * (0.5 / HZ)
+        chunk = session({'obs_time_ns': int(clock * 1e9)})
+        if chunk is not None:
+            player.set([(int(a['timestamp'] * 1e9), a[keys.ROBOT_COMMAND]) for a in chunk])
+        command = player.advance(int(clock * 1e9))
+        if command is not None:
+            played.append(float(command.positions[0]))
+
+    assert sorted(set(played)) == pytest.approx(list(range(9)))  # a re-issued waypoint may play twice
+    assert played == sorted(played)
 
 
 def test_missing_episode_names_what_the_dataset_holds(tmp_path):
