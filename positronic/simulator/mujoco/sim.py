@@ -156,6 +156,8 @@ class MujocoSim(pimm.ControlSystem):
         self._last_grip = 0.0
         # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
         self._reset_pending = False
+        # How far the last ``step`` landed past what it was asked for, owed back to the next one.
+        self._step_overshoot = 0.0
 
         self.commands: pimm.SignalReceiver[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
             pimm.ControlSystemReceiver(self, default=[])
@@ -256,6 +258,7 @@ class MujocoSim(pimm.ControlSystem):
         self._arm_player.set([])
         self._grip_player.set([])
         self._last_grip = 0.0
+        self._step_overshoot = 0.0
         self._reset_pending = True
 
     def _load_scene(self, seed: int | None = None):
@@ -347,9 +350,17 @@ class MujocoSim(pimm.ControlSystem):
         return save_state(self.model, self.data)
 
     def step(self, duration: float | None = None) -> None:
-        target_time = self.data.time + (duration or self.model.opt.timestep)
+        """Advance the physics by ``duration``, defaulting to one physics timestep.
+
+        A duration that is not a whole number of timesteps lands past its target, and the excess is carried
+        into the next call rather than measured out again from the new time: 15 Hz on a 2 ms timestep
+        overshoots by 1.3 ms every period, which uncarried makes simulated time run 2% ahead of the clock the
+        trajectory players and the scheduler read.
+        """
+        target_time = self.data.time + (duration or self.model.opt.timestep) - self._step_overshoot
         while self.data.time < target_time:
             mj.mj_step(self.model, self.data)
+        self._step_overshoot = self.data.time - target_time
 
     def _apply_command(self, cmd):
         match cmd:
