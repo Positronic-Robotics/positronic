@@ -14,6 +14,10 @@ ROBOT_COMMAND = 'robot_command'
 TARGET_EE_POSE = f'{ROBOT_COMMAND}.pose'
 TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
 
+# The gripper's command channel, alongside ``ROBOT_COMMAND``: an action carries it, an embodiment binds it,
+# and a recorded episode holds it under this name.
+TARGET_GRIP = 'target_grip'
+
 JOINTS = 'robot_state.q'
 JOINT_VEL = 'robot_state.dq'
 EE_POSE = 'robot_state.ee_pose'
