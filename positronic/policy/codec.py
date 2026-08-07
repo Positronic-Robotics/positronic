@@ -497,35 +497,43 @@ class RestrictImageSize(Codec):
 class WireCommand(Codec):
     """Turn a robot command that arrived over the wire into the typed command everything above expects.
 
-    A served policy answers across a transport that carries no Python types, so its robot command reaches us
-    as the mapping ``command.from_wire`` reads — ``{'type': 'cartesian_pos', 'pose': [...]}``. Every consumer
-    above this point matches on ``command.*`` objects instead: ``ChangeEEFrame`` re-expresses them by case,
-    the recorder serializes them by type, and each roboarm driver dispatches on them and raises on anything
-    else. So the mapping becomes a command HERE, closest to the wire, and one boundary serves every endpoint
-    and every driver rather than each driver learning to read wire form.
+    A transport carries no Python types, so a served command arrives as the mapping ``command.from_wire``
+    reads — ``{'type': 'cartesian_pos', 'pose': [...]}`` — while everything above this point matches on
+    ``command.*`` objects. Compose it innermost, closest to the wire.
 
-    An action whose command is already typed passes through untouched: a local policy produces one, as does a
-    server whose transport tags commands for ``utils.serialization``. An action carrying no command at all —
-    a chunk's end-of-validity sentinel — passes through too.
+    Every command channel is decoded, not only ``robot_command``: an embodiment with more than one arm
+    names them ``robot_command.{side}`` (``cfg.embodiment.yam_bimanual``) and the harness forwards each to
+    its own driver by that name, so an arm whose channel is skipped is handed the raw mapping.
+
+    An action whose command is already typed passes through untouched, as does one carrying no command at
+    all — a chunk's end-of-validity sentinel.
     """
 
+    # The one owner of this codec's wire name: `to_spec` returns it and `spec.WIRE_WRAPPERS` keys on it,
+    # so a rename cannot desync the two.
+    WIRE_NAME = 'wire_command'
+
     def encode(self, data):
-        # This codec touches actions only. The base `encode` contributes nothing, so an action-only codec
-        # has to pass observations through explicitly or the composition hands the server an empty one.
+        # An action-only codec passes observations through explicitly; the base `encode` returns nothing,
+        # which would hand the server an empty observation.
         return data
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
-        wire = data.get(obs_keys.ROBOT_COMMAND)
-        if not isinstance(wire, cabc.Mapping):
-            return data
-        # The wire has no arrays, only sequences, and `from_wire` reads its vectors as arrays. Coercing is
-        # this boundary's job for the same reason the decode is: nothing above it should know a transport
-        # was involved. `type` is the one entry that stays a string.
-        decoded = {k: v if isinstance(v, str) else np.asarray(v) for k, v in wire.items()}
-        return {**data, obs_keys.ROBOT_COMMAND: command.from_wire(decoded)}
+        decoded = {k: self._as_command(v) for k, v in data.items() if obs_keys.is_robot_command(k)}
+        return {**data, **decoded} if decoded else data
+
+    @staticmethod
+    def _as_command(value):
+        """One channel's value, typed. Anything but a wire mapping is returned as it came: a local policy
+        already produces a typed command, and `robot_command.pose` carries a vector rather than a command."""
+        if not isinstance(value, cabc.Mapping):
+            return value
+        # The wire has no arrays, only sequences, and `from_wire` reads its vectors as arrays. `type` is
+        # the one entry that stays a string.
+        return command.from_wire({k: v if isinstance(v, str) else np.asarray(v) for k, v in value.items()})
 
     def to_spec(self):
-        return {'name': 'wire_command'}
+        return {'name': self.WIRE_NAME}
 
 
 class ChangeEEFrame(Codec):

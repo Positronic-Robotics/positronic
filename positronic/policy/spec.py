@@ -42,9 +42,9 @@ from positronic.policy.codec import (
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
-    WireCommand,
     FlipGrip,
     RestrictImageSize,
+    WireCommand,
 )
 from positronic.policy.observation import ObservationCodec
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
@@ -143,12 +143,12 @@ class PolicySource(ModelSource):
         return self._policy
 
 
-# TODO(hardcoded-keys): every name here is written twice — once as a literal in the wrapper's own ``to_spec``
-# and once as a key below — so a rename in one place silently desyncs the wire. Let each wrapper own its wire
-# name as a class attribute and build this mapping from it. ``test_wire_names_match_table`` is what catches a
-# desync until then.
-# rules-allow: hardcoded-keys — fixing one of the thirteen leaves the rest on the old pattern; the TODO above
-# names the whole-table fix, and the test above catches a desync meanwhile
+# TODO(hardcoded-keys): most names here are written twice — once as a literal in the wrapper's own ``to_spec``
+# and once as a key below — so a rename in one place silently desyncs the wire. The fix is the one
+# ``WireCommand`` already follows: the wrapper owns its wire name as a ``WIRE_NAME`` class attribute and this
+# mapping is built from it. ``test_wire_names_match_table`` is what catches a desync meanwhile.
+# rules-allow: hardcoded-keys — converting one of the remaining entries leaves the rest on the old pattern;
+# the TODO above names the whole-table fix, and the test above catches a desync until then
 WIRE_WRAPPERS: dict[str, type[PolicyWrapper]] = {
     'chunked_schedule': ChunkedSchedule,
     'temporal_stack': TemporalStack,
@@ -159,7 +159,7 @@ WIRE_WRAPPERS: dict[str, type[PolicyWrapper]] = {
     'flip_grip': FlipGrip,
     'restrict_image_size': RestrictImageSize,
     'change_ee_frame': ChangeEEFrame,
-    'wire_command': WireCommand,
+    WireCommand.WIRE_NAME: WireCommand,
     'observation_codec': ObservationCodec,
     'absolute_position_action': AbsolutePositionAction,
     'absolute_joints_action': AbsoluteJointsAction,
