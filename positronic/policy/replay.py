@@ -93,7 +93,13 @@ class ReplaySession(Session):
         chunk = []
         while self._cursor < len(self._actions):
             action = self._actions[self._cursor]
-            if chunk and action['timestamp'] - start >= self._chunk_sec:
+            # A chunk keeps its final waypoint for the next one, which re-issues it at the same instant.
+            # The scheduling wrapper re-queries the moment that waypoint falls due, and in a rig that runs
+            # both in one process the new trajectory replaces the playing one before the waypoint is
+            # applied — so a chunk that ended on it would lose it. Re-issuing an absolute target the rig
+            # has already reached commands nothing new.
+            if len(chunk) > 1 and action['timestamp'] - start >= self._chunk_sec:
+                self._cursor -= 1
                 break
             chunk.append({**action, 'timestamp': action['timestamp'] - start})
             self._cursor += 1
