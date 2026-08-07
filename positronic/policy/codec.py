@@ -509,6 +509,11 @@ class WireCommand(Codec):
     a chunk's end-of-validity sentinel — passes through too.
     """
 
+    def encode(self, data):
+        # This codec touches actions only. The base `encode` contributes nothing, so an action-only codec
+        # has to pass observations through explicitly or the composition hands the server an empty one.
+        return data
+
     def _decode_single(self, data: dict, context: dict | None) -> dict:
         wire = data.get(obs_keys.ROBOT_COMMAND)
         if not isinstance(wire, cabc.Mapping):
