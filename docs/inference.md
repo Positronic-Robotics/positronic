@@ -122,6 +122,24 @@ uv run positronic-inference phail --driver=.web --driver.task='Pick up the green
 
 **The replay policy** (`--policy=.replay --policy.dataset_path=<dataset>`, plus `--policy.episode=N`) plays a recorded episode's commands back through the policy interface, so the arm moves with nothing served. Every episode replays the recording from its first waypoint at the cadence it was recorded at; when it runs out the rig holds. The recording must be one the replaying embodiment can execute — a run recorded in the same sim is the faithful case, and the recorded action space is re-issued verbatim (joint targets replay exactly, pose targets go back through the driver's IK, and a recorded reset is reissued as the command it was). Every command channel the recording carries replays under the name the embodiment commands it by, so a multi-arm rig's `robot_command.left` / `.right` and their grips all play. Arm and gripper each keep the timing they were recorded with rather than the other's cadence, and a recording whose action space changed part-way through replays both stretches — provided both are absolute. Delta commands are not replayable at all, since a delta means something only against the state it was issued from, so a recording carrying one is refused outright rather than played in part.
 
+## Running Several Policies in One Run
+
+`--policy=.production` (and the `phail` default `.phail_multiple`, which adds a balancing sampler) routes each episode to one of several named endpoints, so one run compares policies under identical conditions and the operator cannot tell which is driving. An endpoint is a served checkpoint given as its URL, or a mapping declaring what it is:
+
+```bash
+uv run positronic-inference phail --embodiment=.sim_mujoco \
+  --policy.endpoints='{"arm_a": {"kind": "replay", "dataset": "s3://…/rollouts/", "episode": 0},
+                       "arm_b": {"kind": "replay", "dataset": "s3://…/rollouts/", "episode": 1},
+                       "arm_c": "wss://host/api/v1/session"}' \
+  --output_dir=s3://…/blind/
+```
+
+A `remote` endpoint takes a `url` and a `replay` endpoint a `dataset` plus optionally the `episode` within it; the kind defaults to `remote`, so a bare URL string is the short form. The kind is declared rather than read off the locator, because a URL may be written without a scheme (`notebook:8000` is one) and no rule tells that apart from a relative path to a recording. A run needs no GPU and nothing served when every endpoint is a replay, which is what lets a simulated rig exercise the whole comparison.
+
+Passing the whole mapping replaces the endpoints the config carries; the per-key form (`--policy.endpoints.arm_a=…`) adds to them, which is how a run ends up sampling an endpoint nobody asked for.
+
+**The names address endpoints on the command line and do not reach the recording.** Each episode records the identity its policy reports — a served endpoint's checkpoint path under `inference.policy.server.checkpoint_path`, a replay's `inference.policy.replay.dataset_path` and `.episode` — which is what tells the episodes of one endpoint from another's after the fact. A policy reporting no checkpoint path of its own, a replay among them, is keyed by its position in the mapping.
+
 ## Following a Run From Its Log
 
 The harness logs one line per episode boundary at INFO, so a watcher can follow a run it has no other view of — no console endpoint, no dataset scan:
