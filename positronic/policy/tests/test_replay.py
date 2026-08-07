@@ -78,6 +78,63 @@ def test_load_actions_omits_the_grip_on_waypoints_before_the_grip_channel_starts
     assert actions[3][keys.TARGET_GRIP] == pytest.approx(1.0)
 
 
+def test_load_actions_keeps_a_grip_command_issued_between_or_after_the_arm_waypoints(tmp_path):
+    """The grip keeps the timing it was recorded with, rather than the arm's cadence.
+
+    Keying actions on the arm alone delays a grip command issued between two arm waypoints and drops
+    one issued after the last of them — so a recording that ends by closing the gripper replays
+    without ever closing it.
+    """
+    step = int(1e9 / HZ)
+    start = 1_000_000_000
+    q = np.zeros(7, dtype=np.float32)
+    episode = _write(
+        tmp_path,
+        {
+            keys.TARGET_JOINTS: [(q, start), (q, start + 2 * step)],
+            # One grip command halfway between the two arm waypoints, one after the last of them.
+            keys.TARGET_GRIP: [(np.float32(0.5), start + step), (np.float32(1.0), start + 3 * step)],
+        },
+    )
+
+    actions = load_actions(episode)
+
+    assert [a[keys.ACTION_TIMESTAMP] for a in actions] == pytest.approx([0.0, 0.1, 0.2, 0.3])
+    # The grip-only instants carry no arm command: the recording issued none there.
+    assert [keys.ROBOT_COMMAND in a for a in actions] == [True, False, True, False]
+    assert actions[1][keys.TARGET_GRIP] == pytest.approx(0.5)
+    assert actions[3][keys.TARGET_GRIP] == pytest.approx(1.0)
+
+
+def test_load_actions_replays_both_arm_streams_when_the_action_space_changed(tmp_path):
+    """A command writes one signal, so a recording that switched action space carries both.
+
+    Reading one and dropping the other would replay part of the recording as though it were all of it.
+    """
+    step = int(1e9 / HZ)
+    start = 1_000_000_000
+    q = np.full(7, 0.25, dtype=np.float32)
+    pose = np.array([0.3, 0.0, 0.5, 1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    episode = _write(
+        tmp_path,
+        {
+            keys.TARGET_JOINTS: [(q, start), (q, start + step)],
+            keys.TARGET_EE_POSE: [(pose, start + 2 * step), (pose, start + 3 * step)],
+        },
+    )
+
+    actions = load_actions(episode)
+
+    assert len(actions) == 4
+    assert [type(a[keys.ROBOT_COMMAND]) for a in actions] == [
+        roboarm_command.JointPosition,
+        roboarm_command.JointPosition,
+        roboarm_command.CartesianPosition,
+        roboarm_command.CartesianPosition,
+    ]
+    assert [a[keys.ACTION_TIMESTAMP] for a in actions] == pytest.approx([0.0, 0.1, 0.2, 0.3])
+
+
 def test_load_actions_rebuilds_pose_commands(tmp_path):
     pose = np.array([0.3, 0.0, 0.5, 1.0, 0.0, 0.0, 0.0], dtype=np.float32)
     episode = _write(tmp_path, {keys.TARGET_EE_POSE: [(pose, 1_000_000_000), (pose + 0.1, 1_100_000_000)]})
