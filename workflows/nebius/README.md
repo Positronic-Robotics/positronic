@@ -6,9 +6,11 @@ training) and Endpoints for HTTP inference servers. Same containers, same script
 lifecycle to manage and no idle compute cost.
 
 This page mirrors all three cloud-side steps of
-[docs/training-workflow.md](../../docs/training-workflow.md): Convert, Train, Serve. Step 4
-(running inference from your robot or simulator against the served policy) is unchanged — see
-[docs/inference.md](../../docs/inference.md).
+[docs/training-workflow.md](../../docs/training-workflow.md): Convert, Train, Serve. Step 4 —
+running inference from your robot or simulator against the served policy — works as
+[docs/inference.md](../../docs/inference.md) describes, except that an endpoint served here is
+reached at a managed `https://` URL and gated on a bearer token: see
+[Authenticated inference](#authenticated-inference).
 
 ## Prerequisites
 
@@ -22,12 +24,14 @@ This page mirrors all three cloud-side steps of
 
 ## One-time setup
 
-Create up to four MysteryBox secrets that the jobs will reference by name. AWS keys are read
+Create up to five MysteryBox secrets that the jobs will reference by name. AWS keys are read
 from your local `~/.aws/credentials`; the WandB key from `docker/.env.wandb`. The first three
 are single-key payloads consumed via `--env-secret`. The fourth is a two-key payload consumed
 by `--volume` for Mountpoint-S3 authentication (Nebius requires the keys to be named
-`S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`). The wandb secret is optional — skip it if you
-don't use Weights & Biases.
+`S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`). The fifth is the bearer token every served
+endpoint is gated on — `serve.sh` injects it as the container's `AUTH_TOKEN`, and the payload
+key must be `AUTH_TOKEN` too. The wandb secret is optional — skip it if you don't use
+Weights & Biases.
 
 ```bash
 PARENT_ID=project-e00f38wexevrr52b8j  # adjust to your own project
@@ -65,10 +69,17 @@ nebius mysterybox secret create \
     --arg k "$(aws configure get aws_access_key_id --profile "$AWS_PROFILE_FOR_S3")" \
     --arg s "$(aws configure get aws_secret_access_key --profile "$AWS_PROFILE_FOR_S3")" \
     '[{key:"S3_ACCESS_KEY_ID",string_value:$k},{key:"S3_SECRET_ACCESS_KEY",string_value:$s}]')"
+
+nebius mysterybox secret create \
+  --parent-id "$PARENT_ID" \
+  --name positronic-serverless-inference-token \
+  --description "Bearer token gating served inference endpoints" \
+  --secret-version-payload "$(jq -nc \
+    --arg v "$(openssl rand -hex 32)" '[{key:"AUTH_TOKEN",string_value:$v}]')"
 ```
 
-The names matter — `convert.sh`, `train.sh`, and `serve.sh` reference the secrets by name. If a
-secret with one of these names already exists, the create call fails; skip it.
+The names matter — `convert.sh`, `train.sh`, `serve.sh`, and `eval.sh` reference the secrets by
+name. If a secret with one of these names already exists, the create call fails; skip it.
 
 ## Shared cache filesystem
 
@@ -202,10 +213,14 @@ flow to your account directly via the API key — they aren't synced to S3.
 ## Serve a checkpoint as an HTTP endpoint
 
 `serve.sh` creates a [Nebius Serverless Endpoint](https://docs.nebius.com/serverless/endpoints/manage)
-running `python -m positronic.vendors.<vendor>.server` on H100, with a public static IP on
-port 8000. Endpoints don't have managed DNS yet, so the IP is the contact address — it's stable
-across endpoint stop/start, but new endpoints get new IPs. Supported vendors:
-`lerobot_0_3_3`, `lerobot`, `openpi`, `gr00t`.
+running `python -m positronic.vendors.<vendor>.server` on H100. The endpoint gets no public IP:
+Nebius fronts the container's port 8000 with a managed `https://` URL, which terminates TLS and
+is the contact address. That URL survives endpoint stop/start; deleting an endpoint retires it,
+so a re-created one of the same name gets a new URL. Supported vendors: `lerobot_0_3_3`,
+`lerobot`, `openpi`, `gr00t`.
+
+Every endpoint is gated on a bearer token — see [Authenticated inference](#authenticated-inference)
+below for loading it and for why the check lives in the server rather than at the Nebius ingress.
 
 Take a vendor and a unique endpoint name as the first two arguments; remaining arguments forward
 to the server CLI. Example using the public ACT demo checkpoint at
@@ -237,34 +252,74 @@ bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d_rel \
   --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 ```
 
-`serve.sh` blocks until the public IP is allocated (typically <1 min), then prints a banner with
-the URL, endpoint ID, and the commands to follow logs and tear down. The container takes another
-~10–15 min to finish `uv sync` and load the model into GPU memory; once `INFO Started server
-process` appears in `nebius ai endpoint logs`, sanity-check with:
+`serve.sh` blocks until the managed URL appears (typically <1 min), then prints a banner with
+that URL, the endpoint ID, and the commands to follow logs and tear down. The container takes
+another ~10–15 min to finish `uv sync` and load the model into GPU memory; once `INFO Started
+server process` appears in `nebius ai endpoint logs`, sanity-check with (`AUTH_TOKEN` loaded as
+in [Authenticated inference](#authenticated-inference)):
 
 ```bash
-curl http://<endpoint-ip>:8000/api/v1/models
+curl -H "Authorization: Bearer $AUTH_TOKEN" https://<endpoint-managed-url>/api/v1/models
 # → {"models": ["050000"]}
 ```
 
 Run inference from your laptop or robot host using the existing `positronic-inference` CLI
-([docs/inference.md](../../docs/inference.md)):
+([docs/inference.md](../../docs/inference.md)); `.authed_remote` attaches the token:
 
 ```bash
 uv run positronic-inference sim \
-  --policy=.remote \
-  --policy.url=<endpoint-ip>:8000 \
+  --policy=.authed_remote \
+  --policy.url=https://<endpoint-managed-url> \
   --output_dir=.data/inference/<run-name>/
 ```
 
-When you're done, `stop.sh` deletes the endpoint and releases the public IP:
+When you're done, `stop.sh` deletes the endpoint:
 
 ```bash
 bash workflows/nebius/stop.sh my-act-demo
 ```
 
-To pause an endpoint without releasing its static IP (useful if you want to reuse the same IP
-later), use `nebius ai endpoint stop <id>` directly — `start` resumes it.
+Deleting retires the managed URL. To pause an endpoint and keep the URL, use `nebius ai endpoint
+stop <id>` directly — it releases the compute too, and `start` resumes on the same URL.
+
+## Authenticated inference
+
+The server validates `Authorization: Bearer <token>` on `/api/v1/models` and on the inference
+WebSocket, rejecting before the session opens. `serve.sh` injects the token from the
+`positronic-serverless-inference-token` secret as the container's `AUTH_TOKEN`; export the same
+value locally and `.authed_remote` sends it (it raises immediately if the variable is unset).
+
+```bash
+SECRET_ID=$(nebius mysterybox secret list --parent-id "$PARENT_ID" --format json \
+  | jq -r '.items[] | select(.metadata.name=="positronic-serverless-inference-token") | .metadata.id')
+export AUTH_TOKEN=$(nebius mysterybox payload get-by-key \
+  --secret-id "$SECRET_ID" --key AUTH_TOKEN --format json | jq -r '.data.string_value')
+
+uv run positronic-inference sim \
+  --policy=.authed_remote \
+  --policy.url=https://<endpoint-managed-url> \
+  --output_dir=.data/inference/<run-name>/
+```
+
+Nebius offers `--auth token` at its own ingress, which would spare us the in-server check. It is
+unusable here: that mode strips the `Upgrade`/`Connection` headers off a WebSocket handshake, so
+the inference route answers a plain `200` instead of upgrading and no session can ever open —
+with a valid token as much as without. Plain HTTP routes are gated correctly, and an unauthenticated
+endpoint proxies WebSockets fine; it is the combination that fails.
+
+That ingress also closes any connection it has read nothing from for ~90 seconds. Longer than
+that passes during a cold checkpoint's first inference, so the client holds sessions open with
+WebSocket pings (the `ping_interval` its `connect` call passes, in `positronic/offboard/client.py`).
+
+Rotate the token by adding a new primary version:
+
+```bash
+nebius mysterybox secret-version create --parent-id "$SECRET_ID" --set-primary \
+  --payload "$(jq -nc --arg v "$(openssl rand -hex 32)" '[{key:"AUTH_TOKEN",string_value:$v}]')"
+```
+
+Clients pick the new value up on their next run, but a running endpoint keeps validating the
+token its container read at start. Re-run `serve.sh` for each live endpoint after rotating.
 
 ## Run a simulator eval (RoboLab)
 
@@ -289,7 +344,8 @@ network — so it runs on an **L40S** platform (Isaac's RTX renderer needs RT co
 none). `NEBIUS_PLATFORM=gpu-l40s-a` switches to the AMD-host L40S variant when the Intel one
 is out of capacity.
 
-Serve the policy first and point the eval at the endpoint IP:
+Serve the policy first and point the eval at the endpoint's managed URL. `eval.sh` injects the
+same `AUTH_TOKEN` into the job, which is where `authed_remote` reads it:
 
 ```bash
 bash workflows/nebius/serve.sh openpi pi05-jointpos droid_jointpos
@@ -297,8 +353,8 @@ bash workflows/nebius/serve.sh openpi pi05-jointpos droid_jointpos
 bash workflows/nebius/eval.sh \
   --eval=@positronic.cfg.eval.sim.robolab.banana_in_bowl \
   --eval.trial_count=10 \
-  --policy=@positronic.cfg.policy.remote \
-  --policy.url=<endpoint-ip>:8000 \
+  --policy=@positronic.cfg.policy.authed_remote \
+  --policy.url=https://<endpoint-managed-url> \
   --output_dir=s3://<your-bucket>/evals/robolab_banana/
 ```
 
@@ -320,21 +376,25 @@ of on operator laptops. Compute is released the moment a job finishes — idle c
 
 ## Configuration
 
-The script defaults point at Positronic Robotics' own Nebius project — **external users must
-override them** with their own project + subnet IDs:
+Everything the scripts share — the project, subnet, cache filesystem, image tag, the auth token
+secret, and the S3 credential flags — is defined once in
+[`common.sh`](common.sh), which each script sources; a setting only one script means (a preset, a
+timeout, a platform) stays in that script. The defaults point at Positronic Robotics' own Nebius
+project — **external users must override them** with their own project + subnet IDs:
 
 | Variable | Default (Positronic-internal) | Purpose |
 |---|---|---|
 | `NEBIUS_PARENT_ID` | `project-e00f38wexevrr52b8j` | Nebius project to create the job/endpoint in |
 | `NEBIUS_SUBNET_ID` | `vpcsubnet-e00pk1j1x6hjmr4m92` | VPC subnet for the compute instance |
 | `WANDB_SECRET` | `positronic-serverless-wandb-api-key` | MysteryBox secret name for the WandB key. Set empty (`WANDB_SECRET=`) to skip wandb entirely. |
+| `NEBIUS_AUTH_TOKEN_SECRET` | `positronic-serverless-inference-token` | `serve.sh` and `eval.sh` only. MysteryBox secret name (payload key `AUTH_TOKEN`) injected as the container's `AUTH_TOKEN`. There is no open-endpoint mode. See [Authenticated inference](#authenticated-inference). |
 | `NEBIUS_CACHE_FS` | `computefilesystem-e00f6jyfr5wkawyrab` | Shared filesystem **ID** (not name — `--volume` rejects names) mounted RW at `/cache` for the `uv`/HF/openpi caches (`UV_CACHE_DIR`, `HF_HOME`, `OPENPI_DATA_HOME`). Not used by pos3. The default is Positronic-internal; external users must override with their own filesystem ID. |
 | `NEBIUS_IMAGE_REPO` | `positro/robolab` | *(`eval.sh` only)* Image repository the RoboLab eval job pulls, without the tag. Defaults to the Docker Hub `positro/robolab`; set it to an in-region Nebius Container Registry path (`cr.<region>.nebius.cloud/<registry-id>/robolab`) to skip the cross-cloud Docker Hub pull. `<registry-id>` is the Container Registry ID **without** the `registry-` prefix (from `nebius registry list`) — NOT the project ID. Combined with `NEBIUS_IMAGE_TAG` as `${NEBIUS_IMAGE_REPO}:${NEBIUS_IMAGE_TAG}`. |
 | `NEBIUS_IMAGE_TAG` | `latest` | Docker image tag the job/endpoint pulls (`positro/<image>:<tag>`). `cd docker && make push-* IMAGE_TAG=<branch>` pushes that tag unconditionally; set `NEBIUS_IMAGE_TAG=<branch>` to run a branch build remotely without clobbering `:latest`. `make push-*` only updates `:latest` when run with `CI` set. Note `convert.sh openpi` chains a stats job on the `positro/openpi` image, so with `NEBIUS_IMAGE_TAG=<branch>` you must also have pushed `positro/openpi:<branch>` (not just `positro/positronic:<branch>`); otherwise leave `NEBIUS_IMAGE_TAG` unset so stats uses `:latest`. |
 
-Other operational settings (platform/preset, MysteryBox secret names, S3 endpoint URL, region)
-are hardcoded — change them by editing the script directly. The vendor positional arg selects
-the container image and `uv` extras:
+Settings with no environment override — platform, preset, the AWS MysteryBox secret names, the S3
+endpoint URL and region — are changed by editing `common.sh` if they are shared, or the script
+itself if they are its own. The vendor positional arg selects the container image and `uv` extras:
 
 | Vendor | Image | `uv` extra |
 |---|---|---|

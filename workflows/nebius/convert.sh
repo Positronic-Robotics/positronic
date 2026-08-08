@@ -2,9 +2,9 @@
 # Convert a Positronic dataset into a vendor's LeRobot dataset format
 # as a Nebius Serverless Job.
 #
-# Hardcoded: CPU platform/preset, MysteryBox secret names, S3 endpoint URL.
-# Vendor selects image + uv extra. Override-able via env: NEBIUS_PARENT_ID,
-# NEBIUS_SUBNET_ID.
+# Hardcoded: CPU platform. Vendor selects image + uv extra. Settings of its own,
+# via env: NEBIUS_CPU_PRESET, NEBIUS_JOB_TIMEOUT. Everything shared with the
+# other scripts here lives in common.sh.
 #
 # OpenPI also requires normalization stats. When vendor=openpi, this script
 # blocks until the convert job completes, then submits a second job (in the
@@ -13,15 +13,8 @@
 
 set -euo pipefail
 
-PARENT_ID="${NEBIUS_PARENT_ID:-project-e00f38wexevrr52b8j}"
-SUBNET_ID="${NEBIUS_SUBNET_ID:-vpcsubnet-e00pk1j1x6hjmr4m92}"
-# Shared filesystem (RWX) holding the uv / HF / openpi caches across cold starts.
-# pos3's cache stays on local disk (~/.cache/positronic/s3) — never redirected here.
-CACHE_FS="${NEBIUS_CACHE_FS:-computefilesystem-e00f6jyfr5wkawyrab}"
-# Docker image tag pulled by the job. `make push-*` only updates `:latest` under
-# CI; locally it pushes `:<branch>`/`:<sha>`. To convert with a branch build:
-# `make push-training IMAGE_TAG=<branch>` then run with `NEBIUS_IMAGE_TAG=<branch>`.
-IMAGE_TAG="${NEBIUS_IMAGE_TAG:-latest}"
+source "$(dirname "$0")/common.sh"
+
 # CPU preset + job timeout for the convert job. Bump both for large datasets whose
 # sequential per-episode video encode would otherwise exceed the default timeout
 # (e.g. NEBIUS_CPU_PRESET=16vcpu-64gb NEBIUS_JOB_TIMEOUT=8h).
@@ -103,10 +96,7 @@ CREATE_OUT=$(nebius ai job create \
   --env UV_CACHE_DIR=/cache/uv \
   --env HF_HOME=/cache/hf \
   --env OPENPI_DATA_HOME=/cache/openpi \
-  --env-secret AWS_ACCESS_KEY_ID=positronic-serverless-aws-access-key-id \
-  --env-secret AWS_SECRET_ACCESS_KEY=positronic-serverless-aws-secret-access-key \
-  --env AWS_ENDPOINT_URL=https://storage.eu-north1.nebius.cloud:443 \
-  --env AWS_DEFAULT_REGION=eu-north1)
+  "${S3_ENV_FLAGS[@]}")
 
 echo "$CREATE_OUT"
 
@@ -169,10 +159,7 @@ nebius ai job create \
   --env UV_CACHE_DIR=/cache/uv \
   --env HF_HOME=/cache/hf \
   --env OPENPI_DATA_HOME=/cache/openpi \
-  --env-secret AWS_ACCESS_KEY_ID=positronic-serverless-aws-access-key-id \
-  --env-secret AWS_SECRET_ACCESS_KEY=positronic-serverless-aws-secret-access-key \
-  --env AWS_ENDPOINT_URL=https://storage.eu-north1.nebius.cloud:443 \
-  --env AWS_DEFAULT_REGION=eu-north1
+  "${S3_ENV_FLAGS[@]}"
 
 cat <<EOM
 

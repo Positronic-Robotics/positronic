@@ -1,8 +1,10 @@
 """The inference server: serves a policy pipeline (see ``positronic.policy.spec``) over the offboard protocol."""
 
 import asyncio
+import hmac
 import json
 import logging
+import os
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -12,7 +14,7 @@ from typing import Any
 import configuronic as cfn
 import pos3
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, WebSocketException, status
 from starlette.datastructures import QueryParams
 
 from positronic import keys
@@ -21,6 +23,15 @@ from positronic.policy.spec import SEQ, ModelSource, Pipeline, split
 from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
+
+AUTH_TOKEN_ENV = 'AUTH_TOKEN'
+
+AUTH_HEADER = 'Authorization'
+
+
+def bearer(token: str) -> str:
+    """The ``AUTH_HEADER`` value carrying ``token``."""
+    return f'Bearer {token}'
 
 
 async def _acquire_with_keepalives(lock: asyncio.Lock, websocket: WebSocket | None, message: str):
@@ -176,6 +187,7 @@ class PolicyServer:
         port: int = 8000,
         recording_dir: str | None = None,
         idle_timeout_min: float | None = None,
+        auth_token: str | None = None,
     ):
         self._pipeline_cfg = pipeline if isinstance(pipeline, cfn.Config) else None
         self._pipeline = pipeline.instantiate() if isinstance(pipeline, cfn.Config) else pipeline
@@ -204,12 +216,32 @@ class PolicyServer:
 
         self._default_id: str | None = None
 
+        # ``None`` serves open; empty is a broken secret, so fail closed rather than read as open.
+        if auth_token == '':
+            raise ValueError('auth_token is empty; pass None to serve open, or a real token to gate')
+        self._auth_token = auth_token
+
         self.app = FastAPI()
-        self.app.get('/api/v1/models')(self.get_models)
-        self.app.websocket('/api/v1/session')(self.default_session)
+        http_auth, ws_auth = [Depends(self._require_http_auth)], [Depends(self._require_ws_auth)]
+        self.app.get('/api/v1/models', dependencies=http_auth)(self.get_models)
+        self.app.websocket('/api/v1/session', dependencies=ws_auth)(self.default_session)
         # ``:path`` so an id that is itself a path (a HuggingFace repo, say) opens under the name
         # ``/api/v1/models`` advertises.
-        self.app.websocket('/api/v1/session/{model_id:path}')(self.model_session)
+        self.app.websocket('/api/v1/session/{model_id:path}', dependencies=ws_auth)(self.model_session)
+
+    def _authorized(self, authorization: str | None) -> bool:
+        if self._auth_token is None:
+            return True
+        return authorization is not None and hmac.compare_digest(authorization, bearer(self._auth_token))
+
+    def _require_http_auth(self, authorization: str | None = Header(default=None, alias=AUTH_HEADER)) -> None:
+        if not self._authorized(authorization):
+            raise HTTPException(status_code=401, detail='Invalid or missing bearer token')
+
+    async def _require_ws_auth(self, websocket: WebSocket) -> None:
+        """Rejects before ``accept()``, so an unauthorized peer never reaches the session handshake."""
+        if not self._authorized(websocket.headers.get(AUTH_HEADER)):
+            raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
 
     async def get_models(self) -> dict:
         return {'models': self._source.get_models()}
@@ -388,5 +420,15 @@ def serve(pipeline: cfn.Config, host: str, port: int, recording_dir: str | None,
     Only the socket and the recording taps are flags of their own; everything the served model is —
     codec, source, checkpoint directory — is reached through the pipeline itself
     (``--pipeline.source.checkpoints_dir=...``), so each of those values has exactly one name.
+
+    The bearer token gating the server comes from ``AUTH_TOKEN_ENV`` rather than a flag, which would put
+    a secret in the process arguments; unset serves open.
     """
-    PolicyServer(pipeline, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
+    PolicyServer(
+        pipeline,
+        host=host,
+        port=port,
+        recording_dir=recording_dir,
+        idle_timeout_min=idle_timeout_min,
+        auth_token=os.environ.get(AUTH_TOKEN_ENV),
+    ).serve()

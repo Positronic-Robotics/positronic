@@ -4,11 +4,13 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import configuronic as cfn
+import httpx
 import pytest
+from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
 
 from positronic.offboard.client import InferenceClient, InferenceSession
-from positronic.offboard.server import PolicyServer
+from positronic.offboard.server import AUTH_HEADER, PolicyServer, bearer
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
@@ -373,3 +375,44 @@ def test_duplicate_session_param_keys_rejected(param_server):
     host, port = param_server
     with pytest.raises(RuntimeError, match='[Dd]uplicate'):
         _param_session(host, port, [('pad_start', 'false'), ('pad_start', 'true')])
+
+
+_TOKEN = 'test-secret-token'
+
+
+@pytest.fixture
+def authed_server(start_server, make_mock_policy) -> tuple[str, int]:
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    host, port, _server = start_server(remote | _StubSource(policy), auth_token=_TOKEN)
+    return host, port
+
+
+@pytest.mark.parametrize('headers', [None, {AUTH_HEADER: bearer(f'not-{_TOKEN}')}, {AUTH_HEADER: _TOKEN}])
+def test_auth_rejects_requests_without_the_token(authed_server, headers):
+    host, port = authed_server
+    client = InferenceClient(f'{host}:{port}', headers=headers)
+    with pytest.raises(InvalidStatus):
+        client.new_session()
+    with pytest.raises(httpx.HTTPStatusError):
+        client.list_models()
+
+
+def test_auth_accepts_the_token(authed_server):
+    host, port = authed_server
+    client = InferenceClient(f'{host}:{port}', headers={AUTH_HEADER: bearer(_TOKEN)})
+    assert client.list_models() == ['stub']
+    session = client.new_session()
+    try:
+        assert session.metadata['model_name'] == 'stub'
+    finally:
+        session.close()
+
+
+def test_server_without_a_token_serves_open(stub_server):
+    host, port, _server, _policy = stub_server
+    assert InferenceClient(f'{host}:{port}').list_models() == ['stub']
+
+
+def test_empty_token_fails_closed_at_startup(make_mock_policy):
+    with pytest.raises(ValueError, match='empty'):
+        PolicyServer(remote | _StubSource(make_mock_policy([], {})), auth_token='')

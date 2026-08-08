@@ -238,10 +238,11 @@ bash workflows/nebius/train.sh dreamzero wan22_full_h100x1 \
   --exp_name=<exp_name> \
   --max_steps=30000 --save_steps=2500 --gradient_accumulation_steps=4 --save_total_limit=9999
 
-# Serve (H100 endpoint; the public endpoint is exposed on :8000)
+# Serve (H100 endpoint, reachable at the managed https:// URL the banner prints)
 bash workflows/nebius/serve.sh dreamzero <endpoint-name> joints \
   --pipeline.source.model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
   --pipeline.source.backbone=wan2.2
-# ... infer against the printed endpoint IP with --policy.url=<ip>:8000, then tear down:
+# ... infer with --policy=.authed_remote --policy.url=<managed-url> (export AUTH_TOKEN first,
+# see workflows/nebius/README.md), then tear down:
 bash workflows/nebius/stop.sh <endpoint-name>
 ```
