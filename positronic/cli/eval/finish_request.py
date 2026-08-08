@@ -101,16 +101,6 @@ def request_path(this_run: str) -> Path:
     return request_dir() / f'{FINISH_REQUEST_PREFIX}{this_run}'
 
 
-def names_one_segment(this_run: str) -> bool:
-    """Whether `this_run` can be a filename, which is what scoping the path by run id requires.
-
-    A run id carrying a separator would address a file in a directory nobody agreed on — under the
-    request directory for a relative one, and anywhere at all for `..` — so a run named that way is
-    left with no poller rather than polling somewhere unintended.
-    """
-    return bool(this_run) and this_run not in ('.', '..') and '/' not in this_run and '\0' not in this_run
-
-
 def run_id() -> str | None:
     """This run's identity, or None where nothing gave it one."""
     return os.environ.get(RUN_ID_ENV) or None
@@ -189,6 +179,16 @@ class FinishRequest(pimm.ControlSystem):
                 # emit that landed before it bound would be a request that silently never arrives.
                 self.requested.emit(True, clock.now_ns())
             yield pimm.Sleep(self._poll_interval_s)
+
+
+def names_one_segment(this_run: str) -> bool:
+    """Whether `this_run` can be a filename, which is what scoping the path by run id requires.
+
+    A run id carrying a separator would address a file in a directory nobody agreed on — under the
+    request directory for a relative one, and anywhere at all for `..` — so a run named that way is
+    left with no poller rather than polling somewhere unintended.
+    """
+    return bool(this_run) and this_run not in ('.', '..') and '/' not in this_run and '\0' not in this_run
 
 
 def from_env() -> FinishRequest | None:
