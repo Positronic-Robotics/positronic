@@ -1,15 +1,13 @@
 """Ending an attended run from outside it, without a signal.
 
-An attended run is ended by its operator surface: the web console POSTs `/finish_run` to itself.
-A run driven by the local eval UI has no such surface — it serves no port — so the only way to end
-one from outside the process was a signal, and a signal is not a finish: nothing unwinds the World,
-so the recording is not closed, the dataset is not uploaded, and the arm is left as it stands with
-its control token held.
+An attended run is ended by its operator surface: the web console POSTs `/finish_run` to itself. A
+run driven by the local eval UI serves no port, and this is the surface an orchestrator ends one
+through. It writes a small file; the run polls it and, once the episode in progress has completed,
+stops the way a plan running out stops. What follows is the ordinary shutdown — the World unwinds,
+the recorder commits, the mirror uploads on process exit, and the arm's driver releases control.
 
-This is the surface an orchestrator uses instead. It writes a small file; the run polls it and, once
-the episode in progress has completed, stops the way a plan running out stops. What follows is the
-ordinary shutdown — the World unwinds, the recorder commits, the mirror uploads on process exit, and
-the arm's driver releases control.
+A signal is not an alternative to it: nothing unwinds the World, so the recording is not closed, the
+dataset is not uploaded, and the arm keeps its control token.
 
 THE CONTRACT, which a writer in another repository implements against:
 
@@ -59,6 +57,7 @@ import json
 import logging
 import os
 import time
+from enum import StrEnum
 from pathlib import Path
 
 import pimm
@@ -69,16 +68,22 @@ logger = logging.getLogger(__name__)
 # test, or a rig running more than one simulated run, can use a directory of its own rather than the
 # one tmpfs every run on a machine shares.
 FINISH_REQUEST_DIR_ENV = 'ROLLOUT_FINISH_REQUEST_DIR'
-DEFAULT_FINISH_REQUEST_DIR = '/run/lock'
+DEFAULT_FINISH_REQUEST_DIR = Path('/run/lock')
 FINISH_REQUEST_PREFIX = 'positronic_rollout_finish.'
 # The run's own identity, set by whatever launched it. Its absence is what makes this inert.
 RUN_ID_ENV = 'ROLLOUT_RUN_ID'
 
-# The object's two required fields and the only action understood. A second action (discard the open
-# episode and stop) would be a new value here rather than a second file.
+# The object's two required fields, and the closed set of actions it may name. A second action
+# (discard the open episode and stop) is a new member here rather than a second file. The wire form
+# is the member's value, converted once in `evaluate`, so an unknown one is a refusal rather than a
+# string carried further in.
 ACTION_KEY = 'action'
 RUN_ID_KEY = 'run_id'
-FINISH_ACTION = 'finish'
+
+
+class Action(StrEnum):
+    FINISH = 'finish'
+
 
 # How often the file is read. The wait it adds to a finish is bounded by this, and the cost of it is
 # one `open` on tmpfs, so it is short enough not to be noticed and long enough not to matter.
@@ -93,7 +98,9 @@ ACK_LOG_MARKER = 'rollout finish request granted'
 
 
 def request_dir() -> Path:
-    return Path(os.environ.get(FINISH_REQUEST_DIR_ENV, DEFAULT_FINISH_REQUEST_DIR))
+    """Where requests are read from — the env override converted here, where the string enters."""
+    override = os.environ.get(FINISH_REQUEST_DIR_ENV)
+    return Path(override) if override else DEFAULT_FINISH_REQUEST_DIR
 
 
 def request_path(this_run: str) -> Path:
@@ -119,9 +126,12 @@ def evaluate(path: Path, this_run: str) -> tuple[bool, str]:
         raw = path.read_text()
     except FileNotFoundError:
         return False, ''
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         # Unreadable is not absent: a request written by another account with a restrictive umask
-        # lands here, and it is the one negative a reader cannot fix by waiting.
+        # lands here, and it is the one negative a reader cannot fix by waiting. Bytes that are not
+        # UTF-8 land here too, and are the same answer — `UnicodeDecodeError` is a `ValueError`
+        # rather than an `OSError`, so uncaught it would leave this control system and take the
+        # World down mid-episode, which is the one thing this module must never do.
         return False, f'finish request at {path} could not be read ({e}); continuing to run'
     try:
         request = json.loads(raw)
@@ -129,9 +139,12 @@ def evaluate(path: Path, this_run: str) -> tuple[bool, str]:
         return False, f'finish request at {path} did not parse ({e}); continuing to run'
     if not isinstance(request, dict):
         return False, f'finish request at {path} is {type(request).__name__}, not an object; continuing to run'
-    if request.get(ACTION_KEY) != FINISH_ACTION:
-        action = request.get(ACTION_KEY)
-        return False, f'finish request at {path} names action {action!r}, not {FINISH_ACTION!r}; continuing to run'
+    action = request.get(ACTION_KEY)
+    if action != Action.FINISH:
+        return (
+            False,
+            f'finish request at {path} names action {action!r}, not {Action.FINISH.value!r}; continuing to run',
+        )
     addressee = request.get(RUN_ID_KEY)
     if addressee != this_run:
         # The stale-request case, and the only one that is routine rather than a fault: a previous
@@ -157,24 +170,29 @@ class FinishRequest(pimm.ControlSystem):
         # on every poll for the life of the run. Reported again when the reason CHANGES, which is what
         # a replaced file looks like from here.
         self._reported = ''
+        # Whether the request has been granted, on the INSTANCE rather than in `run`. One object is
+        # built per invocation and handed to every World of a sweep, so a local would reset at each
+        # World and the run would have to re-read the file to know it had been asked — which it can
+        # only do while the file is still there. A request addresses the RUN, and a run is one run
+        # however many Worlds it raises.
+        self._granted = False
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         # Paced on the WALL clock, not the world's. Under virtual time the world runs as fast as the
         # machine allows, so a `Sleep` of two simulated seconds is no wait at all and this would read
         # the file on a tight loop.
         last_read = 0.0
-        granted = False
         while not should_stop.value:
-            if not granted and time.monotonic() - last_read >= self._poll_interval_s:
+            if not self._granted and time.monotonic() - last_read >= self._poll_interval_s:
                 last_read = time.monotonic()
-                granted, reason = evaluate(self._path, self._run)
-                if granted:
+                self._granted, reason = evaluate(self._path, self._run)
+                if self._granted:
                     logger.info('%s: run %s stops after the current episode', ACK_LOG_MARKER, self._run)
                 elif reason != self._reported:
                     self._reported = reason
                     if reason:
                         logger.error(reason)
-            if granted:
+            if self._granted:
                 # Re-emitted every round rather than once: the harness reads a signal, and a single
                 # emit that landed before it bound would be a request that silently never arrives.
                 self.requested.emit(True, clock.now_ns())

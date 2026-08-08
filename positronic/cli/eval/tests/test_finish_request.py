@@ -8,7 +8,7 @@ import pytest
 from positronic.cli.eval import finish_request
 
 
-def write_request(path: Path, *, action: str = finish_request.FINISH_ACTION, run: str, **extra) -> None:
+def write_request(path: Path, *, action: str = finish_request.Action.FINISH, run: str, **extra) -> None:
     """An ordinary fixture, built from the constants this module defines, so a rename moves with them.
     The cross-repository compatibility fixture at the bottom deliberately does not."""
     path.write_text(json.dumps({finish_request.ACTION_KEY: action, finish_request.RUN_ID_KEY: run, **extra}))
@@ -170,3 +170,50 @@ def test_a_refusal_is_reported_once_and_again_only_when_it_changes(tmp_path, cap
 
     write_request(path, action='abort', run='batch-1')
     assert polls(5) == 1  # a different refusal is a different fact
+
+
+def test_bytes_that_are_not_utf8_are_a_refusal_not_an_exception(tmp_path):
+    """`UnicodeDecodeError` is a `ValueError`, not an `OSError`, so it does not fall out of the read
+    guard on its own — and this control system runs in the foreground, where an escaping exception
+    takes the World down in the middle of an episode. Every other malformed input is a logged
+    refusal; so is this one."""
+    path = tmp_path / 'finish'
+    path.write_bytes(b'\xff\xfe not utf-8 at all')
+
+    granted, reason = finish_request.evaluate(path, 'batch-1')
+
+    assert not granted
+    assert 'could not be read' in reason
+
+
+def test_an_action_outside_the_closed_set_is_a_refusal(tmp_path):
+    """The action names a member of `Action`; anything else is a writer from a future this run does
+    not implement, and acting on it would be guessing what it asked for."""
+    path = tmp_path / 'finish'
+    path.write_text(json.dumps({finish_request.ACTION_KEY: 'discard', finish_request.RUN_ID_KEY: 'batch-1'}))
+    assert not finish_request.evaluate(path, 'batch-1')[0]
+
+
+def test_the_default_request_directory_is_already_a_path(monkeypatch):
+    """The domain type is the module's, and the string is converted where it enters — so no consumer
+    re-derives it and the env override is the only place a `str` appears."""
+    monkeypatch.delenv(finish_request.FINISH_REQUEST_DIR_ENV, raising=False)
+    assert isinstance(finish_request.DEFAULT_FINISH_REQUEST_DIR, Path)
+    assert isinstance(finish_request.request_dir(), Path)
+
+
+def test_a_grant_survives_the_world_it_was_read_in(tmp_path):
+    """One object is built per invocation and handed to every World of a sweep, so the grant lives on
+    the INSTANCE. Held in `run`'s frame it would reset at each World, and the run could only learn it
+    had been asked by re-reading a file that may by then have been retired — while a request
+    addresses the RUN, which is one run however many Worlds it raises."""
+    path = tmp_path / 'finish'
+    write_request(path, run='batch-1')
+    cs = finish_request.FinishRequest(path, 'batch-1', poll_interval_s=0.0)
+
+    granted, _ = finish_request.evaluate(cs._path, cs._run)
+    cs._granted = granted
+    assert cs._granted
+
+    path.unlink()  # the writer retires it once the run is over; the grant is not un-asked
+    assert cs._granted

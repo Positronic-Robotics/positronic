@@ -139,7 +139,7 @@ class _EpisodeTelemetry:
 
 
 # How long after a home is commanded a requested finish waits before stopping the World. Covers the
-# travel an embodiment's home motion takes; see ``Harness._may_finish`` for why it is a bound rather
+# travel an embodiment's home motion takes; see ``Harness._wind_down`` for why it is a bound rather
 # than a report of arrival.
 FINISH_HOME_GRACE_NS = int(10.0 * 1e9)
 

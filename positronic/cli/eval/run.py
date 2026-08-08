@@ -130,11 +130,16 @@ def _run_world(
         # yields a Sleep, which the scheduler wakes from at the nearest deadline, so it paces nothing; as a
         # background control system it would be a subprocess whose only job is one `open`, and under the
         # virtual clock it would not share the world's timeline with the harness it answers.
+        #
+        # BEFORE the harness, because the harness reads the signal this emits and the first round decides
+        # whether to open an episode. Scheduled after, a request that is already there when the World
+        # starts — every World of a sweep after the first — is not visible until the harness has begun
+        # one, so the finish waits out an episode nobody asked for.
         watch = [finish] if finish is not None else []
         if embodiment.simulated:
-            world.run([*foreground, harness, ds_agent, *producers, *watch], gui)
+            world.run([*foreground, *watch, harness, ds_agent, *producers], gui)
         else:
-            world.run([harness, *foreground, *watch], [*producers, ds_agent, gui])
+            world.run([*watch, harness, *foreground], [*producers, ds_agent, gui])
 
 
 def _validate_timing(embodiments: Iterable[Embodiment], output_dir: str | Path | None) -> None:
