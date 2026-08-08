@@ -85,10 +85,6 @@ class Action(StrEnum):
     FINISH = 'finish'
 
 
-# Iterated rather than restated, so a member added above is understood here without a second edit.
-_ACTIONS = frozenset(Action)
-
-
 # How often the file is read. The wait it adds to a finish is bounded by this, and the cost of it is
 # one `open` on tmpfs, so it is short enough not to be noticed and long enough not to matter.
 POLL_INTERVAL_S = 2.0
@@ -107,14 +103,8 @@ MAX_REQUEST_BYTES = 64 * 1024
 
 # EVERY way a file can fail to become a request, named once. `OSError` is the file itself — a
 # permission, an I/O error, a directory in its place. `ValueError` covers the decode
-# (`UnicodeDecodeError`), the parse (`JSONDecodeError`) and an action outside the closed set, all
-# three of which are `ValueError` subclasses. `RecursionError` is the JSON parser's own nesting
-# limit, which a corrupt or hostile file reaches and which is not a `ValueError` at all.
-#
-# Listed rather than discovered one exception at a time, because this runs in the FOREGROUND: a
-# reader that raises anywhere in here does not merely fail to read a request, it takes the World
-# down in the middle of an episode. `evaluate` catches this set around the WHOLE read, so a shape
-# nobody enumerated is still a refusal rather than a crash.
+# (`UnicodeDecodeError`) and the parse (`JSONDecodeError`), both subclasses of it. `RecursionError`
+# is the JSON parser's own nesting limit, which is not a `ValueError` at all.
 UNREADABLE = (OSError, ValueError, RecursionError)
 
 
@@ -143,11 +133,9 @@ def evaluate(path: Path, this_run: str) -> tuple[bool, str]:
     than logged here so the caller can report a persistent one once instead of on every poll —
     a request addressed to a dead run would otherwise fill the log for the life of this one.
 
-    IT IS TOTAL. Any failure to turn the file into a request addressed to this run is a refusal, and
-    that is a property of ONE boundary (`UNREADABLE`) rather than of the shapes anyone thought to
-    list: the staged checks below give a good reason for the shapes worth naming, and the boundary
-    answers for the rest. It has to be total because it runs in the foreground — an exception here
-    ends the World mid-episode, which is exactly what this module exists to prevent.
+    It is TOTAL: any failure to read the file as a request addressed to this run is a refusal, since
+    an exception here ends the World mid-episode. `_read`'s staged checks name the shapes worth a
+    reason of their own; `UNREADABLE` answers for the rest.
     """
     try:
         return _read(path, this_run)
@@ -156,6 +144,11 @@ def evaluate(path: Path, this_run: str) -> tuple[bool, str]:
         return False, ''
     except UNREADABLE as e:
         return False, f'finish request at {path} could not be read as a request ({e!r}); continuing to run'
+
+
+# Iterated rather than restated, so a member added to `Action` is understood here without a second
+# edit.
+_ACTIONS = frozenset(Action)
 
 
 def _read(path: Path, this_run: str) -> tuple[bool, str]:

@@ -260,7 +260,13 @@ _UNREADABLE_SHAPES = [
     (_write_bytes(b'[1, 2, 3]'), 'a JSON array rather than an object'),
     (_write_bytes(b'[' * 200_000), 'nesting past the parser limit (RecursionError)'),
     (
-        _write_bytes(b'{"action": "finish", "pad": "' + b'x' * (finish_request.MAX_REQUEST_BYTES + 10) + b'"}'),
+        lambda p: p.write_text(
+            json.dumps({
+                finish_request.ACTION_KEY: finish_request.Action.FINISH,
+                finish_request.RUN_ID_KEY: 'batch-1',
+                'pad': 'x' * (finish_request.MAX_REQUEST_BYTES + 10),
+            })
+        ),
         'a file past the size bound',
     ),
     (
