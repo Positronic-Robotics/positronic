@@ -86,23 +86,43 @@ def test_an_empty_run_id_installs_nothing(monkeypatch):
     assert finish_request.from_env() is None
 
 
-def test_the_run_id_and_path_come_from_the_environment(monkeypatch, tmp_path):
+def test_the_run_id_and_directory_come_from_the_environment(monkeypatch, tmp_path):
     monkeypatch.setenv(finish_request.RUN_ID_ENV, 'batch-7')
-    monkeypatch.setenv(finish_request.FINISH_REQUEST_PATH_ENV, str(tmp_path / 'elsewhere'))
+    monkeypatch.setenv(finish_request.FINISH_REQUEST_DIR_ENV, str(tmp_path))
     cs = finish_request.from_env()
     assert cs is not None
     assert cs._run == 'batch-7'
-    assert cs._path == tmp_path / 'elsewhere'
+    assert cs._path == tmp_path / f'{finish_request.FINISH_REQUEST_PREFIX}batch-7'
+
+
+def test_the_path_names_the_run_so_two_runs_never_share_one(monkeypatch, tmp_path):
+    """The property the whole mechanism rests on. One rig-wide path is a cell every run writes and
+    only one account may replace, so a file left by an ended run is the next run's finish refused.
+    Named per run, a leftover addresses a reader that will never exist again."""
+    monkeypatch.setenv(finish_request.FINISH_REQUEST_DIR_ENV, str(tmp_path))
+    assert finish_request.request_path('batch-1') != finish_request.request_path('batch-2')
+    write_request(finish_request.request_path('batch-1'), run='batch-1')
+    assert finish_request.evaluate(finish_request.request_path('batch-1'), 'batch-1')[0]
+    assert not finish_request.evaluate(finish_request.request_path('batch-2'), 'batch-2')[0]
 
 
 def test_the_default_path_is_absolute_and_on_tmpfs(monkeypatch):
     """Both properties are load-bearing and neither is visible at a call site: an account-relative
     path would be a different file for the writer and the run, and a persistent one would let a
     request outlive the reboot that was supposed to clear it."""
-    monkeypatch.delenv(finish_request.FINISH_REQUEST_PATH_ENV, raising=False)
-    path = finish_request.request_path()
+    monkeypatch.delenv(finish_request.FINISH_REQUEST_DIR_ENV, raising=False)
+    path = finish_request.request_path('batch-1')
     assert path.is_absolute()
     assert str(path).startswith('/run/')
+
+
+@pytest.mark.parametrize('run', ['a/b', '../elsewhere', '.', '..', ''])
+def test_a_run_id_that_is_not_a_filename_installs_nothing(monkeypatch, run):
+    """The path is built from the run id, so an id carrying a separator would poll a file under a
+    directory nobody agreed on — or, for `..`, outside the request directory entirely. Such a run
+    keeps running with no poller, which is this module's failure direction everywhere else."""
+    monkeypatch.setenv(finish_request.RUN_ID_ENV, run)
+    assert finish_request.from_env() is None
 
 
 def test_the_object_the_writer_sends_is_granted(tmp_path):
@@ -115,7 +135,7 @@ def test_the_object_the_writer_sends_is_granted(tmp_path):
     there produces a run that ignores every request it is sent, silently, and the first sign of it is
     a rollout nobody can stop.
     """
-    path = tmp_path / 'positronic_rollout_finish'
+    path = tmp_path / 'positronic_rollout_finish.batch_20260807-111935'
     # rules-allow: hardcoded-keys — the literals ARE the pin. Built from this module's constants it
     # would assert only that the module agrees with itself; spelled out, a rename on either side of
     # the contract fails one of the two tests that name it.

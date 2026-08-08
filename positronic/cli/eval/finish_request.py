@@ -13,20 +13,38 @@ the arm's driver releases control.
 
 THE CONTRACT, which a writer in another repository implements against:
 
-  path     `/run/lock/positronic_rollout_finish`, overridable by `ROLLOUT_FINISH_REQUEST_PATH`.
-           Absolute, because the writer and the run are different accounts on a rig that gives each
-           actor its own home — a `$HOME`-relative path is a different file per actor and reaches
-           nobody. On tmpfs, so a request cannot outlive a reboot as stale state, and in a
-           world-writable sticky directory, so neither account needs root or a shared group.
+  path     `<dir>/positronic_rollout_finish.<run_id>`, where `<dir>` is `/run/lock` unless
+           `ROLLOUT_FINISH_REQUEST_DIR` names another. Absolute, because the writer and the run are
+           different accounts on a rig that gives each actor its own home — a `$HOME`-relative path
+           is a different file per actor and reaches nobody. On tmpfs, so a request cannot outlive a
+           reboot, and in a world-writable sticky directory, so neither account needs root or a
+           shared group.
+
+           PER RUN, which is what makes a leftover inert. One rig-wide path is a shared mutable
+           cell: a file left by a run that has ended names a run nobody will start again, yet in a
+           sticky directory only its creating account may replace it, so the next run under another
+           account cannot write its own request and has no clean exit at all. Scoped by run id,
+           every request is addressed to exactly one reader, no reader ever sees another's, and
+           removal stops being part of correctness — it is hygiene, and the reboot that clears the
+           tmpfs is the only cleanup anyone needs.
+
+           `run_id` is therefore ONE PATH SEGMENT: no separator, and not `.` or `..`. A run named
+           otherwise installs no poller rather than reading a path it did not mean.
   content  one JSON object: `{"action": "finish", "run_id": "<id>"}`. Further keys are ignored, so a
            writer may record its own diagnostics (when it asked, who asked) without a format change.
-  writer   creates and REMOVES it, world-readable (mode 0644 — a `077` umask would leave it 0600 and
-           unreadable by the run, which is silent). The run never writes or unlinks it: the sticky
-           bit means only the owner can, so a run that tried would fail every time.
+  writer   creates it, world-readable (mode 0644 — a `077` umask would leave it 0600 and unreadable
+           by the run, which is silent). The run never writes or unlinks it: the sticky bit means
+           only the owner can, so a run that tried would fail every time.
   reader   this module, in the run's process, read-only.
-  identity `run_id` must equal the run's own `ROLLOUT_RUN_ID`. Without it a request left behind by a
-           crashed writer would end the NEXT run the instant it started, and the two are hard to tell
-           apart afterwards: both are clean finishes with fewer episodes than asked for.
+  identity `run_id` must equal the run's own `ROLLOUT_RUN_ID`. The path already names it, and the
+           content is checked anyway: the two disagree only where a file was copied or a directory
+           override collided, and a run stopped by a request that was never addressed to it is
+           indistinguishable afterwards from one that finished early on its own.
+  intent   MONOTONIC. A request, once made, is never withdrawn — there is no un-ask, and no content
+           that means "carry on". A writer whose write may or may not have landed therefore
+           re-asserts it rather than retracting it, and a reader needs no protocol for a request
+           that changes its mind. It is why the file can be a rendering of the writer's own record
+           rather than the record itself: asserting it twice is asserting it once.
 
 It FAILS CLOSED, where closed means the run keeps running: an absent file, an unreadable one, one
 that does not parse, one naming another run, and one whose action is not `finish` are all ignored,
@@ -47,10 +65,12 @@ import pimm
 
 logger = logging.getLogger(__name__)
 
-# The default path. Overridable so a test, or a rig running more than one simulated run, can use a
-# directory of its own rather than the one real path every run on a machine would share.
-FINISH_REQUEST_PATH_ENV = 'ROLLOUT_FINISH_REQUEST_PATH'
-DEFAULT_FINISH_REQUEST_PATH = '/run/lock/positronic_rollout_finish'
+# The directory requests are written into, and the name each one takes inside it. Overridable so a
+# test, or a rig running more than one simulated run, can use a directory of its own rather than the
+# one tmpfs every run on a machine shares.
+FINISH_REQUEST_DIR_ENV = 'ROLLOUT_FINISH_REQUEST_DIR'
+DEFAULT_FINISH_REQUEST_DIR = '/run/lock'
+FINISH_REQUEST_PREFIX = 'positronic_rollout_finish.'
 # The run's own identity, set by whatever launched it. Its absence is what makes this inert.
 RUN_ID_ENV = 'ROLLOUT_RUN_ID'
 
@@ -72,8 +92,23 @@ POLL_INTERVAL_S = 2.0
 ACK_LOG_MARKER = 'rollout finish request granted'
 
 
-def request_path() -> Path:
-    return Path(os.environ.get(FINISH_REQUEST_PATH_ENV, DEFAULT_FINISH_REQUEST_PATH))
+def request_dir() -> Path:
+    return Path(os.environ.get(FINISH_REQUEST_DIR_ENV, DEFAULT_FINISH_REQUEST_DIR))
+
+
+def request_path(this_run: str) -> Path:
+    """Where a request addressed to `this_run` is read from — the whole of the path contract."""
+    return request_dir() / f'{FINISH_REQUEST_PREFIX}{this_run}'
+
+
+def names_one_segment(this_run: str) -> bool:
+    """Whether `this_run` can be a filename, which is what scoping the path by run id requires.
+
+    A run id carrying a separator would address a file in a directory nobody agreed on — under the
+    request directory for a relative one, and anywhere at all for `..` — so a run named that way is
+    left with no poller rather than polling somewhere unintended.
+    """
+    return bool(this_run) and this_run not in ('.', '..') and '/' not in this_run and '\0' not in this_run
 
 
 def run_id() -> str | None:
@@ -161,6 +196,11 @@ def from_env() -> FinishRequest | None:
     this_run = run_id()
     if this_run is None:
         return None
-    path = request_path()
+    if not names_one_segment(this_run):
+        logger.error(
+            '%s=%r is not a single path segment, so no finish request can address this run', RUN_ID_ENV, this_run
+        )
+        return None
+    path = request_path(this_run)
     logger.info('run %s will stop after the current episode if %s asks it to', this_run, path)
     return FinishRequest(path, this_run)
