@@ -185,11 +185,7 @@ class FinishRequest(pimm.ControlSystem):
 
     @property
     def granted(self) -> bool:
-        """Whether a request addressed to this run has been granted.
-
-        The harness ends the World it is in; only the caller raising them knows there are more, so
-        this is what lets a sweep stop rather than build the rest.
-        """
+        """Whether a request addressed to this run has been granted."""
         return self._granted
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):

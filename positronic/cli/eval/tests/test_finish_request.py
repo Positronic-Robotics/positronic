@@ -220,10 +220,7 @@ def test_a_grant_survives_the_world_it_was_read_in(tmp_path):
 
 
 def test_a_sweep_can_read_the_grant_without_entering_a_world(tmp_path):
-    """The harness ends the World it is in, and only the loop raising them knows there are more.
-
-    Without this the sweep goes on building every later World: each starts its producers, commands a
-    real arm home and waits out the travel, for an eval nobody is going to score."""
+    """The grant is readable outside a World, which is where a sweep decides whether to raise one."""
     path = tmp_path / 'finish'
     cs = finish_request.FinishRequest(path, 'batch-1', poll_interval_s=0.0)
     assert cs.granted is False
