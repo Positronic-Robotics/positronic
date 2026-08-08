@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from dataclasses import replace
 from functools import partial
 from types import SimpleNamespace
 from typing import Any, cast
@@ -30,7 +31,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import Directive, DirectiveType, Harness
+from positronic.policy.harness import FINISH_HOME_GRACE_NS, Directive, DirectiveType, Harness
 from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -1592,3 +1593,170 @@ def test_a_later_episode_waits_for_its_own_first_observation(world, tmp_path):
     episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     assert len(episodes) == 2
     assert episodes[1].attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S] < gap_s
+
+
+# --- ending a run from outside it: one wind-down, reached for either reason --------------------
+
+
+@pytest.mark.timeout(10.0)
+def test_a_finish_request_ends_an_idle_run(world):
+    """The whole point of the request: a run with no operator surface to post at still ends the way a
+    plan running out ends — the loop returns, so the World unwinds, the recorder commits and the
+    mirror uploads, none of which a signal does."""
+    harness = Harness(SpyPolicy(), make_embodiment())
+    _pair_all(world, harness)
+    finish_em = world.pair(harness.finish_requested)
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=3)  # the pre-first-episode home
+    finish_em.emit(True)
+    drive_scheduler(scheduler, steps=2000)
+
+    with pytest.raises(StopIteration):
+        next(scheduler)
+
+
+@pytest.mark.timeout(10.0)
+def test_a_finish_gives_the_arm_its_home_travel_before_the_world_stops(world):
+    """`_home` publishes targets and returns, so the arm is still moving when the loop breaks. The
+    World unwinding under it parks the brakes wherever it got to, which is what the wind-down's wait
+    exists to prevent — measured on the clock, since that is what the arm travels against."""
+    harness = Harness(SpyPolicy(), make_embodiment())
+    _pair_all(world, harness)
+    finish_em = world.pair(harness.finish_requested)
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=3)
+    homed_at = harness._homed_at_ns
+    finish_em.emit(True)
+    drive_scheduler(scheduler, steps=2000)
+
+    assert world.clock.now_ns() - homed_at >= FINISH_HOME_GRACE_NS
+
+
+@pytest.mark.timeout(10.0)
+def test_a_simulated_run_does_not_wait_for_a_motion_it_never_makes(world):
+    """A sim has no travel to finish, and its clock advances only when something asks it to — so a
+    wait measured on it is one nothing ever satisfies."""
+    embodiment = replace(make_embodiment(), simulated=True)
+    harness = Harness(SpyPolicy(), embodiment)
+    _pair_all(world, harness)
+    finish_em = world.pair(harness.finish_requested)
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=3)
+    finish_em.emit(True)
+    before = world.clock.now()
+    drive_scheduler(scheduler, steps=2000)
+
+    with pytest.raises(StopIteration):
+        next(scheduler)
+    assert world.clock.now() - before < FINISH_HOME_GRACE_NS / 1e9
+
+
+@pytest.mark.timeout(10.0)
+def test_a_finish_after_a_manual_command_homes_the_arm_before_stopping(world):
+    """`_apply_manual` publishes a pose and nothing homes after it — an episode's own `_end_episode`
+    does, and a jog happens between episodes. So the arm sits where the operator put it, and a stop
+    that did not re-home would end the run there and start the next one from a pose nothing recorded."""
+    harness = Harness(SpyPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    manual_em = world.pair(harness.manual_command)
+    finish_em = world.pair(harness.finish_requested)
+    home_pose = make_embodiment().home[keys.ROBOT_COMMAND]
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=3)
+    manual_em.emit({keys.ROBOT_COMMAND: CartesianPosition(pose=Transform3D())})
+    drive_scheduler(scheduler, steps=3)
+    assert harness._moved_since_home  # the jog landed and nothing homed after it
+
+    finish_em.emit(True)
+    drive_scheduler(scheduler, steps=2000)
+
+    # The last thing commanded is the home pose, not the operator's jog.
+    last = p['command_rx'].read().data[-1][1]
+    assert last == home_pose
+    assert not harness._moved_since_home
+
+
+@pytest.mark.timeout(10.0)
+def test_a_pending_finish_stops_a_trial_plan_instead_of_starting_another_episode(world):
+    """A request taken AFTER the plan advances starts one more episode and is then blocked by it —
+    and since a trial ends on its own budget, on a long plan that is the difference between ending
+    the run now and not being able to end it at all."""
+    trials = [{'seed': i} for i in range(50)]
+    plan = iter(trials)
+    harness = Harness(SpyPolicy(), make_embodiment(), task=Task(instruction='test', timeout=100.0), trials=plan)
+    p = _pair_all(world, harness)
+    finish_em = world.pair(harness.finish_requested)
+
+    scheduler = world.start([harness])
+    finish_em.emit(True)
+    drive_scheduler(scheduler, steps=2000)
+
+    with pytest.raises(StopIteration):
+        next(scheduler)
+    assert not harness._running
+    # The plan never advanced: no episode was opened, so nothing of it reached the dataset.
+    assert DsWriterCommandType.START_EPISODE not in [c.type for c in _ds_commands(p)]
+    assert next(plan) == {'seed': 0}  # the whole plan is still ahead of it
+
+
+@pytest.mark.timeout(10.0)
+def test_a_queued_directive_is_handled_before_a_pending_finish(world):
+    """The directive read runs every round, ahead of the idle decision, so an operator press that
+    arrived in the same round is acted on rather than dropped by a stop taken beside it."""
+    harness = Harness(SpyPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    finish_em = world.pair(harness.finish_requested)
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=3)
+    finish_em.emit(True)
+    p['directive_em'].emit(Directive.RUN(task='t'))
+    drive_scheduler(scheduler, steps=2)
+
+    assert harness._running  # her episode started; the finish waits for it
+
+
+@pytest.mark.timeout(10.0)
+def test_a_finish_request_does_not_truncate_the_episode_in_progress(world):
+    """The property that makes this a finish rather than a kill. A request arriving mid-episode must
+    not close the recording where it stands: the loop's exit path finalizes whatever is open, so a
+    half-episode would land in the dataset indistinguishable from one the policy actually failed."""
+    harness = Harness(SpyPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    finish_em = world.pair(harness.finish_requested)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    scheduler = world.start([harness])
+    p['directive_em'].emit(Directive.RUN(task='t'))
+    drive_scheduler(scheduler, steps=2)
+    emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
+    drive_scheduler(scheduler, steps=5)
+
+    finish_em.emit(True)
+    drive_scheduler(scheduler, steps=2000)
+
+    assert harness._running
+    assert DsWriterCommandType.STOP_EPISODE not in [c.type for c in _ds_commands(p)]
+
+    # The operator's own FINISH closes the episode; only then does the run end.
+    p['directive_em'].emit(Directive.FINISH())
+    drive_scheduler(scheduler, steps=2000)
+    assert DsWriterCommandType.STOP_EPISODE in [c.type for c in _ds_commands(p)]
+    with pytest.raises(StopIteration):
+        next(scheduler)
+
+
+@pytest.mark.timeout(10.0)
+def test_an_unrequested_run_never_ends_itself(world):
+    """The receiver defaults to False, so every run nobody asked to end is untouched by this path."""
+    harness = Harness(SpyPolicy(), make_embodiment())
+    _pair_all(world, harness)
+
+    scheduler = world.start([harness])
+    drive_scheduler(scheduler, steps=2000)
+
+    next(scheduler)  # still going
