@@ -243,3 +243,65 @@ def test_the_action_arrives_as_the_enum_not_the_string_it_was_written_as(tmp_pat
     path.write_text(json.dumps({finish_request.RUN_ID_KEY: 'batch-1'}))  # no action at all
     granted, reason = finish_request.evaluate(path, 'batch-1')
     assert not granted and 'does not implement' in reason
+
+
+# Every way a file can fail to become a request, as a table rather than a test per discovery. The
+# class is what matters, not the members: this reader runs in the FOREGROUND, so an exception it
+# does not answer for ends the World in the middle of an episode. Each entry writes the file itself,
+# because what is under test is the read, not a fixture's idea of one.
+def _write_bytes(b: bytes):
+    return lambda p: p.write_bytes(b)
+
+
+_UNREADABLE_SHAPES = [
+    (_write_bytes(b'\xff\xfe not utf-8'), 'bytes that are not UTF-8 (UnicodeDecodeError)'),
+    (_write_bytes(b'finish please'), 'text that is not JSON (JSONDecodeError)'),
+    (_write_bytes(b'"finish"'), 'a JSON scalar rather than an object'),
+    (_write_bytes(b'[1, 2, 3]'), 'a JSON array rather than an object'),
+    (_write_bytes(b'[' * 200_000), 'nesting past the parser limit (RecursionError)'),
+    (
+        _write_bytes(b'{"action": "finish", "pad": "' + b'x' * (finish_request.MAX_REQUEST_BYTES + 10) + b'"}'),
+        'a file past the size bound',
+    ),
+    (
+        lambda p: p.write_text(
+            json.dumps({finish_request.ACTION_KEY: 'discard', finish_request.RUN_ID_KEY: 'batch-1'})
+        ),
+        'an action outside the closed set',
+    ),
+    (lambda p: p.write_text(json.dumps({finish_request.RUN_ID_KEY: 'batch-1'})), 'no action at all'),
+    (
+        lambda p: p.write_text(
+            json.dumps({finish_request.ACTION_KEY: 'finish', finish_request.RUN_ID_KEY: 'someone-else'})
+        ),
+        'a request addressed to another run',
+    ),
+    (lambda p: p.write_text(json.dumps({finish_request.ACTION_KEY: 'finish'})), 'no addressee at all'),
+]
+
+
+@pytest.mark.parametrize(('write', 'shape'), _UNREADABLE_SHAPES, ids=[s[1].split(' (')[0] for s in _UNREADABLE_SHAPES])
+def test_no_unreadable_request_ever_raises_out_of_the_reader(tmp_path, write, shape):
+    """Total: every one of these is a refusal that leaves the run going, and none is an exception."""
+    path = tmp_path / 'finish'
+    write(path)
+
+    granted, reason = finish_request.evaluate(path, 'batch-1')
+
+    assert not granted, shape
+    assert reason, f'a refusal says why, for the log: {shape}'
+
+
+def test_the_unreadable_boundary_answers_for_a_shape_nobody_listed(tmp_path, monkeypatch):
+    """The list above is what is known; the boundary is what makes the read total. A parse that
+    raises something new still refuses rather than ending the World."""
+    path = tmp_path / 'finish'
+    write_request(path, run='batch-1')
+
+    def _boom(_raw):
+        raise RecursionError('maximum recursion depth exceeded')
+
+    monkeypatch.setattr(finish_request.json, 'loads', _boom)
+    granted, reason = finish_request.evaluate(path, 'batch-1')
+
+    assert not granted and 'could not be read as a request' in reason

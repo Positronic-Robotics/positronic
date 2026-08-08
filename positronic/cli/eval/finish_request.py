@@ -85,6 +85,10 @@ class Action(StrEnum):
     FINISH = 'finish'
 
 
+# Iterated rather than restated, so a member added above is understood here without a second edit.
+_ACTIONS = frozenset(Action)
+
+
 # How often the file is read. The wait it adds to a finish is bounded by this, and the cost of it is
 # one `open` on tmpfs, so it is short enough not to be noticed and long enough not to matter.
 POLL_INTERVAL_S = 2.0
@@ -95,6 +99,23 @@ POLL_INTERVAL_S = 2.0
 # unreadable, or this run predates the poller. Those need opposite responses from whoever asked, and
 # from outside the process both look like a run that is still running.
 ACK_LOG_MARKER = 'rollout finish request granted'
+
+# A request is a small object — the writer's own is around 120 bytes — and this reads a file any
+# account on the rig may create. Bounding the read makes an oversized one a refusal by construction
+# rather than a memory failure to catch, and nothing legitimate comes near the bound.
+MAX_REQUEST_BYTES = 64 * 1024
+
+# EVERY way a file can fail to become a request, named once. `OSError` is the file itself — a
+# permission, an I/O error, a directory in its place. `ValueError` covers the decode
+# (`UnicodeDecodeError`), the parse (`JSONDecodeError`) and an action outside the closed set, all
+# three of which are `ValueError` subclasses. `RecursionError` is the JSON parser's own nesting
+# limit, which a corrupt or hostile file reaches and which is not a `ValueError` at all.
+#
+# Listed rather than discovered one exception at a time, because this runs in the FOREGROUND: a
+# reader that raises anywhere in here does not merely fail to read a request, it takes the World
+# down in the middle of an episode. `evaluate` catches this set around the WHOLE read, so a shape
+# nobody enumerated is still a refusal rather than a crash.
+UNREADABLE = (OSError, ValueError, RecursionError)
 
 
 def request_dir() -> Path:
@@ -121,35 +142,43 @@ def evaluate(path: Path, this_run: str) -> tuple[bool, str]:
     arrived" look identical from the writer's side and have different fixes. It is returned rather
     than logged here so the caller can report a persistent one once instead of on every poll —
     a request addressed to a dead run would otherwise fill the log for the life of this one.
+
+    IT IS TOTAL. Any failure to turn the file into a request addressed to this run is a refusal, and
+    that is a property of ONE boundary (`UNREADABLE`) rather than of the shapes anyone thought to
+    list: the staged checks below give a good reason for the shapes worth naming, and the boundary
+    answers for the rest. It has to be total because it runs in the foreground — an exception here
+    ends the World mid-episode, which is exactly what this module exists to prevent.
     """
     try:
-        raw = path.read_text()
+        return _read(path, this_run)
     except FileNotFoundError:
+        # Not a request, and not a fault either — the ordinary state of a run nobody has asked.
         return False, ''
-    except (OSError, UnicodeDecodeError) as e:
-        # Unreadable is not absent: a request written by another account with a restrictive umask
-        # lands here, and it is the one negative a reader cannot fix by waiting. Bytes that are not
-        # UTF-8 land here too, and are the same answer — `UnicodeDecodeError` is a `ValueError`
-        # rather than an `OSError`, so uncaught it would leave this control system and take the
-        # World down mid-episode, which is the one thing this module must never do.
-        return False, f'finish request at {path} could not be read ({e}); continuing to run'
-    try:
-        request = json.loads(raw)
-    except json.JSONDecodeError as e:
-        return False, f'finish request at {path} did not parse ({e}); continuing to run'
+    except UNREADABLE as e:
+        return False, f'finish request at {path} could not be read as a request ({e!r}); continuing to run'
+
+
+def _read(path: Path, this_run: str) -> tuple[bool, str]:
+    """`evaluate`'s body, which may raise anything in `UNREADABLE`; it catches them."""
+    with path.open('rb') as f:
+        # One byte past the bound, so the file that exceeds it is recognised rather than truncated
+        # into something that might parse.
+        blob = f.read(MAX_REQUEST_BYTES + 1)
+    if len(blob) > MAX_REQUEST_BYTES:
+        return False, f'finish request at {path} is larger than {MAX_REQUEST_BYTES} bytes; continuing to run'
+    request = json.loads(blob.decode())
     if not isinstance(request, dict):
         return False, f'finish request at {path} is {type(request).__name__}, not an object; continuing to run'
-    raw = request.get(ACTION_KEY)
-    try:
-        # The wire value becomes the domain type HERE or not at all: a `StrEnum` member compares
-        # equal to its own string, so a bare comparison would leave every later reader holding a
-        # `str` the contract calls an `Action`.
-        action = Action(raw)
-    except ValueError:
+    named = request.get(ACTION_KEY)
+    if named not in _ACTIONS:
         return (
             False,
-            f'finish request at {path} names action {raw!r}, which this run does not implement; continuing to run',
+            f'finish request at {path} names action {named!r}, which this run does not implement; continuing to run',
         )
+    # The wire value becomes the domain type HERE or not at all: a `StrEnum` member compares equal to
+    # its own string, so a bare comparison would leave every later reader holding a `str` the
+    # contract calls an `Action`.
+    action = Action(named)
     if action is not Action.FINISH:
         return (
             False,
