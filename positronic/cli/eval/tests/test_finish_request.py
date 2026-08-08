@@ -278,11 +278,17 @@ _UNREADABLE_SHAPES = [
     (lambda p: p.write_text(json.dumps({finish_request.RUN_ID_KEY: 'batch-1'})), 'no action at all'),
     (
         lambda p: p.write_text(
-            json.dumps({finish_request.ACTION_KEY: 'finish', finish_request.RUN_ID_KEY: 'someone-else'})
+            json.dumps({
+                finish_request.ACTION_KEY: finish_request.Action.FINISH,
+                finish_request.RUN_ID_KEY: 'someone-else',
+            })
         ),
         'a request addressed to another run',
     ),
-    (lambda p: p.write_text(json.dumps({finish_request.ACTION_KEY: 'finish'})), 'no addressee at all'),
+    (
+        lambda p: p.write_text(json.dumps({finish_request.ACTION_KEY: finish_request.Action.FINISH})),
+        'no addressee at all',
+    ),
 ]
 
 
