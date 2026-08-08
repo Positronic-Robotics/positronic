@@ -170,11 +170,7 @@ class FinishRequest(pimm.ControlSystem):
         # on every poll for the life of the run. Reported again when the reason CHANGES, which is what
         # a replaced file looks like from here.
         self._reported = ''
-        # Whether the request has been granted, on the INSTANCE rather than in `run`. One object is
-        # built per invocation and handed to every World of a sweep, so a local would reset at each
-        # World and the run would have to re-read the file to know it had been asked — which it can
-        # only do while the file is still there. A request addresses the RUN, and a run is one run
-        # however many Worlds it raises.
+        # One object serves every World of a sweep, so the grant has to outlive any single World.
         self._granted = False
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
