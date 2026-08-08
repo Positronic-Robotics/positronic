@@ -17,6 +17,7 @@ from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.eval import Embodiment, Eval, Task
 from positronic.gui import dpg_ui
+from positronic.offboard.client import DEFAULT_READY_TIMEOUT
 from positronic.policy.base import SampledPolicy
 from positronic.policy.harness import Harness
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
@@ -204,6 +205,7 @@ def main(
     output_dir: str | Path | None = None,
     show_gui: bool = False,
     timing: bool = False,
+    ready_timeout: float = DEFAULT_READY_TIMEOUT,
 ):
     """Run inference for an embodiment, real or simulated.
 
@@ -216,6 +218,10 @@ def main(
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + a machine-load stats
     stream). It needs an ``output_dir`` and an all-simulated sweep: everything under the bound tracer enters
     the report, so a real embodiment in a timed sweep is rejected rather than allowed to pollute it.
+
+    ``ready_timeout`` bounds the wait for each remote endpoint to report itself ready. Raise it where a
+    checkpoint legitimately loads slower than the default; the sweep is refused rather than started when it
+    elapses, since an endpoint that never becomes ready cannot be discovered later at any lower price.
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
     # Validate timing up front, before the policy warmup, so a rejected sweep fails before it spends anything.
@@ -227,14 +233,13 @@ def main(
             embodiments = [embodiment]
         _validate_timing(embodiments, output_dir)
 
-    # Drive the policy's remote endpoints through their cold start before hardware and the operator
-    # surface come up: opening a session blocks on the server handshake, which returns only once the
-    # model is loaded, and a SampledPolicy reaches every sub-policy. The first episode then begins
-    # warm instead of stalling on an on-request endpoint's model load while the robot waits.
-    # TODO: a policy with recording taps (recording_dir set) records this throwaway warmup session —
-    # an empty .rrd plus a bump to the recorder's episode counter — but warmup is not a real episode.
-    logger.info('Warming up policy endpoints')
-    policy.new_session().close()
+    # Every policy this sweep can sample has to report itself able to serve before this line: past it
+    # ``_run_world`` energizes the arm and builds the operator's driver, so a refusal after it reaches
+    # a human standing at a live robot. Readiness is the ``ready`` status frame of the offboard
+    # protocol — a completed connection means only that something is listening — and the wait for it
+    # is bounded, since a server streaming ``loading`` is otherwise indistinguishable from a slow one.
+    logger.info('Waiting for policy endpoints to report ready (up to %.0fs)', ready_timeout)
+    policy.wait_ready(ready_timeout)
 
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
@@ -259,7 +264,15 @@ def main(
 
 
 @cfn.config(eval=placeholder, policy=policy_cfg.placeholder, show_gui=False)
-def run(eval: Eval, policy, show_gui, output_dir=None, inference_latency=False, timing=False):
+def run(
+    eval: Eval,
+    policy,
+    show_gui,
+    output_dir=None,
+    inference_latency=False,
+    timing=False,
+    ready_timeout=DEFAULT_READY_TIMEOUT,
+):
     """Run a selected eval (embodiment + task + its trial sweep) through the shared inference harness.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
@@ -268,4 +281,11 @@ def run(eval: Eval, policy, show_gui, output_dir=None, inference_latency=False, 
     # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob
     # (sim inference-cost simulation). Overlay it onto every trial context, then self-drive the eval.
     eval = replace(eval, trials=[{**trial, 'inference_latency': inference_latency} for trial in eval.trials])
-    main(policy=policy, evals=[eval], show_gui=show_gui, output_dir=output_dir, timing=timing)
+    main(
+        policy=policy,
+        evals=[eval],
+        show_gui=show_gui,
+        output_dir=output_dir,
+        timing=timing,
+        ready_timeout=ready_timeout,
+    )
