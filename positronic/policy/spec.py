@@ -46,6 +46,7 @@ from positronic.policy.codec import (
     RestrictImageSize,
 )
 from positronic.policy.observation import ObservationCodec
+from positronic.policy.recording import Tap
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
 
 
@@ -159,6 +160,7 @@ WIRE_WRAPPERS: dict[str, type[PolicyWrapper]] = {
     'restrict_image_size': RestrictImageSize,
     'change_ee_frame': ChangeEEFrame,
     'observation_codec': ObservationCodec,
+    'tap': Tap,
     'absolute_position_action': AbsolutePositionAction,
     'absolute_joints_action': AbsoluteJointsAction,
     'relative_position_action': RelativePositionAction,
@@ -192,18 +194,23 @@ def inline(pipeline: Pipeline) -> Policy:
     return joined.wrap(policy) if joined is not None else policy
 
 
-def from_spec(node: dict[str, Any]) -> PolicyWrapper | None:
+def from_spec(node: dict[str, Any], tap: Callable[..., PolicyWrapper] = Tap) -> PolicyWrapper | None:
     """Rebuild a declared local stack from its wire spec; ``None`` for an empty declaration.
+
+    ``tap`` builds each declared seam, so where a recording lands is the builder's call rather than
+    the declaration's: a rig that records passes ``Recorder.tap``, and the default records nothing.
 
     Unknown entry names raise ``ValueError`` and unknown arguments ``TypeError`` — a declaration
     this build cannot honor fails before anything moves.
     """
     if SEQ in node:
-        parts = tuple(part for part in (from_spec(child) for child in node[SEQ]) if part is not None)
+        parts = tuple(part for part in (from_spec(child, tap) for child in node[SEQ]) if part is not None)
         return _join(parts)
     if PAR in node:
-        return functools.reduce(operator.and_, (from_spec(child) for child in node[PAR]))
+        return functools.reduce(operator.and_, (from_spec(child, tap) for child in node[PAR]))
     name = node.get('name')
     if name not in WIRE_WRAPPERS:
         raise ValueError(f'Unknown local-stack entry {name!r}; this build knows {sorted(WIRE_WRAPPERS)}')
-    return WIRE_WRAPPERS[name](**node.get('args', {}))
+    cls = WIRE_WRAPPERS[name]
+    args = node.get('args', {})
+    return tap(**args) if cls is Tap else cls(**args)

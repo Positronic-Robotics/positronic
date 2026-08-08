@@ -4,7 +4,7 @@ from positronic import keys
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
-from positronic.policy.recording import Recorder, _build_blueprint, _squeeze_batch, _stack_numeric
+from positronic.policy.recording import Recorder, Tap, _build_blueprint, _squeeze_batch, _stack_numeric
 
 
 class _TrackingSession(Session):
@@ -97,6 +97,16 @@ def test_tap_delegates_inner_call(tmp_path):
     session = policy.new_session()
     result = session({'x': 1.0, 'wall_time_ns': 1_000_000})
     assert result == actions
+
+
+def test_unbound_tap_leaves_the_policy_alone():
+    """A seam nothing is bound to — an in-process pipeline, or a rig that records nowhere."""
+    actions = [{'v': 1, 'timestamp': 0.0}]
+    inner = _TrackingPolicy(actions)
+    session = Tap('wire').wrap(inner).new_session()
+
+    assert session({'x': 1.0, 'wall_time_ns': 1}) == actions
+    assert session.meta == inner.meta
 
 
 def test_tap_meta_passthrough(tmp_path):

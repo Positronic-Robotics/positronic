@@ -21,6 +21,7 @@ from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Codec, Policy, PolicyWrapper, Session
 from positronic.policy.codec import RestrictImageSize
+from positronic.policy.recording import Tap
 from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import list_checkpoints
 from positronic.utils.logging import init_logging
@@ -326,7 +327,7 @@ def pipeline(local: PolicyWrapper, codec: Codec, source: ModelSource, width: int
 
     ``width``/``height`` bound frames on the rig and follow the codec's own geometry.
     """
-    return local | RestrictImageSize(width, height) | remote | codec | source
+    return local | RestrictImageSize(width, height) | Tap('wire') | remote | codec | source
 
 
 joints = pipeline

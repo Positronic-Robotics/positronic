@@ -13,6 +13,7 @@ from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress
 from positronic.policy import Codec, Policy
 from positronic.policy.codec import RestrictImageSize
+from positronic.policy.recording import Tap
 from positronic.policy.spec import ModelSource, remote
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.checkpoints import list_checkpoints, resolve_checkpoint
@@ -79,7 +80,7 @@ lerobot_source = cfn.Config(LerobotSource, policy_factory=act)
 
 @cfn.config(codec=lerobot_codecs.ee, source=lerobot_source)
 def pipeline(codec: Codec, source: ModelSource):
-    return ChunkedSchedule() | RestrictImageSize(224, 224) | remote | codec | source
+    return ChunkedSchedule() | RestrictImageSize(224, 224) | Tap('wire') | remote | codec | source
 
 
 ee = pipeline

@@ -141,12 +141,11 @@ Which command type your model produces is decided by its codec.
 
 ## Debugging with recordings
 
-When a run doesn't produce the result you expected, it helps to record exactly what crossed the boundaries between the robot, the codec, and the model. Recording is itself a policy wrapper — `Recorder` in [`positronic/policy/recording.py`](../positronic/policy/recording.py) — that taps into any client pipeline; the built-in servers expose it via `--recording_dir`. It writes one [rerun](https://rerun.io) file per episode with two layers:
+When a run doesn't produce the result you expected, it helps to record exactly what crossed the boundaries between the robot, the codec, and the model. Recording writes one [rerun](https://rerun.io) file per episode; where the recording is taken is a property of the pipeline, not of whoever runs it.
 
-- **`raw`** — the observation and action as they appear on the wire.
-- **`inference`** — the same episode *after* the codec: the encoded observation the model received and the raw actions it produced.
+A `Tap` ([`positronic/policy/recording.py`](../positronic/policy/recording.py)) names a seam worth recording and goes in the pipeline like any other entry — `... | Tap('wire') | remote | codec | source`. The server publishes it with the rest of the rig-side stack, and a rig given `--policy.recording_dir` logs, under that name, the observation passing down through the seam and the action chunk coming back up. Every built-in pipeline names its wire seam, so a recorded episode shows what was sent and what came back for each inference — and nothing on the ticks in between, since a seam below the scheduling wrapper only sees the ticks that ran one.
 
-Comparing the two localizes the fault: if `raw` looks right but `inference` looks wrong, the codec is at fault; if the `inference` input looks right but the output is bad, it is the model.
+The server records its own side separately, via `--recording_dir` on the server: `raw` is the observation as it arrived on the wire, `inference` the same observation *after* the codec — what the model consumed — and the raw actions it produced. Comparing those localizes the fault: if `raw` looks right but `inference` looks wrong, the codec is at fault; if the `inference` input looks right but the output is bad, it is the model.
 
 The client side can record too: `--output_dir` saves the full episode as a Positronic dataset, browsable with `positronic-server`.
 

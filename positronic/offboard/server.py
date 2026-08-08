@@ -255,6 +255,10 @@ class PolicyServer:
             assert rid is not None
             policy = await self._manager.get_policy(rid, websocket)
             if self._recording_dir is not None:
+                # TODO(#534): these seams are hardcoded here while the rig's are declared by the pipeline
+                # (``Tap``), and they land in a file on the server's disk and clock that nobody fetches. Both
+                # go once the serving half can report into the rig's recording: a ``Tap`` in the remote half
+                # of the pipeline, shipped back on the inference response.
                 # Tap both sides: 'raw' is the wire boundary, 'inference' the encoded obs and model output.
                 rec = Recorder(self._recording_dir)
                 if remote_half is not None:

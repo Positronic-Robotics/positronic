@@ -15,6 +15,7 @@ from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Codec, Policy, Session
 from positronic.policy.codec import ChangeEEFrame, RestrictImageSize
+from positronic.policy.recording import Tap
 from positronic.policy.spec import ModelSource, remote
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
@@ -249,7 +250,7 @@ def pipeline(codec: Codec, source: ModelSource, ee_frame: geom.Transform3D | Non
     if ee_frame is not None:
         # Outermost, so everything downstream — the wire, the server's codec — sees poses already in ``ee_frame``.
         local = ChangeEEFrame(ee_frame) | local
-    return local | remote | codec | source
+    return local | Tap('wire') | remote | codec | source
 
 
 ee = pipeline
