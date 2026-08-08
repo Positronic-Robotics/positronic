@@ -30,7 +30,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import Directive, DirectiveType, Harness
+from positronic.policy.harness import Directive, DirectiveType, Harness, Phase
 from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -971,6 +971,69 @@ def test_run_while_running_is_ignored(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_finish_while_idle_homes_and_finalizes_nothing(world):
+    """FINISH ends the run from any phase, so a sender that only knows a sampled phase never has to
+    choose between finishing and discarding: there is nothing to finalize while idle, and it homes."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+
+    driver = ManualDriver([(partial(p['directive_em'].emit, Directive.FINISH()), 0.0), (None, 0.02)])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=20)
+
+    assert _ds_types(p) == []
+    assert isinstance(_last_command(p), Reset)
+
+
+@pytest.mark.timeout(3.0)
+def test_status_counts_the_directives_the_harness_handled(world):
+    """The count is how a sender tells a status that reflects its own directive from one sampled
+    before it — the phase alone cannot, since an unchanged phase and a stale sample look alike."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    statuses = RecordingEmitter()
+    harness.status._bind(statuses)
+
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.0),
+        (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),
+        (None, 0.02),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=20)
+
+    counts = [s.directives_taken for _ts, s in statuses.emitted]
+    assert counts == sorted(counts)
+    assert counts[-1] == 2
+    assert [s.phase for _ts, s in statuses.emitted][-1] == Phase.IDLE
+
+
+@pytest.mark.timeout(3.0)
+def test_status_counts_the_homes_commanded(world):
+    """Nothing reports the arm reaching home, so a surface that must not drive during the motion waits on
+    this count — including for the home before the first episode, which no directive asked for."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    statuses = RecordingEmitter()
+    harness.status._bind(statuses)
+
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.0),
+        (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),
+        (None, 0.02),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=20)
+
+    homes = [s.homes_commanded for _ts, s in statuses.emitted]
+    assert homes[0] == 1  # the startup home precedes every status, so a fresh surface already waits
+    assert homes[-1] == 2  # and the FINISH homes again
+
+
+@pytest.mark.timeout(3.0)
 def test_run_calls_policy_reset_with_context(world):
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment())
@@ -1130,6 +1193,9 @@ def test_harness_clears_trajectory_on_home(world):
     assert _last_grip(p) == 0.0, 'Expected 0.0 (Abort homes)'
 
     p['directive_em'].emit(Directive.RUN(task='test'))
+    drive_scheduler(scheduler, steps=1)
+    # The rollout infers on an observation delivered after its own reset, so the payload lands once the
+    # directive has been taken — a value published before it belongs to the finished episode.
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, steps=4)
 
@@ -1592,3 +1658,54 @@ def test_a_later_episode_waits_for_its_own_first_observation(world, tmp_path):
     episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     assert len(episodes) == 2
     assert episodes[1].attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S] < gap_s
+
+
+def test_begin_episode_yields_before_the_blocking_handshake():
+    """The 'starting' status must be observable while the policy loads.
+
+    The UI is a peer control system in the same cooperative loop and the status channel holds one
+    slot, so an emit with no scheduling point before a blocking call is never drained: the surface
+    sits on the previous phase for the whole handshake and then sees 'running'.
+    """
+    handshakes: list[str] = []
+
+    class _BlockingHandshakePolicy(Policy):
+        def new_session(self, context=None, now=None):
+            handshakes.append('new_session')
+            return StubPolicy().new_session(context, now)
+
+    harness = Harness(_BlockingHandshakePolicy(), make_embodiment())
+    statuses = RecordingEmitter()
+    harness.status._bind(statuses)
+
+    gen = harness._begin_episode({}, pimm.world.SystemClock())
+    next(gen)  # runs up to the yield
+    assert handshakes == [], 'new_session ran before the UI could be scheduled'
+    assert [s.phase for _ts, s in statuses.emitted] == [Phase.STARTING]
+
+    with pytest.raises(StopIteration):
+        next(gen)
+    assert handshakes == ['new_session']
+
+
+def test_begin_episode_does_not_yield_when_nobody_consumes_status():
+    """The tick is for a status consumer. Unattended sim binds no status port, and an extra
+    scheduling point there costs recorded samples."""
+    harness = Harness(StubPolicy(), make_embodiment())  # status left unbound, as in sim/unattended
+    gen = harness._begin_episode({}, pimm.world.SystemClock())
+    with pytest.raises(StopIteration):
+        next(gen)  # runs to completion without a yield
+
+
+def test_begin_episode_does_not_yield_in_sim_even_with_a_status_consumer():
+    """An attended sim run binds status, so the consumer check alone does not exclude it, and in
+    sim the tick is not free: producers are scheduled after the harness, so one would emit its
+    first observation before START, the recorder would drop it as pre-START, and inference would
+    begin from a later state."""
+    embodiment = make_embodiment()
+    object.__setattr__(embodiment, 'simulated', True)
+    harness = Harness(StubPolicy(), embodiment)
+    harness.status._bind(RecordingEmitter())  # attended: a surface IS consuming status
+    gen = harness._begin_episode({}, pimm.world.SystemClock())
+    with pytest.raises(StopIteration):
+        next(gen)

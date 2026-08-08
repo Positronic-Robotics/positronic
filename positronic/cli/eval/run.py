@@ -41,6 +41,7 @@ class Driver:
     directive_wrapper: Callable
     control_systems: list[pimm.ControlSystem]
     manual_commands: pimm.SignalEmitter | None = None
+    status: pimm.ControlSystemReceiver | None = None
 
 
 def _seed_counter(policy, output_dir: Path):
@@ -104,6 +105,8 @@ def _run_world(
             world.connect(driver.directives, harness.directive, emitter_wrapper=driver.directive_wrapper)
             if driver.manual_commands is not None:
                 world.connect(driver.manual_commands, harness.manual_command)
+            if driver.status is not None:
+                world.connect(harness.status, driver.status)
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)
 
