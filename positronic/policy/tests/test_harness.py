@@ -1598,10 +1598,6 @@ def test_a_later_episode_waits_for_its_own_first_observation(world, tmp_path):
 # --- ending a run from outside it: one wind-down, reached for either reason --------------------
 
 
-def _grace_s() -> float:
-    return FINISH_HOME_GRACE_NS / 1e9
-
-
 @pytest.mark.timeout(10.0)
 def test_a_finish_request_ends_an_idle_run(world):
     """The whole point of the request: a run with no operator surface to post at still ends the way a
@@ -1655,7 +1651,7 @@ def test_a_simulated_run_does_not_wait_for_a_motion_it_never_makes(world):
 
     with pytest.raises(StopIteration):
         next(scheduler)
-    assert world.clock.now() - before < _grace_s()
+    assert world.clock.now() - before < FINISH_HOME_GRACE_NS / 1e9
 
 
 @pytest.mark.timeout(10.0)

@@ -139,11 +139,21 @@ def evaluate(path: Path, this_run: str) -> tuple[bool, str]:
         return False, f'finish request at {path} did not parse ({e}); continuing to run'
     if not isinstance(request, dict):
         return False, f'finish request at {path} is {type(request).__name__}, not an object; continuing to run'
-    action = request.get(ACTION_KEY)
-    if action != Action.FINISH:
+    raw = request.get(ACTION_KEY)
+    try:
+        # The wire value becomes the domain type HERE or not at all: a `StrEnum` member compares
+        # equal to its own string, so a bare comparison would leave every later reader holding a
+        # `str` the contract calls an `Action`.
+        action = Action(raw)
+    except ValueError:
         return (
             False,
-            f'finish request at {path} names action {action!r}, not {Action.FINISH.value!r}; continuing to run',
+            f'finish request at {path} names action {raw!r}, which this run does not implement; continuing to run',
+        )
+    if action is not Action.FINISH:
+        return (
+            False,
+            f'finish request at {path} names action {action.value!r}, not {Action.FINISH.value!r}; continuing to run',
         )
     addressee = request.get(RUN_ID_KEY)
     if addressee != this_run:
@@ -172,6 +182,15 @@ class FinishRequest(pimm.ControlSystem):
         self._reported = ''
         # One object serves every World of a sweep, so the grant has to outlive any single World.
         self._granted = False
+
+    @property
+    def granted(self) -> bool:
+        """Whether a request addressed to this run has been granted.
+
+        The harness ends the World it is in; only the caller raising them knows there are more, so
+        this is what lets a sweep stop rather than build the rest.
+        """
+        return self._granted
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         # Paced on the WALL clock, not the world's. Under virtual time the world runs as fast as the

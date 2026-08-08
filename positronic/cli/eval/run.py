@@ -279,6 +279,13 @@ def main(
                     _run_world(
                         policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete, finish
                     )
+                    # A granted request ends the RUN, and a sweep is one run however many evals it
+                    # holds. The watcher keeps a later World from opening an episode, but only this
+                    # loop can keep one from being raised at all — and raising one starts its
+                    # producers, commands a real arm home and waits out the travel, for an eval
+                    # nobody is going to score.
+                    if finish is not None and finish.granted:
+                        break
     finally:
         policy.close()
 

@@ -217,3 +217,32 @@ def test_a_grant_survives_the_world_it_was_read_in(tmp_path):
 
     path.unlink()  # the writer retires it once the run is over; the grant is not un-asked
     assert cs._granted
+
+
+def test_a_sweep_can_read_the_grant_without_entering_a_world(tmp_path):
+    """The harness ends the World it is in, and only the loop raising them knows there are more.
+
+    Without this the sweep goes on building every later World: each starts its producers, commands a
+    real arm home and waits out the travel, for an eval nobody is going to score."""
+    path = tmp_path / 'finish'
+    cs = finish_request.FinishRequest(path, 'batch-1', poll_interval_s=0.0)
+    assert cs.granted is False
+
+    write_request(path, run='batch-1')
+    cs._granted = finish_request.evaluate(cs._path, cs._run)[0]
+    assert cs.granted is True
+
+
+def test_the_action_arrives_as_the_enum_not_the_string_it_was_written_as(tmp_path):
+    """A `StrEnum` member compares equal to its own string, so a bare comparison passes while leaving
+    every later reader holding a `str` the contract calls an `Action`. The conversion is the check."""
+    path = tmp_path / 'finish'
+    write_request(path, run='batch-1')
+    assert finish_request.evaluate(path, 'batch-1')[0]
+    assert (
+        finish_request.Action(json.loads(path.read_text())[finish_request.ACTION_KEY]) is finish_request.Action.FINISH
+    )
+
+    path.write_text(json.dumps({finish_request.RUN_ID_KEY: 'batch-1'}))  # no action at all
+    granted, reason = finish_request.evaluate(path, 'batch-1')
+    assert not granted and 'does not implement' in reason
