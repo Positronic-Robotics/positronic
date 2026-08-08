@@ -12,7 +12,7 @@ from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
 from .base import Policy, PolicyWrapper, Session
-from .codec import RestrictImageSize
+from .codec import RestrictImageSize, WireCommand
 from .recording import Recorder
 from .spec import from_spec
 from .wrappers import ChunkedSchedule
@@ -215,11 +215,17 @@ class RemotePolicy(Policy):
             if self._recording_dir is not None:
                 rec = Recorder(self._recording_dir)
                 if stack is None:
-                    # With no stack the raw and wire boundaries coincide, so a single tap.
+                    # With no declared stack there is nothing between the two, so a single tap.
                     stack = rec.tap('raw')
                 else:
                     stack = rec.tap('raw') | stack | rec.tap('server')
-            self._stacked = stack.wrap(self._endpoint) if stack is not None else self._endpoint
+            # Rightmost, so it decodes first on the way back: everything above is written against typed
+            # commands, and a served policy's command arrives as a wire mapping. The taps are above it, so
+            # they record a `command.*` object rather than the mapping — which is what the recorder
+            # serializes by, and the observation they record is untouched wire form either way.
+            wire = WireCommand()
+            stack = wire if stack is None else stack | wire
+            self._stacked = stack.wrap(self._endpoint)
         return self._stacked
 
     def new_session(self, context=None, now=None) -> Session:

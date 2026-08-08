@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from positronic import keys, telemetry, telemetry_keys
+from positronic.drivers.roboarm import command
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
@@ -407,6 +408,34 @@ def test_compression_override_rejected_when_the_server_declares():
     policy, _ = _mock_remote_policy({**EMPTY_STACK, 'compress_images': False}, compress_images=True)
     with pytest.raises(ValueError, match='--policy.compress_images'):
         policy.new_session()
+
+
+_WIRE_POSE = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
+_WIRE_ACTION = [{keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': _WIRE_POSE}, 'timestamp': 0.0}]
+
+
+@pytest.mark.parametrize('metadata', [EMPTY_STACK, {'local_stack': {'name': 'chunked_schedule'}}, None])
+def test_a_served_command_reaches_the_driver_typed(metadata):
+    """A served command comes back typed, whatever local stack the server declares — including none."""
+    policy, _ = _mock_remote_policy(metadata, infer_return=_WIRE_ACTION)
+
+    actions = policy.new_session(now=lambda: 0.0)({'obs_time_ns': 0})
+
+    assert actions is not None, 'the chunk was swallowed before any command reached a driver'
+    decoded = actions[0][keys.ROBOT_COMMAND]
+    assert isinstance(decoded, command.CartesianPosition), f'the driver would be handed {decoded!r}'
+    np.testing.assert_allclose(decoded.pose.translation, [0.4, 0.0, 0.6], atol=1e-6)
+
+
+@pytest.mark.parametrize('metadata', [EMPTY_STACK, {'local_stack': {'name': 'chunked_schedule'}}, None])
+def test_the_observation_survives_the_composition_on_the_way_out(metadata):
+    """The decode sits in front of every remote endpoint, so an observation crosses it outbound too."""
+    policy, mock_ws = _mock_remote_policy(metadata, infer_return=_WIRE_ACTION)
+
+    policy.new_session(now=lambda: 0.0)({'obs_time_ns': 0, keys.EE_POSE: np.zeros(7, dtype=np.float32)})
+
+    sent = mock_ws.infer.call_args.args[0]
+    assert keys.EE_POSE in sent, f'the server was handed keys={list(sent)}'
 
 
 def test_remote_policy_lifecycle(inference_server, mock_policy):

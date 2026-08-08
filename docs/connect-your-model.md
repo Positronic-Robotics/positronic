@@ -143,7 +143,8 @@ Which command type your model produces is decided by its codec.
 
 When a run doesn't produce the result you expected, it helps to record exactly what crossed the boundaries between the robot, the codec, and the model. Recording is itself a policy wrapper — `Recorder` in [`positronic/policy/recording.py`](../positronic/policy/recording.py) — that taps into any client pipeline; the built-in servers expose it via `--recording_dir`. It writes one [rerun](https://rerun.io) file per episode with two layers:
 
-- **`raw`** — the observation and action as they appear on the wire.
+- **`raw`** — the observation as it appears on the wire, and the action the server returned. A robot
+  command in it is the typed `command.*` object, decoded at the wire before anything records it.
 - **`inference`** — the same episode *after* the codec: the encoded observation the model received and the raw actions it produced.
 
 Comparing the two localizes the fault: if `raw` looks right but `inference` looks wrong, the codec is at fault; if the `inference` input looks right but the output is bad, it is the model.

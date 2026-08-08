@@ -14,6 +14,21 @@ ROBOT_COMMAND = 'robot_command'
 TARGET_EE_POSE = f'{ROBOT_COMMAND}.pose'
 TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
 
+
+def is_robot_command(name: str) -> bool:
+    """Whether ``name`` is in the robot-command channel family.
+
+    One arm commands on ``robot_command``; an embodiment with more than one names them per arm,
+    ``robot_command.left`` / ``robot_command.right`` (``cfg.embodiment.yam_bimanual``). Anything walking
+    an action's channels has to cover both, and enumerating the sides would answer for today's
+    embodiments only.
+
+    It names the FAMILY, so the serializer's own unfoldings (``TARGET_EE_POSE``, ``TARGET_JOINTS``) match
+    too. They carry a vector rather than a command, so a caller that needs a command reads the value.
+    """
+    return name == ROBOT_COMMAND or name.startswith(f'{ROBOT_COMMAND}.')
+
+
 JOINTS = 'robot_state.q'
 JOINT_VEL = 'robot_state.dq'
 EE_POSE = 'robot_state.ee_pose'
