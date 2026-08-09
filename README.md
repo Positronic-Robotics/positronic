@@ -305,13 +305,17 @@ uv sync --locked              # core + dev tooling; dev is a default group, so n
 
 ### Initial Setup
 
-Install pre-commit hooks (one-time setup). `pre-commit` is a uv tool rather than a project dependency,
-so that a later `uv sync` cannot remove the interpreter the git hook execs:
+Install pre-commit hooks. `pre-commit` is a uv tool rather than a project dependency, so that a later
+`uv sync` cannot remove the interpreter the git hook execs:
 
 ```bash
 uv tool install pre-commit
 pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type post-commit
 ```
+
+Run both in an existing checkout as well as a fresh one. A hook generated against the project venv
+execs an interpreter that no longer carries `pre-commit`, so committing fails outright — reinstalling
+repoints it at the tool.
 
 ### Daily Development
 

@@ -61,6 +61,10 @@ uv tool install pre-commit
 pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type post-commit
 ```
 
+Run both in an existing checkout as well as a fresh one. A hook generated against the project venv
+execs an interpreter that no longer carries `pre-commit`, so committing fails outright — reinstalling
+repoints it at the tool.
+
 This will automatically run checks before each commit, including:
 - **Ruff linting and formatting** - Code style and quality checks
 - **Commit signature verification** - Ensures commits are cryptographically signed
