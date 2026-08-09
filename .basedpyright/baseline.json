@@ -7240,10 +7240,18 @@
         ],
         "./positronic/policy/harness.py": [
             {
+                "code": "reportOptionalCall",
+                "range": {
+                    "startColumn": 18,
+                    "endColumn": 56,
+                    "lineCount": 1
+                }
+            },
+            {
                 "code": "reportArgumentType",
                 "range": {
-                    "startColumn": 26,
-                    "endColumn": 42,
+                    "startColumn": 39,
+                    "endColumn": 55,
                     "lineCount": 1
                 }
             },

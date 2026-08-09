@@ -13,6 +13,7 @@ from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy, Session
+from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils import flatten_dict, frozen_view
 
 # How far from now an action may be scheduled. A chunk spans seconds, so this is loose enough that no real
@@ -268,6 +269,25 @@ class Harness(pimm.ControlSystem):
         hold wall-clock rate."""
         return pimm.Yield() if self._embodiment.simulated else pimm.Sleep(0.01)
 
+    def _bump_schedule_end(self, delta_sec: float) -> None:
+        """Shift the active ``ChunkedSchedule._Session`` ``_trajectory_end`` by ``delta_sec``.
+
+        Used by ``inference_latency``: the session anchored the chunk pre-sleep, then we slept and
+        post-shifted the emitted timestamps. The scheduling wrapper's internal end-of-chunk gate
+        must move forward too, or it will re-infer before the driver has actually played the (shifted)
+        trajectory.
+
+        TODO: the simulated inference cost belongs in the scheduling wrapper, which already anchors the
+        chunk to inference-finish — one source for the chunk's end would delete this walk and the
+        post-shift that makes it necessary. Only the harness can yield the sleep, which is the open problem.
+        """
+        s = self._policy_session
+        while s is not None:
+            if isinstance(s, ChunkedSchedule._Session) and s._trajectory_end is not None:
+                s._trajectory_end += delta_sec
+                return
+            s = getattr(s, '_inner', None)
+
     def _cancel_trajectories(self) -> None:
         """Drop any in-flight chunk from drivers and from the recording's tail.
 
@@ -439,8 +459,6 @@ class Harness(pimm.ControlSystem):
         The session output already carries absolute timestamps (stamped by the
         outermost scheduling wrapper). The harness only demuxes by channel.
         """
-        session = self._policy_session
-        assert session is not None, 'a step runs only inside a live episode'
         obs = self._build_obs(clock)
         if obs is None:
             return
@@ -456,17 +474,17 @@ class Harness(pimm.ControlSystem):
         # Advance the (sim) clock by the inference cost so rollouts feel the model's latency. We only
         # sleep on cycles where inference actually ran (session returned a chunk) — otherwise blocked
         # cycles would slow the harness's directive-handling loop. The trajectory was anchored
-        # pre-sleep, so we post-shift it and tell the session to follow — a scheduling wrapper gates
-        # re-inference on the chunk's end, which has moved.
+        # pre-sleep, so we post-shift it and also bump the scheduling wrapper's internal
+        # ``_trajectory_end`` to stay consistent.
         wall_start = time.monotonic()
-        actions = session(frozen_view(obs))
+        actions = self._policy_session(frozen_view(obs))
         if actions is None:
             return
         delay = self._inference_delay(wall_start)
         if delay > 0.0:
             yield pimm.Sleep(delay)
             actions = [{**a, 'timestamp': a['timestamp'] + delay} for a in actions]
-            session.shift(delay)
+            self._bump_schedule_end(delay)
 
         # Recheck the deadline: the latency sleep (or a slow inference call on a real clock) may have
         # crossed it. Drop the chunk rather than emit past the advertised self-termination point —

@@ -63,11 +63,6 @@ class ChunkedSchedule(PolicyWrapper):
             self._trajectory_end = None
             super().cancel()
 
-        def shift(self, delta_sec: float):
-            if self._trajectory_end is not None:
-                self._trajectory_end += delta_sec
-            super().shift(delta_sec)
-
     def wrap_session(self, inner: Session, context, now: Now | None):
         return ChunkedSchedule._Session(inner, now)
 
