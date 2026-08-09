@@ -18,7 +18,7 @@ from pathlib import Path
 
 import hook_payload
 
-RULES_FILE = Path(__file__).resolve().parents[1] / 'CODE_RULES.md'
+RULES_FILE = Path(__file__).resolve().parents[2] / 'CODE_RULES.md'
 RULE_HEADING = '### '
 PARAGRAPH_BREAK = '\n\n'
 PREAMBLE = (

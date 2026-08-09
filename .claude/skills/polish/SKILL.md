@@ -189,7 +189,7 @@ Lead with what deserves the user's eyes, then compress the rest:
 ## Code rules
 - `swallowed-error` positronic/dataset/local.py:88 — the bare `except Exception: continue` now
   catches `json.JSONDecodeError` and logs the episode it skipped
-- Waived (honoured, not fixed): `hardcoded-keys` utilities/tests/test_hook_payload.py:7 — the
+- Waived (honoured, not fixed): `hardcoded-keys` utilities/claude_hooks/tests/test_hook_payload.py:7 — the
   literals are the independent statement of the harness's wire
 
 ## Mechanical fixes

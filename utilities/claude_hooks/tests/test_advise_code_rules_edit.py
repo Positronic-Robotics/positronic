@@ -30,7 +30,7 @@ def test_it_says_nothing_about_any_other_file():
 
 def test_it_advises_on_a_shell_command_that_could_write_the_file():
     """A heredoc, a redirect or an in-place edit reaches the file without a file_path."""
-    for command in ('cat > CODE_RULES.md <<EOF', "sed -i s/x/y/ CODE_RULES.md", 'tee ../CODE_RULES.md'):
+    for command in ('cat > CODE_RULES.md <<EOF', 'sed -i s/x/y/ CODE_RULES.md', 'tee ../CODE_RULES.md'):
         assert advise.advises(bash(command)), command
 
 
