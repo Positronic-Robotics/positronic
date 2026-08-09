@@ -1,5 +1,5 @@
 # Generated from the installed `mujoco` by utilities/generate_mujoco_stubs.py — do not edit.
-# Regenerate: uv run --locked --extra dev python utilities/generate_mujoco_stubs.py
+# Regenerate: uv run --locked python utilities/generate_mujoco_stubs.py
 from __future__ import annotations
 __all__: list[str] = ['mjDISABLESTRING', 'mjENABLESTRING', 'mjFRAMESTRING', 'mjLABELSTRING', 'mjMAXCONPAIR', 'mjMAXFLEXNODES', 'mjMAXIMP', 'mjMAXLIGHT', 'mjMAXLINE', 'mjMAXLINEPNT', 'mjMAXOVERLAY', 'mjMAXPLANEGRID', 'mjMAXTREEDEPTH', 'mjMAXVAL', 'mjMINAWAKE', 'mjMINIMP', 'mjMINMU', 'mjMINVAL', 'mjNBIAS', 'mjNDYN', 'mjNEQDATA', 'mjNFLUID', 'mjNGAIN', 'mjNGROUP', 'mjNIMP', 'mjNISLAND', 'mjNREF', 'mjNSENS', 'mjNSOLVER', 'mjPI', 'mjRNDSTRING', 'mjTIMERSTRING', 'mjVERSION_HEADER', 'mjVISSTRING']
 mjDISABLESTRING: tuple = ('Constraint', 'Equality', 'Frictionloss', 'Limit', 'Contact', 'Spring', 'Damper', 'Gravity', 'Clampctrl', 'Warmstart', 'Filterparent', 'Actuation', 'Refsafe', 'Sensor', 'Midphase', 'Eulerdamp', 'AutoReset', 'NativeCCD', 'Island')

@@ -20,7 +20,7 @@ jobs:
     - name: Set up Python
       run: uv venv --python 3.11
     - name: Install dev tools
-      run: uv sync --locked --extra dev
+      run: uv sync --locked
     - name: Determine diff base
       run: |
         if [ "${{ github.event_name }}" == "pull_request" ]; then
@@ -52,11 +52,15 @@ jobs:
         if [ -n "$CHANGED_PY_FILES" ]; then
           echo "$CHANGED_PY_FILES" | xargs python3 utilities/check_tests_location.py
         fi
+    - name: Check mujoco stubs are current
+      # Meaningful only in the stubs' generation environment: this job's ubuntu runner and the 3.11
+      # venv created above.
+      run: uv run --locked python utilities/generate_mujoco_stubs.py --check
     - name: Run basedpyright type check
       # Whole-project type-check ratchet: fails on any error not grandfathered in
       # .basedpyright/baseline.json. The fresh dev-only venv above is the canonical
       # env the baseline is generated against, so no `--exact` is needed here.
-      run: uv run --locked --extra dev basedpyright
+      run: uv run --locked basedpyright
     - name: Check basedpyright baseline ratchet
       # Runs unconditionally: cheap, and fast-passes when no baseline file grew. RATCHET_BASE is the
       # PR base sha ($BASE_SHA); the script diffs against its merge-base with HEAD, since origin/main

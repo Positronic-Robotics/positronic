@@ -1,5 +1,5 @@
 # Generated from the installed `mujoco` by utilities/generate_mujoco_stubs.py — do not edit.
-# Regenerate: uv run --locked --extra dev python utilities/generate_mujoco_stubs.py
+# Regenerate: uv run --locked python utilities/generate_mujoco_stubs.py
 from __future__ import annotations
 import collections.abc
 import mujoco._enums
@@ -287,10 +287,11 @@ class MjSpec:
         """
         Reads a zip file and returns an MjSpec.
 
-        Args:
-          file: The path to the file to read from or the file object to read from.
-        Returns:
-          An MjSpec object.
+          Args:
+            file: The path to the file to read from or the file object to read from.
+          Returns:
+            An MjSpec object.
+
         """
     @staticmethod
     def resolve_orientation(degree: bool, sequence: MjCharVec, orientation: MjsOrientation) -> typing.Annotated[list[float], "FixedSize(4)"]:
@@ -300,9 +301,10 @@ class MjSpec:
         """
         Converts an MjSpec to a zip file.
 
-        Args:
-          spec: The mjSpec to save to a file.
-          file: The path to the file to save to or the file object to write to.
+          Args:
+            spec: The mjSpec to save to a file.
+            file: The path to the file to save to or the file object to write to.
+
         """
     def __init__(self) -> None:
         ...

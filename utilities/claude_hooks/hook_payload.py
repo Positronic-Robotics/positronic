@@ -16,6 +16,7 @@ HOOK_SPECIFIC_OUTPUT = 'hookSpecificOutput'
 HOOK_EVENT_NAME = 'hookEventName'
 ADDITIONAL_CONTEXT = 'additionalContext'
 PRE_TOOL_USE = 'PreToolUse'
+SESSION_START = 'SessionStart'
 
 
 def command(payload: dict) -> str:
@@ -29,9 +30,6 @@ def target_path(payload: dict) -> str:
     return str(tool_input.get(FILE_PATH) or tool_input.get(NOTEBOOK_PATH) or '')
 
 
-def additional_context(text: str) -> dict:
-    """A PreToolUse reply putting `text` in front of the model and deciding nothing else.
-
-    A hook's plain stdout reaches the debug log, so anything a model must read goes here.
-    """
-    return {HOOK_SPECIFIC_OUTPUT: {HOOK_EVENT_NAME: PRE_TOOL_USE, ADDITIONAL_CONTEXT: text}}
+def additional_context(text: str, event: str) -> dict:
+    """A reply to `event` putting `text` in front of the model and deciding nothing else."""
+    return {HOOK_SPECIFIC_OUTPUT: {HOOK_EVENT_NAME: event, ADDITIONAL_CONTEXT: text}}

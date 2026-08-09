@@ -29,7 +29,7 @@ jobs:
         run: uv venv --python ${{ matrix.python }}
 
       - name: Install dependencies
-        run: uv sync --locked --extra dev
+        run: uv sync --locked
 
       - name: "Run tests (coverage: term, html)"
         env:
@@ -76,7 +76,7 @@ jobs:
         run: uv venv --python 3.13
 
       - name: Install dependencies
-        run: uv sync --locked --extra dev --extra lerobot_0_3_3
+        run: uv sync --locked --extra lerobot_0_3_3
 
       - name: Run lerobot vendor tests
         env:
@@ -96,7 +96,7 @@ jobs:
         run: uv venv --python 3.13
 
       - name: Install dependencies
-        run: uv sync --locked --extra dev --extra lerobot
+        run: uv sync --locked --extra lerobot
 
       - name: Run lerobot vendor tests
         env:
@@ -118,4 +118,4 @@ jobs:
       - name: Set up Python
         run: uv venv --python ${{ matrix.python }}
       - name: uv sync --locked succeeds on ${{ matrix.os }} (py${{ matrix.python }})
-        run: uv sync --locked --extra dev
+        run: uv sync --locked

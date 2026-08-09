@@ -52,10 +52,18 @@ We use pre-commit hooks to ensure code quality and enforce policies.
 
 ### Installation
 
+`pre-commit` goes in as a uv tool rather than into the project venv: the git hook execs it by path, so
+a later `uv sync` — which uninstalls whatever the command did not name — would otherwise leave the hook
+pointing at a module that is gone, and commits would stop being checked without erroring.
+
 ```bash
-uv pip install pre-commit
+uv tool install pre-commit
 pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type post-commit
 ```
+
+Run both in an existing checkout as well as a fresh one. A hook generated against the project venv
+execs an interpreter that no longer carries `pre-commit`, so committing fails outright — reinstalling
+repoints it at the tool.
 
 This will automatically run checks before each commit, including:
 - **Ruff linting and formatting** - Code style and quality checks
@@ -81,12 +89,12 @@ pre-commit run --all-files
 
 3. Install development dependencies:
    ```bash
-   uv sync --extra dev
+   uv sync
    ```
 
-4. Install pre-commit hooks:
+4. Install pre-commit hooks (see [Pre-commit Hooks](#pre-commit-hooks) for why it is a uv tool):
    ```bash
-   uv pip install pre-commit
+   uv tool install pre-commit
    pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type post-commit
    ```
 
