@@ -10,8 +10,7 @@ from positronic.cli.eval import finish_request
 
 
 def write_request(path: Path, *, action: str = finish_request.Action.FINISH, run: str, **extra) -> None:
-    """An ordinary fixture, built from the constants this module defines, so a rename moves with them.
-    The cross-repository compatibility fixture at the bottom deliberately does not."""
+    """An ordinary fixture, built from the constants the module defines, so a rename moves with them."""
     path.write_text(json.dumps({finish_request.ACTION_KEY: action, finish_request.RUN_ID_KEY: run, **extra}))
 
 
@@ -115,6 +114,23 @@ def test_the_default_path_is_absolute_and_on_tmpfs(monkeypatch):
     path = finish_request.request_path('batch-1')
     assert path.is_absolute()
     assert str(path).startswith('/run/')
+
+
+@pytest.mark.parametrize('override', ['requests', './requests', '../requests'])
+def test_a_relative_request_directory_installs_nothing(monkeypatch, tmp_path, override):
+    """A relative override resolves against each account's own working directory, so the writer and
+    the run address different files from the same configuration."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(finish_request.RUN_ID_ENV, 'batch-1')
+    monkeypatch.setenv(finish_request.FINISH_REQUEST_DIR_ENV, override)
+    assert finish_request.from_env() is None
+
+
+def test_an_absolute_request_directory_installs_the_poller(monkeypatch, tmp_path):
+    """An absolute override installs the poller: what is refused is a relative path, not an override."""
+    monkeypatch.setenv(finish_request.RUN_ID_ENV, 'batch-1')
+    monkeypatch.setenv(finish_request.FINISH_REQUEST_DIR_ENV, str(tmp_path))
+    assert finish_request.from_env() is not None
 
 
 @pytest.mark.parametrize('run', ['a/b', '../elsewhere', '.', '..', ''])

@@ -14,9 +14,10 @@ THE CONTRACT, which a writer in another repository implements against:
   path     `<dir>/positronic_rollout_finish.<run_id>`, where `<dir>` is `/run/lock` unless
            `ROLLOUT_FINISH_REQUEST_DIR` names another. Absolute, because the writer and the run are
            different accounts on a rig that gives each actor its own home — a `$HOME`-relative path
-           is a different file per actor and reaches nobody. On tmpfs, so a request cannot outlive a
-           reboot, and in a world-writable sticky directory, so neither account needs root or a
-           shared group.
+           is a different file per actor and reaches nobody, and a relative override therefore
+           installs no poller rather than resolving to one directory here and another there. On
+           tmpfs, so a request cannot outlive a reboot, and in a world-writable sticky directory, so
+           neither account needs root or a shared group.
 
            PER RUN, which is what makes a leftover inert. One rig-wide path is a shared mutable
            cell: a file left by a run that has ended names a run nobody will start again, yet in a
@@ -154,7 +155,7 @@ _ACTIONS = frozenset(Action)
 
 
 def _read(path: Path, this_run: str) -> tuple[bool, str]:
-    """`evaluate`'s body, which may raise anything in `UNREADABLE`; it catches them."""
+    """The staged read: a refusal is returned, any other failure raises, and all of those are in `UNREADABLE`."""
     # Opened by DESCRIPTOR, because the path is one any account on the rig may create and what it
     # names is therefore not necessarily a file. `O_NONBLOCK` is what stops a FIFO left there holding
     # the open until somebody writes to it — this poller runs in the foreground, so that wait is the
@@ -276,6 +277,17 @@ def from_env() -> FinishRequest | None:
     if not names_one_segment(this_run):
         logger.error(
             '%s=%r is not a single path segment, so no finish request can address this run', RUN_ID_ENV, this_run
+        )
+        return None
+    directory = request_dir()
+    if not directory.is_absolute():
+        # Each account resolves a relative path against its own working directory, so the writer and
+        # this run would address different files from the same configuration.
+        logger.error(
+            '%s=%s is not absolute, so the writer and this run would not resolve it to the same '
+            'directory; no finish request can address this run',
+            FINISH_REQUEST_DIR_ENV,
+            directory,
         )
         return None
     path = request_path(this_run)
