@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -242,6 +243,10 @@ def test_the_action_arrives_as_the_enum_not_the_string_it_was_written_as(tmp_pat
 
     path.write_text(json.dumps({finish_request.RUN_ID_KEY: 'batch-1'}))  # no action at all
     granted, reason = finish_request.evaluate(path, 'batch-1')
+    assert not granted and 'not a string this run can read' in reason
+
+    path.write_text(json.dumps({finish_request.ACTION_KEY: 'abort', finish_request.RUN_ID_KEY: 'batch-1'}))
+    granted, reason = finish_request.evaluate(path, 'batch-1')
     assert not granted and 'does not implement' in reason
 
 
@@ -251,6 +256,16 @@ def test_the_action_arrives_as_the_enum_not_the_string_it_was_written_as(tmp_pat
 # because what is under test is the read, not a fixture's idea of one.
 def _write_bytes(b: bytes):
     return lambda p: p.write_bytes(b)
+
+
+def _symlink_to_a_real_request(path: Path) -> None:
+    """A symlink whose target IS a request addressed to this run — so following it would GRANT.
+
+    Any account may create the link, and the account it points at need not be the one that may write
+    the request; refusing the link is what keeps the two the same decision."""
+    target = path.with_name('a-real-request')
+    write_request(target, run='batch-1')
+    path.symlink_to(target)
 
 
 _UNREADABLE_SHAPES = [
@@ -289,6 +304,27 @@ _UNREADABLE_SHAPES = [
         lambda p: p.write_text(json.dumps({finish_request.ACTION_KEY: finish_request.Action.FINISH})),
         'no addressee at all',
     ),
+    (
+        lambda p: p.write_text(
+            json.dumps({finish_request.ACTION_KEY: ['finish'], finish_request.RUN_ID_KEY: 'batch-1'})
+        ),
+        'an action that is a JSON array (unhashable)',
+    ),
+    (
+        lambda p: p.write_text(
+            json.dumps({finish_request.ACTION_KEY: {'do': 'finish'}, finish_request.RUN_ID_KEY: 'batch-1'})
+        ),
+        'an action that is a JSON object (unhashable)',
+    ),
+    (
+        lambda p: p.write_text(json.dumps({finish_request.ACTION_KEY: 7, finish_request.RUN_ID_KEY: 'batch-1'})),
+        'an action that is a number',
+    ),
+    # The request directory is world-writable by design, so what sits at the path is not necessarily
+    # a file. A device belongs to this class too, and is absent only because creating one needs root.
+    # The FIFO has a test of its own below: it is the member that hangs rather than fails.
+    (_symlink_to_a_real_request, 'a symlink rather than a file'),
+    (lambda p: p.mkdir(), 'a directory rather than a file'),
 ]
 
 
@@ -302,6 +338,26 @@ def test_no_unreadable_request_ever_raises_out_of_the_reader(tmp_path, write, sh
 
     assert not granted, shape
     assert reason, f'a refusal says why, for the log: {shape}'
+
+
+def test_a_fifo_at_the_request_path_is_refused_rather_than_waited_on(tmp_path):
+    """The one shape that does not fail but HANGS, which no refusal can reach.
+
+    Opened by name, a FIFO with no writer holds the `open` until one arrives, and this poller runs in
+    the foreground, so the run stops there mid-episode. Bounded in a thread so a regression fails the
+    suite instead of hanging it."""
+    path = tmp_path / 'finish'
+    os.mkfifo(path)
+    outcome: list[tuple[bool, str]] = []
+    reader = threading.Thread(target=lambda: outcome.append(finish_request.evaluate(path, 'batch-1')), daemon=True)
+
+    reader.start()
+    reader.join(timeout=10.0)
+
+    assert not reader.is_alive(), 'the read blocked on the FIFO instead of refusing it'
+    granted, reason = outcome[0]
+    assert not granted
+    assert reason, 'a refusal says why, for the log'
 
 
 def test_the_unreadable_boundary_answers_for_a_shape_nobody_listed(tmp_path, monkeypatch):

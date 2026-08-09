@@ -45,10 +45,11 @@ THE CONTRACT, which a writer in another repository implements against:
            rather than the record itself: asserting it twice is asserting it once.
 
 It FAILS CLOSED, where closed means the run keeps running: an absent file, an unreadable one, one
-that does not parse, one naming another run, and one whose action is not `finish` are all ignored,
-each logged once. The failure this ordering prevents is a run stopped by something that was never a
-request — the mirror of the writer's own problem, which is a request that is never picked up, and
-which the writer answers with a bounded wait rather than by assuming this side acted.
+that is not a regular file, one that does not parse, one naming another run, and one whose action is
+not `finish` are all ignored, each logged once. The failure this ordering prevents is a run stopped
+by something that was never a request — the mirror of the writer's own problem, which is a request
+that is never picked up, and which the writer answers with a bounded wait rather than by assuming
+this side acted.
 
 Nothing is installed when `ROLLOUT_RUN_ID` is unset, so an ordinary local run is untouched.
 """
@@ -56,6 +57,7 @@ Nothing is installed when `ROLLOUT_RUN_ID` is unset, so an ordinary local run is
 import json
 import logging
 import os
+import stat
 import time
 from enum import StrEnum
 from pathlib import Path
@@ -92,8 +94,8 @@ POLL_INTERVAL_S = 2.0
 # Printed to the run's log the moment a request is granted, and part of the contract: it is the only
 # way the writer can tell a request still being worked through — the run is mid-episode, which can
 # take minutes — from one that never arrived at all, because the path is wrong, the file is
-# unreadable, or this run predates the poller. Those need opposite responses from whoever asked, and
-# from outside the process both look like a run that is still running.
+# unreadable, or the run carries no poller because nothing named it. Those need opposite responses
+# from whoever asked, and from outside the process both look like a run that is still running.
 ACK_LOG_MARKER = 'rollout finish request granted'
 
 # A request is a small object — the writer's own is around 120 bytes — and this reads a file any
@@ -153,16 +155,40 @@ _ACTIONS = frozenset(Action)
 
 def _read(path: Path, this_run: str) -> tuple[bool, str]:
     """`evaluate`'s body, which may raise anything in `UNREADABLE`; it catches them."""
-    with path.open('rb') as f:
-        # One byte past the bound, so the file that exceeds it is recognised rather than truncated
-        # into something that might parse.
-        blob = f.read(MAX_REQUEST_BYTES + 1)
+    # Opened by DESCRIPTOR, because the path is one any account on the rig may create and what it
+    # names is therefore not necessarily a file. `O_NONBLOCK` is what stops a FIFO left there holding
+    # the open until somebody writes to it — this poller runs in the foreground, so that wait is the
+    # whole run, hung in a way no refusal can reach. `O_NOFOLLOW` refuses a symlink outright, with
+    # `ELOOP`, an `OSError` and so a refusal, rather than reading whatever it points at. The `fstat`
+    # answers for the rest — a directory, a device — before a byte is read, and it reads the
+    # descriptor already open rather than the path, so nothing can be swapped underneath the check.
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    try:
+        mode = os.fstat(fd).st_mode
+        if not stat.S_ISREG(mode):
+            return False, f'finish request at {path} is not a regular file ({stat.filemode(mode)}); continuing to run'
+        with os.fdopen(fd, 'rb', closefd=False) as f:
+            # One byte past the bound, so the file that exceeds it is recognised rather than
+            # truncated into something that might parse.
+            blob = f.read(MAX_REQUEST_BYTES + 1)
+    finally:
+        os.close(fd)
     if len(blob) > MAX_REQUEST_BYTES:
         return False, f'finish request at {path} is larger than {MAX_REQUEST_BYTES} bytes; continuing to run'
     request = json.loads(blob.decode())
     if not isinstance(request, dict):
         return False, f'finish request at {path} is {type(request).__name__}, not an object; continuing to run'
     named = request.get(ACTION_KEY)
+    # An action is a string on the wire, and the type is checked before the value because JSON's
+    # containers are unhashable: an array or object reaching the membership test below raises
+    # `TypeError`, which is not in `UNREADABLE` and so ends the World mid-episode. An absent key
+    # arrives here too, as `None`, and is the same fact — nothing an action can be read from.
+    if not isinstance(named, str):
+        return (
+            False,
+            f'finish request at {path} names action {named!r}, which is not a string this run can read; '
+            'continuing to run',
+        )
     if named not in _ACTIONS:
         return (
             False,
