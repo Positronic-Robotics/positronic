@@ -311,11 +311,16 @@ def test_missing_declaration_fails_before_motion():
 
 @pytest.mark.parametrize(
     'declared',
-    [{'seq': []}, {'name': 'restrict_image_size'}, {'seq': [{'name': 'chunked_schedule'}] * 2}],
-    ids=['empty', 'unscheduled', 'double'],
+    [
+        {'seq': []},
+        {'name': 'restrict_image_size'},
+        {'seq': [{'name': 'chunked_schedule'}] * 2},
+        {'seq': [{'name': 'action_timestamp', 'args': {'fps': 10.0}}, {'name': 'chunked_schedule'}]},
+    ],
+    ids=['empty', 'unscheduled', 'double', 'misordered'],
 )
-def test_stack_needs_exactly_one_scheduler(declared):
-    """None leaves the chunk's relative timestamps unanchored; a second anchors the anchored ones again."""
+def test_unanchored_stack_fails_before_motion(declared):
+    """Whatever leaves actions out of wall time: no scheduler, two of them, or one stamping over the anchor."""
     policy, _ = _mock_remote_policy({'local_stack': declared})
     with pytest.raises(ValueError, match='ChunkedSchedule'):
         policy.new_session()

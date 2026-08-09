@@ -18,7 +18,7 @@ from starlette.datastructures import QueryParams
 from positronic import keys
 from positronic.policy import Codec, Policy, Recorder
 from positronic.policy.base import PolicyWrapper
-from positronic.policy.spec import ModelSource, Pipeline, schedules_once, split
+from positronic.policy.spec import ModelSource, Pipeline, anchors_timestamps, split
 from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
@@ -26,10 +26,11 @@ logger = logging.getLogger(__name__)
 
 def _require_schedule(local: PolicyWrapper | None) -> PolicyWrapper:
     """The rig-side half a served pipeline must carry."""
-    if local is None or not schedules_once(local):
+    if local is None or not anchors_timestamps(local):
         raise ValueError(
-            'The pipeline needs exactly one ChunkedSchedule left of the `remote` marker: with none its '
-            'actions reach the rig with no wall-time anchor, and each extra one anchors them again'
+            'The rig-side half needs exactly one ChunkedSchedule, outermost of any ActionTimestamp or '
+            'ActionHorizon: it is what puts actions in wall time, and anything outside it stamps them '
+            'back to chunk-relative'
         )
     return local
 

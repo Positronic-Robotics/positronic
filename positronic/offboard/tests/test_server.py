@@ -215,11 +215,16 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
 
 @pytest.mark.parametrize(
     'local',
-    [None, RestrictImageSize(224, 224), ChunkedSchedule() | ChunkedSchedule()],
-    ids=['empty', 'unscheduled', 'double'],
+    [
+        None,
+        RestrictImageSize(224, 224),
+        ChunkedSchedule() | ChunkedSchedule(),
+        ActionTimestamp(fps=10.0) | ChunkedSchedule(),
+    ],
+    ids=['empty', 'unscheduled', 'double', 'misordered'],
 )
-def test_pipeline_needs_exactly_one_scheduler_at_startup(make_mock_policy, local):
-    """None leaves the chunk's relative timestamps unanchored; a second anchors the anchored ones again."""
+def test_unanchored_pipeline_refused_at_startup(make_mock_policy, local):
+    """Whatever leaves actions out of wall time: no scheduler, two of them, or one stamping over the anchor."""
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     head = remote if local is None else local | remote
     with pytest.raises(ValueError, match='ChunkedSchedule'):

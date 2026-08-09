@@ -184,10 +184,18 @@ def split(pipeline: Pipeline | PolicyWrapper) -> tuple[PolicyWrapper | None, Rem
     return _join(components[:idx]), border, _join(components[idx + 1 :])
 
 
-def schedules_once(stack: PolicyWrapper) -> bool:
-    """Whether ``stack`` carries exactly one ``ChunkedSchedule``, the wrapper that anchors relative action
-    timestamps to wall time."""
-    return sum(isinstance(component, ChunkedSchedule) for component in stack._wrappers()) == 1
+# Codecs that stamp actions relative to their chunk. Left is outermost and the outermost writer wins, so
+# a scheduler inside one of these has its wall-time anchoring overwritten on the way out.
+_RELATIVE_TIMESTAMP = (ActionTimestamp, ActionHorizon)
+
+
+def anchors_timestamps(stack: PolicyWrapper) -> bool:
+    """Whether ``stack`` hands the rig actions in wall time: one ``ChunkedSchedule``, outside every codec
+    that stamps them relative to the chunk."""
+    components = stack._wrappers()
+    scheduled = [i for i, c in enumerate(components) if isinstance(c, ChunkedSchedule)]
+    relative = [i for i, c in enumerate(components) if isinstance(c, _RELATIVE_TIMESTAMP)]
+    return len(scheduled) == 1 and all(i > scheduled[0] for i in relative)
 
 
 def inline(pipeline: Pipeline) -> Policy:
