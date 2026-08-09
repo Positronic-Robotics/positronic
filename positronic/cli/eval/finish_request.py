@@ -1,10 +1,11 @@
 """Ending an attended run from outside it, without a signal.
 
-An attended run is ended by its operator surface: the web console POSTs `/finish_run` to itself. A
-run driven by the local eval UI serves no port, and this is the surface an orchestrator ends one
-through. It writes a small file; the run polls it and, once the episode in progress has completed,
-stops the way a plan running out stops. What follows is the ordinary shutdown — the World unwinds,
-the recorder commits, the mirror uploads on process exit, and the arm's driver releases control.
+An attended run is ended by its operator surface: the web console serves `POST /directive/finish`. A
+run driven by the local eval UI serves nothing, so an orchestrator has no surface to post to, and
+this is what it ends one through instead. It writes a small file; the run polls it and, once the
+episode in progress has completed, stops the way a plan running out stops. What follows is the
+ordinary shutdown — the World unwinds, the recorder commits, the mirror uploads on process exit, and
+the arm's driver releases control.
 
 A signal is not an alternative to it: nothing unwinds the World, so the recording is not closed, the
 dataset is not uploaded, and the arm keeps its control token.
@@ -46,11 +47,11 @@ THE CONTRACT, which a writer in another repository implements against:
            rather than the record itself: asserting it twice is asserting it once.
 
 It FAILS CLOSED, where closed means the run keeps running: an absent file, an unreadable one, one
-that is not a regular file, one that does not parse, one naming another run, and one whose action is
-not `finish` are all ignored, each logged once. The failure this ordering prevents is a run stopped
-by something that was never a request — the mirror of the writer's own problem, which is a request
-that is never picked up, and which the writer answers with a bounded wait rather than by assuming
-this side acted.
+that is not a regular file, one past the size bound, one that does not parse, one that is not an
+object, one whose action is not a string naming `finish`, and one naming another run are all ignored,
+each logged once. The failure this ordering prevents is a run stopped by something that was never a
+request — the mirror of the writer's own problem, which is a request that is never picked up, and
+which the writer answers with a bounded wait rather than by assuming this side acted.
 
 Nothing is installed when `ROLLOUT_RUN_ID` is unset, so an ordinary local run is untouched.
 """
@@ -78,7 +79,7 @@ RUN_ID_ENV = 'ROLLOUT_RUN_ID'
 
 # The object's two required fields, and the closed set of actions it may name. A second action
 # (discard the open episode and stop) is a new member here rather than a second file. The wire form
-# is the member's value, converted once in `evaluate`, so an unknown one is a refusal rather than a
+# is the member's value, converted once in `_read`, so an unknown one is a refusal rather than a
 # string carried further in.
 ACTION_KEY = 'action'
 RUN_ID_KEY = 'run_id'
@@ -105,9 +106,9 @@ ACK_LOG_MARKER = 'rollout finish request granted'
 MAX_REQUEST_BYTES = 64 * 1024
 
 # EVERY way a file can fail to become a request, named once. `OSError` is the file itself — a
-# permission, an I/O error, a directory in its place. `ValueError` covers the decode
-# (`UnicodeDecodeError`) and the parse (`JSONDecodeError`), both subclasses of it. `RecursionError`
-# is the JSON parser's own nesting limit, which is not a `ValueError` at all.
+# permission, an I/O error, the `ELOOP` a symlink takes under `O_NOFOLLOW`. `ValueError` covers the
+# decode (`UnicodeDecodeError`) and the parse (`JSONDecodeError`), both subclasses of it.
+# `RecursionError` is the JSON parser's own nesting limit, which is not a `ValueError` at all.
 UNREADABLE = (OSError, ValueError, RecursionError)
 
 
