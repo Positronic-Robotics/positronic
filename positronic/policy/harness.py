@@ -277,9 +277,7 @@ class Harness(pimm.ControlSystem):
         must move forward too, or it will re-infer before the driver has actually played the (shifted)
         trajectory.
 
-        TODO: the simulated inference cost belongs in the scheduling wrapper, which already anchors the
-        chunk to inference-finish — one source for the chunk's end would delete this walk and the
-        post-shift that makes it necessary. Only the harness can yield the sleep, which is the open problem.
+        TODO: move the simulated inference cost into the scheduling wrapper, deleting this walk and the post-shift.
         """
         s = self._policy_session
         while s is not None:
