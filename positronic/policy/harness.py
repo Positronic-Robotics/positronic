@@ -277,7 +277,7 @@ class Harness(pimm.ControlSystem):
         must move forward too, or it will re-infer before the driver has actually played the (shifted)
         trajectory.
 
-        TODO: move the simulated inference cost into the scheduling wrapper, deleting this walk and the post-shift.
+        TODO: reaching the wrapper by attribute-name guessing and writing its private state breaks on any rename.
         """
         s = self._policy_session
         while s is not None:
