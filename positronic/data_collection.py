@@ -3,6 +3,7 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import nullcontext
 from enum import Enum
+from typing import Any
 
 import configuronic as cfn
 import numpy as np
@@ -296,7 +297,7 @@ def main_sim(
     cameras = {name: sim.cameras[orig_name] for name, orig_name in cameras.items()}
     gui = dpg_ui()
 
-    static_meta = dict(wire.ROBOT_STATIC_META)
+    static_meta: dict[str, Any] = dict(wire.ROBOT_STATIC_META)
     if task is not None:
         static_meta[keys.TASK] = task
 

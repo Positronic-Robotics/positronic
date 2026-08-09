@@ -26,11 +26,11 @@ from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.video import VideoSignal
 from positronic.utils.rerun_compat import flatten_numeric, log_series_styles, set_timeline_time
 
-# TODO: 3D visualization roles (pose_signals, joint_signal) are currently read from episode
+# TODO: 3D visualization roles (pose_signals, joint_signals) are currently read from episode
 # static data as flat keys. A cleaner long-term solution is signal-level metadata: each Signal
 # would carry a `role` (e.g. 'transform3d', 'joint_position') and optionally a `robot` reference
 # linking it to a robot model in static. This would:
-# - Eliminate the need for pose_signals/joint_signal keys in static
+# - Eliminate the need for pose_signals/joint_signals keys in static
 # - Support multiple robots naturally (each signal references its own model)
 # - Keep semantics with the signal that produces them, not in a parallel list
 # - Require extending SignalMeta (currently dtype/shape/kind) with user-settable fields
@@ -64,6 +64,7 @@ class EpisodeSignals:
     numerics: list[str]
     dims: dict[str, int]
     poses: list[str]
+    joints: list[str]
 
     @property
     def plotted(self) -> dict[str, int]:
@@ -164,9 +165,19 @@ def _unplotted_notice(unplotted: dict[str, int]) -> str:
     )
 
 
+# The retired singular spelling of `keys.JOINT_SIGNALS`. It lives here rather than in `keys` because nothing
+# writes it any more — only released data carries it, and only until #587 converts that data.
+_SINGULAR_JOINT_SIGNAL = 'joint_signal'
+
+
 def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
-    pose_set = set(ep.static.get('pose_signals', []))
-    signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[])
+    pose_set = set(ep.static.get(keys.POSE_SIGNALS, []))
+    joint_set = set(ep.static.get(keys.JOINT_SIGNALS, []))
+    # TODO(#587): drop once the published PhAIL dataset carries the plural key. Its `static.json` has the
+    # singular one baked in, so without this a released episode loses its arm model and joint names.
+    if _SINGULAR_JOINT_SIGNAL in ep.static:
+        joint_set.add(ep.static[_SINGULAR_JOINT_SIGNAL])
+    signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[], joints=[])
     for name, sig in ep.signals.items():
         if sig.kind == Kind.IMAGE:
             try:
@@ -184,6 +195,8 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
         signals.dims[name] = dim
         if name in pose_set:
             signals.poses.append(name)
+        if name in joint_set:
+            signals.joints.append(name)
     return signals
 
 
@@ -251,15 +264,8 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
     )
 
 
-def _joint_signals(ep: Episode) -> set[str]:
-    names: set[str] = set(ep.static.get('joint_signals', ()))
-    if ep.static.get('joint_signal'):  # TODO(#511): drop the singular fallback once published datasets migrate.
-        names.add(ep.static['joint_signal'])
-    return names
-
-
 def _setup_series_names(signals: EpisodeSignals, ep: Episode) -> None:
-    joint_set = _joint_signals(ep)
+    joint_set = set(signals.joints)
     joint_names = ep.static.get(keys.JOINT_NAMES)
     pose_set = set(signals.poses)
     for key, dim in signals.plotted.items():
@@ -369,9 +375,8 @@ def _log_numeric_signals(
     A signal too wide to plot is still read, so that a joint or pose vector of any width reaches the
     3D view.
     """
-    pose_set = set(signals.poses)
     gripper = ep.static.get('gripper')
-    stash_keys = pose_set | _joint_signals(ep)
+    stash_keys = set(signals.poses) | set(signals.joints)
     if gripper:
         stash_keys.add(gripper['signal'])
     pose_data = {}
@@ -407,9 +412,13 @@ def _log_numeric_signals(
 _ROBOT_VISUAL_RGBA = '1 1 1 0.5'
 
 
-def _write_urdf_to_dir(urdf_str: str, meshes: dict[str, bytes], dest: Path) -> Path:
-    """Write URDF and mesh files to a directory, rewriting mesh filenames to absolute paths and
-    tinting every visual translucent white."""
+def _write_urdf_to_dir(urdf_str: str, meshes: dict[str, bytes], dest: Path, namespace: str) -> Path:
+    """Write URDF and mesh files to a directory, rewriting mesh filenames to absolute paths, tinting
+    every visual translucent white, and prefixing every link and joint name with ``namespace``.
+
+    Rerun keys a transform on the link name, so two arms driving the same model need their link names
+    apart or they resolve to one another's frames.
+    """
     root = ET.fromstring(urdf_str)
     for mesh_el in root.iter('mesh'):
         filename = mesh_el.get('filename', '')
@@ -418,6 +427,11 @@ def _write_urdf_to_dir(urdf_str: str, meshes: dict[str, bytes], dest: Path) -> P
     for visual_el in root.iter('visual'):
         material_el = ET.SubElement(visual_el, 'material', name='viewer_translucent')
         ET.SubElement(material_el, 'color', rgba=_ROBOT_VISUAL_RGBA)
+    for el in root.iter():
+        if el.tag in ('link', 'joint'):
+            el.set('name', namespace + el.get('name', ''))
+        elif el.tag in ('parent', 'child'):
+            el.set('link', namespace + el.get('link', ''))
     urdf_path = dest / 'robot.urdf'
     urdf_path.write_text(ET.tostring(root, encoding='unicode'))
     for name, data in meshes.items():
@@ -426,7 +440,7 @@ def _write_urdf_to_dir(urdf_str: str, meshes: dict[str, bytes], dest: Path) -> P
     return urdf_path
 
 
-def _animate_joint(joint, q_column: np.ndarray, ts_arr: np.ndarray, prefix: str) -> None:
+def _animate_joint(joint, q_column: np.ndarray, ts_arr: np.ndarray, entity_path: str) -> None:
     """Compute and log transforms for a single URDF joint across all timesteps."""
     n = len(ts_arr)
     translations = np.empty((n, 3), dtype=np.float64)
@@ -436,7 +450,7 @@ def _animate_joint(joint, q_column: np.ndarray, ts_arr: np.ndarray, prefix: str)
         translations[i] = t.translation.as_arrow_array().to_pylist()[0]
         quaternions[i] = t.quaternion.as_arrow_array().to_pylist()[0]
     rr.send_columns(
-        f'{prefix}/{joint.child_link}',
+        entity_path,
         indexes=[rr.TimeColumn('time', timestamp=ts_arr)],
         columns=rr.Transform3D.columns(
             translation=translations,
@@ -451,26 +465,34 @@ _URDF_ANIM_HZ = 15
 
 
 def _log_urdf_robot(
-    ep: Episode, numeric_data: dict[str, tuple[np.ndarray, np.ndarray]], drainer: _BinaryStreamDrainer
-) -> Generator[bytes, None, str | None]:
-    """Log URDF robot model with animated joint angles. Returns root frame name."""
-    joint_sigs = sorted(_joint_signals(ep) & numeric_data.keys())
+    ep: Episode, joint_sig: str, numeric_data: dict[str, tuple[np.ndarray, np.ndarray]], drainer: _BinaryStreamDrainer
+) -> Iterator[bytes]:
+    """Log the episode's robot model, its joints animated by `joint_sig`."""
     joint_names = ep.static.get(keys.JOINT_NAMES)
     urdf_str = ep.static.get(keys.URDF)
     meshes = ep.static.get('meshes')
-    if not all((joint_sigs, joint_names, urdf_str, meshes)):
-        return None
-    ts_arr, q_vals = numeric_data[joint_sigs[0]]
+    if not (joint_names and urdf_str and meshes):
+        return
+    ts_arr, q_vals = numeric_data[joint_sig]
     if q_vals.shape[1] != len(joint_names):
-        return None
+        logging.warning(
+            f'{joint_sig} carries {q_vals.shape[1]} angles for {len(joint_names)} model joints; skipping its model'
+        )
+        return
+    mount = ep.static.get(keys.MOUNTS, {}).get(joint_sig)
+    namespace = f'{joint_sig}.'
+    prefix = f'/3d/robot/{joint_sig}'
 
-    prefix = '/3d/robot'
+    def link_path(joint) -> str:
+        return f'{prefix}/{joint.child_link.removeprefix(namespace)}'
+
     with tempfile.TemporaryDirectory() as tmp:
-        urdf_path = _write_urdf_to_dir(urdf_str, meshes, Path(tmp))
+        urdf_path = _write_urdf_to_dir(urdf_str, meshes, Path(tmp), namespace)
         rr.log_file_from_path(str(urdf_path), entity_path_prefix=prefix, static=True)
         tree = UrdfTree.from_file_path(str(urdf_path), entity_path_prefix=prefix)
 
-    root_frame = tree.root_link().name
+    # An unattached root link frame shares no space with the poses, and the loader leaves it that way.
+    rr.log(prefix, rr.Transform3D(translation=mount or np.zeros(3), child_frame=tree.root_link().name), static=True)
     yield from drainer.drain()
 
     # Downsample to ~15Hz — robot motion is smooth enough, avoids bloating the RRD
@@ -482,25 +504,25 @@ def _log_urdf_robot(
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         for j_idx, name in enumerate(joint_names):
-            joint = tree.get_joint_by_name(name)
+            joint = tree.get_joint_by_name(namespace + name)
             if joint is not None:
-                _animate_joint(joint, q_ds[:, j_idx], ts_ds, prefix)
+                _animate_joint(joint, q_ds[:, j_idx], ts_ds, link_path(joint))
                 yield from drainer.drain()
 
         # A single ``grip`` signal in [0, 1] drives the gripper joints, each joint's axis sign setting
         # its direction; recordings can overshoot slightly, so clip before scaling by ``travel``.
+        # TODO: the spec names one signal, so every model grips with it. Arms that grip independently
+        # need it pluralized the way `joint_signals` is.
         gripper = ep.static.get('gripper')
         if gripper and gripper['signal'] in numeric_data:
             grip_ts, grip_vals = numeric_data[gripper['signal']]
             grip_step = max(1, len(grip_ts) // target_samples)
             finger_pos = np.clip(grip_vals[::grip_step, 0], 0.0, 1.0) * gripper['travel']
             for name in gripper['joints']:
-                joint = tree.get_joint_by_name(name)
+                joint = tree.get_joint_by_name(namespace + name)
                 if joint is not None:
-                    _animate_joint(joint, finger_pos, grip_ts[::grip_step], prefix)
+                    _animate_joint(joint, finger_pos, grip_ts[::grip_step], link_path(joint))
                     yield from drainer.drain()
-
-    return root_frame
 
 
 def _log_pose_signals(
@@ -509,8 +531,10 @@ def _log_pose_signals(
     numeric_data: dict[str, tuple[np.ndarray, np.ndarray]],
     drainer: _BinaryStreamDrainer,
 ) -> Iterator[bytes]:
-    """Log 3D pose: static full trajectory + current position ball + optional URDF robot."""
-    root_frame = yield from _log_urdf_robot(ep, numeric_data, drainer)
+    """Log 3D pose: static full trajectory + current position ball + a URDF model per joint signal."""
+    for joint_sig in signals.joints:
+        if joint_sig in numeric_data:
+            yield from _log_urdf_robot(ep, joint_sig, numeric_data, drainer)
 
     for key in signals.poses:
         if key not in numeric_data:
@@ -520,11 +544,6 @@ def _log_pose_signals(
             continue
         positions = vals[:, :3]
         color = _pose_color(key)
-
-        # Connect pose entities to the URDF root frame so they share the same 3D space
-        if root_frame:
-            rr.log(f'/3d/{key}', rr.Transform3D(parent_frame=root_frame), static=True)
-            rr.log(f'/3d/{key}/trail', rr.Transform3D(parent_frame=root_frame), static=True)
 
         _log_static_trail(f'/3d/{key}/trail', positions, color)
 

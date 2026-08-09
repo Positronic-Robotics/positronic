@@ -33,6 +33,12 @@ JOINT_NAMES = 'joint_names'
 # transform. Absent means they are in that frame itself; ``ChangeEEFrame`` writes it when it moves them.
 EE_FRAME = 'ee_frame'
 
+# The 3D viewer's pointers into an episode: which signals carry joint angles, which carry poses. One arm per
+# ``JOINT_SIGNALS`` entry, each running ``URDF`` and standing where ``MOUNTS`` places it, keyed by that signal.
+JOINT_SIGNALS = 'joint_signals'
+POSE_SIGNALS = 'pose_signals'
+MOUNTS = 'mounts'
+
 # The inference handshake: a policy reports these through its ``meta``, a remote policy nests the serving
 # half under ``SERVER``, and the harness records the result under ``POLICY_META``. ``TYPE`` names the policy
 # at the top level and the vendor under ``SERVER``, so a reader composes a prefix with a field:

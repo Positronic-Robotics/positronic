@@ -504,7 +504,7 @@ def test_harness_waits_for_complete_inputs(world):
 @pytest.mark.timeout(3.0)
 def test_episode_meta_stamped_at_finalize(world):
     policy = StubPolicy(meta={'type': 'stub', 'checkpoint': 'v1'})
-    harness = Harness(policy, make_embodiment(), static_meta={'joint_signal': keys.JOINTS})
+    harness = Harness(policy, make_embodiment(), static_meta={keys.JOINT_SIGNALS: [keys.JOINTS]})
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
@@ -520,7 +520,7 @@ def test_episode_meta_stamped_at_finalize(world):
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
     meta = stops[0].static_data
-    assert meta['joint_signal'] == keys.JOINTS
+    assert meta[keys.JOINT_SIGNALS] == [keys.JOINTS]
     assert meta[keys.URDF] == '<robot/>'
     assert meta[keys.JOINT_NAMES] == ['j1']
     assert meta['inference.policy.type'] == 'stub'
