@@ -13,7 +13,6 @@ from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy, Session
-from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils import flatten_dict, frozen_view
 
 # How far from now an action may be scheduled. A chunk spans seconds, so this is loose enough that no real
@@ -255,36 +254,19 @@ class Harness(pimm.ControlSystem):
         meta.update(context)
         return meta
 
-    def _home(self, clock):
-        now = clock.now_ns()
-        for name, value in self._embodiment.home.items():
-            self.commands[name].emit([(now, value)])
-
-    def _apply_manual(self, action: dict[str, Any], clock: pimm.Clock) -> None:
+    def _emit_now(self, action: dict[str, Any], clock: pimm.Clock) -> None:
         now = clock.now_ns()
         for name, value in action.items():
             self.commands[name].emit([(now, value)])
+
+    def _home(self, clock: pimm.Clock) -> None:
+        self._emit_now(self._embodiment.home, clock)
 
     def _pace(self) -> pimm.Command:
         """Sim mode: yield so the simulator's control-period sleep is the sole time-master — the policy
         reads each observation instantly, matching the gym contract. Real mode: sleep the poll period to
         hold wall-clock rate."""
         return pimm.Yield() if self._embodiment.simulated else pimm.Sleep(0.01)
-
-    def _bump_schedule_end(self, delta_sec: float) -> None:
-        """Shift the active ``ChunkedSchedule._Session`` ``_trajectory_end`` by ``delta_sec``.
-
-        Used by ``inference_latency``: the session anchored the chunk pre-sleep, then we slept and
-        post-shifted the emitted timestamps. The scheduling wrapper's internal end-of-chunk gate
-        must move forward too, or it will re-infer before the driver has actually played the (shifted)
-        trajectory.
-        """
-        s = self._policy_session
-        while s is not None:
-            if isinstance(s, ChunkedSchedule._Session) and s._trajectory_end is not None:
-                s._trajectory_end += delta_sec
-                return
-            s = getattr(s, '_inner', None)
 
     def _cancel_trajectories(self) -> None:
         """Drop any in-flight chunk from drivers and from the recording's tail.
@@ -301,13 +283,27 @@ class Harness(pimm.ControlSystem):
         if self._policy_session is not None:
             self._policy_session.cancel()
 
-    def _finalize_recording(self, payload: dict[str, Any] | None = None) -> None:
+    def _finalize_recording(
+        self, clock: pimm.Clock, payload: dict[str, Any] | None = None
+    ) -> Generator[pimm.Command, None, None]:
         """Commit the live episode: tally completion, cancel the in-flight chunk, stop the recorder —
-        stamping the episode's full static meta (plus any terminal payload) at finalize."""
+        stamping the episode's full static meta (plus any terminal payload) — then close its span."""
         if self._policy_session:
             self._on_complete(self._policy_session, self.context)
         self._cancel_trajectories()
         self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(self.context), **(payload or {})}))
+        # The rollout's virtual duration ends here — the round below advances the sim clock, and that advance
+        # belongs to no rollout.
+        virtual_now = clock.now()
+        # Let the recorder commit the STOP before the next START (they share ``ds_command`` — without a round
+        # between, last-value-wins would drop one) and before the home command, so homing stays out of the
+        # recording.
+        yield self._pace()
+        # End the episode span after that round, so the recorder's STOP-time record.io span (which parents to
+        # the episode) is captured while it is still in flight. Accepted skew: a producer that also steps during
+        # that shared round charges one more span (≤ one control period per episode) to the closing episode —
+        # the cooperative scheduler cannot give the recorder a turn alone.
+        self._telemetry.end(virtual_now)
 
     def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> None:
         """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
@@ -354,23 +350,12 @@ class Harness(pimm.ControlSystem):
             if abort:
                 self._cancel_trajectories()  # abort has no finalize to do it — stop drivers before the home
                 self.ds_command.emit(DsWriterCommand.ABORT())
-            else:
-                self._finalize_recording(payload)
-            # The rollout's virtual duration ends here — the flush round below advances the sim clock, and that
-            # advance belongs to no rollout.
-            virtual_now = clock.now()
-            # Let the recorder commit the STOP/ABORT before the next START (they share ``ds_command`` —
-            # without a round between, last-value-wins would drop one) and before the home command, so
-            # homing stays out of the recording.
-            yield self._pace()
-            # End the episode span after that round, so the recorder's STOP-time record.io span (which parents
-            # to the episode) is captured while it is still in flight. Accepted skew: a producer that also
-            # steps during that shared round charges one more span (≤ one control period per episode) to the
-            # closing episode — the cooperative scheduler cannot give the recorder a turn alone.
-            if abort:
+                # Let the recorder commit the ABORT before the next START (they share ``ds_command`` — without
+                # a round between, last-value-wins would drop one) and before the home command.
+                yield self._pace()
                 self._telemetry.abort()
             else:
-                self._telemetry.end(virtual_now)
+                yield from self._finalize_recording(clock, payload)
         if self._policy_session:
             self._policy_session.close()
             self._policy_session = None
@@ -454,6 +439,8 @@ class Harness(pimm.ControlSystem):
         The session output already carries absolute timestamps (stamped by the
         outermost scheduling wrapper). The harness only demuxes by channel.
         """
+        session = self._policy_session
+        assert session is not None, 'a step runs only inside a live episode'
         obs = self._build_obs(clock)
         if obs is None:
             return
@@ -469,17 +456,17 @@ class Harness(pimm.ControlSystem):
         # Advance the (sim) clock by the inference cost so rollouts feel the model's latency. We only
         # sleep on cycles where inference actually ran (session returned a chunk) — otherwise blocked
         # cycles would slow the harness's directive-handling loop. The trajectory was anchored
-        # pre-sleep, so we post-shift it and also bump the scheduling wrapper's internal
-        # ``_trajectory_end`` to stay consistent.
+        # pre-sleep, so we post-shift it and tell the session to follow — a scheduling wrapper gates
+        # re-inference on the chunk's end, which has moved.
         wall_start = time.monotonic()
-        actions = self._policy_session(frozen_view(obs))
+        actions = session(frozen_view(obs))
         if actions is None:
             return
         delay = self._inference_delay(wall_start)
         if delay > 0.0:
             yield pimm.Sleep(delay)
             actions = [{**a, 'timestamp': a['timestamp'] + delay} for a in actions]
-            self._bump_schedule_end(delay)
+            session.shift(delay)
 
         # Recheck the deadline: the latency sleep (or a slow inference call on a real clock) may have
         # crossed it. Drop the chunk rather than emit past the advertised self-termination point —
@@ -537,11 +524,13 @@ class Harness(pimm.ControlSystem):
             # Read every round so the updated flag clears even mid-episode; a press arriving during a
             # trial is consumed here and never replayed once idle.
             manual_msg = self.manual_command.read()
+            # Both receivers carry a default, so ``read`` always yields a message.
+            assert directive_msg is not None and manual_msg is not None
             if directive_msg.updated:
                 yield from self._handle_directive(directive_msg.data, clock)
             elif not self._running:
                 if manual_msg.updated and manual_msg.data is not None:
-                    self._apply_manual(manual_msg.data, clock)
+                    self._emit_now(manual_msg.data, clock)
                 elif self._trials is not None:
                     trial = next(self._trials, None)
                     if trial is None:  # plan exhausted — let the recorder commit the final episode, then exit
@@ -558,13 +547,7 @@ class Harness(pimm.ControlSystem):
             yield self._pace()
 
         if self._running:
-            self._finalize_recording()
-            virtual_now = clock.now()  # the flush round's clock advance belongs to no rollout
-            # Let the recorder commit the queued STOP while the episode span is still open — the same close
-            # order as ``_end_episode`` — so its shutdown-flush record.io span parents to the episode, not
-            # the pass.
-            yield self._pace()
-            self._telemetry.end(virtual_now)
+            yield from self._finalize_recording(clock)
         if self._policy_session:
             self._policy_session.close()
         # The harness does not own the policy's lifetime: the caller may run several harnesses over

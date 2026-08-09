@@ -115,6 +115,31 @@ class TestChunkedSchedule:
         result = session(_obs())
         assert result is not None
 
+    def test_shift_moves_the_re_inference_gate(self):
+        """A caller that delays a chunk's timestamps moves the gate with them, so the next inference still
+        waits for the driver to play the chunk out."""
+        clock = _FakeClock(t=1.0)
+        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
+        session = ChunkedSchedule().wrap(inner).new_session(now=clock.now)
+        session(_obs())  # trajectory ends at 1.5
+        session.shift(0.3)
+        clock.t = 1.6
+        assert session(_obs()) is None
+        clock.t = 1.9
+        assert session(_obs()) is not None
+
+    def test_shift_reaches_a_schedule_nested_in_another_wrapper(self):
+        """The caller holds only the outermost session, so the shift has to travel down the stack."""
+        clock = _FakeClock(t=1.0)
+        policy = (TemporalStack(keys=('v',), offsets_sec=(0.0,)) | ChunkedSchedule()).wrap(
+            _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
+        )
+        session = policy.new_session(now=clock.now)
+        session({'obs_time_ns': int(1e9), 'v': np.array([5.0])})  # trajectory ends at 1.5
+        session.shift(0.3)
+        clock.t = 1.6
+        assert session({'obs_time_ns': int(1.6e9), 'v': np.array([5.0])}) is None
+
 
 class TestPipelineComposition:
     """Test | operator across PolicyWrapper and Codec types."""

@@ -50,6 +50,14 @@ class Session(ABC):
         """
         return None
 
+    def shift(self, delta_sec: float):
+        """Move in-flight trajectory state later by ``delta_sec``, following timestamps the caller has
+        already shifted. Wrappers that gate on a trajectory's end (e.g. ``ChunkedSchedule``) must move it
+        too, or they re-infer before the driver has played the shifted chunk. Override and propagate via
+        ``super().shift(delta_sec)``.
+        """
+        return None
+
     def close(self):
         """End this session and release per-episode resources."""
         return None
@@ -70,6 +78,9 @@ class DelegatingSession(Session):
 
     def cancel(self):
         self._inner.cancel()
+
+    def shift(self, delta_sec: float):
+        self._inner.shift(delta_sec)
 
     def close(self):
         self._inner.close()
