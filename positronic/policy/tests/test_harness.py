@@ -35,6 +35,10 @@ from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
+# The camera channel every embodiment these tests build carries, named by the producer and the tests that
+# pair against it alike.
+CAM = 'image.cam'
+
 
 @contextmanager
 def _eval_pass(run_id: str):
@@ -49,7 +53,7 @@ def _eval_pass(run_id: str):
         telemetry.pop_anchor(span)
 
 
-def make_embodiment(descriptor: str = '', cameras=('image.cam',), static_meta=None) -> Embodiment:
+def make_embodiment(descriptor: str = '', cameras=(CAM,), static_meta=None) -> Embodiment:
     """Minimal Franka-shaped embodiment for harness unit tests.
 
     The sources/dests are no-ops: these tests pair the harness ports directly
@@ -237,7 +241,7 @@ def _pair_all(world, harness):
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
     return {
-        'frame_em': world.pair(harness.observations['image.cam']),
+        'frame_em': world.pair(harness.observations[CAM]),
         'robot_em': world.pair(harness.observations['robot_state']),
         'grip_em': world.pair(harness.observations[keys.GRIP]),
         'directive_em': world.pair(harness.directive),
@@ -303,7 +307,7 @@ def test_harness_emits_cartesian_move(world):
     harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
@@ -321,7 +325,7 @@ def test_harness_emits_cartesian_move(world):
 
     assert policy.last_obs is not None
     obs = policy.last_obs
-    assert 'image.cam' in obs
+    assert CAM in obs
     expected_pose = np.concatenate([robot_state.ee_pose.translation, robot_state.ee_pose.rotation.as_quat])
     np.testing.assert_allclose(obs[keys.EE_POSE], expected_pose)
     np.testing.assert_allclose(obs[keys.JOINTS], robot_state.q)
@@ -332,7 +336,7 @@ def test_harness_emits_cartesian_move(world):
     # Recording == canonical policy I/O: the policy sees the same ``robot_state`` serializer
     # the dataset records. wall/obs timestamps carry volatile values, so lock the stable key set.
     assert set(obs) - {'wall_time_ns', 'obs_time_ns'} == {
-        'image.cam',
+        CAM,
         keys.JOINTS,
         keys.JOINT_VEL,
         keys.EE_POSE,
@@ -362,7 +366,7 @@ def test_harness_passes_descriptor_to_policy(world):
     harness.commands['target_grip']._bind(RecordingEmitter())
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
@@ -392,7 +396,7 @@ def test_robot_model_stays_out_of_the_observation(world):
     harness.commands['target_grip']._bind(RecordingEmitter())
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations['grip'])
     directive_em = world.pair(harness.directive)
@@ -463,12 +467,12 @@ def test_harness_waits_for_complete_inputs(world):
     harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
-    assert 'image.cam' in harness.observations
+    assert CAM in harness.observations
 
     robot_state = make_robot_state([0.2, 0.0, -0.1], [0.7, 0.1, -0.2])
 
@@ -626,7 +630,7 @@ def test_trial_budget_starts_at_the_first_usable_observation(world):
     policy = SpyPolicy()
     embodiment = make_embodiment()
     usable = iter([None])  # the first camera sample is not ready; every later one is
-    embodiment.observations['image.cam'] = Observation(
+    embodiment.observations[CAM] = Observation(
         pimm.NoOpEmitter(), lambda frames: next(usable, Serializers.camera_images(frames))
     )
     harness = Harness(policy, embodiment, task=Task(instruction='test', timeout=0.05), trials=[{}])
@@ -939,7 +943,7 @@ def test_timeout_crossed_during_latency_sleep_drops_chunk(world):
     harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(ds_recorder)
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations[keys.GRIP])
 
@@ -1068,7 +1072,7 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
     harness.commands['target_grip']._bind(_LabeledRecorder('target_grip', events))
     harness.ds_command._bind(_LabeledRecorder('ds_command', events))
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
@@ -1122,7 +1126,7 @@ def test_empty_chunk_cancels_both_robot_and_grip(world):
     harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
@@ -1372,7 +1376,7 @@ def test_shutdown_cancels_trajectory_before_stop(world):
     harness.commands['target_grip']._bind(_LabeledRecorder('target_grip'))
     harness.ds_command._bind(_LabeledRecorder('ds_command'))
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
