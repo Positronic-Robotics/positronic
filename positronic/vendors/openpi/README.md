@@ -132,11 +132,9 @@ emits absolute `JointPosition` chunks executed at RoboLab's leaderboard cadence 
   `droid_jointpos` / `libero`, the paired OpenPI config. Available: `ee`, `ee_joints`, `ee_traj`,
   `ee_joints_traj`, `joints_traj`, `ee_flip_grip`, `droid`, `droid_jointpos`, `libero`
 - `--pipeline.source.checkpoints_dir`: Full path to the experiment directory containing checkpoints
-- `--pipeline.ee_frame`: The end-effector frame the checkpoint speaks, placed relative to the rig's `default`
-  (`@positronic.drivers.roboarm.models.DROID_EE_FRAME` is the one we ship). Required on the EE pipelines, since
-  a wrong or missing frame is silent — the arm goes to the wrong place and nothing errors. Pass `None` for a
-  checkpoint trained in `default`. The joint-space pipelines (`joints_traj`, `droid`, `droid_jointpos`) set it
-  themselves: no pose crosses the wire
+- `--pipeline.ee_frame`: The end-effector frame the checkpoint speaks, relative to the rig's `default`
+  (`@positronic.drivers.roboarm.models.DROID_EE_FRAME` is the one we ship). Required on the EE pipelines — pass
+  `None` for a checkpoint trained in `default`. The joint-space pipelines set it themselves: no pose crosses the wire
 - `--pipeline.source.checkpoint`: (Optional) Specific checkpoint step to load. If omitted, loads the latest checkpoint
 - `--pipeline.source.config_name`: (Optional) OpenPI config name; overrides the pipeline's pairing (base pipelines use `pi05_positronic_lowmem`)
 - `--port`: (Optional) Port to serve on (default: 8000)

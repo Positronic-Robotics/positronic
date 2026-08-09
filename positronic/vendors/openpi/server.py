@@ -261,8 +261,8 @@ ee_traj = pipeline.override(codec=codecs.ee_traj)
 ee_joints_traj = pipeline.override(codec=codecs.ee_joints_traj)
 # For checkpoints trained on inverted-grip (1 = open) data, e.g. the sim_stack recordings.
 ee_flip_grip = pipeline.override(**{'codec.flip_grip': True})
-# The joint-space codecs put no pose on the wire, so the codec settles the frame and no checkpoint bound here
-# can unsettle it. An EE-space DROID checkpoint would take ``ee_frame=models.DROID_EE_FRAME`` instead.
+# The joint-space codecs put no pose on the wire, so no checkpoint bound here can need a transform. An EE-space
+# DROID checkpoint would take ``ee_frame=models.DROID_EE_FRAME`` instead.
 joints_traj = pipeline.override(codec=codecs.joints_traj, ee_frame=None)
 droid_pipe = pipeline.override(codec=codecs.droid, ee_frame=None, **{'source.config_name': 'pi05_droid'})
 droid_jointpos_pipe = pipeline.override(
@@ -281,8 +281,8 @@ COMMANDS = {
     'ee_joints_traj': serve.override(pipeline=ee_joints_traj),
     'joints_traj': serve.override(pipeline=joints_traj),
     'ee_flip_grip': serve.override(pipeline=ee_flip_grip),
-    # Trained on phail recordings, which carry whatever the real Franka reported as its end effector — that
-    # rig's ``default`` — so there is no transform, as long as it is served on that rig.
+    # Trained on phail recordings, whose poses are the real Franka's ``default``, so no transform — provided it
+    # is served on that rig.
     # TODO(#550): that rig's ``default`` moves to the flange, so this checkpoint will need a transform here.
     'phail': serve.override(
         pipeline=ee.override(
@@ -292,8 +292,9 @@ COMMANDS = {
         recording_dir='s3://inference/phail_unified/server_recordings/openpi/270226-ee/',
     ),
     # The sim_stack checkpoint was trained on inverted-grip (1 = open) sim data, hence the flip-grip pipeline.
-    # Its poses are the sim panda's ``default``, so no transform — but that frame sits 45 mm along the approach
-    # axis from the FR3's, so this checkpoint is off by that much on the real arm until #550 unifies the two.
+    # Its poses are the sim panda's ``default``, which sits 45 mm along the approach axis from the FR3's, so
+    # this checkpoint is off by that much on the real arm.
+    # TODO(#550): both ``default`` frames move to the flange, so this checkpoint will need a transform here.
     'sim_stack': serve.override(
         pipeline=ee_flip_grip.override(
             ee_frame=None,
@@ -314,8 +315,8 @@ COMMANDS = {
         })
     ),
     # TODO(#557): LIBERO reports its eef 38 mm and 90° from where the shipped panda model puts ``default``, and
-    # the codec is calibrated against what the env actually reports. ``None`` is what keeps that pairing intact;
-    # the frame this checkpoint speaks can be stated only once the env stops mislabelling its poses.
+    # the codec is calibrated against what the env actually reports. ``None`` holds that pairing; the frame this
+    # checkpoint speaks can be stated only once the env stops mislabelling its poses.
     'libero': serve.override(
         pipeline=libero_pipe.override(
             ee_frame=None, **{'source.checkpoints_dir': 'gs://openpi-assets/checkpoints/pi05_libero'}
