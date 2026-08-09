@@ -92,15 +92,8 @@ class _EpisodeTelemetry:
         telemetry.push_anchor(self._span)
 
     def start_rollout(self, virtual_now: float) -> None:
-        """Anchor the rollout's virtual duration at the first control cycle that has an observation.
-
-        A simulated producer's ``reset`` only arms frame zero, which it publishes on its next turn, and that
-        turn advances the virtual clock by a control period without stepping the environment. Anchoring when
-        the reset returns would charge that period to the rollout while its wall sits under reset, inflating
-        the real-time factor by one control period per episode. Called every cycle; only the first lands.
-        """
-        if self._virtual_start is None:
-            self._virtual_start = virtual_now
+        """Anchor the rollout's virtual duration at the instant its first observation landed."""
+        self._virtual_start = virtual_now
 
     def step(self) -> None:
         self._steps += 1
@@ -134,9 +127,8 @@ class _EpisodeTelemetry:
         telemetry.force_flush()
 
     def _close(self, virtual_now: float) -> None:
-        # A rollout that never reached its first observation — a reset that raised, or a task already done
-        # before frame zero landed — has zero virtual duration; only an anchored rollout measures from its
-        # start.
+        # A rollout whose first observation never landed — a reset that raised, or a task already done before
+        # it arrived — has zero virtual duration.
         virtual_s = max(virtual_now - self._virtual_start, 0.0) if self._virtual_start is not None else 0.0
         assert self._span is not None
         attrs = {telemetry_keys.ATTR_EPISODE_STEPS: self._steps, telemetry_keys.ATTR_EPISODE_VIRTUAL_S: virtual_s}
@@ -215,6 +207,9 @@ class Harness(pimm.ControlSystem):
         # A trial with a task is bounded by ``task.timeout``, set per episode; a task-less attended
         # session has no deadline and is ended by directives.
         self._deadline: float | None = None
+        # Whether this episode's first observation has landed. Until it does the deadline stands where the
+        # reset put it, which bounds an episode whose first observation never arrives.
+        self._rollout_started = False
         # Wall-clock telemetry for the live rollout, opened under ``--timing`` and inert otherwise.
         self._telemetry = _EpisodeTelemetry()
         # Observation channels that have not delivered since this episode's reset. A receiver latches its
@@ -321,13 +316,15 @@ class Harness(pimm.ControlSystem):
         (last in the round). The recorder drains its channels the turn it opens, so the pre-reset frame and
         the inter-episode home command — lingering there from before START — drop out and its first sample
         is the post-reset scene, which the harness infers on once it lands. The trial deadline (a task's
-        ``timeout``, bounding policy- and operator-driven trials alike) is armed here; a task-less attended
-        session has no deadline and ends only on a directive.
+        ``timeout``, bounding policy- and operator-driven trials alike) is armed here and moved to the
+        episode's first observation once one arrives, so an episode that never gets one is still bounded;
+        a task-less attended session has no deadline and ends only on a directive.
         """
         self.context = context
         # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
         self._inference_latency = self.context.get('inference_latency', False)
         self._awaiting_obs = set(self._embodiment.observations)
+        self._rollout_started = False
         # Open the episode span before the reset, so the phase spans (reset, env.step, policy.infer,
         # record.io) parent to it.
         self._telemetry.begin(context)
@@ -460,7 +457,14 @@ class Harness(pimm.ControlSystem):
         obs = self._build_obs(clock)
         if obs is None:
             return
-        self._telemetry.start_rollout(clock.now())
+        if not self._rollout_started:
+            # The rollout begins at its first observation, not when the reset returned: a reset only asks the
+            # producer for a new scene, and the turns it spends delivering one belong to neither the trial's
+            # budget nor its measured duration.
+            self._rollout_started = True
+            self._telemetry.start_rollout(clock.now())
+            if self._task is not None:
+                self._deadline = clock.now() + self._task.timeout
 
         # Advance the (sim) clock by the inference cost so rollouts feel the model's latency. We only
         # sleep on cycles where inference actually ran (session returned a chunk) — otherwise blocked
