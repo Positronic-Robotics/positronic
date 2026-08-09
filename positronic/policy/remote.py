@@ -131,16 +131,19 @@ class RemotePolicy(Policy):
     def _resolve_stack(self) -> PolicyWrapper:
         meta = self._endpoint.server_meta()
         version = meta.get(keys.POSITRONIC_VERSION, 'unknown')
+        declared = meta.get(keys.LOCAL_STACK)
         try:
-            stack = from_spec(meta[keys.LOCAL_STACK]) if keys.LOCAL_STACK in meta else None
+            stack = from_spec(declared) if declared is not None else None
         except Exception as e:
             raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
-        if stack is None or not anchors_timestamps(stack):
+        if not anchors_timestamps(declared):
             raise ValueError(
                 f'Server declares a rig-side stack that leaves actions out of wall time (server positronic '
                 f'{version}); it needs exactly one ChunkedSchedule, outermost of any ActionTimestamp or '
                 f'ActionHorizon'
             )
+        # ``anchors_timestamps`` found a scheduler in the spec, so the build cannot have come back empty.
+        assert stack is not None
         return stack
 
     def _policy(self) -> Policy:

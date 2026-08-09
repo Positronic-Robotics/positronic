@@ -24,15 +24,16 @@ from positronic.utils.serialization import deserialise, serialise
 logger = logging.getLogger(__name__)
 
 
-def _require_schedule(local: PolicyWrapper | None) -> PolicyWrapper:
-    """The rig-side half a served pipeline must carry."""
-    if local is None or not anchors_timestamps(local):
+def _declared_stack(local: PolicyWrapper | None) -> dict[str, Any]:
+    """The rig-side spec a served pipeline must publish."""
+    spec = local.to_spec() if local is not None else None
+    if spec is None or not anchors_timestamps(spec):
         raise ValueError(
             'The rig-side half needs exactly one ChunkedSchedule, outermost of any ActionTimestamp or '
             'ActionHorizon: it is what puts actions in wall time, and anything outside it stamps them '
             'back to chunk-relative'
         )
-    return local
+    return spec
 
 
 async def _acquire_with_keepalives(lock: asyncio.Lock, websocket: WebSocket | None, message: str):
@@ -197,7 +198,7 @@ class PolicyServer:
         local, _, self._remote = split(self._pipeline)
         # A local half that is missing or cannot be rendered fails at startup, not at a client's connect.
         # The spec itself is built per session, which params may have changed.
-        _require_schedule(local).to_spec()
+        _declared_stack(local)
         self._source = self._pipeline.source
         self._manager = PolicyManager(self._source)
         self.host = host
@@ -260,7 +261,7 @@ class PolicyServer:
         try:
             pipeline = self._session_pipeline(_session_params(websocket.query_params))
             local, border, remote_half = split(pipeline)
-            local_spec = _require_schedule(local).to_spec()
+            local_spec = _declared_stack(local)
 
             rid = self._source.resolve(model_id) if model_id is not None else self._default_id
             assert rid is not None

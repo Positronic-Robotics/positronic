@@ -10,7 +10,7 @@ from websockets.sync.client import connect
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.policy import Codec, Policy, RemotePolicy, Session
-from positronic.policy.codec import ActionTimestamp, RestrictImageSize
+from positronic.policy.codec import ActionTimestamp, ActionTiming, RestrictImageSize
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
 from positronic.utils.serialization import deserialise
@@ -220,8 +220,9 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
         RestrictImageSize(224, 224),
         ChunkedSchedule() | ChunkedSchedule(),
         ActionTimestamp(fps=10.0) | ChunkedSchedule(),
+        ActionTiming(fps=10.0, horizon_sec=0.5) | ChunkedSchedule(),
     ],
-    ids=['empty', 'unscheduled', 'double', 'misordered'],
+    ids=['empty', 'unscheduled', 'double', 'misordered', 'misordered-nested'],
 )
 def test_unanchored_pipeline_refused_at_startup(make_mock_policy, local):
     """Whatever leaves actions out of wall time: no scheduler, two of them, or one stamping over the anchor."""
