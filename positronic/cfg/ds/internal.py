@@ -9,6 +9,8 @@ These datasets remain on the private s3://raw/ bucket and include:
 - Full combined datasets for multi-task training
 """
 
+from typing import Any
+
 import configuronic as cfn
 import numpy as np
 import pos3
@@ -35,9 +37,11 @@ _REMOVE_SIGNALS = ['controller_positions.right', 'robot_commands.pose']
 # Signal-name pointers the 3D viewer reads. They must name the signals as they exist after the
 # transform, so the transform always supplies them — overriding any stale value a recording baked
 # into static (pre-rename recordings carry `robot_commands.pose` in their `pose_signals`).
-ROBOT_SIGNAL_POINTERS = Derive(
-    joint_signals=FromValue([keys.JOINTS]), pose_signals=FromValue([keys.EE_POSE, keys.TARGET_EE_POSE])
-)
+_POINTER_VALUES: dict[str, Any] = {
+    keys.JOINT_SIGNALS: FromValue([keys.JOINTS]),
+    keys.POSE_SIGNALS: FromValue([keys.EE_POSE, keys.TARGET_EE_POSE]),
+}
+ROBOT_SIGNAL_POINTERS = Derive(**_POINTER_VALUES)
 
 # The bundled model (URDF + collision meshes + joint names + control frame + gripper) for the real
 # arm and the MuJoCo sim.

@@ -109,9 +109,9 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
     }
     joint_signals = {side: f'robot_state.{side}.q' for side in arms}
     static_meta = {
-        'joint_signals': list(joint_signals.values()),
-        'pose_signals': [f'robot_state.{s}.ee_pose' for s in arms] + [f'robot_command.{s}.pose' for s in arms],
-        'mounts': {sig: mounts[side] for side, sig in joint_signals.items()},
+        keys.JOINT_SIGNALS: list(joint_signals.values()),
+        keys.POSE_SIGNALS: [f'robot_state.{s}.ee_pose' for s in arms] + [f'robot_command.{s}.pose' for s in arms],
+        keys.MOUNTS: {sig: mounts[side] for side, sig in joint_signals.items()},
     }
     return Embodiment(
         descriptor='yam_bimanual',

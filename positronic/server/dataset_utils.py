@@ -166,8 +166,8 @@ def _unplotted_notice(unplotted: dict[str, int]) -> str:
 
 
 def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
-    pose_set = set(ep.static.get('pose_signals', []))
-    joint_set = set(ep.static.get('joint_signals', []))
+    pose_set = set(ep.static.get(keys.POSE_SIGNALS, []))
+    joint_set = set(ep.static.get(keys.JOINT_SIGNALS, []))
     signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[], joints=[])
     for name, sig in ep.signals.items():
         if sig.kind == Kind.IMAGE:
@@ -470,7 +470,7 @@ def _log_urdf_robot(
             f'{joint_sig} carries {q_vals.shape[1]} angles for {len(joint_names)} model joints; skipping its model'
         )
         return
-    mount = ep.static.get('mounts', {}).get(joint_sig)
+    mount = ep.static.get(keys.MOUNTS, {}).get(joint_sig)
     namespace = f'{joint_sig}.'
     prefix = f'/3d/robot/{joint_sig}'
 
