@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+# The hooks are scripts the harness runs by path, not an importable package, so the directory holding
+# them has to reach `sys.path` before the import rather than at the top of the file.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import hook_payload  # noqa: E402
 import state_code_rules as state  # noqa: E402
@@ -48,6 +50,9 @@ def test_a_rule_arrives_as_its_opening_paragraph_and_nothing_after_it():
 
 
 def test_it_reaches_the_model_where_the_harness_reads_a_session_start_reply():
+    # rules-allow: hardcoded-keys — the waiver syntax and one rule id are spelled here rather than read
+    # back from the module under test. Building the expectation from `state.PREAMBLE` and `state.digest`
+    # would assert those functions against themselves and pass whatever they emitted.
     run = subprocess.run([sys.executable, str(HOOK)], capture_output=True, text=True)
     assert run.returncode == 0
     emitted = json.loads(run.stdout)[hook_payload.HOOK_SPECIFIC_OUTPUT]
