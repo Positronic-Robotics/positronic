@@ -122,11 +122,6 @@ def request_path(this_run: str) -> Path:
     return request_dir() / f'{FINISH_REQUEST_PREFIX}{this_run}'
 
 
-def run_id() -> str | None:
-    """This run's identity, or None where nothing gave it one."""
-    return os.environ.get(RUN_ID_ENV) or None
-
-
 def evaluate(path: Path, this_run: str) -> tuple[bool, str]:
     """Whether `path` holds a finish request addressed to `this_run`, and why not when it does not.
 
@@ -266,8 +261,8 @@ def names_one_segment(this_run: str) -> bool:
 
 def from_env() -> FinishRequest | None:
     """The control system this run should carry, or None where nothing named the run."""
-    this_run = run_id()
-    if this_run is None:
+    this_run = os.environ.get(RUN_ID_ENV)
+    if not this_run:
         return None
     if not names_one_segment(this_run):
         logger.error(
