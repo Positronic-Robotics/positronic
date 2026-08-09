@@ -1,4 +1,3 @@
-import logging
 import time
 from unittest.mock import MagicMock, patch
 
@@ -10,9 +9,8 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.remote import RemoteSession
-from positronic.policy.wrappers import ChunkedSchedule
 
-EMPTY_STACK = {'local_stack': {'seq': []}}
+CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule'}}
 
 
 def _mock_ws_session(metadata=None):
@@ -22,15 +20,21 @@ def _mock_ws_session(metadata=None):
     return session
 
 
-def _mock_remote_policy(metadata=None, infer_return=None, **kwargs):
+def _mock_remote_policy(metadata=None, infer_return=None):
     """A RemotePolicy whose wire client is mocked out; returns (policy, mock_ws)."""
     mock_ws = _mock_ws_session(metadata)
     if infer_return is not None:
         mock_ws.infer.return_value = infer_return
-    policy = RemotePolicy('localhost:0', **kwargs)
+    policy = RemotePolicy('localhost:0')
     policy._endpoint._client = MagicMock()
     policy._endpoint._client.new_session.return_value = mock_ws
     return policy, mock_ws
+
+
+def _mock_endpoint(metadata=None, infer_return=None):
+    """The bare wire connection, with no declared stack in front of it."""
+    policy, mock_ws = _mock_remote_policy(metadata, infer_return)
+    return policy._endpoint, mock_ws
 
 
 def _make_image(h, w):
@@ -204,9 +208,8 @@ class TestActionHorizonWrapping:
             {'a': 3, 'timestamp': 0.5},
             {'a': 4, 'timestamp': 0.75},
         ]
-        # Build: ActionHorizon wrapping a RemotePolicy with no local stack of its own
-        policy, _ = _mock_remote_policy(EMPTY_STACK, infer_return=actions)
-        wrapped = ActionHorizon(0.5).wrap(policy)
+        endpoint, _ = _mock_endpoint(infer_return=actions)
+        wrapped = ActionHorizon(0.5).wrap(endpoint)
 
         session = wrapped.new_session()
         actions = session({'obs_time_ns': 0})
@@ -217,11 +220,9 @@ class TestActionHorizonWrapping:
         assert actions[2] == {'timestamp': 0.5}  # horizon sentinel (timestamp = horizon_sec)
 
     def test_no_truncation_without_horizon(self):
-        policy, _ = _mock_remote_policy(
-            EMPTY_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}, {'a': 2, 'timestamp': 1.0}]
-        )
+        endpoint, _ = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}, {'a': 2, 'timestamp': 1.0}])
 
-        session = policy.new_session()
+        session = endpoint.new_session()
         actions = session({})
         assert actions is not None
         assert len(actions) == 2
@@ -229,26 +230,26 @@ class TestActionHorizonWrapping:
 
 def test_remote_session_normalizes_single_dict():
     """Server returning a single action dict (legacy shape) is wrapped into a 1-element list."""
-    policy, _ = _mock_remote_policy(EMPTY_STACK, infer_return={keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0})
+    endpoint, _ = _mock_endpoint(infer_return={keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0})
 
-    session = policy.new_session()
+    session = endpoint.new_session()
     actions = session({})
     assert actions == [{keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0}]
 
 
 def test_remote_session_passes_through_none():
-    policy, mock_ws = _mock_remote_policy(EMPTY_STACK)
+    endpoint, mock_ws = _mock_endpoint()
     mock_ws.infer.return_value = None
 
-    session = policy.new_session()
+    session = endpoint.new_session()
     assert session({}) is None
 
 
 def test_records_infer_span_without_scheduling_wrapper(tmp_path):
-    """The ``policy.infer`` span is recorded at the remote inference boundary even with no scheduling wrapper
-    in front (the server declares an empty stack, so the session is a bare ``RemoteSession``)."""
-    policy, _ = _mock_remote_policy(EMPTY_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}])
-    session = policy.new_session()
+    """The ``policy.infer`` span is recorded at the remote inference boundary itself, not by a wrapper in
+    front of it."""
+    endpoint, _ = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
+    session = endpoint.new_session()
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-span'):
         assert session({'obs_time_ns': 0}) is not None
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
@@ -259,8 +260,8 @@ def test_infer_span_excludes_client_side_image_preparation(tmp_path):
     """``policy.infer`` is the remote round-trip, so JPEG-encoding the observation stays outside it: folding
     client CPU work into the span would inflate the inference percentiles and the policy-server capacity
     estimate the report derives from them."""
-    policy, _ = _mock_remote_policy({**EMPTY_STACK, 'compress_images': True}, infer_return=[])
-    session = policy.new_session()
+    endpoint, _ = _mock_endpoint({'compress_images': True}, infer_return=[])
+    session = endpoint.new_session()
     encoded_at: list[int] = []
 
     def _stamp_encode(image):
@@ -280,9 +281,9 @@ def test_infer_span_excludes_client_side_image_preparation(tmp_path):
 def test_records_infer_span_when_inference_raises(tmp_path):
     """A raising round-trip (a stalled server surfaces ``TimeoutError``) still records its time-to-failure —
     the span is timed in a ``finally`` — and the exception propagates."""
-    policy, mock_ws = _mock_remote_policy(EMPTY_STACK)
+    endpoint, mock_ws = _mock_endpoint()
     mock_ws.infer.side_effect = TimeoutError('server stalled')
-    session = policy.new_session()
+    session = endpoint.new_session()
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-raise'):
         with pytest.raises(TimeoutError):
             session({'obs_time_ns': 0})
@@ -293,7 +294,7 @@ def test_records_infer_span_when_inference_raises(tmp_path):
 def test_remote_policy_meta_exposes_server_fields():
     """RemotePolicy.meta must expose server metadata so SampledPolicy._get_keys
     can read e.g. 'server.checkpoint_path' before a session is created."""
-    policy, _ = _mock_remote_policy({'checkpoint_path': '/ckpts/abc', 'model_name': 'foo', **EMPTY_STACK})
+    policy, _ = _mock_remote_policy({'checkpoint_path': '/ckpts/abc', 'model_name': 'foo', **CHUNKED_STACK})
 
     meta = policy.meta
     assert meta['type'] == 'remote'
@@ -301,23 +302,24 @@ def test_remote_policy_meta_exposes_server_fields():
     assert meta['server.model_name'] == 'foo'
 
 
-def test_no_declaration_falls_back_to_chunked_schedule():
-    """A server that declares no ``local_stack`` in the handshake gets the standard ChunkedSchedule."""
-    clock = [0.0]
-    policy, _ = _mock_remote_policy(infer_return=[{'a': 1, 'timestamp': 0.0}, {'a': 2, 'timestamp': 0.5}])
-    session = policy.new_session(now=lambda: clock[0])
-    actions = session({'obs_time_ns': 0})
-    # ChunkedSchedule anchored the chunk to now=0.0 and gates re-inference until it is consumed.
-    assert actions == [{'a': 1, 'timestamp': 0.0}, {'a': 2, 'timestamp': 0.5}]
-    clock[0] = 0.2
-    assert session({'obs_time_ns': 0}) is None
+def test_missing_declaration_fails_before_motion():
+    """A handshake carrying no ``local_stack`` leaves nothing to build, so no session opens."""
+    policy, _ = _mock_remote_policy({'positronic_version': '0.1.0'})
+    with pytest.raises(ValueError, match='0.1.0'):
+        policy.new_session()
+
+
+def test_empty_declaration_fails_before_motion():
+    """An empty stack anchors no timestamps, so the rig would fire a whole chunk at once — refuse it."""
+    policy, _ = _mock_remote_policy({'local_stack': {'seq': []}})
+    with pytest.raises(ValueError, match='ChunkedSchedule'):
+        policy.new_session()
 
 
 def test_declared_stack_built_at_session_open():
     """The server-declared local stack runs in front of the connection."""
-    declared = {'local_stack': {'name': 'chunked_schedule'}}
     clock = [1.0]
-    policy, mock_ws = _mock_remote_policy(declared, infer_return=[{'a': 1, 'timestamp': 0.0}])
+    policy, mock_ws = _mock_remote_policy(CHUNKED_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}])
     session = policy.new_session(now=lambda: clock[0])
     actions = session({'obs_time_ns': 0})
     assert actions == [{'a': 1, 'timestamp': 1.0}]
@@ -329,84 +331,17 @@ def test_unknown_declared_entry_fails_before_motion():
         policy.new_session()
 
 
-def test_operator_local_drives_a_server_that_declares_nothing():
-    """The deprecated override stands in where the standard ChunkedSchedule would otherwise apply."""
-    policy, _ = _mock_remote_policy(infer_return=[{'a': 1}], local=ActionHorizon(10.0))
-    session = policy.new_session(now=lambda: 5.0)
-    # ActionHorizon leaves the untimestamped action alone, where ChunkedSchedule would have stamped it.
-    assert session({'obs_time_ns': 0}) == [{'a': 1}]
-
-
-def _sent_frame(metadata, local=None):
-    """The 'cam' frame as it reached the wire, for a server whose handshake is `metadata`."""
-    policy, mock_ws = _mock_remote_policy(metadata, infer_return=[], local=local)
-    policy.new_session(now=lambda: 0.0)({'obs_time_ns': 0, 'cam': _make_image(480, 640)})
-    return mock_ws.infer.call_args.args[0]['cam']
-
-
-def test_legacy_image_sizes_bound_frames_on_the_rig(caplog):
-    """A server that declares no stack but reports `image_sizes` gets them honoured as a wire bound."""
-    with caplog.at_level(logging.WARNING, logger='positronic.policy.remote'):
-        sent = _sent_frame({'image_sizes': (224, 224)})
-    # 480x640 scaled down to fit 224x224, aspect ratio kept.
-    assert sent.shape == (168, 224, 3)
-    assert 'image_sizes' in caplog.text
-
-
-def test_legacy_per_camera_sizes_collapse_to_the_largest():
-    """One bound covers every image, so a mapping errs large rather than shrinking a camera too far."""
-    sent = _sent_frame({'image_sizes': {'cam': (224, 224), 'wrist': (320, 256)}})
-    assert sent.shape == (240, 320, 3)
-
-
-def test_legacy_image_sizes_bound_an_operator_stack_too():
-    """The bound is a wire setting rather than part of the stack, so `--policy.local` does not drop it."""
-    assert _sent_frame({'image_sizes': (224, 224)}, local=ChunkedSchedule()).shape == (168, 224, 3)
-
-
-def test_legacy_state_only_codec_bounds_nothing():
-    """A codec with no images reports an empty mapping, which names no geometry to bound by."""
-    sent = _sent_frame({'image_sizes': {}})
-    assert sent.shape == (480, 640, 3)
-
-
-def test_declared_stack_wins_over_legacy_image_sizes():
-    """`image_sizes` is the codec's geometry; once a server declares a stack, only the stack bounds the wire."""
-    sent = _sent_frame({'image_sizes': (224, 224), **EMPTY_STACK})
-    assert sent.shape == (480, 640, 3)
-
-
-def test_operator_local_rejected_when_the_server_declares():
-    """Against a declaring server the override is a contradiction, not a preference."""
-    declared = {'local_stack': {'name': 'temporal_stack', 'args': {'keys': ['v'], 'offsets_sec': [0.0]}}}
-    policy, _ = _mock_remote_policy(declared, local=ChunkedSchedule())
-    with pytest.raises(ValueError, match='--policy.local'):
-        policy.new_session()
-
-
 def test_compression_follows_the_server_declaration():
     """A server behind a message-size cap declares ``remote(compress_images=True)`` and the rig obeys."""
-    policy, mock_ws = _mock_remote_policy({**EMPTY_STACK, 'compress_images': True}, infer_return=[])
-    policy.new_session()({'cam': _make_image(48, 64)})
+    endpoint, mock_ws = _mock_endpoint({'compress_images': True}, infer_return=[])
+    endpoint.new_session()({'cam': _make_image(48, 64)})
     assert isinstance(mock_ws.infer.call_args.args[0]['cam'], dict)
 
 
 def test_frames_stay_raw_where_the_server_declares_no_compression():
-    policy, mock_ws = _mock_remote_policy({**EMPTY_STACK, 'compress_images': False}, infer_return=[])
-    policy.new_session()({'cam': _make_image(48, 64)})
+    endpoint, mock_ws = _mock_endpoint({'compress_images': False}, infer_return=[])
+    endpoint.new_session()({'cam': _make_image(48, 64)})
     assert isinstance(mock_ws.infer.call_args.args[0]['cam'], np.ndarray)
-
-
-def test_compression_override_drives_a_server_that_declares_nothing():
-    policy, mock_ws = _mock_remote_policy(infer_return=[], compress_images=True)
-    policy.new_session(now=lambda: 0.0)({'obs_time_ns': 0, 'cam': _make_image(48, 64)})
-    assert isinstance(mock_ws.infer.call_args.args[0]['cam'], dict)
-
-
-def test_compression_override_rejected_when_the_server_declares():
-    policy, _ = _mock_remote_policy({**EMPTY_STACK, 'compress_images': False}, compress_images=True)
-    with pytest.raises(ValueError, match='--policy.compress_images'):
-        policy.new_session()
 
 
 def test_remote_policy_lifecycle(inference_server, mock_policy):

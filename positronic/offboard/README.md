@@ -102,8 +102,10 @@ This metadata tells the client:
   leaves composed by `"seq"` (the `|` operator) and `"par"` (the `&` operator). `RemotePolicy` builds
   this stack in front of the connection, resolving names only against the closed vocabulary in
   `positronic.policy.spec.WIRE_WRAPPERS` — an unknown entry fails at connect, before the robot moves.
-  An empty declaration (`{"seq": []}`) means the policy needs no rig-side glue; when the key is
-  absent the server declares nothing and the client falls back to the standard `ChunkedSchedule`.
+  Every served pipeline carries a rig-side half, so this is never empty and never absent: a codec stamps
+  actions relative to their chunk and the rig-side scheduler is what anchors them to wall time. A pipeline
+  with nothing left of the marker is refused when the server starts, and a handshake that still arrives
+  empty is refused by the client.
 - `compress_images` — the `remote` marker's own wire setting: whether the rig JPEG-encodes frames before
   sending, for an endpoint behind a proxy with a message-size cap
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
