@@ -76,5 +76,5 @@ if __name__ == '__main__':
         writer = VideoWriter(sys.argv[1], 30)
         world.connect(camera.frame, writer.frame)
 
-        for sleep_cmd in world.start(writer, camera):
-            time.sleep(sleep_cmd.seconds)
+        for cmd in world.start(writer, camera):
+            time.sleep(cmd.seconds if isinstance(cmd, pimm.Sleep) else 0)
