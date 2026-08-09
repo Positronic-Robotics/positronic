@@ -10,6 +10,9 @@ from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.remote import RemoteSession
 
+# These fixtures stand in for a server, so they spell the handshake fields rather than importing the
+# ``keys`` constants the client reads: sharing a constant makes the two agree whatever its value, which
+# would leave nothing pinning the client to the wire.
 CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule'}}
 
 
