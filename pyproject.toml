@@ -106,11 +106,17 @@ telemetry = [
     "opentelemetry-sdk>=1.42",
     "psutil",
 ]
+
+# A dependency group rather than an extra, so `uv run` and `uv sync` include it without being asked.
+# An extra has to be named on every invocation, and one command that forgets uninstalls the tools the
+# next one needs. Exclude it with `--no-dev` where an image must stay lean.
+# `pre-commit` is absent deliberately: the git hook it installs must survive a sync that does not name
+# it, so it is a uv tool (`uv tool install pre-commit`), outside this venv.
+[dependency-groups]
 dev = [
     "ruff",
     "basedpyright",
     "pybind11-stubgen",  # regenerates stubs/mujoco (utilities/generate_mujoco_stubs.py)
-    "pre-commit",
     "ipython",
     "jupyter",
     "opencv-python",

@@ -160,18 +160,12 @@ stale comments describing the pre-fix code).
 
 ## Step 6: Verify
 
-```bash
-# $BASE from Step 1, so branch-touched files polish didn't edit are still linted;
-# --diff-filter=d drops deleted paths, which ruff fails on (E902).
-# The paths go through xargs because zsh does not word-split an unquoted variable, so a file
-# list held in one arrives at ruff as a single path.
-# --extra dev on every call: a run without it uninstalls the dev tools, the git hook included.
-git diff $BASE --name-only --diff-filter=d -- '*.py' \
-  | xargs -r uv run --locked --extra dev ruff check --fix
-git diff $BASE --name-only --diff-filter=d -- '*.py' \
-  | xargs -r uv run --locked --extra dev ruff format
-uv run --locked --extra dev pytest --no-cov -q
-```
+Lint, format and test through the repo's own commands — `CLAUDE.md` names them, and a copy here
+would be one more thing to keep in step with it.
+
+Lint over the whole of `$BASE` from Step 1 rather than only the files you edited, so a
+branch-touched file you left alone is still covered, and drop deleted paths from the list — a
+linter handed one fails to open it.
 
 Run the full test suite whenever Step 2 changed structure or behavior-adjacent code. Fix
 failures you introduced; report pre-existing failures without hiding them.

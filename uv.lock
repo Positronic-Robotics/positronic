@@ -571,15 +571,6 @@ wheels = [
 ]
 
 [[package]]
-name = "cfgv"
-version = "3.5.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/4e/b5/721b8799b04bf9afe054a3899c6cf4e880fcf8563cc71c15610242490a0c/cfgv-3.5.0.tar.gz", hash = "sha256:d5b1034354820651caa73ede66a6294d6e95c1b00acc5e9b098e917404669132", size = 7334, upload-time = "2025-11-19T20:55:51.612Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/db/3c/33bac158f8ab7f89b2e59426d5fe2e4f63f7ed25df84c036890172b412b5/cfgv-3.5.0-py2.py3-none-any.whl", hash = "sha256:a8dc6b26ad22ff227d2634a65cb388215ce6cc96bbcc5cfde7641ae87e8dacc0", size = 7445, upload-time = "2025-11-19T20:55:50.744Z" },
-]
-
-[[package]]
 name = "charset-normalizer"
 version = "3.4.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1669,15 +1660,6 @@ wheels = [
 ]
 
 [[package]]
-name = "distlib"
-version = "0.4.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/96/8e/709914eb2b5749865801041647dc7f4e6d00b549cfe88b65ca192995f07c/distlib-0.4.0.tar.gz", hash = "sha256:feec40075be03a04501a973d81f633735b4b69f98b05450592310c0f401a4e0d", size = 614605, upload-time = "2025-07-17T16:52:00.465Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/33/6b/e0547afaf41bf2c42e52430072fa5658766e3d65bd4b03a563d1b6336f57/distlib-0.4.0-py2.py3-none-any.whl", hash = "sha256:9659f7d87e46584a30b5780e43ac7a2143098441670ff0a49d5f9034c54a6c16", size = 469047, upload-time = "2025-07-17T16:51:58.613Z" },
-]
-
-[[package]]
 name = "dm-env"
 version = "1.6"
 source = { registry = "https://pypi.org/simple" }
@@ -2549,15 +2531,6 @@ dependencies = [
     { name = "threadpoolctl" },
     { name = "tyro" },
     { name = "viser" },
-]
-
-[[package]]
-name = "identify"
-version = "2.6.16"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/5b/8d/e8b97e6bd3fb6fb271346f7981362f1e04d6a7463abd0de79e1fda17c067/identify-2.6.16.tar.gz", hash = "sha256:846857203b5511bbe94d5a352a48ef2359532bc8f6727b5544077a0dcfb24980", size = 99360, upload-time = "2026-01-12T18:58:58.201Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b8/58/40fbbcefeda82364720eba5cf2270f98496bdfa19ea75b4cccae79c698e6/identify-2.6.16-py2.py3-none-any.whl", hash = "sha256:391ee4d77741d994189522896270b787aed8670389bfd60f326d677d64a6dfb0", size = 99202, upload-time = "2026-01-12T18:58:56.627Z" },
 ]
 
 [[package]]
@@ -3744,15 +3717,6 @@ wheels = [
 ]
 
 [[package]]
-name = "nodeenv"
-version = "1.10.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/24/bf/d1bda4f6168e0b2e9e5958945e01910052158313224ada5ce1fb2e1113b8/nodeenv-1.10.0.tar.gz", hash = "sha256:996c191ad80897d076bdfba80a41994c2b47c68e224c542b48feba42ba00f8bb", size = 55611, upload-time = "2025-12-20T14:08:54.006Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/88/b2/d0896bdcdc8d28a7fc5717c305f1a861c26e18c05047949fb371034d98bd/nodeenv-1.10.0-py2.py3-none-any.whl", hash = "sha256:5bb13e3eed2923615535339b3c620e76779af4cb4c6a90deccc9e36b274d3827", size = 23438, upload-time = "2025-12-20T14:08:52.782Z" },
-]
-
-[[package]]
 name = "nodejs-wheel-binaries"
 version = "24.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4904,25 +4868,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-dev = [
-    { name = "basedpyright" },
-    { name = "coverage" },
-    { name = "ipython" },
-    { name = "jupyter" },
-    { name = "nvidia-ml-py" },
-    { name = "opencv-python" },
-    { name = "opentelemetry-exporter-otlp-json-file" },
-    { name = "opentelemetry-sdk" },
-    { name = "pre-commit" },
-    { name = "psutil" },
-    { name = "pybind11-stubgen" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-timeout" },
-    { name = "rerun-sdk" },
-    { name = "ruff" },
-]
 dreamzero = [
     { name = "huggingface-hub", version = "0.35.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-yam' or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2')" },
     { name = "huggingface-hub", version = "1.19.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra == 'extra-10-positronic-molmoact2' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-yam') or (extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-yam')" },
@@ -4976,14 +4921,29 @@ yam = [
     { name = "i2rt" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "basedpyright" },
+    { name = "coverage" },
+    { name = "ipython" },
+    { name = "jupyter" },
+    { name = "opencv-python" },
+    { name = "positronic", extra = ["telemetry"] },
+    { name = "pybind11-stubgen" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-timeout" },
+    { name = "rerun-sdk" },
+    { name = "ruff" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "accelerate", marker = "extra == 'molmoact2'" },
     { name = "av" },
-    { name = "basedpyright", marker = "extra == 'dev'" },
     { name = "coloredlogs", specifier = ">=15.0.1" },
     { name = "configuronic", specifier = ">=0.7.0" },
-    { name = "coverage", marker = "extra == 'dev'" },
     { name = "cvxopt" },
     { name = "dearpygui", marker = "platform_machine != 'aarch64'" },
     { name = "einops", marker = "extra == 'molmoact2'" },
@@ -4993,9 +4953,7 @@ requires-dist = [
     { name = "httpx" },
     { name = "huggingface-hub", marker = "extra == 'dreamzero'" },
     { name = "i2rt", marker = "extra == 'yam'", git = "https://github.com/i2rt-robotics/i2rt.git?rev=5d47b358bafb30c65e397f2ece506550a0db4594" },
-    { name = "ipython", marker = "extra == 'dev'" },
     { name = "jinja2" },
-    { name = "jupyter", marker = "extra == 'dev'" },
     { name = "lerobot", marker = "extra == 'lerobot-0-3-3'", specifier = "==0.3.3" },
     { name = "lerobot", extras = ["smolvla"], marker = "extra == 'lerobot'", specifier = "==0.4.3" },
     { name = "linuxpy", marker = "extra == 'hardware'" },
@@ -5003,7 +4961,6 @@ requires-dist = [
     { name = "mujoco" },
     { name = "numpy" },
     { name = "nvidia-ml-py", marker = "extra == 'telemetry'" },
-    { name = "opencv-python", marker = "extra == 'dev'" },
     { name = "opencv-python-headless" },
     { name = "openpi-client", marker = "extra == 'openpi'", git = "https://github.com/Positronic-Robotics/openpi.git?subdirectory=packages%2Fopenpi-client&rev=main-positronic" },
     { name = "opentelemetry-api", specifier = ">=1.42" },
@@ -5013,22 +4970,15 @@ requires-dist = [
     { name = "placo", marker = "extra == 'hardware'" },
     { name = "plotly", specifier = ">=6.5.0" },
     { name = "pos3", specifier = ">=0.3.1" },
-    { name = "positronic", extras = ["telemetry"], marker = "extra == 'dev'" },
     { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.7.0" },
-    { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "protobuf", marker = "extra == 'molmoact2'" },
     { name = "psutil", marker = "extra == 'telemetry'" },
     { name = "pyarrow" },
     { name = "pyaudio", marker = "sys_platform == 'linux' and extra == 'hardware'" },
-    { name = "pybind11-stubgen", marker = "extra == 'dev'" },
     { name = "pydantic" },
     { name = "pylance", marker = "extra == 'lance'" },
     { name = "pymodbus", marker = "extra == 'hardware'" },
     { name = "pyserial", marker = "extra == 'hardware'" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'" },
-    { name = "pytest-cov", marker = "extra == 'dev'" },
-    { name = "pytest-timeout", marker = "extra == 'dev'" },
     { name = "pyturbojpeg", specifier = "<2" },
     { name = "pyyaml" },
     { name = "pyzed", marker = "python_full_version == '3.12.*' and sys_platform == 'linux' and extra == 'hardware'", url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp312-cp312-linux_x86_64.whl" },
@@ -5036,10 +4986,8 @@ requires-dist = [
     { name = "pyzed", marker = "python_full_version >= '3.13' and sys_platform == 'linux' and extra == 'hardware'", url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp313-cp313-linux_x86_64.whl" },
     { name = "requests", marker = "extra == 'molmoact2'" },
     { name = "rerun-sdk", specifier = "==0.30.0" },
-    { name = "rerun-sdk", extras = ["notebook"], marker = "extra == 'dev'" },
     { name = "robosuite" },
     { name = "ruckig" },
-    { name = "ruff", marker = "extra == 'dev'" },
     { name = "scipy" },
     { name = "sentencepiece", marker = "extra == 'molmoact2'" },
     { name = "starlette", specifier = ">=1.0.0" },
@@ -5053,7 +5001,24 @@ requires-dist = [
     { name = "websockets", specifier = ">=15.0.1" },
     { name = "zmq" },
 ]
-provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "telemetry", "dev"]
+provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "telemetry"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "basedpyright" },
+    { name = "coverage" },
+    { name = "ipython" },
+    { name = "jupyter" },
+    { name = "opencv-python" },
+    { name = "positronic", extras = ["telemetry"] },
+    { name = "pybind11-stubgen" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-timeout" },
+    { name = "rerun-sdk", extras = ["notebook"] },
+    { name = "ruff" },
+]
 
 [[package]]
 name = "positronic-franka"
@@ -5065,22 +5030,6 @@ dependencies = [
     { name = "requests", marker = "sys_platform == 'linux' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/16/45/029c72cffe797d8265328405552f3f4d7dae76ee900ca811095200e471f4/positronic_franka-0.7.0.tar.gz", hash = "sha256:b9381ffa52d9fa9c998619bc40bb568733ceb2b7bd86d5c407483ae29ec08c2e", size = 1809759, upload-time = "2026-08-03T22:29:36.532Z" }
-
-[[package]]
-name = "pre-commit"
-version = "4.5.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cfgv" },
-    { name = "identify" },
-    { name = "nodeenv" },
-    { name = "pyyaml" },
-    { name = "virtualenv" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/40/f1/6d86a29246dfd2e9b6237f0b5823717f60cad94d47ddc26afa916d21f525/pre_commit-4.5.1.tar.gz", hash = "sha256:eb545fcff725875197837263e977ea257a402056661f09dae08e4b149b030a61", size = 198232, upload-time = "2025-12-16T21:14:33.552Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5d/19/fd3ef348460c80af7bb4669ea7926651d1f95c23ff2df18b9d24bab4f3fa/pre_commit-4.5.1-py2.py3-none-any.whl", hash = "sha256:3b3afd891e97337708c1674210f8eba659b52a38ea5f822ff142d10786221f77", size = 226437, upload-time = "2025-12-16T21:14:32.409Z" },
-]
 
 [[package]]
 name = "prometheus-client"
@@ -7191,20 +7140,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/15/c0/0be24758891ef825f2065cd5db8741aaddabe3e248ee6acc5e8a80f04005/uvloop-0.22.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0530a5fbad9c9e4ee3f2b33b148c6a64d47bbad8000ea63704fa8260f4cf728e", size = 4366890, upload-time = "2025-10-16T22:16:40.547Z" },
     { url = "https://files.pythonhosted.org/packages/d2/53/8369e5219a5855869bcee5f4d317f6da0e2c669aecf0ef7d371e3d084449/uvloop-0.22.1-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:bc5ef13bbc10b5335792360623cc378d52d7e62c2de64660616478c32cd0598e", size = 4119472, upload-time = "2025-10-16T22:16:41.694Z" },
     { url = "https://files.pythonhosted.org/packages/f8/ba/d69adbe699b768f6b29a5eec7b47dd610bd17a69de51b251126a801369ea/uvloop-0.22.1-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:1f38ec5e3f18c8a10ded09742f7fb8de0108796eb673f30ce7762ce1b8550cad", size = 4239051, upload-time = "2025-10-16T22:16:43.224Z" },
-]
-
-[[package]]
-name = "virtualenv"
-version = "20.38.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "distlib" },
-    { name = "filelock" },
-    { name = "platformdirs" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d2/03/a94d404ca09a89a7301a7008467aed525d4cdeb9186d262154dd23208709/virtualenv-20.38.0.tar.gz", hash = "sha256:94f39b1abaea5185bf7ea5a46702b56f1d0c9aa2f41a6c2b8b0af4ddc74c10a7", size = 5864558, upload-time = "2026-02-19T07:48:02.385Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/42/d7/394801755d4c8684b655d35c665aea7836ec68320304f62ab3c94395b442/virtualenv-20.38.0-py3-none-any.whl", hash = "sha256:d6e78e5889de3a4742df2d3d44e779366325a90cf356f15621fddace82431794", size = 5837778, upload-time = "2026-02-19T07:47:59.778Z" },
 ]
 
 [[package]]

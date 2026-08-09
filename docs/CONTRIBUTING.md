@@ -81,12 +81,13 @@ pre-commit run --all-files
 
 3. Install development dependencies:
    ```bash
-   uv sync --extra dev
+   uv sync
    ```
 
-4. Install pre-commit hooks:
+4. Install pre-commit hooks. `pre-commit` goes in as a uv tool rather than into the project venv, because
+   the git hook execs it by path and a later `uv sync` would otherwise remove it:
    ```bash
-   uv pip install pre-commit
+   uv tool install pre-commit
    pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type post-commit
    ```
 

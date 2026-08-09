@@ -20,7 +20,7 @@ jobs:
     - name: Set up Python
       run: uv venv --python 3.11
     - name: Install dev tools
-      run: uv sync --locked --extra dev
+      run: uv sync --locked
     - name: Determine diff base
       run: |
         if [ "${{ github.event_name }}" == "pull_request" ]; then
@@ -56,7 +56,7 @@ jobs:
       # Whole-project type-check ratchet: fails on any error not grandfathered in
       # .basedpyright/baseline.json. The fresh dev-only venv above is the canonical
       # env the baseline is generated against, so no `--exact` is needed here.
-      run: uv run --locked --extra dev basedpyright
+      run: uv run --locked basedpyright
     - name: Check basedpyright baseline ratchet
       # Runs unconditionally: cheap, and fast-passes when no baseline file grew. RATCHET_BASE is the
       # PR base sha ($BASE_SHA); the script diffs against its merge-base with HEAD, since origin/main
