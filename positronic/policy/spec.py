@@ -184,6 +184,11 @@ def split(pipeline: Pipeline | PolicyWrapper) -> tuple[PolicyWrapper | None, Rem
     return _join(components[:idx]), border, _join(components[idx + 1 :])
 
 
+def schedules(stack: PolicyWrapper) -> bool:
+    """Whether ``stack`` anchors relative action timestamps to wall time, which ``ChunkedSchedule`` does."""
+    return any(isinstance(component, ChunkedSchedule) for component in stack._wrappers())
+
+
 def inline(pipeline: Pipeline) -> Policy:
     """The whole pipeline in one process: components (marker dropped) wrapped around the source's latest model."""
     components = tuple(c for c in pipeline.components if not isinstance(c, RemoteMarker))

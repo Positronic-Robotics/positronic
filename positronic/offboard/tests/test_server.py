@@ -10,7 +10,7 @@ from websockets.sync.client import connect
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.policy import Codec, Policy, RemotePolicy, Session
-from positronic.policy.codec import ActionTimestamp
+from positronic.policy.codec import ActionTimestamp, RestrictImageSize
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
 from positronic.utils.serialization import deserialise
@@ -213,11 +213,13 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
         session.close()
 
 
-def test_pipeline_with_no_rig_side_half_refused_at_startup(make_mock_policy):
-    """Nothing left of the marker leaves the rig no scheduler, so its chunks would carry no wall-time anchor."""
+@pytest.mark.parametrize('local', [None, RestrictImageSize(224, 224)], ids=['empty', 'unscheduled'])
+def test_pipeline_without_a_rig_side_scheduler_refused_at_startup(make_mock_policy, local):
+    """Without a rig-side scheduler the chunk's relative timestamps reach the rig with no wall-time anchor."""
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    head = remote if local is None else local | remote
     with pytest.raises(ValueError, match='ChunkedSchedule'):
-        PolicyServer(remote | _StubSource(stub))
+        PolicyServer(head | _StubSource(stub))
 
 
 class _ScriptedSession(Session):

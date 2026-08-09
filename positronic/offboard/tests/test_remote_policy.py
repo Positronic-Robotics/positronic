@@ -309,9 +309,10 @@ def test_missing_declaration_fails_before_motion():
         policy.new_session()
 
 
-def test_empty_declaration_fails_before_motion():
-    """An empty stack anchors no timestamps, so the rig would fire a whole chunk at once — refuse it."""
-    policy, _ = _mock_remote_policy({'local_stack': {'seq': []}})
+@pytest.mark.parametrize('declared', [{'seq': []}, {'name': 'restrict_image_size'}], ids=['empty', 'unscheduled'])
+def test_declaration_without_a_scheduler_fails_before_motion(declared):
+    """Nothing anchors the chunk's relative timestamps, so the rig would fire it all at once — refuse it."""
+    policy, _ = _mock_remote_policy({'local_stack': declared})
     with pytest.raises(ValueError, match='ChunkedSchedule'):
         policy.new_session()
 

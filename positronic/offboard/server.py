@@ -18,18 +18,18 @@ from starlette.datastructures import QueryParams
 from positronic import keys
 from positronic.policy import Codec, Policy, Recorder
 from positronic.policy.base import PolicyWrapper
-from positronic.policy.spec import ModelSource, Pipeline, split
+from positronic.policy.spec import ModelSource, Pipeline, schedules, split
 from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
 
 
-def _require_local(local: PolicyWrapper | None) -> PolicyWrapper:
+def _require_schedule(local: PolicyWrapper | None) -> PolicyWrapper:
     """The rig-side half a served pipeline must carry."""
-    if local is None:
+    if local is None or not schedules(local):
         raise ValueError(
-            'Nothing sits left of the `remote` marker, so the pipeline declares no rig-side stack and its '
-            'actions would reach the rig with no wall-time anchor. Put ChunkedSchedule left of the marker'
+            'The pipeline declares no rig-side scheduler, so its actions would reach the rig with no '
+            'wall-time anchor. Put ChunkedSchedule left of the `remote` marker'
         )
     return local
 
@@ -196,7 +196,7 @@ class PolicyServer:
         local, _, self._remote = split(self._pipeline)
         # A local half that is missing or cannot be rendered fails at startup, not at a client's connect.
         # The spec itself is built per session, which params may have changed.
-        _require_local(local).to_spec()
+        _require_schedule(local).to_spec()
         self._source = self._pipeline.source
         self._manager = PolicyManager(self._source)
         self.host = host
@@ -259,7 +259,7 @@ class PolicyServer:
         try:
             pipeline = self._session_pipeline(_session_params(websocket.query_params))
             local, border, remote_half = split(pipeline)
-            local_spec = _require_local(local).to_spec()
+            local_spec = _require_schedule(local).to_spec()
 
             rid = self._source.resolve(model_id) if model_id is not None else self._default_id
             assert rid is not None

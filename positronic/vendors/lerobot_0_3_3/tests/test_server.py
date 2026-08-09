@@ -5,6 +5,7 @@ from fastapi import WebSocketDisconnect
 from starlette.datastructures import QueryParams
 
 from positronic.policy.spec import remote
+from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.serialization import deserialise
 
 pytest.importorskip('torch')
@@ -51,7 +52,7 @@ def _make_server(checkpoint: str | None) -> PolicyServer:
     source = lerobot_server.LerobotSource(
         policy_factory=lambda _checkpoint: MagicMock(), checkpoints_dir='s3://bucket/exp', checkpoint=checkpoint
     )
-    return PolicyServer(remote | source)
+    return PolicyServer(ChunkedSchedule() | remote | source)
 
 
 @pytest.mark.asyncio

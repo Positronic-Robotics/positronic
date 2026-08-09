@@ -12,7 +12,7 @@ from positronic.utils.serialization import encode_jpeg
 
 from .base import Policy, PolicyWrapper, Session
 from .recording import Recorder
-from .spec import from_spec
+from .spec import from_spec, schedules
 
 
 class RemoteSession(Session):
@@ -111,7 +111,7 @@ class RemotePolicy(Policy):
     The server's ``ready`` handshake declares the local half of its policy pipeline (the
     ``local_stack`` spec — see ``positronic.policy.spec``) along with the wire settings of the
     ``remote`` marker. The declared wrappers are built here, once, and every session runs through
-    them; a handshake declaring an empty stack, or none at all, is an error.
+    them; a handshake whose stack carries no scheduler to anchor action timestamps is an error.
 
     ``recording_dir`` taps the raw and wire boundaries around the stack.
     """
@@ -135,11 +135,11 @@ class RemotePolicy(Policy):
             stack = from_spec(meta['local_stack']) if 'local_stack' in meta else None
         except Exception as e:
             raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
-        if stack is None:
+        if stack is None or not schedules(stack):
             raise ValueError(
-                f'Server declares no rig-side stack (server positronic {version}), so its actions would reach '
-                'the rig with no wall-time anchor. Put ChunkedSchedule left of the `remote` marker in the '
-                'pipeline it serves'
+                f'Server declares no rig-side scheduler (server positronic {version}), so its actions would '
+                'reach the rig with no wall-time anchor. Put ChunkedSchedule left of the `remote` marker in '
+                'the pipeline it serves'
             )
         return stack
 

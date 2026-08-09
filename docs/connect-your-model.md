@@ -199,7 +199,7 @@ PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()
 
 The pipeline reads left to right: everything left of the `remote` marker is the client-side stack the server declares in its handshake (here the standard `ChunkedSchedule`); everything right of it runs on the server. `PolicySource` is the pipeline's terminal — a model source that serves one already-built policy.
 
-The left side is not optional. Actions come back timestamped relative to their chunk, and the rig-side scheduler is what anchors them to wall time — without one the rig would fire a whole chunk at once, so a pipeline with nothing left of the marker is refused when the server starts.
+`ChunkedSchedule` is not optional. Actions come back timestamped relative to their chunk, and it is what anchors them to wall time — without it the rig would fire a whole chunk at once, so a pipeline with no scheduler left of the marker is refused when the server starts.
 
 `new_session`'s `now` argument is the runtime clock that wrappers scheduling against live time read; a policy that does no scheduling of its own just accepts and ignores it (server-side it is `None`).
 
