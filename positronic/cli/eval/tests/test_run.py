@@ -6,8 +6,13 @@ from typing import cast
 import pytest
 
 from positronic import telemetry, telemetry_keys
+from positronic.cli.eval.finish_request import FinishRequest
 from positronic.cli.eval.run import Driver, _pass_span, _timed_pass, main
 from positronic.eval import Embodiment, Eval, Task
+
+# `positronic.cli.eval` binds `run` to the config, shadowing the submodule of that name, so the module
+# object whose globals these tests patch comes from `sys.modules`.
+run_module = sys.modules['positronic.cli.eval.run']
 
 
 def _eval(simulated: bool) -> Eval:
@@ -80,11 +85,59 @@ def test_the_stats_sampler_runs_inside_the_pass_span(tmp_path, monkeypatch):
         order.append('pass out')
 
     monkeypatch.setattr(telemetry, 'StatsSampler', _RecordingSampler)
-    # `positronic.cli.eval` binds `run` to the config, shadowing the submodule of that name, so the module
-    # object whose global is being replaced comes from `sys.modules`.
-    monkeypatch.setattr(sys.modules['positronic.cli.eval.run'], '_pass_span', _recording_pass)
+    monkeypatch.setattr(run_module, '_pass_span', _recording_pass)
 
     with _timed_pass(tmp_path, True, object()):
         pass
 
     assert order == ['sampler built', 'pass in', 'sampler in', 'sampler out', 'pass out']
+
+
+@pytest.mark.parametrize('simulated', [True, False])
+def test_the_driver_is_scheduled_ahead_of_the_watcher_and_the_harness(monkeypatch, simulated):
+    """The driver is scheduled before the watcher and the harness, on both embodiments."""
+    scheduled = []
+
+    class _FakeWorld:
+        def __init__(self, virtual_time=False):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def connect(self, *args, **kwargs):
+            pass
+
+        def run(self, foreground, background=None):
+            scheduled.extend(foreground)
+
+    keyboard = SimpleNamespace(name='keyboard')
+    harness = SimpleNamespace(
+        directive=None, finish_requested=None, manual_command=None, ds_command=None, name='harness'
+    )
+    finish = SimpleNamespace(requested=None, name='watcher')
+    monkeypatch.setattr(run_module.pimm, 'World', _FakeWorld)
+    monkeypatch.setattr(run_module, 'Harness', lambda *args, **kwargs: harness)
+    monkeypatch.setattr(run_module.wire, 'wire_embodiment', lambda *args, **kwargs: None)
+
+    run_module._run_world(
+        policy=object(),
+        embodiment=cast(Embodiment, SimpleNamespace(simulated=simulated, control_systems=[], observations={})),
+        task=None,
+        trials=None,
+        driver=cast(
+            Driver,
+            SimpleNamespace(
+                gui=None, directives=None, directive_wrapper=None, control_systems=[keyboard], manual_commands=None
+            ),
+        ),
+        output_dir=None,
+        show_gui=False,
+        on_complete=None,
+        finish=cast(FinishRequest, finish),
+    )
+
+    assert scheduled[:3] == [keyboard, finish, harness]

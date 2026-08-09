@@ -149,11 +149,6 @@ def evaluate(path: Path, this_run: str) -> tuple[bool, str]:
         return False, f'finish request at {path} could not be read as a request ({e!r}); continuing to run'
 
 
-# Iterated rather than restated, so a member added to `Action` is understood here without a second
-# edit.
-_ACTIONS = frozenset(Action)
-
-
 def _read(path: Path, this_run: str) -> tuple[bool, str]:
     """The staged read: a refusal is returned, any other failure raises, and all of those are in `UNREADABLE`."""
     # Opened by DESCRIPTOR, because the path is one any account on the rig may create and what it
@@ -190,7 +185,7 @@ def _read(path: Path, this_run: str) -> tuple[bool, str]:
             f'finish request at {path} names action {named!r}, which is not a string this run can read; '
             'continuing to run',
         )
-    if named not in _ACTIONS:
+    if named not in frozenset(Action):
         return (
             False,
             f'finish request at {path} names action {named!r}, which this run does not implement; continuing to run',

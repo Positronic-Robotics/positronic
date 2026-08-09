@@ -133,10 +133,13 @@ def _run_world(
         # Before the harness: the harness reads this signal on its first round, and that round decides
         # whether to open an episode.
         watch = [finish] if finish is not None else []
+        # The driver runs before the watcher and the harness: a press sharing its round with a granted
+        # finish is never seen, since the loop breaks into `_wind_down` before the round that would read it.
+        attended = [*foreground, *watch, harness]
         if embodiment.simulated:
-            world.run([*foreground, *watch, harness, ds_agent, *producers], gui)
+            world.run([*attended, ds_agent, *producers], gui)
         else:
-            world.run([*watch, harness, *foreground], [*producers, ds_agent, gui])
+            world.run(attended, [*producers, ds_agent, gui])
 
 
 def _validate_timing(embodiments: Iterable[Embodiment], output_dir: str | Path | None) -> None:
