@@ -139,12 +139,13 @@ class MjData:
         """
         Bind a Mujoco spec to a mjData.
 
-        Args:
-          data: The mjData to bind to.
-          specs: The mjSpec elements to use for binding, can be a single element or a
-            sequence.
-        Returns:
-          A MjDataGroupedViews object or a list of the same type.
+          Args:
+            data: The mjData to bind to.
+            specs: The mjSpec elements to use for binding, can be a single element or a
+              sequence.
+          Returns:
+            A MjDataGroupedViews object or a list of the same type.
+
         """
     def __copy__(self) -> MjData:
         ...
@@ -1325,12 +1326,13 @@ class MjModel:
         """
         Bind a Mujoco spec to a mjModel.
 
-        Args:
-          model: The mjModel to bind to.
-          specs: The mjSpec elements to use for binding, can be a single element or a
-            sequence.
-        Returns:
-          A MjModelGroupedViews object or a list of the same type.
+          Args:
+            model: The mjModel to bind to.
+            specs: The mjSpec elements to use for binding, can be a single element or a
+              sequence.
+          Returns:
+            A MjModelGroupedViews object or a list of the same type.
+
         """
     @staticmethod
     def from_binary_path(filename: str, assets: collections.abc.Mapping[str, bytes] | None = None) -> MjModel:

@@ -493,23 +493,25 @@ def _bind_data(data: _structs.MjData, specs: typing.Union[typing.Sequence[typing
     """
     Bind a Mujoco spec to a mjData.
 
-    Args:
-      data: The mjData to bind to.
-      specs: The mjSpec elements to use for binding, can be a single element or a
-        sequence.
-    Returns:
-      A MjDataGroupedViews object or a list of the same type.
+      Args:
+        data: The mjData to bind to.
+        specs: The mjSpec elements to use for binding, can be a single element or a
+          sequence.
+      Returns:
+        A MjDataGroupedViews object or a list of the same type.
+
     """
 def _bind_model(model: _structs.MjModel, specs: typing.Union[typing.Sequence[typing.Union[mujoco._specs.MjsBody, mujoco._specs.MjsFrame, mujoco._specs.MjsGeom, mujoco._specs.MjsJoint, mujoco._specs.MjsLight, mujoco._specs.MjsMaterial, mujoco._specs.MjsSite, mujoco._specs.MjsMesh, mujoco._specs.MjsSkin, mujoco._specs.MjsTexture, mujoco._specs.MjsText, mujoco._specs.MjsTuple, mujoco._specs.MjsCamera, mujoco._specs.MjsFlex, mujoco._specs.MjsHField, mujoco._specs.MjsKey, mujoco._specs.MjsNumeric, mujoco._specs.MjsPair, mujoco._specs.MjsExclude, mujoco._specs.MjsEquality, mujoco._specs.MjsTendon, mujoco._specs.MjsSensor, mujoco._specs.MjsActuator, mujoco._specs.MjsPlugin]], mujoco._specs.MjsBody, mujoco._specs.MjsFrame, mujoco._specs.MjsGeom, mujoco._specs.MjsJoint, mujoco._specs.MjsLight, mujoco._specs.MjsMaterial, mujoco._specs.MjsSite, mujoco._specs.MjsMesh, mujoco._specs.MjsSkin, mujoco._specs.MjsTexture, mujoco._specs.MjsText, mujoco._specs.MjsTuple, mujoco._specs.MjsCamera, mujoco._specs.MjsFlex, mujoco._specs.MjsHField, mujoco._specs.MjsKey, mujoco._specs.MjsNumeric, mujoco._specs.MjsPair, mujoco._specs.MjsExclude, mujoco._specs.MjsEquality, mujoco._specs.MjsTendon, mujoco._specs.MjsSensor, mujoco._specs.MjsActuator, mujoco._specs.MjsPlugin]):
     """
     Bind a Mujoco spec to a mjModel.
 
-    Args:
-      model: The mjModel to bind to.
-      specs: The mjSpec elements to use for binding, can be a single element or a
-        sequence.
-    Returns:
-      A MjModelGroupedViews object or a list of the same type.
+      Args:
+        model: The mjModel to bind to.
+        specs: The mjSpec elements to use for binding, can be a single element or a
+          sequence.
+      Returns:
+        A MjModelGroupedViews object or a list of the same type.
+
     """
 def _load_all_bundled_plugins():
     ...
@@ -517,18 +519,20 @@ def from_zip(file: typing.Union[str, typing.IO[bytes]]) -> _specs.MjSpec:
     """
     Reads a zip file and returns an MjSpec.
 
-    Args:
-      file: The path to the file to read from or the file object to read from.
-    Returns:
-      An MjSpec object.
+      Args:
+        file: The path to the file to read from or the file object to read from.
+      Returns:
+        An MjSpec object.
+
     """
 def to_zip(spec: _specs.MjSpec, file: typing.Union[str, typing.IO[bytes]]) -> None:
     """
     Converts an MjSpec to a zip file.
 
-    Args:
-      spec: The mjSpec to save to a file.
-      file: The path to the file to save to or the file object to write to.
+      Args:
+        spec: The mjSpec to save to a file.
+        file: The path to the file to save to or the file object to write to.
+
     """
 HEADERS_DIR: str
 MjStruct: typing._UnionGenericAlias  # value = typing.Union[mujoco._specs.MjsBody, mujoco._specs.MjsFrame, mujoco._specs.MjsGeom, mujoco._specs.MjsJoint, mujoco._specs.MjsLight, mujoco._specs.MjsMaterial, mujoco._specs.MjsSite, mujoco._specs.MjsMesh, mujoco._specs.MjsSkin, mujoco._specs.MjsTexture, mujoco._specs.MjsText, mujoco._specs.MjsTuple, mujoco._specs.MjsCamera, mujoco._specs.MjsFlex, mujoco._specs.MjsHField, mujoco._specs.MjsKey, mujoco._specs.MjsNumeric, mujoco._specs.MjsPair, mujoco._specs.MjsExclude, mujoco._specs.MjsEquality, mujoco._specs.MjsTendon, mujoco._specs.MjsSensor, mujoco._specs.MjsActuator, mujoco._specs.MjsPlugin]
