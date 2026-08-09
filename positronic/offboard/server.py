@@ -24,18 +24,6 @@ from positronic.utils.serialization import deserialise, serialise
 logger = logging.getLogger(__name__)
 
 
-def _declared_stack(local: PolicyWrapper | None) -> dict[str, Any]:
-    """The rig-side spec a served pipeline must publish."""
-    spec = local.to_spec() if local is not None else None
-    if spec is None or not anchors_timestamps(spec):
-        raise ValueError(
-            'The rig-side half needs exactly one ChunkedSchedule, outermost of any ActionTimestamp or '
-            'ActionHorizon: it is what puts actions in wall time, and anything outside it stamps them '
-            'back to chunk-relative'
-        )
-    return spec
-
-
 async def _acquire_with_keepalives(lock: asyncio.Lock, websocket: WebSocket | None, message: str):
     """Acquire ``lock``, emitting ``waiting`` keepalives while queued behind another holder.
 
@@ -155,6 +143,18 @@ def _session_params(query_params: QueryParams) -> dict[str, Any]:
         dupes = sorted(key for key, n in counts.items() if n > 1)
         raise ValueError(f'Duplicate session param keys: {dupes}')
     return {key: _literal_value(raw) for key, raw in items}
+
+
+def _declared_stack(local: PolicyWrapper | None) -> dict[str, Any]:
+    """The rig-side spec a served pipeline must publish."""
+    spec = local.to_spec() if local is not None else None
+    if spec is None or not anchors_timestamps(spec):
+        raise ValueError(
+            'The rig-side half needs exactly one ChunkedSchedule, outermost of any ActionTimestamp or '
+            'ActionHorizon: it is what puts actions in wall time, and anything outside it stamps them '
+            'back to chunk-relative'
+        )
+    return spec
 
 
 class PolicyServer:
