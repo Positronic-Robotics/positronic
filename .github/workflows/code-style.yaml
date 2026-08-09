@@ -52,6 +52,11 @@ jobs:
         if [ -n "$CHANGED_PY_FILES" ]; then
           echo "$CHANGED_PY_FILES" | xargs python3 utilities/check_tests_location.py
         fi
+    - name: Check mujoco stubs are current
+      # The stubs come from docstrings compiled into the extension modules, so only Linux reproduces
+      # the committed tree — the pre-commit hook skips itself anywhere else, which leaves this the
+      # only place the check actually runs. It gates the basedpyright step below, which reads them.
+      run: uv run --locked python utilities/generate_mujoco_stubs.py --check
     - name: Run basedpyright type check
       # Whole-project type-check ratchet: fails on any error not grandfathered in
       # .basedpyright/baseline.json. The fresh dev-only venv above is the canonical

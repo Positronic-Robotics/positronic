@@ -193,7 +193,7 @@ def main() -> int:
         if args.check:
             print(
                 f'Skipping: {STUBS.relative_to(ROOT)} is generated on {STUB_PLATFORM}, so {sys.platform} has '
-                f'nothing to compare against.'
+                f'nothing to compare against. CI checks it.'
             )
             return 0
         print(
