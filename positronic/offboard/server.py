@@ -18,7 +18,7 @@ from starlette.datastructures import QueryParams
 from positronic import keys
 from positronic.policy import Codec, Policy, Recorder
 from positronic.policy.base import PolicyWrapper
-from positronic.policy.spec import ModelSource, Pipeline, anchors_timestamps, split
+from positronic.policy.spec import ModelSource, Pipeline, split
 from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
@@ -147,14 +147,12 @@ def _session_params(query_params: QueryParams) -> dict[str, Any]:
 
 def _declared_stack(local: PolicyWrapper | None) -> dict[str, Any]:
     """The rig-side spec a served pipeline must publish."""
-    spec = local.to_spec() if local is not None else None
-    if spec is None or not anchors_timestamps(spec):
+    if local is None:
         raise ValueError(
-            'The rig-side half needs exactly one ChunkedSchedule, outermost of any ActionTimestamp or '
-            'ActionHorizon: it is what puts actions in wall time, and anything outside it stamps them '
-            'back to chunk-relative'
+            'Nothing sits left of the `remote` marker, so the pipeline declares no rig-side stack. Put the '
+            'wrappers the rig runs there, starting with a scheduler such as ChunkedSchedule'
         )
-    return spec
+    return local.to_spec()
 
 
 class PolicyServer:

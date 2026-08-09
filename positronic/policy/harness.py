@@ -16,6 +16,21 @@ from positronic.policy.base import Policy, Session
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils import flatten_dict, frozen_view
 
+# How far from now an action may be scheduled. A chunk spans seconds, so this is loose enough that no real
+# trajectory approaches it, and tight enough to catch a rig-side stack that left timestamps relative to the
+# chunk (decades behind) or anchored them twice (decades ahead).
+MAX_ACTION_SKEW_SEC = 60.0
+
+
+def _assert_anchored(actions: list[dict[str, Any]], now: float) -> None:
+    """Reject a chunk whose timestamps are not times on the harness clock."""
+    skew = max((abs(action['timestamp'] - now) for action in actions), default=0.0)
+    if skew > MAX_ACTION_SKEW_SEC:
+        raise ValueError(
+            f'Action scheduled {skew:.0f}s from now, over the {MAX_ACTION_SKEW_SEC:.0f}s bound: the rig-side '
+            f'stack is not anchoring chunks to the harness clock'
+        )
+
 
 class DirectiveType(Enum):
     """Directive types for the harness."""
@@ -469,6 +484,7 @@ class Harness(pimm.ControlSystem):
             return
 
         self._telemetry.step()
+        _assert_anchored(actions, clock.now())
         self._emit_commands(actions)
 
     def _trial_terminal(self, clock: pimm.Clock) -> dict[str, Any] | None:

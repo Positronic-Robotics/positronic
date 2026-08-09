@@ -312,21 +312,10 @@ def test_missing_declaration_fails_before_motion():
         policy.new_session()
 
 
-@pytest.mark.parametrize(
-    'declared',
-    [
-        {'seq': []},
-        {'name': 'restrict_image_size'},
-        {'seq': [{'name': 'chunked_schedule'}] * 2},
-        {'seq': [{'name': 'action_timestamp', 'args': {'fps': 10.0}}, {'name': 'chunked_schedule'}]},
-        {'seq': [{'seq': [{'name': 'action_horizon', 'args': {'horizon_sec': 0.5}}]}, {'name': 'chunked_schedule'}]},
-    ],
-    ids=['empty', 'unscheduled', 'double', 'misordered', 'misordered-nested'],
-)
-def test_unanchored_stack_fails_before_motion(declared):
-    """Whatever leaves actions out of wall time: no scheduler, two of them, or one stamping over the anchor."""
-    policy, _ = _mock_remote_policy({'local_stack': declared})
-    with pytest.raises(ValueError, match='ChunkedSchedule'):
+def test_empty_declaration_fails_before_motion():
+    """An empty stack declares nothing to build, so it is refused like an absent one."""
+    policy, _ = _mock_remote_policy({'local_stack': {'seq': []}})
+    with pytest.raises(ValueError, match='declares no rig-side stack'):
         policy.new_session()
 
 

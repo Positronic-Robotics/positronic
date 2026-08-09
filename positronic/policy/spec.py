@@ -184,30 +184,6 @@ def split(pipeline: Pipeline | PolicyWrapper) -> tuple[PolicyWrapper | None, Rem
     return _join(components[:idx]), border, _join(components[idx + 1 :])
 
 
-_SCHEDULE = next(name for name, wrapper in WIRE_WRAPPERS.items() if wrapper is ChunkedSchedule)
-# Codecs that stamp actions relative to their chunk. Left is outermost and the outermost writer wins, so
-# a scheduler inside one of these has its wall-time anchoring overwritten on the way out.
-_RELATIVE_TIMESTAMP = frozenset(
-    name for name, wrapper in WIRE_WRAPPERS.items() if issubclass(wrapper, ActionTimestamp | ActionHorizon)
-)
-
-
-def _declared_names(node: dict[str, Any]) -> list[str]:
-    """Every leaf name of a spec tree, outermost first — composition nests, so a flat scan would miss some."""
-    for composition in (SEQ, PAR):
-        if composition in node:
-            return [name for child in node[composition] for name in _declared_names(child)]
-    return [node['name']]
-
-
-def anchors_timestamps(spec: dict[str, Any] | None) -> bool:
-    """Whether a declared stack hands the rig actions in wall time: exactly one ``ChunkedSchedule``, outside
-    every codec that stamps them relative to the chunk."""
-    names = _declared_names(spec) if spec is not None else []
-    scheduled = [i for i, name in enumerate(names) if name == _SCHEDULE]
-    return len(scheduled) == 1 and all(i > scheduled[0] for i, name in enumerate(names) if name in _RELATIVE_TIMESTAMP)
-
-
 def inline(pipeline: Pipeline) -> Policy:
     """The whole pipeline in one process: components (marker dropped) wrapped around the source's latest model."""
     components = tuple(c for c in pipeline.components if not isinstance(c, RemoteMarker))

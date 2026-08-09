@@ -30,7 +30,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import Directive, DirectiveType, Harness
+from positronic.policy.harness import Directive, DirectiveType, Harness, _assert_anchored
 from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -1592,3 +1592,20 @@ def test_a_later_episode_waits_for_its_own_first_observation(world, tmp_path):
     episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     assert len(episodes) == 2
     assert episodes[1].attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S] < gap_s
+
+
+def test_unanchored_chunk_is_refused():
+    """A stack that never anchored leaves chunk-relative stamps, which read as decades before now."""
+    with pytest.raises(ValueError, match='not anchoring'):
+        _assert_anchored([{'timestamp': 0.0}], now=1.7e9)
+
+
+def test_doubly_anchored_chunk_is_refused():
+    """Two schedulers each add the clock, putting the chunk a lifetime ahead."""
+    with pytest.raises(ValueError, match='not anchoring'):
+        _assert_anchored([{'timestamp': 3.4e9}], now=1.7e9)
+
+
+def test_anchored_chunk_passes():
+    """A real chunk spans seconds around now, and a late action sits just behind it."""
+    _assert_anchored([{'timestamp': 1.7e9 - 0.2}, {'timestamp': 1.7e9 + 1.5}], now=1.7e9)
