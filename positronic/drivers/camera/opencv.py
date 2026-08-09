@@ -50,7 +50,7 @@ if __name__ == '__main__':
             self.filename = filename
             self.fps = fps
             self.codec = codec
-            self.frame = pimm.ControlSystemReceiver(self, default=None)
+            self.frame = pimm.ControlSystemReceiver[pimm.shared_memory.NumpySMAdapter](self, default=None)
 
         def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
             logging.info(f'Writing to {self.filename}')
@@ -66,7 +66,7 @@ if __name__ == '__main__':
                         yield pimm.Sleep(0.5 / self.fps)
                         continue
 
-                    frame = av.VideoFrame.from_ndarray(frame_msg.data.value, format='rgb24')
+                    frame = av.VideoFrame.from_ndarray(frame_msg.data.array, format='rgb24')
                     packet = stream.encode(frame)
                     container.mux(packet)
                     fps_counter.tick()
