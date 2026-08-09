@@ -35,10 +35,6 @@ from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
-# The camera channel every embodiment these tests build carries, named by the producer and the tests that
-# pair against it alike.
-CAM = 'image.cam'
-
 
 @contextmanager
 def _eval_pass(run_id: str):
@@ -51,6 +47,9 @@ def _eval_pass(run_id: str):
     finally:
         span.end()
         telemetry.pop_anchor(span)
+
+
+CAM = 'image.cam'
 
 
 def make_embodiment(descriptor: str = '', cameras=(CAM,), static_meta=None) -> Embodiment:
