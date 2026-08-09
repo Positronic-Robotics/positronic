@@ -200,6 +200,9 @@ class Harness(pimm.ControlSystem):
         # A trial with a task is bounded by ``task.timeout``, set per episode; a task-less attended
         # session has no deadline and is ended by directives.
         self._deadline: float | None = None
+        # Whether ``_deadline`` has been moved to the episode's first observation. Until then it stands
+        # where the reset put it, which bounds an episode whose first observation never arrives.
+        self._budget_anchored = False
         # Wall-clock telemetry for the live rollout, opened under ``--timing`` and inert otherwise.
         self._telemetry = _EpisodeTelemetry()
         # Observation channels that have not delivered since this episode's reset. A receiver latches its
@@ -306,14 +309,15 @@ class Harness(pimm.ControlSystem):
         (last in the round). The recorder drains its channels the turn it opens, so the pre-reset frame and
         the inter-episode home command — lingering there from before START — drop out and its first sample
         is the post-reset scene, which the harness infers on once it lands. The trial deadline (a task's
-        ``timeout``, bounding policy- and operator-driven trials alike) is armed here and re-anchored to
-        frame zero, so a frame zero that never lands is still bounded; a task-less attended session has no
-        deadline and ends only on a directive.
+        ``timeout``, bounding policy- and operator-driven trials alike) is armed here and moved to the
+        episode's first observation once one arrives, so an episode that never gets one is still bounded;
+        a task-less attended session has no deadline and ends only on a directive.
         """
         self.context = context
         # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
         self._inference_latency = self.context.get('inference_latency', False)
         self._awaiting_obs = set(self._embodiment.observations)
+        self._budget_anchored = False
         # Open the episode span before the reset, so the phase spans (reset, env.step, policy.infer,
         # record.io) parent to it.
         self._telemetry.begin(context)
@@ -443,12 +447,13 @@ class Harness(pimm.ControlSystem):
         The session output already carries absolute timestamps (stamped by the
         outermost scheduling wrapper). The harness only demuxes by channel.
         """
-        awaiting_frame_zero = bool(self._awaiting_obs)  # ``_build_obs`` clears it, so read it first
         obs = self._build_obs(clock)
         if obs is None:
             return
-        if awaiting_frame_zero and self._task is not None:
-            # An env that paces the trial counts its own steps from frame zero, so the budget must too.
+        if not self._budget_anchored and self._task is not None:
+            # The episode begins at its first observation, not when the reset returned: a reset only asks
+            # the producer for a new scene, and the turns it spends delivering one are not the trial's.
+            self._budget_anchored = True
             self._deadline = clock.now() + self._task.timeout
         self._telemetry.start_rollout(clock.now())
 

@@ -611,12 +611,25 @@ def test_trial_timeout_self_terminates(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_trial_budget_starts_at_the_first_complete_observation(world):
-    """Frame zero lands at 0.02 and a marked observation at 0.06, against a 0.05 budget: anchored at
-    ``reset`` the trial expires at 0.05 and the policy never sees the mark, anchored at frame zero it runs
-    to 0.07 and does."""
+def test_trial_budget_starts_at_the_first_usable_observation(world):
+    """The 0.05 budget is measured from the episode's first usable observation, not from the reset.
+
+    The driver holds every channel silent for 0.02, so the episode opens with nothing to infer on. The
+    delivery at 0.02 is rejected by the camera serializer — the state a real embodiment is in while the
+    arm resets — so the first usable observation is the one at 0.04, and a third at 0.06 carries grip 0.75
+    as a marker. Measured from the reset the budget ends at 0.05 and the policy never sees the marker;
+    measured from the first usable observation it ends at 0.09 and the policy does.
+
+    The rejected delivery matters on its own: it clears the channels out of ``_awaiting_obs`` without
+    yielding an observation, so a budget anchored on that set alone would never move off the reset.
+    """
     policy = SpyPolicy()
-    harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=0.05), trials=[{}])
+    embodiment = make_embodiment()
+    usable = iter([None])  # the first camera sample is not ready; every later one is
+    embodiment.observations['image.cam'] = Observation(
+        pimm.NoOpEmitter(), lambda frames: next(usable, Serializers.camera_images(frames))
+    )
+    harness = Harness(policy, embodiment, task=Task(instruction='test', timeout=0.05), trials=[{}])
     p = _pair_all(world, harness)
     robot_state = make_robot_state([0.2, 0.0, -0.1], [0.7, 0.1, -0.2])
     payload = partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
@@ -625,13 +638,13 @@ def test_trial_budget_starts_at_the_first_complete_observation(world):
         payload()
         p['grip_em'].emit(0.75)
 
-    driver = ManualDriver([(None, 0.02), (payload, 0.04), (marked, 0.2)])
+    driver = ManualDriver([(None, 0.02), (payload, 0.02), (payload, 0.02), (marked, 0.2)])
 
     scheduler = world.start([harness, driver])
     drive_scheduler(scheduler, steps=400)
 
-    assert policy.last_obs is not None, 'the trial expired before frame zero ever landed'
-    assert policy.last_obs[keys.GRIP] == 0.75, 'the budget expired early — it ran from reset, not frame zero'
+    assert policy.last_obs is not None, 'the trial expired before its first observation landed'
+    assert policy.last_obs[keys.GRIP] == 0.75, 'the budget expired early — measured from reset, not the first obs'
 
 
 @pytest.mark.timeout(3.0)
