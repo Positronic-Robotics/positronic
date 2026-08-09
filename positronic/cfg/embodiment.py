@@ -85,7 +85,8 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
     Per-arm channels are the flat names the whole stack shares: ``robot_state.{side}`` expands into
     ``robot_state.{side}.q/.dq/.ee_pose`` on record and commands are ``robot_command.{side}`` +
     ``target_grip.{side}``. Each arm is mounted at ``mounts[side]``, so real ``ee_pose`` lands in the world
-    frame the training data uses; static_meta records the mount of every arm built, naming the sides.
+    frame the training data uses; static_meta records the mount of every arm built, keyed by the joint
+    signal that drives it.
     """
     from positronic import geom
     from positronic.drivers.roboarm import yam as yam_driver
@@ -106,10 +107,11 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
         },
         **{f'target_grip.{s}': Command(arm.target_grip, 0.0, None) for s, arm in arms.items()},
     }
+    joint_signals = {side: f'robot_state.{side}.q' for side in arms}
     static_meta = {
-        'joint_signals': [f'robot_state.{s}.q' for s in arms],
+        'joint_signals': list(joint_signals.values()),
         'pose_signals': [f'robot_state.{s}.ee_pose' for s in arms] + [f'robot_command.{s}.pose' for s in arms],
-        'mounts': {side: mounts[side] for side in arms},
+        'mounts': {sig: mounts[side] for side, sig in joint_signals.items()},
     }
     return Embodiment(
         descriptor='yam_bimanual',

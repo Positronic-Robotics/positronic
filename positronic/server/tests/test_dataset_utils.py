@@ -1,15 +1,25 @@
+import xml.etree.ElementTree as ET
+from typing import Any
+
 import numpy as np
 
 from positronic import keys
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
-from positronic.server.dataset_utils import _MAX_PLOTTED_WIDTH, _collect_signal_groups, _unplotted_notice
+from positronic.server.dataset_utils import (
+    _MAX_PLOTTED_WIDTH,
+    _collect_signal_groups,
+    _unplotted_notice,
+    _write_urdf_to_dir,
+)
 
 
-def _episode(ep_dir, widths: dict[str, int]) -> DiskEpisode:
+def _episode(ep_dir, widths: dict[str, int], static: dict[str, Any] | None = None) -> DiskEpisode:
     with DiskEpisodeWriter(ep_dir) as writer:
         for name, width in widths.items():
             writer.append(name, np.zeros(width, dtype=np.float32), 1000)
             writer.append(name, np.ones(width, dtype=np.float32), 2000)
+        for name, value in (static or {}).items():
+            writer.set_static(name, value)
     return DiskEpisode(ep_dir)
 
 
@@ -34,6 +44,34 @@ def test_wide_signal_still_reaches_the_3d_view(tmp_path):
 
     assert signals.numerics == [keys.JOINTS]
     assert signals.dims == {keys.JOINTS: width}
+
+
+def test_every_joint_signal_the_episode_records_is_collected(tmp_path):
+    widths = {'robot_state.left.q': 6, 'robot_state.right.q': 6, keys.GRIP: 1}
+    static = {'joint_signals': ['robot_state.left.q', 'robot_state.right.q', 'robot_state.absent.q']}
+
+    signals = _collect_signal_groups(_episode(tmp_path / 'ep', widths, static))
+
+    assert sorted(signals.joints) == ['robot_state.left.q', 'robot_state.right.q']
+
+
+def test_urdf_link_and_joint_names_carry_the_namespace(tmp_path):
+    urdf = """<robot name="toy">
+      <link name="base"/>
+      <link name="arm"/>
+      <joint name="shoulder" type="revolute">
+        <parent link="base"/>
+        <child link="arm"/>
+      </joint>
+    </robot>"""
+
+    urdf_path = _write_urdf_to_dir(urdf, {}, tmp_path, 'robot_state.left.q.')
+
+    root = ET.fromstring(urdf_path.read_text())
+    assert [el.get('name') for el in root.iter('link')] == ['robot_state.left.q.base', 'robot_state.left.q.arm']
+    assert [el.get('name') for el in root.iter('joint')] == ['robot_state.left.q.shoulder']
+    assert [el.get('link') for el in root.iter('parent')] == ['robot_state.left.q.base']
+    assert [el.get('link') for el in root.iter('child')] == ['robot_state.left.q.arm']
 
 
 def test_notice_names_every_unplotted_signal_and_its_width():

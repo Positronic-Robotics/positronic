@@ -35,8 +35,8 @@ _REMOVE_SIGNALS = ['controller_positions.right', 'robot_commands.pose']
 # Signal-name pointers the 3D viewer reads. They must name the signals as they exist after the
 # transform, so the transform always supplies them — overriding any stale value a recording baked
 # into static (pre-rename recordings carry `robot_commands.pose` in their `pose_signals`).
-_ROBOT_SIGNAL_POINTERS = Derive(
-    joint_signal=FromValue(keys.JOINTS), pose_signals=FromValue([keys.EE_POSE, keys.TARGET_EE_POSE])
+ROBOT_SIGNAL_POINTERS = Derive(
+    joint_signals=FromValue([keys.JOINTS]), pose_signals=FromValue([keys.EE_POSE, keys.TARGET_EE_POSE])
 )
 
 # The bundled model (URDF + collision meshes + joint names + control frame + gripper) for the real
@@ -54,9 +54,9 @@ _RENAME_ROBOT_COMMAND = Derive(**{keys.TARGET_EE_POSE: Get('robot_commands.pose'
 # `_REAL_MODEL`). The sim's model always comes from the transform — older sim recordings store raw
 # MuJoCo XML under `urdf` — so the bundled panda overwrites (`_SIM_MODEL` before Identity).
 REAL_ROBOT_TRANSFORM = Group(
-    _ROBOT_SIGNAL_POINTERS, Identity(remove=_REMOVE_SIGNALS), _REAL_MODEL, _RENAME_ROBOT_COMMAND
+    ROBOT_SIGNAL_POINTERS, Identity(remove=_REMOVE_SIGNALS), _REAL_MODEL, _RENAME_ROBOT_COMMAND
 )
-SIM_ROBOT_TRANSFORM = Group(_ROBOT_SIGNAL_POINTERS, _SIM_MODEL, Identity(remove=_REMOVE_SIGNALS), _RENAME_ROBOT_COMMAND)
+SIM_ROBOT_TRANSFORM = Group(ROBOT_SIGNAL_POINTERS, _SIM_MODEL, Identity(remove=_REMOVE_SIGNALS), _RENAME_ROBOT_COMMAND)
 
 RECOVERY_TASK = 'Recovery cases.'
 
