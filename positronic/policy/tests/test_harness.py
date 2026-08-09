@@ -611,6 +611,30 @@ def test_trial_timeout_self_terminates(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_trial_budget_starts_at_the_first_complete_observation(world):
+    """Frame zero lands at 0.02 and a marked observation at 0.06, against a 0.05 budget: anchored at
+    ``reset`` the trial expires at 0.05 and the policy never sees the mark, anchored at frame zero it runs
+    to 0.07 and does."""
+    policy = SpyPolicy()
+    harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=0.05), trials=[{}])
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.2, 0.0, -0.1], [0.7, 0.1, -0.2])
+    payload = partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
+
+    def marked():
+        payload()
+        p['grip_em'].emit(0.75)
+
+    driver = ManualDriver([(None, 0.02), (payload, 0.04), (marked, 0.2)])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=400)
+
+    assert policy.last_obs is not None, 'the trial expired before frame zero ever landed'
+    assert policy.last_obs[keys.GRIP] == 0.75, 'the budget expired early — it ran from reset, not frame zero'
+
+
+@pytest.mark.timeout(3.0)
 def test_attended_task_run_respects_timeout(world):
     """A task's ``timeout`` bounds an attended (directive-driven) run too: RUN arrives but no FINISH, yet
     the trial still self-terminates at the deadline. The deadline is armed whenever a task is supplied, not

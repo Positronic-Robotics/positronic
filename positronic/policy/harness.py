@@ -306,8 +306,9 @@ class Harness(pimm.ControlSystem):
         (last in the round). The recorder drains its channels the turn it opens, so the pre-reset frame and
         the inter-episode home command — lingering there from before START — drop out and its first sample
         is the post-reset scene, which the harness infers on once it lands. The trial deadline (a task's
-        ``timeout``, bounding policy- and operator-driven trials alike) is armed here; a task-less attended
-        session has no deadline and ends only on a directive.
+        ``timeout``, bounding policy- and operator-driven trials alike) is armed here and re-anchored to
+        frame zero, so a frame zero that never lands is still bounded; a task-less attended session has no
+        deadline and ends only on a directive.
         """
         self.context = context
         # ``inference_latency`` rides the RUN context (and lands in episode meta with it).
@@ -442,9 +443,13 @@ class Harness(pimm.ControlSystem):
         The session output already carries absolute timestamps (stamped by the
         outermost scheduling wrapper). The harness only demuxes by channel.
         """
+        awaiting_frame_zero = bool(self._awaiting_obs)  # ``_build_obs`` clears it, so read it first
         obs = self._build_obs(clock)
         if obs is None:
             return
+        if awaiting_frame_zero and self._task is not None:
+            # An env that paces the trial counts its own steps from frame zero, so the budget must too.
+            self._deadline = clock.now() + self._task.timeout
         self._telemetry.start_rollout(clock.now())
 
         # Advance the (sim) clock by the inference cost so rollouts feel the model's latency. We only
