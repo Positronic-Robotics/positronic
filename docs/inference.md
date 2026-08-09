@@ -23,9 +23,10 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joints \
   --pipeline.source.checkpoints_dir=~/checkpoints/groot/experiment_v1/
 
-# OpenPI
+# OpenPI (--pipeline.ee_frame states the EE frame the checkpoint speaks; None means the rig's `default`)
 cd docker && docker compose run --rm --service-ports openpi-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/openpi/experiment_v1/
+  --pipeline.source.checkpoints_dir=~/checkpoints/openpi/experiment_v1/ \
+  --pipeline.ee_frame=None
 ```
 
 Check server: `curl http://localhost:8000/api/v1/models` returns available model IDs.

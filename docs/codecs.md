@@ -55,10 +55,10 @@ These timestamps are **relative** — seconds from the start of the trajectory. 
 
 It is declared in two places, for the two things it does:
 
-- **Training** — `compose(ee_frame=DROID_EE_FRAME)` re-expresses the dataset in that frame, which is what makes the resulting checkpoint speak it.
-- **Serving** — the vendor pipeline's `ee_frame=` puts the codec left of the `remote` marker, so the rig converts and the server stays frame-agnostic.
+- **Training** — `compose(ee_frame=DROID_EE_FRAME)` re-expresses the dataset in that frame, which is what makes the resulting checkpoint speak it. It defaults to unset, which trains in `default`.
+- **Serving** — the OpenPI pipeline's `ee_frame=` puts the codec left of the `remote` marker, so the rig converts and the server stays frame-agnostic. It has no default: every deployment states its frame, `None` for a checkpoint trained in `default` or one that speaks joints — joints are unambiguous. Nothing verifies a stated frame against how the checkpoint was actually trained, and a wrong one is silent, so the frame is set beside the checkpoint path it belongs to.
 
-Both take the transform itself — `models.DROID_EE_FRAME` is the one we ship — so a checkpoint declares its own frame and no robot model is consulted to serve it. Leave it unset for a checkpoint trained in `default` or one that speaks joints — joints are unambiguous — and behavior is unchanged.
+Both take the transform itself — `models.DROID_EE_FRAME` is the one we ship — so a checkpoint declares its own frame and no robot model is consulted to serve it. The other vendor servers take no `ee_frame`: every checkpoint they serve was trained in the rig's `default`, so none has a transform to declare.
 
 A `CartesianDelta` is the one command this cannot convert on its own: a delta has no anchor pose, so it carries `frame` and the driver composes it where the measured pose lives.
 

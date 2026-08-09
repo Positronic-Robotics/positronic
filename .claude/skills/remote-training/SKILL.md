@@ -184,8 +184,10 @@ bash workflows/nebius/serve.sh lerobot_0_3_3 my-act-demo demo
 bash workflows/nebius/serve.sh lerobot_0_3_3 act-server ee \
   --pipeline.source.checkpoints_dir=<ckpt-dir>
 
+# openpi's ee pipeline also needs the EE frame the checkpoint speaks; None means the rig's default.
 bash workflows/nebius/serve.sh openpi pi-server ee \
-  --pipeline.source.checkpoints_dir=<ckpt-dir>
+  --pipeline.source.checkpoints_dir=<ckpt-dir> \
+  --pipeline.ee_frame=None
 
 bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d \
   --pipeline.source.checkpoints_dir=<ckpt-dir>
