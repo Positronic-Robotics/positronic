@@ -165,9 +165,18 @@ def _unplotted_notice(unplotted: dict[str, int]) -> str:
     )
 
 
+# The retired singular spelling of `keys.JOINT_SIGNALS`. It lives here rather than in `keys` because nothing
+# writes it any more — only released data carries it, and only until #587 converts that data.
+_SINGULAR_JOINT_SIGNAL = 'joint_signal'
+
+
 def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
     pose_set = set(ep.static.get(keys.POSE_SIGNALS, []))
     joint_set = set(ep.static.get(keys.JOINT_SIGNALS, []))
+    # TODO(#587): drop once the published PhAIL dataset carries the plural key. Its `static.json` has the
+    # singular one baked in, so without this a released episode loses its arm model and joint names.
+    if _SINGULAR_JOINT_SIGNAL in ep.static:
+        joint_set.add(ep.static[_SINGULAR_JOINT_SIGNAL])
     signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[], joints=[])
     for name, sig in ep.signals.items():
         if sig.kind == Kind.IMAGE:

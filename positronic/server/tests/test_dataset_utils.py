@@ -55,6 +55,13 @@ def test_every_joint_signal_the_episode_records_is_collected(tmp_path):
     assert sorted(signals.joints) == ['robot_state.left.q', 'robot_state.right.q']
 
 
+def test_released_episodes_singular_joint_signal_still_counts(tmp_path):
+    # TODO(#587): delete with the bridge in `_collect_signal_groups`.
+    signals = _collect_signal_groups(_episode(tmp_path / 'ep', {keys.JOINTS: 7}, {'joint_signal': keys.JOINTS}))
+
+    assert signals.joints == [keys.JOINTS]
+
+
 def test_urdf_link_and_joint_names_carry_the_namespace(tmp_path):
     urdf = """<robot name="toy">
       <link name="base"/>
