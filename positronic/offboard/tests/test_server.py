@@ -213,9 +213,13 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
         session.close()
 
 
-@pytest.mark.parametrize('local', [None, RestrictImageSize(224, 224)], ids=['empty', 'unscheduled'])
-def test_pipeline_without_a_rig_side_scheduler_refused_at_startup(make_mock_policy, local):
-    """Without a rig-side scheduler the chunk's relative timestamps reach the rig with no wall-time anchor."""
+@pytest.mark.parametrize(
+    'local',
+    [None, RestrictImageSize(224, 224), ChunkedSchedule() | ChunkedSchedule()],
+    ids=['empty', 'unscheduled', 'double'],
+)
+def test_pipeline_needs_exactly_one_scheduler_at_startup(make_mock_policy, local):
+    """None leaves the chunk's relative timestamps unanchored; a second anchors the anchored ones again."""
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
     head = remote if local is None else local | remote
     with pytest.raises(ValueError, match='ChunkedSchedule'):

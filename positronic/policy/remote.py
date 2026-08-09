@@ -12,7 +12,7 @@ from positronic.utils.serialization import encode_jpeg
 
 from .base import Policy, PolicyWrapper, Session
 from .recording import Recorder
-from .spec import from_spec, schedules
+from .spec import from_spec, schedules_once
 
 
 class RemoteSession(Session):
@@ -89,7 +89,7 @@ class _Endpoint(Policy):
         return self._server_meta
 
     def new_session(self, context=None, now=None) -> RemoteSession:
-        compress = bool(self.server_meta().get('compress_images'))
+        compress = bool(self.server_meta().get(keys.COMPRESS_IMAGES))
         ws_session = self._client.new_session()
         return RemoteSession(ws_session, compress_images=compress)
 
@@ -130,16 +130,16 @@ class RemotePolicy(Policy):
 
     def _resolve_stack(self) -> PolicyWrapper:
         meta = self._endpoint.server_meta()
-        version = meta.get('positronic_version', 'unknown')
+        version = meta.get(keys.POSITRONIC_VERSION, 'unknown')
         try:
-            stack = from_spec(meta['local_stack']) if 'local_stack' in meta else None
+            stack = from_spec(meta[keys.LOCAL_STACK]) if keys.LOCAL_STACK in meta else None
         except Exception as e:
             raise ValueError(f'Cannot build the server-declared local stack (server positronic {version})') from e
-        if stack is None or not schedules(stack):
+        if stack is None or not schedules_once(stack):
             raise ValueError(
-                f'Server declares no rig-side scheduler (server positronic {version}), so its actions would '
-                'reach the rig with no wall-time anchor. Put ChunkedSchedule left of the `remote` marker in '
-                'the pipeline it serves'
+                'Server must declare exactly one ChunkedSchedule in its rig-side stack (server positronic '
+                f'{version}): with none its actions reach the rig with no wall-time anchor, and each extra '
+                'one anchors them again'
             )
         return stack
 

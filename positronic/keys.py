@@ -45,6 +45,10 @@ CONFIG_NAME = 'config_name'
 HOST = 'host'
 PORT = 'port'
 SERVER = 'server'
+# The wire half of the handshake: what the server declares for the rig to build and obey.
+LOCAL_STACK = 'local_stack'
+COMPRESS_IMAGES = 'compress_images'
+POSITRONIC_VERSION = 'positronic_version'
 
 POLICY_META = 'inference.policy'
 SERVER_META = f'{POLICY_META}.{SERVER}'

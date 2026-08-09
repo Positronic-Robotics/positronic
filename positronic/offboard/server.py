@@ -18,7 +18,7 @@ from starlette.datastructures import QueryParams
 from positronic import keys
 from positronic.policy import Codec, Policy, Recorder
 from positronic.policy.base import PolicyWrapper
-from positronic.policy.spec import ModelSource, Pipeline, schedules, split
+from positronic.policy.spec import ModelSource, Pipeline, schedules_once, split
 from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
@@ -26,10 +26,10 @@ logger = logging.getLogger(__name__)
 
 def _require_schedule(local: PolicyWrapper | None) -> PolicyWrapper:
     """The rig-side half a served pipeline must carry."""
-    if local is None or not schedules(local):
+    if local is None or not schedules_once(local):
         raise ValueError(
-            'The pipeline declares no rig-side scheduler, so its actions would reach the rig with no '
-            'wall-time anchor. Put ChunkedSchedule left of the `remote` marker'
+            'The pipeline needs exactly one ChunkedSchedule left of the `remote` marker: with none its '
+            'actions reach the rig with no wall-time anchor, and each extra one anchors them again'
         )
     return local
 
@@ -288,9 +288,9 @@ class PolicyServer:
                 keys.CHECKPOINT_ID: rid,
                 **served.meta,
                 **session.meta,
-                'local_stack': local_spec,
-                'compress_images': border.compress_images,
-                'positronic_version': _pkg_version('positronic'),
+                keys.LOCAL_STACK: local_spec,
+                keys.COMPRESS_IMAGES: border.compress_images,
+                keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
             await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
 

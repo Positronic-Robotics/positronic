@@ -184,9 +184,10 @@ def split(pipeline: Pipeline | PolicyWrapper) -> tuple[PolicyWrapper | None, Rem
     return _join(components[:idx]), border, _join(components[idx + 1 :])
 
 
-def schedules(stack: PolicyWrapper) -> bool:
-    """Whether ``stack`` anchors relative action timestamps to wall time, which ``ChunkedSchedule`` does."""
-    return any(isinstance(component, ChunkedSchedule) for component in stack._wrappers())
+def schedules_once(stack: PolicyWrapper) -> bool:
+    """Whether ``stack`` carries exactly one ``ChunkedSchedule``, the wrapper that anchors relative action
+    timestamps to wall time."""
+    return sum(isinstance(component, ChunkedSchedule) for component in stack._wrappers()) == 1
 
 
 def inline(pipeline: Pipeline) -> Policy:
