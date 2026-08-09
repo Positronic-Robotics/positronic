@@ -39,7 +39,7 @@ class _StubSource(ModelSource):
 @pytest.fixture
 def stub_server(start_server, make_mock_policy) -> tuple[str, int, PolicyServer, MagicMock]:
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, server = start_server(remote | _StubSource(policy))
+    host, port, server = start_server(ChunkedSchedule() | remote | _StubSource(policy))
     return host, port, server, policy
 
 
@@ -50,7 +50,7 @@ def test_full_inference_cycle(stub_server):
     try:
         assert session.metadata['model_name'] == 'stub'
         assert session.metadata['type'] == 'stub'
-        assert session.metadata['local_stack'] == {'seq': []}
+        assert session.metadata['local_stack'] == {'name': 'chunked_schedule'}
         assert 'positronic_version' in session.metadata
 
         obs = {'image': 'test'}
@@ -118,7 +118,7 @@ class _LatestSource(ModelSource):
 
 def test_latest_checkpoint_pinned_once_at_startup(start_server, make_mock_policy):
     source = _LatestSource(make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'}))
-    host, port, _server = start_server(remote | source)
+    host, port, _server = start_server(ChunkedSchedule() | remote | source)
     # A newer checkpoint lands after startup (e.g. a training job writes it)...
     source.latest = '200'
     client = InferenceClient(f'{host}:{port}')
@@ -147,7 +147,7 @@ class _ProgressSource(_StubSource):
 
 def test_load_progress_frames_reach_the_client(start_server, make_mock_policy):
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(remote | _ProgressSource(policy))
+    host, port, _server = start_server(ChunkedSchedule() | remote | _ProgressSource(policy))
     # Requesting a non-pinned id forces a load inside the handshake; the source's progress
     # callbacks must arrive as ``loading`` frames before ``ready``.
     ws = connect(f'ws://{host}:{port}/api/v1/session/other')
@@ -179,7 +179,7 @@ class _IdentityCodec(Codec):
 @pytest.fixture
 def codec_server(start_server, make_mock_policy) -> tuple[str, int, MagicMock]:
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(remote | _IdentityCodec() | _StubSource(policy))
+    host, port, _server = start_server(ChunkedSchedule() | remote | _IdentityCodec() | _StubSource(policy))
     return host, port, policy
 
 
@@ -211,6 +211,13 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
         assert session.metadata['local_stack'] == {'name': 'chunked_schedule'}
     finally:
         session.close()
+
+
+def test_pipeline_with_no_rig_side_half_refused_at_startup(make_mock_policy):
+    """Nothing left of the marker leaves the rig nothing to run, so the server refuses to serve it."""
+    stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    with pytest.raises(ValueError, match='no rig-side stack'):
+        PolicyServer(remote | _StubSource(stub))
 
 
 class _ScriptedSession(Session):
