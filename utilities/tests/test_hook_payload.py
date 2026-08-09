@@ -24,6 +24,10 @@ def test_a_payload_carrying_neither_reads_empty():
         assert hook_payload.target_path(payload) == ''
 
 
-def test_the_reply_carries_the_text_where_the_harness_reads_it():
-    reply = hook_payload.additional_context('read the rules first')
-    assert reply == {'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'additionalContext': 'read the rules first'}}
+def test_the_reply_carries_the_text_where_the_harness_reads_it_for_the_event_it_answers():
+    assert hook_payload.additional_context('read the rules first', hook_payload.PRE_TOOL_USE) == {
+        'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'additionalContext': 'read the rules first'}
+    }
+    assert hook_payload.additional_context('the rules', hook_payload.SESSION_START) == {
+        'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': 'the rules'}
+    }
