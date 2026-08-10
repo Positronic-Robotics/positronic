@@ -1,7 +1,7 @@
 """The environment the launcher hands its env-server subprocess.
 
-Unlike ``test_e2e``, nothing here clones LIBERO or spawns anything: the checkout and ``Popen`` are stubbed so
-the assertions are about what ``_spawn`` decides, which is where the renderer choice belongs.
+Nothing here clones LIBERO or spawns it: the checkout and ``Popen`` are stubbed, so what is under test is the
+choice ``_spawn`` makes rather than the rendering it leads to (``test_e2e`` covers that).
 """
 
 import subprocess
@@ -29,8 +29,7 @@ def spawn_env(monkeypatch):
 
 
 def test_headless_linux_gets_a_renderer_without_being_told(spawn_env, monkeypatch):
-    """The point of the whole thing: a GPU host has no display, and nobody outside this file should have to
-    know that MuJoCo defaults to GLFW."""
+    """A GPU host has no display, and nobody running an eval should have to know that."""
     monkeypatch.delenv('MUJOCO_GL', raising=False)
     assert spawn_env('linux')['MUJOCO_GL'] == 'egl'
 
@@ -42,7 +41,7 @@ def test_an_operators_renderer_is_never_overridden(spawn_env, monkeypatch):
 
 
 def test_macos_keeps_glfw(spawn_env, monkeypatch):
-    """robosuite forces GLFW on macOS, and GLFW must init on the main thread — naming any backend here breaks
+    """robosuite forces GLFW on macOS, where it must init on the main thread; naming a backend here breaks
     rendering rather than fixing it."""
     monkeypatch.delenv('MUJOCO_GL', raising=False)
     assert 'MUJOCO_GL' not in spawn_env('darwin')

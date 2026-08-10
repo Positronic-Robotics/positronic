@@ -40,10 +40,10 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
         'PYTHONPATH': os.pathsep.join([str(_ENV_SERVER_DIR), str(_ensure_libero_src())]),
         'LIBERO_CONFIG_PATH': str(_LIBERO_CONFIG),
     }
+    # Pin the renderer instead of leaving it to robosuite, which reaches for EGL only while its
+    # ``MUJOCO_GPU_RENDERING`` macro is on and otherwise falls back to GLFW — and GLFW wants a display no headless
+    # host has. macOS keeps GLFW, which robosuite forces there; an operator's own backend wins either way.
     if sys.platform == 'linux':
-        # MuJoCo picks GLFW when nothing says otherwise, and GLFW needs a display no GPU host has. macOS keeps
-        # GLFW because robosuite forces it there; an operator who named a backend (osmesa on a software-rendering
-        # box) keeps theirs.
         env.setdefault('MUJOCO_GL', 'egl')
     return subprocess.Popen(command, env=env)
 

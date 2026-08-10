@@ -8,6 +8,7 @@ import pytest
 import pimm
 from positronic import geom, keys
 from positronic.cfg.eval.sim import libero as libero_cfg
+from positronic.cfg.eval.sim import positronic as native_cfg
 from positronic.cfg.eval.sim import robolab as robolab_cfg
 from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset
@@ -266,9 +267,9 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
 
 @pytest.mark.timeout(60.0)
 def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
-    """The real ``stack_cubes`` wrapper, end to end: no terminal, so the trial runs to the task timeout
-    (``eval.terminated`` False, and the failure the env never got to declare) and records the canonical
-    signals under the shared camera key."""
+    """The real ``stack_cubes`` wrapper, end to end: no terminal, so the trial runs to the task timeout and
+    records the verdict the env never got to declare — ``eval.terminated`` False, ``eval.success`` False — plus
+    the canonical signals under the shared camera key."""
     host, port = env_server
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
@@ -295,6 +296,16 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     assert 'sim_state.mjSTATE_INTEGRATION' in signals
 
 
+@pytest.mark.parametrize(
+    'eval_cfg', [libero_cfg.spatial, robolab_cfg.benchmark, native_cfg.stack_cubes], ids=['libero', 'robolab', 'mujoco']
+)
+def test_every_sim_eval_publishes_the_shared_camera_keys(eval_cfg):
+    """A codec names the camera it wants, so a sim spelling its cameras its own way can be scored only by a codec
+    written for it. Every sim publishes the shared pair, whatever the benchmark calls those cameras."""
+    observations = eval_cfg.instantiate().embodiment.observations
+    assert {keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE} <= set(observations)
+
+
 # A LIBERO ``step`` payload, the shape ``LiberoEnv._observe`` returns over the wire.
 _LIBERO_RAW_OBS = {
     'eef_pos': np.array([0.1, 0.2, 0.3]),
@@ -306,14 +317,6 @@ _LIBERO_RAW_OBS = {
     'eye_in_hand_image': np.zeros((256, 256, 3), dtype=np.uint8),
     'sim_state': np.zeros(4),
 }
-
-
-@pytest.mark.parametrize('eval_cfg', [libero_cfg.spatial, robolab_cfg.benchmark], ids=['libero', 'robolab'])
-def test_every_sim_eval_publishes_the_shared_camera_keys(eval_cfg):
-    """A codec names the camera it wants, so a sim that spells its cameras its own way can only be scored by a
-    codec written for it. Every sim publishes the shared pair, whatever it calls them internally."""
-    observations = eval_cfg.instantiate().embodiment.observations
-    assert {keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE} <= set(observations)
 
 
 def _policy_inputs(embodiment: Embodiment, adapter: EnvAdapter, raw_obs: dict) -> dict:
@@ -328,8 +331,8 @@ def _policy_inputs(embodiment: Embodiment, adapter: EnvAdapter, raw_obs: dict) -
 
 @pytest.mark.parametrize('codec_cfg', [openpi_codecs.droid_obs, openpi_codecs.libero_obs], ids=['droid', 'libero'])
 def test_libero_observation_encodes_through_any_codec(codec_cfg):
-    """Serve once, score anywhere: a LIBERO observation encodes through a codec built for another env — the
-    DROID one — as readily as through LIBERO's own. What it scores is another matter; the viewpoints differ."""
+    """Serve once, score anywhere: a LIBERO observation encodes through a codec built for another env — the DROID
+    one — as readily as through LIBERO's own. What it scores is another matter; the viewpoints differ."""
     ev = libero_cfg.spatial.instantiate()
     inputs = _policy_inputs(ev.embodiment, LiberoAdapter(libero_cfg.spatial.kwargs['camera_dict']), _LIBERO_RAW_OBS)
 
