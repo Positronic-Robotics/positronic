@@ -209,9 +209,10 @@ def resolve_episode_seed(episode: Any, episode_index: int, override_seed: int | 
 def declared_task_horizon_sec(declared: Iterable[float | None]) -> float:
     """The one horizon a benchmark declares, in sim-seconds, over every episode's ``task_horizon_sec``.
 
-    The horizon belongs to the benchmark, not to an episode within it, so a benchmark that declares none — or
-    disagrees with itself — has no horizon to run at. Callers pass the values already read from their own
-    representation of the specs: parsed episode objects in the molmo venv, raw JSON on the positronic side.
+    The horizon belongs to the benchmark, not to an episode within it, so a benchmark that declares none, one
+    that disagrees with itself, and one that declares a non-positive span all have no horizon to run at.
+    Callers pass the values already read from their own representation of the specs: parsed episode objects in
+    the molmo venv, raw JSON on the positronic side.
     """
     horizons = set()
     for value in declared:
@@ -220,6 +221,8 @@ def declared_task_horizon_sec(declared: Iterable[float | None]) -> float:
                 f'benchmark episodes carry no {MOLMO_TASK_HORIZON_SEC} in their task dict — the horizon is part '
                 'of the task definition; add it to the benchmark'
             )
+        if value <= 0:
+            raise ValueError(f'benchmark declares a non-positive {MOLMO_TASK_HORIZON_SEC} of {value}s')
         horizons.add(value)
     if len(horizons) != 1:
         raise ValueError(f'benchmark declares inconsistent {MOLMO_TASK_HORIZON_SEC} values {sorted(horizons)}')
@@ -234,11 +237,18 @@ def resolve_task_horizon_steps(episodes: Any, policy_dt_ms: float, override_step
     own ``task_horizon_sec`` from the episodes' task dicts, converted with ``round(sec * 1000 / policy_dt_ms)``.
     It raises when any episode declares none, and again when the episodes disagree. This reproduces all three,
     raises included: ``JsonBenchmarkEvalConfig.task_horizon``'s 500-step default is a config default upstream
-    overwrites before the runner ever sees it.
+    overwrites before the runner ever sees it. A horizon that resolves below one step is refused on either
+    path, so no route reaches the task with a budget it expires inside.
     """
     if override_steps is not None:
         if override_steps < 1:
             raise ValueError(f'task_horizon_steps override must be at least 1 step, got {override_steps}')
         return override_steps
     sec = declared_task_horizon_sec(episode.task.get(MOLMO_TASK_HORIZON_SEC) for episode in episodes)
-    return round(sec * 1000.0 / policy_dt_ms)
+    steps = round(sec * 1000.0 / policy_dt_ms)
+    if steps < 1:
+        raise ValueError(
+            f'benchmark {MOLMO_TASK_HORIZON_SEC} of {sec}s rounds to {steps} steps at a {policy_dt_ms}ms policy '
+            'period — the episode would expire before its first action'
+        )
+    return steps

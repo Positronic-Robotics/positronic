@@ -129,6 +129,8 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
             self._cleanup.close()
 
     def _step_env(self, clock: pimm.Clock) -> dict[str, Any]:
+        # Stepping is reachable only while ``_active``, which ``reset`` sets once the connection is up.
+        assert self._conn is not None, 'stepped before the first reset connected'
         # Every command receiver is built with ``default=[]``, so ``read()`` is total here — it returns ``None``
         # only for a receiver with no default.
         commands: dict[str, pimm.Message] = {}

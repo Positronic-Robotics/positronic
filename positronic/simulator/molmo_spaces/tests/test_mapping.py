@@ -121,6 +121,20 @@ def test_task_horizon_disagreeing_across_episodes_raises():
         mapping.resolve_task_horizon_steps(_episodes(20, 30), 66.0)
 
 
+def test_task_horizon_non_positive_raises():
+    # A zero or negative span is no horizon at all; the override path already refuses one below a step.
+    with pytest.raises(ValueError, match='non-positive'):
+        mapping.resolve_task_horizon_steps(_episodes(0), 66.0)
+    with pytest.raises(ValueError, match='non-positive'):
+        mapping.resolve_task_horizon_steps(_episodes(-5), 66.0)
+
+
+def test_task_horizon_rounding_below_one_step_raises():
+    # 0.03s of a 66ms period rounds to 0 steps, which would expire the episode before its first action.
+    with pytest.raises(ValueError, match='rounds to 0 steps'):
+        mapping.resolve_task_horizon_steps(_episodes(0.03), 66.0)
+
+
 def test_task_horizon_override_wins():
     # An explicit override pins the horizon, beating the benchmark field (mirrors --task_horizon_steps), and lets
     # a benchmark that declares none, or disagrees, still resolve.

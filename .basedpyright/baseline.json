@@ -8642,16 +8642,6 @@
                 }
             }
         ],
-        "./positronic/simulator/env_server/proxy.py": [
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 28,
-                    "endColumn": 32,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./positronic/simulator/env_server/server.py": [
             {
                 "code": "reportArgumentType",
