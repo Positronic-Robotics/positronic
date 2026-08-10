@@ -259,7 +259,7 @@ class InferenceClient:
             except OSError as e:
                 raise type(e)(f'{e} (connecting to {self.session_url})') from e
             finally:
-                # ``ServerNotReady`` is not retried above, so it passes through leaving the socket open.
+                # A socket that produced no session is owned by nobody; a returned session owns its own.
                 if session is None and ws is not None:
                     ws.close()
 

@@ -279,8 +279,29 @@ class SampledPolicy(Policy):
                     f'Sampled policies must be distinguishable by {self._key_field!r}, but {duplicates} name more '
                     f'than one of them: sampling would pick the first every time and never run the others'
                 )
+            self._check_weights(keys)
             self._keys = keys
         return self._keys
+
+    def _check_weights(self, keys: tuple[str, ...]) -> None:
+        """Refuse a weighting no draw can be taken from. No weights at all means uniform."""
+        if not self._weights:
+            return
+        if len(self._weights) != len(keys):
+            raise ValueError(
+                f'A sampled policy was given {len(self._weights)} weights for {len(keys)} policies: each policy '
+                f'takes one weight, in the order the policies were given'
+            )
+        if any(w < 0 for w in self._weights):
+            raise ValueError(
+                f'Sampling weights must not be negative, but {list(self._weights)} holds one: a negative weight '
+                f'skews the draw without ever being reported'
+            )
+        if sum(self._weights) <= 0:
+            raise ValueError(
+                f'Sampling weights {list(self._weights)} sum to zero, so no policy could ever be drawn: drop the '
+                f'policies that should not run instead of weighting them to nothing'
+            )
 
     def new_session(self, context=None, now=None):
         keys = self._get_keys()
@@ -309,9 +330,7 @@ class SampledPolicy(Policy):
                     + '\nEvery sampled policy has to answer, or the ones that do absorb the missing share and '
                     'the round measures a set nobody asked for. Bring them up, then start again.'
                 ) from failures[0]
-        # An empty set and one whose members share a key are both unsamplable, and `new_session` is
-        # otherwise the first to say so — from inside the first episode. Resolved after the wait, since
-        # `meta` on a member that has not handshaked opens its own unbounded connection.
+        # After the waits: `meta` on a member that has not handshaked opens its own unbounded connection.
         self._get_keys()
 
     @property

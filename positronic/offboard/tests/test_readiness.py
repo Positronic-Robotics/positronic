@@ -187,6 +187,23 @@ def test_giving_up_is_not_retried_as_a_cold_start(fake_server):
 
 # --- the policy layer --------------------------------------------------------------------------
 
+# The meta field `_Named` names itself by, and the `key_field` the sets below sample on.
+_KEY = 'ckpt'
+
+
+class _Named(Policy):
+    """A member that needs no server: the set-level checks are about the set, not about serving."""
+
+    def __init__(self, name: str):
+        self._name = name
+
+    def new_session(self, context=None, now=None):
+        raise AssertionError('not reached')
+
+    @property
+    def meta(self):
+        return {_KEY: self._name}
+
 
 @pytest.mark.timeout(30)
 def test_a_remote_policy_waits_on_its_own_endpoint_and_names_it(fake_server):
@@ -262,21 +279,31 @@ def test_a_sampled_set_with_nothing_to_sample_is_refused():
 def test_a_sampled_set_whose_members_share_a_key_is_refused():
     """Sampling would pick the first every time and never run the others, so the set is refused
     here rather than by the draw in the first episode."""
-
-    class _Named(Policy):
-        def __init__(self, name):
-            self._name = name
-
-        def new_session(self, context=None, now=None):
-            raise AssertionError('not reached')
-
-        @property
-        def meta(self):
-            return {'ckpt': self._name}
-
-    batch = SampledPolicy(_Named('same'), _Named('same'), key_field='ckpt')
+    batch = SampledPolicy(_Named('same'), _Named('same'), key_field=_KEY)
     with pytest.raises(ValueError, match='distinguishable'):
         batch.wait_ready(1.0)
+
+
+@pytest.mark.timeout(20)
+def test_a_sampled_set_weighted_so_no_draw_can_be_taken_is_refused():
+    """A weighting nothing can be drawn from is refused with the set, not left to the first draw."""
+    with pytest.raises(ValueError, match='one weight'):
+        SampledPolicy(_Named('a'), _Named('b'), weights=[1.0], key_field=_KEY).wait_ready(1.0)
+
+    with pytest.raises(ValueError, match='negative'):
+        SampledPolicy(_Named('a'), _Named('b'), weights=[-1.0, 2.0], key_field=_KEY).wait_ready(1.0)
+
+    with pytest.raises(ValueError, match='sum to zero'):
+        SampledPolicy(_Named('a'), _Named('b'), weights=[0.0, 0.0], key_field=_KEY).wait_ready(1.0)
+
+
+@pytest.mark.timeout(20)
+def test_a_sampled_set_a_draw_can_be_taken_from_passes_the_gate():
+    """The other side of the predicate: an unequal weighting, and one with a zero in it, both draw,
+    as does a set carrying no weights at all."""
+    SampledPolicy(_Named('a'), _Named('b'), weights=[3.0, 1.0], key_field=_KEY).wait_ready(1.0)
+    SampledPolicy(_Named('a'), _Named('b'), weights=[1.0, 0.0], key_field=_KEY).wait_ready(1.0)
+    SampledPolicy(_Named('a'), _Named('b'), key_field=_KEY).wait_ready(1.0)
 
 
 @pytest.mark.timeout(20)
