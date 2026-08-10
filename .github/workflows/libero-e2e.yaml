@@ -41,7 +41,9 @@ jobs:
       - name: Replay a LIBERO demo through the env server (software rendering)
         env:
           MUJOCO_GL: osmesa
-        run: uv run pytest positronic/simulator/libero/tests --no-cov -rs
+        # By file, not by directory: the replay is `--ignore`d in `addopts` so a plain `pytest` never collects it,
+        # and only naming the file itself overrides that.
+        run: uv run pytest positronic/simulator/libero/tests/test_e2e.py --no-cov -rs
 
       # Reuses the LIBERO checkout the replay above cloned (``~/.cache/positronic/libero/src``). Validates the
       # command transform (FK/IK + each controller's set_goal inverse) and the gripper normalization against
