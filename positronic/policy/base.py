@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from enum import Enum
 from typing import Any
 
 Now = Callable[[], float]
@@ -26,13 +28,12 @@ class Session(ABC):
 
     **Return contract**: ``list[dict] | None``. ``None`` means "no new
     trajectory, keep executing the current one" (used by scheduling wrappers).
-    An empty list means "stop whatever is executing now". A non-empty list is
-    a new trajectory. Single-action returns must be wrapped into a 1-element
-    list by the producer.
+    A list is a new trajectory, replacing whatever is playing. Single-action
+    returns must be wrapped into a 1-element list by the producer.
     """
 
     @abstractmethod
-    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+    def __call__(self, obs: Mapping[str, Any]) -> list[dict[str, Any]] | None:
         """Predict actions for the given observation."""
 
     @property
@@ -72,6 +73,86 @@ class DelegatingSession(Session):
         self._inner.close()
 
 
+class LatencyMode(Enum):
+    """When the platform lets a scheduling wrapper have the model's answer."""
+
+    # At completion, and the world runs on meanwhile: the cost is whatever the model really took.
+    LIVE = 'live'
+    # A fixed delay after the call started, whatever the model really took. A delay of zero holds the world
+    # still for the whole call.
+    DECLARED = 'declared'
+    # The call's own wall duration after it started, charged on the world clock.
+    MEASURED = 'measured'
+
+
+class InferenceGate:
+    """The platform's hold on a scheduling wrapper's path to the model.
+
+    Installed around the wrapper's inner session, so no wrapper can reach a result before the mode's cost
+    has been paid. The wrapper resumes at the release instant and anchors there.
+    """
+
+    def __init__(self, now: Now, mode: LatencyMode, delay_sec: float = 0.0):
+        self._now = now
+        self._mode = mode
+        self._delay_sec = delay_sec
+        self._wall_t0 = 0.0
+        self._cancelled = False
+        # True while a call is inside the model — a wrapper that answered on its own never sets it.
+        # ``t0`` is the world instant that call started, valid once ``entered``.
+        self.t0 = 0.0
+        self.entered = False
+
+    def wrap(self, inner: Session) -> Session:
+        return InferenceGate._Session(inner, self)
+
+    def cancel(self) -> None:
+        """Release a parked call, whose result is on its way to a harness that no longer wants it."""
+        self._cancelled = True
+
+    def hold(self) -> float | None:
+        """Wall seconds the world must not advance for, or ``None`` to hold until the call completes."""
+        match self._mode:
+            case LatencyMode.LIVE:
+                return 0.0
+            case LatencyMode.DECLARED:
+                return None if self._now() >= self.t0 + self._delay_sec else 0.0
+            case LatencyMode.MEASURED:
+                # The world may run no further ahead of the call's start than wall time has: measured
+                # charging only means anything with the world at or below real time during the call.
+                return max(0.0, (self._now() - self.t0) - (time.monotonic() - self._wall_t0))
+
+    def _release_at(self) -> float:
+        match self._mode:
+            case LatencyMode.LIVE:
+                return self.t0
+            case LatencyMode.DECLARED:
+                return self.t0 + self._delay_sec
+            case LatencyMode.MEASURED:
+                return self.t0 + (time.monotonic() - self._wall_t0)
+
+    class _Session(DelegatingSession):
+        """Charges the inner call, on whatever thread the harness dispatched it to."""
+
+        def __init__(self, inner: Session, gate: InferenceGate):
+            super().__init__(inner)
+            self._gate = gate
+
+        def __call__(self, obs):
+            gate = self._gate
+            gate.t0 = gate._now()
+            gate._wall_t0 = time.monotonic()
+            gate.entered = True
+            result = self._inner(obs)
+            release = gate._release_at()
+            # The world clock is advanced by the harness's thread, so the park has to poll it; sleeping
+            # zero hands over the GIL without adding a wake-up granularity to the release instant.
+            while not gate._cancelled and gate._now() < release:
+                time.sleep(0)
+            gate.entered = False
+            return result
+
+
 class Policy(ABC):
     """Factory for inference sessions.
 
@@ -81,13 +162,18 @@ class Policy(ABC):
     """
 
     @abstractmethod
-    def new_session(self, context: dict[str, Any] | None = None, now: Now | None = None) -> Session:
+    def new_session(
+        self, context: dict[str, Any] | None = None, now: Now | None = None, gate: InferenceGate | None = None
+    ) -> Session:
         """Create a new inference session for an episode.
 
         Args:
             context: Episode context (task description, eval metadata, etc.).
             now: The runtime clock (current time in seconds), supplied by the harness and passed down
                 to every wrapped session. ``None`` where no runtime clock exists (server-side, warmup).
+            gate: The platform's hold on the path to the model, supplied by the harness and installed
+                around the inner session of every ``SchedulingWrapper`` in the stack. ``None`` where no
+                runtime imposes inference cost (server-side, warmup).
         """
 
     @property
@@ -105,8 +191,8 @@ class DelegatingPolicy(Policy):
     def __init__(self, inner: Policy):
         self._inner = inner
 
-    def new_session(self, context=None, now=None):
-        return self._inner.new_session(context, now)
+    def new_session(self, context=None, now=None, gate=None):
+        return self._inner.new_session(context, now, gate)
 
     @property
     def meta(self):
@@ -171,6 +257,15 @@ class PolicyWrapper:
         return (self,)
 
 
+class SchedulingWrapper(PolicyWrapper):
+    """A wrapper that owns the plan: it decides when to call the model and returns the trajectory the
+    harness plays, rather than one action for the moment.
+
+    Being one is what earns the wrapper an ``InferenceGate`` around its inner session, so the inference
+    cost is imposed below it instead of trusted to it.
+    """
+
+
 class _WrapperPolicy(DelegatingPolicy):
     """Generic policy wrapper produced by ``PolicyWrapper.wrap()``.
 
@@ -181,8 +276,11 @@ class _WrapperPolicy(DelegatingPolicy):
         super().__init__(inner)
         self._wrapper = wrapper
 
-    def new_session(self, context=None, now=None):
-        return self._wrapper.wrap_session(self._inner.new_session(context, now), context, now)
+    def new_session(self, context=None, now=None, gate=None):
+        inner = self._inner.new_session(context, now, gate)
+        if gate is not None and isinstance(self._wrapper, SchedulingWrapper):
+            inner = gate.wrap(inner)
+        return self._wrapper.wrap_session(inner, context, now)
 
     @property
     def meta(self):

@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Generic, TypeVar, cast, final
+from typing import Any, Generic, TypeVar, cast, final
 
 T = TypeVar('T')
 U = TypeVar('U')
@@ -11,7 +11,7 @@ class NoValueException(Exception):
     pass
 
 
-NODEFAULT = object()
+NODEFAULT: Any = object()
 
 
 @dataclass

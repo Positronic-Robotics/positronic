@@ -1,14 +1,13 @@
 """The ``EnvAdapter`` interface: the per-benchmark canonical<->raw mappings, on the client side.
 
 ``RemoteEnvControlSystem`` is a dumb translator — it moves data between pimm signals and this adapter.
-The adapter is the smart half: it turns the Harness's command trajectories into the env's raw action
-(owning trajectory playing and how to hold between waypoints), maps raw observations back to canonical
-signals — policy-facing and privileged ground-truth kept separate — and reads the terminal. Each
-benchmark ships one adapter (``vendors/``-style); the native ``MujocoSim`` fixture is the reference.
+The adapter is the smart half: it turns the Harness's commands into the env's raw action (owning what to
+hold between them), maps raw observations back to canonical signals — policy-facing and privileged
+ground-truth kept separate — and reads the terminal. Each benchmark ships one adapter (``vendors/``-style);
+the native ``MujocoSim`` fixture is the reference.
 """
 
 from abc import ABC, abstractmethod
-from collections import defaultdict
 from typing import Any, final
 
 import numpy as np
@@ -16,14 +15,6 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
-
-
-def fresh_command_players() -> defaultdict[str, roboarm_command.TrajectoryPlayer]:
-    """A trajectory player per command channel: ``robot_command`` accumulates the deltas due in one tick (a
-    missed tick catches up instead of dropping motion), every other channel keeps the last value due."""
-    players = defaultdict(roboarm_command.TrajectoryPlayer)
-    players[keys.ROBOT_COMMAND] = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
-    return players
 
 
 class EnvAdapter(ABC):
@@ -38,11 +29,11 @@ class EnvAdapter(ABC):
         """
 
     @abstractmethod
-    def action(self, commands: dict[str, pimm.Message], now_ns: int) -> dict[str, Any]:
-        """The latest per-channel command messages + the clock -> the raw action the env steps.
+    def action(self, commands: dict[str, pimm.Message]) -> dict[str, Any]:
+        """The latest per-channel command messages -> the raw action the env steps.
 
-        The adapter owns trajectory playing (sampling each channel's waypoints down to ``now_ns``) and
-        what to do between waypoints — e.g. hold the last commanded value, the absolute-mode invariant.
+        A channel delivers a command only when one comes due, so the adapter owns what happens in between —
+        e.g. hold the last commanded value, the absolute-mode invariant.
         """
 
     @abstractmethod
@@ -102,10 +93,9 @@ def _wire_command(cmd: Any) -> dict[str, Any]:
 class WireCommandAdapter(EnvAdapter):
     """An adapter whose action is the shared wire payload ``{'command': <tagged dict>, 'grip': float}``.
 
-    The command side of every remote benchmark adapter: it plays each command channel's trajectory down to
-    the clock — holding an absolute setpoint between waypoints, firing a relative delta once — and flattens
-    the held arm command (a pose as ``[t(3), R(9)]``, joint positions, or per-step joint deltas) plus the
-    gripper closure into one payload.
+    The command side of every remote benchmark adapter: it holds an absolute setpoint until the next command
+    arrives and fires a relative delta once, and flattens the held arm command (a pose as ``[t(3), R(9)]``,
+    joint positions, or per-step joint deltas) plus the gripper closure into one payload.
     All action *encoding* — how the tagged command becomes the env's native action — stays server-side with
     the env's own model. Subclasses implement ``_reset_token`` (the base clears the per-trial command state
     around it) and keep the observation and terminal mappings to themselves.
@@ -118,10 +108,9 @@ class WireCommandAdapter(EnvAdapter):
         self._reset_command_state()
 
     def _reset_command_state(self) -> None:
-        self._players = fresh_command_players()
-        self._held: dict[str, Any] = {}  # last sampled waypoint per channel — re-sent until it changes
-        # Last commanded gripper closure, held across a cancelled grip trajectory: grip is an absolute [0, 1]
-        # value with no 'hold' command to fall back on (unlike the arm), so cancelling must freeze it, not reopen.
+        self._held: dict[str, Any] = {}  # last command per channel — re-sent until the next one arrives
+        # Last commanded gripper closure, held across an episode boundary: grip is an absolute [0, 1] value
+        # with no 'hold' command to fall back on (unlike the arm), so a fresh trial must freeze it, not reopen.
         self._grip = 0.0
 
     @final
@@ -133,21 +122,14 @@ class WireCommandAdapter(EnvAdapter):
     def _reset_token(self, context: dict[str, Any]) -> Any:
         """The per-trial RUN context -> the env's opaque reset token; the command state is already cleared."""
 
-    def action(self, commands: dict[str, pimm.Message], now_ns: int) -> dict[str, Any]:
+    def action(self, commands: dict[str, pimm.Message]) -> dict[str, Any]:
         for name, msg in commands.items():
-            player = self._players[name]
             if msg.updated:
-                player.set(msg.data)
-                if not msg.data:  # an empty trajectory cancels: stop replaying the held waypoint
-                    self._held.pop(name, None)
-            value = player.advance(now_ns)
-            if value is not None:
-                self._held[name] = value
+                self._held[name] = msg.data
         # The server maps the held command into its controller's action. Reset has no env-side action, so it
         # forwards as a hold; a delta — Cartesian or joint — is a one-shot relative motion, forwarded once then
         # dropped. Re-sending a stale delta would re-compose it against the moving arm every tick (the eef
-        # drifts, or the joints walk toward their limits), so once a delta's trajectory is exhausted the arm
-        # holds its measured pose.
+        # drifts, or the joints walk toward their limits), so after one step the arm holds its measured pose.
         cmd = self._held.get(keys.ROBOT_COMMAND)
         match cmd:
             case roboarm_command.Reset():

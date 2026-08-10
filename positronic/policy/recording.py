@@ -35,8 +35,8 @@ The robot's actual gripper is overlaid the same way in white for predicted-vs-re
 Every field is *also* logged as ``rr.Scalars`` on a dedicated ``action_time`` timeline
 (each action stamped at the inference-request time plus its horizon offset), so a
 ``TimeSeriesView`` reads commanded values with real axes. That anchor is the pre-inference
-``obs_time_ns``, so it precedes the harness's true execution time (stamped after
-inference by ``ChunkedSchedule``) by the inference latency. Select ``action_time`` to see them.
+``obs_time_ns``, so it precedes true execution — which the scheduling wrapper anchors at the instant
+the inference gate releases its call — by the inference latency. Select ``action_time`` to see them.
 
 Entity paths are ``{tap_name}/{data_key}``. A tap's incoming observation keys and
 outgoing action keys share that namespace; in the rare case the same key appears on
@@ -221,9 +221,8 @@ def _log_action_series(path: str, arr: np.ndarray, horizon: np.ndarray, base_ns:
 
     Each action is stamped at ``base_ns + horizon_i``, where ``base_ns`` is the
     inference-request time; successive chunks lay out along one clock so a ``TimeSeriesView``
-    has real axes. This precedes true execution by the inference latency: the harness's
-    ``ChunkedSchedule`` anchors commands at ``clock.now()`` *after* inference, which a recorder
-    tap sitting inside it cannot observe.
+    has real axes. This precedes true execution by the inference latency: the scheduling wrapper
+    anchors commands at the instant the gate releases its call, which a recorder tap cannot observe.
     """
     arr = np.asarray(arr, dtype=np.float64)
     if arr.ndim == 1:
@@ -294,6 +293,9 @@ class Recorder:
     once per inference at the outermost tap and reused by inner taps so every tap
     stamps the inference identically. ``blueprint``, if given, is sent as the recording's
     layout instead of the auto-built one.
+
+    The state shared across taps (the nesting depth, the timeline values) carries no lock: the harness
+    keeps one session call in flight, so a whole pipeline's taps run on one thread, one call at a time.
     """
 
     def __init__(

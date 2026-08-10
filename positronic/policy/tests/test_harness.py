@@ -1,3 +1,4 @@
+import time
 from contextlib import contextmanager
 from functools import partial
 from types import SimpleNamespace
@@ -15,20 +16,16 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import (
     CartesianDelta,
     CartesianPosition,
-    JointDelta,
-    JointPosition,
     Reset,
     TrajectoryPlayer,
-    _compose_delta,
     from_wire,
-    reduce,
     to_wire,
 )
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, bundled_franka_model
 from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
-from positronic.policy.base import Policy, Session
+from positronic.policy.base import DelegatingSession, Policy, SchedulingWrapper, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import Directive, DirectiveType, Harness, _assert_anchored
 from positronic.policy.remote import RemoteSession
@@ -52,12 +49,13 @@ def _eval_pass(run_id: str):
 CAM = 'image.cam'
 
 
-def make_embodiment(descriptor: str = '', cameras=(CAM,), static_meta=None) -> Embodiment:
+def make_embodiment(descriptor: str = '', cameras=(CAM,), static_meta=None, simulated=False) -> Embodiment:
     """Minimal Franka-shaped embodiment for harness unit tests.
 
     The sources/dests are no-ops: these tests pair the harness ports directly
     (never via ``wire_embodiment``), so only the spec — names, serializers,
-    home values, descriptor — is read by the Harness.
+    home values, descriptor — is read by the Harness. ``simulated`` is what makes
+    ``inference_latency`` bite, since the knob is sim-only.
     """
     observations = {
         'robot_state': Observation(pimm.NoOpEmitter(), Serializers.robot_state),
@@ -69,7 +67,7 @@ def make_embodiment(descriptor: str = '', cameras=(CAM,), static_meta=None) -> E
         keys.ROBOT_COMMAND: Command(pimm.NoOpReceiver(), Reset(), Serializers.robot_command),
         'target_grip': Command(pimm.NoOpReceiver(), 0.0, None),
     }
-    return Embodiment(descriptor, observations, commands, static_meta or {}, pimm.NoOpEmitter())
+    return Embodiment(descriptor, observations, commands, static_meta or {}, pimm.NoOpEmitter(), simulated=simulated)
 
 
 class _SpySession(Session):
@@ -92,7 +90,7 @@ class SpyPolicy(Policy):
         self.reset_calls: int = 0
         self.last_reset_context = None
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, gate=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _SpySession(self)
@@ -137,7 +135,7 @@ class StubPolicy(Policy):
     def meta(self) -> dict[str, object]:
         return self._meta
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, gate=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _StubSession(self)
@@ -167,7 +165,7 @@ class ChunkPolicy(StubPolicy):
         super().__init__(*args, **kwargs)
         self.counter = 0
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, gate=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _ChunkSession(self)
@@ -202,7 +200,7 @@ class RemoteStubPolicy(Policy):
         self.command = command
         self.target_grip = float(target_grip)
 
-    def new_session(self, context=None, now=None) -> RemoteSession:
+    def new_session(self, context=None, now=None, gate=None) -> RemoteSession:
         action = [{'robot_command': self.command, 'target_grip': self.target_grip, 'timestamp': 0.0}]
         return RemoteSession(_FakeInferenceSession(action))
 
@@ -235,6 +233,17 @@ def emit_ready_payload(frame_emitter, robot_emitter, grip_emitter, robot_state):
     grip_emitter.emit(0.25)
 
 
+class _Pacer(pimm.ControlSystem):
+    """Stands in for the simulator: the sole time-master, sleeping one control period every turn."""
+
+    def __init__(self, period: float = 0.005):
+        self._period = period
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        while not should_stop.value:
+            yield pimm.Sleep(self._period)
+
+
 def _pair_all(world, harness):
     """Pair all harness signals and return a dict of test handles."""
     ds_recorder = RecordingEmitter()
@@ -260,39 +269,27 @@ def _ds_types(p) -> list[DsWriterCommandType]:
 
 
 def _last_command(p):
-    """Extract the last robot command from the trajectory signal."""
+    """The latest robot command the harness put on the channel."""
     msg = p['command_rx'].read()
-    if msg is None or msg.data is None:
-        return None
-    traj = msg.data  # list[tuple[float, CommandType]]
-    return traj[-1][1] if traj else None
+    assert msg is not None, 'no robot command was emitted'
+    return msg.data
 
 
 def _last_grip(p):
-    """Extract the last grip value from the grip trajectory signal."""
+    """The latest grip target the harness put on the channel."""
     msg = p['grip_rx'].read()
-    if msg is None or msg.data is None:
-        return None
-    traj = msg.data  # list[tuple[float, float]]
-    return traj[-1][1] if traj else None
-
-
-def _all_grips(p):
-    """Extract all grip values from the grip trajectory signal."""
-    msg = p['grip_rx'].read()
-    if msg is None or msg.data is None:
-        return []
-    return [g for _, g in msg.data]
+    assert msg is not None, 'no grip target was emitted'
+    return msg.data
 
 
 def _emitted_commands(recorder):
-    """All robot commands across a recorder's non-empty emitted trajectories."""
-    return [cmd for _ts, traj in recorder.emitted if traj for _t, cmd in traj]
+    """Every robot command a recorder saw, in emission order."""
+    return [cmd for _ts, cmd in recorder.emitted]
 
 
 def _emitted_grips(recorder):
-    """All grip targets across a recorder's non-empty emitted trajectories."""
-    return [g for _ts, traj in recorder.emitted if traj for _t, g in traj]
+    """Every grip target a recorder saw, in emission order."""
+    return [grip for _ts, grip in recorder.emitted]
 
 
 @pytest.mark.timeout(3.0)
@@ -344,7 +341,6 @@ def test_harness_emits_cartesian_move(world):
         'descriptor',
     }
 
-    # Last non-empty command (a trailing ``[]`` cancel is emitted on shutdown).
     cmds = _emitted_commands(cmd_recorder)
     assert cmds, 'no robot command emitted'
     cmd = cmds[-1]
@@ -548,7 +544,7 @@ def test_episode_meta_includes_policy_static_meta(world):
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             self._command = CartesianPosition(pose=pose)
 
-        def new_session(self, context=None, now=None):
+        def new_session(self, context=None, now=None, gate=None):
             return _StaticMetaSession(self._command)  # Session.meta defaults to {}
 
         @property
@@ -856,18 +852,15 @@ def test_task_done_terminates_through_wire_embodiment(world):
 
 @pytest.mark.timeout(3.0)
 def test_done_after_deadline_is_a_timeout(world):
-    """The deadline is hard: a ``done`` delivered past it (here during the latency sleep) records as a
-    timeout — ``eval.terminated`` False, payload dropped — not a late stop-signal success."""
+    """The deadline is hard: a ``done`` delivered past it records as a timeout — ``eval.terminated`` False,
+    payload dropped — not a late stop-signal success."""
     policy = StubPolicy()
-    harness = Harness(
-        policy, make_embodiment(), task=Task(instruction='t', timeout=0.05), trials=[{'inference_latency': 0.2}]
-    )
+    harness = Harness(policy, make_embodiment(), task=Task(instruction='t', timeout=0.05), trials=[{}])
     p = _pair_all(world, harness)
     done_em = world.pair(harness.done)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    # Obs starts inference + the 0.2s latency sleep; the 0.05s deadline lapses during it, and done is
-    # delivered at ~0.1s — past the deadline but before the harness next polls. The timeout must win.
+    # The 0.05s deadline lapses first; done lands at ~0.1s, after the trial has already timed out.
     driver = ManualDriver([
         (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.1),
         (partial(done_em.emit, {keys.EVAL_SUCCESS: True}), 0.3),
@@ -929,12 +922,15 @@ def test_trial_plan_self_drives(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_timeout_crossed_during_latency_sleep_drops_chunk(world):
-    """A chunk whose latency sleep crosses the deadline is dropped, never emitted."""
+def test_timeout_during_inference_drops_the_chunk(world):
+    """A trial whose deadline lapses while the model is still owed its latency ends with the call in flight:
+    the trajectory it eventually returns is discarded, never emitted past the advertised termination point."""
     policy = StubPolicy()
-    # The 0.2s latency sleep crosses the 0.05s deadline before the chunk is emitted.
     harness = Harness(
-        policy, make_embodiment(), task=Task(instruction='test', timeout=0.05), trials=[{'inference_latency': 0.2}]
+        ChunkedSchedule().wrap(policy),
+        make_embodiment(simulated=True),
+        task=Task(instruction='test', timeout=0.05),
+        trials=[{keys.INFERENCE_LATENCY: 0.2}],  # the gate holds the answer well past the deadline
     )
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
@@ -951,14 +947,13 @@ def test_timeout_crossed_during_latency_sleep_drops_chunk(world):
 
     driver = ManualDriver([(partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01), (None, 0.3)])
 
-    scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, steps=200)
+    scheduler = world.start([harness, driver, _Pacer()])
+    drive_scheduler(scheduler, steps=2000)
 
     stops = [data for _, data in ds_recorder.emitted if data.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
     assert stops[0].static_data[keys.EVAL_TERMINATED] is False
-    # The post-deadline chunk must not reach the drivers: the only non-empty emissions are the homing
-    # Reset / home grip from the startup home and the timeout FINISH.
+    # The only commands are the homing Reset / home grip from the startup home and the timeout FINISH.
     assert all(isinstance(c, Reset) for c in _emitted_commands(cmd_recorder))
     assert _emitted_grips(grip_recorder) == [0.0, 0.0]
 
@@ -1046,28 +1041,25 @@ def test_task_instruction_reaches_session_context_after_reset(world):
     assert policy.last_reset_context[keys.TASK] == 'resolved-on-reset'
 
 
+class _LabeledRecorder(pimm.SignalEmitter):
+    """Records emissions from several channels into one shared list, so their order is comparable."""
+
+    def __init__(self, label, events):
+        self._label = label
+        self._events = events
+
+    def emit(self, data, ts: int = -1):
+        self._events.append((self._label, data))
+
+
 @pytest.mark.timeout(3.0)
-def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
-    """FINISH must cancel the recording's trajectory tail *before* `STOP_EPISODE`.
-
-    `STOP_EPISODE` calls `flush()` on `TrajectoryOverrideSerializer`, which
-    commits whatever is still buffered. The harness must emit `[]` on
-    `robot_command`/`target_grip` first, so the serializer drops its tail and
-    canceled waypoints are not recorded.
-    """
-
-    class _LabeledRecorder(pimm.SignalEmitter):
-        def __init__(self, label, events):
-            self._label = label
-            self._events = events
-
-        def emit(self, data, ts: int = -1):
-            self._events.append((self._label, data))
-
-    events: list[tuple[str, object]] = []
+def test_finish_stops_playing_the_live_chunk(world):
+    """FINISH drops the schedule the harness is playing: the chunk's remaining waypoints never reach the
+    devices, and the only command after the recorder's STOP is the home the close emits."""
     policy = ChunkPolicy()
     wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # 1.8 s chunk — won't drain before FINISH
     harness = Harness(wrapped, make_embodiment())
+    events: list[tuple[str, object]] = []
     harness.commands[keys.ROBOT_COMMAND]._bind(_LabeledRecorder(keys.ROBOT_COMMAND, events))
     harness.commands['target_grip']._bind(_LabeledRecorder('target_grip', events))
     harness.ds_command._bind(_LabeledRecorder('ds_command', events))
@@ -1083,40 +1075,28 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
         (None, 0.1),
         (partial(directive_em.emit, Directive.FINISH()), 0.0),
-        (None, 0.1),
+        (None, 0.5),
     ]
     scheduler = world.start([harness, ManualDriver(script)])
-    drive_scheduler(scheduler, steps=200)
+    drive_scheduler(scheduler, steps=400)
 
-    cancels = [i for i, (lbl, data) in enumerate(events) if lbl == keys.ROBOT_COMMAND and data == []]
-    stops = [
-        i
-        for i, (lbl, data) in enumerate(events)
-        if lbl == 'ds_command' and getattr(data, 'type', None) is DsWriterCommandType.STOP_EPISODE
-    ]
-    assert cancels, 'FINISH did not emit a cancel on robot_command'
+    stops = [i for i, (_, data) in enumerate(events) if getattr(data, 'type', None) is DsWriterCommandType.STOP_EPISODE]
     assert stops, 'FINISH did not emit STOP_EPISODE'
-    assert cancels[0] < stops[0], (
-        f'cancel ({cancels[0]}) must precede STOP_EPISODE ({stops[0]}); otherwise flush() commits canceled waypoints'
-    )
+    grips_after = [data for lbl, data in events[stops[0] :] if lbl == 'target_grip']
+    assert grips_after == [0.0], f'the cancelled chunk kept playing past FINISH: {grips_after}'
 
 
 @pytest.mark.timeout(3.0)
-def test_empty_chunk_cancels_both_robot_and_grip(world):
-    """A session returning ``[]`` must cancel *both* driver buffers.
-
-    Empty action chunk is the session-level cancel signal (per the
-    ``Session.__call__`` contract). If only ``robot_command`` gets ``[]`` while
-    ``target_grip`` is skipped, the gripper ``TrajectoryPlayer`` keeps draining
-    stale waypoints — a partial cancel that's worse than no cancel.
-    """
+def test_empty_trajectory_leaves_every_channel_holding(world):
+    """A trajectory with no waypoints schedules nothing on any channel, so every device holds where the
+    startup home left it rather than one channel draining on while another stops."""
 
     class _EmptyChunkSession(Session):
         def __call__(self, obs):
             return []
 
     class EmptyChunkPolicy(Policy):
-        def new_session(self, context=None, now=None):
+        def new_session(self, context=None, now=None, gate=None):
             return _EmptyChunkSession()
 
     harness = Harness(EmptyChunkPolicy(), make_embodiment())
@@ -1140,10 +1120,8 @@ def test_empty_chunk_cancels_both_robot_and_grip(world):
     scheduler = world.start([harness, ManualDriver(script)])
     drive_scheduler(scheduler, steps=200)
 
-    cmd_emits = [data for _ts, data in cmd_recorder.emitted]
-    grip_emits = [data for _ts, data in grip_recorder.emitted]
-    assert [] in cmd_emits, 'empty chunk did not cancel robot_command buffer'
-    assert [] in grip_emits, 'empty chunk did not cancel target_grip buffer'
+    assert all(isinstance(c, Reset) for c in _emitted_commands(cmd_recorder))  # only the startup home
+    assert _emitted_grips(grip_recorder) == [0.0]
 
 
 @pytest.mark.timeout(3.0)
@@ -1162,8 +1140,7 @@ def test_harness_clears_trajectory_on_home(world):
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, steps=5)
 
-    grips = _all_grips(p)
-    assert grips[0] >= 100.0, f'Expected chunk 1, got {grips}'
+    assert _last_grip(p) >= 100.0, 'Expected chunk 1'
 
     p['directive_em'].emit(Directive.ABORT())
     drive_scheduler(scheduler, steps=2)
@@ -1174,8 +1151,7 @@ def test_harness_clears_trajectory_on_home(world):
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, steps=4)
 
-    grips = _all_grips(p)
-    assert grips[0] >= 200.0, f'Expected chunk 2 (>= 200.0), got {grips}. Trajectory clearing failed!'
+    assert _last_grip(p) >= 200.0, 'Expected chunk 2; trajectory clearing failed'
 
 
 @pytest.mark.timeout(3.0)
@@ -1194,8 +1170,7 @@ def test_harness_clears_trajectory_on_run(world):
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, steps=5)
 
-    grips = _all_grips(p)
-    assert grips[0] >= 100.0
+    assert _last_grip(p) >= 100.0
 
     p['directive_em'].emit(Directive.RUN(task='test-restart'))
     drive_scheduler(scheduler, steps=1)
@@ -1203,8 +1178,7 @@ def test_harness_clears_trajectory_on_run(world):
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, steps=4)
 
-    grips = _all_grips(p)
-    assert grips[0] >= 200.0, f'Expected chunk 2 (>= 200.0), got {grips}. Trajectory clearing on RUN failed!'
+    assert _last_grip(p) >= 200.0, 'Expected chunk 2; trajectory clearing on RUN failed'
 
 
 @pytest.mark.timeout(3.0)
@@ -1224,8 +1198,7 @@ def test_harness_skips_inference_on_error(world):
     drive_scheduler(scheduler, steps=1)
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], state_ok)
     drive_scheduler(scheduler, steps=3)
-    grips = _all_grips(p)
-    assert grips[0] >= 100.0
+    assert _last_grip(p) >= 100.0
 
     obs_before = len(policy.observations)
     p['robot_em'].emit(state_err)
@@ -1233,9 +1206,8 @@ def test_harness_skips_inference_on_error(world):
     assert len(policy.observations) == obs_before  # the errored state is never fed to the policy
 
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], state_ok)
-    drive_scheduler(scheduler, steps=3)
-    grips = _all_grips(p)
-    assert grips[0] >= 200.0
+    drive_scheduler(scheduler, steps=20)  # long enough for the first chunk to play out and the next to land
+    assert _last_grip(p) >= 200.0
 
 
 def test_directive_preserves_payload():
@@ -1273,6 +1245,18 @@ def test_cartesian_delta_without_a_frame_is_rejected():
         from_wire(wire)
 
 
+def test_trajectory_player_collapses_several_due_waypoints_to_the_last():
+    player = TrajectoryPlayer()
+    player.set([(10, 'a'), (20, 'b'), (30, 'c')])
+    assert player.next_due() == 10
+    assert player.advance(5) is None
+    assert player.advance(25) == 'b'  # a late round overtakes 'a'; the trailing setpoint is the live one
+    assert player.next_due() == 30
+    assert player.advance(30) == 'c'
+    assert player.next_due() is None
+    assert player.advance(40) is None
+
+
 def test_cartesian_delta_applies_in_world_frame():
     current = Transform3D(np.array([0.5, 0.1, 0.3]), Rotation.from_rotvec(np.array([0.2, 0.1, 0.4])))
     delta = Transform3D(np.array([0.02, -0.01, 0.05]), Rotation.from_rotvec(np.array([0.1, 0.0, 0.0])))
@@ -1282,64 +1266,6 @@ def test_cartesian_delta_applies_in_world_frame():
     np.testing.assert_allclose(target.translation, current.translation + delta.translation)
     np.testing.assert_allclose(target.rotation.as_quat, (delta.rotation * current.rotation).as_quat, atol=1e-12)
     assert not np.allclose(target.translation, (current * delta).translation)  # guards against body-frame compose
-
-
-def test_reduce_accumulates_due_cartesian_deltas():
-    # Rotations about different axes so the world-frame compose is non-commutative -- this pins the fold order
-    # (apply d0 then d1), not just that a fold happened.
-    d0 = Transform3D(np.array([0.01, 0.0, 0.0]), Rotation.from_rotvec(np.array([0.3, 0.0, 0.0])))
-    d1 = Transform3D(np.array([0.02, 0.01, 0.0]), Rotation.from_rotvec(np.array([0.0, 0.0, 0.2])))
-    out = reduce([(10, CartesianDelta(d0)), (20, CartesianDelta(d1))])
-    assert isinstance(out, CartesianDelta)
-    expected = _compose_delta(d0, d1)  # two due deltas catch up as their world-frame compose, not last-wins
-    np.testing.assert_allclose(out.delta.translation, expected.translation)
-    np.testing.assert_allclose(out.delta.rotation.as_quat, expected.rotation.as_quat, atol=1e-12)
-    assert not np.allclose(out.delta.rotation.as_quat, _compose_delta(d1, d0).rotation.as_quat)
-
-
-def test_reduce_sums_due_joint_deltas():
-    out = reduce([(10, JointDelta(np.array([0.1, -0.2, 0.3]))), (20, JointDelta(np.array([0.0, 0.2, -0.1])))])
-    assert isinstance(out, JointDelta)
-    np.testing.assert_allclose(out.velocities, [0.1, 0.0, 0.2])
-
-
-def test_reduce_absolute_run_keeps_last():
-    p0 = CartesianPosition(Transform3D(np.array([0.1, 0.0, 0.0]), Rotation.from_rotvec(np.zeros(3))))
-    p1 = JointPosition(np.array([0.2, 0.0, 0.0]))
-    assert reduce([(10, p0), (20, p1)]) is p1
-
-
-def test_reduce_raises_on_absolute_delta_mix():
-    cart_pos = CartesianPosition(Transform3D(np.zeros(3), Rotation.from_rotvec(np.zeros(3))))
-    cart_delta = CartesianDelta(Transform3D(np.array([0.01, 0.0, 0.0]), Rotation.from_rotvec(np.zeros(3))))
-    joint_pos = JointPosition(np.zeros(3))
-    joint_delta = JointDelta(np.array([0.1, 0.0, 0.0]))
-    with pytest.raises(ValueError):
-        reduce([(10, cart_pos), (20, cart_delta)])
-    with pytest.raises(ValueError):
-        reduce([(10, cart_delta), (20, cart_pos)])
-    with pytest.raises(ValueError):  # JointPosition then JointDelta: the delta has no faithful anchor to fold onto
-        reduce([(10, joint_pos), (20, joint_delta)])
-
-
-def test_reduce_raises_on_mixed_delta_spaces():
-    cart_delta = CartesianDelta(Transform3D(np.array([0.01, 0.0, 0.0]), Rotation.from_rotvec(np.zeros(3))))
-    joint_delta = JointDelta(np.array([0.1, 0.0, 0.0]))
-    with pytest.raises(ValueError):
-        reduce([(10, cart_delta), (20, joint_delta)])
-    with pytest.raises(ValueError):
-        reduce([(10, joint_delta), (20, cart_delta)])
-
-
-def test_trajectory_player_accumulates_missed_deltas():
-    d0 = Transform3D(np.array([0.01, 0.0, 0.0]), Rotation.from_rotvec(np.zeros(3)))
-    d1 = Transform3D(np.array([0.02, 0.0, 0.0]), Rotation.from_rotvec(np.zeros(3)))
-    player = TrajectoryPlayer(reduce=reduce)
-    player.set([(10, CartesianDelta(d0)), (20, CartesianDelta(d1))])
-    out = player.advance(20)  # both waypoints due in one tick -> summed, not dropped to the last
-    assert isinstance(out, CartesianDelta)
-    np.testing.assert_allclose(out.delta.translation, [0.03, 0.0, 0.0])
-    assert player.advance(30) is None
 
 
 @pytest.mark.parametrize('status', [RobotStatus.RESETTING, RobotStatus.ERROR])
@@ -1354,27 +1280,15 @@ def test_robot_state_serializer_available_has_no_error_key():
 
 
 @pytest.mark.timeout(3.0)
-def test_shutdown_cancels_trajectory_before_stop(world):
-    """Shutdown while recording must cancel buffered trajectories before STOP_EPISODE.
-
-    ``STOP_EPISODE`` flushes ``TrajectoryOverrideSerializer``; without a prior
-    cancel it would commit the unexecuted tail of an in-flight chunk (the
-    FINISH/RUN paths already cancel first).
-    """
+def test_shutdown_stops_playing_the_live_chunk(world):
+    """Shutdown while recording drops the schedule too: the unplayed tail of the live chunk never reaches
+    the devices after the recorder's STOP."""
     events: list[tuple[str, object]] = []
-
-    class _LabeledRecorder(pimm.SignalEmitter):
-        def __init__(self, label):
-            self._label = label
-
-        def emit(self, data, ts: int = -1):
-            events.append((self._label, data))
-
     wrapped = ActionTimestamp(fps=5.0).wrap(ChunkPolicy())  # 1.8 s chunk — won't drain before shutdown
     harness = Harness(wrapped, make_embodiment())
-    harness.commands[keys.ROBOT_COMMAND]._bind(_LabeledRecorder(keys.ROBOT_COMMAND))
-    harness.commands['target_grip']._bind(_LabeledRecorder('target_grip'))
-    harness.ds_command._bind(_LabeledRecorder('ds_command'))
+    harness.commands[keys.ROBOT_COMMAND]._bind(_LabeledRecorder(keys.ROBOT_COMMAND, events))
+    harness.commands['target_grip']._bind(_LabeledRecorder('target_grip', events))
+    harness.ds_command._bind(_LabeledRecorder('ds_command', events))
 
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
@@ -1382,7 +1296,7 @@ def test_shutdown_cancels_trajectory_before_stop(world):
     directive_em = world.pair(harness.directive)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    # RUN + a complete obs buffers a chunk; the driver then ends, which makes the
+    # RUN + a complete obs schedules a chunk; the driver then ends, which makes the
     # world signal shutdown while still recording — exercising the run() finalizer.
     driver = ManualDriver([
         (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
@@ -1392,15 +1306,9 @@ def test_shutdown_cancels_trajectory_before_stop(world):
     scheduler = world.start([harness, driver])
     drive_scheduler(scheduler, steps=200)
 
-    cancels = [i for i, (lbl, data) in enumerate(events) if lbl == keys.ROBOT_COMMAND and data == []]
-    stops = [
-        i
-        for i, (lbl, data) in enumerate(events)
-        if lbl == 'ds_command' and getattr(data, 'type', None) is DsWriterCommandType.STOP_EPISODE
-    ]
-    assert cancels, 'shutdown did not cancel robot_command'
+    stops = [i for i, (_, data) in enumerate(events) if getattr(data, 'type', None) is DsWriterCommandType.STOP_EPISODE]
     assert stops, 'shutdown did not emit STOP_EPISODE'
-    assert cancels[0] < stops[0], 'cancel must precede STOP_EPISODE on shutdown'
+    assert not [lbl for lbl, _ in events[stops[0] :] if lbl == 'target_grip']
 
 
 @pytest.mark.timeout(5.0)
@@ -1650,3 +1558,230 @@ def test_doubly_anchored_chunk_is_refused():
 def test_anchored_chunk_passes():
     """A real chunk spans seconds around now, and a late action sits just behind it."""
     _assert_anchored([{'timestamp': 1.7e9 - 0.2}, {'timestamp': 1.7e9 + 1.5}], now=1.7e9)
+
+
+class _SlowSession(Session):
+    """A session whose inference costs ``wall_sec`` of real time and returns a fixed-length chunk."""
+
+    def __init__(self, wall_sec: float, span_sec: float, steps: int):
+        self._wall_sec = wall_sec
+        self._span_sec = span_sec
+        self._steps = steps
+
+    def __call__(self, obs):
+        time.sleep(self._wall_sec)
+        dt = self._span_sec / self._steps
+        pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+        return [
+            {keys.ROBOT_COMMAND: CartesianPosition(pose=pose), 'target_grip': float(i), 'timestamp': i * dt}
+            for i in range(self._steps)
+        ]
+
+
+class SlowPolicy(Policy):
+    def __init__(self, wall_sec: float = 0.0, span_sec: float = 0.2, steps: int = 10):
+        self._wall_sec = wall_sec
+        self._span_sec = span_sec
+        self._steps = steps
+
+    def new_session(self, context=None, now=None, gate=None):
+        return _SlowSession(self._wall_sec, self._span_sec, self._steps)
+
+
+class _ReplanEarly(SchedulingWrapper):
+    """Infers on the first observation and again halfway through the chunk it returned.
+
+    The re-query-before-exhaustion shape (RTC, temporal ensembling) that the substrate exists for: unlike
+    ``ChunkedSchedule`` it leaves waypoints to play while a call is in flight.
+    """
+
+    class _Session(DelegatingSession):
+        def __init__(self, inner: Session, now):
+            super().__init__(inner)
+            self._now = now
+            self._replan_at: float | None = None
+
+        def __call__(self, obs):
+            if self._replan_at is not None and self._now() < self._replan_at:
+                return None
+            result = self._inner(obs)
+            assert result is not None, 'the inner policy of this test wrapper always returns a chunk'
+            now = self._now()
+            result = [{**action, 'timestamp': now + action['timestamp']} for action in result]
+            self._replan_at = now + (result[-1]['timestamp'] - now) / 2
+            return result
+
+    def wrap_session(self, inner: Session, context, now):
+        return _ReplanEarly._Session(inner, now)
+
+
+class _TimedRecorder(pimm.SignalEmitter):
+    """Records each emission against the world clock, so a test can read when a command actually went out."""
+
+    def __init__(self, clock: pimm.Clock):
+        self._clock = clock
+        self.emitted: list[tuple[float, Any]] = []
+
+    def emit(self, data, ts: int = -1):
+        self.emitted.append((self._clock.now(), data))
+
+
+def _run_sim_episode(world, policy, wrapper, *, latency, steps=4000, run_sec=1.5) -> list[tuple[float, Any]]:
+    """One sim trial under ``latency``; returns the grip commands with the world time each went out at."""
+    harness = Harness(wrapper.wrap(policy), make_embodiment(simulated=True))
+    grip_recorder = _TimedRecorder(world.clock)
+    harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
+    harness.commands['target_grip']._bind(grip_recorder)
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.observations[CAM])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations[keys.GRIP])
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(directive_em.emit, Directive.RUN(task='t', inference_latency=latency)), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
+        (None, run_sec),
+    ])
+    drive_scheduler(world.start([harness, driver, _Pacer()]), steps=steps)
+    return grip_recorder.emitted[1:]  # drop the startup home
+
+
+@pytest.mark.timeout(20.0)
+def test_default_latency_pauses_the_world_for_the_call(world):
+    """Sim's default charges nothing: the world does not advance while the model runs, so the chunk is
+    anchored at the observation's own instant however long the call really took."""
+    played = _run_sim_episode(world, SlowPolicy(wall_sec=0.05), ChunkedSchedule(), latency=False)
+
+    assert played, 'no command was played'
+    assert played[0][0] < 0.01, f'the world advanced during the call: first command at {played[0][0]}s'
+
+
+@pytest.mark.timeout(20.0)
+@pytest.mark.parametrize('wall_sec', [0.0, 0.05])
+def test_declared_latency_ignores_what_the_call_really_took(world, wall_sec):
+    """The reproducible mode: the wrapper is released a fixed delay after the call started, so the played
+    trace is the same against a fast server and a slow one."""
+    played = _run_sim_episode(world, SlowPolicy(wall_sec=wall_sec), ChunkedSchedule(), latency=0.3)
+
+    assert played, 'no command was played'
+    assert played[0][0] == pytest.approx(0.3, abs=0.02), f'first command at {played[0][0]}s, expected the 0.3s delay'
+
+
+@pytest.mark.timeout(20.0)
+def test_measured_latency_charges_the_calls_own_wall_duration(world):
+    """``inference_latency=True`` charges the world what the model really took, so a slow server is scored
+    as slow — at the cost of a trace that inherits the machine's noise."""
+    played = _run_sim_episode(world, SlowPolicy(wall_sec=0.2), ChunkedSchedule(), latency=True)
+
+    assert played, 'no command was played'
+    assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the call took'
+
+
+@pytest.mark.timeout(20.0)
+def test_harness_keeps_playing_while_a_call_is_in_flight(world):
+    """A wrapper that replans before its chunk is exhausted leaves waypoints due during inference, and the
+    harness emits them on time instead of standing still until the model answers."""
+    played = _run_sim_episode(world, SlowPolicy(span_sec=0.4, steps=20), _ReplanEarly(), latency=0.15)
+
+    # The second call starts halfway through the first chunk (0.2s in) and is owed 0.15s; the waypoints due
+    # in that window have to keep going out.
+    during = [t for t, _ in played if 0.2 <= t < 0.35]
+    assert len(during) >= 3, f'the harness stopped playing during inference: {[t for t, _ in played]}'
+
+
+@pytest.mark.timeout(3.0)
+def test_installed_trajectory_clears_the_channels_it_omits(world):
+    """A trajectory naming only one channel replaces the whole schedule: the omitted channel stops being
+    played rather than draining the previous trajectory's tail."""
+
+    class _GripThenArm(Session):
+        """First a two-channel chunk, then an arm-only one that must silence the gripper."""
+
+        def __init__(self):
+            self._calls = 0
+
+        def __call__(self, obs):
+            self._calls += 1
+            pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+            command = CartesianPosition(pose=pose)
+            if self._calls == 1:
+                return [{keys.ROBOT_COMMAND: command, 'target_grip': 0.5, 'timestamp': i * 0.01} for i in range(10)]
+            return [{keys.ROBOT_COMMAND: command, 'timestamp': i * 0.01} for i in range(10)]
+
+    class _GripThenArmPolicy(Policy):
+        def new_session(self, context=None, now=None, gate=None):
+            return _GripThenArm()
+
+    harness = Harness(ChunkedSchedule().wrap(_GripThenArmPolicy()), make_embodiment())
+    grip_recorder = RecordingEmitter()
+    harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
+    harness.commands['target_grip']._bind(grip_recorder)
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.observations[CAM])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations[keys.GRIP])
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
+        (None, 0.5),
+    ])
+    drive_scheduler(world.start([harness, driver]), steps=1000)
+
+    grips = _emitted_grips(grip_recorder)
+    assert grips[0] == 0.0  # the startup home
+    assert set(grips[1:]) == {0.5}, f'the second chunk kept the gripper playing: {grips}'
+
+
+@pytest.mark.timeout(3.0)
+def test_home_and_manual_commands_are_emitted_as_plain_values(world):
+    """Homing and operator commands bypass the schedule: they are the command, not a plan to play."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    cmd_recorder = RecordingEmitter()
+    grip_recorder = RecordingEmitter()
+    harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
+    harness.commands['target_grip']._bind(grip_recorder)
+    harness.ds_command._bind(RecordingEmitter())
+    manual_em = world.pair(harness.manual_command)
+
+    pose = Transform3D(translation=np.array([0.1, 0.1, 0.1], dtype=np.float32), rotation=Rotation.identity)
+    manual = CartesianPosition(pose=pose)
+    driver = ManualDriver([(partial(manual_em.emit, {keys.ROBOT_COMMAND: manual}), 0.01), (None, 0.02)])
+    drive_scheduler(world.start([harness, driver]), steps=50)
+
+    assert _emitted_commands(cmd_recorder) == [Reset(), manual]
+    assert _emitted_grips(grip_recorder) == [0.0]
+
+
+@pytest.mark.timeout(20.0)
+def test_abort_discards_a_call_that_is_still_in_flight(world):
+    """An ABORT while the gate is still holding the model's answer throws that answer away: the trajectory
+    it carries never reaches the devices."""
+    harness = Harness(ChunkedSchedule().wrap(SlowPolicy()), make_embodiment(simulated=True))
+    cmd_recorder = RecordingEmitter()
+    harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
+    harness.commands['target_grip']._bind(RecordingEmitter())
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.observations[CAM])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations[keys.GRIP])
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(directive_em.emit, Directive.RUN(task='t', inference_latency=1.0)), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
+        (None, 0.05),  # well inside the 1.0s the gate owes the call
+        (partial(directive_em.emit, Directive.ABORT()), 0.0),
+        (None, 0.05),
+    ])
+    drive_scheduler(world.start([harness, driver, _Pacer()]), steps=2000)
+
+    assert all(isinstance(c, Reset) for c in _emitted_commands(cmd_recorder))

@@ -1,5 +1,10 @@
-"""Unit tests for PolicyWrapper composition, ChunkedSchedule, TemporalStack, and the policy-pipeline algebra."""
+"""Unit tests for PolicyWrapper composition, the InferenceGate, ChunkedSchedule, TemporalStack, and the
+policy-pipeline algebra."""
 
+import concurrent.futures
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
@@ -15,7 +20,7 @@ from positronic.policy.action import (
     JointDeltaAction,
     RelativePositionAction,
 )
-from positronic.policy.base import Policy, PolicyWrapper, Session
+from positronic.policy.base import InferenceGate, LatencyMode, Policy, PolicyWrapper, Session
 from positronic.policy.codec import (
     ActionHorizon,
     ActionTimestamp,
@@ -58,7 +63,7 @@ class _ConstPolicy(Policy):
         self._actions = actions
         self._session: _ConstSession | None = None
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, gate=None):
         self._session = _ConstSession(self._actions)
         return self._session
 
@@ -225,7 +230,7 @@ class _CapturePolicy(Policy):
     def __init__(self):
         self.session = _CaptureSession()
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, gate=None):
         return self.session
 
 
@@ -571,3 +576,115 @@ class TestRestrictImageSize:
         rebuilt = spec.from_spec(RestrictImageSize(64, 48).to_spec())
         assert isinstance(rebuilt, RestrictImageSize)
         assert rebuilt.encode({'cam': _image(480, 640)})['cam'].shape == (48, 64, 3)
+
+
+class _BlockingSession(Session):
+    """Holds the call inside the gate until the test releases it, and reports when it was entered."""
+
+    def __init__(self):
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def __call__(self, obs):
+        self.entered.set()
+        self.release.wait(timeout=5.0)
+        return [{'v': 1, 'timestamp': 0.0}]
+
+
+class _SlowSession(Session):
+    """Spends ``wall_sec`` of real time in the model, which is what the measured mode charges."""
+
+    def __init__(self, wall_sec: float):
+        self._wall_sec = wall_sec
+
+    def __call__(self, obs):
+        time.sleep(self._wall_sec)
+        return [{'v': 1, 'timestamp': 0.0}]
+
+
+def _run_gated(gate: InferenceGate, inner: Session, executor: ThreadPoolExecutor):
+    return executor.submit(gate.wrap(inner), _obs())
+
+
+class TestInferenceGate:
+    def test_declared_mode_parks_the_call_until_its_delay_has_passed(self):
+        clock = _FakeClock(t=1.0)
+        gate = InferenceGate(clock.now, LatencyMode.DECLARED, 0.5)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = _run_gated(gate, _ConstSession([{'v': 1, 'timestamp': 0.0}]), executor)
+            concurrent.futures.wait([future], timeout=0.05)
+            assert not future.done(), 'the gate let the call through before its declared delay'
+            clock.t = 1.5
+            assert future.result(timeout=5.0) is not None
+            assert gate.t0 == 1.0
+
+    def test_measured_mode_parks_the_call_for_its_own_wall_duration(self):
+        clock = _FakeClock(t=1.0)
+        gate = InferenceGate(clock.now, LatencyMode.MEASURED)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = _run_gated(gate, _SlowSession(0.1), executor)
+            concurrent.futures.wait([future], timeout=0.3)
+            assert not future.done(), 'the gate charged nothing for a call that took 0.1s'
+            clock.t = 1.5  # past t0 + the wall duration, whatever it measured
+            assert future.result(timeout=5.0) is not None
+
+    @pytest.mark.parametrize(
+        'mode,delay_sec', [(LatencyMode.LIVE, 0.0), (LatencyMode.DECLARED, 0.0)], ids=['live', 'declared-zero']
+    )
+    def test_a_call_owed_nothing_is_never_parked(self, mode, delay_sec):
+        """Hardware pays what the model took, and sim's default charges nothing: neither owes the wrapper a
+        wait, so the call returns with the clock standing still."""
+        clock = _FakeClock(t=1.0)
+        gate = InferenceGate(clock.now, mode, delay_sec)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = _run_gated(gate, _ConstSession([{'v': 1, 'timestamp': 0.0}]), executor)
+            assert future.result(timeout=1.0) is not None  # the clock never moves and the call still returns
+            assert gate.entered is False
+
+    def test_entered_is_visible_while_the_call_is_at_the_model(self):
+        clock = _FakeClock(t=1.0)
+        gate = InferenceGate(clock.now, LatencyMode.LIVE)
+        inner = _BlockingSession()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = _run_gated(gate, inner, executor)
+            assert inner.entered.wait(timeout=5.0)
+            assert gate.entered is True
+            inner.release.set()
+            future.result(timeout=5.0)
+            assert gate.entered is False
+
+    def test_cancel_unparks_a_call_the_harness_no_longer_wants(self):
+        clock = _FakeClock(t=1.0)
+        gate = InferenceGate(clock.now, LatencyMode.DECLARED, 60.0)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = _run_gated(gate, _ConstSession([{'v': 1, 'timestamp': 0.0}]), executor)
+            concurrent.futures.wait([future], timeout=0.05)
+            assert not future.done()
+            gate.cancel()
+            assert future.result(timeout=5.0) is not None  # released without waiting out the 60s delay
+
+    def test_gate_wraps_the_inner_session_of_a_scheduling_wrapper(self):
+        """The cost lands below the wrapper: by the time ``ChunkedSchedule`` anchors its chunk, the delay
+        has already been paid, so the anchor is the release instant."""
+        clock = _FakeClock(t=1.0)
+        gate = InferenceGate(clock.now, LatencyMode.DECLARED, 0.5)
+        policy = ChunkedSchedule().wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}]))
+        session = policy.new_session(now=clock.now, gate=gate)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(session, _obs())
+            concurrent.futures.wait([future], timeout=0.05)
+            assert not future.done()
+            clock.t = 1.5
+            chunk = future.result(timeout=5.0)
+            assert chunk is not None and chunk[0]['timestamp'] == 1.5
+
+    def test_a_stack_without_a_scheduling_wrapper_gets_no_gate(self):
+        """``TemporalStack`` owns no plan, so it is not what the platform charges; its call runs straight
+        through and the gate is never entered."""
+        clock = _FakeClock(t=1.0)
+        gate = InferenceGate(clock.now, LatencyMode.DECLARED, 60.0)
+        policy = TemporalStack(keys=('v',), offsets_sec=(0.0,)).wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}]))
+        session = policy.new_session(now=clock.now, gate=gate)
+
+        assert session({**_obs(), 'v': np.array([1.0])}) is not None
+        assert gate.entered is False

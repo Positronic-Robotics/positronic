@@ -92,7 +92,7 @@ class LerobotPolicy(Policy):
         self._policy = policy.to(self._device)
         self._meta = extra_meta or {}
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, gate=None):
         self._policy.reset()
         return _LerobotSession(self._policy, self._device, self._meta)
 

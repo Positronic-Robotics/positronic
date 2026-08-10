@@ -59,12 +59,8 @@ class Robot(pimm.ControlSystem):
         self.kinematic = Kinematics(_SO101_URDF_PATH, _SO101_EE_JOINT)
         self.joint_limits = self.kinematic.joint_limits
         self.home_joints = home_joints if home_joints is not None else [0.0, 0.0, 0.0, 0.0, 0.0]
-        self.commands: pimm.SignalReceiver[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
-            pimm.ControlSystemReceiver(self, default=[])
-        )
-        self.target_grip: pimm.SignalReceiver[roboarm_command.Trajectory[float]] = pimm.ControlSystemReceiver(
-            self, default=[]
-        )
+        self.commands = pimm.ControlSystemReceiver[roboarm_command.CommandType](self)
+        self.target_grip = pimm.ControlSystemReceiver[float](self)
         self._last_grip: float = 0.0
 
         self.grip: pimm.SignalEmitter[float] = pimm.ControlSystemEmitter(self)
@@ -88,22 +84,13 @@ class Robot(pimm.ControlSystem):
         rate_limit = pimm.RateLimiter(hz=1000, clock=clock)
         state = SO101State()
 
-        player = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
-        grip_player = roboarm_command.TrajectoryPlayer()
-
         while not should_stop.value:
             cmd_msg = self.commands.read()
-            if cmd_msg.updated:
-                player.set(cmd_msg.data)
             grip_msg = self.target_grip.read()
-            if grip_msg.updated:
-                grip_player.set(grip_msg.data)
-            grip = grip_player.advance(clock.now_ns())
-            if grip is not None:
-                self._last_grip = grip
-            cmd = player.advance(clock.now_ns())
-            if cmd is not None:
-                match cmd:
+            if grip_msg is not None and grip_msg.updated:
+                self._last_grip = grip_msg.data
+            if cmd_msg is not None and cmd_msg.updated:
+                match cmd_msg.data:
                     case roboarm_command.Reset():
                         raise NotImplementedError('Reset not implemented')
                     case roboarm_command.CartesianPosition(pose):
@@ -120,8 +107,8 @@ class Robot(pimm.ControlSystem):
                         q_norm = self.rad_to_norm(qpos)
                         q_with_gripper = np.concatenate([q_norm, [self._last_grip]])
                         self.motor_bus.set_target_position(q_with_gripper)
-                    case _:
-                        raise ValueError(f'Unknown command: {cmd}')
+                    case other:
+                        raise ValueError(f'Unknown command: {other}')
 
             q = self.motor_bus.position
             dq = self.motor_bus.velocity[:-1]

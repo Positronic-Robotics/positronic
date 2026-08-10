@@ -37,7 +37,7 @@ from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianPosition, Reset, TrajectoryPlayer
+from positronic.drivers.roboarm.command import CartesianPosition, CommandType, Reset
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
@@ -82,7 +82,7 @@ class ScriptedProportionalPolicy(Policy):
     clock, no images. Codec stamps/truncates; the harness anchors/schedules.
     """
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, gate=None):
         return _ScriptedSession()
 
 
@@ -108,13 +108,11 @@ class _FakeRobotState:
 
 
 class FakeRobot(pimm.ControlSystem):
-    """Deterministic closed-loop arm: applies the latest command immediately.
+    """Deterministic closed-loop arm: applies each command as it arrives.
 
-    Mirrors ``MujocoSim``'s arm loop (read latest command, apply, emit
-    state). ``ee_pose`` becomes the applied ``CartesianPosition`` target and the
-    first three joints track it, so recorded state is a lossless re-expression
-    of applied commands. Closed loop: the policy's next chunk evolves with this
-    feedback.
+    Mirrors ``MujocoSim``'s arm loop (execute on updated, emit state). ``ee_pose`` becomes the applied
+    ``CartesianPosition`` target and the first three joints track it, so recorded state is a lossless
+    re-expression of applied commands. Closed loop: the policy's next chunk evolves with this feedback.
     """
 
     def __init__(self):
@@ -122,7 +120,7 @@ class FakeRobot(pimm.ControlSystem):
         self._q = INITIAL_Q.copy()
         self._status = RobotStatus.AVAILABLE
         self._error_pending = False
-        self.commands = pimm.ControlSystemReceiver(self, default=[])
+        self.commands = pimm.ControlSystemReceiver[CommandType](self)
         self.state = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
 
@@ -142,19 +140,12 @@ class FakeRobot(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         self.robot_meta.emit({})
-        player = TrajectoryPlayer()
         while not should_stop.value:
             cmd_msg = self.commands.read()
-            if cmd_msg.updated:
-                player.set(cmd_msg.data)
             if self._status == RobotStatus.ERROR:
-                self._status = RobotStatus.AVAILABLE
-                # Drop the in-flight trajectory so the arm holds position rather than resuming a stale waypoint.
-                player.set([])
-            else:
-                cmd = player.advance(clock.now_ns())
-                if cmd is not None:
-                    self._apply(cmd)
+                self._status = RobotStatus.AVAILABLE  # the command that arrived with the error is skipped
+            elif cmd_msg is not None and cmd_msg.updated:
+                self._apply(cmd_msg.data)
             if self._error_pending:
                 self._status = RobotStatus.ERROR
                 self._error_pending = False
@@ -167,18 +158,14 @@ class FakeGripper(pimm.ControlSystem):
 
     def __init__(self):
         self._grip = 0.0
-        self.target_grip = pimm.ControlSystemReceiver(self, default=[])
+        self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.grip = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        player = TrajectoryPlayer()
         while not should_stop.value:
             msg = self.target_grip.read()
-            if msg.updated:
-                player.set(msg.data)
-            grip = player.advance(clock.now_ns())
-            if grip is not None:
-                self._grip = float(grip)
+            if msg is not None and msg.updated:
+                self._grip = float(msg.data)
             self.grip.emit(self._grip)
             yield pimm.Sleep(CONTROL_PERIOD_S)
 
@@ -202,6 +189,9 @@ def _run_pipeline(tmp_path: Path) -> dict:
             },
             static_meta=dict(ROBOT_STATIC_META),
             meta_source=robot.robot_meta,
+            # ``inference_latency`` is a sim-only knob, and the fake robot's control-period sleep is this
+            # world's sole time-master — the shape a sim eval runs in.
+            simulated=True,
         )
         harness = Harness(ChunkedSchedule().wrap(policy), embodiment)
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)

@@ -211,7 +211,7 @@ class _CountdownAdapter(EnvAdapter):
     def reset_token(self, context):
         return context.get('eval.seed')
 
-    def action(self, commands, now_ns):
+    def action(self, commands):
         return {}
 
     def observations(self, raw_obs):
@@ -312,7 +312,7 @@ class _JointposChunks(Policy):
         self.chunk_len = chunk_len
         self.chunks = 0
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, gate=None):
         return _JointposChunkSession(self)
 
 

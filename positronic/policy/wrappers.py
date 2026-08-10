@@ -12,7 +12,7 @@ from collections import deque
 import numpy as np
 
 from positronic import keys
-from positronic.policy.base import DelegatingSession, Now, PolicyWrapper, Session
+from positronic.policy.base import DelegatingSession, Now, PolicyWrapper, SchedulingWrapper, Session
 
 
 def _obs_time(obs) -> float:
@@ -20,7 +20,7 @@ def _obs_time(obs) -> float:
     return obs[keys.OBS_TIME_NS] / 1e9
 
 
-class ChunkedSchedule(PolicyWrapper):
+class ChunkedSchedule(SchedulingWrapper):
     """Wait for the current trajectory to finish before calling the inner policy again.
 
     Owns relative→absolute time conversion: inner layers (codecs, models) emit relative timestamps;

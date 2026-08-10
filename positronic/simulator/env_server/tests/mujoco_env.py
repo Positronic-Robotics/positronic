@@ -133,10 +133,9 @@ class MujocoEnv(EnvProtocol):
                 cmd = roboarm_command.CartesianDelta(geom.Transform3D.from_vector(command['delta'], _ROTMAT))
             case other:
                 raise ValueError(f'MujocoEnv got unsupported command type {other!r}')
-        now_ns = self._clock.now_ns()
         if cmd is not None:
-            self._cmd_emit.emit([(now_ns, cmd)])
-        self._grip_emit.emit([(now_ns, float(action['grip']))])
+            self._cmd_emit.emit(cmd)
+        self._grip_emit.emit(float(action['grip']))
         self._advance(self._timestep)
         return {'obs': self._read_obs(), 'done': False, 'control_dt': self._timestep}
 

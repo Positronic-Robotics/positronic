@@ -1,5 +1,4 @@
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -26,18 +25,7 @@ from positronic.drivers.roboarm.command import (
 #         - use "" (empty string) to keep the base name as-is
 #         - any dict entry with value None is skipped
 #     * None -> the sample is dropped
-#     * a list[Timestamped] -> a self-timestamped stream (recording only): each item is
-#       recorded at its own ``ts_ns``. An empty list defers; a StatefulSerializer may emit
-#       the remainder later from ``flush()``. The per-item ``value`` follows the rules above.
 Serializer = Callable[[Any], Any | dict[str, Any]]
-
-
-@dataclass
-class Timestamped:
-    """A sample paired with its own absolute timestamp (ns)."""
-
-    ts: int
-    value: Any
 
 
 class StatefulSerializer:
@@ -51,18 +39,8 @@ class StatefulSerializer:
     def reset(self) -> None:
         pass
 
-    def __call__(self, value: Any) -> Any | dict[str, Any] | list['Timestamped']:
+    def __call__(self, value: Any) -> Any | dict[str, Any]:
         raise NotImplementedError
-
-    def flush(self, now_ns: int | None = None) -> list['Timestamped']:
-        """Drain any buffered samples at episode end (mirror of ``reset``).
-
-        Called once on ``STOP_EPISODE`` before the episode is finalized. ``now_ns``
-        is the episode-end time; serializers that buffer future-scheduled samples
-        use it to drop the un-executed tail. The default keeps stateless
-        serializers a no-op.
-        """
-        return []
 
 
 class _PureSerializer(StatefulSerializer):
