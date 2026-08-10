@@ -130,8 +130,7 @@ _HOLD = {protocol.ACTION_COMMAND: {protocol.COMMAND_TYPE: protocol.HOLD}, protoc
 
 def _settle(env, action: dict, steps: int) -> np.ndarray:
     """Apply ``action`` once, then idle ``steps`` ticks while the position actuators settle; return the final eef."""
-    env.step(action)
-    out = {protocol.FRAME_OBS: None}
+    out = env.step(action)
     for _ in range(steps):
         out = env.step(_HOLD)
     return np.asarray(out[protocol.FRAME_OBS]['ee_pos'])

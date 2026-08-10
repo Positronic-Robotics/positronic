@@ -109,12 +109,14 @@ class MujocoEnv(EnvProtocol):
         self._gen = self._sim.run(_NeverStop(), self._clock)
         next(self._gen)  # loop setup + first control-period sleep
         next(self._gen)  # the reset turn: publishes frame-0 (no step)
+        robot_meta = self._robot_meta_recv.read()
+        assert robot_meta is not None, 'the sim publishes robot_meta on the reset turns stepped above'
         # Native ``stack_cubes`` has no language scene meta (its instruction is a static client string), so ``meta``
         # is empty; the sim's robot identity (URDF / joints) is the ``robot_meta``.
         return {
             protocol.FRAME_OBS: self._read_obs(),
             protocol.FRAME_META: {},
-            protocol.FRAME_ROBOT_META: dict(self._robot_meta_recv.read().data),
+            protocol.FRAME_ROBOT_META: dict(robot_meta.data),
             protocol.FRAME_CONTROL_DT: self._timestep,
         }
 

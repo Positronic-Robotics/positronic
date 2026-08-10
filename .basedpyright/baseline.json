@@ -8714,14 +8714,6 @@
                 }
             },
             {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 73,
-                    "endColumn": 77,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportAttributeAccessIssue",
                 "range": {
                     "startColumn": 22,
@@ -8731,14 +8723,6 @@
             }
         ],
         "./positronic/simulator/env_server/tests/test_remote_env.py": [
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
-                    "startColumn": 22,
-                    "endColumn": 45,
-                    "lineCount": 1
-                }
-            },
             {
                 "code": "reportArgumentType",
                 "range": {

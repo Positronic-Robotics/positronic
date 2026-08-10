@@ -18,11 +18,10 @@ end-effector *world* pose is read from the robot view's grasp-site frame here, a
 the raw payload the adapter assembles into a ``MujocoFrankaState``.
 """
 
-# molmo_spaces (+ its transitive configs/tasks) resolves only inside MolmoSpaces' own venv, where the launcher
-# runs this module; pyright checks it against positronic's deps, which cannot see it. This module imports no
-# positronic packages, so missing-import errors here are exclusively those foreign imports — suppress just that
-# category file-wide; every other type check (wrong types, optional access, ...) stays active.
-# pyright: reportMissingImports=false
+# ``molmo_spaces`` (+ its transitive configs/tasks) and the flat ``protocol`` resolve only inside MolmoSpaces'
+# own venv, where the launcher runs this module; pyright checks it against positronic's deps, which cannot see
+# them. Each of those imports carries its own ``reportMissingImports`` suppression, so an import that should
+# resolve here — anything from positronic, which this module must never take — still fails the check.
 
 import argparse
 import os
@@ -66,7 +65,7 @@ from typing import Any  # noqa: E402
 
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
-import protocol  # noqa: E402 -- the positronic-free wire contract, on PYTHONPATH
+import protocol  # noqa: E402 -- the positronic-free wire contract, on PYTHONPATH  # pyright: ignore[reportMissingImports]
 
 # server resolves to a module without these symbols under positronic's deps (the real one is on the molmo
 # venv's PYTHONPATH), so the symbols read as unknown here.
@@ -76,13 +75,22 @@ from server import EnvProtocol, EnvServer  # noqa: E402  # pyright: ignore[repor
 # benchmark may be evaluated against, and this is the only place upstream enforces it. Driving the sampler
 # directly skips the native entrypoint, so without this a run on mismatched asset packs would score where
 # MolmoSpaces itself refuses to.
-import molmo_spaces.evaluation.eval_main  # noqa: E402, F401
-import molmo_spaces.evaluation.json_eval_runner  # noqa: E402, F401 -- load first: breaks a circular import that importing json_eval_task_sampler directly hits
-from molmo_spaces.configs.policy_configs import DummyPolicyConfig  # noqa: E402
-from molmo_spaces.configs.robot_configs import ActionNoiseConfig, FrankaRobotConfig  # noqa: E402
-from molmo_spaces.evaluation.benchmark_schema import load_all_episodes  # noqa: E402
-from molmo_spaces.evaluation.configs.evaluation_configs import JsonBenchmarkEvalConfig  # noqa: E402
-from molmo_spaces.tasks.json_eval_task_sampler import JsonEvalTaskSampler  # noqa: E402
+import molmo_spaces.evaluation.eval_main  # noqa: E402, F401  # pyright: ignore[reportMissingImports]
+import molmo_spaces.evaluation.json_eval_runner  # noqa: E402, F401 -- load first: breaks a circular import that importing json_eval_task_sampler directly hits  # pyright: ignore[reportMissingImports]
+from molmo_spaces.configs.policy_configs import DummyPolicyConfig  # noqa: E402  # pyright: ignore[reportMissingImports]
+from molmo_spaces.configs.robot_configs import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    ActionNoiseConfig,
+    FrankaRobotConfig,
+)
+from molmo_spaces.evaluation.benchmark_schema import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    load_all_episodes,
+)
+from molmo_spaces.evaluation.configs.evaluation_configs import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    JsonBenchmarkEvalConfig,
+)
+from molmo_spaces.tasks.json_eval_task_sampler import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    JsonEvalTaskSampler,
+)
 
 # Damped-least-squares differential IK, matching the LIBERO rig's solver (positronic/simulator/libero/env.py):
 # the same iteration budget, damping and convergence tolerance, on MuJoCo's own site/body Jacobian.
