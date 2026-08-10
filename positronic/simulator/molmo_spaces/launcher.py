@@ -92,9 +92,8 @@ def molmo_subprocess_env() -> dict[str, str]:
 
 
 def _spawn(host: str, port: int, benchmark_dir: Path, task_horizon_steps: int | None) -> subprocess.Popen:
-    # env.py exits on these before it binds the port, and a server that dies pre-bind is invisible to the
-    # client, which retries the dead port until its connect deadline. Check them here, where the failure
-    # still has a caller to raise into.
+    # env.py exits on these before it binds the port. Check them here, where the failure can name the missing
+    # precondition instead of reaching the caller as a bare pre-bind exit status.
     if not os.environ.get(mapping.ASSETS_DIR_ENV):
         raise ValueError(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
     if not benchmark_dir.is_dir():
@@ -107,11 +106,11 @@ def _spawn(host: str, port: int, benchmark_dir: Path, task_horizon_steps: int | 
         host,
         '--port',
         str(port),
-        '--benchmark_dir',
+        mapping.OPT_BENCHMARK_DIR,
         str(benchmark_dir),
     ]
     if task_horizon_steps is not None:
-        command += ['--task_horizon_steps', str(task_horizon_steps)]
+        command += [mapping.OPT_TASK_HORIZON_STEPS, str(task_horizon_steps)]
     return subprocess.Popen(command, env=molmo_subprocess_env())
 
 

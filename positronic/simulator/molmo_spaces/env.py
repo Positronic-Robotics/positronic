@@ -377,9 +377,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description='Serve MolmoSpaces over the env-server protocol.')
     parser.add_argument('--host', default='localhost')
     parser.add_argument('--port', type=int, required=True)
-    parser.add_argument('--benchmark_dir', required=True, help='dir containing benchmark.json')
     parser.add_argument(
-        '--task_horizon_steps', type=int, default=None, help='override the benchmark horizon (steps per episode)'
+        mapping.OPT_BENCHMARK_DIR, required=True, help=f'dir containing {mapping.MOLMO_BENCHMARK_MANIFEST}'
+    )
+    parser.add_argument(
+        mapping.OPT_TASK_HORIZON_STEPS,
+        type=int,
+        default=None,
+        help='override the benchmark horizon (steps per episode)',
     )
     args = parser.parse_args()
     if not os.environ.get(mapping.ASSETS_DIR_ENV):

@@ -43,6 +43,11 @@ ASSETS_BENCHMARKS_DIR = 'benchmarks'
 # directory as a benchmark for discovery.
 MOLMO_BENCHMARK_MANIFEST = 'benchmark.json'
 
+# The env-server subprocess CLI, spelled by the launcher building the command and by ``env.py``'s parser
+# declaring it — two interpreters, so a rename that misses one fails at spawn rather than at import.
+OPT_BENCHMARK_DIR = '--benchmark_dir'
+OPT_TASK_HORIZON_STEPS = '--task_horizon_steps'
+
 # MuJoCo's backend selector, and the backend this adoption asks for. EGL is the headless-GPU path the env
 # server targets; a GPU-less box overrides with MUJOCO_GL=osmesa. macOS has no EGL and is not a target here —
 # env.py's CGL stub excludes Darwin to keep the module it fakes honest, not to make Darwin run this server.
