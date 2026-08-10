@@ -85,9 +85,8 @@ def _run_world(
     ``driver`` (attended) and ``trials`` (unattended self-driving) are the two lifecycle sources, mutually
     exclusive per the caller. The shared ``policy``'s lifetime stays with ``main``.
 
-    ``finish`` is the out-of-process request to end the run, built once per invocation and passed to every
-    World of a sweep: a request outlives the World that was up when it arrived, and one that ended a single
-    eval and let the sweep continue would be a finish nobody asked for.
+    ``finish``, when given, is wired to the harness and scheduled with it, so a request granted while this
+    World is up ends the run after the episode in progress. Its grant is readable afterwards.
     """
     harness = Harness(policy, embodiment, task=task, trials=trials, on_episode_complete=on_complete)
     gui = driver.gui if driver is not None else (dpg_ui() if show_gui else None)
@@ -125,21 +124,23 @@ def _run_world(
         # is the post-reset scene. Real runs the producers + recorder as background subprocesses; harness,
         # driver, and GUI placement is otherwise identical.
         producers = [cs for cs in embodiment.control_systems if cs is not None]
-        foreground = driver.control_systems if driver is not None else []
+        driver_systems = driver.control_systems if driver is not None else []
         # In the FOREGROUND, with the harness, on both paths. It reads a file every couple of seconds and
         # yields a Sleep, which the scheduler wakes from at the nearest deadline, so it paces nothing; as a
-        # background control system it would be a subprocess whose only job is one `open`, and under the
-        # virtual clock it would not share the world's timeline with the harness it answers.
-        # Before the harness: the harness reads this signal on its first round, and that round decides
-        # whether to open an episode.
+        # background control system it would be a subprocess whose only job is one `open`, and it would not
+        # share the timeline of the harness it answers — which is what keeps its poll interval and the
+        # harness's episodes on one clock.
         watch = [finish] if finish is not None else []
-        # The driver runs before the watcher and the harness: a press sharing its round with a granted
-        # finish is never seen, since the loop breaks into `_wind_down` before the round that would read it.
-        attended = [*foreground, *watch, harness]
+        # What decides and ends episodes, in the order it is read each round: the operator's surface, the
+        # finish watcher, the harness that acts on both. The driver runs first because a press sharing its
+        # round with a granted finish is never seen — the loop breaks into `_wind_down` before the round
+        # that would read it. The rig's producers and the recorder are not in this list; they carry out an
+        # episode rather than decide one.
+        lifecycle_systems = [*driver_systems, *watch, harness]
         if embodiment.simulated:
-            world.run([*attended, ds_agent, *producers], gui)
+            world.run([*lifecycle_systems, ds_agent, *producers], gui)
         else:
-            world.run(attended, [*producers, ds_agent, gui])
+            world.run(lifecycle_systems, [*producers, ds_agent, gui])
 
 
 def _validate_timing(embodiments: Iterable[Embodiment], output_dir: str | Path | None) -> None:
@@ -264,9 +265,10 @@ def main(
     # over the whole sweep.
     on_complete = _completion_sink(policy)
 
-    # Built once, before any World: an orchestrator addresses the RUN, and a sweep is one run however many
-    # Worlds it raises. None unless something named this run (`ROLLOUT_RUN_ID`), which is every ordinary
-    # invocation.
+    # Built once, before any World, and handed to every one of them: an orchestrator addresses the RUN, and
+    # a sweep is one run however many Worlds it raises — so a request outlives the World that was up when it
+    # arrived, and one that ended a single eval while the sweep carried on would be a finish nobody asked
+    # for. None unless something named this run (`ROLLOUT_RUN_ID`), which is every ordinary invocation.
     finish = finish_request_from_env()
 
     try:

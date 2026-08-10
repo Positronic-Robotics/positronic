@@ -26,7 +26,6 @@ import json
 import logging
 import os
 import stat
-import time
 from enum import StrEnum
 from pathlib import Path
 
@@ -174,12 +173,13 @@ class FinishRequest(pimm.ControlSystem):
         return self._granted
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        # Paced on the WALL clock, not the world's: under virtual time a `Sleep` of two simulated
-        # seconds is no wait at all, and this would read the file on a tight loop.
-        last_read = 0.0
+        # The yielded `Sleep` is the whole pace, so the interval is measured on the world's clock —
+        # the one the run's episodes are measured on. A wall-clock pace is incommensurable with a
+        # simulated sweep, which advances episodes as fast as the machine allows: entire episodes
+        # pass between two reads, and a request written during one is still unread when the harness
+        # decides whether to open the next.
         while not should_stop.value:
-            if not self._granted and time.monotonic() - last_read >= self._poll_interval_s:
-                last_read = time.monotonic()
+            if not self._granted:
                 self._granted, reason = evaluate(self._path, self._run)
                 if self._granted:
                     logger.info('%s: run %s stops after the current episode', ACK_LOG_MARKER, self._run)

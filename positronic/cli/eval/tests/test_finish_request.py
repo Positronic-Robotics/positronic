@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import pimm
 from positronic.cli.eval import finish_request
 
 
@@ -389,3 +390,23 @@ def test_the_unreadable_boundary_answers_for_a_shape_nobody_listed(tmp_path, mon
     granted, reason = finish_request.evaluate(path, 'batch-1')
 
     assert not granted and 'could not be read as a request' in reason
+
+
+def test_the_poll_is_paced_on_the_clock_the_run_is_measured_on(tmp_path):
+    """A simulated sweep advances episodes on the virtual clock, which runs as fast as the machine
+    allows. A poll paced on WALL time is incommensurable with that: whole episodes pass between two
+    reads, so a request written during one is still unread when the harness decides whether to open
+    the next. Paced on the world's clock the poll interval means the same thing in both modes.
+    """
+    path = tmp_path / 'finish'
+    cs = finish_request.FinishRequest(path, 'batch-1', poll_interval_s=2.0)
+
+    with pimm.World(virtual_time=True) as world:
+        loop = world.interleave(cs.run)
+        next(loop)  # the first poll, before the request exists
+        write_request(path, run='batch-1')
+        deadline = world.clock.now() + 300.0  # 300 virtual seconds; almost no wall time passes
+        while world.clock.now() < deadline and not cs.granted:
+            next(loop)
+
+    assert cs.granted, 'the request went unread while 300 seconds of the run went by'
