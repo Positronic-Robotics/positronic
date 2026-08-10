@@ -20,10 +20,11 @@ logger = logging.getLogger(__name__)
 # The serializer suffix each replayable arm command is written under, most faithful first; pose targets
 # go back through the rig's IK. The delta forms are absent: a delta means something only against the
 # state it was issued from.
+# Taken off the single-arm keys rather than spelled again — a multi-arm channel carries the same suffix.
 _ARM_SUFFIXES = (
-    ('.joints', roboarm_command.JointPosition),
-    ('.pose', roboarm_command.CartesianPosition),
-    ('.reset', roboarm_command.Reset),
+    (keys.TARGET_JOINTS.removeprefix(keys.ROBOT_COMMAND), roboarm_command.JointPosition),
+    (keys.TARGET_EE_POSE.removeprefix(keys.ROBOT_COMMAND), roboarm_command.CartesianPosition),
+    (keys.TARGET_RESET.removeprefix(keys.ROBOT_COMMAND), roboarm_command.Reset),
 )
 
 
@@ -35,16 +36,6 @@ def _rebuild(command_type: Any, value: np.ndarray) -> Any:
         pose = geom.Transform3D.from_vector(np.asarray(value), geom.Rotation.Representation.QUAT)
         return roboarm_command.CartesianPosition(pose)
     return roboarm_command.JointPosition(np.asarray(value))
-
-
-def _arm_channel(name: str) -> tuple[str, Any] | None:
-    """The command channel and type a recorded arm signal reissues as, or ``None`` where it cannot."""
-    if not name.startswith(keys.ROBOT_COMMAND):
-        return None
-    for suffix, command_type in _ARM_SUFFIXES:
-        if name.endswith(suffix):
-            return name[: -len(suffix)], command_type
-    return None
 
 
 def _arm_commands(episode: Episode) -> dict[str, dict[int, Any]]:
@@ -80,7 +71,8 @@ def _grip_signals(episode: Episode) -> dict[str, Any]:
 
 def _unreplayable_arm_signals(episode: Episode) -> list[str]:
     """Arm-command signals the recording carries that this cannot reissue — the delta forms."""
-    return sorted(n for n in episode.signals if n.startswith(f'{keys.ROBOT_COMMAND}.') and _arm_channel(n) is None)
+    replayable = tuple(suffix for suffix, _ in _ARM_SUFFIXES)
+    return sorted(n for n in episode.signals if n.startswith(f'{keys.ROBOT_COMMAND}.') and not n.endswith(replayable))
 
 
 def load_actions(episode: Episode) -> list[dict[str, Any]]:
