@@ -24,13 +24,35 @@ The reason must say why this instance is correct. One rule id, at the site — a
 
 ## Rules
 
-### caller-in-name
+### misleading-name
 
-Don't name anything — function, class, module, variable — after where it is used. Name it after what it
-does. Information about the callers must not leak into the name.
+Name anything — function, class, module, variable — for what it is and does. A name describing where it
+is used misleads, and information about the callers must not leak into it. So does one describing the
+activity performed when what comes back is a `bool`: there the name carries the question that `bool`
+answers, so `if f(...):` reads as the claim being tested. A function that also acts is the exception —
+it keeps its action name and returns an enum whose members carry the answer, because renaming it for its
+verdict hides what it did.
 
 A helper that recomposes a pose through a fixed transform is `change_frame`, not `to_policy_frame`: it
 has never heard of a policy.
+
+An activity name over a `bool` leaves the verdict invisible at the call site, so a reader takes it on
+trust until they open the definition, and takes it backwards wherever the sense inverts. The tell is a
+docstring sentence of the form "True means …"; once the name carries it, that sentence has nothing left
+to say.
+
+```python
+# Bad — a query named for the activity, and a command renamed until its action disappeared
+if evaluate(path, run_id): ...
+if idle_ends_the_run(msg, clock): ...
+
+# Good
+if asks_this_run_to_finish(path, run_id): ...
+if take_idle_round(msg, clock) is IdleRoundOutcome.ENDS_THE_RUN: ...
+```
+
+The same enum answers the case where the verdict was never binary — a status, one of several endings.
+There the `bool` was the mistake rather than the name (`primitive-type`).
 
 ### hardcoded-keys
 
