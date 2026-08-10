@@ -23,8 +23,8 @@ from .ds import internal
 def eval_table():
     """The episode table for an eval run: only what every eval writes, nothing task-specific.
 
-    ``eval.success`` is absent on an episode that never reached its terminal, so it defaults to False;
-    ``eval.terminated`` separates a task the policy failed from one whose budget ran out.
+    ``eval.success`` defaults to False for an episode no env judged, so a column of verdicts stays readable
+    beside them; ``eval.terminated`` separates a task the policy failed from one whose budget ran out.
     """
     return {
         '__index__': C(label='#', format='%d'),

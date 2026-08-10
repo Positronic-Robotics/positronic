@@ -8,6 +8,7 @@ package and a LIBERO source checkout are placed on ``PYTHONPATH`` so ``env.py`` 
 
 import os
 import subprocess
+import sys
 from contextlib import AbstractContextManager
 from pathlib import Path
 
@@ -39,6 +40,11 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
         'PYTHONPATH': os.pathsep.join([str(_ENV_SERVER_DIR), str(_ensure_libero_src())]),
         'LIBERO_CONFIG_PATH': str(_LIBERO_CONFIG),
     }
+    if sys.platform == 'linux':
+        # MuJoCo picks GLFW when nothing says otherwise, and GLFW needs a display no GPU host has. macOS keeps
+        # GLFW because robosuite forces it there; an operator who named a backend (osmesa on a software-rendering
+        # box) keeps theirs.
+        env.setdefault('MUJOCO_GL', 'egl')
     return subprocess.Popen(command, env=env)
 
 
