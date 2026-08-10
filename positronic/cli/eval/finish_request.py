@@ -4,18 +4,16 @@ dataset not uploaded, arm keeps its token).
 
 The contract, for a writer in another repository:
 
-- path `<dir>/positronic_rollout_finish.<run_id>`; `<dir>` is `/run/lock` unless
-  `ROLLOUT_FINISH_REQUEST_DIR` names another, absolute; `run_id` is one path segment. Per run, so a
-  leftover is inert.
+- path: `FINISH_REQUEST_PREFIX` + `run_id`, inside `DEFAULT_FINISH_REQUEST_DIR` (overridden by
+  `FINISH_REQUEST_DIR_ENV`; absolute); `run_id` is one path segment. Per run, so a leftover is inert.
 - content `{"action": "finish", "run_id": "<id>"}`; further keys ignored.
 - the writer creates it world-readable (a `077` umask silently defeats this) and never unlinks it;
-  the run only reads it, and only where `run_id` equals its own `ROLLOUT_RUN_ID`. Unset env = no
-  poller installed.
+  the run only reads it, and only where `run_id` matches the run's own `RUN_ID_ENV`; unset, no
+  poller is installed.
 - intent is monotonic: never withdrawn, so a writer unsure its write landed re-asserts.
 - the only acknowledgement is `ACK_LOG_MARKER` in the run's log.
-- the failure boundary is the FILE: what an outside account controls (presence, name, readability,
-  bytes) refuses — logged once, run keeps going; past the parse every check is this run's own, so a
-  failure there is a defect and raises.
+- a file that cannot be read as a request — absent, unreadable, malformed — is refused: logged once,
+  the run keeps going. Past the parse the checks are this run's own code, so a failure there raises.
 """
 
 import json
