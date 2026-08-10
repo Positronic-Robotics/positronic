@@ -19,16 +19,20 @@ logger = logging.getLogger(__name__)
 
 # The recorded arm-command signals this reads back, most faithful first. Joint targets replay exactly;
 # pose targets go back through the driver's IK, so they land on the joint solution of the replaying rig
-# rather than the recorded one. The delta forms (``.pose_delta``, ``.joint_deltas``) are deliberately
-# absent: a delta means something only against the state it was issued from, so replaying one onto a
-# different scene produces a different trajectory while looking like a faithful one.
+# rather than the recorded one. A reset carries no state at all — it is reissued as the command it was.
+# The delta forms (``.pose_delta``, ``.joint_deltas``) are deliberately absent: a delta means something
+# only against the state it was issued from, so replaying one onto a different scene produces a different
+# trajectory while looking like a faithful one.
 _ARM_SIGNALS = (
     (keys.TARGET_JOINTS, roboarm_command.JointPosition),
     (keys.TARGET_EE_POSE, roboarm_command.CartesianPosition),
+    (keys.TARGET_RESET, roboarm_command.Reset),
 )
 
 
 def _rebuild(command_type: Any, value: np.ndarray) -> Any:
+    if command_type is roboarm_command.Reset:
+        return roboarm_command.Reset()  # recorded as a sentinel; the command carries nothing to restore
     if command_type is roboarm_command.CartesianPosition:
         # The quaternion representation ``Serializers.transform_3d`` wrote it in.
         pose = geom.Transform3D.from_vector(np.asarray(value), geom.Rotation.Representation.QUAT)

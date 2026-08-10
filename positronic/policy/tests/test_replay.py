@@ -184,6 +184,38 @@ def test_load_actions_rejects_a_delta_recording_even_when_it_carries_a_grip(tmp_
         load_actions(episode)
 
 
+def test_load_actions_replays_a_recorded_reset(tmp_path):
+    """A reset is absolute and carries no state, so it is reissued as the command it was recorded as.
+
+    The delta rationale does not reach it: there is nothing to reconstruct against the state it was
+    issued from, and refusing it would drop a command the recording genuinely made.
+    """
+    step = int(1e9 / HZ)
+    start = 1_000_000_000
+    episode = _write(
+        tmp_path,
+        {
+            keys.TARGET_JOINTS: [(np.full(7, 0.1, dtype=np.float32), start)],
+            keys.TARGET_RESET: [(np.int64(1), start + step)],
+        },
+    )
+
+    actions = load_actions(episode)
+
+    assert [a[keys.ACTION_TIMESTAMP] for a in actions] == pytest.approx([0.0, 0.1])
+    assert isinstance(actions[0][keys.ROBOT_COMMAND], roboarm_command.JointPosition)
+    assert actions[1][keys.ROBOT_COMMAND] == roboarm_command.Reset()
+
+
+def test_load_actions_replays_a_recording_of_resets_alone(tmp_path):
+    """A reset is a replayable arm command in its own right, so it does not need a positional one beside it."""
+    episode = _write(tmp_path, {keys.TARGET_RESET: [(np.int64(1), 1_000_000_000)]})
+
+    actions = load_actions(episode)
+
+    assert [a[keys.ROBOT_COMMAND] for a in actions] == [roboarm_command.Reset()]
+
+
 def test_load_actions_rejects_a_recording_that_switched_to_deltas_part_way(tmp_path):
     """An absolute stretch does not make the delta stretch replayable, and replaying only the first
     presents a partial trajectory as faithful playback: the arm holds through motion the recording made.
