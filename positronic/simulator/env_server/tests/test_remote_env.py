@@ -12,7 +12,7 @@ import pimm
 from positronic import geom, keys
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.eval import EVAL_SUCCESS, Task
+from positronic.eval import Task
 from positronic.inference import main
 from positronic.policy import Policy, Session
 from positronic.policy.codec import ActionTimestamp
@@ -267,7 +267,7 @@ class _CountdownAdapter(EnvAdapter):
         return {}
 
     def terminal(self, result):
-        return {EVAL_SUCCESS: True} if result[protocol.FRAME_DONE] else None
+        return {keys.EVAL_SUCCESS: True} if result[protocol.FRAME_DONE] else None
 
 
 @pytest.mark.timeout(60.0)
@@ -341,7 +341,7 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
     episode = ds[0]
-    assert episode.static['eval.terminated'] is False
+    assert episode.static[keys.EVAL_TERMINATED] is False
     assert episode.static['eval.universe'] == 'sim'
     assert episode.static['eval.embodiment'] == 'remote.mujoco.franka'
     assert episode.static['scene_xml'].startswith('<mujoco')

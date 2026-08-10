@@ -167,7 +167,7 @@ class DsWriterAgent(pimm.ControlSystem):
         poll_hz: float = 1000.0,
         time_mode: TimeMode = TimeMode.CLOCK,
         virtual_time: bool = False,
-        # rules-allow: caller-in-name — timing is the only use, and a name for the mechanism alone reads as
+        # rules-allow: misleading-name — timing is the only use, and a name for the mechanism alone reads as
         # a context of unsaid purpose. It generalises when a second kind of caller arrives.
         telemetry_span: ContextFactory = nullcontext,
     ):

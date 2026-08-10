@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from positronic import keys
-from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED, EVAL_SUCCESS
+from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED
 from positronic.simulator.env_server import protocol
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.adapter import DEFAULT_CAMERA_DICT as CAMERA_DICT
@@ -72,8 +72,8 @@ def test_terminal_reports_success_only_when_done():
     done_ok = {protocol.FRAME_DONE: True, protocol.FRAME_SUCCESS: True}
     done_fail = {protocol.FRAME_DONE: True, protocol.FRAME_SUCCESS: False}
     running = {protocol.FRAME_DONE: False, protocol.FRAME_SUCCESS: False}
-    assert adapter.terminal(done_ok) == {EVAL_SUCCESS: True}
-    assert adapter.terminal(done_fail) == {EVAL_SUCCESS: False}
+    assert adapter.terminal(done_ok) == {keys.EVAL_SUCCESS: True}
+    assert adapter.terminal(done_fail) == {keys.EVAL_SUCCESS: False}
     assert adapter.terminal(running) is None
 
 

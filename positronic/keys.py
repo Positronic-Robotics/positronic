@@ -14,6 +14,15 @@ ROBOT_COMMAND = 'robot_command'
 TARGET_EE_POSE = f'{ROBOT_COMMAND}.pose'
 TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
 
+
+def is_robot_command(name: str) -> bool:
+    """Whether ``name`` is in the robot-command family: ``robot_command``, or an arm's ``robot_command.{side}``.
+
+    ``TARGET_EE_POSE`` and ``TARGET_JOINTS`` are in the family by name while carrying a vector.
+    """
+    return name == ROBOT_COMMAND or name.startswith(f'{ROBOT_COMMAND}.')
+
+
 JOINTS = 'robot_state.q'
 JOINT_VEL = 'robot_state.dq'
 EE_POSE = 'robot_state.ee_pose'
@@ -58,3 +67,10 @@ POSITRONIC_VERSION = 'positronic_version'
 
 POLICY_META = 'inference.policy'
 SERVER_META = f'{POLICY_META}.{SERVER}'
+
+# What a trial reports when it ends, in its episode's statics. The harness writes ``EVAL_TERMINATED``:
+# True when a terminal was delivered inside the budget, False when the budget ran out. ``EVAL_SUCCESS``
+# rides in the terminal payload an env's adapter returns, so an env that reports it only on success
+# leaves it absent on failure — a reader defaults it rather than assuming a False.
+EVAL_SUCCESS = 'eval.success'
+EVAL_TERMINATED = 'eval.terminated'

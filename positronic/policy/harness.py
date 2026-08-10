@@ -454,9 +454,9 @@ class Harness(pimm.ControlSystem):
         """
         done_msg = self.done.read()
         if done_msg.updated and done_msg.data and done_msg.ts <= self._deadline * 1e9:
-            return {**done_msg.data, 'eval.terminated': True}
+            return {**done_msg.data, keys.EVAL_TERMINATED: True}
         if clock.now() >= self._deadline:
-            return {'eval.terminated': False}
+            return {keys.EVAL_TERMINATED: False}
         return None
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:

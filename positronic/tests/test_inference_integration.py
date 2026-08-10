@@ -88,7 +88,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     assert len(ds) == 2
 
     episode = ds[0]
-    assert episode.static['eval.terminated'] is False
+    assert episode.static[keys.EVAL_TERMINATED] is False
     assert episode.static['eval.trial_index'] == 0
     assert episode.static['eval.seed'] == 100
     assert episode.static['eval.universe'] == 'sim'
@@ -188,7 +188,7 @@ class _CountdownProducer(pimm.ControlSystem):
                 self._steps += 1
                 self._emit_obs()
                 if self._done_after is not None and self._steps >= self._done_after:
-                    self.done.emit({'eval.success': True})
+                    self.done.emit({keys.EVAL_SUCCESS: True})
                     self._active = False
 
 
@@ -297,8 +297,8 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
     episode = ds[0]
-    assert episode.static['eval.terminated'] is True
-    assert episode.static['eval.success'] is True  # the delivered ``done`` payload lands in static data
+    assert episode.static[keys.EVAL_TERMINATED] is True
+    assert episode.static[keys.EVAL_SUCCESS] is True  # the delivered ``done`` payload lands in static data
     assert episode.static['eval.embodiment'] == 'test.countdown'
     # The terminal frame (the step where ``done`` fired) is recorded, not dropped by STOP closing the writer.
     values = [v for v, _ in episode.signals['value']]

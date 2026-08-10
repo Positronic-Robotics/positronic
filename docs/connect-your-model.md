@@ -109,7 +109,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `task` | str | — | Language instruction for the episode |
 | `descriptor` | str | — | Embodiment the observation came from (e.g. `mujoco.franka`); empty string when unset. Lets a multi-embodiment policy adapt to the current robot |
 
-Your server receives every key each step. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones.
+Your server receives every key each step. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm.
 
 ### Actions (server → client)
 
@@ -117,33 +117,40 @@ The normal response is a list of action dicts — a short trajectory. (A single 
 
 ```python
 {"result": [
-    {"robot_command": {...}, "target_grip": 1.0, "timestamp": 0.0},
-    {"robot_command": {...}, "target_grip": 1.0, "timestamp": 0.066},
+    {"robot_command": CartesianPosition(pose=...), "target_grip": 1.0, "timestamp": 0.0},
+    {"robot_command": CartesianPosition(pose=...), "target_grip": 1.0, "timestamp": 0.066},
     ...
 ]}
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `robot_command` | dict | Control command (see below) |
+| `robot_command` | command object | Control command (see below) |
 | `target_grip` | float | Target gripper closure in `[0, 1]`: 0 = open, 1 = closed |
 | `timestamp` | float | Execution time in seconds from the start of the returned trajectory (e.g. `i / action_fps` for the i-th action). The client runs each action at `now + timestamp`, where `now` is when the prediction arrived. A single action dict returned *outside* a list is auto-stamped `0.0`; give every action in a list its own `timestamp`, or they all collapse onto one instant and fire at once. |
 
-The `robot_command` field selects the control mode:
+The `robot_command` field selects the control mode. Build one of the commands in
+[`positronic.drivers.roboarm.command`](../positronic/drivers/roboarm/command.py):
 
-| Command type | Fields | Description |
-|--------------|--------|-------------|
-| `cartesian_pos` | `pose`: float32 (12,) | Target EE pose: 3 translation + 9 flattened rotation matrix (row-major) |
-| `joint_pos` | `positions`: float32 (7,) | Target joint angles (radians) |
-| `joint_delta` | `velocities`: float32 (7,) | Joint velocity command |
+| Command | Fields | Description |
+|---------|--------|-------------|
+| `CartesianPosition` | `pose`: `geom.Transform3D` | Target end-effector pose |
+| `JointPosition` | `positions`: float32 (7,) | Target joint angles (radians) |
+| `JointDelta` | `velocities`: float32 (7,) | Joint velocity command |
+| `CartesianDelta` | `delta`, `frame`: `geom.Transform3D` | Relative motion, composed onto the pose the arm is at when it lands; `frame` is the frame `delta` is expressed in |
+| `Reset` | — | Return the arm to its home position |
 
-Which command type your model produces is decided by its codec.
+Which command your model produces is decided by its codec.
+
+A rig with more than one arm names every channel after the arm that owns it: observations arrive as
+`robot_state.left.ee_pose` and `grip.left`, and an action carries `robot_command.left` alongside
+`target_grip.left`. An arm your action omits holds its last command.
 
 ## Debugging with recordings
 
 When a run doesn't produce the result you expected, it helps to record exactly what crossed the boundaries between the robot, the codec, and the model. Recording is itself a policy wrapper — `Recorder` in [`positronic/policy/recording.py`](../positronic/policy/recording.py) — that taps into any client pipeline; the built-in servers expose it via `--recording_dir`. It writes one [rerun](https://rerun.io) file per episode with two layers:
 
-- **`raw`** — the observation and action as they appear on the wire.
+- **`raw`** — the observation and the action as they cross the wire.
 - **`inference`** — the same episode *after* the codec: the encoded observation the model received and the raw actions it produced.
 
 Comparing the two localizes the fault: if `raw` looks right but `inference` looks wrong, the codec is at fault; if the `inference` input looks right but the output is bad, it is the model.
@@ -159,6 +166,7 @@ To connect a custom model you implement this WebSocket protocol. The full low-le
 Implement a `Policy`, close a pipeline over it with `PolicySource`, and hand the pipeline to `PolicyServer`:
 
 ```python
+from positronic.drivers.roboarm import command
 from positronic.offboard import PolicyServer
 from positronic.policy import Policy, Session
 from positronic.policy.spec import PolicySource, remote
@@ -173,10 +181,10 @@ class MySession(Session):
         # obs holds the raw keys from the wire table above. Pick what you need:
         images = obs['image.exterior']
         ee = obs['robot_state.ee_pose']
-        predicted_poses = self._model.predict(images, ee)
-        # Return the actions to run: a list of wire-format dicts.
+        predicted_poses = self._model.predict(images, ee)  # each a geom.Transform3D
+        # Return the actions to run, one per predicted step.
         return [
-            {'robot_command': {'type': 'cartesian_pos', 'pose': pose}, 'target_grip': 0.0}
+            {'robot_command': command.CartesianPosition(pose=pose), 'target_grip': 0.0}
             for pose in predicted_poses
         ]
 
@@ -237,7 +245,8 @@ Every message is msgpack. Numpy arrays use a custom extension:
 }
 ```
 
-`positronic.utils.serialization` provides `serialise()` / `deserialise()` that handle this for you:
+`positronic.utils.serialization` provides `serialise()` / `deserialise()`, which handle this and the
+robot commands:
 
 ```python
 from positronic.utils.serialization import serialise, deserialise
@@ -248,8 +257,6 @@ async for message in websocket.iter_bytes():
     actions = session(obs)               # list of action dicts (or None)
     await websocket.send_bytes(serialise({"result": actions}))
 ```
-
-If you would rather not depend on Positronic, implement the protocol directly — the only hard requirement is msgpack with numpy support.
 
 ## See Also
 

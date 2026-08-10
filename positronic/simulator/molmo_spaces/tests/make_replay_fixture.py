@@ -47,7 +47,7 @@ import numpy as np
 from positronic import keys
 from positronic.dataset.local_dataset import DiskEpisode
 from positronic.dataset.signal import Signal
-from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SUCCESS
+from positronic.eval import EVAL_EPISODE_INDEX
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import launcher, mapping
@@ -179,7 +179,7 @@ def build_fixture(episode_dir: Path, benchmark_path: str, assets_dir: Path) -> d
         FIELD_UNREPLAYABLE_TAIL_STEPS: np.asarray(len(step_ts) - replayable, dtype=np.int32),
         FIELD_CHECKPOINT_STEPS: checkpoints.astype(np.int32),
         FIELD_CHECKPOINT_SIM_STATE: np.stack([replayed[int(step) - 1] for step in checkpoints]),
-        FIELD_EXPECTED_SUCCESS: np.asarray(episode.static[EVAL_SUCCESS], dtype=bool),
+        FIELD_EXPECTED_SUCCESS: np.asarray(episode.static[keys.EVAL_SUCCESS], dtype=bool),
     }
 
 
