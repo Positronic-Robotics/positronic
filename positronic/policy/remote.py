@@ -62,7 +62,7 @@ class RemoteSession(Session):
         return [self._decode_commands(action) for action in actions]
 
     def _decode_commands(self, action: dict[str, Any]) -> dict[str, Any]:
-        """One action with every command channel typed. Every consumer above dispatches on ``command.*``."""
+        """One action with every ``keys.is_robot_command`` channel typed."""
         decoded = {k: self._as_command(v) for k, v in action.items() if keys.is_robot_command(k)}
         return {**action, **decoded} if decoded else action
 

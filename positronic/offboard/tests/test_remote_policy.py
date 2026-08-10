@@ -353,13 +353,6 @@ def test_frames_stay_raw_where_the_server_declares_no_compression():
 _WIRE_POSE = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
 
 
-# rules-allow: hardcoded-keys — a fixture standing in for a server, so it spells the wire itself; reading
-# `command.CartesianPosition.TYPE` would agree with the decoder whatever it became, pinning nothing.
-def _wire_command(pose=_WIRE_POSE) -> dict:
-    """One served ``cartesian_pos`` command, in the wire's own layout."""
-    return {'type': 'cartesian_pos', 'pose': pose}
-
-
 def _served(action: dict) -> dict:
     """One action as the session hands it up, having crossed the wire."""
     endpoint, _ = _mock_endpoint(infer_return=action)
@@ -368,11 +361,19 @@ def _served(action: dict) -> dict:
     return actions[0]
 
 
+# rules-allow: hardcoded-keys — every wire name below is spelled the way a server sends it: the command
+# mapping, and the `target_grip` / `timestamp` fields an action carries. Reading the decoder's own constants
+# would make test and decoder agree whatever those names became, leaving the wire itself unpinned.
 class TestServedCommandDecode:
-    """A server answers with the command as a mapping; every consumer above dispatches on ``command.*``."""
+    """A server answers with the command as a mapping; the session hands up the typed command."""
+
+    @staticmethod
+    def _wire_command(pose=_WIRE_POSE) -> dict:
+        """One served ``cartesian_pos`` command, in the wire's own layout."""
+        return {'type': 'cartesian_pos', 'pose': pose}
 
     def test_a_served_command_arrives_typed(self):
-        served = _served({keys.ROBOT_COMMAND: _wire_command(), 'target_grip': 0.5, 'timestamp': 0.0})
+        served = _served({keys.ROBOT_COMMAND: self._wire_command(), 'target_grip': 0.5, 'timestamp': 0.0})
 
         decoded = served[keys.ROBOT_COMMAND]
         assert isinstance(decoded, command.CartesianPosition), f'the driver would be handed {decoded!r}'
@@ -383,8 +384,8 @@ class TestServedCommandDecode:
         """A transport may hand the vector back as a list rather than an array; either decodes the same."""
         pose = np.asarray(_WIRE_POSE, dtype=np.float32)
 
-        from_array = _served({keys.ROBOT_COMMAND: _wire_command(pose)})
-        from_list = _served({keys.ROBOT_COMMAND: _wire_command(pose.tolist())})
+        from_array = _served({keys.ROBOT_COMMAND: self._wire_command(pose)})
+        from_list = _served({keys.ROBOT_COMMAND: self._wire_command(pose.tolist())})
 
         np.testing.assert_allclose(
             from_list[keys.ROBOT_COMMAND].pose.translation, from_array[keys.ROBOT_COMMAND].pose.translation, atol=1e-6
@@ -393,7 +394,7 @@ class TestServedCommandDecode:
     def test_every_arm_of_a_multi_arm_action_decodes(self):
         """A bimanual embodiment names its channels ``robot_command.{side}``; decoding only the unsuffixed one
         hands those arms the raw mapping."""
-        wire = _wire_command()
+        wire = self._wire_command()
         served = _served({f'{keys.ROBOT_COMMAND}.left': wire, f'{keys.ROBOT_COMMAND}.right': wire, 'timestamp': 0.0})
 
         for side in ('left', 'right'):
@@ -419,7 +420,7 @@ class TestServedCommandDecode:
 
     def test_a_served_command_reaches_the_driver_typed_through_the_declared_stack(self):
         """End to end: the decode sits under whatever the handshake declares, so the stack cannot undo it."""
-        wire_action = [{keys.ROBOT_COMMAND: _wire_command(), 'timestamp': 0.0}]
+        wire_action = [{keys.ROBOT_COMMAND: self._wire_command(), 'timestamp': 0.0}]
         policy, _ = _mock_remote_policy(CHUNKED_STACK, infer_return=wire_action)
 
         actions = policy.new_session(now=lambda: 0.0)({'obs_time_ns': 0})
@@ -428,9 +429,9 @@ class TestServedCommandDecode:
         assert isinstance(actions[0][keys.ROBOT_COMMAND], command.CartesianPosition)
 
     def test_a_command_crossing_a_live_websocket_arrives_typed(self, start_server, make_mock_policy):
-        """The command as a mapping is what msgpack carries a served command in — no ``__cmd__`` envelope,
-        the vector a plain sequence — so the round-trip is what pins the decode, not a stubbed ``infer``."""
-        served = make_mock_policy([{keys.ROBOT_COMMAND: _wire_command(), 'timestamp': 0.0}], {'model_name': 'm'})
+        """A command served as a bare mapping — no ``__cmd__`` envelope, the vector a plain sequence —
+        survives a real msgpack round trip over the socket and arrives typed."""
+        served = make_mock_policy([{keys.ROBOT_COMMAND: self._wire_command(), 'timestamp': 0.0}], {'model_name': 'm'})
         host, port, _ = start_server(ChunkedSchedule() | remote | PolicySource(served))
 
         actions = RemotePolicy(f'{host}:{port}').new_session(now=lambda: 0.0)({'obs_time_ns': 0})
