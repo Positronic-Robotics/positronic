@@ -17,12 +17,8 @@ from .wrappers import ChunkedSchedule
 
 logger = logging.getLogger(__name__)
 
-# The recorded arm-command signals this reads back, most faithful first. Joint targets replay exactly;
-# pose targets go back through the driver's IK, so they land on the joint solution of the replaying rig
-# rather than the recorded one. A reset carries no state at all — it is reissued as the command it was.
-# The delta forms (``.pose_delta``, ``.joint_deltas``) are deliberately absent: a delta means something
-# only against the state it was issued from, so replaying one onto a different scene produces a different
-# trajectory while looking like a faithful one.
+# The arm-command signals this replays, most faithful first; pose targets go back through the rig's IK.
+# The delta forms are absent: a delta means something only against the state it was issued from.
 _ARM_SIGNALS = (
     (keys.TARGET_JOINTS, roboarm_command.JointPosition),
     (keys.TARGET_EE_POSE, roboarm_command.CartesianPosition),
@@ -68,24 +64,18 @@ def _unreplayable_arm_signals(episode: Episode) -> list[str]:
 def load_actions(episode: Episode) -> list[dict[str, Any]]:
     """The episode's commands as an action list: one entry per instant either channel was commanded at.
 
-    Each channel keeps the timing it was recorded with rather than the other's cadence, so a grip
-    command issued between two arm waypoints falls due between them, and one issued after the last of
-    them still falls due.
-
-    ``keys.ACTION_TIMESTAMP`` is seconds from the earliest instant, so the list replays at the cadence
-    it was recorded at. An action carries a channel only where the recording commanded it: the arm
-    where a command was issued at that instant, the grip from its first sample onwards (sampled at or
-    before the instant, since a grip holds until changed). An action omitting a channel emits nothing
-    on it, so the rig holds what it has there, which is what commanding nothing means. In practice the
-    two channels are emitted together and land on the same instants; an episode with no grip channel
-    replays the arm alone, and one that only ever commanded the grip replays the grip alone.
+    - Each channel keeps its own recorded timing, so a grip command between two arm waypoints falls
+      due between them.
+    - ``keys.ACTION_TIMESTAMP`` is seconds from the earliest instant, so the list replays at the
+      cadence it was recorded at.
+    - An action carries a channel only where the recording commanded it; omitting one emits nothing
+      there, so the rig holds. Either channel alone replays alone.
     """
     arm = _arm_commands(episode)
     grip = episode.signals.get(keys.TARGET_GRIP)
     grip_stamps = {ts for _, ts in grip} if grip is not None and len(grip) > 0 else set()
-    # Asked whether or not absolutes were found. A recording that switched action space part-way carries
-    # both, and replaying the stretches this can reissue while dropping the rest holds the arm still
-    # through motion the recording made — a partial trajectory presented as faithful playback.
+    # Asked whether or not absolutes were found: a recording that switched part-way carries both, and
+    # replaying only the reissuable stretch holds the arm still through motion the recording made.
     if unreplayable := _unreplayable_arm_signals(episode):
         raise ValueError(
             f'Episode carries arm commands this cannot reissue: {unreplayable}. Only '
@@ -129,11 +119,8 @@ class ReplaySession(Session):
         chunk = []
         while self._cursor < len(self._actions):
             action = self._actions[self._cursor]
-            # A chunk keeps its final waypoint for the next one, which re-issues it at the same instant.
-            # The scheduling wrapper re-queries the moment that waypoint falls due, and in a rig that runs
-            # both in one process the new trajectory replaces the playing one before the waypoint is
-            # applied — so a chunk that ended on it would lose it. Re-issuing an absolute target the rig
-            # has already reached commands nothing new.
+            # A chunk keeps its final waypoint for the next one: the wrapper re-queries when it falls due,
+            # and the new trajectory replaces the playing one before it is applied, so it would be lost.
             if len(chunk) > 1 and action[keys.ACTION_TIMESTAMP] - start >= self._chunk_sec:
                 self._cursor -= 1
                 break

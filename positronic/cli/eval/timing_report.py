@@ -163,10 +163,8 @@ class PassReport:
     episodes: int
     window: WallWindow
     wall_s: float
-    # Which clock the pass was measured on, and the two readings of the same ratio it decides between.
-    # ``real_time_factor`` is sim-seconds per wall-second and exists only under a virtual clock; an
-    # attended pass runs on the wall clock, where the ratio is the share of ``window`` wall spent in
-    # rollouts and a real-time factor would be a sim number the run never produced.
+    # ``real_time_factor`` is sim-s per wall-s and exists only under a virtual clock.
+    # An attended pass runs on the wall clock, where the ratio is the share of window wall spent in rollouts.
     virtual_clock: bool
     real_time_factor: float | None
     rollout_wall_share: float
@@ -547,8 +545,7 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
         overhead=phase_fraction(sum(t.overhead_s for t in timings)),
         between_episodes=phase_fraction(wall - episode_wall_sum),
     )
-    # Absent on a sidecar written before the pass carried its clock, and every one of those is a sim
-    # sweep: an attended run could not reach the timing path then.
+    # Absent on a sidecar written before the pass carried its clock; every one of those is a sim sweep.
     virtual_clock = bool(passes[0].attrs.get(ATTR_PASS_VIRTUAL_CLOCK, True))
     rollout_share = (sum(t.virtual_s for t in timings) / wall) if wall else 0.0
     return PassReport(

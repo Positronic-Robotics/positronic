@@ -109,11 +109,9 @@ def _run_world(
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)
 
-        # Sim schedules harness, recorder, then producers (the simulator) in-process, in that order; each
-        # scheduler round is one control period, paced by the clock chosen above. The harness decides the
-        # round's action (a reset, a policy command off the last round's observation, or finish); the
-        # recorder logs that observation with the command; the producer applies the command and publishes
-        # the next observation.
+        # Sim order: harness, recorder, producers, one control period per round.
+        # A reset arms the producer to publish frame-0 after the harness, so the recorder's open-turn drain
+        # drops the pre-reset frame. Real runs the producers and recorder as background subprocesses.
         # A reset arms the producer to publish frame-0 after the harness (last in the round); the recorder
         # drains its channels the turn it opens, dropping the pre-reset frame, so its first recorded sample
         # is the post-reset scene. Real runs the producers + recorder as background subprocesses; harness,
@@ -226,8 +224,7 @@ def main(
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
     # Validate timing up front, before the policy warmup, so a rejected sweep fails before it spends anything.
-    # The clock every world in this sweep will run on, by the same rule ``_run_world`` applies per world.
-    # Stamped on the pass so the timing report labels what it measured instead of assuming sim time.
+    # The clock every world here runs on, stamped on the pass so the report labels what it measured.
     virtual_clock = False
     if timing:
         if evals is not None:

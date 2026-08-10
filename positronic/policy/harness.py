@@ -35,19 +35,17 @@ def _assert_anchored(actions: list[dict[str, Any]], now: float) -> None:
         )
 
 
-# A contract with a run watcher outside this repository, which cannot import them: keep the prefixes
-# stable, and keep the free-form task last so a parser can read it to end of line.
+# A contract with an out-of-repo watcher: keep the prefixes stable and the free-form task last.
 LOG_DIRECTIVE_START = 'harness: directive start'
 LOG_DIRECTIVE_FINISH = 'harness: directive finish'
 LOG_RUN_FINISH = 'harness: run finish'
 
 
 class Outcome(Enum):
-    """What became of an episode, on its ``directive finish`` line.
+    """What the harness did with an episode, on its ``directive finish`` line.
 
-    These report what the harness did with the episode, which is all the harness knows: the recorder
-    writes the artifact and tells nobody when it lands. So ``saved`` is not a claim that the artifact
-    exists yet, and a reader that needs the artifact reads the dataset rather than this line.
+    Not a claim about the artifact: the recorder writes it and reports nothing back, so a reader that
+    needs the artifact reads the dataset.
     """
 
     SAVED = 'saved'  # finalized, and handed to the recorder to commit
@@ -157,8 +155,8 @@ class _EpisodeTelemetry:
         self._span = None
 
 
-# What a free-form field may not contain, since the line it ends is one record to a reader that splits
-# on line breaks: the breaks themselves, the rest of the C0 controls, and the backslash introducing them.
+# Everything that would end the record a free-form field sits in: line breaks, the other C0 controls,
+# and the backslash that introduces their escapes.
 _ESCAPED = (
     {ord('\\'): '\\\\', ord('\n'): '\\n', ord('\r'): '\\r', ord('\t'): '\\t'}
     | {code: f'\\x{code:02x}' for code in range(0x20) if code not in (0x09, 0x0A, 0x0D)}
@@ -221,10 +219,8 @@ class Harness(pimm.ControlSystem):
         self._rollout_started = False
         # Wall-clock telemetry for the live rollout, opened under ``--timing`` and inert otherwise.
         self._telemetry = _EpisodeTelemetry()
-        # Episodes begun in this run, counted from 0 — the id pairing a logged start with its finish, and
-        # the index its telemetry span carries. Bumped before the reset, so an episode whose reset raises
-        # consumes its id and the log simply has no line under it. It counts this run's episodes, so it
-        # matches a dataset index only for a run into a fresh output directory.
+        # Episodes begun in this run from 0 — the log's ``id`` and its span's ``episode.index``.
+        # Bumped before the reset, so an episode whose reset raises consumes its id and logs no line.
         self._episode_index = -1
         # Channels that have not delivered since this episode's reset. A receiver latches its last value, so
         # emptying this set is what keeps the first inference off the previous episode's final frame.
@@ -320,19 +316,17 @@ class Harness(pimm.ControlSystem):
         logger.info('%s id=%d outcome=%s', LOG_DIRECTIVE_FINISH, self._episode_index, outcome.value)
 
     def _commit_episode(self, clock: pimm.Clock, *, abort: bool = False) -> Generator[pimm.Command, None, None]:
-        """Give the recorder the round in which to take the queued STOP/ABORT, then log the episode's finish.
+        """Give the recorder the round in which to take the queued STOP/ABORT, then log the finish.
 
-        The episode leaves the live state before that round and its line is logged after it, so a failure
-        during the commit cannot add a contradicting ``aborted`` finish under the same id.
-
-        That round is the commit only where the recorder shares this scheduler; where it runs in the
-        background the round is one control period and the finish line orders this harness's state alone.
+        - The episode leaves the live state before that round and is logged after it, so a failure while
+          committing cannot add a contradicting ``aborted`` finish under the same id.
+        - The round is the commit only where the recorder shares this scheduler; in the background it is
+          one control period, and the line orders this harness's state alone.
         """
         virtual_now = clock.now()  # before the round below, whose sim-clock advance belongs to no rollout
         self._running = False
-        # Give the recorder a round to commit the STOP/ABORT before the next START (they share ``ds_command``,
-        # where last-value-wins would drop one) and before the home command, so homing stays out of the
-        # recording.
+        # The recorder needs a round to commit the STOP/ABORT before the next START — they share
+        # ``ds_command``, where last-value-wins drops one — and before the home, which stays out of the take.
         yield self._pace()
         self._log_finish(Outcome.DISCARDED if abort else Outcome.SAVED)
         # After that round, so the recorder's STOP-time record.io span is still in flight and parents to the
@@ -368,8 +362,7 @@ class Harness(pimm.ControlSystem):
             self.context = {**self.context, keys.TASK: self._task.instruction}
         self._policy_session = self.policy.new_session(self.context, clock.now)
         self._running = True
-        # Logged once the episode is genuinely live, so a reset or a session open that raises leaves no
-        # start with no finish to pair it — and so the task it names is the one the policy was given.
+        # Logged once the episode is live, so a raising reset or session open leaves no unpaired start.
         task = str(self.context.get(keys.TASK, '')).translate(_ESCAPED)
         logger.info('%s id=%d task=%s', LOG_DIRECTIVE_START, self._episode_index, task)
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
@@ -532,9 +525,8 @@ class Harness(pimm.ControlSystem):
                 self._log_finish(Outcome.ABORTED)
             self._telemetry.seal(clock.now())
             raise
-        # Only the clean return: a run that unwound above is not one that finished. It says the harness's
-        # loop ended, not that the run was healthy — a background process that dies sets the same stop
-        # signal an orderly shutdown does, and the signal carries no reason to tell them apart.
+        # Says the harness's loop returned, not that the run was healthy: a dying background process sets
+        # the same stop signal an orderly shutdown does, and that signal carries no reason.
         logger.info(LOG_RUN_FINISH)
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:  # noqa: C901

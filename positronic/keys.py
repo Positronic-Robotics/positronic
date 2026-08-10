@@ -18,8 +18,8 @@ TARGET_RESET = f'{ROBOT_COMMAND}.reset'
 # The gripper's command channel: a scalar target beside the arm's ``ROBOT_COMMAND``.
 TARGET_GRIP = 'target_grip'
 
-# When an action falls due, in seconds. It names a field of the action dict rather than a signal, so it is
-# a different contract from the ``timestamp`` column a stored vector signal is written under.
+# When an action falls due, in seconds.
+# A field of the action dict, not a signal — a different contract from a stored signal's ``timestamp``.
 ACTION_TIMESTAMP = 'timestamp'
 
 

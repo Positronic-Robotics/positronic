@@ -391,8 +391,7 @@ def test_sim_steps_a_fractional_control_period_without_drifting():
         sim.step(period)
         assert sim.data.time - start == pytest.approx(turn * period, abs=sim.model.opt.timestep)
 
-    # A restored state replaces the time the carry was owed against, so the period after it runs whole:
-    # a carry held over would spend it on a period the loaded state never ran.
+    # A restored state replaces the time the carry was owed against, so the next period runs whole.
     sim.load_state(sim.save_state())
     sim.step(period)
     assert sim.data.time >= period

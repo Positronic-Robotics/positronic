@@ -1681,16 +1681,10 @@ def test_anchored_chunk_passes():
     _assert_anchored([{'timestamp': 1.7e9 - 0.2}, {'timestamp': 1.7e9 + 1.5}], now=1.7e9)
 
 
-# --- The run log's episode-boundary contract ---
+# --- The run log's episode-boundary contract, pinned as an out-of-repo watcher reads it ---
 #
-# A run watcher outside this repo reads these lines to follow a rollout it cannot see any other way,
-# so they are a contract with a consumer that does not import this package: the prefixes and the
-# fields are pinned here rather than left to whatever the logger happens to emit.
-#
-# rules-allow: hardcoded-keys — the expected lines are spelled out rather than built from the
-# ``LOG_*`` constants on purpose. A watcher that cannot import them matches the literal text, so a
-# test written against the constants would follow an edit to them and let the wire format change
-# with nothing failing. Spelling them here is what makes that edit break a test.
+# rules-allow: hardcoded-keys — spelled out, not built from the ``LOG_*`` constants: a test written
+# against them would follow an edit and let the wire format change with nothing failing.
 
 
 def _harness_log(caplog) -> list[str]:
@@ -1796,9 +1790,8 @@ def test_an_exhausted_trial_plan_logs_the_run_finishing(world, caplog):
 
     log = _harness_log(caplog)
     assert log[0] == 'harness: directive start id=0 task=sweep'
-    # rules-allow: hardcoded-keys — spelled out rather than read from LOG_RUN_FINISH: a watcher that
-    # cannot import the constant matches this text, so a test built on the constant would follow an
-    # edit to it and let the wire format change with nothing failing.
+    # rules-allow: hardcoded-keys — spelled out, not read from LOG_RUN_FINISH: a test built on the
+    # constant would follow an edit to it and let the wire format change with nothing failing.
     assert log[-1] == 'harness: run finish'
 
 

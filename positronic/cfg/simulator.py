@@ -13,8 +13,8 @@ from positronic.simulator.mujoco.transforms import (
 )
 from positronic.utils import package_assets_path
 
-# The MuJoCo camera ports of the Franka table scene, under the canonical observation names. Three of
-# them because MuJoCo does not render the second image when only two cameras are bound.
+# The Franka table scene's camera ports, under the canonical observation names.
+# Three, not two: MuJoCo does not render the second image when only two cameras are bound.
 MUJOCO_FRANKA_CAMERAS = {
     keys.WRIST_IMAGE: 'handcam_left_ph',
     keys.EXTERIOR_IMAGE: 'back_view_ph',
@@ -83,8 +83,7 @@ def low_render_quality(loaders, shadowsize: int, offsamples: int, reflectance: f
     return [*loaders, SetRenderQuality(shadowsize, offsamples, reflectance)]
 
 
-# The rate a Franka rollout is driven at, in Hz: one scheduler round, one camera frame and one inference
-# per control period, matching what the real rig does.
+# The rate a Franka rollout is driven at: one scheduler round, camera frame and inference per period.
 MUJOCO_FRANKA_CONTROL_HZ = 15
 
 mujoco_franka_sim = cfn.Config(
