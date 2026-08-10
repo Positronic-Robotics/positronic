@@ -10,7 +10,7 @@ from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive
-from positronic.policy.codec import LEROBOT_TASK, Codec, lerobot_image, lerobot_state
+from positronic.policy.codec import Codec, lerobot_image, lerobot_state
 
 
 class ObservationCodec(Codec):
@@ -19,7 +19,7 @@ class ObservationCodec(Codec):
     Args:
         state: mapping from output state key to an ordered dict of {episode_key: dim} to concatenate.
         images: mapping from output image name to tuple (input_key, (width, height)).
-        task_field: output key carrying the language prompt at inference; LeRobot training always uses ``task``.
+        task_field: output key carrying the language prompt at inference; training always emits ``keys.TASK``.
         lowercase_task: lowercase the task text at inference, for checkpoints trained on lowercased language
             (the pretrained DROID models; MolmoSpaces' Pi baseline applies the same normalization).
     """
@@ -28,7 +28,7 @@ class ObservationCodec(Codec):
         self,
         state: dict[str, dict[str, int]],
         images: dict[str, tuple[str, tuple[int, int]]],
-        task_field: str = LEROBOT_TASK,
+        task_field: str = keys.TASK,
         lowercase_task: bool = False,
     ):
         self._state = state
@@ -42,7 +42,7 @@ class ObservationCodec(Codec):
         self._derive_transforms.update({k: partial(self._derive_image, k) for k in images.keys()})
         # Lowercase the training task the same way ``encode`` lowercases the served prompt, so a codec with
         # ``lowercase_task`` trains and infers on one text distribution (the ``Codec`` same-keys contract).
-        self._derive_transforms[LEROBOT_TASK] = self._derive_task
+        self._derive_transforms[keys.TASK] = self._derive_task
 
         lerobot_features: dict[str, Any] = {}
         for name, features in state.items():

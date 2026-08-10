@@ -28,10 +28,6 @@ from positronic.utils import merge_dicts
 
 _QUAT = geom.Rotation.Representation.QUAT
 
-# LeRobot's reserved dataset column for the language prompt. Distinct from ``keys.TASK``, the wire key the
-# prompt is read from: same string, different namespace.
-LEROBOT_TASK = 'task'
-
 
 def lerobot_state(dim: int, names: list[str] | None = None) -> dict[str, Any]:
     """LeRobot feature descriptor for a state vector."""

@@ -8,6 +8,7 @@ MuJoCo reads that need the live model (joint velocities, the end-effector world 
 only the framework-independent arithmetic lives here.
 """
 
+import sys
 from collections.abc import Callable, Iterable
 from typing import Any, TypeAlias
 
@@ -48,11 +49,11 @@ MOLMO_BENCHMARK_MANIFEST = 'benchmark.json'
 OPT_BENCHMARK_DIR = '--benchmark_dir'
 OPT_TASK_HORIZON_STEPS = '--task_horizon_steps'
 
-# MuJoCo's backend selector, and the backend this adoption asks for. EGL is the headless-GPU path the env
-# server targets; a GPU-less box overrides with MUJOCO_GL=osmesa. macOS has no EGL and is not a target here —
-# env.py's CGL stub excludes Darwin to keep the module it fakes honest, not to make Darwin run this server.
+# MuJoCo's backend selector, and the backend this adoption asks for. MuJoCo validates the value against the
+# host platform and raises on one it does not offer there, so the default follows the platform: EGL is the
+# headless-GPU path on Linux, CGL the only context macOS has. A GPU-less Linux box overrides with osmesa.
 GL_BACKEND_ENV = 'MUJOCO_GL'
-GL_BACKEND_DEFAULT = 'egl'
+GL_BACKEND_DEFAULT = 'cgl' if sys.platform == 'darwin' else 'egl'
 
 # The reset token: which benchmark episode to build, and the seed overriding the episode spec's own.
 TOKEN_EPISODE_INDEX = 'episode_index'

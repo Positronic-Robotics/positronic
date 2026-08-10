@@ -350,6 +350,10 @@ class MolmoSpacesEnv(EnvProtocol):
             self._task = None
 
 
+# rules-allow: stranded-definition — this file keeps its pure MuJoCo helpers at module scope as a set:
+# `_assert_measures_at_grasp_site`, `_leaf_pose` and `_pose_error` all take plain model/data arguments, hold no
+# `self`, and are called only from `MolmoSpacesEnv`. Moving one into the class splits the set for no gain;
+# moving all three is a layout decision for the file, not a fix to this definition.
 def _leaf_pose(move_group: Any, data: Any) -> tuple[np.ndarray, np.ndarray]:
     """A move group's leaf-frame world pose read off *data* — which may be a scratch ``MjData``, unlike the
     group's own ``leaf_frame_to_world``, so IK can probe candidate joints without touching the live sim."""
