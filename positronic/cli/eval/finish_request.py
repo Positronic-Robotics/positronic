@@ -1,28 +1,21 @@
-"""Ending an attended run from outside it, without a signal.
+"""An orchestrator ends an attended run by writing a file; the run polls it and stops after the
+current episode, through the ordinary shutdown — a signal unwinds nothing (recording unclosed,
+dataset not uploaded, arm keeps its token).
 
-A run driven by the local eval UI serves no operator surface, so an orchestrator has nowhere to post
-`finish`. It writes a small file instead; the run polls it and, once the episode in progress has
-completed, stops the way a plan running out stops. A signal is not an alternative: nothing unwinds
-the World, so the recording is not closed, the dataset is not uploaded, and the arm keeps its token.
+The contract, for a writer in another repository:
 
-THE CONTRACT, which a writer in another repository implements against:
-
-  path     `<dir>/positronic_rollout_finish.<run_id>`; `<dir>` is `/run/lock` unless
-           `ROLLOUT_FINISH_REQUEST_DIR` names another. Absolute — writer and run are different
-           accounts, each resolving a relative path against its own directory. Per run, so a
-           leftover is inert. `run_id` is one path segment: no separator, not `.` or `..`.
-  content  one JSON object, `{"action": "finish", "run_id": "<id>"}`; further keys are ignored.
-  writer   creates it world-readable (a `077` umask leaves it unreadable by the run) and never
-           unlinks it; the run only ever reads it, and only where `run_id` equals its own
-           `ROLLOUT_RUN_ID`.
-  intent   monotonic — never withdrawn, so a writer unsure its write landed re-asserts it.
-  ack      `ACK_LOG_MARKER` in the run's log, and nothing else.
-
-The boundary is the FILE, not the code. What an account outside this run controls — whether the file
-is there, what it names, whether it can be read, and the bytes in it — refuses: the reason is logged
-once and the run keeps going. Past the parse the input is a `dict` and every remaining check is this
-run's own, so a failure there can only be a defect and raises, ending the World rather than reading
-as a file that was never a request. Inert when `ROLLOUT_RUN_ID` is unset.
+- path `<dir>/positronic_rollout_finish.<run_id>`; `<dir>` is `/run/lock` unless
+  `ROLLOUT_FINISH_REQUEST_DIR` names another, absolute; `run_id` is one path segment. Per run, so a
+  leftover is inert.
+- content `{"action": "finish", "run_id": "<id>"}`; further keys ignored.
+- the writer creates it world-readable (a `077` umask silently defeats this) and never unlinks it;
+  the run only reads it, and only where `run_id` equals its own `ROLLOUT_RUN_ID`. Unset env = no
+  poller installed.
+- intent is monotonic: never withdrawn, so a writer unsure its write landed re-asserts.
+- the only acknowledgement is `ACK_LOG_MARKER` in the run's log.
+- the failure boundary is the FILE: what an outside account controls (presence, name, readability,
+  bytes) refuses — logged once, run keeps going; past the parse every check is this run's own, so a
+  failure there is a defect and raises.
 """
 
 import json
