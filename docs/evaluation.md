@@ -19,7 +19,7 @@ You keep the weights. Your model runs as an inference server behind one WebSocke
 
 ## Try it now
 
-Two commands and you have a scored run: no checkpoint of your own, nothing to download, no rig. Serve a public policy — Ubuntu with an NVIDIA card, and it holds its terminal, so run the eval from a second one.
+Two commands and you have a scored run: no checkpoint of your own, no rig. The first run pulls the image, the checkpoint and LIBERO itself, so give it a few minutes and some disk. Serve a public policy — Ubuntu with an NVIDIA card, and it holds its terminal, so run the eval from a second one.
 
 ```bash
 cd docker && docker compose run --rm --service-ports openpi-server libero
