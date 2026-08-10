@@ -318,6 +318,8 @@ class Gr00tSource(ModelSource):
 gr00t_source = cfn.Config(Gr00tSource)
 
 
+# No ``ee_frame``: every checkpoint served here was trained on poses the rig reported in its ``default``,
+# so none has a transform to declare.
 @cfn.config(codec=codecs.ee_quat, source=gr00t_source)
 def pipeline(codec, source):
     return ChunkedSchedule() | RestrictImageSize(224, 224) | remote | codec | source

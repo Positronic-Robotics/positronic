@@ -44,7 +44,7 @@ def main() -> int:
     except (json.JSONDecodeError, UnicodeDecodeError):
         return 0
     if advises(payload):
-        print(json.dumps(hook_payload.additional_context(ADVICE)))
+        print(json.dumps(hook_payload.additional_context(ADVICE, hook_payload.PRE_TOOL_USE)))
     return 0
 
 

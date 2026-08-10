@@ -30,7 +30,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import Directive, DirectiveType, Harness, Phase
+from positronic.policy.harness import Directive, DirectiveType, Harness, Phase, _assert_anchored
 from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -49,7 +49,10 @@ def _eval_pass(run_id: str):
         telemetry.pop_anchor(span)
 
 
-def make_embodiment(descriptor: str = '', cameras=('image.cam',), static_meta=None) -> Embodiment:
+CAM = 'image.cam'
+
+
+def make_embodiment(descriptor: str = '', cameras=(CAM,), static_meta=None) -> Embodiment:
     """Minimal Franka-shaped embodiment for harness unit tests.
 
     The sources/dests are no-ops: these tests pair the harness ports directly
@@ -237,7 +240,7 @@ def _pair_all(world, harness):
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
     return {
-        'frame_em': world.pair(harness.observations['image.cam']),
+        'frame_em': world.pair(harness.observations[CAM]),
         'robot_em': world.pair(harness.observations['robot_state']),
         'grip_em': world.pair(harness.observations[keys.GRIP]),
         'directive_em': world.pair(harness.directive),
@@ -303,7 +306,7 @@ def test_harness_emits_cartesian_move(world):
     harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
@@ -321,7 +324,7 @@ def test_harness_emits_cartesian_move(world):
 
     assert policy.last_obs is not None
     obs = policy.last_obs
-    assert 'image.cam' in obs
+    assert CAM in obs
     expected_pose = np.concatenate([robot_state.ee_pose.translation, robot_state.ee_pose.rotation.as_quat])
     np.testing.assert_allclose(obs[keys.EE_POSE], expected_pose)
     np.testing.assert_allclose(obs[keys.JOINTS], robot_state.q)
@@ -332,7 +335,7 @@ def test_harness_emits_cartesian_move(world):
     # Recording == canonical policy I/O: the policy sees the same ``robot_state`` serializer
     # the dataset records. wall/obs timestamps carry volatile values, so lock the stable key set.
     assert set(obs) - {'wall_time_ns', 'obs_time_ns'} == {
-        'image.cam',
+        CAM,
         keys.JOINTS,
         keys.JOINT_VEL,
         keys.EE_POSE,
@@ -362,7 +365,7 @@ def test_harness_passes_descriptor_to_policy(world):
     harness.commands['target_grip']._bind(RecordingEmitter())
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
@@ -392,7 +395,7 @@ def test_robot_model_stays_out_of_the_observation(world):
     harness.commands['target_grip']._bind(RecordingEmitter())
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations['grip'])
     directive_em = world.pair(harness.directive)
@@ -463,12 +466,12 @@ def test_harness_waits_for_complete_inputs(world):
     harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
-    assert 'image.cam' in harness.observations
+    assert CAM in harness.observations
 
     robot_state = make_robot_state([0.2, 0.0, -0.1], [0.7, 0.1, -0.2])
 
@@ -504,7 +507,7 @@ def test_harness_waits_for_complete_inputs(world):
 @pytest.mark.timeout(3.0)
 def test_episode_meta_stamped_at_finalize(world):
     policy = StubPolicy(meta={'type': 'stub', 'checkpoint': 'v1'})
-    harness = Harness(policy, make_embodiment(), static_meta={'joint_signal': keys.JOINTS})
+    harness = Harness(policy, make_embodiment(), static_meta={keys.JOINT_SIGNALS: [keys.JOINTS]})
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
@@ -520,7 +523,7 @@ def test_episode_meta_stamped_at_finalize(world):
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
     meta = stops[0].static_data
-    assert meta['joint_signal'] == keys.JOINTS
+    assert meta[keys.JOINT_SIGNALS] == [keys.JOINTS]
     assert meta[keys.URDF] == '<robot/>'
     assert meta[keys.JOINT_NAMES] == ['j1']
     assert meta['inference.policy.type'] == 'stub'
@@ -608,6 +611,43 @@ def test_trial_timeout_self_terminates(world):
     assert len(stops) == 1
     assert stops[0].static_data['eval.terminated'] is False
     assert isinstance(_last_command(p), Reset)
+
+
+@pytest.mark.timeout(3.0)
+def test_trial_budget_starts_at_the_first_usable_observation(world):
+    """The 0.05 budget is measured from the episode's first usable observation, not from the reset.
+
+    The driver holds every channel silent for 0.02, so the episode opens with nothing to infer on. The
+    delivery at 0.02 is rejected by the camera serializer — the state a real embodiment is in while the
+    arm resets — so the first usable observation is the one at 0.04, and a third at 0.06 carries grip 0.75
+    as a marker. Measured from the reset the budget ends at 0.05 and the policy never sees the marker;
+    measured from the first usable observation it ends at 0.09 and the policy does.
+
+    The rejected delivery matters on its own: it clears the channels out of ``_awaiting_obs`` without
+    yielding an observation, so a budget anchored on that set alone would never move off the reset.
+    """
+    policy = SpyPolicy()
+    embodiment = make_embodiment()
+    usable = iter([None])  # the first camera sample is not ready; every later one is
+    embodiment.observations[CAM] = Observation(
+        pimm.NoOpEmitter(), lambda frames: next(usable, Serializers.camera_images(frames))
+    )
+    harness = Harness(policy, embodiment, task=Task(instruction='test', timeout=0.05), trials=[{}])
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.2, 0.0, -0.1], [0.7, 0.1, -0.2])
+    payload = partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
+
+    def marked():
+        payload()
+        p['grip_em'].emit(0.75)
+
+    driver = ManualDriver([(None, 0.02), (payload, 0.02), (payload, 0.02), (marked, 0.2)])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=400)
+
+    assert policy.last_obs is not None, 'the trial expired before its first observation landed'
+    assert policy.last_obs[keys.GRIP] == 0.75, 'the budget expired early — measured from reset, not the first obs'
 
 
 @pytest.mark.timeout(3.0)
@@ -902,7 +942,7 @@ def test_timeout_crossed_during_latency_sleep_drops_chunk(world):
     harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(ds_recorder)
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations[keys.GRIP])
 
@@ -1094,7 +1134,7 @@ def test_finish_cancels_buffered_trajectory_before_stop_episode(world):
     harness.commands['target_grip']._bind(_LabeledRecorder('target_grip', events))
     harness.ds_command._bind(_LabeledRecorder('ds_command', events))
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
@@ -1148,7 +1188,7 @@ def test_empty_chunk_cancels_both_robot_and_grip(world):
     harness.commands['target_grip']._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
@@ -1401,7 +1441,7 @@ def test_shutdown_cancels_trajectory_before_stop(world):
     harness.commands['target_grip']._bind(_LabeledRecorder('target_grip'))
     harness.ds_command._bind(_LabeledRecorder('ds_command'))
 
-    frame_em = world.pair(harness.observations['image.cam'])
+    frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations['robot_state'])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
@@ -1709,3 +1749,20 @@ def test_begin_episode_does_not_yield_in_sim_even_with_a_status_consumer():
     gen = harness._begin_episode({}, pimm.world.SystemClock())
     with pytest.raises(StopIteration):
         next(gen)
+
+
+def test_unanchored_chunk_is_refused():
+    """A stack that never anchored leaves chunk-relative stamps, which read as decades before now."""
+    with pytest.raises(ValueError, match='not anchoring'):
+        _assert_anchored([{'timestamp': 0.0}], now=1.7e9)
+
+
+def test_doubly_anchored_chunk_is_refused():
+    """Two schedulers each add the clock, putting the chunk a lifetime ahead."""
+    with pytest.raises(ValueError, match='not anchoring'):
+        _assert_anchored([{'timestamp': 3.4e9}], now=1.7e9)
+
+
+def test_anchored_chunk_passes():
+    """A real chunk spans seconds around now, and a late action sits just behind it."""
+    _assert_anchored([{'timestamp': 1.7e9 - 0.2}, {'timestamp': 1.7e9 + 1.5}], now=1.7e9)

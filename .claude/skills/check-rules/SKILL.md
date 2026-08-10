@@ -39,6 +39,13 @@ of one cleanly checked. Each needs its rule and a way to tell which code changed
 not know how that code came to be: a cold-headed reviewer answering one question, not a colleague who
 sat through the reasoning.
 
+**Spawn them on Sonnet** — `model: 'sonnet'`, on every agent. Each one answers a narrow question: one
+rule against one diff. A fan-out of that width spends most of what it costs on being that wide rather
+than on the judging. The parameter is not optional: omitted, an agent inherits whatever model the
+session runs, which is the caller's business and not the checker's. Raise a single rule to `opus` where
+its verdict turns on the change as a whole rather than on a shape in the diff, and name that rule in
+the report, so a reader can tell what judged what.
+
 Each agent returns two sections, either of which may be empty:
 
 ```

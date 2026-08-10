@@ -24,7 +24,7 @@ from positronic.policy.base import Policy, SampledPolicy, Session
 from positronic.policy.codec import ActionTiming
 from positronic.policy.harness import Directive, Harness
 from positronic.policy.sampler import BalancedSampler
-from positronic.policy.tests.test_harness import make_embodiment
+from positronic.policy.tests.test_harness import CAM, make_embodiment
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
 
@@ -88,7 +88,7 @@ def _pair_all(world, harness):
     grip_recorder = RecordingEmitter()
     harness.commands['target_grip']._bind(grip_recorder)
     return {
-        'frame_em': world.pair(harness.observations['image.cam']),
+        'frame_em': world.pair(harness.observations[CAM]),
         'robot_em': world.pair(harness.observations['robot_state']),
         'grip_em': world.pair(harness.observations[keys.GRIP]),
         'directive_em': world.pair(harness.directive),

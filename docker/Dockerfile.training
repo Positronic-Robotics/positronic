@@ -19,7 +19,7 @@ ENV VIRTUAL_ENV=/.venv
 ENV PATH=/$VIRTUAL_ENV/bin:$PATH
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --extra dev --no-install-project
+    uv sync --locked --no-install-project
 COPY . /positronic
 WORKDIR /positronic
 RUN uv pip install --no-deps .

@@ -77,6 +77,8 @@ class LerobotSource(ModelSource):
 lerobot_source = cfn.Config(LerobotSource, policy_factory=act)
 
 
+# No ``ee_frame``: every checkpoint served here was trained on poses the rig reported in its ``default``,
+# so none has a transform to declare.
 @cfn.config(codec=lerobot_codecs.ee, source=lerobot_source)
 def pipeline(codec: Codec, source: ModelSource):
     return ChunkedSchedule() | RestrictImageSize(224, 224) | remote | codec | source

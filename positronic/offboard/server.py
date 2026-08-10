@@ -17,7 +17,8 @@ from starlette.datastructures import QueryParams
 
 from positronic import keys
 from positronic.policy import Codec, Policy, Recorder
-from positronic.policy.spec import SEQ, ModelSource, Pipeline, split
+from positronic.policy.base import PolicyWrapper
+from positronic.policy.spec import ModelSource, Pipeline, split
 from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,16 @@ def _session_params(query_params: QueryParams) -> dict[str, Any]:
     return {key: _literal_value(raw) for key, raw in items}
 
 
+def _declared_stack(local: PolicyWrapper | None) -> dict[str, Any]:
+    """The rig-side spec a served pipeline must publish."""
+    if local is None:
+        raise ValueError(
+            'Nothing sits left of the `remote` marker, so the pipeline declares no rig-side stack. Put the '
+            'wrappers the rig runs there, starting with a scheduler such as ChunkedSchedule'
+        )
+    return local.to_spec()
+
+
 class PolicyServer:
     """Serves a policy pipeline: one wrapper chain with a ``remote`` marker, closed by a ``ModelSource``
     (see ``positronic.policy.spec``).
@@ -183,10 +194,9 @@ class PolicyServer:
             f'PolicyServer serves a policy pipeline closed by a model source, got {type(self._pipeline).__name__}'
         )
         local, _, self._remote = split(self._pipeline)
-        # A local half that cannot be rendered fails at startup, not at a client's connect. The spec itself
-        # is built per session, which params may have changed.
-        if local is not None:
-            local.to_spec()
+        # A local half that is missing or cannot be rendered fails at startup, not at a client's connect.
+        # The spec itself is built per session, which params may have changed.
+        _declared_stack(local)
         self._source = self._pipeline.source
         self._manager = PolicyManager(self._source)
         self.host = host
@@ -249,7 +259,7 @@ class PolicyServer:
         try:
             pipeline = self._session_pipeline(_session_params(websocket.query_params))
             local, border, remote_half = split(pipeline)
-            local_spec = local.to_spec() if local is not None else {SEQ: []}
+            local_spec = _declared_stack(local)
 
             rid = self._source.resolve(model_id) if model_id is not None else self._default_id
             assert rid is not None
@@ -278,9 +288,9 @@ class PolicyServer:
                 keys.CHECKPOINT_ID: rid,
                 **served.meta,
                 **session.meta,
-                'local_stack': local_spec,
-                'compress_images': border.compress_images,
-                'positronic_version': _pkg_version('positronic'),
+                keys.LOCAL_STACK: local_spec,
+                keys.COMPRESS_IMAGES: border.compress_images,
+                keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
             await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
 
