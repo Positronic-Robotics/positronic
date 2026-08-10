@@ -15,7 +15,7 @@ import pos3
 
 from positronic import keys
 from positronic.cfg.ds import group, local_all, transform
-from positronic.cfg.ds.internal import REAL_ROBOT_TRANSFORM
+from positronic.cfg.ds.internal import REAL_ROBOT_TRANSFORM, ROBOT_SIGNAL_POINTERS
 from positronic.cfg.eval.real.tasks import UNIFIED_TASK
 from positronic.dataset import Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Identity
@@ -81,7 +81,11 @@ phail_with_started = transform.override(
     base=ds.teleop,
     transforms=[
         group.override(
-            transforms=[Identity(), Derive(started=lambda ep: datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9))]
+            transforms=[
+                ROBOT_SIGNAL_POINTERS,  # first, so it wins over what the released episodes baked into their static
+                Identity(),
+                Derive(started=lambda ep: datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9)),
+            ]
         )
     ],
     extra_meta={'name': 'PhAIL Public Dataset'},

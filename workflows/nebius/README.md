@@ -230,8 +230,10 @@ matching checkpoint:
 bash workflows/nebius/serve.sh lerobot smolvla-server ee \
   --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/
 
+# --pipeline.ee_frame states the EE frame the checkpoint speaks; None means the rig's `default`
 bash workflows/nebius/serve.sh openpi my-openpi ee \
-  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/
+  --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/openpi/<exp_name>/ \
+  --pipeline.ee_frame=None
 
 bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d_rel \
   --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/

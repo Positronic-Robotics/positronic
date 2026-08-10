@@ -132,7 +132,12 @@ case "$VENDOR" in
       "--exp_name=$EXP_NAME" \
       --num_train_steps=500 2>&1)
     # openpi.train writes to <output_path>/<config_name>/<exp_name>/
-    SERVE_SUBCMD=(ee --pipeline.source.checkpoints_dir="${CKPT_DIR%/}/pi05_positronic_lowmem/$EXP_NAME/")
+    # The run trains in the rig's default frame, so the checkpoint declares no transform.
+    SERVE_SUBCMD=(
+      ee
+      --pipeline.source.checkpoints_dir="${CKPT_DIR%/}/pi05_positronic_lowmem/$EXP_NAME/"
+      --pipeline.ee_frame=None
+    )
     ;;
   gr00t)
     TRAIN_OUT=$(bash "$SCRIPT_DIR/train.sh" gr00t \

@@ -5,8 +5,9 @@ modules, so a type checker resolves none of it — `mj.MjModel`, `mj.mj_forward`
 read as attribute errors. `pybind11-stubgen` recovers the signatures from the pybind11 docstrings;
 the result is committed under `stubs/` and reached through `stubPath` in `pyproject.toml`.
 
-Run this after changing the pinned `mujoco` version. `--check` regenerates into a temporary
-directory and compares instead of rewriting the stubs.
+Run this after changing the pinned `mujoco` version, in the environment named by `STUB_PLATFORM` and
+`STUB_PYTHON` — the output varies with both, and anywhere else the script declines rather than
+rewriting the tree. `--check` regenerates into a temporary directory and compares instead of rewriting.
 """
 
 import argparse
@@ -24,6 +25,12 @@ import mujoco
 PACKAGE = 'mujoco'
 ROOT = Path(__file__).resolve().parent.parent
 STUBS = ROOT / 'stubs' / PACKAGE
+# One environment reproduces the committed tree, and it is the one CI generates against. Two things move
+# it: `mujoco.cgl` exists only on macOS and wraps its entry points in closures that stubgen rejects
+# outright, and CPython 3.13 strips docstring indentation at compile time, reindenting every docstring
+# stubgen recovers.
+STUB_PLATFORM = 'linux'
+STUB_PYTHON = (3, 11)
 
 # Module constants read off the machine that generated the stubs: the install prefix, the handles of
 # the plugins loaded into this process, the host OS. A stub needs their type and nothing else —
@@ -134,9 +141,10 @@ def _parseable(text: str, name: str) -> str:
     return text
 
 
+REGENERATE = f'uv run --locked python {Path(__file__).resolve().relative_to(ROOT)}'
 HEADER = f"""\
-# Generated from the installed `{PACKAGE}` by utilities/generate_mujoco_stubs.py — do not edit.
-# Regenerate: uv run --locked --extra dev python utilities/generate_mujoco_stubs.py
+# Generated from the installed `{PACKAGE}` by {Path(__file__).resolve().relative_to(ROOT)} — do not edit.
+# Regenerate: {REGENERATE}
 """
 
 
@@ -183,6 +191,21 @@ def main() -> int:
     parser.add_argument('--check', action='store_true', help='report staleness instead of rewriting the stubs')
     args = parser.parse_args()
 
+    if (sys.platform, sys.version_info[:2]) != (STUB_PLATFORM, STUB_PYTHON):
+        here = f'{sys.platform}/python{sys.version_info[0]}.{sys.version_info[1]}'
+        there = f'{STUB_PLATFORM}/python{STUB_PYTHON[0]}.{STUB_PYTHON[1]}'
+        if args.check:
+            print(
+                f'Skipping: {STUBS.relative_to(ROOT)} is generated on {there}, which {here} does not '
+                f'reproduce. CI checks it.'
+            )
+            return 0
+        print(
+            f'Refusing: {here} renders {STUBS.relative_to(ROOT)} differently from {there}, so writing it '
+            f'here would replace the tree the checker reads.'
+        )
+        return 1
+
     stubs = generate()
     if not args.check:
         write(stubs)
@@ -197,7 +220,7 @@ def main() -> int:
     if len(stale) > shown:
         print(f'... and {len(stale) - shown} more diff lines')
     print(f'{STUBS.relative_to(ROOT)} does not match the installed {PACKAGE} {mujoco.__version__}.')
-    print(f'Regenerate: uv run --extra dev python {Path(__file__).relative_to(ROOT)}')
+    print(f'Regenerate: {REGENERATE}')
     return 1
 
 

@@ -1,6 +1,6 @@
 ---
 name: polish
-description: Autonomous design + style pass over recently changed code — rewrites files and commits the result. Invoke only on an explicit polish request (/polish) or from the push-pr flow; NOT for read-only review or analysis asks, which must not modify the worktree. Reviews touched files as a whole (not diff hunks), fixes everything it finds including refactors, iterates until clean, and reports — design changes first.
+description: Autonomous design + style pass over recently changed code — rewrites files and commits the result. Invoke only on an explicit polish request (/polish) or from the push-pr flow; NOT for read-only review or analysis asks, which must not modify the worktree. Reviews touched files as a whole (not diff hunks), fixes everything it finds including the named rules in CODE_RULES.md and refactors, iterates until clean, and reports — design changes first.
 ---
 
 # Polish: Autonomous Design Review + Style Rewriter
@@ -47,8 +47,9 @@ touched file fully, plus the modules it tightly interacts with (callers/callees 
 interfaces).
 
 For large scopes (roughly >400 changed lines or >6 files), fan the detection out to parallel
-subagents — one each for design integrity, duplication, and comments/naming — each returning
-a findings list with file:line and a one-line rationale. Apply all fixes yourself.
+subagents — one each for design integrity, duplication, comments/naming, and one per rule in
+`CODE_RULES.md` — each returning a findings list with file:line and a one-line rationale. Apply
+all fixes yourself.
 
 ## Step 2: Design integrity
 
@@ -109,12 +110,23 @@ The expensive smells. Judge the *resulting state* of each touched module against
 - **Optional that lies.** `X | None` for a value that is logically required weakens the
   contract — make it required, or restructure so the None path doesn't exist.
 
-## Step 3: Style rules
+## Step 3: Rules
 
-Apply the rulebook below (R1–R8) to the changed code. Mechanical style fixes stay within
-diff-touched lines; design fixes from Step 2 go wherever the design requires. Don't hand-fix
-what ruff owns under the repo config (quotes, collapsing literals that fit the line,
-`dict()`→`{}`, import order, `Optional`→`|`, f-strings) — the edit hook and Step 6 run it.
+Two rulebooks apply. `CODE_RULES.md` in the repository root comes first — it is what a review
+cites, so a fix it drives is reported by rule id. Read the file itself: the session-start digest
+carries each rule's opening statement, not the exceptions that decide a marginal case. Its rules
+span all three detection steps, so fix each where its smell lives — `earn-its-place`,
+`hidden-dependency` and `overspecific` in Step 2, `diff-comments` and `stale-doc` in Step 4, the
+rest here.
+
+Honour `# rules-allow: <rule-id> — <reason>` on the offending line or its enclosing block and
+report it; don't write new ones, and never edit `CODE_RULES.md` — a rule that looks wrong from
+here is a note in the report, and only a human changes it through the `add-rule` skill.
+
+Then apply the rulebook below (R1–R8). Mechanical style fixes stay within diff-touched lines;
+design fixes from Step 2 go wherever the design requires. Don't hand-fix what ruff owns under the
+repo config (quotes, collapsing literals that fit the line, `dict()`→`{}`, import order,
+`Optional`→`|`, f-strings) — the edit hook and Step 6 run it.
 
 ## Step 4: Comments & docstrings sweep
 
@@ -148,13 +160,12 @@ stale comments describing the pre-fix code).
 
 ## Step 6: Verify
 
-```bash
-# $BASE from Step 1, so branch-touched files polish didn't edit are still linted;
-# --diff-filter=d drops deleted paths, which ruff fails on (E902)
-PY=$(git diff $BASE --name-only --diff-filter=d -- '*.py')
-[ -n "$PY" ] && uv run --locked ruff check --fix $PY && uv run --locked ruff format $PY
-uv run --locked pytest --no-cov -q
-```
+Lint, format and test through the repo's own commands — `CLAUDE.md` names them, and a copy here
+would be one more thing to keep in step with it.
+
+Lint over the whole of `$BASE` from Step 1 rather than only the files you edited, so a
+branch-touched file you left alone is still covered, and drop deleted paths from the list — a
+linter handed one fails to open it.
 
 Run the full test suite whenever Step 2 changed structure or behavior-adjacent code. Fix
 failures you introduced; report pre-existing failures without hiding them.
@@ -168,6 +179,12 @@ Lead with what deserves the user's eyes, then compress the rest:
 1. Merged `Privileged` into `Observation` — after the serializer unification they were
    structural twins; the observations/privileged dicts already carry the distinction.
 2. Moved `timeout` ownership to Harness (reads it from Task); deleted the driver parameter.
+
+## Code rules
+- `swallowed-error` positronic/dataset/local.py:88 — the bare `except Exception: continue` now
+  catches `json.JSONDecodeError` and logs the episode it skipped
+- Waived (honoured, not fixed): `hardcoded-keys` utilities/claude_hooks/tests/test_hook_payload.py:7 — the
+  literals are the independent statement of the harness's wire
 
 ## Mechanical fixes
 - Comments: removed 4 archeology comments, re-wrapped 3 to 120 cols, dropped 1 dead noqa

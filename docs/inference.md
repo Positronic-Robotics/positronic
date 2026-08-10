@@ -23,9 +23,10 @@ cd docker && docker compose run --rm --service-ports lerobot-0_3_3-server ee \
 cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joints \
   --pipeline.source.checkpoints_dir=~/checkpoints/groot/experiment_v1/
 
-# OpenPI
+# OpenPI (--pipeline.ee_frame states the EE frame the checkpoint speaks; None means the rig's `default`)
 cd docker && docker compose run --rm --service-ports openpi-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/openpi/experiment_v1/
+  --pipeline.source.checkpoints_dir=~/checkpoints/openpi/experiment_v1/ \
+  --pipeline.ee_frame=None
 ```
 
 Check server: `curl http://localhost:8000/api/v1/models` returns available model IDs.
@@ -61,9 +62,7 @@ The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server
 
 **Credentials stay out of the URL.** `--policy.headers='{"Modal-Key": "..."}'` passes auth headers for a fronted endpoint, so the URL itself is safe to paste around.
 
-**What crosses the wire is the server's call, not the client's.** A server that wants smaller frames declares `RestrictImageSize` in its rig-side stack (640x640 by default); one behind a proxy with a message-size cap declares `remote(compress_images=True)` and the rig JPEG-encodes frames before sending. A server whose checkpoint speaks a different end-effector frame declares `ChangeEEFrame` with the transform placing that frame relative to the rig's `default`, and the rig converts poses (see [End-effector frames](codecs.md#end-effector-frames)). The client builds whatever the handshake declares — a server that declares nothing gets the standard `ChunkedSchedule`.
-
-`--policy.local=@...` and `--policy.compress_images` are deprecated stand-ins for a server too old to declare either; against a server that does declare, they raise rather than quietly winning. A server that declares no stack at all but still reports `image_sizes` gets a third stand-in: the client bounds frames to those sizes, logging what it did. All three go away once every server declares (see [#514](https://github.com/Positronic-Robotics/positronic/issues/514)).
+**What crosses the wire is the server's call, not the client's.** A server that wants smaller frames declares `RestrictImageSize` in its rig-side stack (640x640 by default); one behind a proxy with a message-size cap declares `remote(compress_images=True)` and the rig JPEG-encodes frames before sending. A server whose checkpoint speaks a different end-effector frame declares `ChangeEEFrame` with the transform placing that frame relative to the rig's `default`, and the rig converts poses (see [End-effector frames](codecs.md#end-effector-frames)). The client builds whatever the handshake declares, and only that — connecting to a server that declares no stack fails with an error naming the version it runs. What the declared stack must achieve is checked where it matters: the harness refuses to emit an action scheduled further than `MAX_ACTION_SKEW_SEC` from now, which is what a stack that never anchored its chunk to the rig's clock produces.
 
 > **Recording inference I/O:** Pass `--policy.recording_dir=s3://bucket/path` to write a rerun `.rrd` file per episode capturing the raw and server-side observation/action boundaries. Useful for debugging codec behavior and visualizing what the policy actually received.
 

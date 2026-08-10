@@ -1,11 +1,11 @@
 # Generated from the installed `mujoco` by utilities/generate_mujoco_stubs.py — do not edit.
-# Regenerate: uv run --locked --extra dev python utilities/generate_mujoco_stubs.py
+# Regenerate: uv run --locked python utilities/generate_mujoco_stubs.py
 from __future__ import annotations
 import mujoco._structs
 import numpy
 import numpy.typing
-import types
 import typing
+import typing_extensions
 __all__: list[str] = ['mj_Euler', 'mj_RungeKutta', 'mj_addContact', 'mj_addM', 'mj_angmomMat', 'mj_applyFT', 'mj_camlight', 'mj_checkAcc', 'mj_checkPos', 'mj_checkVel', 'mj_clearCache', 'mj_collision', 'mj_comPos', 'mj_comVel', 'mj_compareFwdInv', 'mj_constraintUpdate', 'mj_contactForce', 'mj_copyData', 'mj_copyState', 'mj_crb', 'mj_defaultLROpt', 'mj_defaultOption', 'mj_defaultSolRefImp', 'mj_defaultVisual', 'mj_differentiatePos', 'mj_energyPos', 'mj_energyVel', 'mj_extractState', 'mj_factorM', 'mj_flex', 'mj_forward', 'mj_forwardSkip', 'mj_fullM', 'mj_fwdAcceleration', 'mj_fwdActuation', 'mj_fwdConstraint', 'mj_fwdKinematics', 'mj_fwdPosition', 'mj_fwdVelocity', 'mj_geomDistance', 'mj_getCache', 'mj_getCacheCapacity', 'mj_getCacheSize', 'mj_getState', 'mj_getTotalmass', 'mj_id2name', 'mj_implicit', 'mj_initCtrlHistory', 'mj_initSensorHistory', 'mj_integratePos', 'mj_invConstraint', 'mj_invPosition', 'mj_invVelocity', 'mj_inverse', 'mj_inverseSkip', 'mj_isDual', 'mj_isPyramidal', 'mj_isSparse', 'mj_island', 'mj_jac', 'mj_jacBody', 'mj_jacBodyCom', 'mj_jacDot', 'mj_jacGeom', 'mj_jacPointAxis', 'mj_jacSite', 'mj_jacSubtreeCom', 'mj_kinematics', 'mj_loadAllPluginLibraries', 'mj_loadPluginLibrary', 'mj_local2Global', 'mj_makeConstraint', 'mj_makeM', 'mj_mulJacTVec', 'mj_mulJacVec', 'mj_mulM', 'mj_mulM2', 'mj_multiRay', 'mj_name2id', 'mj_normalizeQuat', 'mj_objectAcceleration', 'mj_objectVelocity', 'mj_passive', 'mj_printData', 'mj_printFormattedData', 'mj_printFormattedModel', 'mj_printFormattedScene', 'mj_printModel', 'mj_printScene', 'mj_printSchema', 'mj_projectConstraint', 'mj_ray', 'mj_rayFlex', 'mj_rayHfield', 'mj_rayMesh', 'mj_readCtrl', 'mj_readSensor', 'mj_referenceConstraint', 'mj_resetCallbacks', 'mj_resetData', 'mj_resetDataDebug', 'mj_resetDataKeyframe', 'mj_rne', 'mj_rnePostConstraint', 'mj_saveLastXML', 'mj_saveModel', 'mj_sensorAcc', 'mj_sensorPos', 'mj_sensorVel', 'mj_setCacheCapacity', 'mj_setConst', 'mj_setKeyframe', 'mj_setLengthRange', 'mj_setState', 'mj_setTotalmass', 'mj_sizeModel', 'mj_solveM', 'mj_solveM2', 'mj_stateSize', 'mj_step', 'mj_step1', 'mj_step2', 'mj_subtreeVel', 'mj_tendon', 'mj_transmission', 'mj_version', 'mj_versionString', 'mjd_inverseFD', 'mjd_quatIntegrate', 'mjd_subQuat', 'mjd_transitionFD', 'mju_Halton', 'mju_L1', 'mju_add', 'mju_add3', 'mju_addScl', 'mju_addScl3', 'mju_addTo', 'mju_addTo3', 'mju_addToScl', 'mju_addToScl3', 'mju_axisAngle2Quat', 'mju_band2Dense', 'mju_bandDiag', 'mju_bandMulMatVec', 'mju_boxQP', 'mju_cholFactor', 'mju_cholFactorBand', 'mju_cholSolve', 'mju_cholSolveBand', 'mju_cholUpdate', 'mju_clip', 'mju_copy', 'mju_copy3', 'mju_copy4', 'mju_cross', 'mju_d2n', 'mju_decodePyramid', 'mju_dense2Band', 'mju_dense2sparse', 'mju_derivQuat', 'mju_dist3', 'mju_dot', 'mju_dot3', 'mju_eig3', 'mju_encodePyramid', 'mju_euler2Quat', 'mju_eye', 'mju_f2n', 'mju_fill', 'mju_getXMLDependencies', 'mju_insertionSort', 'mju_insertionSortInt', 'mju_isBad', 'mju_isZero', 'mju_mat2Quat', 'mju_mat2Rot', 'mju_max', 'mju_min', 'mju_mulMatMat', 'mju_mulMatMatT', 'mju_mulMatTMat', 'mju_mulMatTVec', 'mju_mulMatTVec3', 'mju_mulMatVec', 'mju_mulMatVec3', 'mju_mulPose', 'mju_mulQuat', 'mju_mulQuatAxis', 'mju_mulVecMatVec', 'mju_muscleBias', 'mju_muscleDynamics', 'mju_muscleGain', 'mju_n2d', 'mju_n2f', 'mju_negPose', 'mju_negQuat', 'mju_norm', 'mju_norm3', 'mju_normalize', 'mju_normalize3', 'mju_normalize4', 'mju_printMat', 'mju_printMatSparse', 'mju_quat2Mat', 'mju_quat2Vel', 'mju_quatIntegrate', 'mju_quatZ2Vec', 'mju_rayGeom', 'mju_raySkin', 'mju_rotVecQuat', 'mju_round', 'mju_scl', 'mju_scl3', 'mju_sigmoid', 'mju_sign', 'mju_sparse2dense', 'mju_springDamper', 'mju_sqrMatTD', 'mju_standardNormal', 'mju_str2Type', 'mju_sub', 'mju_sub3', 'mju_subFrom', 'mju_subFrom3', 'mju_subQuat', 'mju_sum', 'mju_symmetrize', 'mju_transformSpatial', 'mju_transpose', 'mju_trnVecPose', 'mju_type2Str', 'mju_unit4', 'mju_warningText', 'mju_writeLog', 'mju_writeNumBytes', 'mju_zero', 'mju_zero3', 'mju_zero4', 'mjv_addGeoms', 'mjv_alignToCamera', 'mjv_applyPerturbForce', 'mjv_applyPerturbPose', 'mjv_cameraFrame', 'mjv_cameraFrustum', 'mjv_cameraInModel', 'mjv_cameraInRoom', 'mjv_connector', 'mjv_defaultCamera', 'mjv_defaultFigure', 'mjv_defaultFreeCamera', 'mjv_defaultOption', 'mjv_defaultPerturb', 'mjv_frustumHeight', 'mjv_initGeom', 'mjv_initPerturb', 'mjv_makeLights', 'mjv_model2room', 'mjv_moveCamera', 'mjv_moveModel', 'mjv_movePerturb', 'mjv_room2model', 'mjv_select', 'mjv_updateCamera', 'mjv_updateScene', 'mjv_updateSkin']
 def _realloc_con_efc(d: mujoco._structs.MjData, ncon: typing.SupportsInt, nefc: typing.SupportsInt, nJ: typing.SupportsInt = -1) -> None:
     ...
@@ -49,7 +49,7 @@ def mj_checkVel(m: mujoco._structs.MjModel, d: mujoco._structs.MjData) -> None:
     """
     Check qvel, reset if any element is too big or nan.
     """
-def mj_clearCache(cache: types.CapsuleType) -> None:
+def mj_clearCache(cache: typing_extensions.CapsuleType) -> None:
     """
     Clear the asset cache.
     """
@@ -169,15 +169,15 @@ def mj_geomDistance(m: mujoco._structs.MjModel, d: mujoco._structs.MjData, geom1
     """
     Return smallest signed distance between two geoms and optionally segment from geom1 to geom2.
     """
-def mj_getCache() -> types.CapsuleType:
+def mj_getCache() -> typing_extensions.CapsuleType:
     """
     Get the internal asset cache used by the compiler.
     """
-def mj_getCacheCapacity(cache: types.CapsuleType) -> int:
+def mj_getCacheCapacity(cache: typing_extensions.CapsuleType) -> int:
     """
     Get the capacity of the asset cache in bytes.
     """
-def mj_getCacheSize(cache: types.CapsuleType) -> int:
+def mj_getCacheSize(cache: typing_extensions.CapsuleType) -> int:
     """
     Get the current size of the asset cache in bytes.
     """
@@ -445,7 +445,7 @@ def mj_sensorVel(m: mujoco._structs.MjModel, d: mujoco._structs.MjData) -> None:
     """
     Evaluate velocity-dependent sensors.
     """
-def mj_setCacheCapacity(cache: types.CapsuleType, size: typing.SupportsInt) -> int:
+def mj_setCacheCapacity(cache: typing_extensions.CapsuleType, size: typing.SupportsInt) -> int:
     """
     Set the capacity of the asset cache in bytes (0 to disable); return the new capacity.
     """

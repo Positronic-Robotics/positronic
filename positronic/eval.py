@@ -7,7 +7,7 @@ from positronic import keys
 from positronic.dataset.serializers import Serializer
 
 # Embodiment-level static meta: how recorded signals map to the canonical robot fields.
-ROBOT_STATIC_META = {'joint_signal': keys.JOINTS, 'pose_signals': [keys.EE_POSE, keys.TARGET_EE_POSE]}
+ROBOT_STATIC_META = {keys.JOINT_SIGNALS: [keys.JOINTS], keys.POSE_SIGNALS: [keys.EE_POSE, keys.TARGET_EE_POSE]}
 
 
 @dataclass

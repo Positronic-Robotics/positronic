@@ -205,7 +205,8 @@ cd docker && docker compose run --rm --service-ports groot-server ee_rot6d_joint
 
 ```bash
 cd docker && docker compose run --rm --service-ports openpi-server ee \
-  --pipeline.source.checkpoints_dir=~/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/
+  --pipeline.source.checkpoints_dir=~/checkpoints/openpi/pi05_positronic_lowmem/experiment_v1/ \
+  --pipeline.ee_frame=None
 ```
 
 ### Server Parameters
@@ -215,6 +216,7 @@ cd docker && docker compose run --rm --service-ports openpi-server ee \
 | subcommand | Named policy pipeline: the server-side codec (must match training). Each vendor lists its pipeline names in its README | `ee` |
 | `--pipeline.source.checkpoints_dir` | Path to experiment directory (contains checkpoint folders) | `~/checkpoints/lerobot/experiment_v1/` |
 | `--pipeline.source.checkpoint` | (Optional) Specific checkpoint ID to load | `10000`, `20000` |
+| `--pipeline.ee_frame` | OpenPI only: the EE frame the checkpoint speaks, relative to the rig's `default` | `None` |
 | `--port` | Server port | `8000` (default) |
 | `--host` | Server host | `0.0.0.0` (default, binds to all interfaces) |
 

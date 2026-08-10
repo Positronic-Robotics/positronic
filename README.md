@@ -127,7 +127,7 @@ cd positronic
 
 uv venv -p 3.11               # optional but keeps the interpreter isolated
 source .venv/bin/activate     # activate the venv if you created one
-uv sync --locked --extra dev  # install core + dev tooling
+uv sync --locked              # core + dev tooling; dev is a default group, so no flag is needed
 ```
 
 Install hardware extras only when you need physical robot drivers (Linux only):
@@ -300,16 +300,22 @@ Monitor performance, collect edge cases, and iterate. See [Inference Guide](docs
 
 Install development dependencies first:
 ```bash
-uv sync --locked --extra dev  # install core + dev tooling
+uv sync --locked              # core + dev tooling; dev is a default group, so no flag is needed
 ```
 
 ### Initial Setup
 
-Install pre-commit hooks (one-time setup):
+Install pre-commit hooks. `pre-commit` is a uv tool rather than a project dependency, so that a later
+`uv sync` cannot remove the interpreter the git hook execs:
 
 ```bash
+uv tool install pre-commit
 pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type post-commit
 ```
+
+Run both in an existing checkout as well as a fresh one. A hook generated against the project venv
+execs an interpreter that no longer carries `pre-commit`, so committing fails outright — reinstalling
+repoints it at the tool.
 
 ### Daily Development
 
