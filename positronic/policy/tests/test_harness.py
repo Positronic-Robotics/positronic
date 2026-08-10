@@ -653,15 +653,13 @@ def test_trial_budget_starts_at_the_first_usable_observation(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_trial_timeout_records_failure_when_the_task_judges(world):
-    """A task naming a ``done`` source runs against an env that judges every trial, so spending the budget
-    without a terminal records ``eval.success`` False — the verdict a reader would otherwise have to infer
-    from the key being absent."""
+def test_trial_timeout_records_the_tasks_verdict(world):
+    """An env that judges its trials live states what a spent budget means, so the timeout records that
+    verdict — not just the bare ``eval.terminated`` a reader would have to interpret."""
     policy = StubPolicy()
-    task = Task(instruction='test', timeout=0.05)
+    task = Task(instruction='test', timeout=0.05, timeout_verdict={keys.EVAL_SUCCESS: False})
     harness = Harness(policy, make_embodiment(), task=task, trials=[{}])
     p = _pair_all(world, harness)
-    task.done = world.pair(harness.done)  # the connection ``wire`` makes for a real eval
 
     scheduler = world.start([harness])
     drive_scheduler(scheduler, steps=200)
@@ -881,10 +879,10 @@ def test_done_after_deadline_is_a_timeout(world):
     timeout — ``eval.terminated`` False, the payload dropped and the trial marked failed — not a late stop-signal
     success."""
     policy = StubPolicy()
-    task = Task(instruction='t', timeout=0.05)
+    task = Task(instruction='t', timeout=0.05, timeout_verdict={keys.EVAL_SUCCESS: False})
     harness = Harness(policy, make_embodiment(), task=task, trials=[{'inference_latency': 0.2}])
     p = _pair_all(world, harness)
-    task.done = done_em = world.pair(harness.done)
+    done_em = world.pair(harness.done)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     # Obs starts inference + the 0.2s latency sleep; the 0.05s deadline lapses during it, and done is

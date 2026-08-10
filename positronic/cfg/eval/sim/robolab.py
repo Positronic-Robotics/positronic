@@ -197,6 +197,9 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
             privileged={'subtask': Observation(proxy.privileged['subtask'], None)},
             reset=proxy.reset,
             done=proxy.done,
+            # RoboLab freezes a timed-out env and reports the failure itself, so this covers only a client
+            # budget shorter than the env's own horizon.
+            timeout_verdict={keys.EVAL_SUCCESS: False},
         ),
         trials,
     )
