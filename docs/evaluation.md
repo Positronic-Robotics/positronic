@@ -17,9 +17,9 @@ You ship a new checkpoint and want a clean answer to one question: is it actuall
 
 You keep the weights. Your model runs as an inference server behind one WebSocket endpoint; a lightweight client streams observations and executes the returned trajectory — identical for sim and real. See [Connect your model](connect-your-model.md) and [Inference](inference.md).
 
-## One CLI, any benchmark
+## Try it now
 
-Serve a DROID policy once, and every benchmark is one CLI parameter away. With no checkpoint of your own, the preset below serves openpi's public `pi05_droid_jointpos`; openpi fetches it, nothing to mount. Needs Ubuntu with an NVIDIA card, and holds its terminal, so run the eval from a second one.
+Two commands and you have a scored run: no checkpoint of your own, nothing to download, no rig. Serve a public DROID policy — Ubuntu with an NVIDIA card, and it holds its terminal, so run the eval from a second one.
 
 ```bash
 cd docker && docker compose run --rm --service-ports openpi-server droid_jointpos
