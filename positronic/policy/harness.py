@@ -64,6 +64,13 @@ class Directive:
         return cls(DirectiveType.ABORT)
 
 
+class IdleRound(Enum):
+    """What a round taken with no episode open settled."""
+
+    CONTINUES = 'continues'
+    ENDS_THE_RUN = 'ends_the_run'
+
+
 class _EpisodeTelemetry:
     """The live rollout's wall-clock telemetry: the episode span, its index, its step count and the virtual
     instant it began. Inert while telemetry is unbound, so the harness calls it unconditionally.
@@ -485,8 +492,8 @@ class Harness(pimm.ControlSystem):
             self._telemetry.seal(clock.now())
             raise
 
-    def _idle_ends_the_run(self, manual_msg, clock: pimm.Clock) -> bool:
-        """Take the round of a harness with no episode open, and answer whether it ends the run.
+    def _take_idle_round(self, manual_msg, clock: pimm.Clock) -> IdleRound:
+        """Take a round with no episode open: apply a manual command, or open the plan's next trial.
 
         Priority order: a manual command, then a pending finish, then the plan advancing. The finish is
         read before the plan advances — after it, a request would start one more episode and be blocked
@@ -496,17 +503,17 @@ class Harness(pimm.ControlSystem):
             # Moves the arm and does not home it again, so it leaves the pose the operator chose.
             self._moved_since_home = True
             self._emit_now(manual_msg.data, clock)
-            return False
+            return IdleRound.CONTINUES
         if self.finish_requested.value:
             logger.info('finish requested and no episode is open — ending the run')
-            return True
+            return IdleRound.ENDS_THE_RUN
         if self._trials is None:
-            return False
+            return IdleRound.CONTINUES
         trial = next(self._trials, None)
         if trial is None:
-            return True
+            return IdleRound.ENDS_THE_RUN
         self._begin_episode(trial, clock)
-        return False
+        return IdleRound.CONTINUES
 
     # Travel allowance after a home is commanded, for every reason the loop stops.
     HOME_TRAVEL_GRACE_NS = int(10.0 * 1e9)
@@ -541,7 +548,7 @@ class Harness(pimm.ControlSystem):
             if directive_msg.updated:
                 yield from self._handle_directive(directive_msg.data, clock)
             elif not self._running:
-                if self._idle_ends_the_run(manual_msg, clock):
+                if self._take_idle_round(manual_msg, clock) is IdleRound.ENDS_THE_RUN:
                     yield from self._wind_down(clock)
                     break
             elif self._deadline is not None and (terminal := self._trial_terminal(clock)) is not None:
