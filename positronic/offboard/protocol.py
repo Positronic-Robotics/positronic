@@ -11,13 +11,13 @@ STATUS = 'status'
 MESSAGE = 'message'
 META = 'meta'
 RESULT = 'result'
+# Both the field carrying a failure's reason and the STATUS value announcing one — one word, one meaning.
 ERROR = 'error'
 
-# Status values, in the order a session passes through them.
+# Status values, in the order a session passes through them. A failed session reports ERROR.
 WAITING = 'waiting'  # queued behind another session holding the model slot or the backend
 LOADING = 'loading'  # the checkpoint is being loaded; carries a progress MESSAGE
 READY = 'ready'  # the model is loaded and a session is reset — the server can serve, and only now
-STATUS_ERROR = 'error'  # the session failed to come up; the reason is in ERROR
 
 # Not yet, keep waiting — a session in flight rather than one that failed.
 PENDING_STATUSES = (WAITING, LOADING)

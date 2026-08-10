@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocke
 from starlette.datastructures import QueryParams
 
 from positronic import keys
-from positronic.offboard.protocol import ERROR, LOADING, MESSAGE, META, READY, RESULT, STATUS, STATUS_ERROR, WAITING
+from positronic.offboard.protocol import ERROR, LOADING, MESSAGE, META, READY, RESULT, STATUS, WAITING
 from positronic.policy import Codec, Policy, Recorder
 from positronic.policy.base import PolicyWrapper
 from positronic.policy.spec import ModelSource, Pipeline, split
@@ -353,7 +353,7 @@ class PolicyServer:
         except Exception as e:
             logger.error(f'Failed session: {e}', exc_info=True)
             try:
-                await websocket.send_bytes(serialise({STATUS: STATUS_ERROR, ERROR: str(e)}))
+                await websocket.send_bytes(serialise({STATUS: ERROR, ERROR: str(e)}))
                 await websocket.close(code=1008, reason=str(e)[:100])
             except Exception:
                 logger.debug('Failed to send error to client', exc_info=True)

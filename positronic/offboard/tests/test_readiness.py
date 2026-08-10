@@ -22,7 +22,7 @@ from positronic import keys
 from positronic.cli.eval.run import main
 from positronic.eval import Embodiment
 from positronic.offboard.client import InferenceClient, ServerNotReady
-from positronic.offboard.protocol import LOADING, MESSAGE, META, READY, STATUS
+from positronic.offboard.protocol import ERROR, LOADING, MESSAGE, META, READY, STATUS
 from positronic.policy.base import Policy, SampledPolicy
 from positronic.policy.remote import RemotePolicy
 from positronic.utils.serialization import serialise
@@ -109,6 +109,30 @@ def test_a_server_that_reports_ready_passes_the_gate(fake_server):
     session = InferenceClient(fake_server(_ready_at_once)).new_session(ready_deadline=time.monotonic() + 5.0)
     assert session.metadata == READY_META
     session.close()
+
+
+@pytest.mark.timeout(20)
+def test_a_server_reporting_an_error_status_surfaces_it_rather_than_waiting(fake_server):
+    """``ERROR`` is one word in two positions — the STATUS value and the field holding the reason.
+
+    Each is asserted alone, since a frame carrying both raises on either one and would pass while
+    half the contract was misspelled. A client that spells one differently from the server reads a
+    failed session as an unrecognised frame, and waits out the deadline instead of reporting it.
+    """
+
+    async def _status_only(websocket):
+        await websocket.send(serialise({STATUS: ERROR}))
+        await asyncio.Future()
+
+    async def _reason_only(websocket):
+        await websocket.send(serialise({ERROR: 'checkpoint 50k is not on this node'}))
+        await asyncio.Future()
+
+    with pytest.raises(RuntimeError, match='Server error'):
+        InferenceClient(fake_server(_status_only)).new_session(ready_deadline=time.monotonic() + 5.0)
+
+    with pytest.raises(RuntimeError, match='checkpoint 50k is not on this node'):
+        InferenceClient(fake_server(_reason_only)).new_session(ready_deadline=time.monotonic() + 5.0)
 
 
 @pytest.mark.timeout(20)
