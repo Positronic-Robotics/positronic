@@ -333,17 +333,15 @@ finding without it noticing, so check that yourself.
 
 ### activity-named-predicate
 
-Don't name a function for the activity it performs when what it returns is a `bool` — name it for the
-question that `bool` answers, so `if f(...):` reads as the claim being tested. An activity name leaves
-the verdict invisible at the call site, so a reader takes it on trust until they open the definition,
-and takes it backwards wherever the sense inverts.
+Don't name a function for the activity it performs when what it returns is a `bool` — a pure query is
+named for the question that `bool` answers, so `if f(...):` reads as the claim being tested. An activity
+name leaves the verdict invisible at the call site, so a reader takes it on trust until they open the
+definition, and takes it backwards wherever the sense inverts. A function that also acts keeps its action
+name and returns an enum whose members carry the answer, read at the call site: renaming that one for its
+verdict hides what it did.
 
 The tell is a docstring sentence of the form "True means …". Once the name carries it, that sentence
 has nothing left to say.
-
-A pure query takes the predicate name. A function that also ACTS does not: renaming it for its verdict
-hides what it did. Name that one for its action and return an enum whose members carry the answer, read
-at the call site.
 
 ```python
 # Bad — a query named for the activity, and a command renamed until its action disappeared
