@@ -409,12 +409,12 @@ class WebEvalUI(pimm.ControlSystem):
             than on any one name for being busy.
             """
             for _ in range(int(home_start_grace_s / 0.1)):
-                if status is not None and not status.robot_ready:
+                if status is not None and status.robot_ready is False:  # False is busy; None is unknown
                     break
                 await asyncio.sleep(0.1)
             else:
-                # Nothing reported it moving: an embodiment whose arm publishes no state, or a home
-                # already reached. Neither can be waited on, so allow the settle and stop.
+                # Nothing reported it moving: an arm that publishes no state, or a home already
+                # reached. Neither can be waited on, so allow the settle and stop.
                 await asyncio.sleep(home_settle_s)
                 return True
             for _ in range(int(home_arrive_timeout_s / 0.1)):

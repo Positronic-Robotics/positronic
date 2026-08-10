@@ -206,9 +206,8 @@
       const isActivePhase = (p) => p === 'starting' || p === 'running';
       const serverPhase = () => (lastStatus && typeof lastStatus === 'object' ? lastStatus.phase : undefined);
       const directiveButtons = document.querySelectorAll('button[data-action]');
-      // One directive at a time. The harness queues up to three and the phase driving these decisions is up
-      // to one refresh stale, so a second click lands on a phase the first has already invalidated: Discard
-      // then Save queues both, the episode is discarded, and the idle that follows satisfies Save's target.
+      // One directive pending from this page at a time: a second click lands on a phase the first has
+      // already invalidated.
       const setAckPending = (ack) => {
         pendingAck = ack;
         for (const button of directiveButtons) button.disabled = ack !== null;

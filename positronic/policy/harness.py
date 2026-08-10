@@ -78,6 +78,7 @@ class HarnessStatus:
     one every control cycle.
     ``homes_commanded`` counts the home commands issued, and ``robot_ready`` is the arm's own report that
     it has stopped moving — the drivers name a motion differently, but all report ready when it ends.
+    ``robot_ready`` is ``None`` where there is no arm state to read, which a waiter must not read as busy.
     ``directives_taken`` counts the directives picked off the queue, which is what a sender correlates
     against: a directive whose execution blocks has still been taken.
     """
@@ -85,7 +86,7 @@ class HarnessStatus:
     phase: Phase
     waiting_for_policy: bool
     robot_error: bool
-    robot_ready: bool
+    robot_ready: bool | None
     directives_taken: int
     homes_commanded: int
 
@@ -258,7 +259,7 @@ class Harness(pimm.ControlSystem):
                 phase=phase,
                 waiting_for_policy=bool(self._running and not driving),
                 robot_error=robot_status is RobotStatus.ERROR,
-                robot_ready=robot_status is RobotStatus.AVAILABLE,
+                robot_ready=None if robot_status is None else robot_status is RobotStatus.AVAILABLE,
                 directives_taken=self._directives_taken,
                 homes_commanded=self._homes_commanded,
             ),

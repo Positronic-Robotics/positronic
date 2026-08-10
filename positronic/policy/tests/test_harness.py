@@ -1051,6 +1051,31 @@ def test_status_counts_the_directives_the_harness_handled(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_status_reports_unknown_readiness_where_there_is_no_arm_state(world):
+    """An embodiment with no ``robot_state`` reports ``None``, not ``False``.
+
+    A waiter cannot tell "still homing" from "nothing to wait on" if both read False, and the wrap-up
+    path waits out its timeout and refuses to stop the World rather than taking its settle fallback.
+
+    The ready/busy arms are not reachable here: ``FakeRobotState`` is not a ``roboarm.State``, so
+    ``_robot_status`` reads ``None`` for it too. Those arms are unchanged by this and run on hardware.
+    """
+    embodiment = make_embodiment()
+    del embodiment.observations[keys.ROBOT_STATE]
+    harness = Harness(StubPolicy(), embodiment)
+    harness.ds_command._bind(RecordingEmitter())
+    statuses = RecordingEmitter()
+    harness.status._bind(statuses)
+
+    scheduler = world.start([harness, ManualDriver([(None, 0.02)])])
+    drive_scheduler(scheduler, steps=10)
+
+    assert statuses.emitted, 'the harness published no status'
+    assert all(s.robot_ready is None for _ts, s in statuses.emitted)
+    assert all(s.robot_error is False for _ts, s in statuses.emitted)  # unknown is not an error either
+
+
+@pytest.mark.timeout(3.0)
 def test_status_counts_the_homes_commanded(world):
     """Nothing reports the arm reaching home, so a surface that must not drive during the motion waits on
     this count — including for the home before the first episode, which no directive asked for."""
