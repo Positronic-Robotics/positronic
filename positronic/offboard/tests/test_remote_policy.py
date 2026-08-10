@@ -413,8 +413,8 @@ class TestServedCommandDecode:
         np.testing.assert_array_equal(served[keys.TARGET_JOINTS], pose)
 
     def test_a_typed_command_and_a_sentinel_are_left_alone(self):
-        """Every remote session runs this, so it meets actions needing nothing done: a typed command that
-        crossed as a ``__cmd__`` envelope, and a chunk's no-command sentinel."""
+        """A typed command that crossed as a ``__cmd__`` envelope, and an action carrying no command
+        channel, both come back unchanged."""
         assert isinstance(_served({keys.ROBOT_COMMAND: command.Reset()})[keys.ROBOT_COMMAND], command.Reset)
         assert _served({'timestamp': 1.6}) == {'timestamp': 1.6}
 
