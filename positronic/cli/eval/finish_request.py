@@ -7,13 +7,14 @@ The contract, for a writer in another repository:
 - path: `FINISH_REQUEST_PREFIX` + `run_id`, inside `DEFAULT_FINISH_REQUEST_DIR` (overridden by
   `FINISH_REQUEST_DIR_ENV`; absolute); `run_id` is one path segment. Per run, so a leftover is inert.
 - content `{"action": "finish", "run_id": "<id>"}`; further keys ignored.
-- the writer creates it world-readable (a `077` umask silently defeats this) and never unlinks it;
+- the writer creates it world-readable (a `077` umask leaves it unreadable) and never unlinks it;
   the run only reads it, and only where `run_id` matches the run's own `RUN_ID_ENV`; unset, no
   poller is installed.
 - intent is monotonic: never withdrawn, so a writer unsure its write landed re-asserts.
 - the only acknowledgement is `ACK_LOG_MARKER` in the run's log.
-- a file that cannot be read as a request — absent, unreadable, malformed — is refused: logged once,
-  the run keeps going. Past the parse the checks are this run's own code, so a failure there raises.
+- an absent file is the ordinary state: no request. Any other failure to read the file as a request
+  addressed to this run raises and ends the World — the system is ours end to end, so a contract
+  violation is breakage to surface, not input to tolerate.
 """
 
 import json
@@ -53,14 +54,8 @@ POLL_INTERVAL_S = 2.0
 # never arrived. From outside the process both look like a run that is still running.
 ACK_LOG_MARKER = 'rollout finish request granted'
 
-# Any account on the rig may create this file, so the read is bounded rather than trusted; a real
-# request is around 120 bytes.
+# A request is around 120 bytes; a file past this bound is not one.
 MAX_REQUEST_BYTES = 64 * 1024
-
-# Reading the file's bytes: an account this run does not control wrote them, so text that is not
-# UTF-8, text that is not JSON, and nesting past the parser's limit are all ordinary.
-# `UnicodeDecodeError` and `JSONDecodeError` are both `ValueError`; `RecursionError` is not.
-MALFORMED_CONTENT = (ValueError, RecursionError)
 
 
 def request_dir() -> Path:
@@ -74,103 +69,63 @@ def request_path(this_run: str) -> Path:
     return request_dir() / f'{FINISH_REQUEST_PREFIX}{this_run}'
 
 
-def evaluate(path: Path, this_run: str) -> tuple[bool, str]:
-    """Whether `path` holds a finish request addressed to `this_run`, and why not when it does not.
+def evaluate(path: Path, this_run: str) -> bool:
+    """Whether a finish request addressed to `this_run` is waiting at `path`.
 
-    Every negative is a reason to keep running, so the caller acts on the bool alone. The reason is
-    returned rather than logged so the caller can report a persistent one once instead of on every
-    poll.
-
-    The two halves are separated deliberately. Reaching and reading the file is external, and every
-    way it fails is a refusal. What follows the parse is this run's own code over a `dict`, so a
-    failure there can only be a defect and is left to raise.
+    False means there is no file, which is every run nobody has asked. Anything else at that path
+    raises: the writer and the run are one system, so a file that is not the request the contract
+    describes is breakage to surface rather than input to tolerate.
     """
-    blob, reason = _read_bytes(path)
+    blob = _read_bytes(path)
     if blob is None:
-        return False, reason
-    request, reason = _parse(path, blob)
-    if request is None:
-        return False, reason
-    return _asks_this_run_to_finish(path, request, this_run)
+        return False
+    request = json.loads(blob.decode())
+    if not isinstance(request, dict):
+        raise ValueError(f'finish request at {path} is {type(request).__name__}, not an object')
+    _assert_addressed_finish(path, request, this_run)
+    return True
 
 
-def _read_bytes(path: Path) -> tuple[bytes | None, str]:
-    """The file's bytes, or `None` and the reason there are none to read."""
-    # O_NONBLOCK: a FIFO here would hang the foreground poller. O_NOFOLLOW: a symlink refuses (ELOOP).
+def _read_bytes(path: Path) -> bytes | None:
+    """The file's bytes, or `None` where there is no file."""
+    # O_NONBLOCK: a FIFO here would hang the foreground poller. O_NOFOLLOW: a symlink fails (ELOOP).
     # fstat reads the open descriptor, not the path, so nothing swaps under the check.
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
-        try:
-            mode = os.fstat(fd).st_mode
-            if not stat.S_ISREG(mode):
-                return (
-                    None,
-                    f'finish request at {path} is not a regular file ({stat.filemode(mode)}); continuing to run',
-                )
-            with os.fdopen(fd, 'rb', closefd=False) as f:
-                # One byte past the bound, so an oversized file is recognised rather than truncated
-                # into something that might parse.
-                blob = f.read(MAX_REQUEST_BYTES + 1)
-        finally:
-            os.close(fd)
     except FileNotFoundError:
-        # The ordinary state of a run nobody has asked, so not a fault worth a reason.
-        return None, ''
-    except OSError as e:
-        # What valid operation produces at a path any account on the rig may create: a permission, an
-        # I/O error, the `ELOOP` a symlink takes under `O_NOFOLLOW`.
-        return None, f'finish request at {path} could not be read as a request ({e!r}); continuing to run'
-    if len(blob) > MAX_REQUEST_BYTES:
-        return None, f'finish request at {path} is larger than {MAX_REQUEST_BYTES} bytes; continuing to run'
-    return blob, ''
-
-
-def _parse(path: Path, blob: bytes) -> tuple[dict[str, Any] | None, str]:
-    """The request object those bytes hold, or `None` and the reason they hold none."""
+        return None
     try:
-        request = json.loads(blob.decode())
-    except MALFORMED_CONTENT as e:
-        return None, f'finish request at {path} could not be read as a request ({e!r}); continuing to run'
-    if not isinstance(request, dict):
-        return None, f'finish request at {path} is {type(request).__name__}, not an object; continuing to run'
-    return request, ''
+        mode = os.fstat(fd).st_mode
+        if not stat.S_ISREG(mode):
+            raise ValueError(f'finish request at {path} is not a regular file ({stat.filemode(mode)})')
+        with os.fdopen(fd, 'rb', closefd=False) as f:
+            # One byte past the bound, so an oversized file is caught rather than truncated into
+            # something that might parse.
+            blob = f.read(MAX_REQUEST_BYTES + 1)
+    finally:
+        os.close(fd)
+    if len(blob) > MAX_REQUEST_BYTES:
+        raise ValueError(f'finish request at {path} is larger than {MAX_REQUEST_BYTES} bytes')
+    return blob
 
 
-def _asks_this_run_to_finish(path: Path, request: dict[str, Any], this_run: str) -> tuple[bool, str]:
-    """Whether the request object asks `this_run` to finish, and why not when it does not.
-
-    Runs outside every handler: the input is a `dict` by here, so anything raising is a defect and
-    ends the World rather than reading as a file that was never a request.
-    """
+def _assert_addressed_finish(path: Path, request: dict[str, Any], this_run: str) -> None:
+    """Raise unless the request object asks `this_run` to finish."""
     named = request.get(ACTION_KEY)
-    # The type is checked before the value because JSON's containers are unhashable: an array or
-    # object reaching the membership test below raises `TypeError`, and nothing here catches one —
-    # a file somebody wrote would end the run as though this code were broken. An absent key arrives
-    # as `None` and is the same fact: nothing an action reads from.
+    # Checked before the membership test: JSON's containers are unhashable, so one reaching it raises
+    # `TypeError` instead of the `ValueError` that names what is wrong.
     if not isinstance(named, str):
-        return (
-            False,
-            f'finish request at {path} names action {named!r}, which is not a string this run can read; '
-            'continuing to run',
-        )
+        raise ValueError(f'finish request at {path} names action {named!r}, which is not a string')
     if named not in frozenset(Action):
-        return (
-            False,
-            f'finish request at {path} names action {named!r}, which this run does not implement; continuing to run',
-        )
+        raise ValueError(f'finish request at {path} names action {named!r}, which this run does not implement')
     # A `StrEnum` member compares equal to its own string, so a bare comparison would leave every
     # later reader holding a `str` the contract calls an `Action`.
     action = Action(named)
     if action is not Action.FINISH:
-        return (
-            False,
-            f'finish request at {path} names action {action.value!r}, not {Action.FINISH.value!r}; continuing to run',
-        )
+        raise ValueError(f'finish request at {path} names action {action.value!r}, not {Action.FINISH.value!r}')
     addressee = request.get(RUN_ID_KEY)
     if addressee != this_run:
-        # Routine rather than a fault: a previous run's request outliving it.
-        return False, f'finish request at {path} names run {addressee!r}, not {this_run!r}; continuing to run'
-    return True, ''
+        raise ValueError(f'finish request at {path} names run {addressee!r}, not {this_run!r}')
 
 
 class FinishRequest(pimm.ControlSystem):
@@ -186,9 +141,6 @@ class FinishRequest(pimm.ControlSystem):
         self._path = path
         self._run = this_run
         self._poll_interval_s = poll_interval_s
-        # The last refusal reported, so a request that stays wrong is logged once rather than every
-        # poll. Reported again when the reason changes, which is what a replaced file looks like.
-        self._reported = ''
         # The grant, latched: once made it is never withdrawn, and it outlives the World that read it.
         self._granted = False
 
@@ -202,13 +154,9 @@ class FinishRequest(pimm.ControlSystem):
         # episodes run on. A wall-clock pace would let whole simulated episodes pass between reads.
         while not should_stop.value:
             if not self._granted:
-                self._granted, reason = evaluate(self._path, self._run)
+                self._granted = evaluate(self._path, self._run)
                 if self._granted:
                     logger.info('%s: run %s stops after the current episode', ACK_LOG_MARKER, self._run)
-                elif reason != self._reported:
-                    self._reported = reason
-                    if reason:
-                        logger.error(reason)
             if self._granted:
                 # Every round, not once: the harness reads a signal, and a single emit that landed
                 # before it bound would be a request that silently never arrives.
@@ -219,8 +167,7 @@ class FinishRequest(pimm.ControlSystem):
 def names_one_segment(this_run: str) -> bool:
     """Whether `this_run` can be a filename, which is what scoping the path by run id requires.
 
-    A run id carrying a separator would address a file in a directory nobody agreed on, so a run
-    named that way is left with no poller rather than polling somewhere unintended.
+    A run id carrying a separator would address a file in a directory nobody agreed on.
     """
     return bool(this_run) and this_run not in ('.', '..') and '/' not in this_run and '\0' not in this_run
 
@@ -230,22 +177,16 @@ def from_env() -> FinishRequest | None:
     this_run = os.environ.get(RUN_ID_ENV)
     if not this_run:
         return None
+    # Raised at launch, before an episode runs: a run that cannot be addressed is a misconfigured
+    # deploy, and discovering it is better than running unpollable for hours.
     if not names_one_segment(this_run):
-        logger.error(
-            '%s=%r is not a single path segment, so no finish request can address this run', RUN_ID_ENV, this_run
-        )
-        return None
+        raise ValueError(f'{RUN_ID_ENV}={this_run!r} is not a single path segment, so no request can address this run')
     directory = request_dir()
     if not directory.is_absolute():
-        # Each account resolves a relative path against its own working directory, so the writer and
-        # this run would address different files from the same configuration.
-        logger.error(
-            '%s=%s is not absolute, so the writer and this run would not resolve it to the same '
-            'directory; no finish request can address this run',
-            FINISH_REQUEST_DIR_ENV,
-            directory,
+        raise ValueError(
+            f'{FINISH_REQUEST_DIR_ENV}={directory} is not absolute, so the writer and this run would not '
+            'resolve it to the same directory'
         )
-        return None
     path = request_path(this_run)
     logger.info('run %s will stop after the current episode if %s asks it to', this_run, path)
     return FinishRequest(path, this_run)

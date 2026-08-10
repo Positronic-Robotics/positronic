@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import threading
 from pathlib import Path
@@ -18,61 +17,67 @@ def write_request(path: Path, *, action: str = finish_request.Action.FINISH, run
 def test_a_request_naming_this_run_is_granted(tmp_path):
     path = tmp_path / 'finish'
     write_request(path, run='batch-1')
-    assert finish_request.evaluate(path, 'batch-1')[0]
+    assert finish_request.evaluate(path, 'batch-1')
 
 
-def test_an_absent_file_is_not_a_request(tmp_path):
-    assert not finish_request.evaluate(tmp_path / 'nothing', 'batch-1')[0]
+def test_an_absent_file_is_the_ordinary_state(tmp_path):
+    """The one negative: no file, no request, and nothing wrong."""
+    assert not finish_request.evaluate(tmp_path / 'nothing', 'batch-1')
 
 
-def test_a_request_naming_another_run_is_ignored(tmp_path):
-    """The stale-request case: a previous run's file outliving it must not end the next run, which
-    would otherwise stop early and look exactly like a short but successful round."""
+def test_a_request_naming_another_run_raises(tmp_path):
+    """A file at THIS run's path addressed to another run is a writer that got the path wrong. It
+    cannot be honoured and must not be ignored: nothing else would ever report the mistake."""
     path = tmp_path / 'finish'
     write_request(path, run='batch-1')
-    assert not finish_request.evaluate(path, 'batch-2')[0]
+    with pytest.raises(ValueError, match='names run'):
+        finish_request.evaluate(path, 'batch-2')
 
 
-def test_an_unparseable_request_leaves_the_run_going(tmp_path):
+def test_an_unparseable_request_raises(tmp_path):
     path = tmp_path / 'finish'
     path.write_text('finish please')
-    assert not finish_request.evaluate(path, 'batch-1')[0]
+    with pytest.raises(ValueError):
+        finish_request.evaluate(path, 'batch-1')
 
 
-def test_a_json_scalar_is_not_a_request(tmp_path):
+def test_a_json_scalar_raises(tmp_path):
     """`json.loads` accepts a bare string, so parsing is not enough — the shape is checked too."""
     path = tmp_path / 'finish'
     path.write_text('"finish"')
-    assert not finish_request.evaluate(path, 'batch-1')[0]
+    with pytest.raises(ValueError, match='not an object'):
+        finish_request.evaluate(path, 'batch-1')
 
 
-def test_an_unreadable_request_leaves_the_run_going(tmp_path):
-    """The umask trap: a writer whose umask is 077 leaves a file this account cannot open. It must
-    read as "keep running", never as a request, and it must not raise out of the poll loop."""
+def test_an_unreadable_request_raises(tmp_path):
+    """The umask trap: a writer whose umask is 077 leaves a file this account cannot open. Silence
+    there would be a request nobody could send and nobody could see failing."""
     path = tmp_path / 'finish'
     write_request(path, run='batch-1')
     path.chmod(0o000)
     try:
         if os.geteuid() == 0:
             pytest.skip('root reads a mode-000 file, so the unreadable branch cannot be reached')
-        assert not finish_request.evaluate(path, 'batch-1')[0]
+        with pytest.raises(PermissionError):
+            finish_request.evaluate(path, 'batch-1')
     finally:
         path.chmod(0o644)
 
 
-def test_an_unknown_action_is_ignored(tmp_path):
-    """A second action would be a new value of this field, so an unrecognised one is a writer from a
-    future this run does not implement — and acting on it would be guessing what it asked for."""
+def test_an_unknown_action_raises(tmp_path):
+    """An action this run does not implement is a deploy that shipped a writer ahead of its runs.
+    Acting on it would be guessing; ignoring it would leave the mismatch to be found by hand."""
     path = tmp_path / 'finish'
     write_request(path, action='abort', run='batch-1')
-    assert not finish_request.evaluate(path, 'batch-1')[0]
+    with pytest.raises(ValueError, match='does not implement'):
+        finish_request.evaluate(path, 'batch-1')
 
 
 def test_extra_fields_do_not_break_a_request(tmp_path):
     """The writer records its own diagnostics in the same object; they are not this side's business."""
     path = tmp_path / 'finish'
     write_request(path, run='batch-1', requested_at_s=1.0, requested_by='someone')
-    assert finish_request.evaluate(path, 'batch-1')[0]
+    assert finish_request.evaluate(path, 'batch-1')
 
 
 def test_nothing_is_installed_without_a_run_id(monkeypatch):
@@ -103,8 +108,8 @@ def test_the_path_names_the_run_so_two_runs_never_share_one(monkeypatch, tmp_pat
     monkeypatch.setenv(finish_request.FINISH_REQUEST_DIR_ENV, str(tmp_path))
     assert finish_request.request_path('batch-1') != finish_request.request_path('batch-2')
     write_request(finish_request.request_path('batch-1'), run='batch-1')
-    assert finish_request.evaluate(finish_request.request_path('batch-1'), 'batch-1')[0]
-    assert not finish_request.evaluate(finish_request.request_path('batch-2'), 'batch-2')[0]
+    assert finish_request.evaluate(finish_request.request_path('batch-1'), 'batch-1')
+    assert not finish_request.evaluate(finish_request.request_path('batch-2'), 'batch-2')
 
 
 def test_the_default_path_is_absolute_and_on_tmpfs(monkeypatch):
@@ -118,13 +123,15 @@ def test_the_default_path_is_absolute_and_on_tmpfs(monkeypatch):
 
 
 @pytest.mark.parametrize('override', ['requests', './requests', '../requests'])
-def test_a_relative_request_directory_installs_nothing(monkeypatch, tmp_path, override):
+def test_a_relative_request_directory_raises_at_launch(monkeypatch, tmp_path, override):
     """A relative override resolves against each account's own working directory, so the writer and
-    the run address different files from the same configuration."""
+    the run address different files from the same configuration. Raised before the first episode,
+    since a run nobody can address is a misconfigured deploy rather than a run to start."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv(finish_request.RUN_ID_ENV, 'batch-1')
     monkeypatch.setenv(finish_request.FINISH_REQUEST_DIR_ENV, override)
-    assert finish_request.from_env() is None
+    with pytest.raises(ValueError, match='not absolute'):
+        finish_request.from_env()
 
 
 def test_an_absolute_request_directory_installs_the_poller(monkeypatch, tmp_path):
@@ -134,13 +141,13 @@ def test_an_absolute_request_directory_installs_the_poller(monkeypatch, tmp_path
     assert finish_request.from_env() is not None
 
 
-@pytest.mark.parametrize('run', ['a/b', '../elsewhere', '.', '..', ''])
-def test_a_run_id_that_is_not_a_filename_installs_nothing(monkeypatch, run):
+@pytest.mark.parametrize('run', ['a/b', '../elsewhere', '.', '..'])
+def test_a_run_id_that_is_not_a_filename_raises_at_launch(monkeypatch, run):
     """The path is built from the run id, so an id carrying a separator would poll a file under a
-    directory nobody agreed on — or, for `..`, outside the request directory entirely. Such a run
-    keeps running with no poller, which is this module's failure direction everywhere else."""
+    directory nobody agreed on — or, for `..`, outside the request directory entirely."""
     monkeypatch.setenv(finish_request.RUN_ID_ENV, run)
-    assert finish_request.from_env() is None
+    with pytest.raises(ValueError, match='single path segment'):
+        finish_request.from_env()
 
 
 def test_the_object_the_writer_sends_is_granted(tmp_path):
@@ -161,55 +168,27 @@ def test_the_object_the_writer_sends_is_granted(tmp_path):
         '{"action": "finish", "run_id": "batch_20260807-111935", '
         '"requested_at_s": 1786101583.6, "requested_by": "rollouts-mcp"}'
     )
-    assert finish_request.evaluate(path, 'batch_20260807-111935')[0]
-    assert not finish_request.evaluate(path, 'batch_20260807-110748')[0]
+    assert finish_request.evaluate(path, 'batch_20260807-111935')
+    with pytest.raises(ValueError, match='names run'):
+        finish_request.evaluate(path, 'batch_20260807-110748')
 
 
-def test_a_refusal_is_reported_once_and_again_only_when_it_changes(tmp_path, caplog):
-    """A request addressed to a dead run stays on the rig for the life of this one, and the poll runs
-    every couple of seconds — so a reason logged per poll fills the log of exactly the long run
-    somebody will later need to read."""
-    path = tmp_path / 'finish'
-    write_request(path, run='someone-else')
-    cs = finish_request.FinishRequest(path, 'batch-1', poll_interval_s=0.0)
-
-    def polls(n: int) -> int:
-        with caplog.at_level('ERROR'):
-            caplog.clear()
-            for _ in range(n):
-                granted, reason = finish_request.evaluate(cs._path, cs._run)
-                if not granted and reason != cs._reported:
-                    cs._reported = reason
-                    logging.getLogger(finish_request.__name__).error(reason)
-        return len(caplog.records)
-
-    assert polls(5) == 1  # reported when it appears...
-    assert polls(5) == 0  # ...and not again while it says the same thing
-
-    write_request(path, action='abort', run='batch-1')
-    assert polls(5) == 1  # a different refusal is a different fact
-
-
-def test_bytes_that_are_not_utf8_are_a_refusal_not_an_exception(tmp_path):
-    """`UnicodeDecodeError` is a `ValueError`, not an `OSError`, so it does not fall out of the read
-    guard on its own — and this control system runs in the foreground, where an escaping exception
-    takes the World down in the middle of an episode. Every other malformed input is a logged
-    refusal; so is this one."""
+def test_bytes_that_are_not_utf8_raise(tmp_path):
+    """`UnicodeDecodeError` is a `ValueError`; nothing catches it, so the decode failure reaches the
+    World and the broken writer is visible."""
     path = tmp_path / 'finish'
     path.write_bytes(b'\xff\xfe not utf-8 at all')
 
-    granted, reason = finish_request.evaluate(path, 'batch-1')
-
-    assert not granted
-    assert 'could not be read' in reason
+    with pytest.raises(UnicodeDecodeError):
+        finish_request.evaluate(path, 'batch-1')
 
 
-def test_an_action_outside_the_closed_set_is_a_refusal(tmp_path):
-    """The action names a member of `Action`; anything else is a writer from a future this run does
-    not implement, and acting on it would be guessing what it asked for."""
+def test_an_action_outside_the_closed_set_raises(tmp_path):
+    """The action names a member of `Action`; anything else is a writer this run cannot serve."""
     path = tmp_path / 'finish'
     path.write_text(json.dumps({finish_request.ACTION_KEY: 'discard', finish_request.RUN_ID_KEY: 'batch-1'}))
-    assert not finish_request.evaluate(path, 'batch-1')[0]
+    with pytest.raises(ValueError, match='does not implement'):
+        finish_request.evaluate(path, 'batch-1')
 
 
 def test_the_default_request_directory_is_already_a_path(monkeypatch):
@@ -229,8 +208,7 @@ def test_a_grant_survives_the_world_it_was_read_in(tmp_path):
     write_request(path, run='batch-1')
     cs = finish_request.FinishRequest(path, 'batch-1', poll_interval_s=0.0)
 
-    granted, _ = finish_request.evaluate(cs._path, cs._run)
-    cs._granted = granted
+    cs._granted = finish_request.evaluate(cs._path, cs._run)
     assert cs._granted
 
     path.unlink()  # the writer retires it once the run is over; the grant is not un-asked
@@ -244,7 +222,7 @@ def test_a_sweep_can_read_the_grant_without_entering_a_world(tmp_path):
     assert cs.granted is False
 
     write_request(path, run='batch-1')
-    cs._granted = finish_request.evaluate(cs._path, cs._run)[0]
+    cs._granted = finish_request.evaluate(cs._path, cs._run)
     assert cs.granted is True
 
 
@@ -253,24 +231,23 @@ def test_the_action_arrives_as_the_enum_not_the_string_it_was_written_as(tmp_pat
     every later reader holding a `str` the contract calls an `Action`. The conversion is the check."""
     path = tmp_path / 'finish'
     write_request(path, run='batch-1')
-    assert finish_request.evaluate(path, 'batch-1')[0]
+    assert finish_request.evaluate(path, 'batch-1')
     assert (
         finish_request.Action(json.loads(path.read_text())[finish_request.ACTION_KEY]) is finish_request.Action.FINISH
     )
 
     path.write_text(json.dumps({finish_request.RUN_ID_KEY: 'batch-1'}))  # no action at all
-    granted, reason = finish_request.evaluate(path, 'batch-1')
-    assert not granted and 'not a string this run can read' in reason
+    with pytest.raises(ValueError, match='not a string'):
+        finish_request.evaluate(path, 'batch-1')
 
     path.write_text(json.dumps({finish_request.ACTION_KEY: 'abort', finish_request.RUN_ID_KEY: 'batch-1'}))
-    granted, reason = finish_request.evaluate(path, 'batch-1')
-    assert not granted and 'does not implement' in reason
+    with pytest.raises(ValueError, match='does not implement'):
+        finish_request.evaluate(path, 'batch-1')
 
 
-# Every way a file can fail to become a request, as a table rather than a test per discovery. The
-# class is what matters, not the members: this reader runs in the FOREGROUND, so an exception it
-# does not answer for ends the World in the middle of an episode. Each entry writes the file itself,
-# because what is under test is the read, not a fixture's idea of one.
+# Every way a file can fail to be the request the contract describes. Each raises: the writer and
+# the run are one system, so a file at this path that is not a request is breakage. Each entry
+# writes the file itself, because what is under test is the read, not a fixture's idea of one.
 def _write_bytes(b: bytes):
     return lambda p: p.write_bytes(b)
 
@@ -285,7 +262,7 @@ def _symlink_to_a_real_request(path: Path) -> None:
     path.symlink_to(target)
 
 
-_UNREADABLE_SHAPES = [
+_CONTRACT_VIOLATIONS = [
     (_write_bytes(b'\xff\xfe not utf-8'), 'bytes that are not UTF-8 (UnicodeDecodeError)'),
     (_write_bytes(b'finish please'), 'text that is not JSON (JSONDecodeError)'),
     (_write_bytes(b'"finish"'), 'a JSON scalar rather than an object'),
@@ -345,41 +322,47 @@ _UNREADABLE_SHAPES = [
 ]
 
 
-@pytest.mark.parametrize(('write', 'shape'), _UNREADABLE_SHAPES, ids=[s[1].split(' (')[0] for s in _UNREADABLE_SHAPES])
-def test_no_unreadable_request_ever_raises_out_of_the_reader(tmp_path, write, shape):
-    """Total: every one of these is a refusal that leaves the run going, and none is an exception."""
+@pytest.mark.parametrize(
+    ('write', 'shape'), _CONTRACT_VIOLATIONS, ids=[s[1].split(' (')[0] for s in _CONTRACT_VIOLATIONS]
+)
+def test_every_contract_violation_raises(tmp_path, write, shape):
+    """None of these is quietly ignored: each ends the run with what was wrong at the path."""
     path = tmp_path / 'finish'
     write(path)
 
-    granted, reason = finish_request.evaluate(path, 'batch-1')
+    with pytest.raises(Exception) as caught:  # noqa: B017 — the class is the point, not one member
+        finish_request.evaluate(path, 'batch-1')
 
-    assert not granted, shape
-    assert reason, f'a refusal says why, for the log: {shape}'
+    assert str(caught.value), f'the failure says what was wrong: {shape}'
 
 
-def test_a_fifo_at_the_request_path_is_refused_rather_than_waited_on(tmp_path):
-    """The one shape that does not fail but HANGS, which no refusal can reach.
+def test_a_fifo_at_the_request_path_raises_rather_than_waiting_on_it(tmp_path):
+    """The one shape that does not fail but HANGS, which no exception can reach.
 
     Opened by name, a FIFO with no writer holds the `open` until one arrives, and this poller runs in
-    the foreground, so the run stops there mid-episode. Bounded in a thread so a regression fails the
-    suite instead of hanging it."""
+    the foreground, so the run stops there mid-episode. `O_NONBLOCK` is what turns it into a failure
+    that can be raised. Bounded in a thread so a regression fails the suite instead of hanging it."""
     path = tmp_path / 'finish'
     os.mkfifo(path)
-    outcome: list[tuple[bool, str]] = []
-    reader = threading.Thread(target=lambda: outcome.append(finish_request.evaluate(path, 'batch-1')), daemon=True)
+    outcome: list[BaseException] = []
 
+    def read() -> None:
+        try:
+            finish_request.evaluate(path, 'batch-1')
+        except BaseException as e:  # noqa: BLE001 — recorded so the assert below can name it
+            outcome.append(e)
+
+    reader = threading.Thread(target=read, daemon=True)
     reader.start()
     reader.join(timeout=10.0)
 
-    assert not reader.is_alive(), 'the read blocked on the FIFO instead of refusing it'
-    granted, reason = outcome[0]
-    assert not granted
-    assert reason, 'a refusal says why, for the log'
+    assert not reader.is_alive(), 'the read blocked on the FIFO instead of failing on it'
+    assert outcome and str(outcome[0]), 'the failure says what was wrong at the path'
 
 
-def test_the_unreadable_boundary_answers_for_a_shape_nobody_listed(tmp_path, monkeypatch):
-    """The list above is what is known; the boundary is what makes the read total. A parse that
-    raises something new still refuses rather than ending the World."""
+def test_a_shape_nobody_listed_reaches_the_world_too(tmp_path, monkeypatch):
+    """The list above is what is known; nothing catches what is not on it, which is the point. A
+    parse failure of a kind nobody anticipated ends the run rather than reading as no request."""
     path = tmp_path / 'finish'
     write_request(path, run='batch-1')
 
@@ -387,9 +370,9 @@ def test_the_unreadable_boundary_answers_for_a_shape_nobody_listed(tmp_path, mon
         raise RecursionError('maximum recursion depth exceeded')
 
     monkeypatch.setattr(finish_request.json, 'loads', _boom)
-    granted, reason = finish_request.evaluate(path, 'batch-1')
 
-    assert not granted and 'could not be read as a request' in reason
+    with pytest.raises(RecursionError):
+        finish_request.evaluate(path, 'batch-1')
 
 
 def test_the_poll_is_paced_on_the_clock_the_run_is_measured_on(tmp_path):
@@ -412,23 +395,17 @@ def test_the_poll_is_paced_on_the_clock_the_run_is_measured_on(tmp_path):
     assert cs.granted, 'the request went unread while 300 seconds of the run went by'
 
 
-def test_a_defect_past_the_parse_raises_rather_than_reading_as_no_request(tmp_path, monkeypatch):
-    """Past the parse the input is a `dict` and every check is this run's own, so a failure there can
-    only be a defect. Swallowed it would be indistinguishable from a file that is not a request: the
-    run would keep going, the writer would never be acknowledged, and nothing would say why.
-    """
+def test_a_defect_in_this_run_s_own_code_reaches_the_world(tmp_path, monkeypatch):
+    """A defect in the checks is breakage like any other: it surfaces rather than reading as a file
+    that was never a request, which would leave the run going and the writer unacknowledged."""
     path = tmp_path / 'finish'
     write_request(path, run='batch-1')
 
-    # A `ValueError`, which is what the staged checks would really raise (`Action(named)` on a value
-    # the membership test let through) and which the read boundary catches — so this pins the split,
-    # not merely that some exception escapes.
     class Broken:
         def __iter__(self):
             raise ValueError('a defect in the staged checks')
 
     monkeypatch.setattr(finish_request, 'Action', Broken())
-    assert isinstance(ValueError(), finish_request.MALFORMED_CONTENT), 'the boundary would catch this if it saw it'
 
     with pytest.raises(ValueError, match='a defect in the staged checks'):
         finish_request.evaluate(path, 'batch-1')
