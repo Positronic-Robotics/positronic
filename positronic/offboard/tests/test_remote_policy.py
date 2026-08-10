@@ -392,8 +392,7 @@ class TestServedCommandDecode:
         )
 
     def test_every_arm_of_a_multi_arm_action_decodes(self):
-        """A bimanual embodiment names its channels ``robot_command.{side}``; decoding only the unsuffixed one
-        hands those arms the raw mapping."""
+        """A bimanual embodiment names its channels ``robot_command.{side}``; every one of them decodes."""
         wire = self._wire_command()
         served = _served({f'{keys.ROBOT_COMMAND}.left': wire, f'{keys.ROBOT_COMMAND}.right': wire, 'timestamp': 0.0})
 
@@ -418,8 +417,8 @@ class TestServedCommandDecode:
         assert isinstance(_served({keys.ROBOT_COMMAND: command.Reset()})[keys.ROBOT_COMMAND], command.Reset)
         assert _served({'timestamp': 1.6}) == {'timestamp': 1.6}
 
-    def test_a_served_command_reaches_the_driver_typed_through_the_declared_stack(self):
-        """End to end: the decode sits under whatever the handshake declares, so the stack cannot undo it."""
+    def test_a_served_command_decodes_through_the_declared_stack(self):
+        """The decode sits under whatever the handshake declares, so the stack cannot undo it."""
         wire_action = [{keys.ROBOT_COMMAND: self._wire_command(), 'timestamp': 0.0}]
         policy, _ = _mock_remote_policy(CHUNKED_STACK, infer_return=wire_action)
 
