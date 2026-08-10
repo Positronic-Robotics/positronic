@@ -198,11 +198,8 @@ class FinishRequest(pimm.ControlSystem):
         return self._granted
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        # The yielded `Sleep` is the whole pace, so the interval is measured on the world's clock —
-        # the one the run's episodes are measured on. A wall-clock pace is incommensurable with a
-        # simulated sweep, which advances episodes as fast as the machine allows: entire episodes
-        # pass between two reads, and a request written during one is still unread when the harness
-        # decides whether to open the next.
+        # The yielded `Sleep` is the whole pace, so the interval is the world's clock — the one the
+        # episodes run on. A wall-clock pace would let whole simulated episodes pass between reads.
         while not should_stop.value:
             if not self._granted:
                 self._granted, reason = evaluate(self._path, self._run)
