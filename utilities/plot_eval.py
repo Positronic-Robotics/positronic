@@ -2,7 +2,7 @@
 Script to generate evaluation plots from a dataset.
 
 Usage:
-    uv run --locked utilities/plot_eval.py --dataset=@positronic.cfg.analysis.sim_episodes --output=eval_plots.html
+    uv run --locked utilities/plot_eval.py --dataset=@positronic.cfg.analysis.stacking_episodes --output=eval_plots.html
 """
 
 from collections import defaultdict
@@ -18,13 +18,13 @@ import positronic.cfg.analysis
 from positronic.dataset import Dataset
 
 
-@cfn.config(dataset=positronic.cfg.analysis.sim_episodes, output='eval_plots.html')
+@cfn.config(dataset=positronic.cfg.analysis.stacking_episodes, output='eval_plots.html')
 def main(dataset: Dataset, output: str):  # noqa: C901
     """
     Generate evaluation plots for a given dataset.
 
     Args:
-        dataset: The dataset to evaluate. Defaults to sim_episodes config.
+        dataset: The dataset to evaluate. Defaults to stacking_episodes config.
         output: Path to the output HTML file.
     """
     print(f'Loading dataset with {len(dataset)} episodes...')

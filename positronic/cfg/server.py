@@ -9,7 +9,7 @@ from positronic import keys
 from positronic.dataset import Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
 from positronic.server.positronic_server import ColumnConfig as C
-from positronic.server.positronic_server import GroupTableConfig
+from positronic.server.positronic_server import GroupTableConfig, RendererConfig
 from positronic.server.positronic_server import main as server_main
 from positronic.utils.logging import init_logging
 
@@ -17,6 +17,29 @@ from . import analysis as analysis_cfg
 from . import ds
 from .analysis import calculate_units
 from .ds import internal
+
+
+@cfn.config()
+def eval_table():
+    """The episode table for an eval run: only what every eval writes, nothing task-specific.
+
+    ``eval.success`` is absent on an episode that never reached its terminal, so it defaults to False;
+    ``eval.terminated`` separates a task the policy failed from one whose budget ran out.
+    """
+    return {
+        '__index__': C(label='#', format='%d'),
+        '__duration__': C(label='Duration', format='%.2f sec'),
+        keys.TASK: C(label='Task', filter=True),
+        'eval.success': C(
+            label='Pass',
+            default=False,
+            renderer=RendererConfig(
+                type='badge',
+                options={True: {'label': 'Pass', 'variant': 'success'}, False: {'label': 'Fail', 'variant': 'danger'}},
+            ),
+        ),
+        'eval.terminated': C(label='Ended', default=False),
+    }
 
 
 def uph(ep: Episode) -> float | None:

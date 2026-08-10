@@ -33,7 +33,8 @@ uv run positronic eval run --eval=.sim.libero.object \
   --policy=.remote --policy.url=localhost:8000 \
   --eval.trial_count=10 --output_dir=~/evals/libero
 
-uv run positronic-server --dataset.path=~/evals/libero
+uv run positronic-server --dataset.path=~/evals/libero \
+  --ep_table_cfg=@positronic.cfg.server.eval_table
 ```
 
 **One server, many targets.** A DROID policy served once is scored on RoboLab, on MolmoSpaces and on our real rig without a restart — the target is a parameter, not an integration. RoboLab renders in Isaac Sim, so it wants an RTX-class host; the rig is ours. Your own model is served the same way — [Connect your model](connect-your-model.md).
