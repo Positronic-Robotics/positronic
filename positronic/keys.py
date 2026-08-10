@@ -19,11 +19,8 @@ JOINT_VEL = 'robot_state.dq'
 EE_POSE = 'robot_state.ee_pose'
 GRIP = 'grip'
 TASK = 'task'
-# Every camera signal is named under one prefix, and that is what identifies a camera on the wire:
-# an embodiment declares its cameras by naming them this way, and the GUIs, the probe and the
-# readiness report all pick them out of the observations by it. Owned here with the names built
-# from it, so the convention is one definition rather than a literal retyped wherever a consumer
-# needs to know which signals carry pictures.
+# The prefix that identifies a camera on the wire: an embodiment declares its cameras by naming
+# them this way, and every consumer picks them out of the observations by it.
 IMAGE_PREFIX = 'image.'
 WRIST_IMAGE = f'{IMAGE_PREFIX}wrist'
 EXTERIOR_IMAGE = f'{IMAGE_PREFIX}exterior'

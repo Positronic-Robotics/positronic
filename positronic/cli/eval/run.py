@@ -42,8 +42,8 @@ class Driver:
     directive_wrapper: Callable
     control_systems: list[pimm.ControlSystem]
     manual_commands: pimm.SignalEmitter | None = None
-    # The port this surface serves the operator on; None where it is drawn on the rig's own screen
-    # and has no address. Only the driver knows: the UI itself is in another process by then.
+    # The port this surface serves the operator on; None where it is drawn on the rig's own
+    # screen. Only the driver knows: the UI is in another process by the time anything asks.
     console_port: int | None = None
 
 
@@ -87,9 +87,8 @@ def _run_world(
     ``driver`` (attended) and ``trials`` (unattended self-driving) are the two lifecycle sources, mutually
     exclusive per the caller. The shared ``policy``'s lifetime stays with ``main``.
 
-    ``state`` reports this World coming up and its cameras delivering their first frames. It is scheduled
-    rather than called: the World spawns its background processes before the first foreground round, so only
-    from inside ``world.run`` is the operator's UI known to exist.
+    ``state`` reports this World coming up and its cameras delivering their first frames. Scheduled rather
+    than called: only from inside ``world.run`` is the operator's UI known to exist.
     """
     harness = Harness(policy, embodiment, task=task, trials=trials, on_episode_complete=on_complete)
     gui = driver.gui if driver is not None else (dpg_ui() if show_gui else None)
@@ -110,8 +109,8 @@ def _run_world(
             for name, obs in embodiment.observations.items():
                 if name.startswith(keys.IMAGE_PREFIX):
                     world.connect(obs.source, gui.cameras[name])
-        # A second reader on the same emitters costs the producer a flag per frame: one frame goes
-        # into shared memory whatever the number of receivers.
+        # A second reader costs the producer a flag per frame: one frame into shared memory
+        # whatever the number of receivers.
         readiness = None
         if state.enabled:
             readiness = run_state.Readiness(state, cameras, driver.console_port if driver is not None else None)
@@ -137,9 +136,8 @@ def _run_world(
         # driver, and GUI placement is otherwise identical.
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         foreground = driver.control_systems if driver is not None else []
-        # Last in the round on both paths, and in the foreground on both: it reports what the round
-        # produced, so it must not read ahead of the systems producing it, and its first round is
-        # what says the background processes are up — which only holds where it is not one of them.
+        # Foreground and last in the round: its first round is what says the background processes
+        # are up, which only holds where it is not one of them.
         watch = [readiness] if readiness is not None else []
         if embodiment.simulated:
             world.run([*foreground, harness, ds_agent, *producers, *watch], gui)
@@ -242,9 +240,8 @@ def main(
     the report, so a real embodiment in a timed sweep is rejected rather than allowed to pollute it.
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
-    # Built before anything else and handed to every World: an orchestrator watches the RUN, and a sweep is
-    # one run however many Worlds it raises. Inert unless something named this run (`ROLLOUT_RUN_ID`), which
-    # is every ordinary invocation — so nothing below is conditional on it.
+    # One per RUN, handed to every World a sweep raises. Inert unless something named this run, so
+    # nothing below is conditional on it.
     state = run_state.from_env()
     # Validate timing up front, before the policy warmup, so a rejected sweep fails before it spends anything.
     if timing:

@@ -57,8 +57,7 @@ class CountingReceiver(pimm.ControlSystemReceiver):
 
 
 class Stopper(pimm.ControlSystem):
-    """Ends the world after `rounds`, so a test's world terminates without the readiness watch —
-    which never returns — deciding when."""
+    """Ends the world after `rounds`, since the readiness watch never returns."""
 
     def __init__(self, rounds: int):
         self._rounds = rounds
@@ -111,8 +110,7 @@ def test_a_run_id_that_is_not_one_path_segment_reports_nowhere(tmp_path, monkeyp
 
 
 def test_a_relative_directory_reports_nowhere(monkeypatch):
-    """The writer and its reader are different accounts, each resolving a relative path against its
-    own working directory — so they would address different files from the same configuration."""
+    """A relative path resolves per account, so the two would address different files."""
     monkeypatch.setenv(run_state.RUN_ID_ENV, 'batch-1')
     monkeypatch.setenv(run_state.STATE_DIR_ENV, 'run/lock')
     assert not run_state.from_env().enabled
@@ -161,8 +159,7 @@ def test_a_persistent_write_failure_is_logged_once(tmp_path, monkeypatch, caplog
 
 
 def test_a_report_replaces_the_file_rather_than_truncating_it(named_run):
-    """The reader polls this path and must never meet a half-written file, so the visible file is
-    only ever swapped for a complete one — its inode changes and its bytes never shorten in place."""
+    """A poll must never meet a half-written file: the visible file is only ever swapped."""
     # rules-allow: hardcoded-keys — the wire shape, asserted the way a reader in another
     # repository sees it. Written through the constants these tests would still pass if one
     # were renamed, which is the single thing they exist to catch.
@@ -175,8 +172,7 @@ def test_a_report_replaces_the_file_rather_than_truncating_it(named_run):
 
 
 def test_a_report_carries_unnamed_fields_forward(named_run):
-    """A camera count is measured once and holds until the next camera; a phase change must not
-    silently reset it to the field's default."""
+    """A camera count is measured once and holds, so a phase change must not reset it."""
     # rules-allow: hardcoded-keys — the wire shape, asserted the way a reader in another
     # repository sees it. Written through the constants these tests would still pass if one
     # were renamed, which is the single thing they exist to catch.
@@ -206,10 +202,8 @@ def _drive(state: run_state.StateFile, cameras: dict[str, Camera], rounds: int =
 
 
 def test_the_world_coming_up_is_reported_before_any_camera(named_run):
-    """The first round is the report, and it is the fact a reader needs: the background processes
-    the operator's UI is one of have been spawned, and where to reach it. It is reported on its own,
-    ahead of any camera — which is the whole distinction between a UI that exists and one that works.
-    """
+    """Reported on its own, ahead of any camera — the distinction between a UI that exists and
+    one that works."""
     # rules-allow: hardcoded-keys — the wire shape, asserted the way a reader in another
     # repository sees it. Written through the constants these tests would still pass if one
     # were renamed, which is the single thing they exist to catch.
@@ -236,8 +230,7 @@ def test_every_camera_delivering_a_frame_is_readiness(named_run):
 
 
 def test_a_camera_that_never_opens_holds_readiness_back(named_run):
-    """The failure this whole file exists to make visible: one camera up and its neighbour missing
-    tears the World down as thoroughly as both missing, so it must never read as ready."""
+    """One camera up and its neighbour missing tears the World down as thoroughly as both."""
     # rules-allow: hardcoded-keys — the wire shape, asserted the way a reader in another
     # repository sees it. Written through the constants these tests would still pass if one
     # were renamed, which is the single thing they exist to catch.
@@ -259,8 +252,7 @@ def test_a_run_with_no_cameras_is_ready_at_once(named_run):
 
 
 def test_a_camera_is_read_only_until_it_is_seen(named_run):
-    """Reading a frame takes the lock its producer, the harness, the recorder and the UI contend
-    for and copies the whole frame out, so a camera already known to be up is not read again."""
+    """A read takes the lock four systems contend for and copies the whole frame out."""
     # rules-allow: hardcoded-keys — the wire shape, asserted the way a reader in another
     # repository sees it. Written through the constants these tests would still pass if one
     # were renamed, which is the single thing they exist to catch.
@@ -279,8 +271,7 @@ def test_a_camera_is_read_only_until_it_is_seen(named_run):
 
 def test_the_watch_does_not_end_the_world(named_run):
     """A control system that returns sets the world's stop event, which would end the run the
-    moment every camera was up — the exact opposite of what this reports. So the world must run
-    for as long as something else keeps it, with every camera up from the first round."""
+    moment every camera came up."""
     # rules-allow: hardcoded-keys — the wire shape, asserted the way a reader in another
     # repository sees it. Written through the constants these tests would still pass if one
     # were renamed, which is the single thing they exist to catch.
