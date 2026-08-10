@@ -5,7 +5,8 @@ dataset not uploaded, arm keeps its token).
 The contract, for a writer in another repository:
 
 - path: `FINISH_REQUEST_PREFIX` + `run_id`, inside `DEFAULT_FINISH_REQUEST_DIR` (overridden by
-  `FINISH_REQUEST_DIR_ENV`; absolute); `run_id` is one path segment. Per run, so a leftover is inert.
+  `FINISH_REQUEST_DIR_ENV`; absolute, and it must exist); `run_id` is one path segment, and prefix
+  plus id must fit the directory's filename limit. Per run, so a leftover is inert.
 - content `{"action": "finish", "run_id": "<id>"}`; further keys ignored.
 - the writer publishes atomically: a temp file in the same directory, renamed into place. Rename
   within a filesystem is atomic, so a poll never sees half an object — which is what makes partial
@@ -15,9 +16,9 @@ The contract, for a writer in another repository:
   poller is installed.
 - intent is monotonic: never withdrawn, so a writer unsure its write landed re-asserts.
 - the only acknowledgement is `ACK_LOG_MARKER` in the run's log.
-- an absent file is the ordinary state: no request. Any other failure to read the file as a request
-  addressed to this run raises and ends the World — the system is ours end to end, so a contract
-  violation is breakage to surface, not input to tolerate.
+- an absent file in an existing directory is the ordinary state: no request. Any other failure to
+  read it as a request addressed to this run raises and ends the World — the system is ours end to
+  end, so a contract violation is breakage to surface, not input to tolerate.
 """
 
 import json
@@ -95,7 +96,12 @@ def _read_bytes(path: Path) -> bytes | None:
     # fstat reads the open descriptor, not the path, so nothing swaps under the check.
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
-    except FileNotFoundError:
+    except FileNotFoundError as e:
+        # `ENOENT` is the same for an absent request and an absent directory, and the two are
+        # opposites: no request is every run nobody has asked, no directory is a run nothing can
+        # ever ask. Read as the ordinary state, the second disables finishing for the run's life.
+        if not path.parent.is_dir():
+            raise ValueError(f'finish request directory {path.parent} does not exist') from e
         return None
     try:
         mode = os.fstat(fd).st_mode
@@ -190,6 +196,14 @@ def from_env() -> FinishRequest | None:
             f'{FINISH_REQUEST_DIR_ENV}={directory} is not absolute, so the writer and this run would not '
             'resolve it to the same directory'
         )
+    if not directory.is_dir():
+        raise ValueError(f'finish request directory {directory} does not exist')
+    # What has to fit is the id plus the prefix, against this directory's own component limit. The
+    # id alone passing leaves the first poll to die of `ENAMETOOLONG` once the arm has homed.
+    name = f'{FINISH_REQUEST_PREFIX}{this_run}'
+    limit = os.pathconf(directory, 'PC_NAME_MAX')
+    if len(os.fsencode(name)) > limit:
+        raise ValueError(f"{RUN_ID_ENV} makes {name!r}, past {directory}'s {limit}-byte filename limit")
     path = request_path(this_run)
     logger.info('run %s will stop after the current episode if %s asks it to', this_run, path)
     return FinishRequest(path, this_run)

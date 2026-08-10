@@ -409,3 +409,40 @@ def test_a_defect_in_this_run_s_own_code_reaches_the_world(tmp_path, monkeypatch
 
     with pytest.raises(ValueError, match='a defect in the staged checks'):
         finish_request.evaluate(path, 'batch-1')
+
+
+def test_a_missing_request_directory_raises_on_the_read(tmp_path):
+    """`ENOENT` is the same for an absent request and an absent directory, and the two mean opposite
+    things: the first is every run nobody has asked, the second is a run nothing can ever ask. Read
+    as the ordinary state it would disable finishing for the life of the run, silently."""
+    path = tmp_path / 'not-a-directory' / 'finish'
+    with pytest.raises(ValueError, match='directory'):
+        finish_request.evaluate(path, 'batch-1')
+
+
+def test_a_missing_request_directory_raises_at_launch(monkeypatch, tmp_path):
+    """A mistyped override or an absent mount is a deploy that cannot be finished; it fails before
+    the first episode rather than at a poll nothing is watching."""
+    monkeypatch.setenv(finish_request.RUN_ID_ENV, 'batch-1')
+    monkeypatch.setenv(finish_request.FINISH_REQUEST_DIR_ENV, str(tmp_path / 'absent'))
+    with pytest.raises(ValueError, match='does not exist'):
+        finish_request.from_env()
+
+
+def test_a_run_id_too_long_for_the_directory_raises_at_launch(monkeypatch, tmp_path):
+    """`names_one_segment` certifies the id; what has to fit is the id PLUS the prefix, against the
+    directory's own component limit. Unchecked, the id passes at launch and the first poll dies of
+    `ENAMETOOLONG` after the World is up and the arm has homed."""
+    monkeypatch.setenv(finish_request.FINISH_REQUEST_DIR_ENV, str(tmp_path))
+    limit = os.pathconf(tmp_path, 'PC_NAME_MAX')
+    monkeypatch.setenv(finish_request.RUN_ID_ENV, 'x' * (limit - len(finish_request.FINISH_REQUEST_PREFIX) + 1))
+    with pytest.raises(ValueError, match='filename limit'):
+        finish_request.from_env()
+
+
+def test_a_run_id_that_just_fits_installs_the_poller(monkeypatch, tmp_path):
+    """The bound is the filesystem's, not a guess: the longest id that fits is accepted."""
+    monkeypatch.setenv(finish_request.FINISH_REQUEST_DIR_ENV, str(tmp_path))
+    limit = os.pathconf(tmp_path, 'PC_NAME_MAX')
+    monkeypatch.setenv(finish_request.RUN_ID_ENV, 'x' * (limit - len(finish_request.FINISH_REQUEST_PREFIX)))
+    assert finish_request.from_env() is not None
