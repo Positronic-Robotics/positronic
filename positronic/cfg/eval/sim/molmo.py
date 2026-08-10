@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -30,9 +31,19 @@ def _load_episodes(benchmark_dir: Path) -> list[dict[str, Any]]:
     return [json.loads(p.read_text()) for p in sorted(benchmark_dir.glob('house_*/episode_*.json'))]
 
 
-@cfn.config(camera_dict=DEFAULT_CAMERA_DICT, benchmark_dir=None, episodes=None, trial_count=1, timeout=None, seed=None)
+def _discovery_hint() -> str:
+    """What to try instead, appended to a path that holds no benchmark — nothing else enumerates the packs."""
+    assets = os.environ.get(mapping.ASSETS_DIR_ENV)
+    if not assets:
+        return f' Point {mapping.ASSETS_DIR_ENV} at the MolmoSpaces asset packs to have the available ones listed.'
+    root = Path(assets) / mapping.ASSETS_BENCHMARKS_DIR
+    found = sorted(str(p.parent) for p in root.rglob('benchmark.json'))
+    return f' Available under {root}: {", ".join(found)}' if found else f' No benchmark.json found under {root}.'
+
+
+@cfn.config(camera_dict=DEFAULT_CAMERA_DICT, episodes=None, trial_count=1, timeout=None, seed=None)
 def _molmo_eval(
-    benchmark_dir: str | None,
+    benchmark_dir: str,
     episodes: int | list[int] | None,
     trial_count: int,
     timeout: float | None,
@@ -58,20 +69,17 @@ def _molmo_eval(
     deadline, never raise it, and one at or below the horizon truncates valid episodes — so any value that
     differs from the default is warned about.
     """
-    if benchmark_dir is None:
-        raise ValueError('MolmoSpaces eval needs --eval.benchmark_dir pointing at a dir with benchmark.json')
     base = Path(benchmark_dir)
     specs = _load_episodes(base)
     count = len(specs)
-    if episodes is None:
-        indices = list(range(count))
-    else:
-        indices = [episodes] if isinstance(episodes, int) else list(episodes)
-    if not indices:
+    if count == 0:
         raise ValueError(
-            f'no benchmark episodes found under {base}; expected a benchmark.json or a legacy '
-            'house_*/episode_*.json layout (or pass --eval.episodes explicitly)'
+            f'no benchmark episodes under {base}; expected a benchmark.json or a legacy '
+            f'house_*/episode_*.json layout.{_discovery_hint()}'
         )
+    indices = list(range(count)) if episodes is None else [episodes] if isinstance(episodes, int) else list(episodes)
+    if not indices:
+        raise ValueError('--eval.episodes selected no episodes; omit it to run the whole benchmark')
     # Reject explicit selectors outside the manifest before the costly server spawn: a negative index would
     # silently run a from-the-end episode mislabeled by its own index, and an over-range one fails only after setup.
     out_of_range = [i for i in indices if not 0 <= i < count]

@@ -4,6 +4,7 @@ import logging
 import pytest
 
 from positronic.cfg.eval.sim.molmo import _TIMEOUT_MARGIN_SEC, benchmark
+from positronic.simulator.molmo_spaces import mapping
 
 _HORIZON_SEC = 30.0
 
@@ -35,6 +36,17 @@ def test_timeout_matching_the_backstop_is_silent(benchmark_dir, caplog):
         ev = benchmark.override(benchmark_dir=benchmark_dir, timeout=_HORIZON_SEC + _TIMEOUT_MARGIN_SEC).instantiate()
     assert ev.task.timeout == _HORIZON_SEC + _TIMEOUT_MARGIN_SEC
     assert not caplog.records
+
+
+def test_a_path_holding_no_benchmark_names_the_ones_that_exist(tmp_path, monkeypatch):
+    # Nothing else enumerates the packs, so the failure is where a customer learns what they can run.
+    assets = tmp_path / 'assets'
+    pack = assets / mapping.ASSETS_BENCHMARKS_DIR / 'droid_pick'
+    pack.mkdir(parents=True)
+    (pack / 'benchmark.json').write_text('[]')
+    monkeypatch.setenv(mapping.ASSETS_DIR_ENV, str(assets))
+    with pytest.raises(ValueError, match='droid_pick'):
+        benchmark.override(benchmark_dir=str(tmp_path / 'nowhere')).instantiate()
 
 
 def test_benchmark_without_a_declared_horizon_is_rejected(tmp_path):

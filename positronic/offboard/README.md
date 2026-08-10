@@ -23,7 +23,8 @@ Consequences:
   key (see `Codec.meta`), the server returns it in the session handshake, and the client fits
   frames to it before sending. This is default-on — an adapter that resizes "to keep the wire
   payload small" is duplicating it.
-- **Codecs run on either side of the wire.** positronic-native evals compose the codec around
+- **Codecs run on either side of the wire** — the client being the process driving the robot or sim,
+  the server being the process holding the model. positronic-native evals compose the codec around
   `RemotePolicy` on the client (`cfg/policy.py` — the wire then carries model-sized encoded inputs,
   and the client-side resize is disabled since `codec.meta` already reports `image_sizes`).
   Thin-client deployments (a sim adapter in a foreign venv talking to a serverless endpoint) host
