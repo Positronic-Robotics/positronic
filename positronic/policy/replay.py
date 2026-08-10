@@ -41,7 +41,8 @@ def _arm_commands(episode: Episode) -> dict[int, Any]:
 
     ``Serializers.robot_command`` maps each command type to its own suffix, so one command writes one
     signal, and a recording whose action space changed mid-episode carries commands in more than one —
-    each covering its own stretch of the timeline. Every supported signal contributes its waypoints.
+    each covering its own stretch of the timeline. Every supported signal contributes its waypoints; a
+    recording carrying any unsupported one is refused by ``load_actions`` rather than played in part.
     """
     commands: dict[int, Any] = {}
     for name, command_type in _ARM_SIGNALS:
@@ -78,18 +79,18 @@ def load_actions(episode: Episode) -> list[dict[str, Any]]:
     arm = _arm_commands(episode)
     grip = episode.signals.get(keys.TARGET_GRIP)
     grip_stamps = {ts for _, ts in grip} if grip is not None and len(grip) > 0 else set()
-    if not arm:
-        # A recording carrying arm commands in a form this cannot reissue is refused even when it has a
-        # grip channel: replaying the grip alone would hold the arm still through motion that was recorded.
-        if unreplayable := _unreplayable_arm_signals(episode):
-            raise ValueError(
-                f'Episode records no replayable arm command: it carries {unreplayable}, and only '
-                f'{[name for name, _ in _ARM_SIGNALS]} can be replayed. An episode recorded from delta '
-                f'commands cannot be replayed — deltas only mean anything against the state they were '
-                f'issued from.'
-            )
-        if not grip_stamps:
-            raise ValueError(f'Episode records nothing replayable: it carries {sorted(episode.signals)}.')
+    # Asked whether or not absolutes were found. A recording that switched action space part-way carries
+    # both, and replaying the stretches this can reissue while dropping the rest holds the arm still
+    # through motion the recording made — a partial trajectory presented as faithful playback.
+    if unreplayable := _unreplayable_arm_signals(episode):
+        raise ValueError(
+            f'Episode carries arm commands this cannot reissue: {unreplayable}. Only '
+            f'{[name for name, _ in _ARM_SIGNALS]} can be replayed — a delta means something only '
+            f'against the state it was issued from, so the stretch it covers cannot be reconstructed '
+            f'and replaying around it would present a partial trajectory as a faithful one.'
+        )
+    if not arm and not grip_stamps:
+        raise ValueError(f'Episode records nothing replayable: it carries {sorted(episode.signals)}.')
     stamps = sorted(arm.keys() | grip_stamps)
     first_ts = stamps[0]
     grip_start = min(grip_stamps) if grip_stamps else 0

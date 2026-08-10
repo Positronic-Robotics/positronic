@@ -162,7 +162,7 @@ def test_load_actions_prefers_joints_over_pose(tmp_path):
 def test_load_actions_rejects_an_episode_with_no_replayable_arm_command(tmp_path):
     episode = _write(tmp_path, {f'{keys.ROBOT_COMMAND}.pose_delta': [(np.zeros(7, dtype=np.float32), 1_000_000_000)]})
 
-    with pytest.raises(ValueError, match='no replayable arm command'):
+    with pytest.raises(ValueError, match='cannot reissue'):
         load_actions(episode)
 
 
@@ -180,7 +180,27 @@ def test_load_actions_rejects_a_delta_recording_even_when_it_carries_a_grip(tmp_
         },
     )
 
-    with pytest.raises(ValueError, match='no replayable arm command'):
+    with pytest.raises(ValueError, match='cannot reissue'):
+        load_actions(episode)
+
+
+def test_load_actions_rejects_a_recording_that_switched_to_deltas_part_way(tmp_path):
+    """An absolute stretch does not make the delta stretch replayable, and replaying only the first
+    presents a partial trajectory as faithful playback: the arm holds through motion the recording made.
+    """
+    step = int(1e9 / HZ)
+    start = 1_000_000_000
+    episode = _write(
+        tmp_path,
+        {
+            keys.TARGET_JOINTS: [(np.full(7, 0.1, dtype=np.float32), start + i * step) for i in range(2)],
+            f'{keys.ROBOT_COMMAND}.pose_delta': [
+                (np.zeros(7, dtype=np.float32), start + i * step) for i in range(2, 4)
+            ],
+        },
+    )
+
+    with pytest.raises(ValueError, match='cannot reissue'):
         load_actions(episode)
 
 
