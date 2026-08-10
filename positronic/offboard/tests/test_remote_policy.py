@@ -10,6 +10,8 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.remote import RemoteSession
+from positronic.policy.spec import PolicySource, remote
+from positronic.policy.wrappers import ChunkedSchedule
 
 # These fixtures stand in for a server, so they spell the handshake fields rather than importing the
 # ``keys`` constants the client reads: sharing a constant makes the two agree whatever its value, which
@@ -424,6 +426,19 @@ class TestServedCommandDecode:
 
         assert actions is not None, 'the chunk was swallowed before any command reached a driver'
         assert isinstance(actions[0][keys.ROBOT_COMMAND], command.CartesianPosition)
+
+    def test_a_command_crossing_a_live_websocket_arrives_typed(self, start_server, make_mock_policy):
+        """The command as a mapping is what msgpack carries a served command in — no ``__cmd__`` envelope,
+        the vector a plain sequence — so the round-trip is what pins the decode, not a stubbed ``infer``."""
+        served = make_mock_policy([{keys.ROBOT_COMMAND: _wire_command(), 'timestamp': 0.0}], {'model_name': 'm'})
+        host, port, _ = start_server(ChunkedSchedule() | remote | PolicySource(served))
+
+        actions = RemotePolicy(f'{host}:{port}').new_session(now=lambda: 0.0)({'obs_time_ns': 0})
+
+        assert actions is not None, 'the chunk was swallowed before any command reached a driver'
+        decoded = actions[0][keys.ROBOT_COMMAND]
+        assert isinstance(decoded, command.CartesianPosition), f'the driver would be handed {decoded!r}'
+        np.testing.assert_allclose(decoded.pose.translation, [0.4, 0.0, 0.6], atol=1e-6)
 
 
 def test_remote_policy_lifecycle(inference_server, mock_policy):
