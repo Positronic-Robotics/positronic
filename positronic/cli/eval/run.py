@@ -239,6 +239,11 @@ def main(
             embodiments = [embodiment]
         _validate_timing(embodiments, output_dir)
 
+    # One per invocation, shared by every World: a request addresses the run, not the World it arrived in.
+    # Built with the other up-front validation, before the warmup: it raises on a misconfigured run, and
+    # after the warmup that raise would strand a policy nothing closes.
+    finish = finish_request_from_env()
+
     # Drive the policy's remote endpoints through their cold start before hardware and the operator
     # surface come up: opening a session blocks on the server handshake, which returns only once the
     # model is loaded, and a SampledPolicy reaches every sub-policy. The first episode then begins
@@ -256,9 +261,6 @@ def main(
     # One completion sink — so one ``SampledPolicy`` counter — across every eval, keeping sampling balanced
     # over the whole sweep.
     on_complete = _completion_sink(policy)
-
-    # One per invocation, shared by every World: a request addresses the run, not the World it arrived in.
-    finish = finish_request_from_env()
 
     try:
         with _timed_pass(output_dir, timing, policy):

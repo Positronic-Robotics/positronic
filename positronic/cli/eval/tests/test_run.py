@@ -141,3 +141,23 @@ def test_the_driver_is_scheduled_ahead_of_the_watcher_and_the_harness(monkeypatc
     )
 
     assert scheduled[:3] == [keyboard, finish, harness]
+
+
+def test_a_misconfigured_run_is_rejected_before_the_policy_is_warmed(monkeypatch):
+    """`finish_request.from_env` raises on a run nothing can address. Reached after the warmup, that
+    raise would leave a warmed policy — and whatever remote session it holds — with nothing to close
+    it, since `main`'s `finally` has not been entered yet. So it is checked with the other up-front
+    validation, and the warmup never runs."""
+    warmed = []
+
+    def new_session():
+        warmed.append(True)
+        return SimpleNamespace(close=lambda: None)
+
+    policy = cast(object, SimpleNamespace(new_session=new_session, close=lambda: None))
+    monkeypatch.setenv('ROLLOUT_RUN_ID', 'a/b')
+
+    with pytest.raises(ValueError, match='single path segment'):
+        main(policy=policy, evals=[_eval(True)])
+
+    assert not warmed, 'the policy was warmed before the run was known to be addressable'

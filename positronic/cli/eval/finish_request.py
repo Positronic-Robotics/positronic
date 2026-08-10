@@ -7,6 +7,9 @@ The contract, for a writer in another repository:
 - path: `FINISH_REQUEST_PREFIX` + `run_id`, inside `DEFAULT_FINISH_REQUEST_DIR` (overridden by
   `FINISH_REQUEST_DIR_ENV`; absolute); `run_id` is one path segment. Per run, so a leftover is inert.
 - content `{"action": "finish", "run_id": "<id>"}`; further keys ignored.
+- the writer publishes atomically: a temp file in the same directory, renamed into place. Rename
+  within a filesystem is atomic, so a poll never sees half an object — which is what makes partial
+  content a violation rather than a state to wait out.
 - the writer creates it world-readable (a `077` umask leaves it unreadable) and never unlinks it;
   the run only reads it, and only where `run_id` matches the run's own `RUN_ID_ENV`; unset, no
   poller is installed.
