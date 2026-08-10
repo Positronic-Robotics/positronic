@@ -7,7 +7,8 @@ physics / render). A rollout cannot recover these wall costs from its own timest
 offline reduce over the raw spans and samples: the per-phase wall split, the env-step split, the
 inference-latency distribution, the rollout duration over span wall, and the sim box's GPU load. That last
 ratio is read as a real-time factor only where the pass ran on a virtual clock; an attended pass is paced by
-its operator on the wall clock, so the same ratio is the share of window wall spent in rollouts.
+its operator on the wall clock, so the same ratio is the share of window wall spent in rollouts. A directory
+holding passes of both kinds is refused rather than reduced into one.
 The policy endpoint (a different box) folds in from an optional ``nvidia-smi dmon`` log.
 """
 
@@ -468,6 +469,20 @@ def _episode_windows(episodes: list[SpanRec]) -> dict[str | None, tuple[int, int
     }
 
 
+def _passes_virtual_clock(passes: list[SpanRec]) -> bool:
+    """Which clock the passes were measured on, refusing a directory that holds both.
+
+    Absent on a sidecar written before the pass carried its clock; every one of those is a sim sweep.
+    """
+    clocks = {bool(p.attrs.get(ATTR_PASS_VIRTUAL_CLOCK, True)) for p in passes}
+    if len(clocks) > 1:
+        raise ValueError(
+            'Telemetry holds passes measured on different clocks: sim seconds and wall seconds cannot be '
+            'summed into one ratio, so no label on the result would be true. Reduce each run separately.'
+        )
+    return clocks.pop() if clocks else True
+
+
 def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummary | None) -> PassReport:
     children: dict[str, list[SpanRec]] = defaultdict(list)
     for span in spans:
@@ -545,8 +560,7 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
         overhead=phase_fraction(sum(t.overhead_s for t in timings)),
         between_episodes=phase_fraction(wall - episode_wall_sum),
     )
-    # Absent on a sidecar written before the pass carried its clock; every one of those is a sim sweep.
-    virtual_clock = bool(passes[0].attrs.get(ATTR_PASS_VIRTUAL_CLOCK, True))
+    virtual_clock = _passes_virtual_clock(passes)
     rollout_share = (sum(t.virtual_s for t in timings) / wall) if wall else 0.0
     return PassReport(
         episodes=len(episodes),

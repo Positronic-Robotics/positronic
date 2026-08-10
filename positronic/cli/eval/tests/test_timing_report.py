@@ -136,6 +136,44 @@ def test_an_attended_pass_reports_wall_time_as_wall_time(tmp_path):
     assert 'sim-s' not in rendered
 
 
+def test_a_directory_mixing_clock_modes_is_refused(tmp_path):
+    """Sidecars append, so one output dir can hold an attended pass and an unattended one.
+
+    Their durations are seconds on different clocks, so summing them into one ratio is invalid whichever
+    label it carries — the reduce refuses instead of picking the first pass's clock and labelling by it.
+    """
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    telemetry_dir.mkdir()
+    spans = [
+        _span(SPAN_EVAL_PASS, 0, 100, 'pass0', attrs={ATTR_PASS_VIRTUAL_CLOCK: True}),
+        _span(SPAN_EPISODE, 0, 40, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+        _span(SPAN_EVAL_PASS, 200, 300, 'pass1', attrs={ATTR_PASS_VIRTUAL_CLOCK: False}),
+        _span(SPAN_EPISODE, 200, 240, 'ep1', 'pass1', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+    ]
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', spans)
+
+    with pytest.raises(ValueError, match='different clocks'):
+        _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+
+
+def test_passes_of_one_clock_still_reduce_together(tmp_path):
+    """Several passes appended to one dir are the normal case and still sum, as long as they agree."""
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    telemetry_dir.mkdir()
+    spans = [
+        _span(SPAN_EVAL_PASS, 0, 100, 'pass0', attrs={ATTR_PASS_VIRTUAL_CLOCK: False}),
+        _span(SPAN_EPISODE, 0, 40, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+        _span(SPAN_EVAL_PASS, 200, 300, 'pass1', attrs={ATTR_PASS_VIRTUAL_CLOCK: False}),
+        _span(SPAN_EPISODE, 200, 240, 'ep1', 'pass1', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+    ]
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', spans)
+
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+
+    assert report.virtual_clock is False
+    assert report.rollout_wall_share == pytest.approx(40 / 200)
+
+
 def test_a_sim_pass_still_reports_a_real_time_factor(tmp_path):
     """The virtual-clock reading is unchanged, including for a sidecar written before the pass carried
     its clock — every one of those is a sim sweep."""
