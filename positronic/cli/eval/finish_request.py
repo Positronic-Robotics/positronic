@@ -66,12 +66,9 @@ ACK_LOG_MARKER = 'rollout finish request granted'
 # request is around 120 bytes.
 MAX_REQUEST_BYTES = 64 * 1024
 
-# Reaching the file: what valid operation produces at a path any account on the rig may create — a
-# permission, an I/O error, the `ELOOP` a symlink takes under `O_NOFOLLOW`.
-UNREADABLE_FILE = OSError
-# Reading its bytes: an account this run does not control wrote them, so text that is not UTF-8,
-# text that is not JSON, and nesting past the parser's limit are all ordinary. `UnicodeDecodeError`
-# and `JSONDecodeError` are both `ValueError`; `RecursionError` is not.
+# Reading the file's bytes: an account this run does not control wrote them, so text that is not
+# UTF-8, text that is not JSON, and nesting past the parser's limit are all ordinary.
+# `UnicodeDecodeError` and `JSONDecodeError` are both `ValueError`; `RecursionError` is not.
 MALFORMED_CONTENT = (ValueError, RecursionError)
 
 
@@ -131,7 +128,9 @@ def _read_bytes(path: Path) -> tuple[bytes | None, str]:
     except FileNotFoundError:
         # The ordinary state of a run nobody has asked, so not a fault worth a reason.
         return None, ''
-    except UNREADABLE_FILE as e:
+    except OSError as e:
+        # What valid operation produces at a path any account on the rig may create: a permission, an
+        # I/O error, the `ELOOP` a symlink takes under `O_NOFOLLOW`.
         return None, f'finish request at {path} could not be read as a request ({e!r}); continuing to run'
     if len(blob) > MAX_REQUEST_BYTES:
         return None, f'finish request at {path} is larger than {MAX_REQUEST_BYTES} bytes; continuing to run'

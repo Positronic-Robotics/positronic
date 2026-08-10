@@ -1713,9 +1713,9 @@ def test_a_simulated_run_does_not_wait_for_a_motion_it_never_makes(world):
 
 @pytest.mark.timeout(10.0)
 def test_a_finish_after_a_manual_command_homes_the_arm_before_stopping(world):
-    """`_apply_manual` publishes a pose and nothing homes after it — an episode's own `_end_episode`
-    does, and a jog happens between episodes. So the arm sits where the operator put it, and a stop
-    that did not re-home would end the run there and start the next one from a pose nothing recorded."""
+    """A manual command publishes a pose and nothing homes after it — `_end_episode` is what homes,
+    and a jog happens between episodes. So the arm sits where the operator put it, and a stop that
+    did not re-home would end the run there and start the next one from a pose nothing recorded."""
     harness = Harness(SpyPolicy(), make_embodiment())
     p = _pair_all(world, harness)
     manual_em = world.pair(harness.manual_command)
