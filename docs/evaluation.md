@@ -17,40 +17,25 @@ You ship a new checkpoint and want a clean answer to one question: is it actuall
 
 You keep the weights. Your model runs as an inference server behind one WebSocket endpoint; a lightweight client streams observations and executes the returned trajectory — identical for sim and real. See [Connect your model](connect-your-model.md) and [Inference](inference.md).
 
-## End to end in ten minutes, with no checkpoint of your own
+## One CLI, any benchmark
 
-Two commands take you from an empty machine to a scored run. The first serves a
-public reference policy — openpi fetches the checkpoint itself, nothing to mount:
+The same command runs any benchmark — only the `--eval` target changes, and the endpoint it points at is any model served over the protocol. With no checkpoint of your own, serve a public reference policy: openpi fetches the checkpoint itself, nothing to mount.
 
 ```bash
 cd docker && docker compose run --rm --service-ports openpi-server libero
 ```
 
-The second scores it on a LIBERO suite and writes every trial as a dataset:
+Score it, and browse every trial — video, robot state, per-trial success:
 
 ```bash
-uv run --locked positronic eval run --eval=.sim.libero.object \
+uv run positronic eval run --eval=.sim.libero.object \
   --policy=.remote --policy.url=localhost:8000 \
   --eval.trial_count=10 --output_dir=~/evals/libero
+
+uv run positronic-server --dataset.path=~/evals/libero
 ```
 
-Then browse what happened — video, robot state, per-trial success:
-
-```bash
-uv run --locked python -m positronic.server.positronic_server --dataset.path=~/evals/libero
-```
-
-`pi05_libero` scores 21/21 through this path across the spatial, object and goal
-suites, against its published ~97%, so a run that reproduces those numbers says
-the loop is faithful before your own model is anywhere near it. Swap
-`openpi-server libero` for `openpi-server droid_jointpos` and
-`--eval=.sim.robolab.banana_in_bowl` to do the same against RoboLab — that one
-needs an RTX-class GPU host, see below. Serving your own model instead is
-[Connect your model](connect-your-model.md); the eval command does not change.
-
-## One CLI, any benchmark
-
-The same command runs any benchmark — only the `--eval` target changes. Start your model as an inference server (see [Connect your model](connect-your-model.md)), then point the eval runner at it:
+`pi05_libero` scores 21/21 that way across the spatial, object and goal suites, against its published ~97%: a run reproducing those numbers says the loop is faithful before your own model is anywhere near it. Your own model is served the same way ([Connect your model](connect-your-model.md)) and nothing about the eval command changes.
 
 ```bash
 # LIBERO — the 40-task benchmark (four suites), in sim
@@ -80,7 +65,7 @@ scores never do. See [Eval telemetry](telemetry.md).
 
 ## Three ways to start
 
-1. **Run it yourself, in sim.** Free, self-serve, on your own compute — the ten-minute path above. LIBERO is hardware-free; RoboLab renders in Isaac Sim and wants an RTX-class host.
+1. **Run it yourself, in sim.** Free, self-serve, on your own compute — the reference-policy path above takes about ten minutes. LIBERO is hardware-free; RoboLab renders in Isaac Sim and wants an RTX-class host.
 2. **Have us run the sim.** Point us at your endpoint and we run the suite on our GPUs and return the runs, so no one on your side provisions a GPU or installs Isaac. Ask at hi@phail.ai.
 3. **Get evaluated on real hardware.** The same endpoint, on our rigs, operated and operator-scored. The first real-hardware eval is on us, with full results back within a day.
 
