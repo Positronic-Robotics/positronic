@@ -8,7 +8,7 @@ You ship a new checkpoint and want a clean answer to one question: is it actuall
 
 ## What you get
 
-- **Sim and real through the same tasks and API.** Sim today: LIBERO (40 tasks), RoboLab (NVIDIA Isaac Lab, 120 DROID tasks), MuJoCo; MolmoSpaces lands next, through the same adapter. Real hardware: the DROID setup (Franka FR3 + Robotiq 2F-85), bimanual next. **An endpoint that runs against a sim target runs against the rig unchanged** — same wire protocol, same client, nothing to port. Sim for cheap, broad iteration; real hardware as ground truth.
+- **Sim and real through the same tasks and API.** Sim today: LIBERO (40 tasks), RoboLab (NVIDIA Isaac Lab, 120 DROID tasks), MuJoCo — each through the same adapter. Real hardware: the DROID setup (Franka FR3 + Robotiq 2F-85), bimanual next. **An endpoint that runs against a sim target runs against the rig unchanged** — same wire protocol, same client, nothing to port. Sim for cheap, broad iteration; real hardware as ground truth.
 - **Blinded A/B.** Your checkpoint against your own previous checkpoints, or against our maintained baselines (π0.5, GR00T, SmolVLA, ACT) — randomized and blinded, so lighting and setup drift don't bias the result.
 - **Every run returned.** Multi-view video, full telemetry, and the complete run dataset — not just a success rate. Yours to analyze.
 - **Latency-honest execution.** On real hardware, inference and network delay are real — a slow model is scored as slow. In sim the world pauses during inference by default (as in other harnesses), but you can charge the model's measured inference time with `--inference_latency=True`, so sim scores reflect the delay the robot would actually feel — something sim-only harnesses can't model.
@@ -19,23 +19,25 @@ You keep the weights. Your model runs as an inference server behind one WebSocke
 
 ## One CLI, any benchmark
 
-The same command runs any benchmark — only the `--eval` target changes, and the endpoint it points at is any model served over the protocol. With no checkpoint of your own, serve a public reference policy: openpi fetches the checkpoint itself, nothing to mount.
+The same command runs any benchmark — only the `--eval` target changes, as long as the model behind the endpoint speaks that benchmark's observations. With no checkpoint of your own, serve a public reference policy: openpi fetches the checkpoint itself, nothing to mount.
 
 ```bash
 cd docker && docker compose run --rm --service-ports openpi-server libero
 ```
 
-Score it, and browse every trial — video, robot state, per-trial success:
+Score one task, and browse every trial — video, robot state, per-trial success:
 
 ```bash
-uv run positronic eval run --eval=.sim.libero.object \
+uv run positronic eval run --eval=.sim.libero.object --eval.task_id=0 \
   --policy=.remote --policy.url=localhost:8000 \
-  --eval.trial_count=10 --output_dir=~/evals/libero
+  --eval.trial_count=5 --output_dir=~/evals/libero
 
 uv run positronic-server --dataset.path=~/evals/libero
 ```
 
-`pi05_libero` scores 21/21 that way across the spatial, object and goal suites, against its published ~97%: a run reproducing those numbers says the loop is faithful before your own model is anywhere near it. Your own model is served the same way ([Connect your model](connect-your-model.md)) and nothing about the eval command changes.
+`pi05_libero` reproduces its published LIBERO success rates through this path across the spatial, object and goal suites, so a sweep that lands near them says the loop is faithful before your own model is anywhere near it. Drop `--eval.task_id` to sweep the whole suite, at `trial_count` episodes per task.
+
+Your own model is served the same way ([Connect your model](connect-your-model.md)) and the eval command does not change. The **deployment** does: a serving pipeline binds the codec its benchmark expects — `openpi-server libero` reads `image.agentview`, where a RoboLab target supplies the standard exterior image — so switch the deployment with the target (`openpi-server droid_jointpos` for RoboLab) rather than pointing one endpoint at every suite.
 
 ```bash
 # LIBERO — the 40-task benchmark (four suites), in sim
