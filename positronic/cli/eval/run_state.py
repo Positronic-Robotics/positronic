@@ -16,10 +16,11 @@ THE CONTRACT, which a reader in another repository implements against:
            second World reports that World coming up.
   console  the PORT, or null where the run has no console. Not a URL: the run binds `0.0.0.0` and
            cannot know which address a reader comes from, so the host is the reader's to supply.
+           On `ready` it is bound and serving; before that it is only the port it will bind.
   absent   NOT a run that failed — a run predating this module. A reader reports unknown.
 
-Best-effort: a failed write is logged, never raised into the run, which is mid-episode. Inert when
-`ROLLOUT_RUN_ID` is unset, which is every ordinary invocation.
+A write failure is logged and suppressed, never raised. Reporting is inert when `ROLLOUT_RUN_ID`
+is unset.
 """
 
 import json
@@ -56,6 +57,9 @@ class Phase(StrEnum):
     STARTING = 'starting'
     # Driving the policy endpoints through their cold start: seconds to a quarter of an hour.
     WARMING_UP = 'warming_up'
+    # Endpoints warm; building what the run needs before a World exists — syncing the output
+    # directory, scanning what it already holds, constructing the operator surface.
+    SETTING_UP = 'setting_up'
     # The World is up and its background processes, the operator's UI among them, are spawned.
     # NOT usable yet: the cameras open after this, and one that will not takes the run down with it.
     WORLD_UP = 'world_up'
@@ -98,19 +102,10 @@ def state_path(this_run: str) -> Path:
     return state_dir() / f'{STATE_PREFIX}{this_run}'
 
 
-def names_one_segment(this_run: str) -> bool:
-    """Whether `this_run` can be a filename, which is what scoping the path by run id requires.
-
-    One carrying a separator would write to a directory nobody agreed on, so it reports nowhere.
-    """
-    return bool(this_run) and this_run not in ('.', '..') and '/' not in this_run and '\0' not in this_run
-
-
 class StateFile:
     """The run's state, and the file it is reported through.
 
-    An instance with no path is INERT — it holds the state and writes nothing — which is what every
-    ordinary invocation gets, and why no call site guards.
+    An instance with no path is INERT: it holds the state and writes nothing.
     """
 
     def __init__(self, path: Path | None, this_run: str):
@@ -164,7 +159,7 @@ class StateFile:
 
 
 class Readiness(pimm.ControlSystem):
-    """Reports the World coming up, and each of its cameras delivering its first frame.
+    """Reports the World coming up, then each camera's first frame and the console's bind.
 
     FOREGROUND only: the World spawns every background process before scheduling the first
     foreground round, which is what makes that round's World-up report true. It also never returns
@@ -177,14 +172,20 @@ class Readiness(pimm.ControlSystem):
         camera_names: list[str],
         console_port: int | None = None,
         poll_interval_s: float = POLL_INTERVAL_S,
+        awaits_console: bool = False,
     ):
         self.cameras = pimm.ReceiverDict(self)
+        # Bound only where a console announces itself; `awaits_console` is what says it will, so an
+        # unconnected receiver never holds readiness open forever.
+        self.console = pimm.ControlSystemReceiver(self)
         # Touched here so the receivers exist to be connected and the count is fixed up front.
         for name in camera_names:
             _ = self.cameras[name]
         self._state = state
         self._console_port = console_port
         self._poll_interval_s = poll_interval_s
+        self._awaits_console = awaits_console
+        self._console_up = False
         self._open: set[str] = set()
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
@@ -196,11 +197,13 @@ class Readiness(pimm.ControlSystem):
             yield pimm.Sleep(self._poll_interval_s)
 
     def _phase(self) -> Phase:
-        """Readiness, decided in one place: every camera the run declared has delivered a frame.
+        """Readiness, decided in one place: every camera delivering, and the console bound.
 
-        A World with no cameras satisfies it the moment it is up — nothing to wait on.
+        Whatever the run has nothing of — no cameras, no console — it does not wait on.
         """
-        return Phase.READY if len(self._open) == len(self.cameras) else Phase.WORLD_UP
+        cameras_up = len(self._open) == len(self.cameras)
+        console_up = self._console_up or not self._awaits_console
+        return Phase.READY if cameras_up and console_up else Phase.WORLD_UP
 
     def _count(self) -> None:
         """Report any camera seen for the first time, and readiness once none is left.
@@ -209,19 +212,31 @@ class Readiness(pimm.ControlSystem):
         first-frame. Only channels not yet seen are read: a read takes the lock the producer, the
         harness, the recorder and the UI contend for, and copies the whole frame out.
         """
+        console = self._console_up
+        if self._awaits_console and not console:
+            # A socket bound in another process: the run cannot report a console it only intends.
+            self._console_up = self.console.read() is not None
         pending = [name for name in self.cameras if name not in self._open]
         opened = {name for name in pending if self.cameras[name].read() is not None}
-        if not opened:
+        if not opened and console == self._console_up:
             return
         self._open |= opened
         self._state.report(self._phase(), cameras_open=len(self._open))
 
 
-def from_env() -> StateFile:
-    """The state file this run reports through — inert unless something named the run.
+def names_one_segment(this_run: str) -> bool:
+    """Whether `this_run` can be a filename, which is what scoping the path by run id requires.
 
-    Returns a file either way, so no caller asks whether anyone is listening. The first report is
-    made here, so the file existing at all says the process speaks this contract.
+    One carrying a separator would write to a directory nobody agreed on, so it reports nowhere.
+    """
+    return bool(this_run) and this_run not in ('.', '..') and '/' not in this_run and '\0' not in this_run
+
+
+def from_env() -> StateFile:
+    """The state file this run reports through.
+
+    Returns an inert pathless `StateFile` where `ROLLOUT_RUN_ID` names no run, or one bound to
+    `state_path` having already written its `STARTING` report.
     """
     this_run = os.environ.get(RUN_ID_ENV)
     if not this_run:

@@ -84,7 +84,15 @@ def web(port, fps, width, bitrate, translation_fine, translation_coarse, rotatio
             rotation_fine=rotation_fine,
             rotation_coarse=rotation_coarse,
         )
-        return Driver(ui, ui.directive, pimm.utils.identity, [], manual_commands=ui.manual_command, console_port=port)
+        return Driver(
+            ui,
+            ui.directive,
+            pimm.utils.identity,
+            [],
+            manual_commands=ui.manual_command,
+            console_port=port,
+            console_ready=ui.console_ready,
+        )
 
     return make
 

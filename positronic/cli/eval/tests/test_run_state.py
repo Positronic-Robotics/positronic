@@ -191,6 +191,22 @@ def test_a_report_carries_unnamed_fields_forward(named_run):
 # --- the transitions ------------------------------------------------------------------------
 
 
+class Console(pimm.ControlSystem):
+    """A console that announces its bind after `after` rounds, standing in for uvicorn."""
+
+    def __init__(self, after: int = 0):
+        self.ready = pimm.ControlSystemEmitter(self)
+        self._after = after
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        rounds = 0
+        while not should_stop.value:
+            if rounds >= self._after:
+                self.ready.emit(True, clock.now_ns())
+            rounds += 1
+            yield pimm.Sleep(TICK_S)
+
+
 def _drive(state: run_state.StateFile, cameras: dict[str, Camera], rounds: int = 6) -> run_state.Readiness:
     """Run a world holding `cameras` and a readiness watch over them, for a bounded number of rounds."""
     readiness = run_state.Readiness(state, list(cameras), console_port=8080, poll_interval_s=TICK_S)
@@ -199,6 +215,14 @@ def _drive(state: run_state.StateFile, cameras: dict[str, Camera], rounds: int =
             world.connect(camera.frame, readiness.cameras[name])
         world.run([*cameras.values(), readiness, Stopper(rounds)])
     return readiness
+
+
+def _drive_console(state, console: Console, rounds: int = 8) -> None:
+    """A World whose only thing to wait on is a console."""
+    readiness = run_state.Readiness(state, [], console_port=8080, poll_interval_s=TICK_S, awaits_console=True)
+    with pimm.World(virtual_time=True) as world:
+        world.connect(console.ready, readiness.console)
+        world.run([console, readiness, Stopper(rounds)])
 
 
 def test_the_world_coming_up_is_reported_before_any_camera(named_run):
@@ -293,3 +317,36 @@ def test_the_watch_does_not_end_the_world(named_run):
         world.run([camera, readiness, stopper])
     assert rounds == 20
     assert read_state(named_run)['phase'] == 'ready'
+
+
+def test_a_console_that_has_not_bound_holds_readiness_back(named_run):
+    """The console's socket comes up inside the process the World spawned, after every producer, so
+    a run can have every camera delivering while nothing answers on the port it reports."""
+    state = run_state.from_env()
+    _drive_console(state, Console(after=99))
+    got = read_state(named_run)
+    assert got['phase'] == 'world_up'
+    assert got['console_port'] == 8080
+
+
+def test_a_console_that_binds_completes_readiness(named_run):
+    state = run_state.from_env()
+    _drive_console(state, Console(after=2))
+    assert read_state(named_run)['phase'] == 'ready'
+
+
+def test_a_run_with_no_console_waits_on_none(named_run):
+    """A surface drawn on the rig's own screen has no socket to wait for — the absence of the
+    question, not a waiver of it."""
+    state = run_state.from_env()
+    _drive(state, {})
+    assert read_state(named_run)['phase'] == 'ready'
+
+
+def test_the_setup_after_the_warm_up_is_its_own_phase(named_run):
+    """Syncing the output directory and scanning what it holds happen with the endpoints already
+    warm, so reporting them as warm-up names the wrong wait."""
+    state = run_state.from_env()
+    state.report(run_state.Phase.WARMING_UP)
+    state.report(run_state.Phase.SETTING_UP)
+    assert read_state(named_run)['phase'] == 'setting_up'

@@ -42,9 +42,10 @@ class Driver:
     directive_wrapper: Callable
     control_systems: list[pimm.ControlSystem]
     manual_commands: pimm.SignalEmitter | None = None
-    # The port this surface serves the operator on; None where it is drawn on the rig's own
-    # screen. Only the driver knows: the UI is in another process by the time anything asks.
+    # The port this surface serves the operator on, and the signal it raises once bound; both None
+    # where the surface is drawn on the rig's own screen and has no socket.
     console_port: int | None = None
+    console_ready: pimm.ControlSystemEmitter | None = None
 
 
 def _seed_counter(policy, output_dir: Path):
@@ -69,6 +70,33 @@ def _completion_sink(policy):
     policies. The harness fires it on each clean episode completion.
     """
     return policy.counter.record if isinstance(policy, SampledPolicy) else None
+
+
+def _wire_readiness(
+    world: pimm.World, state: run_state.StateFile, embodiment: Embodiment, driver: Driver | None, cameras: list[str]
+) -> run_state.Readiness | None:
+    """The progress watch for this World, tapped onto its cameras and console. None where nothing
+    is listening, so an unwatched run binds no extra receivers at all.
+
+    A second reader costs the producer a flag per frame: one frame into shared memory whatever the
+    number of receivers.
+    """
+    if not state.enabled:
+        return None
+    # One expression, two uses side by side: a console that must be waited for is exactly one whose
+    # signal is connected below.
+    console_ready = driver.console_ready if driver is not None else None
+    readiness = run_state.Readiness(
+        state, cameras, driver.console_port if driver is not None else None, awaits_console=console_ready is not None
+    )
+    if console_ready is not None:
+        world.connect(console_ready, readiness.console)
+    for name in cameras:
+        source = embodiment.observations[name].source
+        # `connect` asserts this too; the field is annotated as the wider `SignalEmitter`.
+        assert isinstance(source, pimm.ControlSystemEmitter)
+        world.connect(source, readiness.cameras[name])
+    return readiness
 
 
 def _run_world(
@@ -109,16 +137,7 @@ def _run_world(
             for name, obs in embodiment.observations.items():
                 if name.startswith(keys.IMAGE_PREFIX):
                     world.connect(obs.source, gui.cameras[name])
-        # A second reader costs the producer a flag per frame: one frame into shared memory
-        # whatever the number of receivers.
-        readiness = None
-        if state.enabled:
-            readiness = run_state.Readiness(state, cameras, driver.console_port if driver is not None else None)
-            for name in cameras:
-                source = embodiment.observations[name].source
-                # `connect` asserts this too; the field is annotated as the wider `SignalEmitter`.
-                assert isinstance(source, pimm.ControlSystemEmitter)
-                world.connect(source, readiness.cameras[name])
+        readiness = _wire_readiness(world, state, embodiment, driver, cameras)
         if driver is not None:
             world.connect(driver.directives, harness.directive, emitter_wrapper=driver.directive_wrapper)
             if driver.manual_commands is not None:
@@ -240,8 +259,8 @@ def main(
     the report, so a real embodiment in a timed sweep is rejected rather than allowed to pollute it.
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
-    # One per RUN, handed to every World a sweep raises. Inert unless something named this run, so
-    # nothing below is conditional on it.
+    # One `StateFile` spans the sweep, whatever number of Worlds it raises, and is inert when
+    # `ROLLOUT_RUN_ID` is unset.
     state = run_state.from_env()
     # Validate timing up front, before the policy warmup, so a rejected sweep fails before it spends anything.
     if timing:
@@ -262,6 +281,9 @@ def main(
     state.report(run_state.Phase.WARMING_UP)
     policy.new_session().close()
 
+    # The endpoints are warm from here; syncing the output directory and scanning what it holds can
+    # take minutes on its own, and reporting that as warm-up would name the wrong wait.
+    state.report(run_state.Phase.SETTING_UP)
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
         utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])

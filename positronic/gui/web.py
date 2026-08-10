@@ -216,6 +216,10 @@ class WebEvalUI(pimm.ControlSystem):
         self.cameras = pimm.ReceiverDict(self, default=None)
         self.directive = pimm.ControlSystemEmitter(self)
         self.manual_command = pimm.ControlSystemEmitter(self)
+        # True once uvicorn has bound the port. The socket comes up inside this process, after the
+        # World has spawned it, so nothing outside can tell a console that is serving from one that
+        # is about to.
+        self.console_ready = pimm.ControlSystemEmitter[bool](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         templates = Jinja2Templates(directory=_pkg_path('templates'))
@@ -309,6 +313,10 @@ class WebEvalUI(pimm.ControlSystem):
                     stream.push(_tile([latest[name] for name in names], self.width))
                 if not server_thread.is_alive():
                     raise RuntimeError('Web eval server thread died')
+                # Emitted every round rather than once: a single emit made before the reader bound
+                # would be a console that silently never announced itself.
+                if server.started:
+                    self.console_ready.emit(True, clock.now_ns())
                 yield pimm.Sleep(1 / self.fps)
         finally:
             stream.close()
