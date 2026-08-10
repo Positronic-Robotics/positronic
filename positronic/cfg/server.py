@@ -30,7 +30,7 @@ def eval_table():
         '__index__': C(label='#', format='%d'),
         '__duration__': C(label='Duration', format='%.2f sec'),
         keys.TASK: C(label='Task', filter=True),
-        'eval.success': C(
+        keys.EVAL_SUCCESS: C(
             label='Pass',
             default=False,
             renderer=RendererConfig(
@@ -38,7 +38,7 @@ def eval_table():
                 options={True: {'label': 'Pass', 'variant': 'success'}, False: {'label': 'Fail', 'variant': 'danger'}},
             ),
         ),
-        'eval.terminated': C(label='Ended', default=False),
+        keys.EVAL_TERMINATED: C(label='Ended', default=False),
     }
 
 

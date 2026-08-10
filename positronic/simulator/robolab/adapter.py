@@ -60,4 +60,4 @@ class RobolabAdapter(WireCommandAdapter):
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
         # ``done`` covers termination and truncation, so the trial ends either way; ``success`` is True only
         # when the task's success condition fired, keeping timeouts honest.
-        return {'eval.success': bool(result['success'])} if result['done'] else None
+        return {keys.EVAL_SUCCESS: bool(result['success'])} if result['done'] else None
