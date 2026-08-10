@@ -543,11 +543,9 @@ class ChangeEEFrame(Codec):
                     'episode a codec already moved would train on a frame the checkpoint does not declare'
                 )
             derived: dict[str, Any] = {obs_keys.EE_FRAME: FromValue(codec._transform.as_vector(_QUAT))}
-            # Membership alone is not enough: a joint-only dataset carries no legacy pose to rename, and the
-            # backfill (``cfg.ds.internal._RENAME_ROBOT_COMMAND``) surfaces that absence as a present key holding
-            # ``None``. Wrapping it would defer the failure to whoever dereferences the signal.
-            present = (key for key in codec._keys if key in episode and episode[key] is not None)
-            derived.update({key: partial(self._derive_pose, key) for key in present})
+            # ``cfg.ds.internal._RENAME_ROBOT_COMMAND`` backfills an absent pose as ``None``, not as a missing key.
+            keys_with_poses = (key for key in codec._keys if key in episode and episode[key] is not None)
+            derived.update({key: partial(self._derive_pose, key) for key in keys_with_poses})
             return Group(Derive(**derived), Identity())(episode)
 
         @property
