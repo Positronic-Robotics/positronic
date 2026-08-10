@@ -109,7 +109,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `task` | str | — | Language instruction for the episode |
 | `descriptor` | str | — | Embodiment the observation came from (e.g. `mujoco.franka`); empty string when unset. Lets a multi-embodiment policy adapt to the current robot |
 
-Your server receives every key each step. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm (see [Actions](#actions-server--client)).
+Your server receives every key each step. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm.
 
 ### Actions (server → client)
 
@@ -130,26 +130,21 @@ The normal response is a list of action dicts — a short trajectory. (A single 
 | `timestamp` | float | Execution time in seconds from the start of the returned trajectory (e.g. `i / action_fps` for the i-th action). The client runs each action at `now + timestamp`, where `now` is when the prediction arrived. A single action dict returned *outside* a list is auto-stamped `0.0`; give every action in a list its own `timestamp`, or they all collapse onto one instant and fire at once. |
 
 The `robot_command` field selects the control mode. Build one of the commands in
-[`positronic.drivers.roboarm.command`](../positronic/drivers/roboarm/command.py) — the client hands the
-same object to its arm driver, which dispatches on the type:
+[`positronic.drivers.roboarm.command`](../positronic/drivers/roboarm/command.py):
 
 | Command | Fields | Description |
 |---------|--------|-------------|
 | `CartesianPosition` | `pose`: `geom.Transform3D` | Target end-effector pose |
 | `JointPosition` | `positions`: float32 (7,) | Target joint angles (radians) |
 | `JointDelta` | `velocities`: float32 (7,) | Joint velocity command |
-| `CartesianDelta` | `delta`, `frame`: `geom.Transform3D` | Relative motion, composed onto the pose the driver measures when the command lands. A delta has no anchor pose of its own, so `frame` states which frame it is expressed in |
+| `CartesianDelta` | `delta`, `frame`: `geom.Transform3D` | Relative motion, composed onto the pose the arm is at when it lands; `frame` is the frame `delta` is expressed in |
 | `Reset` | — | Return the arm to its home position |
 
 Which command your model produces is decided by its codec.
 
-A rig with more than one arm names every channel after the arm that owns it, on both sides of the wire:
-observations arrive as `robot_state.left.ee_pose` and `grip.left`, and an action carries `robot_command.left`
-alongside `target_grip.left`. The client emits each channel to its own arm, and an arm the action omits holds
-its last command.
-
-`serialise` puts these on the wire; [Serialization](#serialization) gives the bytes, for a server that
-implements the protocol without depending on Positronic.
+A rig with more than one arm names every channel after the arm that owns it: observations arrive as
+`robot_state.left.ee_pose` and `grip.left`, and an action carries `robot_command.left` alongside
+`target_grip.left`. An arm your action omits holds its last command.
 
 ## Debugging with recordings
 
@@ -238,7 +233,7 @@ The built-in OpenPI and GR00T servers can't hand over a ready policy — checkpo
 
 ### Serialization
 
-Every message is msgpack. Numpy arrays and robot commands each use a custom extension:
+Every message is msgpack. Numpy arrays use a custom extension:
 
 ```python
 # numpy array -> msgpack
@@ -248,30 +243,10 @@ Every message is msgpack. Numpy arrays and robot commands each use a custom exte
     b"dtype": str(array.dtype), # e.g. "<f4"
     b"shape": array.shape       # tuple
 }
-
-# robot command -> msgpack
-{
-    b"__cmd__": {
-        "type": "cartesian_pos",  # str; the wire name of one of the commands below
-        "pose": array             # the command's field, itself an __ndarray__ map
-    }
-}
 ```
 
-The envelope key is bytes; the keys inside it are strings. Each command's wire name and the numeric field
-it carries:
-
-| Command | Wire `type` | Fields |
-|---------|-------------|--------|
-| `CartesianPosition` | `cartesian_pos` | `pose`: float32 (12,) |
-| `JointPosition` | `joint_pos` | `positions`: float32 (7,) |
-| `JointDelta` | `joint_delta` | `velocities`: float32 (7,) |
-| `CartesianDelta` | `cartesian_delta` | `delta`: float32 (12,), `frame`: float32 (12,) — both required |
-| `Reset` | `reset` | — |
-
-A pose or transform on the wire is 12 floats: 3 translation, then a 3x3 rotation matrix flattened row-major.
-
-`positronic.utils.serialization` provides `serialise()` / `deserialise()` that handle this for you:
+`positronic.utils.serialization` provides `serialise()` / `deserialise()`, which handle this and the
+robot commands:
 
 ```python
 from positronic.utils.serialization import serialise, deserialise
@@ -282,8 +257,6 @@ async for message in websocket.iter_bytes():
     actions = session(obs)               # list of action dicts (or None)
     await websocket.send_bytes(serialise({"result": actions}))
 ```
-
-If you would rather not depend on Positronic, implement the protocol directly: msgpack with numpy support, plus the two envelopes above — `__ndarray__` around every array, and `__cmd__` around every robot command.
 
 ## See Also
 
