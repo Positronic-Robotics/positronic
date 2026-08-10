@@ -322,6 +322,9 @@ def test_the_watch_does_not_end_the_world(named_run):
 def test_a_console_that_has_not_bound_holds_readiness_back(named_run):
     """The console's socket comes up inside the process the World spawned, after every producer, so
     a run can have every camera delivering while nothing answers on the port it reports."""
+    # rules-allow: hardcoded-keys — the wire shape, asserted the way a reader in another
+    # repository sees it. Written through the constants these tests would still pass if one
+    # were renamed, which is the single thing they exist to catch.
     state = run_state.from_env()
     _drive_console(state, Console(after=99))
     got = read_state(named_run)
@@ -330,6 +333,9 @@ def test_a_console_that_has_not_bound_holds_readiness_back(named_run):
 
 
 def test_a_console_that_binds_completes_readiness(named_run):
+    # rules-allow: hardcoded-keys — the wire shape, asserted the way a reader in another
+    # repository sees it. Written through the constants these tests would still pass if one
+    # were renamed, which is the single thing they exist to catch.
     state = run_state.from_env()
     _drive_console(state, Console(after=2))
     assert read_state(named_run)['phase'] == 'ready'
@@ -338,6 +344,9 @@ def test_a_console_that_binds_completes_readiness(named_run):
 def test_a_run_with_no_console_waits_on_none(named_run):
     """A surface drawn on the rig's own screen has no socket to wait for — the absence of the
     question, not a waiver of it."""
+    # rules-allow: hardcoded-keys — the wire shape, asserted the way a reader in another
+    # repository sees it. Written through the constants these tests would still pass if one
+    # were renamed, which is the single thing they exist to catch.
     state = run_state.from_env()
     _drive(state, {})
     assert read_state(named_run)['phase'] == 'ready'
@@ -346,6 +355,9 @@ def test_a_run_with_no_console_waits_on_none(named_run):
 def test_the_setup_after_the_warm_up_is_its_own_phase(named_run):
     """Syncing the output directory and scanning what it holds happen with the endpoints already
     warm, so reporting them as warm-up names the wrong wait."""
+    # rules-allow: hardcoded-keys — the wire shape, asserted the way a reader in another
+    # repository sees it. Written through the constants these tests would still pass if one
+    # were renamed, which is the single thing they exist to catch.
     state = run_state.from_env()
     state.report(run_state.Phase.WARMING_UP)
     state.report(run_state.Phase.SETTING_UP)

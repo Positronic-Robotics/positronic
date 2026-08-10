@@ -5,8 +5,10 @@ from typing import cast
 
 import pytest
 
+import pimm
 from positronic import telemetry, telemetry_keys
-from positronic.cli.eval.run import Driver, _pass_span, _timed_pass, main
+from positronic.cli.eval import run_state
+from positronic.cli.eval.run import Driver, _pass_span, _run_world, _timed_pass, main
 from positronic.eval import Embodiment, Eval, Task
 
 
@@ -88,3 +90,36 @@ def test_the_stats_sampler_runs_inside_the_pass_span(tmp_path, monkeypatch):
         pass
 
     assert order == ['sampler built', 'pass in', 'sampler in', 'sampler out', 'pass out']
+
+
+def test_a_console_port_without_its_ready_signal_is_rejected():
+    """A port nobody confirms would let a run advertise `ready` on a socket nothing is listening
+    on, so the two halves of the console contract are given together or not at all."""
+    with pytest.raises(AssertionError, match='one contract'):
+        Driver(None, cast(pimm.SignalEmitter, SimpleNamespace()), lambda x: x, [], console_port=8080)
+    with pytest.raises(AssertionError, match='one contract'):
+        Driver(
+            None,
+            cast(pimm.SignalEmitter, SimpleNamespace()),
+            lambda x: x,
+            [],
+            console_ready=cast(pimm.ControlSystemEmitter, SimpleNamespace()),
+        )
+
+
+def test_a_world_reports_setting_up_before_it_is_constructed(tmp_path, monkeypatch):
+    """In a sweep the previous World has exited while the state still says `ready`; waiting for the
+    next Readiness's first scheduler round would advertise a dead World as up for the whole of the
+    next one's construction."""
+    state = run_state.StateFile(tmp_path / 'state.json', 'run-sweep')
+    state.report(run_state.Phase.READY)
+
+    def _explode(*args, **kwargs):
+        raise RuntimeError('constructed')
+
+    monkeypatch.setattr(sys.modules['positronic.cli.eval.run'], 'Harness', _explode)
+
+    with pytest.raises(RuntimeError, match='constructed'):
+        _run_world(object(), cast(Embodiment, SimpleNamespace()), None, None, None, None, False, None, state)
+
+    assert state.state.phase is run_state.Phase.SETTING_UP

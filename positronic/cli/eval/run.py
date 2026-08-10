@@ -47,6 +47,12 @@ class Driver:
     console_port: int | None = None
     console_ready: pimm.ControlSystemEmitter | None = None
 
+    def __post_init__(self):
+        # One console contract: a port nobody confirms would let a run advertise `ready` on an
+        # unbound socket, and a confirmation with no port names nothing to connect to.
+        both = (self.console_port is None) == (self.console_ready is None)
+        assert both, 'console_port and console_ready are one contract: give both or neither'
+
 
 def _seed_counter(policy, output_dir: Path):
     """If policy is a SampledPolicy, seed its episode counter from existing episodes in output_dir."""
@@ -83,8 +89,7 @@ def _wire_readiness(
     """
     if not state.enabled:
         return None
-    # One expression, two uses side by side: a console that must be waited for is exactly one whose
-    # signal is connected below.
+    # Readiness waits for a console exactly when one is connected below.
     console_ready = driver.console_ready if driver is not None else None
     readiness = run_state.Readiness(
         state, cameras, driver.console_port if driver is not None else None, awaits_console=console_ready is not None
@@ -118,6 +123,9 @@ def _run_world(
     ``state`` reports this World coming up and its cameras delivering their first frames. Scheduled rather
     than called: only from inside ``world.run`` is the operator's UI known to exist.
     """
+    # Before anything is constructed: in a sweep the previous World has exited while the state still
+    # says `ready`, and waiting for the next Readiness's first round would advertise it as up.
+    state.report(run_state.Phase.SETTING_UP)
     harness = Harness(policy, embodiment, task=task, trials=trials, on_episode_complete=on_complete)
     gui = driver.gui if driver is not None else (dpg_ui() if show_gui else None)
 

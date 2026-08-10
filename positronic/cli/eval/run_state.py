@@ -117,7 +117,7 @@ class StateFile:
 
     @property
     def enabled(self) -> bool:
-        """Whether anything is being reported. False on an ordinary run."""
+        """Whether anything is being reported — that is, whether this instance has a path."""
         return self._path is not None
 
     @property
