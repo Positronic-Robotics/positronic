@@ -235,9 +235,8 @@ def main(
         _validate_timing(embodiments, output_dir)
         virtual_clock = driver is None and all(e.simulated for e in embodiments)
 
-    # Drive the policy through its cold start before hardware and the operator surface come up, so the
-    # first episode begins warm rather than stalling while the robot waits. One session is enough: it
-    # brings up every endpoint a multi-policy run carries, not only the one it samples.
+    # Cold-start the policy before hardware and the operator surface, so the first episode begins warm.
+    # One session is enough: it brings up every endpoint a multi-policy run carries, not just the sampled one.
     # TODO: a policy with recording taps (recording_dir set) records this throwaway warmup session —
     # an empty .rrd plus a bump to the recorder's episode counter — but warmup is not a real episode.
     logger.info('Warming up policy endpoints')

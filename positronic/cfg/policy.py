@@ -63,8 +63,7 @@ class EndpointKind(StrEnum):
     REPLAY = 'replay'  # a recorded dataset played back, with nothing served and no network
 
 
-# The field names of an `endpoints` entry: the wire contract with whatever writes `--policy.endpoints`,
-# which reaches this process as one JSON object. They stay stable.
+# The wire contract with whatever writes `--policy.endpoints` as JSON: these names stay stable.
 ENDPOINT_KIND = 'kind'
 ENDPOINT_URL = 'url'
 ENDPOINT_DATASET = 'dataset'
@@ -73,8 +72,7 @@ ENDPOINT_EPISODE = 'episode'
 # What each kind takes besides `kind` itself, in the order its declaration reads.
 ENDPOINT_FIELDS = {EndpointKind.REMOTE: (ENDPOINT_URL,), EndpointKind.REPLAY: (ENDPOINT_DATASET, ENDPOINT_EPISODE)}
 
-# One entry of the `endpoints` mapping. A bare string is a served endpoint's URL, the short form for
-# the common case; a mapping declares the endpoint's kind and the fields that kind takes.
+# One `endpoints` entry: a bare string is a served endpoint's URL, a mapping declares kind and fields.
 EndpointSpec = str | dict[str, str | int | None]
 
 
@@ -108,8 +106,7 @@ def _endpoint_policy(name: str, spec: EndpointSpec, recording_dir: str | None) -
     if not isinstance(dataset, str) or not dataset:
         raise ValueError(f'endpoint {name!r} is {kind} and names no {ENDPOINT_DATASET} to play back')
     episode = fields.get(ENDPOINT_EPISODE)
-    # ``type`` rather than ``isinstance``: ``bool`` subclasses ``int``, so a JSON ``true`` would pass here
-    # and play episode 1.
+    # ``type`` not ``isinstance``: ``bool`` subclasses ``int``, so a JSON ``true`` would play episode 1.
     if episode is not None and type(episode) is not int:
         raise ValueError(f'endpoint {name!r} declares {ENDPOINT_EPISODE}={episode!r}, which is not an episode index')
     # An entry that names no episode plays the recording's first.
