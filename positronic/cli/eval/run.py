@@ -161,7 +161,7 @@ def _pass_span(**attrs) -> Generator[None, None, None]:
 
 
 @contextmanager
-def _timed_pass(output_dir: str | Path | None, timing: bool, policy):
+def _timed_pass(output_dir: str | Path | None, timing: bool, policy, virtual_clock: bool):
     """Bracket a sweep in the harness-process telemetry: the bound tracer, the machine-load sampler and one
     ``eval.pass`` span, with the environment a launched env server reads set around them. Inert without
     ``timing``."""
@@ -186,7 +186,11 @@ def _timed_pass(output_dir: str | Path | None, timing: bool, policy):
         # as CPU-only.
         with (
             telemetry.bind(timed_dir, telemetry_keys.HARNESS_PROCESS, run_id),
-            _pass_span(**{ATTR_RUN_ID: run_id, 'policy': type(policy).__name__}),
+            _pass_span(**{
+                ATTR_RUN_ID: run_id,
+                'policy': type(policy).__name__,
+                telemetry_keys.ATTR_PASS_VIRTUAL_CLOCK: virtual_clock,
+            }),
             sampler,
         ):
             yield
@@ -222,6 +226,9 @@ def main(
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
     # Validate timing up front, before the policy warmup, so a rejected sweep fails before it spends anything.
+    # The clock every world in this sweep will run on, by the same rule ``_run_world`` applies per world.
+    # Stamped on the pass so the timing report labels what it measured instead of assuming sim time.
+    virtual_clock = False
     if timing:
         if evals is not None:
             embodiments = [ev.embodiment for ev in evals]
@@ -229,6 +236,7 @@ def main(
             assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
             embodiments = [embodiment]
         _validate_timing(embodiments, output_dir)
+        virtual_clock = driver is None and all(e.simulated for e in embodiments)
 
     # Drive the policy's remote endpoints through their cold start before hardware and the operator
     # surface come up: opening a session blocks on the server handshake, which returns only once the
@@ -249,7 +257,7 @@ def main(
     on_complete = _completion_sink(policy)
 
     try:
-        with _timed_pass(output_dir, timing, policy):
+        with _timed_pass(output_dir, timing, policy, virtual_clock):
             if driver is not None:
                 assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
                 _run_world(policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete)

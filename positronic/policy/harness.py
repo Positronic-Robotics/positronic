@@ -532,8 +532,9 @@ class Harness(pimm.ControlSystem):
                 self._log_finish(Outcome.ABORTED)
             self._telemetry.seal(clock.now())
             raise
-        # Only the clean return: a run that unwound above is not one that finished, and a watcher reading
-        # this line would otherwise call a crash a completed run.
+        # Only the clean return: a run that unwound above is not one that finished. It says the harness's
+        # loop ended, not that the run was healthy — a background process that dies sets the same stop
+        # signal an orderly shutdown does, and the signal carries no reason to tell them apart.
         logger.info(LOG_RUN_FINISH)
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:  # noqa: C901
