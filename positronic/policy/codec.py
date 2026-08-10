@@ -495,26 +495,19 @@ class RestrictImageSize(Codec):
 
 
 class WireCommand(Codec):
-    """Turn a robot command that arrived over the wire into the typed command everything above expects.
+    """Decode a served command mapping — ``{'type': 'cartesian_pos', 'pose': [...]}`` — into the typed
+    ``command.*`` object everything above the wire matches on.
 
-    A transport carries no Python types, so a served command arrives as the mapping ``command.from_wire``
-    reads — ``{'type': 'cartesian_pos', 'pose': [...]}`` — while everything above this point matches on
-    ``command.*`` objects. Compose it innermost, closest to the wire.
-
-    Every channel in the command family is decoded, not only ``robot_command`` itself;
-    ``keys.is_robot_command`` is the test, and defines the family.
-
-    An action whose command is already typed passes through untouched, as does one carrying no command at
-    all — a chunk's end-of-validity sentinel.
+    - Compose innermost, closest to the wire.
+    - Decodes every channel ``keys.is_robot_command`` names, not only ``robot_command``.
+    - An already-typed command, and the chunk's no-command sentinel, pass through.
     """
 
-    # The one owner of this codec's wire name: `to_spec` returns it and `spec.WIRE_WRAPPERS` keys on it,
-    # so a rename cannot desync the two.
+    # `to_spec` returns this and `spec.WIRE_WRAPPERS` keys on it, so a rename cannot desync the two.
     WIRE_NAME = 'wire_command'
 
     def encode(self, data):
-        # An action-only codec passes observations through explicitly; the base `encode` returns nothing,
-        # which would hand the server an empty observation.
+        # The base `Codec.encode` returns `{}`, which would hand the server an empty observation.
         return data
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
@@ -523,18 +516,15 @@ class WireCommand(Codec):
 
     @staticmethod
     def _as_command(value):
-        """One channel's value, typed. Anything but a wire mapping is returned as it came: a local policy
-        already produces a typed command, and `robot_command.pose` carries a vector rather than a command."""
+        """One channel's value, typed. A non-mapping — a typed command, a ``.pose`` vector — returns as it came."""
         if not isinstance(value, cabc.Mapping):
             return value
-        # The wire has no arrays, only sequences, and `from_wire` reads its vectors as arrays. `type` is
-        # the one entry that stays a string.
+        # `from_wire` reads vectors as arrays; the wire carries sequences, and `type` is its one string.
         return command.from_wire({k: v if isinstance(v, str) else np.asarray(v) for k, v in value.items()})
 
     def to_spec(self):
         # rules-allow: hardcoded-keys — `'name'` is the spec layer's structural key, written bare by every
-        # `to_spec` and read by `from_spec`. Giving it a constant is one change across that whole layer;
-        # converting this site alone would leave every sibling on the literal and this one reading apart.
+        # `to_spec` and read by `from_spec`; a constant for it is one change across that layer, not this site.
         return {'name': self.WIRE_NAME}
 
 

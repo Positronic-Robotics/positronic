@@ -349,12 +349,10 @@ def test_frames_stay_raw_where_the_server_declares_no_compression():
 
 
 _WIRE_POSE = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
-# rules-allow: hardcoded-keys — a fixture standing in for a server, so it spells the wire itself. Sharing
-# the reader's constants would make the two agree whatever their values, leaving nothing pinned. Same
-# reason as `CHUNKED_STACK` above, and as `command.from_wire`, which spells this command form to read it.
+# rules-allow: hardcoded-keys — a fixture standing in for a server, so it spells the wire itself; sharing
+# the reader's constants would make the two agree whatever their values, leaving nothing pinned.
 _WIRE_ACTION = [{keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': _WIRE_POSE}, 'timestamp': 0.0}]
-# The decode sits under whatever the handshake declares, so both spec shapes a server can send are run:
-# the bare scheduler, and a sequence putting a codec between that scheduler and the wire.
+# The decode sits under whatever the handshake declares, so both legal spec shapes are run.
 _DECLARED_STACKS = [
     CHUNKED_STACK,
     {'local_stack': {'seq': [{'name': 'chunked_schedule'}, {'name': 'restrict_image_size'}]}},

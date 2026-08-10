@@ -631,18 +631,15 @@ def test_groot_joints_codec_decodes_modality_keyed_actions():
 _WIRE_POSE = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
 
 
-# rules-allow: hardcoded-keys — a fixture standing in for a server, so it spells the wire itself. Reading
-# `command.CartesianPosition.TYPE` would make the test agree with the decoder whatever that value became,
-# leaving the wire the rig actually receives unpinned. Same reason as `_WIRE_ACTION` in
-# `offboard/tests/test_remote_policy.py`.
+# rules-allow: hardcoded-keys — a fixture standing in for a server, so it spells the wire itself; reading
+# `command.CartesianPosition.TYPE` would agree with the decoder whatever it became, pinning nothing.
 def _wire_command(pose=_WIRE_POSE) -> dict:
     """One served ``cartesian_pos`` command, in the wire's own layout."""
     return {'type': 'cartesian_pos', 'pose': pose}
 
 
 def _wire_decoded(action: dict) -> dict:
-    """One action through ``WireCommand``. ``Codec.decode`` answers a chunk with a list, so the
-    single-action shape is narrowed once here rather than at every assertion below."""
+    """One action through ``WireCommand``, narrowed to a dict — ``Codec.decode`` answers a chunk with a list."""
     decoded = WireCommand().decode(action)
     assert isinstance(decoded, dict)
     return decoded
@@ -674,9 +671,8 @@ def test_wire_command_accepts_the_wire_as_a_plain_sequence():
 
 
 def test_wire_command_decodes_every_arm_of_a_multi_arm_action():
-    """An embodiment with more than one arm names its channels `robot_command.{side}`, and the harness
-    forwards each to its own driver by that name. Decoding only the unsuffixed channel hands a bimanual
-    endpoint's arms the raw mapping — the same failure on a different channel."""
+    """A bimanual embodiment names its channels `robot_command.{side}`; decoding only the unsuffixed one
+    hands those arms the raw mapping."""
     wire = _wire_command()
     action = {f'{obs_keys.ROBOT_COMMAND}.left': wire, f'{obs_keys.ROBOT_COMMAND}.right': wire, 'timestamp': 0.0}
 
@@ -689,9 +685,8 @@ def test_wire_command_decodes_every_arm_of_a_multi_arm_action():
 
 
 def test_wire_command_leaves_a_command_channel_carrying_a_vector_alone():
-    """`robot_command.pose` and `robot_command.joints` are the serializer's own unfoldings of the channel,
-    so they share its prefix while carrying a vector rather than a command. Reading the value is what tells
-    them apart — a prefix match alone would hand them to `from_wire`."""
+    """`robot_command.pose` / `.joints` share the prefix but carry a vector, so a prefix match alone would
+    hand them to `from_wire`; reading the value is what tells them apart."""
     pose = np.zeros(7, dtype=np.float32)
 
     decoded = _wire_decoded({obs_keys.TARGET_EE_POSE: pose, obs_keys.TARGET_JOINTS: pose})
@@ -701,8 +696,7 @@ def test_wire_command_leaves_a_command_channel_carrying_a_vector_alone():
 
 
 def test_wire_command_leaves_a_typed_command_and_a_sentinel_alone():
-    """It is composed for every remote policy, so it meets actions that need nothing done: an already-typed
-    command, and the chunk's end-of-validity sentinel, which carries no command at all."""
+    """Composed for every remote policy, so it meets actions needing nothing done: a typed command, a sentinel."""
     typed = _wire_decoded({obs_keys.ROBOT_COMMAND: command.Reset()})
     assert isinstance(typed[obs_keys.ROBOT_COMMAND], command.Reset)
 
@@ -717,5 +711,5 @@ def test_wire_command_passes_the_observation_through_untouched():
 
     # And composed the way `RemotePolicy` composes it — the stack first, this codec innermost.
     composed = ActionTimestamp(fps=10.0) | WireCommand()
-    assert isinstance(composed, Codec)  # two codecs compose into one, so the pair still encodes
+    assert isinstance(composed, Codec)
     assert set(composed.encode(obs)) == set(obs)

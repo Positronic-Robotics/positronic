@@ -143,10 +143,9 @@ class PolicySource(ModelSource):
         return self._policy
 
 
-# TODO(hardcoded-keys): most names here are written twice — once as a literal in the wrapper's own ``to_spec``
-# and once as a key below — so a rename in one place silently desyncs the wire. The fix is the one
-# ``WireCommand`` already follows: the wrapper owns its wire name as a ``WIRE_NAME`` class attribute and this
-# mapping is built from it. ``test_wire_names_match_table`` is what catches a desync meanwhile.
+# TODO(hardcoded-keys): most names here are written twice — here and in the wrapper's own ``to_spec`` — so a
+# rename desyncs the wire silently; ``test_wire_names_match_table`` catches that meanwhile. The fix is
+# ``WireCommand``'s: the wrapper owns a ``WIRE_NAME`` and this mapping is built from it.
 # rules-allow: hardcoded-keys — converting one of the remaining entries leaves the rest on the old pattern;
 # the TODO above names the whole-table fix, and the test above catches a desync until then
 WIRE_WRAPPERS: dict[str, type[PolicyWrapper]] = {

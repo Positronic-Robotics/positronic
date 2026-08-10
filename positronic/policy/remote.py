@@ -150,8 +150,7 @@ class RemotePolicy(Policy):
             if self._recording_dir is not None:
                 rec = Recorder(self._recording_dir)
                 stack = rec.tap('raw') | stack | rec.tap('server')
-            # Rightmost, so it decodes first on the way back: everything above is written against typed
-            # commands, and a served policy's command arrives as a wire mapping.
+            # Rightmost, so it decodes first on the way back: everything above expects typed commands.
             stack = stack | WireCommand()
             self._stacked = stack.wrap(self._endpoint)
         return self._stacked
