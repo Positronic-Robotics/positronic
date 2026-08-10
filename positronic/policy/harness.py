@@ -249,8 +249,8 @@ class Harness(pimm.ControlSystem):
             self.commands[name].emit([(now, value)])
 
     def _home(self, clock: pimm.Clock) -> None:
-        # Publishes targets and returns, so the arm is still travelling after this. ``_wind_down`` waits
-        # that out rather than letting the World unwind under a moving arm.
+        # Stamped before the emit: this publishes targets and returns, so the instant recorded is when
+        # the travel began, not when it ended.
         self._homed_at_ns = clock.now_ns()
         self._moved_since_home = False
         self._emit_now(self._embodiment.home, clock)
@@ -500,8 +500,7 @@ class Harness(pimm.ControlSystem):
         through ``_wind_down``.
         """
         if manual_msg.updated and manual_msg.data is not None:
-            # Nothing homes after a manual command — an episode's own ``_end_episode`` does, and this runs
-            # between episodes. So the arm is left where it is put, and ``_wind_down`` brings it back.
+            # This moves the arm and does not home it again, so it leaves the pose the operator chose.
             self._moved_since_home = True
             self._emit_now(manual_msg.data, clock)
             return False
