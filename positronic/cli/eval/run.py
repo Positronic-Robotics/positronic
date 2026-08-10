@@ -125,10 +125,10 @@ def _run_world(
         # driver, and GUI placement is otherwise identical.
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         driver_systems = driver.control_systems if driver is not None else []
-        # Foreground: shares the harness's timeline, so the poll interval and episodes run on one clock.
         watch = [finish] if finish is not None else []
         # Read order matters: a press sharing a round with a granted finish is never seen — driver first.
         lifecycle_systems = [*driver_systems, *watch, harness]
+        # lifecycle_systems run foreground on both paths: the finish poll and the episodes share one clock.
         if embodiment.simulated:
             world.run([*lifecycle_systems, ds_agent, *producers], gui)
         else:
