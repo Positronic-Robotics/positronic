@@ -283,7 +283,7 @@ async for message in websocket.iter_bytes():
     await websocket.send_bytes(serialise({"result": actions}))
 ```
 
-If you would rather not depend on Positronic, implement the protocol directly — the only hard requirement is msgpack with numpy support.
+If you would rather not depend on Positronic, implement the protocol directly: msgpack with numpy support, plus the two envelopes above — `__ndarray__` around every array, and `__cmd__` around every robot command.
 
 ## See Also
 
