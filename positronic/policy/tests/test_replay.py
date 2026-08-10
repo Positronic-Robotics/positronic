@@ -166,6 +166,44 @@ def test_load_actions_rejects_an_episode_with_no_replayable_arm_command(tmp_path
         load_actions(episode)
 
 
+def test_load_actions_rejects_a_delta_recording_even_when_it_carries_a_grip(tmp_path):
+    """A grip channel does not make a delta recording replayable: the arm moved and this cannot reissue it.
+
+    Replaying the grip alone would work the gripper through a trajectory the arm never travels, which
+    looks like a faithful replay and is not.
+    """
+    episode = _write(
+        tmp_path,
+        {
+            f'{keys.ROBOT_COMMAND}.pose_delta': [(np.zeros(7, dtype=np.float32), 1_000_000_000)],
+            keys.TARGET_GRIP: [(np.float32(1.0), 1_000_000_000)],
+        },
+    )
+
+    with pytest.raises(ValueError, match='no replayable arm command'):
+        load_actions(episode)
+
+
+def test_load_actions_replays_a_recording_that_only_commanded_the_grip(tmp_path):
+    """A recording that never commanded the arm replays the grip alone; the arm holds what it has."""
+    step = int(1e9 / HZ)
+    start = 1_000_000_000
+    episode = _write(tmp_path, {keys.TARGET_GRIP: [(np.float32(i / 2), start + i * step) for i in range(3)]})
+
+    actions = load_actions(episode)
+
+    assert [a[keys.ACTION_TIMESTAMP] for a in actions] == pytest.approx([0.0, 0.1, 0.2])
+    assert [keys.ROBOT_COMMAND in a for a in actions] == [False, False, False]
+    assert [a[keys.TARGET_GRIP] for a in actions] == pytest.approx([0.0, 0.5, 1.0])
+
+
+def test_load_actions_rejects_an_episode_that_commanded_nothing(tmp_path):
+    episode = _write(tmp_path, {keys.JOINTS: [(np.zeros(7, dtype=np.float32), 1_000_000_000)]})
+
+    with pytest.raises(ValueError, match='nothing replayable'):
+        load_actions(episode)
+
+
 def test_load_actions_holds_the_grip_recorded_before_the_first_waypoint(tmp_path):
     """The two channels can start a beat apart; the grip in force is the last one commanded."""
     q = np.zeros(7, dtype=np.float32)

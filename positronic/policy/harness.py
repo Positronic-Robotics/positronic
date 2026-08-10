@@ -35,11 +35,8 @@ def _assert_anchored(actions: list[dict[str, Any]], now: float) -> None:
         )
 
 
-# The run log is the episode boundary a run watcher reads: it is the only account of a rollout that
-# exists while the rollout is still going, and the harness is the one place that sees every episode of
-# every driver. A watcher pairs a ``start`` with the ``finish`` carrying the same id, and takes
-# ``run finish`` as the run having ended of its own accord. The three prefixes are the contract; keep
-# them stable, and keep the free-form task last so a parser can read it to end of line.
+# A contract with a run watcher outside this repository, which cannot import them: keep the prefixes
+# stable, and keep the free-form task last so a parser can read it to end of line.
 LOG_DIRECTIVE_START = 'harness: directive start'
 LOG_DIRECTIVE_FINISH = 'harness: directive finish'
 LOG_RUN_FINISH = 'harness: run finish'
@@ -97,18 +94,16 @@ class _EpisodeTelemetry:
 
     def __init__(self) -> None:
         self._span: Span | None = None
-        self._index = -1
         self._steps = 0
         # ``None`` until the rollout starts, so the reset is excluded and a failed reset leaves it unstamped.
         self._virtual_start: float | None = None
 
-    def begin(self, context: dict[str, Any]) -> None:
+    def begin(self, index: int, context: dict[str, Any]) -> None:
         """Open the episode span, stamped with the index and the flat trial-context keys. Called before the
         scene reset, so the reset is timed inside the rollout it belongs to."""
-        self._index += 1
         self._steps = 0
         self._virtual_start = None
-        attrs: dict[str, Any] = {telemetry_keys.ATTR_EPISODE_INDEX: self._index}
+        attrs: dict[str, Any] = {telemetry_keys.ATTR_EPISODE_INDEX: index}
         attrs.update({k: v for k, v in context.items() if isinstance(v, (bool, int, float, str))})
         self._span = telemetry.start_span(telemetry_keys.SPAN_EPISODE, **attrs)
         telemetry.push_anchor(self._span)
@@ -171,11 +166,6 @@ _ESCAPED = (
 )
 
 
-def escape_field(text: str) -> str:
-    """``text`` with everything that would end the record it sits in written as an escape."""
-    return text.translate(_ESCAPED)
-
-
 class Harness(pimm.ControlSystem):
     """Control system that runs the episode lifecycle and forwards trajectories to drivers.
 
@@ -231,9 +221,10 @@ class Harness(pimm.ControlSystem):
         self._rollout_started = False
         # Wall-clock telemetry for the live rollout, opened under ``--timing`` and inert otherwise.
         self._telemetry = _EpisodeTelemetry()
-        # Episodes begun in this run, counted from 0 — the id pairing a logged start with its finish.
-        # It counts this run's episodes, so it matches a dataset index only for a run into a fresh
-        # output directory.
+        # Episodes begun in this run, counted from 0 — the id pairing a logged start with its finish, and
+        # the index its telemetry span carries. Bumped before the reset, so an episode whose reset raises
+        # consumes its id and the log simply has no line under it. It counts this run's episodes, so it
+        # matches a dataset index only for a run into a fresh output directory.
         self._episode_index = -1
         # Channels that have not delivered since this episode's reset. A receiver latches its last value, so
         # emptying this set is what keeps the first inference off the previous episode's final frame.
@@ -366,7 +357,8 @@ class Harness(pimm.ControlSystem):
         self._awaiting_obs = set(self._embodiment.observations)
         self._rollout_started = False
         # Before the reset, so the reset and the rollout's other phase spans parent to the episode span.
-        self._telemetry.begin(context)
+        self._episode_index += 1
+        self._telemetry.begin(self._episode_index, context)
         # Reset before opening the session: a resettable task only learns its instruction on reset (a remote
         # env reports it then), so the session context — and the sampling it drives — must read it here.
         if self._task is not None and self._task.reset is not None:
@@ -376,10 +368,9 @@ class Harness(pimm.ControlSystem):
             self.context = {**self.context, keys.TASK: self._task.instruction}
         self._policy_session = self.policy.new_session(self.context, clock.now)
         self._running = True
-        self._episode_index += 1
         # Logged once the episode is genuinely live, so a reset or a session open that raises leaves no
         # start with no finish to pair it — and so the task it names is the one the policy was given.
-        task = escape_field(str(self.context.get(keys.TASK, '')))
+        task = str(self.context.get(keys.TASK, '')).translate(_ESCAPED)
         logger.info('%s id=%d task=%s', LOG_DIRECTIVE_START, self._episode_index, task)
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
         self.ds_command.emit(DsWriterCommand.START())

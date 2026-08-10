@@ -132,7 +132,7 @@ harness: directive finish id=<n> outcome=<saved|discarded|aborted>
 harness: run finish
 ```
 
-`id` counts episodes within the run from 0, pairing a start with its finish. `saved` means the harness finalized the episode and handed it to the recorder, `discarded` that the operator dropped it, `aborted` that a failure abandoned it mid-flight. `run finish` is logged only when the run ends of its own accord, so a crashed run is distinguishable from a completed one. The task is last on the line and free-form to its end.
+`id` counts episodes within the run from 0, pairing a start with its finish, and is the same number the episode's telemetry span carries as `episode.index` — so a run log and a `--timing` report name the same episode. `saved` means the harness finalized the episode and handed it to the recorder, `discarded` that the operator dropped it, `aborted` that a failure abandoned it mid-flight. `run finish` is logged only when the run ends of its own accord, so a crashed run is distinguishable from a completed one. The task is last on the line and free-form to its end.
 
 The outcomes report what the harness did, which is all it knows: on a real rig the recorder runs as a background subprocess that writes the artifact after the fact and reports nothing back, so `saved` can precede the episode appearing on disk. A watcher that needs the artifact reads the dataset; the log tells it which episodes to expect and when the run ended.
 

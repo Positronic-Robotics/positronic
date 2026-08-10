@@ -1636,6 +1636,34 @@ def test_a_later_episode_waits_for_its_own_first_observation(world, tmp_path):
     assert episodes[1].attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S] < gap_s
 
 
+@pytest.mark.timeout(3.0)
+def test_the_logged_id_is_the_index_its_telemetry_span_carries(world, tmp_path, caplog):
+    """One counter feeds both, so a run watcher reading `id` and a timing report reading `episode.index`
+    name the same episode. Two counters bumped at different points in `_begin_episode` would agree here
+    and drift the moment one of them was bumped and the other was not."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+
+    def episode():
+        p['directive_em'].emit(Directive.RUN(task='t'))
+        drive_scheduler(scheduler, steps=3)
+        p['directive_em'].emit(Directive.FINISH())
+        drive_scheduler(scheduler, steps=3)
+
+    with caplog.at_level('INFO', logger='positronic.policy.harness'):
+        with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-ids'), _eval_pass('run-ids'):
+            scheduler = world.start([harness])
+            episode()
+            episode()
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    indices = [s.attrs[telemetry_keys.ATTR_EPISODE_INDEX] for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    logged = [int(m.split('id=')[1].split()[0]) for m in _directive_log(caplog) if 'start' in m]
+
+    assert indices == [0, 1]
+    assert logged == indices
+
+
 def test_unanchored_chunk_is_refused():
     """A stack that never anchored leaves chunk-relative stamps, which read as decades before now."""
     with pytest.raises(ValueError, match='not anchoring'):
@@ -1819,8 +1847,10 @@ class _CommitSpy(pimm.ControlSystem):
 
 
 @pytest.mark.timeout(3.0)
-def test_a_saved_episode_is_logged_only_once_the_recorder_has_committed_it(world, caplog):
-    """A watcher reads the finish line as the episode's artifact existing, so the commit comes first."""
+def test_a_cooperative_recorder_takes_the_stop_before_the_finish_is_logged(world, caplog):
+    """The commit round comes before the line, so a recorder sharing this scheduler has taken
+    ``STOP_EPISODE`` by the time the finish is logged. That orders this harness's own state and nothing
+    further: a background recorder acknowledges nothing, so ``saved`` can still precede the artifact."""
     harness = Harness(StubPolicy(), make_embodiment())
     p = _pair_all(world, harness)
     recorder = _CommitSpy()

@@ -109,10 +109,11 @@ def _run_world(
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)
 
-        # Sim schedules harness, recorder, then producers (the simulator) in-process under the virtual clock,
-        # in that order; each scheduler round is one control period. The harness decides the round's action
-        # (a reset, a policy command off the last round's observation, or finish); the recorder logs that
-        # observation with the command; the producer applies the command and publishes the next observation.
+        # Sim schedules harness, recorder, then producers (the simulator) in-process, in that order; each
+        # scheduler round is one control period, paced by the clock chosen above. The harness decides the
+        # round's action (a reset, a policy command off the last round's observation, or finish); the
+        # recorder logs that observation with the command; the producer applies the command and publishes
+        # the next observation.
         # A reset arms the producer to publish frame-0 after the harness (last in the round); the recorder
         # drains its channels the turn it opens, dropping the pre-reset frame, so its first recorded sample
         # is the post-reset scene. Real runs the producers + recorder as background subprocesses; harness,

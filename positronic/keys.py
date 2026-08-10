@@ -17,10 +17,8 @@ TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
 # The gripper's command channel: a scalar target beside the arm's ``ROBOT_COMMAND``.
 TARGET_GRIP = 'target_grip'
 
-# When an action falls due, in seconds. Every action an inference hands back carries it: the scheduling
-# wrapper anchors it to the live clock and the harness converts it to the nanoseconds its command channels
-# take. It names a field of the action dict rather than a signal, so it is a different contract from the
-# ``timestamp`` column a stored vector signal is written under.
+# When an action falls due, in seconds. It names a field of the action dict rather than a signal, so it is
+# a different contract from the ``timestamp`` column a stored vector signal is written under.
 ACTION_TIMESTAMP = 'timestamp'
 
 

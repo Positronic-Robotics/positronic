@@ -37,7 +37,7 @@ def _rebuild(command_type: Any, value: np.ndarray) -> Any:
 
 
 def _arm_commands(episode: Episode) -> dict[int, Any]:
-    """Every recorded arm command, keyed by the instant it was issued at.
+    """Every recorded arm command, keyed by the instant it was issued at, empty where there is none.
 
     ``Serializers.robot_command`` maps each command type to its own suffix, so one command writes one
     signal, and a recording whose action space changed mid-episode carries commands in more than one —
@@ -51,15 +51,13 @@ def _arm_commands(episode: Episode) -> dict[int, Any]:
         for value, ts in signal:
             # ``_ARM_SIGNALS`` is most-faithful-first, so an instant already claimed keeps its command.
             commands.setdefault(ts, _rebuild(command_type, value))
-    if not commands:
-        recorded = sorted(episode.signals)
-        raise ValueError(
-            f'Episode records no replayable arm command: expected one of '
-            f'{[name for name, _ in _ARM_SIGNALS]}, and it carries {recorded}. An episode recorded from '
-            f'delta commands cannot be replayed — deltas only mean anything against the state they were '
-            f'issued from.'
-        )
     return commands
+
+
+def _unreplayable_arm_signals(episode: Episode) -> list[str]:
+    """Arm-command signals the recording carries that this cannot reissue — the delta forms."""
+    supported = {name for name, _ in _ARM_SIGNALS}
+    return sorted(n for n in episode.signals if n.startswith(f'{keys.ROBOT_COMMAND}.') and n not in supported)
 
 
 def load_actions(episode: Episode) -> list[dict[str, Any]]:
@@ -74,12 +72,24 @@ def load_actions(episode: Episode) -> list[dict[str, Any]]:
     where a command was issued at that instant, the grip from its first sample onwards (sampled at or
     before the instant, since a grip holds until changed). An action omitting a channel emits nothing
     on it, so the rig holds what it has there, which is what commanding nothing means. In practice the
-    two channels are emitted together and land on the same instants, and an episode with no grip
-    channel replays the arm alone.
+    two channels are emitted together and land on the same instants; an episode with no grip channel
+    replays the arm alone, and one that only ever commanded the grip replays the grip alone.
     """
     arm = _arm_commands(episode)
     grip = episode.signals.get(keys.TARGET_GRIP)
     grip_stamps = {ts for _, ts in grip} if grip is not None and len(grip) > 0 else set()
+    if not arm:
+        # A recording carrying arm commands in a form this cannot reissue is refused even when it has a
+        # grip channel: replaying the grip alone would hold the arm still through motion that was recorded.
+        if unreplayable := _unreplayable_arm_signals(episode):
+            raise ValueError(
+                f'Episode records no replayable arm command: it carries {unreplayable}, and only '
+                f'{[name for name, _ in _ARM_SIGNALS]} can be replayed. An episode recorded from delta '
+                f'commands cannot be replayed — deltas only mean anything against the state they were '
+                f'issued from.'
+            )
+        if not grip_stamps:
+            raise ValueError(f'Episode records nothing replayable: it carries {sorted(episode.signals)}.')
     stamps = sorted(arm.keys() | grip_stamps)
     first_ts = stamps[0]
     grip_start = min(grip_stamps) if grip_stamps else 0
