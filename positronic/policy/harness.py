@@ -183,9 +183,8 @@ class Harness(pimm.ControlSystem):
         self._policy_session: Session | None = None
         # True between RUN and FINISH/ABORT: the trial is live — stepping and recording happen together.
         self._running = False
-        # When the last home was COMMANDED, and whether anything has moved the arm since. Both are read
-        # only by ``_wind_down``, which owes the run an arm at home whichever reason it is stopping for.
-        # ``run`` homes before the first episode, so the instant is never a guess.
+        # When the last home was commanded, and whether anything has moved the arm since. ``run`` homes
+        # before the first episode, so the initial 0 is never read as a real instant.
         self._homed_at_ns = 0
         self._moved_since_home = False
         # Sim-only, delivered on the RUN context: ``True`` advances the sim clock by the measured wall cost
