@@ -494,40 +494,6 @@ class RestrictImageSize(Codec):
         return {'name': 'restrict_image_size', 'args': {'width': self._width, 'height': self._height}}
 
 
-class WireCommand(Codec):
-    """Decode a served command mapping — ``{'type': 'cartesian_pos', 'pose': [...]}`` — into the typed
-    ``command.*`` object everything above the wire matches on.
-
-    - Compose innermost, closest to the wire.
-    - Decodes every channel ``keys.is_robot_command`` names, not only ``robot_command``.
-    - An already-typed command, and the chunk's no-command sentinel, pass through.
-    """
-
-    # `to_spec` returns this and `spec.WIRE_WRAPPERS` keys on it, so a rename cannot desync the two.
-    WIRE_NAME = 'wire_command'
-
-    def encode(self, data):
-        # The base `Codec.encode` returns `{}`, which would hand the server an empty observation.
-        return data
-
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
-        decoded = {k: self._as_command(v) for k, v in data.items() if obs_keys.is_robot_command(k)}
-        return {**data, **decoded} if decoded else data
-
-    @staticmethod
-    def _as_command(value):
-        """One channel's value, typed. A non-mapping — a typed command, a ``.pose`` vector — returns as it came."""
-        if not isinstance(value, cabc.Mapping):
-            return value
-        # `from_wire` reads vectors as arrays; the wire carries sequences, and `type` is its one string.
-        return command.from_wire({k: v if isinstance(v, str) else np.asarray(v) for k, v in value.items()})
-
-    def to_spec(self):
-        # rules-allow: hardcoded-keys — `'name'` is the spec layer's structural key, written bare by every
-        # `to_spec` and read by `from_spec`; a constant for it is one change across that layer, not this site.
-        return {'name': self.WIRE_NAME}
-
-
 class ChangeEEFrame(Codec):
     """Convert poses between the embodiment's ``default`` frame and the frame the policy speaks.
 

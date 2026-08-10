@@ -6,7 +6,6 @@ from positronic import keys as obs_keys
 from positronic.cfg.codecs import compose
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
-from positronic.drivers.roboarm import command
 from positronic.geom import Rotation
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, RelativePositionAction
 from positronic.policy.base import Policy, Session
@@ -18,7 +17,6 @@ from positronic.policy.codec import (
     BinarizeGripTraining,
     Codec,
     FlipGrip,
-    WireCommand,
 )
 from positronic.policy.observation import ObservationCodec
 from positronic.vendors.gr00t.codecs import ee_quat, joints_traj
@@ -626,90 +624,3 @@ def test_groot_joints_codec_decodes_modality_keyed_actions():
         assert obs_keys.ROBOT_COMMAND in d
         assert 'target_grip' in d
     assert decoded[-1] == {'timestamp': pytest.approx(3 / 15.0)}  # timestamp sentinel
-
-
-_WIRE_POSE = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
-
-
-# rules-allow: hardcoded-keys — a fixture standing in for a server, so it spells the wire itself; reading
-# `command.CartesianPosition.TYPE` would agree with the decoder whatever it became, pinning nothing.
-def _wire_command(pose=_WIRE_POSE) -> dict:
-    """One served ``cartesian_pos`` command, in the wire's own layout."""
-    return {'type': 'cartesian_pos', 'pose': pose}
-
-
-def _wire_decoded(action: dict) -> dict:
-    """One action through ``WireCommand``, narrowed to a dict — ``Codec.decode`` answers a chunk with a list."""
-    decoded = WireCommand().decode(action)
-    assert isinstance(decoded, dict)
-    return decoded
-
-
-def test_wire_command_decodes_a_served_command_into_the_typed_one_drivers_dispatch_on():
-    """The wire's own layout in, a `command.*` object out — the form everything above this codec matches on."""
-    action = {obs_keys.ROBOT_COMMAND: _wire_command(), 'target_grip': 0.5, 'timestamp': 0.0}
-
-    decoded = _wire_decoded(action)
-
-    assert isinstance(decoded[obs_keys.ROBOT_COMMAND], command.CartesianPosition)
-    np.testing.assert_allclose(decoded[obs_keys.ROBOT_COMMAND].pose.translation, [0.4, 0.0, 0.6], atol=1e-6)
-    assert decoded['target_grip'] == 0.5 and decoded['timestamp'] == 0.0  # the rest of the action survives
-
-
-def test_wire_command_accepts_the_wire_as_a_plain_sequence():
-    """A transport may hand the vector back as a list rather than an array; either decodes the same."""
-    pose = np.asarray(_WIRE_POSE, dtype=np.float32)
-
-    from_array = _wire_decoded({obs_keys.ROBOT_COMMAND: _wire_command(pose)})
-    from_list = _wire_decoded({obs_keys.ROBOT_COMMAND: _wire_command(pose.tolist())})
-
-    np.testing.assert_allclose(
-        from_list[obs_keys.ROBOT_COMMAND].pose.translation,
-        from_array[obs_keys.ROBOT_COMMAND].pose.translation,
-        atol=1e-6,
-    )
-
-
-def test_wire_command_decodes_every_arm_of_a_multi_arm_action():
-    """A bimanual embodiment names its channels `robot_command.{side}`; decoding only the unsuffixed one
-    hands those arms the raw mapping."""
-    wire = _wire_command()
-    action = {f'{obs_keys.ROBOT_COMMAND}.left': wire, f'{obs_keys.ROBOT_COMMAND}.right': wire, 'timestamp': 0.0}
-
-    decoded = _wire_decoded(action)
-
-    for side in ('left', 'right'):
-        got = decoded[f'{obs_keys.ROBOT_COMMAND}.{side}']
-        assert isinstance(got, command.CartesianPosition), f'the {side} driver would be handed {got!r}'
-    assert decoded['timestamp'] == 0.0
-
-
-def test_wire_command_leaves_a_command_channel_carrying_a_vector_alone():
-    """`robot_command.pose` / `.joints` share the prefix but carry a vector, so a prefix match alone would
-    hand them to `from_wire`; reading the value is what tells them apart."""
-    pose = np.zeros(7, dtype=np.float32)
-
-    decoded = _wire_decoded({obs_keys.TARGET_EE_POSE: pose, obs_keys.TARGET_JOINTS: pose})
-
-    np.testing.assert_array_equal(decoded[obs_keys.TARGET_EE_POSE], pose)
-    np.testing.assert_array_equal(decoded[obs_keys.TARGET_JOINTS], pose)
-
-
-def test_wire_command_leaves_a_typed_command_and_a_sentinel_alone():
-    """Composed for every remote policy, so it meets actions needing nothing done: a typed command, a sentinel."""
-    typed = _wire_decoded({obs_keys.ROBOT_COMMAND: command.Reset()})
-    assert isinstance(typed[obs_keys.ROBOT_COMMAND], command.Reset)
-
-    assert _wire_decoded({'timestamp': 1.6}) == {'timestamp': 1.6}
-
-
-def test_wire_command_passes_the_observation_through_untouched():
-    """It is composed in front of every remote endpoint, so an observation crosses it on the way out."""
-    obs = {obs_keys.EE_POSE: np.zeros(7, dtype=np.float32), obs_keys.WRIST_IMAGE: np.zeros((4, 4, 3), np.uint8)}
-
-    assert WireCommand().encode(obs) == obs
-
-    # And composed the way `RemotePolicy` composes it — the stack first, this codec innermost.
-    composed = ActionTimestamp(fps=10.0) | WireCommand()
-    assert isinstance(composed, Codec)
-    assert set(composed.encode(obs)) == set(obs)

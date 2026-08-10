@@ -25,7 +25,6 @@ from positronic.policy.codec import (
     Codec,
     FlipGrip,
     RestrictImageSize,
-    WireCommand,
 )
 from positronic.policy.observation import ObservationCodec
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
@@ -379,7 +378,6 @@ class TestPipelineSpec:
             'binarize_grip_inference': BinarizeGripInference(),
             'flip_grip': FlipGrip(),
             'restrict_image_size': RestrictImageSize(),
-            WireCommand.WIRE_NAME: WireCommand(),
             'observation_codec': ObservationCodec(state={}, images={}),
             'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, 'target_grip'),
             'absolute_joints_action': AbsoluteJointsAction(keys.TARGET_JOINTS, 'target_grip'),

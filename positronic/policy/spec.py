@@ -44,7 +44,6 @@ from positronic.policy.codec import (
     ChangeEEFrame,
     FlipGrip,
     RestrictImageSize,
-    WireCommand,
 )
 from positronic.policy.observation import ObservationCodec
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
@@ -143,11 +142,12 @@ class PolicySource(ModelSource):
         return self._policy
 
 
-# TODO(hardcoded-keys): most names here are written twice — here and in the wrapper's own ``to_spec`` — so a
-# rename desyncs the wire silently; ``test_wire_names_match_table`` catches that meanwhile. The fix is
-# ``WireCommand``'s: the wrapper owns a ``WIRE_NAME`` and this mapping is built from it.
-# rules-allow: hardcoded-keys — converting one of the remaining entries leaves the rest on the old pattern;
-# the TODO above names the whole-table fix, and the test above catches a desync until then
+# TODO(hardcoded-keys): every name here is written twice — once as a literal in the wrapper's own ``to_spec``
+# and once as a key below — so a rename in one place silently desyncs the wire. Let each wrapper own its wire
+# name as a class attribute and build this mapping from it. ``test_wire_names_match_table`` is what catches a
+# desync until then.
+# rules-allow: hardcoded-keys — fixing one of the thirteen leaves the rest on the old pattern; the TODO above
+# names the whole-table fix, and the test above catches a desync meanwhile
 WIRE_WRAPPERS: dict[str, type[PolicyWrapper]] = {
     'chunked_schedule': ChunkedSchedule,
     'temporal_stack': TemporalStack,
@@ -158,7 +158,6 @@ WIRE_WRAPPERS: dict[str, type[PolicyWrapper]] = {
     'flip_grip': FlipGrip,
     'restrict_image_size': RestrictImageSize,
     'change_ee_frame': ChangeEEFrame,
-    WireCommand.WIRE_NAME: WireCommand,
     'observation_codec': ObservationCodec,
     'absolute_position_action': AbsolutePositionAction,
     'absolute_joints_action': AbsoluteJointsAction,
