@@ -330,3 +330,20 @@ reason: an import that cannot resolve gets `# pyright: ignore[reportMissingImpor
 other diagnostic in that file live. Where the gate compares per-file counts rather than entries —
 `.basedpyright/baseline.json` is one such baseline — re-anchoring line numbers can absorb a new
 finding without it noticing, so check that yourself.
+
+### activity-named-predicate
+
+Don't name a function for the activity it performs when what it returns is a `bool` — name it for the
+question that `bool` answers, so `if f(...):` reads as the claim being tested. An activity name leaves
+the verdict invisible at the call site, so a reader takes it on trust until they open the definition,
+and takes it backwards wherever the sense inverts.
+
+The tell is a docstring sentence of the form "True means …". Once the name carries it, that sentence
+has nothing left to say.
+
+A round of a run loop answering whether the run ends is `idle_ends_the_run`, not `idle_step`; a read of
+a request file answering whether it asks this run to stop is `asks_this_run_to_finish`, not `evaluate`.
+A function that both acts and answers is still named for its answer.
+
+Where the return is not a claim about the world but a status, or one of several outcomes, the `bool` is
+the mistake rather than the name: return a type whose members are named (`primitive-type`).
