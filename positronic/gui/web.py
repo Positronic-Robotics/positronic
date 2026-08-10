@@ -445,8 +445,8 @@ class WebEvalUI(pimm.ControlSystem):
             # The World may only stop once the harness has acknowledged finalizing the live episode and
             # homing: stopping it directly aborts an open recording and leaves the arm where it stands.
             # Returns as soon as the wrap-up is scheduled; the console follows it on GET /wrap_up.
-            # Marked here rather than in the task, so a console that lost this response and asks
-            # GET /wrap_up learns the run is ending instead of racing the task onto the loop.
+            # Set before the task is scheduled, so a console that lost this response and falls back to
+            # GET /wrap_up reads the run as ending however the loop orders the two.
             wrap_up_status = _WrapUpStatus(_WrapUpState.FINALIZING)
             asyncio.create_task(_wrap_up())
             return {'wrapping_up': True}

@@ -306,10 +306,6 @@
           showGrip(acceptedGrip);
         });
 
-      // The harness homes the gripper open on every episode boundary: the robot's setpoint moves with no
-      // command from here.
-      const adoptGrip = (value) => { acceptedGrip = value; showGrip(value); };
-
       for (const button of gripButtons) {
         button.addEventListener('click', () => {
           const value = Number(button.dataset.grip);
@@ -477,10 +473,11 @@
           if (handled && pendingAck.ok(s.phase)) {
             showAck(`${pendingAck.label} — recognized`, true); setAckPending(null);
             // The harness homes the gripper open on every episode boundary, and nothing else updates
-            // this setpoint, so the next step would start from a stale pre-episode value. Adopted only
-            // once the harness reports the directive handled: a directive that never arrived homes
-            // nothing, and a zero here would make the next close step open a gripper the operator shut.
-            adoptGrip(0);
+            // this setpoint, so the next step would start from a stale pre-episode value. It is taken
+            // here, where the harness has reported the directive handled: a directive that never
+            // arrived homes nothing, and a zero would make the next close step open a shut gripper.
+            acceptedGrip = 0;
+            showGrip(acceptedGrip);
           } else if (performance.now() > pendingAck.deadline) {
             showAck(`${pendingAck.label} — no phase change (ignored?)`, false); setAckPending(null);
           }
@@ -612,7 +609,14 @@
               if (s.state !== 'idle') beginWrapup();
               else showAck('Finish run — no response; run still active, try again', false);
             })
-            .catch(() => beginWrapup()));
+            .catch((error) => {
+              // Neither request answered, so which of the two happened is unknown here. The overlay
+              // is the state that says so and keeps polling; showing the live controls instead would
+              // claim the run is up, which is the half that ends an episode the wrap-up then stops.
+              console.error('/wrap_up did not answer after a lost /finish_run', error);
+              showAck('Finish run — no response; checking whether it landed', false);
+              beginWrapup();
+            }));
       });
 
       startStream(document.getElementById('feed'));
