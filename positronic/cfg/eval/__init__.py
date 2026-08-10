@@ -2,6 +2,8 @@ import random
 
 import configuronic as cfn
 
+from positronic.eval import EVAL_SEED, EVAL_TRIAL_COUNT, EVAL_TRIAL_INDEX
+
 
 @cfn.config()
 def placeholder():
@@ -20,8 +22,8 @@ def build_trials(seed: int | None, trial_count: int, scenes: list[dict] | None =
     trials = []
     for scene in scenes if scenes is not None else [{}]:
         for s in range(trial_count):
-            trials.append({**scene, 'eval.seed': seed + s if seed is not None else random.randrange(2**31)})
+            trials.append({**scene, EVAL_SEED: seed + s if seed is not None else random.randrange(2**31)})
     for i, ctx in enumerate(trials):
-        ctx['eval.trial_index'] = i
-        ctx['eval.trial_count'] = len(trials)
+        ctx[EVAL_TRIAL_INDEX] = i
+        ctx[EVAL_TRIAL_COUNT] = len(trials)
     return trials

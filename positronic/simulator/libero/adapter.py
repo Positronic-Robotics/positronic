@@ -12,7 +12,7 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
-from positronic.eval import EVAL_SUCCESS
+from positronic.eval import EVAL_SEED, EVAL_SUCCESS
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.mujoco.sim import MujocoFrankaState
@@ -34,7 +34,7 @@ class LiberoAdapter(WireCommandAdapter):
             'task_id': context['eval.task_id'],
             'camera_resolution': context['eval.camera_resolution'],
             'control_mode': context['eval.control_mode'],
-            'seed': context.get('eval.seed'),
+            'seed': context.get(EVAL_SEED),
             'settle_steps': context['eval.settle_steps'],
         }
 

@@ -167,6 +167,6 @@ through both stacks and asserts this, re-run on every bump of the sim's pinned v
 The episode horizon is one case of that reproduction rather than a rule of its own: a task that
 defines a horizon has it enforced by the env, which reports expiry through the same terminal `done`
 a success uses; a task that defines none leaves nothing to reproduce. The harness `Task.timeout` is
-only a runaway-cost safety net, so an env that enforces a horizon reports it at reset and the
-harness rejects a `timeout` that is not longer — a mis-set budget fails loud instead of silently
-truncating a valid episode.
+only a runaway-cost safety net, so the config that knows the benchmark derives the timeout from the
+horizon it declares rather than taking one on faith — a budget below the horizon would silently
+truncate valid episodes and score them as failures.

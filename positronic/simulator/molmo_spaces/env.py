@@ -48,7 +48,8 @@ def _install_cgl_noop_stub() -> None:
     # crashes at renderer init on Linux — so a CPU-rendered server (MUJOCO_GL=osmesa or mesa software EGL)
     # dies before the first observation. CGL locking is a no-op off macOS, so stub the module: the import
     # resolves and the (un)lock does nothing. Untouched on a GPU box, where the EGL path never imports it.
-    if _CGL_PACKAGE in sys.modules:
+    # macOS keeps the real module, where those locks guard an actual context.
+    if sys.platform == 'darwin' or _CGL_PACKAGE in sys.modules:
         return
     cgl = types.ModuleType(_CGL_MODULE)
     cgl.CGLLockContext = cgl.CGLUnlockContext = lambda *args, **kwargs: None  # pyright: ignore[reportAttributeAccessIssue]
@@ -108,6 +109,10 @@ class _DroidPickEvalConfig(JsonBenchmarkEvalConfig):
         self.robot_config.action_noise_config = ActionNoiseConfig(enabled=False)
 
 
+# MolmoSpaces reports a move group's leaf frame as one of MuJoCo's frame kinds; the arm's is a site.
+_SITE_FRAME = 'site'
+
+
 def _assert_measures_at_grasp_site(robot_view: Any) -> None:
     """Fail unless the arm move group's leaf frame is ``mapping.MOLMO_GRASP_SITE``.
 
@@ -122,10 +127,6 @@ def _assert_measures_at_grasp_site(robot_view: Any) -> None:
     name = mujoco.mj_id2name(arm.mj_model, mujoco.mjtObj.mjOBJ_SITE, arm.leaf_frame_id)  # pyright: ignore[reportAttributeAccessIssue]
     if name != mapping.MOLMO_GRASP_SITE and not name.endswith(f'/{mapping.MOLMO_GRASP_SITE}'):
         raise ValueError(f'arm move group measures at site {name!r}, expected {mapping.MOLMO_GRASP_SITE!r}')
-
-
-# MolmoSpaces reports a move group's leaf frame as one of MuJoCo's frame kinds; the arm's is a site.
-_SITE_FRAME = 'site'
 
 
 class MolmoSpacesEnv(EnvProtocol):
