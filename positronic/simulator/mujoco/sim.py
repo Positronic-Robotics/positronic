@@ -178,7 +178,7 @@ class MujocoSim(pimm.ControlSystem):
             now = clock.now()
             cmd_msg = self.commands.read()
             if self._error:
-                self._error = False  # the command that arrived with the error is skipped, not queued
+                self._error = False
             elif cmd_msg is not None and cmd_msg.updated:
                 self._apply_command(cmd_msg.data)
             grip_msg = self.target_grip.read()

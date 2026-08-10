@@ -13,21 +13,14 @@ from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandT
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import (
-    CartesianDelta,
-    CartesianPosition,
-    Reset,
-    TrajectoryPlayer,
-    from_wire,
-    to_wire,
-)
+from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, Reset, from_wire, to_wire
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, bundled_franka_model
 from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import DelegatingSession, Policy, SchedulingWrapper, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import Directive, DirectiveType, Harness, _assert_anchored
+from positronic.policy.harness import Directive, DirectiveType, Harness, TrajectoryPlayer, _assert_anchored
 from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -54,8 +47,7 @@ def make_embodiment(descriptor: str = '', cameras=(CAM,), static_meta=None, simu
 
     The sources/dests are no-ops: these tests pair the harness ports directly
     (never via ``wire_embodiment``), so only the spec — names, serializers,
-    home values, descriptor — is read by the Harness. ``simulated`` is what makes
-    ``inference_latency`` bite, since the knob is sim-only.
+    home values, descriptor — is read by the Harness.
     """
     observations = {
         'robot_state': Observation(pimm.NoOpEmitter(), Serializers.robot_state),
@@ -90,7 +82,7 @@ class SpyPolicy(Policy):
         self.reset_calls: int = 0
         self.last_reset_context = None
 
-    def new_session(self, context=None, now=None, gate=None):
+    def new_session(self, context=None, *, now=None, gate=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _SpySession(self)
@@ -135,7 +127,7 @@ class StubPolicy(Policy):
     def meta(self) -> dict[str, object]:
         return self._meta
 
-    def new_session(self, context=None, now=None, gate=None):
+    def new_session(self, context=None, *, now=None, gate=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _StubSession(self)
@@ -165,7 +157,7 @@ class ChunkPolicy(StubPolicy):
         super().__init__(*args, **kwargs)
         self.counter = 0
 
-    def new_session(self, context=None, now=None, gate=None):
+    def new_session(self, context=None, *, now=None, gate=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _ChunkSession(self)
@@ -200,7 +192,7 @@ class RemoteStubPolicy(Policy):
         self.command = command
         self.target_grip = float(target_grip)
 
-    def new_session(self, context=None, now=None, gate=None) -> RemoteSession:
+    def new_session(self, context=None, *, now=None, gate=None) -> RemoteSession:
         action = [{'robot_command': self.command, 'target_grip': self.target_grip, 'timestamp': 0.0}]
         return RemoteSession(_FakeInferenceSession(action))
 
@@ -544,7 +536,7 @@ def test_episode_meta_includes_policy_static_meta(world):
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             self._command = CartesianPosition(pose=pose)
 
-        def new_session(self, context=None, now=None, gate=None):
+        def new_session(self, context=None, *, now=None, gate=None):
             return _StaticMetaSession(self._command)  # Session.meta defaults to {}
 
         @property
@@ -1096,7 +1088,7 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
             return []
 
     class EmptyChunkPolicy(Policy):
-        def new_session(self, context=None, now=None, gate=None):
+        def new_session(self, context=None, *, now=None, gate=None):
             return _EmptyChunkSession()
 
     harness = Harness(EmptyChunkPolicy(), make_embodiment())
@@ -1125,8 +1117,7 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_harness_clears_trajectory_on_home(world):
-    """Verify that HOME resets trajectory state so next RUN gets a fresh chunk."""
+def test_harness_clears_trajectory_on_abort(world):
     policy = ChunkPolicy()
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
@@ -1156,7 +1147,6 @@ def test_harness_clears_trajectory_on_home(world):
 
 @pytest.mark.timeout(3.0)
 def test_harness_clears_trajectory_on_run(world):
-    """Verify that RUN resets trajectory state so a fresh chunk is emitted."""
     policy = ChunkPolicy()
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
@@ -1584,7 +1574,7 @@ class SlowPolicy(Policy):
         self._span_sec = span_sec
         self._steps = steps
 
-    def new_session(self, context=None, now=None, gate=None):
+    def new_session(self, context=None, *, now=None, gate=None):
         return _SlowSession(self._wall_sec, self._span_sec, self._steps)
 
 
@@ -1616,7 +1606,7 @@ class _ReplanEarly(SchedulingWrapper):
 
 
 class _TimedRecorder(pimm.SignalEmitter):
-    """Records each emission against the world clock, so a test can read when a command actually went out."""
+    """Records each emission against the world clock, so a test can read when a command went out."""
 
     def __init__(self, clock: pimm.Clock):
         self._clock = clock
@@ -1712,7 +1702,7 @@ def test_installed_trajectory_clears_the_channels_it_omits(world):
             return [{keys.ROBOT_COMMAND: command, 'timestamp': i * 0.01} for i in range(10)]
 
     class _GripThenArmPolicy(Policy):
-        def new_session(self, context=None, now=None, gate=None):
+        def new_session(self, context=None, *, now=None, gate=None):
             return _GripThenArm()
 
     harness = Harness(ChunkedSchedule().wrap(_GripThenArmPolicy()), make_embodiment())

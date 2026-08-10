@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, TypeAlias
 
 from opentelemetry.trace import Span
 
@@ -12,7 +12,6 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
-from positronic.drivers.roboarm.command import TrajectoryPlayer
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import InferenceGate, LatencyMode, Policy, Session
@@ -26,6 +25,39 @@ MAX_ACTION_SKEW_SEC = 60.0
 # How long a real-time round may last when no waypoint is due sooner. It bounds how late a directive is
 # noticed, and with it the granularity every command timestamp is quantized to.
 POLL_PERIOD_SEC = 0.01
+
+# One channel's schedule: waypoints stamped with absolute clock ns, ascending.
+Trajectory: TypeAlias = list[tuple[int, Any]]
+
+
+class TrajectoryPlayer:
+    """Plays one channel's schedule: ``set()`` a trajectory, then ``advance(now)`` each round for the value
+    to emit."""
+
+    def __init__(self):
+        self._trajectory: Trajectory = []
+        self._index: int = 0
+
+    def set(self, trajectory: Trajectory):
+        self._trajectory = trajectory
+        self._index = 0
+
+    def next_due(self) -> int | None:
+        """Timestamp of the earliest waypoint not yet played, or ``None`` once the schedule is exhausted."""
+        return self._trajectory[self._index][0] if self._index < len(self._trajectory) else None
+
+    def advance(self, current_time: int):
+        """The single value due at ``current_time``, or ``None`` when no waypoint has come due since the
+        last call.
+
+        TODO: several waypoints due at once collapse to the last, which drops the motion of every delta but
+        the final one. Revisit if pacing turns out not to hold one waypoint due per round.
+        """
+        value = None
+        while self._index < len(self._trajectory) and self._trajectory[self._index][0] <= current_time:
+            value = self._trajectory[self._index][1]
+            self._index += 1
+        return value
 
 
 def _assert_anchored(actions: list[dict[str, Any]], now: float) -> None:
@@ -147,14 +179,10 @@ class Harness(pimm.ControlSystem):
 
     Handles directives (RUN/FINISH/ABORT) and dataset recording. Inference intelligence — scheduling,
     error recovery, blending, absolute time stamping — lives in the policy/session layer: the wrapper owns
-    the plan, the harness plays it. Each round emits at most one command per channel, the one due now, so a
-    command channel carries execution rather than intent and its granularity is the round —
-    ``POLL_PERIOD_SEC`` on real hardware, one control period in sim. The RUN context is handed whole to the
-    task's scene reset, which reads the per-trial keys it needs (e.g. ``eval.seed``).
-
-    The session call runs on a worker thread, so playing continues while the model does; the
-    ``InferenceGate`` installed below the scheduling wrapper is what charges that call the trial's
-    inference latency.
+    the plan, the harness plays it, one command per channel per round. The session call runs on a worker
+    thread so playing continues while the model does, and the ``InferenceGate`` installed below the
+    scheduling wrapper charges that call the trial's inference latency. The RUN context is handed whole to
+    the task's scene reset, which reads the per-trial keys it needs (e.g. ``eval.seed``).
 
     A ``trials`` plan (a sequence of RUN contexts) makes the harness self-driving: it starts the next trial
     whenever idle and returns once the plan is exhausted, so the unattended path needs no driver. A task's
@@ -211,8 +239,6 @@ class Harness(pimm.ControlSystem):
             self.observations[name]  # touch to allocate the port
         for name in embodiment.commands:
             self.commands[name]
-        # TODO: a late round collapses several due waypoints to the last, which drops the motion of every
-        # delta but the final one. Revisit if pacing turns out not to hold one waypoint due per round.
         self._players = {name: TrajectoryPlayer() for name in embodiment.commands}
 
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
@@ -327,7 +353,7 @@ class Harness(pimm.ControlSystem):
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
         self._gate = self._new_gate(clock)
-        self._policy_session = self.policy.new_session(self.context, clock.now, self._gate)
+        self._policy_session = self.policy.new_session(self.context, now=clock.now, gate=self._gate)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
         self.ds_command.emit(DsWriterCommand.START())
@@ -405,9 +431,9 @@ class Harness(pimm.ControlSystem):
     def _step(self, clock: pimm.Clock) -> None:
         """Keep one session call in flight and install the trajectory it returns.
 
-        The call goes to the worker so the harness keeps playing while the model runs. The spin after
-        dispatch keeps a wrapper answering without inference — ``None``, a local decision — in the round it
-        was asked: it ends when the call is already done, or when the gate reports it reached the model.
+        The call goes to the worker so the harness keeps playing while the model runs; a wrapper that
+        answers without inference still resolves in the round it was asked. A stack with no
+        ``SchedulingWrapper`` never enters the gate, so its call blocks the round like a direct one.
         """
         session, gate = self._policy_session, self._gate
         assert session is not None and gate is not None  # only a live episode steps
@@ -424,8 +450,9 @@ class Harness(pimm.ControlSystem):
                 if self._task is not None:
                     self._deadline = clock.now() + self._task.timeout
             self._future = self._executor.submit(session, frozen_view(obs))
+            # Sleeping zero hands the worker the GIL without adding a wake-up granularity to the handshake.
             while not (self._future.done() or gate.entered):
-                pass
+                time.sleep(0)
         self._collect(self._future, gate, clock)
 
     def _collect(self, future: Future[list[dict[str, Any]] | None], gate: InferenceGate, clock: pimm.Clock) -> None:
@@ -513,7 +540,7 @@ class Harness(pimm.ControlSystem):
             self._policy_session.close()
             self._policy_session = None
 
-    def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:  # noqa: C901
+    def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         while not should_stop.value:
             # One action per round, mutually exclusive: handle a directive, start the next trial (or exit
             # when the plan is done), finish a self-driven trial that is out of budget or done, or step the

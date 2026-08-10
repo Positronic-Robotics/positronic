@@ -286,7 +286,7 @@ class DreamZeroPolicy(Policy):
     def __init__(self, sp: DreamZeroSubprocess):
         self._subprocess = sp
 
-    def new_session(self, context=None, now=None, gate=None):
+    def new_session(self, context=None, *, now=None, gate=None):
         client = RoboarenaClient(port=self._subprocess.roboarena_port)
         client.connect()
         return _DreamZeroSession(client, str(uuid.uuid4()))

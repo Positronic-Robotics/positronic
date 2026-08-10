@@ -1,7 +1,7 @@
 """Collection of commands that can be sent to the robot."""
 
 from dataclasses import dataclass, field
-from typing import Any, TypeAlias, TypeVar
+from typing import Any
 
 import numpy as np
 
@@ -80,12 +80,6 @@ class CartesianDelta:
 
 CommandType = Reset | CartesianPosition | JointPosition | JointDelta | CartesianDelta
 
-_T = TypeVar('_T')
-
-# A schedule the harness plays: waypoints stamped with absolute clock ns, ascending. Command channels
-# themselves carry one value -- the command due at the moment it is emitted.
-Trajectory: TypeAlias = list[tuple[int, _T]]
-
 
 def to_wire(command: CommandType) -> dict[str, Any]:
     match command:
@@ -103,34 +97,6 @@ def to_wire(command: CommandType) -> dict[str, Any]:
                 'delta': delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX),
                 'frame': frame.as_vector(geom.Rotation.Representation.ROTATION_MATRIX),
             }
-
-
-class TrajectoryPlayer:
-    """Plays one channel's schedule: ``set()`` a trajectory, then ``advance(now)`` each round for the value
-    to emit."""
-
-    def __init__(self):
-        self._trajectory: Trajectory[Any] = []
-        self._index: int = 0
-
-    def set(self, trajectory: Trajectory[Any]):
-        self._trajectory = trajectory
-        self._index = 0
-
-    def next_due(self) -> int | None:
-        """Timestamp of the earliest waypoint not yet played, or ``None`` once the schedule is exhausted."""
-        return self._trajectory[self._index][0] if self._index < len(self._trajectory) else None
-
-    def advance(self, current_time: int):
-        """The single value due at ``current_time``, or ``None`` when no waypoint has come due since the last
-        call. Several waypoints due at once collapse to the last: an absolute setpoint supersedes the ones it
-        overtook, and only a late round makes it happen.
-        """
-        value = None
-        while self._index < len(self._trajectory) and self._trajectory[self._index][0] <= current_time:
-            value = self._trajectory[self._index][1]
-            self._index += 1
-        return value
 
 
 def from_wire(wire: dict[str, Any]) -> CommandType:

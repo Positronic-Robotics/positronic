@@ -6936,14 +6936,6 @@
                     "endColumn": 32,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 54,
-                    "endColumn": 62,
-                    "lineCount": 1
-                }
             }
         ],
         "./positronic/simulator/env_server/server.py": [

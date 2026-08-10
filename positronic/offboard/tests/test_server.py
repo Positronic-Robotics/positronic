@@ -244,7 +244,7 @@ class _ScriptedSession(Session):
 class _ScriptedPolicy(Policy):
     """Deterministic base policy: every session returns the same untimestamped chunk."""
 
-    def new_session(self, context=None, now=None, gate=None) -> Session:
+    def new_session(self, context=None, *, now=None, gate=None) -> Session:
         return _ScriptedSession()
 
 

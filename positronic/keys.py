@@ -79,11 +79,6 @@ LOCAL_STACK = 'local_stack'
 COMPRESS_IMAGES = 'compress_images'
 POSITRONIC_VERSION = 'positronic_version'
 
-# The sim-only knob a trial's RUN context carries: what the platform charges the scheduling wrapper's
-# model call. ``False`` (or absent) holds the world still for it, a float charges that fixed delay, ``True``
-# charges the call's own wall duration.
-INFERENCE_LATENCY = 'inference_latency'
-
 POLICY_META = 'inference.policy'
 SERVER_META = f'{POLICY_META}.{SERVER}'
 
@@ -93,3 +88,6 @@ SERVER_META = f'{POLICY_META}.{SERVER}'
 # leaves it absent on failure — a reader defaults it rather than assuming a False.
 EVAL_SUCCESS = 'eval.success'
 EVAL_TERMINATED = 'eval.terminated'
+
+# The sim-only inference cost a trial's RUN context asks the platform to charge the model call.
+INFERENCE_LATENCY = 'inference_latency'

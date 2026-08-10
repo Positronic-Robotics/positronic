@@ -316,7 +316,7 @@ class Robot(pimm.ControlSystem):
         except Exception:
             logging.exception('Parking failed, the arm stays where it stands')
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         with self._desk_session():
             robot = self._ensure_robot()
             try:
@@ -345,7 +345,7 @@ class Robot(pimm.ControlSystem):
                     if in_error:
                         # The driver always clears a recoverable error itself; making it optional (hold in
                         # ERROR for out-of-band recovery instead) is a config knob to add when an embodiment
-                        # needs it. A command that arrived with the error is skipped, not queued.
+                        # needs it.
                         robot.recover_from_errors()
                         yield rate_limiter.wait()
                         continue

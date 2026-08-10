@@ -2,9 +2,9 @@
 
 Wrappers are composable serving-time concerns layered around a policy with ``|`` (left is
 outermost), exactly like codecs. Most read time from the observation (``obs_time_ns``); only
-``ChunkedSchedule`` needs the live clock — it anchors a chunk to inference *completion*, which the
-pre-inference observation stamp cannot give — so the harness passes ``now`` (a ``Callable[[], float]``
-in seconds) to ``new_session`` and it reaches that one session.
+``ChunkedSchedule`` needs the live clock — it anchors a chunk to the instant the inference gate releases
+its call, which the pre-inference observation stamp cannot give — so the harness passes ``now`` (a
+``Callable[[], float]`` in seconds) to ``new_session``, and it reaches every session in the stack.
 """
 
 from collections import deque
@@ -24,9 +24,9 @@ class ChunkedSchedule(SchedulingWrapper):
     """Wait for the current trajectory to finish before calling the inner policy again.
 
     Owns relative→absolute time conversion: inner layers (codecs, models) emit relative timestamps;
-    this wrapper anchors them to ``now()`` *after* inner inference returns, so execution aligns to
-    inference-finish (not inference-start). Returns ``None`` ("keep executing the current trajectory")
-    until the last action's timestamp is reached, then calls the inner policy.
+    this wrapper anchors them to ``now()`` *after* the inner call returns, which is the instant the
+    inference gate releases it. Returns ``None`` ("keep executing the current trajectory") until the last
+    action's timestamp is reached, then calls the inner policy.
     """
 
     class _Session(DelegatingSession):
@@ -53,7 +53,6 @@ class ChunkedSchedule(SchedulingWrapper):
                 # immediate action executes instead of raising.
                 if isinstance(result, dict):
                     result = [result]
-                # Anchor to post-inference time so execution starts when inference *finished*.
                 # Copy dicts so we don't mutate caller-owned data (sessions may reuse templates).
                 now = self._now()
                 result = [{**r, keys.ACTION_TIMESTAMP: now + r.get(keys.ACTION_TIMESTAMP, 0.0)} for r in result]

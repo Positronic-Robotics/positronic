@@ -128,7 +128,8 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
             self._cleanup.close()
 
     def _step_env(self) -> dict[str, Any]:
-        commands = {name: receiver.read() for name, receiver in self.commands.items()}
+        reads = ((name, receiver.read()) for name, receiver in self.commands.items())
+        commands = {name: msg for name, msg in reads if msg is not None}
         result = self._conn.step(self._adapter.action(commands))
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues

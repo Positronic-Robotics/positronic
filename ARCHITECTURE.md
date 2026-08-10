@@ -36,9 +36,9 @@ library must supply the tools that make late binding possible — codecs, per-tr
 projections over raw recordings.
 
 **Every decision lives with the party that has the information.** Only a driver knows its motion
-capabilities, so drivers own how they reach a commanded setpoint. Only a sensor knows its own cadence, so sensors
-run at their own rate instead of a rate the loop imposes. Only a policy knows what its model was
-trained on, so translation to model I/O ships with the policy.
+capabilities, so drivers own how they reach a commanded setpoint. Only a sensor knows its own
+cadence, so sensors run at their own rate instead of a rate the loop imposes. Only a policy knows
+what its model was trained on, so translation to model I/O ships with the policy.
 
 **Components are functions over flowing data.** A component sees nothing but its inputs and touches
 nothing but its outputs. Whatever varies enters as data — time is an observation field, hardware

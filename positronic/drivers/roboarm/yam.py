@@ -184,13 +184,13 @@ class Robot(pimm.ControlSystem):
         self._sim = sim
         self._connect = connect
 
-        self.commands = pimm.ControlSystemReceiver[command.CommandType](self, default=None)
-        self.target_grip = pimm.ControlSystemReceiver[float](self, default=None)
+        self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
+        self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:  # noqa: C901
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         arm = self._connect(self._channel, self._sim)
         try:
             kin = _Kinematics()

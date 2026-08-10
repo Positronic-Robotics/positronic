@@ -302,7 +302,7 @@ class TestActionHorizonWrapping:
 
 
 def test_remote_session_normalizes_single_dict():
-    """Server returning a single action dict (legacy shape) is wrapped into a 1-element list."""
+    """Server returning a single action dict is wrapped into a 1-element list."""
     endpoint, _ = _mock_endpoint(infer_return={keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0})
 
     session = endpoint.new_session()

@@ -293,9 +293,6 @@ class Recorder:
     once per inference at the outermost tap and reused by inner taps so every tap
     stamps the inference identically. ``blueprint``, if given, is sent as the recording's
     layout instead of the auto-built one.
-
-    The state shared across taps (the nesting depth, the timeline values) carries no lock: the harness
-    keeps one session call in flight, so a whole pipeline's taps run on one thread, one call at a time.
     """
 
     def __init__(
@@ -308,6 +305,7 @@ class Recorder:
         self._stream: rr.RecordingStream | None = None
         self._rrd_path: Path | None = None
         self._live = 0
+        # Shared across a pipeline's taps and unlocked: the harness keeps one session call in flight.
         self._depth = 0
         self._timeline_values: dict[str, Any] = {}
         self._image_paths: list[str] = []

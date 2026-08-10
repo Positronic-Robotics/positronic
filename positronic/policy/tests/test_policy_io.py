@@ -164,12 +164,12 @@ class _ChunkPolicy(Policy):
     def __init__(self, actions: list[dict]):
         self._actions = actions
 
-    def new_session(self, context=None, now=None, gate=None):
+    def new_session(self, context=None, *, now=None, gate=None):
         return _FixedSession(list(self._actions))
 
 
 class _SinglePolicy(Policy):
-    def new_session(self, context=None, now=None, gate=None):
+    def new_session(self, context=None, *, now=None, gate=None):
         return _FixedSession({'v': 42})
 
 
@@ -183,7 +183,7 @@ class _PassthroughCodec(Codec):
 
 
 class _MetaPolicy(Policy):
-    def new_session(self, context=None, now=None, gate=None):
+    def new_session(self, context=None, *, now=None, gate=None):
         return _FixedSession({})
 
     @property

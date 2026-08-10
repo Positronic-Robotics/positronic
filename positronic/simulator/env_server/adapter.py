@@ -109,9 +109,6 @@ class WireCommandAdapter(EnvAdapter):
 
     def _reset_command_state(self) -> None:
         self._held: dict[str, Any] = {}  # last command per channel — re-sent until the next one arrives
-        # Last commanded gripper closure, held across an episode boundary: grip is an absolute [0, 1] value
-        # with no 'hold' command to fall back on (unlike the arm), so a fresh trial must freeze it, not reopen.
-        self._grip = 0.0
 
     @final
     def reset_token(self, context: dict[str, Any]) -> Any:
@@ -137,6 +134,5 @@ class WireCommandAdapter(EnvAdapter):
                 cmd = None
             case roboarm_command.CartesianDelta() | roboarm_command.JointDelta():
                 self._held.pop(keys.ROBOT_COMMAND)
-        if keys.TARGET_GRIP in self._held:
-            self._grip = float(self._held[keys.TARGET_GRIP])
-        return {'command': _wire_command(_in_env_control_frame(cmd, self.env_control_frame)), 'grip': self._grip}
+        grip = float(self._held.get(keys.TARGET_GRIP, 0.0))
+        return {'command': _wire_command(_in_env_control_frame(cmd, self.env_control_frame)), 'grip': grip}

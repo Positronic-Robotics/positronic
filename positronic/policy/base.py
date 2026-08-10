@@ -116,11 +116,10 @@ class InferenceGate:
             case LatencyMode.LIVE:
                 return 0.0
             case LatencyMode.DECLARED:
-                return None if self._now() >= self.t0 + self._delay_sec else 0.0
+                return None if self._now() >= self._release_at() else 0.0
             case LatencyMode.MEASURED:
-                # The world may run no further ahead of the call's start than wall time has: measured
-                # charging only means anything with the world at or below real time during the call.
-                return max(0.0, (self._now() - self.t0) - (time.monotonic() - self._wall_t0))
+                # The world may run no further ahead of the call's start than wall time has.
+                return max(0.0, self._now() - self._release_at())
 
     def _release_at(self) -> float:
         match self._mode:
@@ -132,7 +131,7 @@ class InferenceGate:
                 return self.t0 + (time.monotonic() - self._wall_t0)
 
     class _Session(DelegatingSession):
-        """Charges the inner call, on whatever thread the harness dispatched it to."""
+        """Charges the inner call."""
 
         def __init__(self, inner: Session, gate: InferenceGate):
             super().__init__(inner)
@@ -163,7 +162,7 @@ class Policy(ABC):
 
     @abstractmethod
     def new_session(
-        self, context: dict[str, Any] | None = None, now: Now | None = None, gate: InferenceGate | None = None
+        self, context: dict[str, Any] | None = None, *, now: Now | None = None, gate: InferenceGate | None = None
     ) -> Session:
         """Create a new inference session for an episode.
 
@@ -191,8 +190,8 @@ class DelegatingPolicy(Policy):
     def __init__(self, inner: Policy):
         self._inner = inner
 
-    def new_session(self, context=None, now=None, gate=None):
-        return self._inner.new_session(context, now, gate)
+    def new_session(self, context=None, *, now=None, gate=None):
+        return self._inner.new_session(context, now=now, gate=gate)
 
     @property
     def meta(self):
@@ -276,8 +275,8 @@ class _WrapperPolicy(DelegatingPolicy):
         super().__init__(inner)
         self._wrapper = wrapper
 
-    def new_session(self, context=None, now=None, gate=None):
-        inner = self._inner.new_session(context, now, gate)
+    def new_session(self, context=None, *, now=None, gate=None):
+        inner = self._inner.new_session(context, now=now, gate=gate)
         if gate is not None and isinstance(self._wrapper, SchedulingWrapper):
             inner = gate.wrap(inner)
         return self._wrapper.wrap_session(inner, context, now)

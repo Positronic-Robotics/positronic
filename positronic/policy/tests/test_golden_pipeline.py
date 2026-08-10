@@ -82,7 +82,7 @@ class ScriptedProportionalPolicy(Policy):
     clock, no images. Codec stamps/truncates; the harness anchors/schedules.
     """
 
-    def new_session(self, context=None, now=None, gate=None):
+    def new_session(self, context=None, *, now=None, gate=None):
         return _ScriptedSession()
 
 
@@ -143,7 +143,7 @@ class FakeRobot(pimm.ControlSystem):
         while not should_stop.value:
             cmd_msg = self.commands.read()
             if self._status == RobotStatus.ERROR:
-                self._status = RobotStatus.AVAILABLE  # the command that arrived with the error is skipped
+                self._status = RobotStatus.AVAILABLE
             elif cmd_msg is not None and cmd_msg.updated:
                 self._apply(cmd_msg.data)
             if self._error_pending:
