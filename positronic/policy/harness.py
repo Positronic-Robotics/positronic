@@ -485,12 +485,12 @@ class Harness(pimm.ControlSystem):
             self._telemetry.seal(clock.now())
             raise
 
-    def _idle_step(self, manual_msg, clock: pimm.Clock) -> bool:
-        """Decide what a harness with no episode open does this round. True means wind down and stop.
+    def _idle_ends_the_run(self, manual_msg, clock: pimm.Clock) -> bool:
+        """Take the round of a harness with no episode open, and answer whether it ends the run.
 
         Priority order: a manual command, then a pending finish, then the plan advancing. The finish is
         read before the plan advances — after it, a request would start one more episode and be blocked
-        by it. An exhausted plan returns True too, so both reasons to stop leave through ``_wind_down``.
+        by it. An exhausted plan ends the run too, so both reasons leave through ``_wind_down``.
         """
         if manual_msg.updated and manual_msg.data is not None:
             # Moves the arm and does not home it again, so it leaves the pose the operator chose.
@@ -541,7 +541,7 @@ class Harness(pimm.ControlSystem):
             if directive_msg.updated:
                 yield from self._handle_directive(directive_msg.data, clock)
             elif not self._running:
-                if self._idle_step(manual_msg, clock):
+                if self._idle_ends_the_run(manual_msg, clock):
                     yield from self._wind_down(clock)
                     break
             elif self._deadline is not None and (terminal := self._trial_terminal(clock)) is not None:

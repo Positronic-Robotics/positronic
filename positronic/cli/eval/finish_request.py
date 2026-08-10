@@ -74,7 +74,7 @@ def request_path(this_run: str) -> Path:
     return request_dir() / f'{FINISH_REQUEST_PREFIX}{this_run}'
 
 
-def evaluate(path: Path, this_run: str) -> bool:
+def asks_this_run_to_finish(path: Path, this_run: str) -> bool:
     """Whether a finish request addressed to `this_run` is waiting at `path`.
 
     False means there is no file, which is every run nobody has asked. Anything else at that path
@@ -164,7 +164,7 @@ class FinishRequest(pimm.ControlSystem):
         # episodes run on. A wall-clock pace would let whole simulated episodes pass between reads.
         while not should_stop.value:
             if not self._granted:
-                self._granted = evaluate(self._path, self._run)
+                self._granted = asks_this_run_to_finish(self._path, self._run)
                 if self._granted:
                     logger.info('%s: run %s stops after the current episode', ACK_LOG_MARKER, self._run)
             if self._granted:

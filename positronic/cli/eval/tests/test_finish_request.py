@@ -17,12 +17,12 @@ def write_request(path: Path, *, action: str = finish_request.Action.FINISH, run
 def test_a_request_naming_this_run_is_granted(tmp_path):
     path = tmp_path / 'finish'
     write_request(path, run='batch-1')
-    assert finish_request.evaluate(path, 'batch-1')
+    assert finish_request.asks_this_run_to_finish(path, 'batch-1')
 
 
 def test_an_absent_file_is_the_ordinary_state(tmp_path):
     """The one negative: no file, no request, and nothing wrong."""
-    assert not finish_request.evaluate(tmp_path / 'nothing', 'batch-1')
+    assert not finish_request.asks_this_run_to_finish(tmp_path / 'nothing', 'batch-1')
 
 
 def test_a_request_naming_another_run_raises(tmp_path):
@@ -31,14 +31,14 @@ def test_a_request_naming_another_run_raises(tmp_path):
     path = tmp_path / 'finish'
     write_request(path, run='batch-1')
     with pytest.raises(ValueError, match='names run'):
-        finish_request.evaluate(path, 'batch-2')
+        finish_request.asks_this_run_to_finish(path, 'batch-2')
 
 
 def test_an_unparseable_request_raises(tmp_path):
     path = tmp_path / 'finish'
     path.write_text('finish please')
     with pytest.raises(ValueError):
-        finish_request.evaluate(path, 'batch-1')
+        finish_request.asks_this_run_to_finish(path, 'batch-1')
 
 
 def test_a_json_scalar_raises(tmp_path):
@@ -46,7 +46,7 @@ def test_a_json_scalar_raises(tmp_path):
     path = tmp_path / 'finish'
     path.write_text('"finish"')
     with pytest.raises(ValueError, match='not an object'):
-        finish_request.evaluate(path, 'batch-1')
+        finish_request.asks_this_run_to_finish(path, 'batch-1')
 
 
 def test_an_unreadable_request_raises(tmp_path):
@@ -59,7 +59,7 @@ def test_an_unreadable_request_raises(tmp_path):
         if os.geteuid() == 0:
             pytest.skip('root reads a mode-000 file, so the unreadable branch cannot be reached')
         with pytest.raises(PermissionError):
-            finish_request.evaluate(path, 'batch-1')
+            finish_request.asks_this_run_to_finish(path, 'batch-1')
     finally:
         path.chmod(0o644)
 
@@ -70,14 +70,14 @@ def test_an_unknown_action_raises(tmp_path):
     path = tmp_path / 'finish'
     write_request(path, action='abort', run='batch-1')
     with pytest.raises(ValueError, match='does not implement'):
-        finish_request.evaluate(path, 'batch-1')
+        finish_request.asks_this_run_to_finish(path, 'batch-1')
 
 
 def test_extra_fields_do_not_break_a_request(tmp_path):
     """The writer records its own diagnostics in the same object; they are not this side's business."""
     path = tmp_path / 'finish'
     write_request(path, run='batch-1', requested_at_s=1.0, requested_by='someone')
-    assert finish_request.evaluate(path, 'batch-1')
+    assert finish_request.asks_this_run_to_finish(path, 'batch-1')
 
 
 def test_nothing_is_installed_without_a_run_id(monkeypatch):
@@ -108,8 +108,8 @@ def test_the_path_names_the_run_so_two_runs_never_share_one(monkeypatch, tmp_pat
     monkeypatch.setenv(finish_request.FINISH_REQUEST_DIR_ENV, str(tmp_path))
     assert finish_request.request_path('batch-1') != finish_request.request_path('batch-2')
     write_request(finish_request.request_path('batch-1'), run='batch-1')
-    assert finish_request.evaluate(finish_request.request_path('batch-1'), 'batch-1')
-    assert not finish_request.evaluate(finish_request.request_path('batch-2'), 'batch-2')
+    assert finish_request.asks_this_run_to_finish(finish_request.request_path('batch-1'), 'batch-1')
+    assert not finish_request.asks_this_run_to_finish(finish_request.request_path('batch-2'), 'batch-2')
 
 
 def test_the_default_path_is_absolute_and_on_tmpfs(monkeypatch):
@@ -168,9 +168,9 @@ def test_the_object_the_writer_sends_is_granted(tmp_path):
         '{"action": "finish", "run_id": "batch_20260807-111935", '
         '"requested_at_s": 1786101583.6, "requested_by": "rollouts-mcp"}'
     )
-    assert finish_request.evaluate(path, 'batch_20260807-111935')
+    assert finish_request.asks_this_run_to_finish(path, 'batch_20260807-111935')
     with pytest.raises(ValueError, match='names run'):
-        finish_request.evaluate(path, 'batch_20260807-110748')
+        finish_request.asks_this_run_to_finish(path, 'batch_20260807-110748')
 
 
 def test_bytes_that_are_not_utf8_raise(tmp_path):
@@ -180,7 +180,7 @@ def test_bytes_that_are_not_utf8_raise(tmp_path):
     path.write_bytes(b'\xff\xfe not utf-8 at all')
 
     with pytest.raises(UnicodeDecodeError):
-        finish_request.evaluate(path, 'batch-1')
+        finish_request.asks_this_run_to_finish(path, 'batch-1')
 
 
 def test_an_action_outside_the_closed_set_raises(tmp_path):
@@ -188,7 +188,7 @@ def test_an_action_outside_the_closed_set_raises(tmp_path):
     path = tmp_path / 'finish'
     path.write_text(json.dumps({finish_request.ACTION_KEY: 'discard', finish_request.RUN_ID_KEY: 'batch-1'}))
     with pytest.raises(ValueError, match='does not implement'):
-        finish_request.evaluate(path, 'batch-1')
+        finish_request.asks_this_run_to_finish(path, 'batch-1')
 
 
 def test_the_default_request_directory_is_already_a_path(monkeypatch):
@@ -208,7 +208,7 @@ def test_a_grant_survives_the_world_it_was_read_in(tmp_path):
     write_request(path, run='batch-1')
     cs = finish_request.FinishRequest(path, 'batch-1', poll_interval_s=0.0)
 
-    cs._granted = finish_request.evaluate(cs._path, cs._run)
+    cs._granted = finish_request.asks_this_run_to_finish(cs._path, cs._run)
     assert cs._granted
 
     path.unlink()  # nothing the file does afterwards is read again — the grant is not re-derived
@@ -222,7 +222,7 @@ def test_a_sweep_can_read_the_grant_without_entering_a_world(tmp_path):
     assert cs.granted is False
 
     write_request(path, run='batch-1')
-    cs._granted = finish_request.evaluate(cs._path, cs._run)
+    cs._granted = finish_request.asks_this_run_to_finish(cs._path, cs._run)
     assert cs.granted is True
 
 
@@ -231,18 +231,18 @@ def test_the_action_arrives_as_the_enum_not_the_string_it_was_written_as(tmp_pat
     every later reader holding a `str` the contract calls an `Action`. The conversion is the check."""
     path = tmp_path / 'finish'
     write_request(path, run='batch-1')
-    assert finish_request.evaluate(path, 'batch-1')
+    assert finish_request.asks_this_run_to_finish(path, 'batch-1')
     assert (
         finish_request.Action(json.loads(path.read_text())[finish_request.ACTION_KEY]) is finish_request.Action.FINISH
     )
 
     path.write_text(json.dumps({finish_request.RUN_ID_KEY: 'batch-1'}))  # no action at all
     with pytest.raises(ValueError, match='not a string'):
-        finish_request.evaluate(path, 'batch-1')
+        finish_request.asks_this_run_to_finish(path, 'batch-1')
 
     path.write_text(json.dumps({finish_request.ACTION_KEY: 'abort', finish_request.RUN_ID_KEY: 'batch-1'}))
     with pytest.raises(ValueError, match='does not implement'):
-        finish_request.evaluate(path, 'batch-1')
+        finish_request.asks_this_run_to_finish(path, 'batch-1')
 
 
 # Every way a file can fail to be the request the contract describes. Each raises: the writer and
@@ -331,7 +331,7 @@ def test_every_contract_violation_raises(tmp_path, write, shape):
     write(path)
 
     with pytest.raises(Exception) as caught:  # noqa: B017 — the class is the point, not one member
-        finish_request.evaluate(path, 'batch-1')
+        finish_request.asks_this_run_to_finish(path, 'batch-1')
 
     assert str(caught.value), f'the failure says what was wrong: {shape}'
 
@@ -348,7 +348,7 @@ def test_a_fifo_at_the_request_path_raises_rather_than_waiting_on_it(tmp_path):
 
     def read() -> None:
         try:
-            finish_request.evaluate(path, 'batch-1')
+            finish_request.asks_this_run_to_finish(path, 'batch-1')
         except BaseException as e:  # noqa: BLE001 — recorded so the assert below can name it
             outcome.append(e)
 
@@ -372,7 +372,7 @@ def test_a_shape_nobody_listed_reaches_the_world_too(tmp_path, monkeypatch):
     monkeypatch.setattr(finish_request.json, 'loads', _boom)
 
     with pytest.raises(RecursionError):
-        finish_request.evaluate(path, 'batch-1')
+        finish_request.asks_this_run_to_finish(path, 'batch-1')
 
 
 def test_the_poll_is_paced_on_the_clock_the_run_is_measured_on(tmp_path):
@@ -408,7 +408,7 @@ def test_a_defect_in_this_run_s_own_code_reaches_the_world(tmp_path, monkeypatch
     monkeypatch.setattr(finish_request, 'Action', Broken())
 
     with pytest.raises(ValueError, match='a defect in the staged checks'):
-        finish_request.evaluate(path, 'batch-1')
+        finish_request.asks_this_run_to_finish(path, 'batch-1')
 
 
 def test_a_missing_request_directory_raises_on_the_read(tmp_path):
@@ -417,7 +417,7 @@ def test_a_missing_request_directory_raises_on_the_read(tmp_path):
     as the ordinary state it would disable finishing for the life of the run, silently."""
     path = tmp_path / 'not-a-directory' / 'finish'
     with pytest.raises(ValueError, match='directory'):
-        finish_request.evaluate(path, 'batch-1')
+        finish_request.asks_this_run_to_finish(path, 'batch-1')
 
 
 def test_a_missing_request_directory_raises_at_launch(monkeypatch, tmp_path):
