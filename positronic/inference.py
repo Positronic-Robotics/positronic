@@ -12,7 +12,7 @@ import positronic.cfg.policy as policy_cfg
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import Driver, main, run
 from positronic.dataset.local_dataset import load_all_datasets
-from positronic.gui import dpg_ui
+from positronic.gui import dpg_ui, handover
 from positronic.gui.keyboard import KeyboardControl
 from positronic.gui.web import WebEvalUI
 from positronic.policy.harness import Directive
@@ -34,12 +34,12 @@ class KeyboardHandler:
         return None
 
 
-@cfn.config(ui_scale=1)
-def eval_ui(ui_scale):
+@cfn.config(ui_scale=1, handover_dir=handover.DEFAULT_DIR)
+def eval_ui(ui_scale, handover_dir):
     def make(output_dir: Path | None) -> Driver:
         from positronic.gui.eval import EvalUI  # noqa: PLC0415
 
-        gui = EvalUI(output_dir, ui_scale=ui_scale)
+        gui = EvalUI(output_dir, ui_scale=ui_scale, handover_dir=Path(handover_dir))
         return Driver(gui, gui.directive, pimm.utils.identity, [])
 
     return make
