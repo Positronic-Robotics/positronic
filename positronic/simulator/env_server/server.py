@@ -27,8 +27,10 @@ from websockets.sync.server import ServerConnection, serve
 # (importing ``positronic.*`` would run the package's installed-version lookup and fail there).
 # Relative when they land as a package, top-level when copied in flat.
 try:
+    from . import protocol
     from .protocol import decode, encode
 except ImportError:
+    import protocol  # pyright: ignore[reportMissingImports]
     from protocol import decode, encode
 
 logger = logging.getLogger(__name__)
@@ -95,18 +97,18 @@ class EnvServer:
         for raw in connection:
             msg = decode(raw)
             try:
-                match msg['cmd']:
-                    case 'close':
-                        connection.send(encode({'ok': True}))
+                match msg[protocol.REQUEST_CMD]:
+                    case protocol.CMD_CLOSE:
+                        connection.send(encode({protocol.RESPONSE_OK: True}))
                         return
-                    case 'reset':
-                        result = self._env.reset(msg['token'])
-                    case 'step':
-                        result = self._env.step(msg['action'])
+                    case protocol.CMD_RESET:
+                        result = self._env.reset(msg[protocol.REQUEST_TOKEN])
+                    case protocol.CMD_STEP:
+                        result = self._env.step(msg[protocol.REQUEST_ACTION])
                     case other:
                         raise ValueError(f'Unknown command: {other!r}')
             except Exception as e:
-                result = {'error': f'{type(e).__name__}: {e}'}
+                result = {protocol.RESPONSE_ERROR: f'{type(e).__name__}: {e}'}
             connection.send(encode(result))
 
     def serve_forever(self) -> None:

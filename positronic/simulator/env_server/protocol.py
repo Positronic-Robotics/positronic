@@ -10,6 +10,7 @@ numpy-1 client unchanged.
 """
 
 import functools
+from typing import Any
 
 import msgpack
 import numpy as np
@@ -47,6 +48,17 @@ COMMAND_JOINT_VEL = 'dq'  # JOINT_VEL — per-step joint deltas
 OPT_HOST = '--host'
 OPT_PORT = '--port'
 
+# The request envelope: the verb the client sends, the arguments each verb carries, and the two replies the
+# server writes itself (every other reply is an env's own frame).
+REQUEST_CMD = 'cmd'
+REQUEST_TOKEN = 'token'  # CMD_RESET — the adapter's reset token
+REQUEST_ACTION = 'action'  # CMD_STEP — the tagged command plus grip
+CMD_RESET = 'reset'
+CMD_STEP = 'step'
+CMD_CLOSE = 'close'
+RESPONSE_OK = 'ok'  # CMD_CLOSE's acknowledgement
+RESPONSE_ERROR = 'error'  # any verb: the server caught an exception and the client re-raises it
+
 FRAME_OBS = 'obs'
 FRAME_META = 'meta'
 FRAME_ROBOT_META = 'robot_meta'
@@ -76,5 +88,13 @@ def _unpack(obj):
     return obj
 
 
-encode = functools.partial(msgpack.packb, default=_pack)
+def encode(obj: Any) -> bytes:
+    """*obj* as a msgpack frame, with the numpy envelope applied to arrays and scalars inside it."""
+    # ``packb`` is annotated ``bytes | None``, for a streaming mode this call does not use; every caller here
+    # hands the result straight to a socket, so the frame is materialized.
+    packed = msgpack.packb(obj, default=_pack)
+    assert packed is not None
+    return packed
+
+
 decode = functools.partial(msgpack.unpackb, object_hook=_unpack)

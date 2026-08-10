@@ -10,6 +10,7 @@ from typing import Any
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect
 
+from . import protocol
 from .protocol import decode, encode
 
 
@@ -39,23 +40,23 @@ class EnvConnection:
                 backoff = min(backoff * 2, 5.0)
 
     def reset(self, token: Any) -> dict[str, Any]:
-        return self._request({'cmd': 'reset', 'token': token})
+        return self._request({protocol.REQUEST_CMD: protocol.CMD_RESET, protocol.REQUEST_TOKEN: token})
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
-        return self._request({'cmd': 'step', 'action': action})
+        return self._request({protocol.REQUEST_CMD: protocol.CMD_STEP, protocol.REQUEST_ACTION: action})
 
     def _request(self, msg: dict[str, Any]) -> dict[str, Any]:
         self._ws.send(encode(msg))
         result = decode(self._ws.recv())
-        if 'error' in result:
-            raise RuntimeError(f'env server: {result["error"]}')
+        if protocol.RESPONSE_ERROR in result:
+            raise RuntimeError(f'env server: {result[protocol.RESPONSE_ERROR]}')
         return result
 
     def close(self) -> None:
         # Best-effort: ask the server to release, but a peer that is already gone (a crashed or killed server) is
         # success too — the socket is closed regardless.
         try:
-            self._ws.send(encode({'cmd': 'close'}))
+            self._ws.send(encode({protocol.REQUEST_CMD: protocol.CMD_CLOSE}))
             self._ws.recv()
         except ConnectionClosed:
             pass
