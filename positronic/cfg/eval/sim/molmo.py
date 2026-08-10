@@ -1,5 +1,7 @@
 import json
+import logging
 from pathlib import Path
+from typing import Any
 
 import configuronic as cfn
 
@@ -10,37 +12,32 @@ from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.adapter import DEFAULT_CAMERA_DICT, MolmoAdapter
 from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
 
+# How far the harness deadline sits above the benchmark horizon. Being sim-time, the spare budget costs
+# nothing unless the sim stops terminating, which is the only thing the deadline is there to catch.
+_TIMEOUT_MARGIN_SEC = 10.0
 
-def _episode_count(benchmark_dir: Path) -> int:
-    """The episode count of a MolmoSpaces benchmark dir, mirroring ``load_all_episodes``' two layouts.
 
-    positronic cannot import ``molmo_spaces`` here (it lives in the env server's own venv), so this counts the
+def _load_episodes(benchmark_dir: Path) -> list[dict[str, Any]]:
+    """The episode specs of a MolmoSpaces benchmark dir, mirroring ``load_all_episodes``' two layouts.
+
+    positronic cannot import ``molmo_spaces`` here (it lives in the env server's own venv), so this reads the
     benchmark files directly: a single ``benchmark.json`` (a JSON list of episode specs) when present, else the
     legacy ``house_*/episode_*.json`` layout the loader also accepts.
     """
     manifest = benchmark_dir / 'benchmark.json'
     if manifest.exists():
-        return len(json.loads(manifest.read_text()))
-    return sum(1 for _ in benchmark_dir.glob('house_*/episode_*.json'))
+        return json.loads(manifest.read_text())
+    return [json.loads(p.read_text()) for p in sorted(benchmark_dir.glob('house_*/episode_*.json'))]
 
 
-@cfn.config(
-    camera_dict=DEFAULT_CAMERA_DICT,
-    benchmark_dir=None,
-    episodes=None,
-    trial_count=1,
-    timeout=60.0,
-    seed=None,
-    task_horizon_steps=None,
-)
+@cfn.config(camera_dict=DEFAULT_CAMERA_DICT, benchmark_dir=None, episodes=None, trial_count=1, timeout=None, seed=None)
 def _molmo_eval(
     benchmark_dir: str | None,
     episodes: int | list[int] | None,
     trial_count: int,
-    timeout: float,
+    timeout: float | None,
     camera_dict: dict[str, str],
     seed: int | None,
-    task_horizon_steps: int | None,
 ) -> Eval:
     """A MolmoSpaces eval: the embodiment proxies a remote MolmoSpaces env, the task carries the scenario.
 
@@ -57,17 +54,15 @@ def _molmo_eval(
 
     ``timeout`` is not the benchmark horizon — the sim owns that (the benchmark's ``task_horizon_sec``, enforced
     env-side and delivered as a terminal ``done``). It is only a runaway-cost safety net for a sim that never
-    terminates, so it must stay longer than the sim's native horizon. Being sim-time, the spare budget costs
-    nothing unless the sim misbehaves.
-
-    ``task_horizon_steps`` optionally pins the episode horizon, mirroring MolmoSpaces' ``--task_horizon_steps`` —
-    use it to reproduce a reference run whose horizon differs from the benchmark's declared value. Default
-    (``None``) reads the benchmark's own ``task_horizon_sec``, where MolmoSpaces' own resolver reads it.
+    terminates, so its default is the benchmark's own horizon plus a margin. An explicit value can only lower the
+    deadline, never raise it, and one at or below the horizon truncates valid episodes — so any value that
+    differs from the default is warned about.
     """
     if benchmark_dir is None:
         raise ValueError('MolmoSpaces eval needs --eval.benchmark_dir pointing at a dir with benchmark.json')
     base = Path(benchmark_dir)
-    count = _episode_count(base)
+    specs = _load_episodes(base)
+    count = len(specs)
     if episodes is None:
         indices = list(range(count))
     else:
@@ -86,9 +81,23 @@ def _molmo_eval(
     # finished run — the command would exit 0 having evaluated nothing.
     if trial_count < 1:
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
-    proxy = RemoteEnvControlSystem(
-        MolmoAdapter(camera_dict), serve_molmo_spaces(base, task_horizon_steps=task_horizon_steps)
+    # Before the costly server spawn, and the same rule the env server then applies to the same specs.
+    horizon = mapping.declared_task_horizon_sec(
+        spec.get(mapping.MOLMO_EPISODE_TASK, {}).get(mapping.MOLMO_TASK_HORIZON_SEC) for spec in specs
     )
+    backstop = horizon + _TIMEOUT_MARGIN_SEC
+    if timeout is not None and timeout != backstop:
+        logging.warning(
+            '--eval.timeout %ss overrides the benchmark backstop of %ss (the %ss horizon plus a margin); running '
+            'with %ss. The deadline only catches a sim that stopped terminating, and a deadline at or below the '
+            'horizon cuts valid episodes short and scores them as failures.',
+            timeout,
+            backstop,
+            horizon,
+            min(timeout, backstop),
+        )
+    timeout = backstop if timeout is None else min(timeout, backstop)
+    proxy = RemoteEnvControlSystem(MolmoAdapter(camera_dict), serve_molmo_spaces(base))
     # MolmoSpaces drives a Franka DROID rig; recordings carry the same model (URDF + meshes + joint names +
     # control frame) for the 3D viewer and offline IK, supplied here since the molmo server can't import
     # positronic to emit it via ``robot_meta``. ``DEFAULT_FRAME`` is declared on the gripper's grasp site,
@@ -105,7 +114,6 @@ def _molmo_eval(
         privileged=privileged,
         reset=proxy.reset,
         done=proxy.done,
-        horizon=lambda: proxy.horizon,
     )
     # Benchmark episodes are exact-pose deterministic and carry their own seed. An unset ``seed`` leaves
     # ``eval.seed`` off the trial, so the env falls back to the episode's spec seed (reproducing the benchmark);

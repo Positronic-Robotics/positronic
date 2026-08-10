@@ -53,8 +53,8 @@ class EnvProtocol(ABC):
         instruction, or an embodiment that ships its own model.
 
         ``horizon`` (optional) is the sim-enforced episode deadline in sim-seconds — the env's own time limit, which
-        it delivers as a terminal ``done`` on expiry. An env that enforces a horizon reports it so the client can
-        check its safety-net timeout stays strictly weaker (longer); omit it when the env enforces none.
+        it delivers as a terminal ``done`` on expiry. It is reported for observability, so a run can be checked
+        against the horizon the env actually resolved; omit it when the env enforces none.
         """
 
     @abstractmethod

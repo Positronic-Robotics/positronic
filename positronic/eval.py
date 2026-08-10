@@ -102,12 +102,6 @@ class Task:
     ``done`` is the optional terminating signal: a source that delivers a dict payload when the
     trial ends. The Harness reads it to stop the trial early and records the payload into the
     episode's static data.
-
-    ``horizon`` is the optional trial time budget (sim-seconds) — the sim-enforced episode horizon plus the env's
-    own framing overhead — resolved live per trial like ``instruction`` from what a benchmark env reports at reset
-    (see the two-tier design above). The Harness reads it once a trial is armed and rejects a ``timeout`` that is
-    not strictly longer, so the safety net cannot silently truncate a valid episode. ``None`` for real/attended
-    tasks and envs that enforce no horizon.
     """
 
     def __init__(
@@ -117,23 +111,16 @@ class Task:
         privileged: dict[str, Observation] | None = None,
         reset: Callable[[dict[str, Any]], None] | None = None,
         done: pimm.SignalEmitter | None = None,
-        horizon: Callable[[], float | None] | None = None,
     ):
         self._instruction = (lambda: instruction) if isinstance(instruction, str) else instruction
         self.timeout = timeout
         self.privileged = privileged or {}
         self.reset = reset
         self.done = done
-        self._horizon = horizon
 
     @property
     def instruction(self) -> str:
         return self._instruction()
-
-    @property
-    def horizon(self) -> float | None:
-        """The env's sim-enforced episode horizon (sim-seconds) for the current trial, or ``None`` if none."""
-        return self._horizon() if self._horizon is not None else None
 
 
 @dataclass

@@ -8,7 +8,7 @@ MuJoCo reads that need the live model (joint velocities, the end-effector world 
 only the framework-independent arithmetic lives here.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, TypeAlias
 
 import numpy as np
@@ -55,7 +55,8 @@ META_HOUSE_INDEX = 'house_index'
 # gripper closure is read from.
 MOLMO_OBS_QPOS = 'qpos'
 
-# The benchmark episode's declared horizon, in sim-seconds, inside its task dict.
+# The benchmark episode spec's task definition, and the horizon it declares in sim-seconds.
+MOLMO_EPISODE_TASK = 'task'
 MOLMO_TASK_HORIZON_SEC = 'task_horizon_sec'
 
 # The raw observation payload ``env.py`` reports and ``MolmoAdapter`` reads back.
@@ -205,27 +206,39 @@ def resolve_episode_seed(episode: Any, episode_index: int, override_seed: int | 
     return int(spec_seed) if spec_seed is not None else int(episode_index)
 
 
+def declared_task_horizon_sec(declared: Iterable[float | None]) -> float:
+    """The one horizon a benchmark declares, in sim-seconds, over every episode's ``task_horizon_sec``.
+
+    The horizon belongs to the benchmark, not to an episode within it, so a benchmark that declares none — or
+    disagrees with itself — has no horizon to run at. Callers pass the values already read from their own
+    representation of the specs: parsed episode objects in the molmo venv, raw JSON on the positronic side.
+    """
+    horizons = set()
+    for value in declared:
+        if value is None:
+            raise ValueError(
+                f'benchmark episodes carry no {MOLMO_TASK_HORIZON_SEC} in their task dict — the horizon is part '
+                'of the task definition; add it to the benchmark'
+            )
+        horizons.add(value)
+    if len(horizons) != 1:
+        raise ValueError(f'benchmark declares inconsistent {MOLMO_TASK_HORIZON_SEC} values {sorted(horizons)}')
+    return float(horizons.pop())
+
+
 def resolve_task_horizon_steps(episodes: Any, policy_dt_ms: float, override_steps: int | None = None) -> int:
     """A benchmark's enforced horizon in policy steps, mirroring MolmoSpaces' own resolution.
 
     Upstream's ``determine_task_horizon`` (``evaluation/eval_main.py``, the entrypoint its README documents)
     resolves in this order and nothing else: an explicit ``--task_horizon_steps`` override, then the benchmark's
     own ``task_horizon_sec`` from the episodes' task dicts, converted with ``round(sec * 1000 / policy_dt_ms)``.
-    It raises when any episode declares none, and again when the episodes disagree — the horizon belongs to the
-    benchmark, not to an episode within it, so one run has one. This reproduces all three, raises included:
-    ``JsonBenchmarkEvalConfig.task_horizon``'s 500-step default is a config default upstream overwrites before
-    the runner ever sees it.
+    It raises when any episode declares none, and again when the episodes disagree. This reproduces all three,
+    raises included: ``JsonBenchmarkEvalConfig.task_horizon``'s 500-step default is a config default upstream
+    overwrites before the runner ever sees it.
     """
     if override_steps is not None:
         if override_steps < 1:
             raise ValueError(f'task_horizon_steps override must be at least 1 step, got {override_steps}')
         return override_steps
-    declared = {episode.task.get(MOLMO_TASK_HORIZON_SEC) for episode in episodes}
-    if None in declared:
-        raise ValueError(
-            'benchmark episodes carry no task_horizon_sec in their task dict and no task_horizon_steps override '
-            '— the horizon is part of the task definition; add it to the benchmark or pass an override'
-        )
-    if len(declared) != 1:
-        raise ValueError(f'benchmark declares inconsistent task_horizon_sec values {sorted(declared)}')
-    return round(declared.pop() * 1000.0 / policy_dt_ms)
+    sec = declared_task_horizon_sec(episode.task.get(MOLMO_TASK_HORIZON_SEC) for episode in episodes)
+    return round(sec * 1000.0 / policy_dt_ms)
