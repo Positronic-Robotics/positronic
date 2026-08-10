@@ -212,8 +212,8 @@ def main(
     Exactly one of ``driver`` (attended: a factory producing the operator surface that emits the directives
     over a single ``embodiment``) or ``evals`` (unattended: the harness self-drives each eval's trial plan,
     rebuilding the World per eval) must be given; ``show_gui`` applies to the unattended path (attended surfaces
-    bring their own). ``main`` owns the policy lifetime: it warms the policy once up front and closes it once
-    after the last World, so a multi-eval sweep reuses one live policy across the rebuilds.
+    bring their own). ``main`` owns the policy lifetime: it gates the run on the policy reporting itself ready
+    and closes it once after the last World, so a multi-eval sweep reuses one live policy across the rebuilds.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + a machine-load stats
     stream). It needs an ``output_dir`` and an all-simulated sweep: everything under the bound tracer enters
@@ -223,7 +223,7 @@ def main(
     refused when it elapses.
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
-    # Validate timing up front, before the policy warmup, so a rejected sweep fails before it spends anything.
+    # Timing is validated before the readiness wait, so a rejected sweep fails before it spends anything.
     if timing:
         if evals is not None:
             embodiments = [ev.embodiment for ev in evals]
@@ -232,7 +232,7 @@ def main(
             embodiments = [embodiment]
         _validate_timing(embodiments, output_dir)
 
-    # Before ``_run_world``: past this line the arm is energized, so a refusal reaches a human at a live robot.
+    # Ahead of the driver factory and the worlds: nothing downstream is built for a policy that cannot serve.
     logger.info('Waiting for policy endpoints to report ready (up to %.0fs)', ready_timeout)
     policy.wait_ready(ready_timeout)
 

@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 # outlast that compile (still surfacing a stalled/half-open connection), and let callers override per use.
 DEFAULT_INFER_TIMEOUT = 180.0
 
-# Overall bound on reaching ``ready``. The per-message timeout bounds SILENCE only, so a server streaming
-# ``loading`` frames inside it trips nothing and would wait for ever without this.
+# Overall bound on reaching ``ready``: the per-message timeout bounds SILENCE only, so a server streaming
+# ``loading`` frames inside it trips nothing.
 DEFAULT_READY_TIMEOUT = 300.0
 
 

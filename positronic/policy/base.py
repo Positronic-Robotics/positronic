@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+import numbers
 from abc import ABC, abstractmethod
 from collections import Counter
 from collections.abc import Callable
@@ -284,7 +286,15 @@ class SampledPolicy(Policy):
         return self._keys
 
     def _check_weights(self, keys: tuple[str, ...]) -> None:
-        """Refuse a weighting no draw can be taken from. No weights at all means uniform."""
+        """Refuse a weighting the draw cannot use. No weights at all means uniform.
+
+        ``random.choices`` accumulates the weights left to right and bisects the running sums, so a
+        usable weighting is: one real weight per policy, each non-negative and finite, and a total
+        that is positive and finite. The total is checked on the sum rather than derived from the
+        members: two individually finite weights can overflow it. A negative weight is the one shape
+        the draw does not refuse — the running sums stop increasing and the bisect then picks the
+        wrong policy in silence — which is why this gate is stricter than the draw it protects.
+        """
         if not self._weights:
             return
         if len(self._weights) != len(keys):
@@ -292,15 +302,19 @@ class SampledPolicy(Policy):
                 f'A sampled policy was given {len(self._weights)} weights for {len(keys)} policies: each policy '
                 f'takes one weight, in the order the policies were given'
             )
-        if any(w < 0 for w in self._weights):
+        unusable = [w for w in self._weights if not (isinstance(w, numbers.Real) and math.isfinite(w) and w >= 0)]
+        if unusable:
             raise ValueError(
-                f'Sampling weights must not be negative, but {list(self._weights)} holds one: a negative weight '
-                f'skews the draw without ever being reported'
+                f'Every sampling weight has to be a finite non-negative number, but {list(self._weights)} holds '
+                f'{unusable}: the draw accumulates them in order, and anything else either refuses to accumulate '
+                f'or skews the draw without ever being reported'
             )
-        if sum(self._weights) <= 0:
+        total = sum(self._weights)
+        if not math.isfinite(total) or total <= 0:
             raise ValueError(
-                f'Sampling weights {list(self._weights)} sum to zero, so no policy could ever be drawn: drop the '
-                f'policies that should not run instead of weighting them to nothing'
+                f'Sampling weights {list(self._weights)} sum to {total}, so no draw can be taken from them: the '
+                f'total has to be positive and finite. Drop the policies that should not run instead of '
+                f'weighting them to nothing'
             )
 
     def new_session(self, context=None, now=None):
@@ -312,11 +326,10 @@ class SampledPolicy(Policy):
         return _KeyedSession(session, policy.meta, self._key_field, key)
 
     def wait_ready(self, timeout: float) -> None:
-        """Every member serves and the set is samplable, or the run is refused. ``timeout`` bounds each wait.
+        """Every member serves and the set is samplable, or the run is refused. ``timeout`` bounds each member.
 
-        Dropping a failed member instead would hand its share to the rest, changing every member's
-        numbers with nothing recording which set ran. Concurrent: sequentially the bound would be
-        ``timeout`` times the size of the set.
+        All-or-nothing: one member short and the rest absorb its share, so the round measures a set
+        nobody asked for. The waits are concurrent, so ``timeout`` bounds the call, not each member in turn.
         """
         if self._policies:
             with ThreadPoolExecutor(max_workers=len(self._policies)) as pool:

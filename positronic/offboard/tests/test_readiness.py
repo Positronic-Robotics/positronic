@@ -8,10 +8,13 @@ misbehaviour the client is being tested against.
 """
 
 import asyncio
+import random
 import socket
 import threading
 import time
 from collections.abc import Callable, Generator
+from decimal import Decimal
+from fractions import Fraction
 from types import SimpleNamespace
 from typing import cast
 
@@ -284,26 +287,52 @@ def test_a_sampled_set_whose_members_share_a_key_is_refused():
         batch.wait_ready(1.0)
 
 
+# Every weighting of two policies the draw cannot use, and the words the refusal carries. Exhaustive
+# over what ``random.choices`` requires — one real weight per policy, each non-negative and finite,
+# summing to a positive finite total — with a row per way each of those can fail.
+_UNDRAWABLE_WEIGHTS = [
+    ('one short', [1.0], 'one weight'),
+    ('one too many', [1.0, 1.0, 1.0], 'one weight'),
+    ('negative, total still positive', [-1.0, 2.0], 'finite non-negative'),
+    ('not a number', [float('nan'), 1.0], 'finite non-negative'),
+    ('infinite', [float('inf'), 1.0], 'finite non-negative'),
+    ('negatively infinite', [float('-inf'), 2.0], 'finite non-negative'),
+    ('infinities that cancel', [float('inf'), float('-inf')], 'finite non-negative'),
+    ('not real numbers', ['1.0', '2.0'], 'finite non-negative'),
+    ('decimals, which do not accumulate with a float', [Decimal(1), Decimal(2)], 'finite non-negative'),
+    ('complex, which do not order', [1 + 0j, 2 + 0j], 'finite non-negative'),
+    ('each finite, overflowing the total', [1e308, 1e308], 'positive and finite'),
+    ('nothing to draw from', [0.0, 0.0], 'positive and finite'),
+]
+
+# The other side of the same predicate: every weighting the draw does accept has to pass the gate.
+_DRAWABLE_WEIGHTS = [
+    ('equal', [1.0, 1.0]),
+    ('unequal', [3.0, 1.0]),
+    ('a zero among positives', [1.0, 0.0]),
+    ('integers', [3, 1]),
+    ('fractions', [Fraction(1, 3), Fraction(2, 3)]),
+    ('no weights at all', None),
+]
+
+
 @pytest.mark.timeout(20)
-def test_a_sampled_set_weighted_so_no_draw_can_be_taken_is_refused():
+@pytest.mark.parametrize(
+    ('weights', 'refusal'), [row[1:] for row in _UNDRAWABLE_WEIGHTS], ids=[row[0] for row in _UNDRAWABLE_WEIGHTS]
+)
+def test_a_sampled_set_weighted_so_no_draw_can_be_taken_is_refused(weights, refusal):
     """A weighting nothing can be drawn from is refused with the set, not left to the first draw."""
-    with pytest.raises(ValueError, match='one weight'):
-        SampledPolicy(_Named('a'), _Named('b'), weights=[1.0], key_field=_KEY).wait_ready(1.0)
-
-    with pytest.raises(ValueError, match='negative'):
-        SampledPolicy(_Named('a'), _Named('b'), weights=[-1.0, 2.0], key_field=_KEY).wait_ready(1.0)
-
-    with pytest.raises(ValueError, match='sum to zero'):
-        SampledPolicy(_Named('a'), _Named('b'), weights=[0.0, 0.0], key_field=_KEY).wait_ready(1.0)
+    with pytest.raises(ValueError, match=refusal):
+        SampledPolicy(_Named('a'), _Named('b'), weights=weights, key_field=_KEY).wait_ready(1.0)
 
 
 @pytest.mark.timeout(20)
-def test_a_sampled_set_a_draw_can_be_taken_from_passes_the_gate():
-    """The other side of the predicate: an unequal weighting, and one with a zero in it, both draw,
-    as does a set carrying no weights at all."""
-    SampledPolicy(_Named('a'), _Named('b'), weights=[3.0, 1.0], key_field=_KEY).wait_ready(1.0)
-    SampledPolicy(_Named('a'), _Named('b'), weights=[1.0, 0.0], key_field=_KEY).wait_ready(1.0)
-    SampledPolicy(_Named('a'), _Named('b'), key_field=_KEY).wait_ready(1.0)
+@pytest.mark.parametrize('weights', [row[1] for row in _DRAWABLE_WEIGHTS], ids=[row[0] for row in _DRAWABLE_WEIGHTS])
+def test_a_sampled_set_a_draw_can_be_taken_from_passes_the_gate(weights):
+    """The gate is stricter than the draw only where the draw is silently wrong, so a weighting
+    ``random.choices`` serves has to pass — the second assertion is what pins that boundary."""
+    SampledPolicy(_Named('a'), _Named('b'), weights=weights, key_field=_KEY).wait_ready(1.0)
+    assert random.choices(['a', 'b'], weights)[0] in ('a', 'b')
 
 
 @pytest.mark.timeout(20)
