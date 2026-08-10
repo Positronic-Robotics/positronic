@@ -154,6 +154,13 @@ class ReplaySession(Session):
         return {keys.TYPE: 'replay'}
 
 
+# The meta fields a replay reports beside ``keys.TYPE``. A recorded episode carries them under
+# ``keys.POLICY_META``, and that is what joins it back to the recording it was played from — so a reader
+# outside this module resolves them by importing these rather than spelling them.
+META_DATASET_PATH = 'replay.dataset_path'
+META_EPISODE = 'replay.episode'
+
+
 class ReplayPolicy(Policy):
     """Plays a recorded episode back through the policy interface, with no model and no server.
 
@@ -204,12 +211,6 @@ class ReplayPolicy(Policy):
 
     @property
     def meta(self) -> dict[str, Any]:
-        """What this policy is. Reading it fetches the recording and checks the episode exists.
-
-        Resolving here is the contract ``RemotePolicy.meta`` keeps, where the read performs the
-        server handshake. A ``SampledPolicy`` reads every sub-policy's meta to key them, so a
-        warm-up brings the whole set up; a pure property would leave a replay fetching inside the
-        first episode that selects it, with the operator surface already running.
-        """
+        """What this policy is. Reading it fetches the recording and checks the episode exists."""
         self._load()
-        return {keys.TYPE: 'replay', 'replay.dataset_path': self._dataset_path, 'replay.episode': self._episode_index}
+        return {keys.TYPE: 'replay', META_DATASET_PATH: self._dataset_path, META_EPISODE: self._episode_index}

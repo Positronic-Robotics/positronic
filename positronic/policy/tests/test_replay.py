@@ -10,7 +10,7 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.policy.base import SampledPolicy
-from positronic.policy.replay import ReplayPolicy, ReplaySession, load_actions
+from positronic.policy.replay import META_DATASET_PATH, ReplayPolicy, ReplaySession, load_actions
 
 HZ = 10  # waypoints per second in the fixtures below
 
@@ -410,7 +410,7 @@ def test_missing_episode_names_what_the_dataset_holds(tmp_path):
 
     with pytest.raises(IndexError, match='holds 1 episode'):
         policy.new_session()
-    # From `meta` too, which a run resolves before hardware, so a missing episode is named at startup.
+    # From `meta` too, since reading it resolves the recording.
     with pytest.raises(IndexError, match='holds 1 episode'):
         _ = ReplayPolicy(str(tmp_path), episode=7).meta
 
@@ -438,4 +438,4 @@ def test_meta_names_the_recording_it_plays(tmp_path):
     policy = ReplayPolicy(str(tmp_path), episode=0)
 
     assert policy.meta[keys.TYPE] == 'replay'
-    assert policy.meta['replay.dataset_path'] == str(tmp_path)
+    assert policy.meta[META_DATASET_PATH] == str(tmp_path)

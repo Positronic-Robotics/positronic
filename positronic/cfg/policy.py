@@ -108,7 +108,9 @@ def _endpoint_policy(name: str, spec: EndpointSpec, recording_dir: str | None) -
     if not isinstance(dataset, str) or not dataset:
         raise ValueError(f'endpoint {name!r} is {kind} and names no {ENDPOINT_DATASET} to play back')
     episode = fields.get(ENDPOINT_EPISODE)
-    if episode is not None and not isinstance(episode, int):
+    # ``type`` rather than ``isinstance``: ``bool`` subclasses ``int``, so a JSON ``true`` would pass here
+    # and play episode 1.
+    if episode is not None and type(episode) is not int:
         raise ValueError(f'endpoint {name!r} declares {ENDPOINT_EPISODE}={episode!r}, which is not an episode index')
     # An entry that names no episode plays the recording's first.
     return ReplayPolicy(dataset, episode=episode if episode is not None else 0)

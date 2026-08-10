@@ -3,6 +3,9 @@
 The endpoint field names are spelled out here rather than imported from `policy_cfg`, because these
 tests stand in for whatever writes `--policy.endpoints` — which spells them out too, having no way to
 import anything. A test written against the constants would follow a rename and pin nothing.
+
+That holds for what a caller WRITES. What a policy REPORTS is read back by first-party code, which
+imports, so the meta keys come from the module that produces them.
 """
 
 import numpy as np
@@ -13,6 +16,7 @@ from positronic import keys
 from positronic.cfg import policy as policy_cfg
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.policy.base import SampledPolicy
+from positronic.policy.replay import META_DATASET_PATH, META_EPISODE
 
 
 @pytest.fixture(autouse=True)
@@ -60,8 +64,8 @@ def test_replay_endpoints_fan_out_and_record_which_recording_ran(tmp_path):
     b = _session_meta(_built(endpoints=endpoints, weights={'arm_a': 0.0, 'arm_b': 1.0}))
 
     assert a[keys.TYPE] == 'replay'
-    assert (a['replay.dataset_path'], a['replay.episode']) == (dataset, 0)
-    assert (b['replay.dataset_path'], b['replay.episode']) == (dataset, 1)
+    assert (a[META_DATASET_PATH], a[META_EPISODE]) == (dataset, 0)
+    assert (b[META_DATASET_PATH], b[META_EPISODE]) == (dataset, 1)
 
 
 def test_replay_endpoint_without_an_episode_takes_the_first(tmp_path):
@@ -69,7 +73,7 @@ def test_replay_endpoint_without_an_episode_takes_the_first(tmp_path):
 
     meta = _session_meta(_built(endpoints={'arm_a': {'kind': 'replay', 'dataset': dataset}}))
 
-    assert meta['replay.episode'] == 0
+    assert meta[META_EPISODE] == 0
 
 
 def test_a_served_endpoint_and_a_replay_endpoint_stand_side_by_side(tmp_path):
@@ -117,6 +121,13 @@ def test_an_endpoint_that_names_nothing_to_reach_is_refused():
 def test_an_episode_that_is_not_an_index_is_refused():
     with pytest.raises(ValueError, match="declares episode='2', which is not an episode index"):
         _built(endpoints={'arm_a': {'kind': 'replay', 'dataset': '/tmp/x', 'episode': '2'}})
+
+
+def test_a_boolean_episode_is_refused():
+    """`bool` subclasses `int`, so a JSON `true` reaches the index check as a valid one and plays 1."""
+    for episode in (True, False):
+        with pytest.raises(ValueError, match=f'declares episode={episode!r}, which is not an episode index'):
+            _built(endpoints={'arm_a': {'kind': 'replay', 'dataset': '/tmp/x', 'episode': episode}})
 
 
 def test_weights_still_name_endpoints_declared_as_mappings(tmp_path):
