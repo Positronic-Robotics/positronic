@@ -354,7 +354,7 @@ _WIRE_POSE = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 r
 
 
 def _served(action: dict) -> dict:
-    """One action as the session hands it up, having crossed the wire."""
+    """One action as the session hands it up, from a mocked inference result."""
     endpoint, _ = _mock_endpoint(infer_return=action)
     actions = endpoint.new_session()({})
     assert actions is not None and len(actions) == 1
