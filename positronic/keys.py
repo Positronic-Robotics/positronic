@@ -14,6 +14,15 @@ ROBOT_COMMAND = 'robot_command'
 TARGET_EE_POSE = f'{ROBOT_COMMAND}.pose'
 TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
 
+
+def is_robot_command(name: str) -> bool:
+    """Whether ``name`` is in the robot-command family: ``robot_command``, or an arm's ``robot_command.{side}``.
+
+    ``TARGET_EE_POSE`` and ``TARGET_JOINTS`` are in the family by name while carrying a vector.
+    """
+    return name == ROBOT_COMMAND or name.startswith(f'{ROBOT_COMMAND}.')
+
+
 JOINTS = 'robot_state.q'
 JOINT_VEL = 'robot_state.dq'
 EE_POSE = 'robot_state.ee_pose'
