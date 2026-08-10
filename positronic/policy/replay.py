@@ -17,12 +17,13 @@ from .wrappers import ChunkedSchedule
 
 logger = logging.getLogger(__name__)
 
-# The arm-command signals this replays, most faithful first; pose targets go back through the rig's IK.
-# The delta forms are absent: a delta means something only against the state it was issued from.
-_ARM_SIGNALS = (
-    (keys.TARGET_JOINTS, roboarm_command.JointPosition),
-    (keys.TARGET_EE_POSE, roboarm_command.CartesianPosition),
-    (keys.TARGET_RESET, roboarm_command.Reset),
+# The serializer suffix each replayable arm command is written under, most faithful first; pose targets
+# go back through the rig's IK. The delta forms are absent: a delta means something only against the
+# state it was issued from.
+_ARM_SUFFIXES = (
+    ('.joints', roboarm_command.JointPosition),
+    ('.pose', roboarm_command.CartesianPosition),
+    ('.reset', roboarm_command.Reset),
 )
 
 
@@ -36,66 +37,94 @@ def _rebuild(command_type: Any, value: np.ndarray) -> Any:
     return roboarm_command.JointPosition(np.asarray(value))
 
 
-def _arm_commands(episode: Episode) -> dict[int, Any]:
-    """Every recorded arm command, keyed by the instant it was issued at, empty where there is none.
+def _arm_channel(name: str) -> tuple[str, Any] | None:
+    """The command channel and type a recorded arm signal reissues as, or ``None`` where it cannot."""
+    if not name.startswith(keys.ROBOT_COMMAND):
+        return None
+    for suffix, command_type in _ARM_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)], command_type
+    return None
 
-    ``Serializers.robot_command`` maps each command type to its own suffix, so one command writes one
-    signal, and a recording whose action space changed mid-episode carries commands in more than one —
-    each covering its own stretch of the timeline. Every supported signal contributes its waypoints; a
-    recording carrying any unsupported one is refused by ``load_actions`` rather than played in part.
+
+def _arm_commands(episode: Episode) -> dict[str, dict[int, Any]]:
+    """Every recorded arm command as ``channel -> {instant: command}``.
+
+    An embodiment names its own command channels, and a multi-arm rig has several
+    (``robot_command.left``, ``robot_command.right``), so the set is read off the recording rather
+    than assumed. ``Serializers.robot_command`` writes one signal per command type, so a recording
+    whose action space changed mid-episode carries more than one per channel.
     """
-    commands: dict[int, Any] = {}
-    for name, command_type in _ARM_SIGNALS:
-        signal = episode.signals.get(name)
-        if signal is None or len(signal) == 0:
-            continue
-        for value, ts in signal:
-            # ``_ARM_SIGNALS`` is most-faithful-first, so an instant already claimed keeps its command.
-            commands.setdefault(ts, _rebuild(command_type, value))
+    commands: dict[str, dict[int, Any]] = {}
+    for suffix, command_type in _ARM_SUFFIXES:  # most faithful first
+        for name in sorted(episode.signals):
+            if not (name.startswith(keys.ROBOT_COMMAND) and name.endswith(suffix)):
+                continue
+            signal = episode.signals[name]
+            if len(signal) == 0:
+                continue
+            per_channel = commands.setdefault(name[: -len(suffix)], {})
+            for value, ts in signal:
+                per_channel.setdefault(ts, _rebuild(command_type, value))  # an instant keeps its first
     return commands
+
+
+def _grip_signals(episode: Episode) -> dict[str, Any]:
+    """Every recorded grip channel, by the name the embodiment commands it under."""
+    return {
+        name: episode.signals[name]
+        for name in sorted(episode.signals)
+        if (name == keys.TARGET_GRIP or name.startswith(f'{keys.TARGET_GRIP}.')) and len(episode.signals[name]) > 0
+    }
 
 
 def _unreplayable_arm_signals(episode: Episode) -> list[str]:
     """Arm-command signals the recording carries that this cannot reissue — the delta forms."""
-    supported = {name for name, _ in _ARM_SIGNALS}
-    return sorted(n for n in episode.signals if n.startswith(f'{keys.ROBOT_COMMAND}.') and n not in supported)
+    return sorted(n for n in episode.signals if n.startswith(f'{keys.ROBOT_COMMAND}.') and _arm_channel(n) is None)
 
 
 def load_actions(episode: Episode) -> list[dict[str, Any]]:
-    """The episode's commands as an action list: one entry per instant either channel was commanded at.
+    """The episode's commands as an action list: one entry per instant any channel was commanded at.
 
+    - Every command channel the recording carries replays, whatever the embodiment named them.
     - Each channel keeps its own recorded timing, so a grip command between two arm waypoints falls
       due between them.
     - ``keys.ACTION_TIMESTAMP`` is seconds from the earliest instant, so the list replays at the
       cadence it was recorded at.
     - An action carries a channel only where the recording commanded it; omitting one emits nothing
-      there, so the rig holds. Either channel alone replays alone.
+      there, so the rig holds. Any channel alone replays alone.
     """
     arm = _arm_commands(episode)
-    grip = episode.signals.get(keys.TARGET_GRIP)
-    grip_stamps = {ts for _, ts in grip} if grip is not None and len(grip) > 0 else set()
+    grips = _grip_signals(episode)
     # Asked whether or not absolutes were found: a recording that switched part-way carries both, and
     # replaying only the reissuable stretch holds the arm still through motion the recording made.
     if unreplayable := _unreplayable_arm_signals(episode):
         raise ValueError(
             f'Episode carries arm commands this cannot reissue: {unreplayable}. Only '
-            f'{[name for name, _ in _ARM_SIGNALS]} can be replayed — a delta means something only '
+            f'{[suffix for suffix, _ in _ARM_SUFFIXES]} can be replayed — a delta means something only '
             f'against the state it was issued from, so the stretch it covers cannot be reconstructed '
             f'and replaying around it would present a partial trajectory as a faithful one.'
         )
-    if not arm and not grip_stamps:
+    if not arm and not grips:
         raise ValueError(f'Episode records nothing replayable: it carries {sorted(episode.signals)}.')
-    stamps = sorted(arm.keys() | grip_stamps)
-    first_ts = stamps[0]
-    grip_start = min(grip_stamps) if grip_stamps else 0
+
+    grip_stamps = {name: {ts for _, ts in signal} for name, signal in grips.items()}
+    stamps: set[int] = set()
+    for per_channel in arm.values():
+        stamps |= per_channel.keys()
+    for name_stamps in grip_stamps.values():
+        stamps |= name_stamps
+    first_ts = min(stamps)
     actions = []
-    for ts in stamps:
+    for ts in sorted(stamps):
         action: dict[str, Any] = {keys.ACTION_TIMESTAMP: (ts - first_ts) / 1e9}
-        if ts in arm:
-            action[keys.ROBOT_COMMAND] = arm[ts]
-        if grip_stamps and ts >= grip_start:
-            sample = cast(tuple[Any, int], cast(Signal[np.ndarray], grip).time[ts])
-            action[keys.TARGET_GRIP] = float(sample[0])
+        for channel, per_channel in arm.items():
+            if ts in per_channel:
+                action[channel] = per_channel[ts]
+        for name, signal in grips.items():
+            # A grip holds until changed, so it carries from its first sample on, sampled at or before.
+            if ts >= min(grip_stamps[name]):
+                action[name] = float(cast(tuple[Any, int], cast(Signal[np.ndarray], signal).time[ts])[0])
         actions.append(action)
     return actions
 

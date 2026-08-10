@@ -184,6 +184,54 @@ def test_load_actions_rejects_a_delta_recording_even_when_it_carries_a_grip(tmp_
         load_actions(episode)
 
 
+def test_load_actions_replays_every_channel_a_recording_carries(tmp_path):
+    """A bimanual rig names its channels per side, so the set is read off the recording, not assumed.
+
+    `yam_bimanual` commands `robot_command.{left,right}` and `target_grip.{left,right}`; an enumerated
+    single-arm pair matches none of them and refuses the whole episode as unreplayable.
+    """
+    step = int(1e9 / HZ)
+    start = 1_000_000_000
+    episode = _write(
+        tmp_path,
+        {
+            'robot_command.left.joints': [(np.full(7, 0.1, dtype=np.float32), start + i * step) for i in range(2)],
+            'robot_command.right.joints': [(np.full(7, 0.2, dtype=np.float32), start + i * step) for i in range(2)],
+            'target_grip.left': [(np.float32(0.0), start)],
+            'target_grip.right': [(np.float32(1.0), start)],
+        },
+    )
+
+    actions = load_actions(episode)
+
+    assert [a[keys.ACTION_TIMESTAMP] for a in actions] == pytest.approx([0.0, 0.1])
+    for action in actions:
+        assert set(action) == {
+            keys.ACTION_TIMESTAMP,
+            'robot_command.left',
+            'robot_command.right',
+            'target_grip.left',
+            'target_grip.right',
+        }
+    assert actions[0]['robot_command.left'].positions[0] == pytest.approx(0.1)
+    assert actions[0]['robot_command.right'].positions[0] == pytest.approx(0.2)
+    assert (actions[0]['target_grip.left'], actions[0]['target_grip.right']) == (0.0, 1.0)
+
+
+def test_load_actions_rejects_a_delta_on_one_arm_of_a_bimanual_recording(tmp_path):
+    """One arm's absolutes do not make the other's deltas replayable — the same partial-trajectory hole."""
+    episode = _write(
+        tmp_path,
+        {
+            'robot_command.left.joints': [(np.full(7, 0.1, dtype=np.float32), 1_000_000_000)],
+            'robot_command.right.pose_delta': [(np.zeros(7, dtype=np.float32), 1_000_000_000)],
+        },
+    )
+
+    with pytest.raises(ValueError, match='cannot reissue'):
+        load_actions(episode)
+
+
 def test_load_actions_replays_a_recorded_reset(tmp_path):
     """A reset is absolute and carries no state, so it is reissued as the command it was recorded as.
 
