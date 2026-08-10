@@ -62,7 +62,7 @@ ACK_LOG_MARKER = 'rollout finish request granted'
 # request is around 120 bytes.
 MAX_REQUEST_BYTES = 64 * 1024
 
-# EVERY way a file can fail to become a request. `ValueError` covers the decode and the parse, both
+# Every way a file can fail to become a request. `ValueError` covers the decode and the parse, both
 # subclasses of it; `RecursionError` is the JSON parser's nesting limit, which is not one.
 UNREADABLE = (OSError, ValueError, RecursionError)
 
@@ -83,8 +83,8 @@ def evaluate(path: Path, this_run: str) -> tuple[bool, str]:
 
     Every negative is a reason to keep running, so the caller acts on the bool alone. The reason is
     returned rather than logged so the caller can report a persistent one once instead of on every
-    poll. TOTAL: any failure to read the file as a request addressed to this run is a refusal, since
-    an exception here would end the World mid-episode.
+    poll. It is total: any failure to read the file as a request addressed to this run is a refusal,
+    since an exception here would end the World mid-episode.
     """
     try:
         return _read(path, this_run)
@@ -164,7 +164,7 @@ class FinishRequest(pimm.ControlSystem):
         # The last refusal reported, so a request that stays wrong is logged once rather than every
         # poll. Reported again when the reason changes, which is what a replaced file looks like.
         self._reported = ''
-        # One object serves every World of a sweep, so the grant has to outlive any single World.
+        # The grant, latched: once made it is never withdrawn, and it outlives the World that read it.
         self._granted = False
 
     @property

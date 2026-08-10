@@ -125,7 +125,7 @@ def _run_world(
         # driver, and GUI placement is otherwise identical.
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         driver_systems = driver.control_systems if driver is not None else []
-        # In the FOREGROUND, with the harness, on both paths. It reads a file every couple of seconds and
+        # In the foreground, with the harness, on both paths. It reads a file every couple of seconds and
         # yields a Sleep, which the scheduler wakes from at the nearest deadline, so it paces nothing; as a
         # background control system it would be a subprocess whose only job is one `open`, and it would not
         # share the timeline of the harness it answers — which is what keeps its poll interval and the

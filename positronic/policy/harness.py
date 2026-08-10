@@ -497,14 +497,13 @@ class Harness(pimm.ControlSystem):
             raise
 
     def _idle_step(self, manual_msg, clock: pimm.Clock) -> bool:
-        """Decide what a harness with no episode open does this round; True means wind down and stop.
+        """Decide what a harness with no episode open does this round. True means wind down and stop.
 
-        The order IS the priority. The operator's own input goes first, so a jog she has just sent is
-        applied rather than dropped by a stop taken in the same round. A pending finish comes next, and
-        crucially BEFORE the plan advances: taken after, a request would start one more episode and then
-        be blocked by it, which on a long plan means the run cannot be ended at all. The plan running out
-        is the third way to arrive at the same answer, and it returns the same True — so both reasons to
-        stop leave through one route (``_wind_down``) rather than two that must be kept in step.
+        The order is the priority: a manual command, then a pending finish, then the plan advancing. A
+        manual command that arrived this round is applied rather than dropped by a stop taken beside it.
+        The finish is read before the plan advances; after it, a request would start one more episode and
+        be blocked by it. A plan that is exhausted returns the same True, so both reasons to stop leave
+        through ``_wind_down``.
         """
         if manual_msg.updated and manual_msg.data is not None:
             # Nothing homes after a manual command — an episode's own ``_end_episode`` does, and this runs
@@ -526,20 +525,15 @@ class Harness(pimm.ControlSystem):
     def _wind_down(self, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         """Everything between deciding to stop and stopping, for every reason the loop stops.
 
-        Three things, each answering a way an abrupt stop damages the run:
+        Homes the arm if anything has moved it since the last home command, gives the recorder a round
+        to commit the episode that just closed, and lets a real arm travel: ``_home`` publishes targets
+        and returns, so the arm is still moving when this is reached, and a World that unwinds under it
+        parks the brakes wherever it got to.
 
-        - **Home the arm if anything has moved it since the last home command.** A jog between episodes
-          leaves the arm where the operator put it; stopping there ends the run somewhere she did not
-          leave it and starts the next one from a pose nothing recorded.
-        - **Give the recorder a round** to commit the episode that just closed.
-        - **Let a real arm travel.** ``_home`` publishes targets and returns, so the arm is still moving
-          when this is reached; a World that unwinds under it parks the brakes wherever it got to.
-
-        The travel wait is a BOUND, not a report of arrival: the arm's readiness is not readable here
-        under a name every embodiment shares. An arm whose home motion takes longer than
-        ``FINISH_HOME_GRACE_NS`` can still be stopped mid-travel. A simulated embodiment has no travel
-        to wait for, and its clock advances only when something asks it to, so a wait measured on it
-        would never end — the same real/simulated split ``_pace`` makes, for the same reason.
+        The travel wait is a bound, not a report of arrival — no name every embodiment shares reports
+        the arm's readiness — so an arm whose home motion takes longer than ``FINISH_HOME_GRACE_NS`` can
+        still be stopped mid-travel. A simulated embodiment has no travel to wait for, and its clock
+        advances only when something asks it to, so a wait measured on it would never end.
         """
         if self._moved_since_home:
             self._home(clock)
