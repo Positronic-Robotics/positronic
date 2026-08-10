@@ -11,8 +11,9 @@ import pos3
 
 import pimm
 import positronic.cfg.policy as policy_cfg
-from positronic import telemetry, telemetry_keys, utils, wire
+from positronic import keys, telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import placeholder
+from positronic.cli.eval import run_state
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.eval import Embodiment, Eval, Task
@@ -41,6 +42,9 @@ class Driver:
     directive_wrapper: Callable
     control_systems: list[pimm.ControlSystem]
     manual_commands: pimm.SignalEmitter | None = None
+    # The port this surface serves the operator on; None where it is drawn on the rig's own screen
+    # and has no address. Only the driver knows: the UI itself is in another process by then.
+    console_port: int | None = None
 
 
 def _seed_counter(policy, output_dir: Path):
@@ -76,11 +80,16 @@ def _run_world(
     output_dir: Path | None,
     show_gui: bool,
     on_complete,
+    state: run_state.StateFile,
 ):
     """Wire one embodiment under a fresh Harness + World and run it to completion.
 
     ``driver`` (attended) and ``trials`` (unattended self-driving) are the two lifecycle sources, mutually
     exclusive per the caller. The shared ``policy``'s lifetime stays with ``main``.
+
+    ``state`` reports this World coming up and its cameras delivering their first frames. It is scheduled
+    rather than called: the World spawns its background processes before the first foreground round, so only
+    from inside ``world.run`` is the operator's UI known to exist.
     """
     harness = Harness(policy, embodiment, task=task, trials=trials, on_episode_complete=on_complete)
     gui = driver.gui if driver is not None else (dpg_ui() if show_gui else None)
@@ -93,13 +102,24 @@ def _run_world(
         ds_agent = wire.wire_embodiment(
             world, harness, embodiment, dataset_writer, time_mode, privileged=privileged, done=done
         )
+        # HACK: GUI cameras are matched to observations by the `image.` name prefix, which
+        # hard-binds GUI wiring to the observation naming convention. TODO: resolve this
+        # coupling (the right binding is still open).
+        cameras = [name for name in embodiment.observations if name.startswith(keys.IMAGE_PREFIX)]
         if gui is not None:
-            # HACK: GUI cameras are matched to observations by the `image.` name prefix, which
-            # hard-binds GUI wiring to the observation naming convention. TODO: resolve this
-            # coupling (the right binding is still open).
             for name, obs in embodiment.observations.items():
-                if name.startswith('image.'):
+                if name.startswith(keys.IMAGE_PREFIX):
                     world.connect(obs.source, gui.cameras[name])
+        # A second reader on the same emitters costs the producer a flag per frame: one frame goes
+        # into shared memory whatever the number of receivers.
+        readiness = None
+        if state.enabled:
+            readiness = run_state.Readiness(state, cameras, driver.console_port if driver is not None else None)
+            for name in cameras:
+                source = embodiment.observations[name].source
+                # `connect` asserts this too; the field is annotated as the wider `SignalEmitter`.
+                assert isinstance(source, pimm.ControlSystemEmitter)
+                world.connect(source, readiness.cameras[name])
         if driver is not None:
             world.connect(driver.directives, harness.directive, emitter_wrapper=driver.directive_wrapper)
             if driver.manual_commands is not None:
@@ -117,10 +137,14 @@ def _run_world(
         # driver, and GUI placement is otherwise identical.
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         foreground = driver.control_systems if driver is not None else []
+        # Last in the round on both paths, and in the foreground on both: it reports what the round
+        # produced, so it must not read ahead of the systems producing it, and its first round is
+        # what says the background processes are up — which only holds where it is not one of them.
+        watch = [readiness] if readiness is not None else []
         if embodiment.simulated:
-            world.run([*foreground, harness, ds_agent, *producers], gui)
+            world.run([*foreground, harness, ds_agent, *producers, *watch], gui)
         else:
-            world.run([harness, *foreground], [*producers, ds_agent, gui])
+            world.run([harness, *foreground, *watch], [*producers, ds_agent, gui])
 
 
 def _validate_timing(embodiments: Iterable[Embodiment], output_dir: str | Path | None) -> None:
@@ -218,6 +242,10 @@ def main(
     the report, so a real embodiment in a timed sweep is rejected rather than allowed to pollute it.
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
+    # Built before anything else and handed to every World: an orchestrator watches the RUN, and a sweep is
+    # one run however many Worlds it raises. Inert unless something named this run (`ROLLOUT_RUN_ID`), which
+    # is every ordinary invocation — so nothing below is conditional on it.
+    state = run_state.from_env()
     # Validate timing up front, before the policy warmup, so a rejected sweep fails before it spends anything.
     if timing:
         if evals is not None:
@@ -234,6 +262,7 @@ def main(
     # TODO: a policy with recording taps (recording_dir set) records this throwaway warmup session —
     # an empty .rrd plus a bump to the recorder's episode counter — but warmup is not a real episode.
     logger.info('Warming up policy endpoints')
+    state.report(run_state.Phase.WARMING_UP)
     policy.new_session().close()
 
     if output_dir is not None:
@@ -249,11 +278,13 @@ def main(
         with _timed_pass(output_dir, timing, policy):
             if driver is not None:
                 assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
-                _run_world(policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete)
+                _run_world(policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete, state)
             else:
                 assert evals is not None  # driver/evals XOR asserted up front
                 for ev in evals:
-                    _run_world(policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete)
+                    _run_world(
+                        policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete, state
+                    )
     finally:
         policy.close()
 
