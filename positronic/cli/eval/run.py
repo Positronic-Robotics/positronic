@@ -125,17 +125,9 @@ def _run_world(
         # driver, and GUI placement is otherwise identical.
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         driver_systems = driver.control_systems if driver is not None else []
-        # In the foreground, with the harness, on both paths. It reads a file every couple of seconds and
-        # yields a Sleep, which the scheduler wakes from at the nearest deadline, so it paces nothing; as a
-        # background control system it would be a subprocess whose only job is one `open`, and it would not
-        # share the timeline of the harness it answers — which is what keeps its poll interval and the
-        # harness's episodes on one clock.
+        # Foreground: shares the harness's timeline, so the poll interval and episodes run on one clock.
         watch = [finish] if finish is not None else []
-        # What decides and ends episodes, in the order it is read each round: the operator's surface, the
-        # finish watcher, the harness that acts on both. The driver runs first because a press sharing its
-        # round with a granted finish is never seen — the loop breaks into `_wind_down` before the round
-        # that would read it. The rig's producers and the recorder are not in this list; they carry out an
-        # episode rather than decide one.
+        # Read order matters: a press sharing a round with a granted finish is never seen — driver first.
         lifecycle_systems = [*driver_systems, *watch, harness]
         if embodiment.simulated:
             world.run([*lifecycle_systems, ds_agent, *producers], gui)
@@ -265,10 +257,7 @@ def main(
     # over the whole sweep.
     on_complete = _completion_sink(policy)
 
-    # Built once, before any World, and handed to every one of them: an orchestrator addresses the RUN, and
-    # a sweep is one run however many Worlds it raises — so a request outlives the World that was up when it
-    # arrived, and one that ended a single eval while the sweep carried on would be a finish nobody asked
-    # for. None unless something named this run (`ROLLOUT_RUN_ID`), which is every ordinary invocation.
+    # One per invocation, shared by every World: a request addresses the run, not the World it arrived in.
     finish = finish_request_from_env()
 
     try:
@@ -284,8 +273,7 @@ def main(
                     _run_world(
                         policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete, finish
                     )
-                    # A granted request ends the RUN, and raising a World starts its producers and
-                    # homes a real arm.
+                    # Checked before the next World: raising one starts its producers and homes a real arm.
                     if finish is not None and finish.granted:
                         break
     finally:
