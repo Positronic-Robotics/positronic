@@ -25,7 +25,7 @@ def _load_episodes(benchmark_dir: Path) -> list[dict[str, Any]]:
     benchmark files directly: a single ``benchmark.json`` (a JSON list of episode specs) when present, else the
     legacy ``house_*/episode_*.json`` layout the loader also accepts.
     """
-    manifest = benchmark_dir / 'benchmark.json'
+    manifest = benchmark_dir / mapping.MOLMO_BENCHMARK_MANIFEST
     if manifest.exists():
         return json.loads(manifest.read_text())
     return [json.loads(p.read_text()) for p in sorted(benchmark_dir.glob('house_*/episode_*.json'))]
@@ -37,8 +37,10 @@ def _discovery_hint() -> str:
     if not assets:
         return f' Point {mapping.ASSETS_DIR_ENV} at the MolmoSpaces asset packs to have the available ones listed.'
     root = Path(assets) / mapping.ASSETS_BENCHMARKS_DIR
-    found = sorted(str(p.parent) for p in root.rglob('benchmark.json'))
-    return f' Available under {root}: {", ".join(found)}' if found else f' No benchmark.json found under {root}.'
+    found = sorted(str(p.parent) for p in root.rglob(mapping.MOLMO_BENCHMARK_MANIFEST))
+    if not found:
+        return f' No {mapping.MOLMO_BENCHMARK_MANIFEST} found under {root}.'
+    return f' Available under {root}: {", ".join(found)}'
 
 
 @cfn.config(camera_dict=DEFAULT_CAMERA_DICT, episodes=None, trial_count=1, timeout=None, seed=None)
@@ -74,7 +76,7 @@ def _molmo_eval(
     count = len(specs)
     if count == 0:
         raise ValueError(
-            f'no benchmark episodes under {base}; expected a benchmark.json or a legacy '
+            f'no benchmark episodes under {base}; expected a {mapping.MOLMO_BENCHMARK_MANIFEST} or a legacy '
             f'house_*/episode_*.json layout.{_discovery_hint()}'
         )
     indices = list(range(count)) if episodes is None else [episodes] if isinstance(episodes, int) else list(episodes)

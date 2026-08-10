@@ -61,7 +61,7 @@ def _benchmark_dir(benchmark_path: str) -> Path:
     if not assets:
         pytest.skip(f'{mapping.ASSETS_DIR_ENV} is unset — MolmoSpaces asset packs are needed to replay')
     benchmark_dir = Path(assets) / mapping.ASSETS_BENCHMARKS_DIR / benchmark_path
-    if not (benchmark_dir / 'benchmark.json').is_file():
+    if not (benchmark_dir / mapping.MOLMO_BENCHMARK_MANIFEST).is_file():
         pytest.skip(f'{benchmark_dir} is absent — this asset pack cannot replay the fixture')
     return benchmark_dir
 

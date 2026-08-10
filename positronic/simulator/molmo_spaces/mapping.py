@@ -39,7 +39,13 @@ MOLMO_GRASP_SITE = 'gripper/grasp_site'
 ASSETS_DIR_ENV = 'MLSPACES_ASSETS_DIR'
 ASSETS_BENCHMARKS_DIR = 'benchmarks'
 
-# MuJoCo's backend selector, and the backend this adoption asks for.
+# A benchmark dir's manifest: the JSON list of episode specs ``load_all_episodes`` reads, and what marks a
+# directory as a benchmark for discovery.
+MOLMO_BENCHMARK_MANIFEST = 'benchmark.json'
+
+# MuJoCo's backend selector, and the backend this adoption asks for. EGL is the headless-GPU path the env
+# server targets; a GPU-less box overrides with MUJOCO_GL=osmesa. macOS has no EGL and is not a target here —
+# env.py's CGL stub excludes Darwin to keep the module it fakes honest, not to make Darwin run this server.
 GL_BACKEND_ENV = 'MUJOCO_GL'
 GL_BACKEND_DEFAULT = 'egl'
 
