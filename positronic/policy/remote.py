@@ -105,9 +105,8 @@ class _Endpoint(Policy):
     def wait_ready(self, timeout: float) -> None:
         """Wait for this server to report itself ready, bounded, or raise naming it and its last state.
 
-        The wait IS the handshake: a session's metadata arrives in the ``ready`` frame, so reaching
-        that frame and being able to serve are the same event, and the metadata is kept — the stack
-        this endpoint runs is resolved from it later without a second connection.
+        The wait IS the handshake: metadata arrives in the ``ready`` frame and is kept, so resolving
+        the stack later costs no second connection.
         """
         self.server_meta(ready_deadline=time.monotonic() + timeout)
 
@@ -185,13 +184,8 @@ class RemotePolicy(Policy):
     def wait_ready(self, timeout: float) -> None:
         """Wait for the server, then build the stack it declared — both, because either can refuse.
 
-        A server that is ready can still declare a local stack this rig cannot build: an unknown
-        wrapper, arguments its constructor rejects, or no declaration at all. `_resolve_stack` raises
-        on each, and it would otherwise first run at the opening of the first episode — which is the
-        moment this gate exists to take work away from.
-
-        The stack is resolved from the metadata the wait itself collected, so this costs no second
-        connection.
+        A ready server can still declare a stack this rig cannot build; `_resolve_stack` raises on
+        that, and would otherwise first run at the opening of the first episode.
         """
         self._endpoint.wait_ready(timeout)
         self._policy()

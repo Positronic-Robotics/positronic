@@ -19,22 +19,15 @@ logger = logging.getLogger(__name__)
 # outlast that compile (still surfacing a stalled/half-open connection), and let callers override per use.
 DEFAULT_INFER_TIMEOUT = 180.0
 
-# How long a server may take to reach ``ready`` before the wait is given up on. The per-message timeout below
-# bounds SILENCE, not the handshake: a server that keeps sending ``loading`` frames inside it never trips one,
-# so without an overall bound the wait has none, and a stuck load is indistinguishable from a slow one until
-# somebody gives up by hand. Sits between the two bounds already here — longer than one inference round trip
-# (``DEFAULT_INFER_TIMEOUT``), well short of the connect deadline a retry cycle may spend — and is a parameter
-# because how long a legitimate cold start takes is a fact about a deployment's checkpoint and hardware.
+# Overall bound on reaching ``ready``. The per-message timeout bounds SILENCE only, so a server streaming
+# ``loading`` frames inside it trips nothing and would wait for ever without this.
 DEFAULT_READY_TIMEOUT = 300.0
 
 
 class ServerNotReady(RuntimeError):
-    """A server did not reach ``ready`` within the time allowed, and what it was doing when the wait ended.
+    """A server kept talking but never reached ``ready`` within the time allowed.
 
-    Distinct from the timeouts around it because it means something different: a per-message timeout is a
-    server that went silent, which a reconnect may well fix, while this is a server that kept talking and
-    never became able to serve. So it is not retried, and it carries the last status frame — the only
-    evidence of what it was doing — for whoever reads the failure.
+    Not retried: a reconnect does not fix it. Carries the last status frame.
     """
 
     def __init__(self, url: str, status: str, message: str, waited_s: float):
@@ -64,16 +57,12 @@ class InferenceSession:
     ) -> dict[str, Any]:
         """Receive status updates until the server reports itself ready.
 
-        ``ready`` is the one frame that means the server can serve: our own server sends it only once the
-        checkpoint is loaded and a session reset (``PolicyServer._serve_session``). Everything before it —
-        the TCP connect, the TLS handshake, the websocket upgrade — completes while the model is still
-        loading, which is why none of them answers whether a policy can answer.
+        Every layer below ``ready`` — connect, TLS, upgrade — completes while the model is still loading.
 
         Args:
             timeout_per_message: how long the server may stay SILENT between frames (default: 30s).
             url: the endpoint being waited on, for the failure to name.
-            ready_deadline: monotonic deadline for reaching ``ready`` at all. ``None`` waits as long as
-                the server keeps talking, which is right for a caller carrying its own bound.
+            ready_deadline: monotonic deadline for reaching ``ready``; ``None`` waits while it keeps talking.
         """
         started = time.monotonic()
         status, message = 'no status frame', ''
@@ -102,8 +91,7 @@ class InferenceSession:
                 raise RuntimeError(f'Unexpected server response: {response}')
 
         except TimeoutError:
-            # A recv bounded by the deadline rather than by the per-message allowance is the deadline
-            # expiring, not the server going quiet; the two have different answers, so say which happened.
+            # A recv bounded by the deadline expiring is not the server going quiet — report which happened.
             if ready_deadline is not None and time.monotonic() >= ready_deadline:
                 raise ServerNotReady(url, status, message, time.monotonic() - started) from None
             raise TimeoutError(
@@ -216,9 +204,7 @@ class InferenceClient:
     def new_session(self, ready_deadline: float | None = None) -> InferenceSession:
         """Creates a new inference session on the model the URL names.
 
-        ``ready_deadline`` is a monotonic deadline bounding the whole wait for a servable session,
-        reconnects included, not each handshake separately. ``None`` leaves ``connect_deadline`` as
-        the only bound.
+        ``ready_deadline`` bounds the whole wait, reconnects included; ``None`` leaves ``connect_deadline``.
         """
         deadline = time.monotonic() + self.connect_deadline
         if ready_deadline is not None:
@@ -228,8 +214,7 @@ class InferenceClient:
             ws = None
             session = None
             try:
-                # Capped by the deadline: an unanswered connect otherwise spends its own fixed timeout
-                # past the bound the caller set, and the bound is the whole point of giving one.
+                # Capped by the deadline: an unanswered connect otherwise overruns the caller's bound.
                 open_timeout = min(self.open_timeout, max(deadline - time.monotonic(), 0.0))
                 # A proxy between here and the server closes a connection it has read nothing from, often
                 # after 60s — well inside one ``infer_timeout`` inference, which sends nothing until it
@@ -268,9 +253,7 @@ class InferenceClient:
             except OSError as e:
                 raise type(e)(f'{e} (connecting to {self.session_url})') from e
             finally:
-                # Every path that leaves without a session leaves the socket open otherwise —
-                # including ``ServerNotReady``, which is deliberately not one of the retried
-                # exceptions above and so passes straight through them.
+                # ``ServerNotReady`` is not retried above, so it passes through leaving the socket open.
                 if session is None and ws is not None:
                     ws.close()
 

@@ -1,13 +1,10 @@
 """The readiness gate: a policy that cannot serve must be found before an operator is offered Start.
 
-The failure these pin is one an operator met at the rig: an endpoint that is deployed, answers its
-HTTP probe, and completes a websocket connection — and then never becomes able to answer. Nothing
-below the status protocol distinguishes it from a healthy one, so a run started on it comes up, the
-arm energizes, and the fault surfaces minutes later in the middle of an episode.
+The endpoint under test connects and answers its HTTP probe but never becomes able to serve; nothing
+below the status protocol distinguishes it from a healthy one.
 
-The server end here is a bare websocket, not ``PolicyServer``: what is under test is how the CLIENT
-reads a server that misbehaves, and our own server does not misbehave. A server streaming ``loading``
-for ever is exactly what was observed, and no fixture over a correct implementation can produce it.
+The server end is a bare websocket, not ``PolicyServer``: a correct implementation cannot produce the
+misbehaviour the client is being tested against.
 """
 
 import asyncio
@@ -41,10 +38,8 @@ def _free_port() -> int:
 def fake_server() -> Generator[Callable[..., str], None, None]:
     """Serve a scripted status stream on a free port; returns the ws:// url. Stopped at teardown.
 
-    Teardown closes the server from inside its own loop and lets that loop finish, rather than
-    stopping the loop under it: a handler still streaming when the loop dies leaves the websockets
-    server closing against a closed loop, and the resulting warnings are the kind that teach a
-    reader to ignore warnings.
+    Teardown closes the server from inside its own loop: killing the loop under a streaming handler
+    leaves websockets closing against a closed loop and warning about it.
     """
     started: list[tuple[threading.Event, threading.Thread]] = []
 
@@ -70,18 +65,16 @@ def fake_server() -> Generator[Callable[..., str], None, None]:
 
 
 async def _forever_loading(websocket):
-    """Accept, then stream ``loading`` indefinitely — the observed failure, in its own words.
+    """Accept, then stream ``loading`` indefinitely.
 
-    Frames go out well inside the handshake's per-message allowance, so the timeout that bounds
-    SILENCE never fires: this server is talking, and would talk until somebody gave up by hand.
+    Frames go out inside the per-message allowance, so the timeout that bounds SILENCE never fires.
     """
     while True:
         await websocket.send(serialise({STATUS: LOADING, MESSAGE: 'loading checkpoint 50k'}))
         await asyncio.sleep(0.05)
 
 
-# A minimal buildable declaration: the rig runs the stack the handshake declares and nothing else, so a
-# server that is ready still has to name one for the endpoint to be usable.
+# Minimal buildable declaration: a ready server must still name a stack for the endpoint to be usable.
 READY_META = {keys.LOCAL_STACK: {'name': 'chunked_schedule'}}
 
 
@@ -95,7 +88,7 @@ async def _ready_at_once(websocket):
 
 @pytest.mark.timeout(20)
 def test_a_server_that_never_becomes_ready_is_given_up_on_and_names_its_last_state(fake_server):
-    """The whole failure in one place: connected, talking, never servable — and bounded."""
+    """Connected, talking, never servable — and bounded."""
     url = fake_server(_forever_loading)
     client = InferenceClient(url)
 
@@ -104,8 +97,7 @@ def test_a_server_that_never_becomes_ready_is_given_up_on_and_names_its_last_sta
         client.new_session(ready_deadline=time.monotonic() + 1.0)
 
     assert time.monotonic() - started < 10, 'the wait was not bounded by the deadline'
-    # Named: which endpoint, and what it was doing when the wait ended. Both are what an operator
-    # reads off the refusal, and the status frame is the only evidence of the second.
+    # The refusal names the endpoint and its last status frame.
     assert url in str(excinfo.value)
     assert excinfo.value.status == LOADING
     assert 'loading checkpoint 50k' in str(excinfo.value)
@@ -113,7 +105,7 @@ def test_a_server_that_never_becomes_ready_is_given_up_on_and_names_its_last_sta
 
 @pytest.mark.timeout(20)
 def test_a_server_that_reports_ready_passes_the_gate(fake_server):
-    """The gate must not cost a healthy endpoint anything: ready is read on the first frame."""
+    """A healthy endpoint pays nothing: ready is read on the first frame."""
     session = InferenceClient(fake_server(_ready_at_once)).new_session(ready_deadline=time.monotonic() + 5.0)
     assert session.metadata == READY_META
     session.close()
@@ -121,9 +113,7 @@ def test_a_server_that_reports_ready_passes_the_gate(fake_server):
 
 @pytest.mark.timeout(20)
 def test_giving_up_is_not_retried_as_a_cold_start(fake_server):
-    """A server that keeps talking and never becomes ready is not a server a reconnect fixes, so it
-    must not be swallowed by the retry loop that exists for cold backends — which would spend the
-    connect deadline discovering the same thing several times over."""
+    """A reconnect does not fix it, so the cold-backend retry loop must not swallow it."""
     url = fake_server(_forever_loading)
     client = InferenceClient(url, connect_deadline=600.0)
 
@@ -147,9 +137,7 @@ def test_a_remote_policy_waits_on_its_own_endpoint_and_names_it(fake_server):
 
 @pytest.mark.timeout(30)
 def test_a_ready_server_declaring_a_stack_this_rig_cannot_build_is_caught_at_the_gate(fake_server):
-    """Being ready is not the only way an endpoint fails a run. A server can report ready and declare
-    a local stack naming a wrapper this rig does not have, and building it is what raises — at the
-    opening of the first episode, unless the gate does it here."""
+    """A ready server can declare a wrapper this rig does not have; building it is what raises."""
 
     async def _ready_with_unbuildable_stack(websocket):
         await websocket.send(serialise({STATUS: READY, META: {keys.LOCAL_STACK: {'name': 'no_such_wrapper_anywhere'}}}))
@@ -161,8 +149,7 @@ def test_a_ready_server_declaring_a_stack_this_rig_cannot_build_is_caught_at_the
 
 @pytest.mark.timeout(30)
 def test_a_sampled_batch_refuses_when_any_endpoint_cannot_serve(fake_server):
-    """A sampled set is a comparison. Carrying on without one member silently hands its share of the
-    episodes to the others, so every member's numbers change and nothing records which set ran."""
+    """Carrying on without one member hands its episodes to the others, changing everyone's numbers."""
     good, bad = fake_server(_ready_at_once), fake_server(_forever_loading)
     batch = SampledPolicy(RemotePolicy(good), RemotePolicy(bad))
 
@@ -175,7 +162,7 @@ def test_a_sampled_batch_refuses_when_any_endpoint_cannot_serve(fake_server):
 
 @pytest.mark.timeout(30)
 def test_every_endpoint_is_reported_not_just_the_first(fake_server):
-    """Two bad members are two facts. Reporting one sends the operator round the loop twice."""
+    """Reporting one of two bad members sends the operator round the loop twice."""
     first, second = fake_server(_forever_loading), fake_server(_forever_loading)
     batch = SampledPolicy(RemotePolicy(first), RemotePolicy(second))
 
@@ -188,9 +175,7 @@ def test_every_endpoint_is_reported_not_just_the_first(fake_server):
 
 @pytest.mark.timeout(30)
 def test_the_endpoints_are_waited_on_concurrently(fake_server):
-    """Sequentially, a per-endpoint bound is a bound times the size of the set — so the gate's own
-    cost would grow with the sample it exists to protect. Asserted as wall clock against the sum,
-    which is the property that matters and the one a sequential implementation cannot have."""
+    """Sequentially the gate's cost would grow with the sample it protects: bound times set size."""
     urls = [fake_server(_forever_loading) for _ in range(3)]
     batch = SampledPolicy(*(RemotePolicy(u) for u in urls))
 
@@ -204,8 +189,7 @@ def test_the_endpoints_are_waited_on_concurrently(fake_server):
 
 @pytest.mark.timeout(20)
 def test_a_local_policy_is_ready_when_it_is_constructed():
-    """Nothing holds a model over a network here, so there is nothing to wait for — and a gate that
-    demanded an override of every in-process policy would be a gate nobody could adopt."""
+    """No network, nothing to wait for: an in-process policy needs no override to pass the gate."""
 
     class Local(Policy):
         def new_session(self, context=None, now=None):
@@ -219,9 +203,8 @@ def test_a_local_policy_is_ready_when_it_is_constructed():
 
 @pytest.mark.timeout(30)
 def test_a_run_is_refused_before_the_operator_surface_is_built(fake_server):
-    """The point of the whole change: the driver factory builds the operator's UI, and it must never
-    be called for a policy that cannot answer. A run refused here costs the minutes it takes to bring
-    the endpoint up; one refused after it costs an operator standing at a live arm."""
+    """The driver factory builds the operator's UI, and must never be called for a policy that
+    cannot answer."""
     built = []
 
     with pytest.raises(ServerNotReady):

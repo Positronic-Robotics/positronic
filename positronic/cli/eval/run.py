@@ -219,9 +219,8 @@ def main(
     stream). It needs an ``output_dir`` and an all-simulated sweep: everything under the bound tracer enters
     the report, so a real embodiment in a timed sweep is rejected rather than allowed to pollute it.
 
-    ``ready_timeout`` bounds the wait for each remote endpoint to report itself ready. Raise it where a
-    checkpoint legitimately loads slower than the default; the sweep is refused rather than started when it
-    elapses, since an endpoint that never becomes ready cannot be discovered later at any lower price.
+    ``ready_timeout`` bounds the wait for each remote endpoint to report itself ready; the sweep is
+    refused when it elapses.
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
     # Validate timing up front, before the policy warmup, so a rejected sweep fails before it spends anything.
@@ -233,11 +232,7 @@ def main(
             embodiments = [embodiment]
         _validate_timing(embodiments, output_dir)
 
-    # Every policy this sweep can sample has to report itself able to serve before this line: past it
-    # ``_run_world`` energizes the arm and builds the operator's driver, so a refusal after it reaches
-    # a human standing at a live robot. Readiness is the ``ready`` status frame of the offboard
-    # protocol — a completed connection means only that something is listening — and the wait for it
-    # is bounded, since a server streaming ``loading`` is otherwise indistinguishable from a slow one.
+    # Before ``_run_world``: past this line the arm is energized, so a refusal reaches a human at a live robot.
     logger.info('Waiting for policy endpoints to report ready (up to %.0fs)', ready_timeout)
     policy.wait_ready(ready_timeout)
 

@@ -102,12 +102,8 @@ class Policy(ABC):
     def wait_ready(self, timeout: float) -> None:  # noqa: B027
         """Block until this policy can serve inference, or raise saying why it cannot.
 
-        A policy holding its model in this process is ready once constructed, so the default does
-        nothing. One reached over a network is not: every layer below the status protocol completes
-        while its server is still loading.
-
-        A composite must reach every policy it holds — which one an episode samples is not known in
-        advance.
+        In-process policies are ready once constructed, hence the empty default. A composite must
+        reach every policy it holds: which one an episode samples is not known in advance.
         """
 
     def close(self):  # noqa: B027
@@ -294,13 +290,9 @@ class SampledPolicy(Policy):
     def wait_ready(self, timeout: float) -> None:
         """Wait for every sampled policy; refuse if any cannot serve. ``timeout`` bounds each.
 
-        Refusing rather than dropping the failed one: sampling balances across the keys, so a set
-        short one member hands its share to the rest, and every member's numbers change with nothing
-        recording which set ran.
-
-        Every policy is waited on even after one fails, so two bad members are reported together.
-        Concurrently, since the waits are independent servers' cold starts and sequentially the bound
-        would be ``timeout`` times the size of the set.
+        Dropping a failed member instead would hand its share to the rest, changing every member's
+        numbers with nothing recording which set ran. Concurrent: sequentially the bound would be
+        ``timeout`` times the size of the set.
         """
         if not self._policies:
             return
@@ -308,7 +300,7 @@ class SampledPolicy(Policy):
             futures = [pool.submit(p.wait_ready, timeout) for p in self._policies]
             failures = [e for f in as_completed(futures) if (e := f.exception()) is not None]
         if failures:
-            # Chained to the first, so the traceback of a failure survives being summarised with its peers.
+            # Chained, so one traceback survives the summary.
             raise RuntimeError(
                 f'{len(failures)} of {len(self._policies)} sampled policies cannot serve:\n'
                 + '\n'.join(f'  - {e}' for e in sorted(map(str, failures)))

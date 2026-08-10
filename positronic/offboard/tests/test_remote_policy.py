@@ -92,8 +92,7 @@ class TestInferenceClientHeaders:
 
             mock_connect.assert_called_once()
             assert mock_connect.call_args.kwargs['additional_headers'] == headers
-            # The url travels with the session so a server that never becomes ready can be named in the
-            # failure; no deadline, since this caller gave none.
+            # The url travels with the session so a failure can name the endpoint.
             mock_session_cls.assert_called_once_with(
                 mock_connect.return_value,
                 infer_timeout=DEFAULT_INFER_TIMEOUT,
