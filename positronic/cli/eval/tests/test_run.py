@@ -6,7 +6,7 @@ from typing import cast
 import pytest
 
 from positronic import telemetry, telemetry_keys
-from positronic.cli.eval.finish_request import FinishRequest
+from positronic.cli.eval.finish_request import RUN_ID_ENV, FinishRequest
 from positronic.cli.eval.run import Driver, _pass_span, _timed_pass, main
 from positronic.eval import Embodiment, Eval, Task
 
@@ -155,7 +155,7 @@ def test_a_misconfigured_run_is_rejected_before_the_policy_is_warmed(monkeypatch
         return SimpleNamespace(close=lambda: None)
 
     policy = cast(object, SimpleNamespace(new_session=new_session, close=lambda: None))
-    monkeypatch.setenv('ROLLOUT_RUN_ID', 'a/b')
+    monkeypatch.setenv(RUN_ID_ENV, 'a/b')
 
     with pytest.raises(ValueError, match='single path segment'):
         main(policy=policy, evals=[_eval(True)])
