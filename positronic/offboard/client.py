@@ -209,6 +209,10 @@ class InferenceClient:
         deadline = time.monotonic() + self.connect_deadline
         if ready_deadline is not None:
             deadline = min(deadline, ready_deadline)
+        # The handshake gets the same bound as the connects, so a shorter ``connect_deadline`` is not
+        # outlived by a server that connects and then streams ``loading``. Left unbounded where the caller
+        # named no readiness bound: ``connect_deadline`` covers reaching a server, not loading a checkpoint.
+        handshake_deadline = deadline if ready_deadline is not None else None
         backoff = 1.0
         while True:
             ws = None
@@ -226,7 +230,7 @@ class InferenceClient:
                     ping_interval=20.0,
                 )
                 session = InferenceSession(
-                    ws, infer_timeout=self.infer_timeout, url=self.session_url, ready_deadline=ready_deadline
+                    ws, infer_timeout=self.infer_timeout, url=self.session_url, ready_deadline=handshake_deadline
                 )
                 return session
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
@@ -247,8 +251,10 @@ class InferenceClient:
                     raise
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'{e} (connecting to {self.session_url})') from e
-                logger.info('Server not ready (cold start?): %s; retrying in %.0fs', e, backoff)
-                time.sleep(backoff)
+                # Capped by the deadline: a full backoff otherwise sleeps up to 30s past the caller's bound.
+                pause = min(backoff, max(deadline - time.monotonic(), 0.0))
+                logger.info('Server not ready (cold start?): %s; retrying in %.0fs', e, pause)
+                time.sleep(pause)
                 backoff = min(backoff * 2, 30.0)
             except OSError as e:
                 raise type(e)(f'{e} (connecting to {self.session_url})') from e

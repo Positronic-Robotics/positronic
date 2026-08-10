@@ -99,12 +99,13 @@ class Policy(ABC):
         """Static metadata about this policy/model."""
         return {}
 
-    def wait_ready(self, timeout: float) -> None:  # noqa: B027
+    def wait_ready(self, timeout: float) -> None:
         """Block until this policy can serve inference, or raise saying why it cannot.
 
-        In-process policies are ready once constructed, hence the empty default. A composite must
+        In-process policies are ready once constructed, hence the no-op default. A composite must
         reach every policy it holds: which one an episode samples is not known in advance.
         """
+        return None
 
     def close(self):  # noqa: B027
         """Release shared resources (model weights, connections, etc.)."""
@@ -269,6 +270,8 @@ class SampledPolicy(Policy):
 
     def _get_keys(self) -> tuple[str, ...]:
         if self._keys is None:
+            if not self._policies:
+                raise ValueError('A sampled policy has nothing to sample: give it at least one policy')
             keys = tuple(p.meta.get(self._key_field, str(i)) for i, p in enumerate(self._policies))
             duplicates = sorted(k for k, n in Counter(keys).items() if n > 1)
             if duplicates:
@@ -288,25 +291,28 @@ class SampledPolicy(Policy):
         return _KeyedSession(session, policy.meta, self._key_field, key)
 
     def wait_ready(self, timeout: float) -> None:
-        """Wait for every sampled policy; refuse if any cannot serve. ``timeout`` bounds each.
+        """Every member serves and the set is samplable, or the run is refused. ``timeout`` bounds each wait.
 
         Dropping a failed member instead would hand its share to the rest, changing every member's
         numbers with nothing recording which set ran. Concurrent: sequentially the bound would be
         ``timeout`` times the size of the set.
         """
-        if not self._policies:
-            return
-        with ThreadPoolExecutor(max_workers=len(self._policies)) as pool:
-            futures = [pool.submit(p.wait_ready, timeout) for p in self._policies]
-            failures = [e for f in as_completed(futures) if (e := f.exception()) is not None]
-        if failures:
-            # Chained, so one traceback survives the summary.
-            raise RuntimeError(
-                f'{len(failures)} of {len(self._policies)} sampled policies cannot serve:\n'
-                + '\n'.join(f'  - {e}' for e in sorted(map(str, failures)))
-                + '\nEvery sampled policy has to answer, or the ones that do absorb the missing share and '
-                'the round measures a set nobody asked for. Bring them up, then start again.'
-            ) from failures[0]
+        if self._policies:
+            with ThreadPoolExecutor(max_workers=len(self._policies)) as pool:
+                futures = [pool.submit(p.wait_ready, timeout) for p in self._policies]
+                failures = [e for f in as_completed(futures) if (e := f.exception()) is not None]
+            if failures:
+                # Chained, so one traceback survives the summary.
+                raise RuntimeError(
+                    f'{len(failures)} of {len(self._policies)} sampled policies cannot serve:\n'
+                    + '\n'.join(f'  - {e}' for e in sorted(map(str, failures)))
+                    + '\nEvery sampled policy has to answer, or the ones that do absorb the missing share and '
+                    'the round measures a set nobody asked for. Bring them up, then start again.'
+                ) from failures[0]
+        # An empty set and one whose members share a key are both unsamplable, and `new_session` is
+        # otherwise the first to say so — from inside the first episode. Resolved after the wait, since
+        # `meta` on a member that has not handshaked opens its own unbounded connection.
+        self._get_keys()
 
     @property
     def meta(self):

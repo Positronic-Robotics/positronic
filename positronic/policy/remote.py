@@ -182,10 +182,9 @@ class RemotePolicy(Policy):
         return self._policy().meta
 
     def wait_ready(self, timeout: float) -> None:
-        """Wait for the server, then build the stack it declared — both, because either can refuse.
+        """Ready means both: the server reports itself servable AND its declared stack builds here.
 
-        A ready server can still declare a stack this rig cannot build; `_resolve_stack` raises on
-        that, and would otherwise first run at the opening of the first episode.
+        A ready server can still declare a stack this rig cannot construct; `_resolve_stack` raises.
         """
         self._endpoint.wait_ready(timeout)
         self._policy()

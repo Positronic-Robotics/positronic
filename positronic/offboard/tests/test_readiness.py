@@ -25,6 +25,7 @@ from positronic.offboard.client import InferenceClient, ServerNotReady
 from positronic.offboard.protocol import ERROR, LOADING, MESSAGE, META, READY, STATUS
 from positronic.policy.base import Policy, SampledPolicy
 from positronic.policy.remote import RemotePolicy
+from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.serialization import serialise
 
 
@@ -75,7 +76,13 @@ async def _forever_loading(websocket):
 
 
 # Minimal buildable declaration: a ready server must still name a stack for the endpoint to be usable.
-READY_META = {keys.LOCAL_STACK: {'name': 'chunked_schedule'}}
+# Built by the wrapper that owns the wire name, so the fixture cannot drift from what `from_spec` accepts.
+READY_META = {keys.LOCAL_STACK: ChunkedSchedule().to_spec()}
+
+
+async def _accept_then_drop(websocket):
+    """Accept and close without a status frame — a cold backend's shape, which the connect loop retries."""
+    await websocket.close()
 
 
 async def _ready_at_once(websocket):
@@ -135,6 +142,36 @@ def test_a_server_reporting_an_error_status_surfaces_it_rather_than_waiting(fake
         InferenceClient(fake_server(_reason_only)).new_session(ready_deadline=time.monotonic() + 5.0)
 
 
+@pytest.mark.timeout(30)
+def test_a_retry_backoff_does_not_sleep_past_the_deadline(fake_server):
+    """The backoff doubles towards 30s, so a retryable failure landing near the deadline would
+    otherwise hold the caller well past the bound it asked for. Every attempt here fails at once,
+    so the elapsed time is the sleeping."""
+    client = InferenceClient(fake_server(_accept_then_drop))
+
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        client.new_session(ready_deadline=time.monotonic() + 1.5)
+    elapsed = time.monotonic() - started
+
+    # Uncapped, the second backoff alone is 2s and lands at ~3s; capped, the waits sum to the deadline.
+    assert elapsed < 2.5, f'the retry slept {elapsed:.1f}s past a 1.5s deadline'
+
+
+@pytest.mark.timeout(30)
+def test_the_handshake_is_bounded_by_the_shorter_of_the_two_deadlines(fake_server):
+    """``connect_deadline`` bounds the whole call, so a server that connects and then streams
+    ``loading`` cannot outlive it by handshaking under the caller's later deadline."""
+    client = InferenceClient(fake_server(_forever_loading), connect_deadline=1.0)
+
+    started = time.monotonic()
+    with pytest.raises(ServerNotReady):
+        client.new_session(ready_deadline=time.monotonic() + 300.0)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 10.0, f'the handshake ran {elapsed:.1f}s under a 1.0s connect deadline'
+
+
 @pytest.mark.timeout(20)
 def test_giving_up_is_not_retried_as_a_cold_start(fake_server):
     """A reconnect does not fix it, so the cold-backend retry loop must not swallow it."""
@@ -164,7 +201,9 @@ def test_a_ready_server_declaring_a_stack_this_rig_cannot_build_is_caught_at_the
     """A ready server can declare a wrapper this rig does not have; building it is what raises."""
 
     async def _ready_with_unbuildable_stack(websocket):
-        await websocket.send(serialise({STATUS: READY, META: {keys.LOCAL_STACK: {'name': 'no_such_wrapper_anywhere'}}}))
+        # Spelled out rather than built: no wrapper owns this name, which is the point of the case.
+        declared = {keys.LOCAL_STACK: {'name': 'no_such_wrapper_anywhere'}}
+        await websocket.send(serialise({STATUS: READY, META: declared}))
         await asyncio.Future()
 
     with pytest.raises(ValueError, match='local stack'):
@@ -209,6 +248,35 @@ def test_the_endpoints_are_waited_on_concurrently(fake_server):
     elapsed = time.monotonic() - started
 
     assert elapsed < 5.0, f'waited {elapsed:.1f}s for 3 endpoints bounded at 2.0s each'
+
+
+@pytest.mark.timeout(20)
+def test_a_sampled_set_with_nothing_to_sample_is_refused():
+    """Serving is not the only way a set fails: an empty one has no key to draw, and the sampler
+    raises on the draw — inside the first episode."""
+    with pytest.raises(ValueError, match='nothing to sample'):
+        SampledPolicy().wait_ready(1.0)
+
+
+@pytest.mark.timeout(20)
+def test_a_sampled_set_whose_members_share_a_key_is_refused():
+    """Sampling would pick the first every time and never run the others, so the set is refused
+    here rather than by the draw in the first episode."""
+
+    class _Named(Policy):
+        def __init__(self, name):
+            self._name = name
+
+        def new_session(self, context=None, now=None):
+            raise AssertionError('not reached')
+
+        @property
+        def meta(self):
+            return {'ckpt': self._name}
+
+    batch = SampledPolicy(_Named('same'), _Named('same'), key_field='ckpt')
+    with pytest.raises(ValueError, match='distinguishable'):
+        batch.wait_ready(1.0)
 
 
 @pytest.mark.timeout(20)
