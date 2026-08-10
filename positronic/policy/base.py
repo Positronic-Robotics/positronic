@@ -97,8 +97,8 @@ class Policy(ABC):
     def meta(self) -> dict[str, Any]:
         """Metadata about this policy/model, resolved on first read.
 
-        Resolving is not free: a served policy performs its handshake here and a replay fetches its
-        recording, so reading this is what brings a policy up.
+        Reading it may acquire whatever the policy needs to answer with, so it is not free, and an
+        implementation may defer that work to here rather than do it in its constructor.
         """
         return {}
 
