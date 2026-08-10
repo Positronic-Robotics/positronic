@@ -609,7 +609,7 @@ def test_trial_timeout_self_terminates(world):
 
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
-    assert stops[0].static_data['eval.terminated'] is False
+    assert stops[0].static_data[keys.EVAL_TERMINATED] is False
     assert isinstance(_last_command(p), Reset)
 
 
@@ -665,7 +665,7 @@ def test_attended_task_run_respects_timeout(world):
 
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
-    assert stops[0].static_data['eval.terminated'] is False
+    assert stops[0].static_data[keys.EVAL_TERMINATED] is False
     assert isinstance(_last_command(p), Reset)
 
 
@@ -684,12 +684,12 @@ def test_attended_task_run_respects_done(world):
     drive_scheduler(scheduler, steps=5)
     assert not [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
 
-    done_em.emit({'eval.success': True})
+    done_em.emit({keys.EVAL_SUCCESS: True})
     drive_scheduler(scheduler, steps=10)
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
-    assert stops[0].static_data['eval.terminated'] is True
-    assert stops[0].static_data['eval.success'] is True
+    assert stops[0].static_data[keys.EVAL_TERMINATED] is True
+    assert stops[0].static_data[keys.EVAL_SUCCESS] is True
 
 
 @pytest.mark.timeout(3.0)
@@ -706,13 +706,13 @@ def test_trial_stop_signal_terminates(world):
     # Trial is live and unbounded by the clock: nothing committed yet.
     assert not [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
 
-    done_em.emit({'eval.success': True})
+    done_em.emit({keys.EVAL_SUCCESS: True})
     drive_scheduler(scheduler, steps=10)
 
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
-    assert stops[0].static_data['eval.terminated'] is True
-    assert stops[0].static_data['eval.success'] is True  # the delivered payload lands in static data
+    assert stops[0].static_data[keys.EVAL_TERMINATED] is True
+    assert stops[0].static_data[keys.EVAL_SUCCESS] is True  # the delivered payload lands in static data
     assert isinstance(_last_command(p), Reset)
 
 
@@ -736,7 +736,7 @@ def test_stale_done_does_not_terminate_next_trial(world):
     drive_scheduler(scheduler, steps=10)
     assert stop_count() == 0
 
-    done_em.emit({'eval.success': True})  # fresh truthy: ends trial 0
+    done_em.emit({keys.EVAL_SUCCESS: True})  # fresh truthy: ends trial 0
     drive_scheduler(scheduler, steps=10)
     assert stop_count() == 1
 
@@ -744,11 +744,11 @@ def test_stale_done_does_not_terminate_next_trial(world):
     drive_scheduler(scheduler, steps=10)
     assert stop_count() == 1
 
-    done_em.emit({'eval.success': True})  # a fresh delivery ends trial 1
+    done_em.emit({keys.EVAL_SUCCESS: True})  # a fresh delivery ends trial 1
     drive_scheduler(scheduler, steps=10)
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 2
-    assert all(s.static_data['eval.terminated'] is True for s in stops)
+    assert all(s.static_data[keys.EVAL_TERMINATED] is True for s in stops)
 
 
 class _FrameIndexDevice(pimm.ControlSystem):
@@ -825,7 +825,7 @@ def test_task_done_terminates_through_wire_embodiment(world):
                 self.state.emit(0.0)
                 n += 1
                 if n == 5:
-                    self.done.emit({'eval.success': True})
+                    self.done.emit({keys.EVAL_SUCCESS: True})
                 yield pimm.Sleep(0.01)
 
     device = _Device()
@@ -849,8 +849,8 @@ def test_task_done_terminates_through_wire_embodiment(world):
 
     stops = [d for _, d in ds_recorder.emitted if d.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
-    assert stops[0].static_data['eval.terminated'] is True
-    assert stops[0].static_data['eval.success'] is True
+    assert stops[0].static_data[keys.EVAL_TERMINATED] is True
+    assert stops[0].static_data[keys.EVAL_SUCCESS] is True
 
 
 @pytest.mark.timeout(3.0)
@@ -869,7 +869,7 @@ def test_done_after_deadline_is_a_timeout(world):
     # delivered at ~0.1s — past the deadline but before the harness next polls. The timeout must win.
     driver = ManualDriver([
         (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.1),
-        (partial(done_em.emit, {'eval.success': True}), 0.3),
+        (partial(done_em.emit, {keys.EVAL_SUCCESS: True}), 0.3),
         (None, 0.0),
     ])
     scheduler = world.start([harness, driver])
@@ -877,8 +877,8 @@ def test_done_after_deadline_is_a_timeout(world):
 
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
-    assert stops[0].static_data['eval.terminated'] is False
-    assert 'eval.success' not in stops[0].static_data
+    assert stops[0].static_data[keys.EVAL_TERMINATED] is False
+    assert keys.EVAL_SUCCESS not in stops[0].static_data
 
 
 @pytest.mark.timeout(3.0)
@@ -923,7 +923,7 @@ def test_trial_plan_self_drives(world):
     assert [s.static_data['eval.trial_index'] for s in stops] == [0, 1]
     assert all(s.static_data[keys.TASK] == 'stack' for s in stops)
     assert len(stops) == 2
-    assert all(s.static_data['eval.terminated'] is False for s in stops)
+    assert all(s.static_data[keys.EVAL_TERMINATED] is False for s in stops)
     assert policy.reset_calls == 2
 
 
@@ -955,7 +955,7 @@ def test_timeout_crossed_during_latency_sleep_drops_chunk(world):
 
     stops = [data for _, data in ds_recorder.emitted if data.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
-    assert stops[0].static_data['eval.terminated'] is False
+    assert stops[0].static_data[keys.EVAL_TERMINATED] is False
     # The post-deadline chunk must not reach the drivers: the only non-empty emissions are the homing
     # Reset / home grip from the startup home and the timeout FINISH.
     assert all(isinstance(c, Reset) for c in _emitted_commands(cmd_recorder))

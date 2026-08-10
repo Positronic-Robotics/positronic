@@ -67,3 +67,10 @@ POSITRONIC_VERSION = 'positronic_version'
 
 POLICY_META = 'inference.policy'
 SERVER_META = f'{POLICY_META}.{SERVER}'
+
+# What a trial reports when it ends, in its episode's statics. The harness writes ``EVAL_TERMINATED``:
+# True when a terminal was delivered inside the budget, False when the budget ran out. ``EVAL_SUCCESS``
+# rides in the terminal payload an env's adapter returns, so an env that reports it only on success
+# leaves it absent on failure — a reader defaults it rather than assuming a False.
+EVAL_SUCCESS = 'eval.success'
+EVAL_TERMINATED = 'eval.terminated'
