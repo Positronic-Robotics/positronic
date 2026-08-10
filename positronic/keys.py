@@ -16,7 +16,6 @@ TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
 TARGET_GRIP = 'target_grip'
 
 
-
 def is_robot_command(name: str) -> bool:
     """Whether ``name`` is in the robot-command family: ``robot_command``, or an arm's ``robot_command.{side}``.
 

@@ -182,8 +182,16 @@
       };
 
       resumeBtn.addEventListener('click', () => {
+        // Confirm the home this button was offered for. A home issued since the last poll — by a discard
+        // here, or by another console — is a different arm motion, and confirming it would clear the
+        // guard over an arm still travelling.
+        const homes = lastStatus && typeof lastStatus === 'object' ? lastStatus.homes_commanded : 0;
         resumeBtn.hidden = true;   // the next status decides; hide it so it cannot be clicked twice
-        fetch('/parked', { method: 'POST' }).then(pollStatus).catch(() => showAck('Arm parked — no response', false));
+        fetch('/parked', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ homes_commanded: homes }),
+        }).then(pollStatus).catch(() => showAck('Arm parked — no response', false));
       });
 
       // ─── Episode control buttons + directive-ack toast ───────────────────────────────────────────────
@@ -241,9 +249,6 @@
           sentAt: performance.now(),
           handled: lastStatus && typeof lastStatus === 'object' ? lastStatus.directives_taken : undefined,
         });
-        // The harness homes the gripper open on every episode boundary, and nothing else updates this
-        // setpoint, so the next step would start from a stale pre-episode value.
-        adoptGrip(0);
         // A click may only ever DISABLE teleop, never enable it: the harness is busy until it publishes
         // idle, and a manual command sent meanwhile is applied after the home it queues behind.
         setRunning(true);
@@ -471,6 +476,11 @@
             : true;   // no count to correlate against: fall back to the phase alone
           if (handled && pendingAck.ok(s.phase)) {
             showAck(`${pendingAck.label} — recognized`, true); setAckPending(null);
+            // The harness homes the gripper open on every episode boundary, and nothing else updates
+            // this setpoint, so the next step would start from a stale pre-episode value. Adopted only
+            // once the harness reports the directive handled: a directive that never arrived homes
+            // nothing, and a zero here would make the next close step open a gripper the operator shut.
+            adoptGrip(0);
           } else if (performance.now() > pendingAck.deadline) {
             showAck(`${pendingAck.label} — no phase change (ignored?)`, false); setAckPending(null);
           }
@@ -592,7 +602,17 @@
         fetch('/finish_run', { method: 'POST' })
           .then((r) => { if (r.ok) beginWrapup();
             else showAck(`Finish run — FAILED (${r.status}); run still active, try again`, false); })
-          .catch(() => showAck('Finish run — no response; run still active, try again', false));
+          // A lost response is not a refusal: the server may have taken the finish and be homing already,
+          // and leaving the controls live over that lets a Start open an episode the wrap-up then stops.
+          // The wrap-up state is what knows, so ask it — and an answer that never comes is itself the
+          // console going down with the run, which is the overlay's own case.
+          .catch(() => fetch('/wrap_up')
+            .then((r) => r.json())
+            .then((s) => {
+              if (s.state !== 'idle') beginWrapup();
+              else showAck('Finish run — no response; run still active, try again', false);
+            })
+            .catch(() => beginWrapup()));
       });
 
       startStream(document.getElementById('feed'));

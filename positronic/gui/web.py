@@ -51,6 +51,12 @@ class _GripBody(BaseModel):
     value: float = Field(ge=0.0, le=1.0)
 
 
+class _ParkedBody(BaseModel):
+    """Which home the operator is confirming: the ``homes_commanded`` their page was showing."""
+
+    homes_commanded: int = Field(ge=0)
+
+
 _TRANSLATION_AXES = {_Axis.X: 0, _Axis.Y: 1, _Axis.Z: 2}
 _ROTATION_AXES = {_Axis.RX: 0, _Axis.RY: 1, _Axis.RZ: 2}
 
@@ -356,9 +362,12 @@ class WebEvalUI(pimm.ControlSystem):
             return dataclasses.asdict(wrap_up_status)
 
         @app.post('/parked')
-        async def parked():
+        async def parked(body: _ParkedBody):
+            # Confirms the home the page was showing, not whatever has been commanded since: the page
+            # samples status every 500ms, so a confirmation still on screen can arrive after a newer home
+            # was issued, and confirming that one lets a manual command queue behind an arm still moving.
             nonlocal confirmed_homes
-            confirmed_homes = status.homes_commanded if status is not None else 0
+            confirmed_homes = max(confirmed_homes, body.homes_commanded)
 
         @app.get('/ping')
         async def ping():  # tiny + no work, so its round-trip measures the browser<->robot-host link
@@ -373,9 +382,7 @@ class WebEvalUI(pimm.ControlSystem):
         home_settle_s = 5.0
 
         async def _wrap_up():
-            nonlocal wrap_up_status
             taken = status.directives_taken if status is not None else 0
-            wrap_up_status = _WrapUpStatus(_WrapUpState.FINALIZING)
             self.directive.emit(Directive.FINISH(), clock.now_ns())
             for _ in range(int(finalize_timeout_s / 0.1)):
                 current = status
@@ -434,9 +441,13 @@ class WebEvalUI(pimm.ControlSystem):
 
         @app.post('/finish_run')
         async def finish_run():
+            nonlocal wrap_up_status
             # The World may only stop once the harness has acknowledged finalizing the live episode and
             # homing: stopping it directly aborts an open recording and leaves the arm where it stands.
             # Returns as soon as the wrap-up is scheduled; the console follows it on GET /wrap_up.
+            # Marked here rather than in the task, so a console that lost this response and asks
+            # GET /wrap_up learns the run is ending instead of racing the task onto the loop.
+            wrap_up_status = _WrapUpStatus(_WrapUpState.FINALIZING)
             asyncio.create_task(_wrap_up())
             return {'wrapping_up': True}
 
