@@ -1688,7 +1688,7 @@ def test_a_finish_gives_the_arm_its_home_travel_before_the_world_stops(world):
     finish_em.emit(True)
     drive_scheduler(scheduler, steps=2000)
 
-    assert world.clock.now_ns() - homed_at >= Harness.FINISH_HOME_GRACE_NS
+    assert world.clock.now_ns() - homed_at >= Harness.HOME_TRAVEL_GRACE_NS
 
 
 @pytest.mark.timeout(10.0)
@@ -1708,7 +1708,7 @@ def test_a_simulated_run_does_not_wait_for_a_motion_it_never_makes(world):
 
     with pytest.raises(StopIteration):
         next(scheduler)
-    assert world.clock.now() - before < Harness.FINISH_HOME_GRACE_NS / 1e9
+    assert world.clock.now() - before < Harness.HOME_TRAVEL_GRACE_NS / 1e9
 
 
 @pytest.mark.timeout(10.0)

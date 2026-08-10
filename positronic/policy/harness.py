@@ -508,8 +508,8 @@ class Harness(pimm.ControlSystem):
         self._begin_episode(trial, clock)
         return False
 
-    # Travel allowance after a home is commanded, before a requested finish stops the World.
-    FINISH_HOME_GRACE_NS = int(10.0 * 1e9)
+    # Travel allowance after a home is commanded, for every reason the loop stops.
+    HOME_TRAVEL_GRACE_NS = int(10.0 * 1e9)
 
     def _wind_down(self, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         """Everything between deciding to stop and stopping, for every reason the loop stops.
@@ -517,7 +517,7 @@ class Harness(pimm.ControlSystem):
         Homes the arm if anything moved it, gives the recorder a round to commit, then waits out the
         travel — a World that unwinds under a moving arm parks the brakes wherever it got to.
 
-        The wait is a bound, not a report of arrival: an arm slower than ``FINISH_HOME_GRACE_NS`` is
+        The wait is a bound, not a report of arrival: an arm slower than ``HOME_TRAVEL_GRACE_NS`` is
         still stopped mid-travel. A simulated embodiment has no travel and a clock that advances only
         on request, so it does not wait at all.
         """
@@ -526,7 +526,7 @@ class Harness(pimm.ControlSystem):
         yield pimm.Sleep(0.5)
         if self._embodiment.simulated:
             return
-        while (remaining_ns := self.FINISH_HOME_GRACE_NS - (clock.now_ns() - self._homed_at_ns)) > 0:
+        while (remaining_ns := self.HOME_TRAVEL_GRACE_NS - (clock.now_ns() - self._homed_at_ns)) > 0:
             yield pimm.Sleep(min(remaining_ns / 1e9, 0.1))
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:

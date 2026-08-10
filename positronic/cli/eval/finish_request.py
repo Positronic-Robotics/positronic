@@ -50,7 +50,8 @@ class Action(StrEnum):
     FINISH = 'finish'
 
 
-# How often the file is read; the wait this adds to a finish is bounded by it.
+# How often the file is read. A cadence, not a latency: a finish waits for the episode in
+# progress, and a request landing within one interval of a boundary waits the next episode too.
 POLL_INTERVAL_S = 2.0
 
 # Logged the moment a request is granted, and the writer's only acknowledgement: it separates a

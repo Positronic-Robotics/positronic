@@ -211,7 +211,7 @@ def test_a_grant_survives_the_world_it_was_read_in(tmp_path):
     cs._granted = finish_request.evaluate(cs._path, cs._run)
     assert cs._granted
 
-    path.unlink()  # the writer retires it once the run is over; the grant is not un-asked
+    path.unlink()  # nothing the file does afterwards is read again — the grant is not re-derived
     assert cs._granted
 
 
