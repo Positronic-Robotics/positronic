@@ -39,7 +39,6 @@ def test_timeout_matching_the_backstop_is_silent(benchmark_dir, caplog):
 
 
 def test_a_path_holding_no_benchmark_names_the_ones_that_exist(tmp_path, monkeypatch):
-    # Nothing else enumerates the packs, so the failure is where a customer learns what they can run.
     assets = tmp_path / 'assets'
     pack = assets / mapping.ASSETS_BENCHMARKS_DIR / 'droid_pick'
     pack.mkdir(parents=True)

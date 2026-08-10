@@ -32,7 +32,7 @@ def _load_episodes(benchmark_dir: Path) -> list[dict[str, Any]]:
 
 
 def _discovery_hint() -> str:
-    """What to try instead, appended to a path that holds no benchmark — nothing else enumerates the packs."""
+    """The benchmark dirs found under ``MLSPACES_ASSETS_DIR``, appended to a path that holds none."""
     assets = os.environ.get(mapping.ASSETS_DIR_ENV)
     if not assets:
         return f' Point {mapping.ASSETS_DIR_ENV} at the MolmoSpaces asset packs to have the available ones listed.'
