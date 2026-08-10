@@ -7,8 +7,9 @@ this package's ``mapping`` module ride ``PYTHONPATH`` so ``env.py`` imports the 
 the pure wire mappings without dragging in positronic; ``molmo_spaces`` resolves from the venv.
 
 MolmoSpaces renders MuJoCo scenes, so the server needs a GL backend (``MUJOCO_GL``) and its asset packs
-(``MLSPACES_ASSETS_DIR``): ``MUJOCO_GL`` defaults to ``egl`` (GPU) here and both env vars pass through from the
-caller, so a GPU-less box can override ``MUJOCO_GL=osmesa`` for CPU software rendering.
+(``MLSPACES_ASSETS_DIR``). Both env vars pass through from the caller; unset, ``MUJOCO_GL`` takes the backend
+the host platform offers — ``egl`` (GPU) on Linux, ``cgl`` on macOS, which has no EGL and rejects it. A
+GPU-less Linux box overrides with ``MUJOCO_GL=osmesa`` for CPU software rendering.
 """
 
 import fcntl

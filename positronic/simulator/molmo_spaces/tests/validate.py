@@ -32,11 +32,9 @@ way ``parity.py`` launches the native reference — the venv python under ``laun
                    env=launcher.molmo_subprocess_env(), check=True)"
 """
 
-# ``env`` and ``molmo_spaces`` resolve only inside MolmoSpaces' own venv (the flat ``env`` module off PYTHONPATH,
-# and the molmo stack), which pyright checks against positronic's deps and cannot see. This module imports no
-# positronic packages, so missing-import errors here are exclusively those foreign imports — suppress just that
-# category file-wide; every other type check stays active.
-# pyright: reportMissingImports=false
+# The flat ``protocol`` module resolves only inside MolmoSpaces' own venv, where this validation runs; pyright
+# checks it against positronic's deps, which cannot see it. That import carries its own
+# ``reportMissingImports`` suppression, so one that should resolve here still fails the check.
 
 import argparse
 from pathlib import Path
@@ -47,7 +45,7 @@ from pathlib import Path
 import env  # noqa: E402
 import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import numpy as np
-import protocol  # the positronic-free wire contract, flat on PYTHONPATH beside ``server`` — see ``launcher``
+import protocol  # pyright: ignore[reportMissingImports] -- flat on PYTHONPATH beside ``server``, see ``launcher``
 
 # Sampled targets perturb each measured joint by up to this much (radians): far enough that the solver has real
 # work to do, near enough that every target stays reachable and away from the limits.

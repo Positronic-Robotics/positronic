@@ -19,11 +19,9 @@ and MolmoSpaces has no per-benchmark config to derive a second from.
 Needs ``MLSPACES_ASSETS_DIR`` + a GL backend, like ``e2e.py``. Invoked by ``parity.py``; not run by hand.
 """
 
-# ``env`` and ``molmo_spaces`` resolve only inside MolmoSpaces' own venv (the flat ``env`` module off PYTHONPATH,
-# and the molmo stack), which pyright checks against positronic's deps and cannot see. This module imports no
-# positronic packages, so missing-import errors here are exclusively those foreign imports — suppress just that
-# category file-wide; every other type check stays active.
-# pyright: reportMissingImports=false
+# The ``molmo_spaces`` stack resolves only inside MolmoSpaces' own venv, where this reference runs; pyright
+# checks it against positronic's deps, which cannot see it. Each such import carries its own
+# ``reportMissingImports`` suppression, so one that should resolve here still fails the check.
 
 import argparse
 import hashlib
@@ -37,9 +35,15 @@ import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
 import parity_record  # noqa: E402 -- the record's field names, on PYTHONPATH beside this file
 
-from molmo_spaces.evaluation.benchmark_schema import load_all_episodes  # noqa: E402
-from molmo_spaces.evaluation.eval_main import determine_task_horizon  # noqa: E402
-from molmo_spaces.tasks.json_eval_task_sampler import JsonEvalTaskSampler  # noqa: E402
+from molmo_spaces.evaluation.benchmark_schema import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    load_all_episodes,
+)
+from molmo_spaces.evaluation.eval_main import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    determine_task_horizon,
+)
+from molmo_spaces.tasks.json_eval_task_sampler import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    JsonEvalTaskSampler,
+)
 
 # The Robotiq finger qpos the DROID observation's closure is normalised against, as MolmoSpaces' own policies
 # read it (``np.clip(obs["qpos"]["gripper"][0] / 0.824033, 0, 1)``, pi_policy.py:126). Transcribed from upstream
