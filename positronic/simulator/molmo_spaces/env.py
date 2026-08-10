@@ -379,8 +379,8 @@ def _pose_error(target_pos: np.ndarray, target_rot: np.ndarray, cur_pos: np.ndar
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Serve MolmoSpaces over the env-server protocol.')
-    parser.add_argument('--host', default='localhost')
-    parser.add_argument('--port', type=int, required=True)
+    parser.add_argument(protocol.OPT_HOST, default='localhost')
+    parser.add_argument(protocol.OPT_PORT, type=int, required=True)
     parser.add_argument(
         mapping.OPT_BENCHMARK_DIR, required=True, help=f'dir containing {mapping.MOLMO_BENCHMARK_MANIFEST}'
     )

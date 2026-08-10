@@ -41,6 +41,12 @@ COMMAND_JOINT_VEL = 'dq'  # JOINT_VEL — per-step joint deltas
 # and the control period; ``step`` carries the observation, the terminal, the control period, and — where the
 # env judges one — its success. ``horizon`` is the episode limit the env enforces itself, in sim-seconds,
 # absent when the env enforces none.
+# The address every env-server script is spawned with: its launcher builds the command in positronic's
+# interpreter, its ``env.py`` parser declares it in the adoption's own, so a rename that misses one side
+# fails at spawn rather than at import.
+OPT_HOST = '--host'
+OPT_PORT = '--port'
+
 FRAME_OBS = 'obs'
 FRAME_META = 'meta'
 FRAME_ROBOT_META = 'robot_meta'

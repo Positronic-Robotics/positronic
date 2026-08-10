@@ -18,6 +18,7 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess
 from positronic.simulator.molmo_spaces import mapping
 
@@ -102,9 +103,9 @@ def _spawn(host: str, port: int, benchmark_dir: Path, task_horizon_steps: int | 
     command = [
         str(python),
         str(_ENV_SCRIPT),
-        '--host',
+        protocol.OPT_HOST,
         host,
-        '--port',
+        protocol.OPT_PORT,
         str(port),
         mapping.OPT_BENCHMARK_DIR,
         str(benchmark_dir),
