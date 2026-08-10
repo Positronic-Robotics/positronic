@@ -109,7 +109,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `task` | str | — | Language instruction for the episode |
 | `descriptor` | str | — | Embodiment the observation came from (e.g. `mujoco.franka`); empty string when unset. Lets a multi-embodiment policy adapt to the current robot |
 
-Your server receives every key each step. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones.
+Your server receives every key each step. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm (see [Actions](#actions-server--client)).
 
 ### Actions (server → client)
 
@@ -133,15 +133,20 @@ The `robot_command` field selects the control mode. Build one of the commands in
 [`positronic.drivers.roboarm.command`](../positronic/drivers/roboarm/command.py) — the client hands the
 same object to its arm driver, which dispatches on the type:
 
-| Command | Field | Description |
-|---------|-------|-------------|
+| Command | Fields | Description |
+|---------|--------|-------------|
 | `CartesianPosition` | `pose`: `geom.Transform3D` | Target end-effector pose |
 | `JointPosition` | `positions`: float32 (7,) | Target joint angles (radians) |
 | `JointDelta` | `velocities`: float32 (7,) | Joint velocity command |
-| `Reset` | — | Return the arm to its home configuration |
+| `CartesianDelta` | `delta`, `frame`: `geom.Transform3D` | Relative motion, composed onto the pose the driver measures when the command lands. A delta has no anchor pose of its own, so `frame` states which frame it is expressed in |
+| `Reset` | — | Return the arm to its home position |
 
-Which command your model produces is decided by its codec. A rig with more than one arm names a channel
-per arm — `robot_command.left`, `robot_command.right` — and each carries its own command.
+Which command your model produces is decided by its codec.
+
+A rig with more than one arm names every channel after the arm that owns it, on both sides of the wire:
+observations arrive as `robot_state.left.ee_pose` and `grip.left`, and an action carries `robot_command.left`
+alongside `target_grip.left`. The client emits each channel to its own arm, and an arm the action omits holds
+its last command.
 
 `serialise` puts these on the wire; [Serialization](#serialization) gives the bytes, for a server that
 implements the protocol without depending on Positronic.
@@ -256,12 +261,15 @@ Every message is msgpack. Numpy arrays and robot commands each use a custom exte
 The envelope key is bytes; the keys inside it are strings. Each command's wire name and the numeric field
 it carries:
 
-| Command | Wire `type` | Field |
-|---------|-------------|-------|
-| `CartesianPosition` | `cartesian_pos` | `pose`: float32 (12,) — 3 translation + 9 rotation matrix, row-major |
+| Command | Wire `type` | Fields |
+|---------|-------------|--------|
+| `CartesianPosition` | `cartesian_pos` | `pose`: float32 (12,) |
 | `JointPosition` | `joint_pos` | `positions`: float32 (7,) |
 | `JointDelta` | `joint_delta` | `velocities`: float32 (7,) |
+| `CartesianDelta` | `cartesian_delta` | `delta`: float32 (12,), `frame`: float32 (12,) — both required |
 | `Reset` | `reset` | — |
+
+A pose or transform on the wire is 12 floats: 3 translation, then a 3x3 rotation matrix flattened row-major.
 
 `positronic.utils.serialization` provides `serialise()` / `deserialise()` that handle this for you:
 
