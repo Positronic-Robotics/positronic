@@ -8,6 +8,7 @@ package and a LIBERO source checkout are placed on ``PYTHONPATH`` so ``env.py`` 
 
 import os
 import subprocess
+import sys
 from contextlib import AbstractContextManager
 from pathlib import Path
 
@@ -39,6 +40,10 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
         'PYTHONPATH': os.pathsep.join([str(_ENV_SERVER_DIR), str(_ensure_libero_src())]),
         'LIBERO_CONFIG_PATH': str(_LIBERO_CONFIG),
     }
+    # MuJoCo reads its rendering backend from ``MUJOCO_GL`` and falls back to GLFW, which needs a display the
+    # Linux hosts these evals run on do not have. macOS renders through GLFW; an operator's own choice stands.
+    if sys.platform == 'linux':
+        env.setdefault('MUJOCO_GL', 'egl')
     return subprocess.Popen(command, env=env)
 
 
