@@ -410,3 +410,25 @@ def test_the_poll_is_paced_on_the_clock_the_run_is_measured_on(tmp_path):
             next(loop)
 
     assert cs.granted, 'the request went unread while 300 seconds of the run went by'
+
+
+def test_a_defect_past_the_parse_raises_rather_than_reading_as_no_request(tmp_path, monkeypatch):
+    """Past the parse the input is a `dict` and every check is this run's own, so a failure there can
+    only be a defect. Swallowed it would be indistinguishable from a file that is not a request: the
+    run would keep going, the writer would never be acknowledged, and nothing would say why.
+    """
+    path = tmp_path / 'finish'
+    write_request(path, run='batch-1')
+
+    # A `ValueError`, which is what the staged checks would really raise (`Action(named)` on a value
+    # the membership test let through) and which the read boundary catches — so this pins the split,
+    # not merely that some exception escapes.
+    class Broken:
+        def __iter__(self):
+            raise ValueError('a defect in the staged checks')
+
+    monkeypatch.setattr(finish_request, 'Action', Broken())
+    assert isinstance(ValueError(), finish_request.MALFORMED_CONTENT), 'the boundary would catch this if it saw it'
+
+    with pytest.raises(ValueError, match='a defect in the staged checks'):
+        finish_request.evaluate(path, 'batch-1')

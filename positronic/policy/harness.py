@@ -139,12 +139,6 @@ class _EpisodeTelemetry:
         self._span = None
 
 
-# How long after a home is commanded a requested finish waits before stopping the World. Covers the
-# travel an embodiment's home motion takes; see ``Harness._wind_down`` for why it is a bound rather
-# than a report of arrival.
-FINISH_HOME_GRACE_NS = int(10.0 * 1e9)
-
-
 class Harness(pimm.ControlSystem):
     """Control system that runs the episode lifecycle and forwards trajectories to drivers.
 
@@ -522,6 +516,10 @@ class Harness(pimm.ControlSystem):
         self._begin_episode(trial, clock)
         return False
 
+    # How long after a home is commanded a requested finish waits before stopping the World. Covers
+    # the travel an embodiment's home motion takes.
+    FINISH_HOME_GRACE_NS = int(10.0 * 1e9)
+
     def _wind_down(self, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         """Everything between deciding to stop and stopping, for every reason the loop stops.
 
@@ -540,7 +538,7 @@ class Harness(pimm.ControlSystem):
         yield pimm.Sleep(0.5)
         if self._embodiment.simulated:
             return
-        while (remaining_ns := FINISH_HOME_GRACE_NS - (clock.now_ns() - self._homed_at_ns)) > 0:
+        while (remaining_ns := self.FINISH_HOME_GRACE_NS - (clock.now_ns() - self._homed_at_ns)) > 0:
             yield pimm.Sleep(min(remaining_ns / 1e9, 0.1))
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:

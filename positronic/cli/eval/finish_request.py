@@ -18,8 +18,11 @@ THE CONTRACT, which a writer in another repository implements against:
   intent   monotonic — never withdrawn, so a writer unsure its write landed re-asserts it.
   ack      `ACK_LOG_MARKER` in the run's log, and nothing else.
 
-It FAILS CLOSED, where closed means the run keeps running: anything that is not a readable request
-addressed to this run is ignored and logged once. Inert when `ROLLOUT_RUN_ID` is unset.
+The boundary is the FILE, not the code. What an account outside this run controls — whether the file
+is there, what it names, whether it can be read, and the bytes in it — refuses: the reason is logged
+once and the run keeps going. Past the parse the input is a `dict` and every remaining check is this
+run's own, so a failure there can only be a defect and raises, ending the World rather than reading
+as a file that was never a request. Inert when `ROLLOUT_RUN_ID` is unset.
 """
 
 import json
@@ -28,6 +31,7 @@ import os
 import stat
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 import pimm
 
@@ -62,9 +66,13 @@ ACK_LOG_MARKER = 'rollout finish request granted'
 # request is around 120 bytes.
 MAX_REQUEST_BYTES = 64 * 1024
 
-# Every way a file can fail to become a request. `ValueError` covers the decode and the parse, both
-# subclasses of it; `RecursionError` is the JSON parser's nesting limit, which is not one.
-UNREADABLE = (OSError, ValueError, RecursionError)
+# Reaching the file: what valid operation produces at a path any account on the rig may create — a
+# permission, an I/O error, the `ELOOP` a symlink takes under `O_NOFOLLOW`.
+UNREADABLE_FILE = OSError
+# Reading its bytes: an account this run does not control wrote them, so text that is not UTF-8,
+# text that is not JSON, and nesting past the parser's limit are all ordinary. `UnicodeDecodeError`
+# and `JSONDecodeError` are both `ValueError`; `RecursionError` is not.
+MALFORMED_CONTENT = (ValueError, RecursionError)
 
 
 def request_dir() -> Path:
@@ -83,45 +91,75 @@ def evaluate(path: Path, this_run: str) -> tuple[bool, str]:
 
     Every negative is a reason to keep running, so the caller acts on the bool alone. The reason is
     returned rather than logged so the caller can report a persistent one once instead of on every
-    poll. It is total: any failure to read the file as a request addressed to this run is a refusal,
-    since an exception here would end the World mid-episode.
+    poll.
+
+    The two halves are separated deliberately. Reaching and reading the file is external, and every
+    way it fails is a refusal. What follows the parse is this run's own code over a `dict`, so a
+    failure there can only be a defect and is left to raise.
     """
-    try:
-        return _read(path, this_run)
-    except FileNotFoundError:
-        # The ordinary state of a run nobody has asked, so not a fault worth a reason.
-        return False, ''
-    except UNREADABLE as e:
-        return False, f'finish request at {path} could not be read as a request ({e!r}); continuing to run'
+    blob, reason = _read_bytes(path)
+    if blob is None:
+        return False, reason
+    request, reason = _parse(path, blob)
+    if request is None:
+        return False, reason
+    return _asks_this_run_to_finish(path, request, this_run)
 
 
-def _read(path: Path, this_run: str) -> tuple[bool, str]:
-    """The staged read: a refusal is returned, any other failure raises, and all of those are in `UNREADABLE`."""
+def _read_bytes(path: Path) -> tuple[bytes | None, str]:
+    """The file's bytes, or `None` and the reason there are none to read."""
     # Any account on the rig may create this path, so what it names need not be a file. `O_NONBLOCK`
     # stops a FIFO holding the open until somebody writes — this poller runs in the foreground, so
     # that wait would hang the whole run. `O_NOFOLLOW` refuses a symlink with `ELOOP`. The `fstat`
     # answers for a directory or a device, and reads the open descriptor, not the path, so nothing
     # can be swapped underneath the check.
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     try:
-        mode = os.fstat(fd).st_mode
-        if not stat.S_ISREG(mode):
-            return False, f'finish request at {path} is not a regular file ({stat.filemode(mode)}); continuing to run'
-        with os.fdopen(fd, 'rb', closefd=False) as f:
-            # One byte past the bound, so an oversized file is recognised rather than truncated into
-            # something that might parse.
-            blob = f.read(MAX_REQUEST_BYTES + 1)
-    finally:
-        os.close(fd)
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        try:
+            mode = os.fstat(fd).st_mode
+            if not stat.S_ISREG(mode):
+                return (
+                    None,
+                    f'finish request at {path} is not a regular file ({stat.filemode(mode)}); continuing to run',
+                )
+            with os.fdopen(fd, 'rb', closefd=False) as f:
+                # One byte past the bound, so an oversized file is recognised rather than truncated
+                # into something that might parse.
+                blob = f.read(MAX_REQUEST_BYTES + 1)
+        finally:
+            os.close(fd)
+    except FileNotFoundError:
+        # The ordinary state of a run nobody has asked, so not a fault worth a reason.
+        return None, ''
+    except UNREADABLE_FILE as e:
+        return None, f'finish request at {path} could not be read as a request ({e!r}); continuing to run'
     if len(blob) > MAX_REQUEST_BYTES:
-        return False, f'finish request at {path} is larger than {MAX_REQUEST_BYTES} bytes; continuing to run'
-    request = json.loads(blob.decode())
+        return None, f'finish request at {path} is larger than {MAX_REQUEST_BYTES} bytes; continuing to run'
+    return blob, ''
+
+
+def _parse(path: Path, blob: bytes) -> tuple[dict[str, Any] | None, str]:
+    """The request object those bytes hold, or `None` and the reason they hold none."""
+    try:
+        request = json.loads(blob.decode())
+    except MALFORMED_CONTENT as e:
+        return None, f'finish request at {path} could not be read as a request ({e!r}); continuing to run'
     if not isinstance(request, dict):
-        return False, f'finish request at {path} is {type(request).__name__}, not an object; continuing to run'
+        return None, f'finish request at {path} is {type(request).__name__}, not an object; continuing to run'
+    return request, ''
+
+
+def _asks_this_run_to_finish(path: Path, request: dict[str, Any], this_run: str) -> tuple[bool, str]:
+    """Whether the request object asks `this_run` to finish, and why not when it does not.
+
+    Runs outside every handler: the input is a `dict` by here, so anything raising is a defect and
+    ends the World rather than reading as a file that was never a request.
+    """
     named = request.get(ACTION_KEY)
     # The type is checked before the value because JSON's containers are unhashable: an array or
-    # object reaching the membership test below raises `TypeError`, which is not in `UNREADABLE`.
-    # An absent key arrives here as `None` and is the same fact — nothing an action reads from.
+    # object reaching the membership test below raises `TypeError`, and nothing here catches one —
+    # a file somebody wrote would end the run as though this code were broken. An absent key arrives
+    # as `None` and is the same fact: nothing an action reads from.
     if not isinstance(named, str):
         return (
             False,
