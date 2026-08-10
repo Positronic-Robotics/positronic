@@ -19,7 +19,7 @@ You keep the weights. Your model runs as an inference server behind one WebSocke
 
 ## One CLI, any benchmark
 
-Serve a DROID policy once, then point the eval at whichever target you want — only `--eval` changes. With no checkpoint of your own, the preset below serves openpi's public `pi05_droid_jointpos`; openpi fetches it, nothing to mount. Needs Ubuntu with an NVIDIA card, and holds its terminal, so run the eval from a second one.
+Serve a DROID policy once, and every benchmark is one CLI parameter away. With no checkpoint of your own, the preset below serves openpi's public `pi05_droid_jointpos`; openpi fetches it, nothing to mount. Needs Ubuntu with an NVIDIA card, and holds its terminal, so run the eval from a second one.
 
 ```bash
 cd docker && docker compose run --rm --service-ports openpi-server droid_jointpos
@@ -28,6 +28,7 @@ cd docker && docker compose run --rm --service-ports openpi-server droid_jointpo
 Score a suite, and browse every trial — video, robot state, per-trial success:
 
 ```bash
+# --policy.url is where the server is — <remote-server>:8000 if it runs on another machine
 uv run positronic eval run --eval=.sim.robolab.benchmark \
   --policy=.remote --policy.url=localhost:8000 \
   --eval.trial_count=10 --output_dir=~/evals/robolab
@@ -35,9 +36,9 @@ uv run positronic eval run --eval=.sim.robolab.benchmark \
 uv run positronic-server --dataset.path=~/evals/robolab
 ```
 
-That same endpoint serves the other DROID targets and our real rig without being restarted. Your own model is served the same way ([Connect your model](connect-your-model.md)); point `--pipeline.source.checkpoints_dir` at your checkpoint instead of taking the reference one.
+That same endpoint serves the other DROID targets and our real rig without being restarted, and your own model is served the same way — [Connect your model](connect-your-model.md).
 
-Any target the catalog exposes goes in `--eval`: a whole benchmark (`.sim.libero.all`), a suite or category (`.sim.libero.spatial`, `.sim.robolab.visual`), or one task (`.sim.robolab.banana_in_bowl`). Add `--inference_latency=True` to charge the model's inference time in sim. Every trial is recorded as a Positronic dataset under `--output_dir`.
+`--eval` takes any target the catalog exposes: a whole benchmark, a suite or category (`.sim.robolab.visual`), or one task (`.sim.robolab.banana_in_bowl`). LIBERO speaks its own observations, so it runs off its own deployment (`openpi-server libero`, then `--eval=.sim.libero.all`). Add `--inference_latency=True` to charge the model's inference time in sim. Every trial is recorded as a Positronic dataset under `--output_dir`.
 
 Real-hardware DROID evals take the same model endpoint, but we run them for you — operated and operator-scored on our fleet, not self-driven in sim. Write to hi@phail.ai for those.
 
