@@ -154,9 +154,7 @@ class ReplaySession(Session):
         return {keys.TYPE: 'replay'}
 
 
-# The meta fields a replay reports beside ``keys.TYPE``. A recorded episode carries them under
-# ``keys.POLICY_META``, and that is what joins it back to the recording it was played from — so a reader
-# outside this module resolves them by importing these rather than spelling them.
+# The meta fields a replay reports beside ``keys.TYPE``.
 META_DATASET_PATH = 'replay.dataset_path'
 META_EPISODE = 'replay.episode'
 
