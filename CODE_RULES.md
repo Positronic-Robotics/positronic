@@ -341,9 +341,19 @@ and takes it backwards wherever the sense inverts.
 The tell is a docstring sentence of the form "True means …". Once the name carries it, that sentence
 has nothing left to say.
 
-A round of a run loop answering whether the run ends is `idle_ends_the_run`, not `idle_step`; a read of
-a request file answering whether it asks this run to stop is `asks_this_run_to_finish`, not `evaluate`.
-A function that both acts and answers is still named for its answer.
+A pure query takes the predicate name. A function that also ACTS does not: renaming it for its verdict
+hides what it did. Name that one for its action and return an enum whose members carry the answer, read
+at the call site.
 
-Where the return is not a claim about the world but a status, or one of several outcomes, the `bool` is
-the mistake rather than the name: return a type whose members are named (`primitive-type`).
+```python
+# Bad — a query named for the activity, and a command renamed until its action disappeared
+if evaluate(path, run_id): ...
+if idle_ends_the_run(msg, clock): ...
+
+# Good
+if asks_this_run_to_finish(path, run_id): ...
+if take_idle_round(msg, clock) is IdleRound.ENDS_THE_RUN: ...
+```
+
+The same enum answers the case where the verdict was never binary — a status, one of several endings.
+There the `bool` was the mistake rather than the name (`primitive-type`).
