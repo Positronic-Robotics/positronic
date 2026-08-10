@@ -96,11 +96,8 @@ def evaluate(path: Path, this_run: str) -> tuple[bool, str]:
 
 def _read_bytes(path: Path) -> tuple[bytes | None, str]:
     """The file's bytes, or `None` and the reason there are none to read."""
-    # Any account on the rig may create this path, so what it names need not be a file. `O_NONBLOCK`
-    # stops a FIFO holding the open until somebody writes — this poller runs in the foreground, so
-    # that wait would hang the whole run. `O_NOFOLLOW` refuses a symlink with `ELOOP`. The `fstat`
-    # answers for a directory or a device, and reads the open descriptor, not the path, so nothing
-    # can be swapped underneath the check.
+    # O_NONBLOCK: a FIFO here would hang the foreground poller. O_NOFOLLOW: a symlink refuses (ELOOP).
+    # fstat reads the open descriptor, not the path, so nothing swaps under the check.
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
         try:
