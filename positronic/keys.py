@@ -15,6 +15,16 @@ TARGET_EE_POSE = f'{ROBOT_COMMAND}.pose'
 TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
 TARGET_GRIP = 'target_grip'
 
+
+
+def is_robot_command(name: str) -> bool:
+    """Whether ``name`` is in the robot-command family: ``robot_command``, or an arm's ``robot_command.{side}``.
+
+    ``TARGET_EE_POSE`` and ``TARGET_JOINTS`` are in the family by name while carrying a vector.
+    """
+    return name == ROBOT_COMMAND or name.startswith(f'{ROBOT_COMMAND}.')
+
+
 # The arm's state channel, and the signals its serializer unfolds it into.
 ROBOT_STATE = 'robot_state'
 JOINTS = f'{ROBOT_STATE}.q'

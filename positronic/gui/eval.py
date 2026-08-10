@@ -14,6 +14,7 @@ from positronic import keys
 from positronic.cfg.eval.real.tasks import SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK, UNIFIED_TASK
 from positronic.dataset.edits import EditedDataset
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.gui import handover
 from positronic.policy.harness import Directive
 
 
@@ -63,7 +64,11 @@ def fit_ui_scale(requested: float, viewport_size: tuple[int, int]) -> float:
 # the positronic server grows into it — and owning `output_dir` there frees the driver from the factory closure.
 # The editable static fields differ per eval, so the form must become data-driven (declared by the Task/Eval).
 class EvalUI(pimm.ControlSystem):
-    """Operator console for attended evals: trial control plus an episode editor.
+    """Operator console for attended evals: the batch assignment, trial control, and an episode editor.
+
+    The assignment panel shows the batch handed over through `handover_dir` — its task, its episode target,
+    how many episodes this session has recorded against it — and hands the batch back with a completion
+    marker. It sits outside the tabs so neither half of the console can hide it.
 
     Trial control drives the lifecycle (RUN/FINISH/HOME directives) and shows the remaining time budget.
     The editor is a non-modal view over the recorded dataset: the operator navigates episodes and corrects
@@ -74,10 +79,15 @@ class EvalUI(pimm.ControlSystem):
     """
 
     def __init__(
-        self, output_dir: Path | None = None, max_im_size: tuple[int, int] = (320, 240), ui_scale: float = 1.0
+        self,
+        output_dir: Path | None = None,
+        max_im_size: tuple[int, int] = (320, 240),
+        ui_scale: float = 1.0,
+        handover_dir: Path = handover.DEFAULT_DIR,
     ):
         self.state = State.WAITING
         self.output_dir = output_dir
+        self.handover_dir = handover_dir
         self.ui_scale = ui_scale
         self.max_im_size = max_im_size
 
@@ -110,6 +120,11 @@ class EvalUI(pimm.ControlSystem):
         # The selected episode's video signal under the review scrubber.
         self._rv_signal = None
         self.rv_texture = np.zeros((240, 320, 4), dtype=np.float32)
+
+        # Handover state. `_batch_base_count` is the episode count when the current assignment was picked up,
+        # so progress against the target counts this batch's recordings rather than the whole output directory.
+        self._assignment: handover.Assignment | handover.UnsupportedSchema | None = None
+        self._batch_base_count = 0
 
     def size(self, v: int) -> int:
         """Scale a value by ui_scale."""
@@ -184,6 +199,28 @@ class EvalUI(pimm.ControlSystem):
             dpg.add_spacer(width=self.size(25))
             with dpg.drawlist(width=self.size(160), height=self.size(46)):
                 dpg.draw_text((0, 0), '0:00', size=self.size(40), tag='time_text')
+
+    def _build_assignment(self):
+        dpg.add_separator()
+        dpg.add_text('', tag='hv_status')
+        # dearpygui's stubs type the container helpers as their tag, not as context managers.
+        with dpg.group(show=False, tag='hv_body'):  # pyright: ignore[reportGeneralTypeIssues]
+            dpg.add_text('', tag='hv_task', wrap=self.size(660))
+            dpg.add_text('', tag='hv_notes', wrap=self.size(660), color=(160, 160, 160))
+            dpg.add_text('', tag='hv_progress')
+            with dpg.group(horizontal=True):  # pyright: ignore[reportGeneralTypeIssues]
+                dpg.add_input_text(hint='note for the batch (optional)', width=self.size(320), tag='hv_note')
+                dpg.add_spacer(width=self.size(10))
+                dpg.add_button(
+                    label='Batch done',
+                    tag='hv_done',
+                    callback=self.hand_back,
+                    width=self.size(110),
+                    height=self.size(28),
+                )
+                dpg.add_spacer(width=self.size(10))
+                dpg.add_text('', tag='hv_confirm', color=(0, 200, 0))
+        dpg.add_separator()
 
     def _build_configuration(self):
         dpg.add_text('Configuration')
@@ -469,6 +506,60 @@ class EvalUI(pimm.ControlSystem):
         self.update_ui()
         self.directive.emit(Directive.ABORT())
 
+    # --- Batch handover ---
+
+    def _poll_assignment(self):
+        """Pick up the assignment in the handover directory, including one that lands after start-up."""
+        assignment = handover.read_assignment(self.handover_dir)
+        if assignment != self._assignment:
+            self._assignment = assignment
+            self._batch_base_count = self._count
+            self._update_assignment_ui()
+        self._update_assignment_progress()
+
+    def _update_assignment_ui(self):
+        assignment = self._assignment
+        dpg.configure_item('hv_body', show=isinstance(assignment, handover.Assignment))
+        if assignment is None:
+            dpg.set_value('hv_status', 'No active assignment')
+            dpg.configure_item('hv_status', color=(140, 140, 140))
+            return
+        if isinstance(assignment, handover.UnsupportedSchema):
+            dpg.set_value(
+                'hv_status',
+                f'Assignment written for schema_version {assignment.schema_version}; '
+                f'this console reads {handover.SCHEMA_VERSION}. Not showing it.',
+            )
+            dpg.configure_item('hv_status', color=(230, 170, 60))
+            return
+        dpg.set_value('hv_status', f'ASSIGNMENT — batch {assignment.batch_id}')
+        dpg.configure_item('hv_status', color=(120, 180, 255))
+        dpg.set_value('hv_task', assignment.task)
+        dpg.set_value('hv_notes', assignment.notes)
+        dpg.configure_item('hv_notes', show=bool(assignment.notes))
+        self._set_handed_back(handover.completion_path(self.handover_dir, assignment.batch_id).exists())
+
+    def _set_handed_back(self, done: bool):
+        dpg.set_value('hv_confirm', 'Handed back' if done else '')
+        self._set_enabled('hv_done', not done)
+        self._set_enabled('hv_note', not done)
+
+    def _update_assignment_progress(self):
+        assignment = self._assignment
+        if not isinstance(assignment, handover.Assignment):
+            return
+        recorded = self._count - self._batch_base_count
+        target = assignment.episode_target
+        dpg.set_value('hv_progress', f'Episodes recorded: {recorded} / {target}')
+        dpg.configure_item('hv_progress', color=(0, 200, 0) if recorded >= target else (255, 255, 255))
+
+    def hand_back(self, sender=None, app_data=None):
+        """Write the completion marker for the current assignment."""
+        assignment = self._assignment
+        assert isinstance(assignment, handover.Assignment), 'the hand-back button shows only for a readable assignment'
+        handover.write_completion(self.handover_dir, assignment.batch_id, dpg.get_value('hv_note'))
+        self._set_handed_back(True)
+
     # --- Episode editor ---
 
     def _refresh_view(self):
@@ -745,6 +836,9 @@ class EvalUI(pimm.ControlSystem):
                     self._build_controls()
 
                     dpg.add_spacer(height=self.size(10))
+                    self._build_assignment()
+
+                    dpg.add_spacer(height=self.size(10))
                     with dpg.tab_bar(tag='mode_tabs'):
                         with dpg.tab(label='Trial', tag='tab_trial'):
                             dpg.add_spacer(height=self.size(10))
@@ -758,6 +852,7 @@ class EvalUI(pimm.ControlSystem):
 
         # Initialize UI state; open the editor on the newest episode of an existing dataset
         self.update_ui()
+        self._update_assignment_ui()
         if self.output_dir is not None:
             self._refresh_view()
         self._select(self._count - 1)
@@ -767,6 +862,7 @@ class EvalUI(pimm.ControlSystem):
             if now - self._last_scan >= EDITOR_POLL_SEC:
                 self._last_scan = now
                 self._poll_episodes()
+                self._poll_assignment()
 
             # Count down the remaining time budget; the run stops when it is exhausted
             if self.state == State.RUNNING and self.run_start_time:

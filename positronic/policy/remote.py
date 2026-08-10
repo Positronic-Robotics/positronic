@@ -6,6 +6,7 @@ import numpy as np
 import pos3
 
 from positronic import keys, telemetry, telemetry_keys
+from positronic.drivers.roboarm import command
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
@@ -44,7 +45,6 @@ class RemoteSession(Session):
     def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
         """Forwards the observation to the remote server and returns the action trajectory.
 
-        Command reconstruction is handled transparently by the deserialization layer.
         Single-action server responses are wrapped into a 1-element list to honor
         the ``Session.__call__`` contract (``list[dict] | None``).
         """
@@ -56,9 +56,23 @@ class RemoteSession(Session):
             result = self._session.infer(prepared)
         finally:
             telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns())
-        if isinstance(result, dict):
-            return [result]
-        return result
+        if result is None:
+            return None
+        actions = [result] if isinstance(result, dict) else result
+        return [self._decode_commands(action) for action in actions]
+
+    def _decode_commands(self, action: dict[str, Any]) -> dict[str, Any]:
+        """One action with every ``keys.is_robot_command`` channel typed."""
+        decoded = {k: self._as_command(v) for k, v in action.items() if keys.is_robot_command(k)}
+        return {**action, **decoded} if decoded else action
+
+    @staticmethod
+    def _as_command(value: Any) -> Any:
+        """One channel's value, typed. A non-mapping — a typed command, a ``.pose`` vector — returns as it came."""
+        if not isinstance(value, cabc.Mapping):
+            return value
+        # `from_wire` reads vectors as arrays; the wire carries sequences, and `type` is its one string.
+        return command.from_wire({k: v if isinstance(v, str) else np.asarray(v) for k, v in value.items()})
 
     @property
     def meta(self) -> dict[str, Any]:
