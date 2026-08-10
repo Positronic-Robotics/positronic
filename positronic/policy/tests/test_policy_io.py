@@ -628,6 +628,18 @@ def test_groot_joints_codec_decodes_modality_keyed_actions():
     assert decoded[-1] == {'timestamp': pytest.approx(3 / 15.0)}  # timestamp sentinel
 
 
+_WIRE_POSE = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
+
+
+# rules-allow: hardcoded-keys — a fixture standing in for a server, so it spells the wire itself. Reading
+# `command.CartesianPosition.TYPE` would make the test agree with the decoder whatever that value became,
+# leaving the wire the rig actually receives unpinned. Same reason as `_WIRE_ACTION` in
+# `offboard/tests/test_remote_policy.py`.
+def _wire_command(pose=_WIRE_POSE) -> dict:
+    """One served ``cartesian_pos`` command, in the wire's own layout."""
+    return {'type': 'cartesian_pos', 'pose': pose}
+
+
 def _wire_decoded(action: dict) -> dict:
     """One action through ``WireCommand``. ``Codec.decode`` answers a chunk with a list, so the
     single-action shape is narrowed once here rather than at every assertion below."""
@@ -638,8 +650,7 @@ def _wire_decoded(action: dict) -> dict:
 
 def test_wire_command_decodes_a_served_command_into_the_typed_one_drivers_dispatch_on():
     """The wire's own layout in, a `command.*` object out — the form everything above this codec matches on."""
-    pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
-    action = {obs_keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}, 'target_grip': 0.5, 'timestamp': 0.0}
+    action = {obs_keys.ROBOT_COMMAND: _wire_command(), 'target_grip': 0.5, 'timestamp': 0.0}
 
     decoded = _wire_decoded(action)
 
@@ -650,10 +661,10 @@ def test_wire_command_decodes_a_served_command_into_the_typed_one_drivers_dispat
 
 def test_wire_command_accepts_the_wire_as_a_plain_sequence():
     """A transport may hand the vector back as a list rather than an array; either decodes the same."""
-    pose = np.asarray([0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1], dtype=np.float32)
+    pose = np.asarray(_WIRE_POSE, dtype=np.float32)
 
-    from_array = _wire_decoded({obs_keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}})
-    from_list = _wire_decoded({obs_keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose.tolist()}})
+    from_array = _wire_decoded({obs_keys.ROBOT_COMMAND: _wire_command(pose)})
+    from_list = _wire_decoded({obs_keys.ROBOT_COMMAND: _wire_command(pose.tolist())})
 
     np.testing.assert_allclose(
         from_list[obs_keys.ROBOT_COMMAND].pose.translation,
@@ -666,7 +677,7 @@ def test_wire_command_decodes_every_arm_of_a_multi_arm_action():
     """An embodiment with more than one arm names its channels `robot_command.{side}`, and the harness
     forwards each to its own driver by that name. Decoding only the unsuffixed channel hands a bimanual
     endpoint's arms the raw mapping — the same failure on a different channel."""
-    wire = {'type': 'cartesian_pos', 'pose': [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]}
+    wire = _wire_command()
     action = {f'{obs_keys.ROBOT_COMMAND}.left': wire, f'{obs_keys.ROBOT_COMMAND}.right': wire, 'timestamp': 0.0}
 
     decoded = _wire_decoded(action)

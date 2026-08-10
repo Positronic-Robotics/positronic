@@ -501,9 +501,8 @@ class WireCommand(Codec):
     reads — ``{'type': 'cartesian_pos', 'pose': [...]}`` — while everything above this point matches on
     ``command.*`` objects. Compose it innermost, closest to the wire.
 
-    Every command channel is decoded, not only ``robot_command``: an embodiment with more than one arm
-    names them ``robot_command.{side}`` (``cfg.embodiment.yam_bimanual``) and the harness forwards each to
-    its own driver by that name, so an arm whose channel is skipped is handed the raw mapping.
+    Every channel in the command family is decoded, not only ``robot_command`` itself;
+    ``keys.is_robot_command`` is the test, and defines the family.
 
     An action whose command is already typed passes through untouched, as does one carrying no command at
     all — a chunk's end-of-validity sentinel.
@@ -533,6 +532,9 @@ class WireCommand(Codec):
         return command.from_wire({k: v if isinstance(v, str) else np.asarray(v) for k, v in value.items()})
 
     def to_spec(self):
+        # rules-allow: hardcoded-keys — `'name'` is the spec layer's structural key, written bare by every
+        # `to_spec` and read by `from_spec`. Giving it a constant is one change across that whole layer;
+        # converting this site alone would leave every sibling on the literal and this one reading apart.
         return {'name': self.WIRE_NAME}
 
 
