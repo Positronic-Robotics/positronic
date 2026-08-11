@@ -5,6 +5,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from positronic import keys
 from positronic.dataset import META_UID, DiscardReason, Episode
 from positronic.dataset.local_dataset import (
     DISCARD_MARKER,
@@ -82,7 +83,7 @@ def test_episode_static_items_json(tmp_path):
     ep_dir = tmp_path / 'ep_static'
     with DiskEpisodeWriter(ep_dir, discarded_dir=tmp_path / 'discarded') as w:
         # write static metadata (single file static.json)
-        w.set_static('task', 'pick_place')
+        w.set_static(keys.TASK, 'pick_place')
         w.set_static('version', 1)
         w.set_static('params', {'speed': 0.5})
         w.set_static('tags', ['demo', 'test'])
@@ -99,7 +100,7 @@ def test_episode_static_items_json(tmp_path):
     assert set(ep.keys()) == {'task', 'version', 'params', 'tags', 'a'}
 
     # static access returns the value directly
-    assert ep['task'] == 'pick_place'
+    assert ep[keys.TASK] == 'pick_place'
     assert ep['version'] == 1
     assert ep['params'] == {'speed': 0.5}
     assert ep['tags'] == ['demo', 'test']
@@ -245,13 +246,13 @@ def test_a_discarded_episode_keeps_its_static_data_and_identity(tmp_path):
     ep_dir = tmp_path / 'ep_discard_static'
     w = DiskEpisodeWriter(ep_dir, discarded_dir=tmp_path / 'discarded')
     w.append('a', 1, 1000)
-    w.set_static('task', 'pick_place')
+    w.set_static(keys.TASK, 'pick_place')
     uid = w.meta[META_UID]
 
     w.discard(DiscardReason.RUN_ENDED)
 
     discarded = tmp_path / 'discarded' / f'ep_discard_static-{uid}'
-    assert json.loads((discarded / 'static.json').read_text())['task'] == 'pick_place'
+    assert json.loads((discarded / 'static.json').read_text())[keys.TASK] == 'pick_place'
     meta = json.loads((discarded / 'meta.json').read_text())
     assert meta[META_UID] == uid
     assert meta['created_ts_ns'] > 0
