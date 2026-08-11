@@ -279,32 +279,27 @@ class MolmoSpacesEnv(EnvProtocol):
     def _measured_arm_q(self) -> np.ndarray:
         return np.asarray(self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP).joint_pos, dtype=np.float32)
 
-    def _measured_eef_pose(self) -> tuple[np.ndarray, np.ndarray]:
-        """The measured grasp-site pose in the ROBOT frame as ``(translation, 3x3 rotation)`` — the frame a
-        Cartesian command targets and the one ``_observe`` reports, so command and observation share a frame.
-
-        Robot-frame rather than world: a scene-world pose puts the arm metres from the origin (the ProcTHOR
-        house frame), which no DROID-trained checkpoint has ever seen as proprioception. MolmoSpaces' own
-        ``tcp_pose`` sensor reports ``leaf_frame_to_robot`` for the same reason.
-        """
-        eef_robot = np.asarray(
-            self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP).leaf_frame_to_robot, dtype=np.float64
-        )
-        return eef_robot[:3, 3].copy(), eef_robot[:3, :3].copy()
-
-    def _robot_to_world(self) -> tuple[np.ndarray, np.ndarray]:
-        """The robot base pose as ``(translation, 3x3 rotation)``, composing a robot-frame pose into world."""
-        base = np.asarray(self._robot_view.base.pose, dtype=np.float64)
-        return base[:3, 3].copy(), base[:3, :3].copy()
-
     def _ik_robot_frame(self, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray:
         """A robot-frame Cartesian target -> arm joint targets, through the world-frame solver.
 
         Commands arrive in the frame ``_observe`` reports; ``_ik`` solves in world, so the base transform is
         applied here rather than duplicated in either.
         """
-        t, r = self._robot_to_world()
+        base = np.asarray(self._robot_view.base.pose, dtype=np.float64)
+        t, r = base[:3, 3], base[:3, :3]
         return self._ik(r @ np.asarray(target_pos, dtype=np.float64) + t, r @ np.asarray(target_rot, dtype=np.float64))
+
+    def _measured_eef_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        """The measured grasp-site pose in the ROBOT frame as ``(translation, 3x3 rotation)`` — the frame a
+        Cartesian command targets and the one ``_observe`` reports, so command and observation share a frame.
+
+        Robot-frame rather than world: a scene-world pose puts the arm metres from the origin (the ProcTHOR
+        house frame), which no DROID-trained checkpoint has ever seen as proprioception.
+        """
+        eef_robot = np.asarray(
+            self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP).leaf_frame_to_robot, dtype=np.float64
+        )
+        return eef_robot[:3, 3].copy(), eef_robot[:3, :3].copy()
 
     def _scratch_data(self, move_group: Any) -> Any:
         """The scratch ``MjData``, refreshed from the live one, for off-sim kinematics probing.
