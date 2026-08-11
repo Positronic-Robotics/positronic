@@ -186,7 +186,7 @@ owner so the world can wire them correctly.
 
 **Don't use system libs for sleeping — `yield pimm.Sleep(secs)` instead.** In the main-process
 group `interleave` advances the peers while one loop sleeps, so a blocking call there stalls them
-all. `positronic/drivers/tests/test_no_blocking_sleep.py` enforces it.
+all.
 
 The `World` runtime plays three roles:
 
