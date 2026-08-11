@@ -26,7 +26,7 @@ def _nebius(*args: str) -> dict:
         completed = subprocess.run(command, capture_output=True, text=True, timeout=_CLI_TIMEOUT_SEC, check=True)
     except FileNotFoundError:
         raise RuntimeError(
-            'The `nebius` CLI is not on PATH. Install it, or export AUTH_TOKEN and use `.authed_remote`.'
+            f'The `nebius` CLI is not on PATH. Install it, or export {AUTH_TOKEN_ENV} and use `.authed_remote`.'
         ) from None
     except subprocess.TimeoutExpired:
         # An expired CLI credential turns any call into a browser login that waits for a human, which would

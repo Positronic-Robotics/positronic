@@ -226,10 +226,11 @@ class PolicyServer:
 
         self._default_id: str | None = None
 
-        # ``None`` serves open, so a broken secret must not reach that path by accident: empty would read
-        # as open, and a non-ASCII one can never match, since a header reaches us latin-1 decoded.
-        if auth_token is not None and (not auth_token or not auth_token.isascii()):
-            raise ValueError('auth_token must be a non-empty ASCII string; pass None to serve open')
+        # ``None`` serves open, so a broken secret must not reach that path by accident. Empty would read
+        # as open; anything an ``Authorization`` header cannot carry — a newline off the end of a file, a
+        # non-ASCII byte — gates the server against everybody, because no client can send the value back.
+        if auth_token is not None and not (auth_token and all('!' <= c <= '~' for c in auth_token)):
+            raise ValueError('auth_token must be non-empty printable ASCII without spaces; pass None to serve open')
         self._auth_token = auth_token
 
         self.app = FastAPI()

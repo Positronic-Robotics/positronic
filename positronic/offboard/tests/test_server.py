@@ -463,7 +463,16 @@ def test_server_without_a_token_serves_open(stub_server):
     assert InferenceClient(f'{host}:{port}').list_models() == ['stub']
 
 
-@pytest.mark.parametrize('token', [pytest.param('', id='empty'), pytest.param('tökén', id='non-ascii')])
+@pytest.mark.parametrize(
+    'token',
+    [
+        pytest.param('', id='empty'),
+        pytest.param('tökén', id='non-ascii'),
+        # What a secret read from a file that ends in one looks like.
+        pytest.param('a-token\n', id='trailing-newline'),
+        pytest.param('a token', id='space'),
+    ],
+)
 def test_a_token_that_could_never_gate_fails_closed_at_startup(make_mock_policy, token):
     with pytest.raises(ValueError, match='ASCII'):
         PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})), auth_token=token)

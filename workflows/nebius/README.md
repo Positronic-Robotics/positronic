@@ -383,8 +383,13 @@ bash workflows/nebius/stop.sh auth-smoke
 Add a new primary version:
 
 ```bash
+source workflows/nebius/common.sh
+SECRET_ID=$(nebius mysterybox secret get-by-name --parent-id "$PARENT_ID" \
+  --name "$AUTH_TOKEN_SECRET" --format json | jq -r '.metadata.id')
+
 nebius mysterybox secret-version create --parent-id "$SECRET_ID" --set-primary \
-  --payload "$(jq -nc --arg v "$(openssl rand -hex 32)" '[{key:"AUTH_TOKEN",string_value:$v}]')"
+  --payload "$(jq -nc --arg k "$AUTH_TOKEN_KEY" --arg v "$(openssl rand -hex 32)" \
+    '[{key:$k,string_value:$v}]')"
 ```
 
 `.nebius_remote` picks the new value up on its next run; an exported `AUTH_TOKEN` holds the old one until
