@@ -2,7 +2,8 @@ import numpy as np
 import pytest
 
 from positronic import keys
-from positronic.vendors.openpi import codecs, wire
+from positronic.vendors import openpi
+from positronic.vendors.openpi import codecs
 
 
 @pytest.fixture
@@ -23,4 +24,4 @@ def raw_observation() -> dict:
 def test_warmup_observation_carries_every_field_a_codec_encodes(name, raw_observation):
     encoded = getattr(codecs, name).instantiate().encode(raw_observation)
 
-    assert set(encoded) <= set(wire.warm_observation())
+    assert set(encoded) <= set(openpi.warm_observation())

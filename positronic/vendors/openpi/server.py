@@ -19,7 +19,8 @@ from positronic.policy.spec import ModelSource, remote
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
-from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer, wire
+from positronic.vendors import openpi
+from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +219,7 @@ class OpenpiSource(ModelSource):
             subproc.start(on_progress)
             policy = OpenpiPolicy(subproc)
             # The subprocess compiles the model on its first inference, which outlasts a rig's inference timeout.
-            warmup(policy, wire.warm_observation(), on_progress)
+            warmup(policy, openpi.warm_observation(), on_progress)
         except Exception:
             subproc.stop()
             raise

@@ -31,7 +31,7 @@ from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
 from positronic.policy.codec import Codec, lerobot_image, lerobot_state
 from positronic.policy.observation import ObservationCodec as GenericObservationCodec
-from positronic.vendors.openpi import wire
+from positronic.vendors import openpi
 
 
 class ObservationCodec(Codec):
@@ -84,12 +84,12 @@ class ObservationCodec(Codec):
             state_parts.append(np.asarray(inputs[feature_key], dtype=np.float32).reshape(-1))
 
         obs: dict[str, Any] = {
-            wire.STATE: np.concatenate(state_parts) if state_parts else np.empty((0,), dtype=np.float32),
-            wire.WRIST_IMAGE: self._encode_image(self._wrist_camera, inputs),
-            wire.IMAGE: self._encode_image(self._exterior_camera, inputs),
+            openpi.STATE: np.concatenate(state_parts) if state_parts else np.empty((0,), dtype=np.float32),
+            openpi.WRIST_IMAGE: self._encode_image(self._wrist_camera, inputs),
+            openpi.IMAGE: self._encode_image(self._exterior_camera, inputs),
         }
         if keys.TASK in inputs:
-            obs[wire.PROMPT] = inputs[keys.TASK]
+            obs[openpi.PROMPT] = inputs[keys.TASK]
         return obs
 
     def _encode_image(self, input_key: str, inputs: dict[str, Any]) -> np.ndarray:
@@ -131,12 +131,12 @@ ee_joints_obs = observation.override(state_features={keys.EE_POSE: 7, keys.GRIP:
 # prompt under `prompt` (see openpi `droid_policy.DroidInputs`).
 droid_obs = cfn.Config(
     GenericObservationCodec,
-    state={wire.JOINT_POSITION: {keys.JOINTS: 7}, wire.GRIPPER_POSITION: {keys.GRIP: 1}},
+    state={openpi.JOINT_POSITION: {keys.JOINTS: 7}, openpi.GRIPPER_POSITION: {keys.GRIP: 1}},
     images={
-        wire.WRIST_IMAGE_LEFT: (keys.WRIST_IMAGE, (224, 224)),
-        wire.EXTERIOR_IMAGE_LEFT: (keys.EXTERIOR_IMAGE, (224, 224)),
+        openpi.WRIST_IMAGE_LEFT: (keys.WRIST_IMAGE, (224, 224)),
+        openpi.EXTERIOR_IMAGE_LEFT: (keys.EXTERIOR_IMAGE, (224, 224)),
     },
-    task_field=wire.PROMPT,
+    task_field=openpi.PROMPT,
 )
 
 ee = codecs.compose.override(obs=ee_obs, action=codecs.absolute_pos_action)
@@ -230,12 +230,12 @@ class LiberoObservationCodec(Codec):
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         obs = {
-            wire.STATE: self._libero_state(inputs),
-            wire.WRIST_IMAGE: self._encode_image(self._wrist_camera, inputs),
-            wire.IMAGE: self._encode_image(self._exterior_camera, inputs),
+            openpi.STATE: self._libero_state(inputs),
+            openpi.WRIST_IMAGE: self._encode_image(self._wrist_camera, inputs),
+            openpi.IMAGE: self._encode_image(self._exterior_camera, inputs),
         }
         if keys.TASK in inputs:
-            obs[wire.PROMPT] = inputs[keys.TASK]
+            obs[openpi.PROMPT] = inputs[keys.TASK]
         return obs
 
     def _libero_state(self, inputs: dict[str, Any]) -> np.ndarray:
