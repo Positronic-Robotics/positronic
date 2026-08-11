@@ -204,7 +204,9 @@ flow to your account directly via the API key — they aren't synced to S3.
 `serve.sh` creates a [Nebius Serverless Endpoint](https://docs.nebius.com/serverless/endpoints/manage)
 running `python -m positronic.vendors.<vendor>.server` on H100, with a public static IP on
 port 8000. Endpoints don't have managed DNS yet, so the IP is the contact address — it's stable
-across endpoint stop/start, but new endpoints get new IPs. Supported vendors:
+across endpoint stop/start, but new endpoints get new IPs. A consumer inside the cloud on the
+same subnet needs no public IP: `NEBIUS_PUBLIC=0` serves the endpoint on its private address
+instead, which also leaves the project's public-IP quota alone. Supported vendors:
 `lerobot_0_3_3`, `lerobot`, `openpi`, `gr00t`.
 
 Take a vendor and a unique endpoint name as the first two arguments; remaining arguments forward
@@ -239,8 +241,8 @@ bash workflows/nebius/serve.sh gr00t groot-server ee_rot6d_rel \
   --pipeline.source.checkpoints_dir=s3://<your-bucket>/checkpoints/groot/<exp_name>/
 ```
 
-`serve.sh` blocks until the public IP is allocated (typically <1 min), then prints a banner with
-the URL, endpoint ID, and the commands to follow logs and tear down. The container takes another
+`serve.sh` blocks until the endpoint reports its address (typically <1 min), then prints a banner
+with the URL, endpoint ID, and the commands to follow logs and tear down. The container takes another
 ~10–15 min to finish `uv sync` and load the model into GPU memory; once `INFO Started server
 process` appears in `nebius ai endpoint logs`, sanity-check with:
 
@@ -259,7 +261,7 @@ uv run positronic-inference sim \
   --output_dir=.data/inference/<run-name>/
 ```
 
-When you're done, `stop.sh` deletes the endpoint and releases the public IP:
+When you're done, `stop.sh` deletes the endpoint and releases its address:
 
 ```bash
 bash workflows/nebius/stop.sh my-act-demo
@@ -329,6 +331,7 @@ override them** with their own project + subnet IDs:
 |---|---|---|
 | `NEBIUS_PARENT_ID` | `project-e00f38wexevrr52b8j` | Nebius project to create the job/endpoint in |
 | `NEBIUS_SUBNET_ID` | `vpcsubnet-e00pk1j1x6hjmr4m92` | VPC subnet for the compute instance |
+| `NEBIUS_PUBLIC` | `1` | *(`serve.sh` only)* Whether the endpoint gets a public IP. `NEBIUS_PUBLIC=0` creates it without one and reports its private `host:port`, for a consumer inside the cloud on the same subnet. A `--public` create with no public-IP quota left does not fail — it waits for an allocation that never arrives and the endpoint stays in `PROVISIONING`. |
 | `WANDB_SECRET` | `positronic-serverless-wandb-api-key` | MysteryBox secret name for the WandB key. Set empty (`WANDB_SECRET=`) to skip wandb entirely. |
 | `NEBIUS_CACHE_FS` | `computefilesystem-e00f6jyfr5wkawyrab` | Shared filesystem **ID** (not name — `--volume` rejects names) mounted RW at `/cache` for the `uv`/HF/openpi caches (`UV_CACHE_DIR`, `HF_HOME`, `OPENPI_DATA_HOME`). Not used by pos3. The default is Positronic-internal; external users must override with their own filesystem ID. |
 | `NEBIUS_IMAGE_REPO` | `positro/robolab` | *(`eval.sh` only)* Image repository the RoboLab eval job pulls, without the tag. Defaults to the Docker Hub `positro/robolab`; set it to an in-region Nebius Container Registry path (`cr.<region>.nebius.cloud/<registry-id>/robolab`) to skip the cross-cloud Docker Hub pull. `<registry-id>` is the Container Registry ID **without** the `registry-` prefix (from `nebius registry list`) — NOT the project ID. Combined with `NEBIUS_IMAGE_TAG` as `${NEBIUS_IMAGE_REPO}:${NEBIUS_IMAGE_TAG}`. |
