@@ -232,7 +232,9 @@ and the human resolves when satisfied.
 
 Summarize:
 - a table of comment → verdict → fix (with commit SHA),
-- what `check-rules` found and you fixed (by rule id), plus any finding you judged wrong,
+- what `check-rules` found and you fixed (by rule id), the waivers it honoured (with their
+  reasons — a rule silenced by a waiver must not read as one that passed), and any finding
+  you judged wrong,
 - what was pushed,
 - which threads you resolved (fixes only) vs left open (declines / defers / discussion),
 - any follow-ups the user should track.
