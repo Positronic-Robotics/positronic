@@ -1821,7 +1821,7 @@ def test_a_stop_lands_without_waiting_out_the_charge(world):
     harness = Harness(stack.wrap(SlowPolicy(span_sec=1.0, steps=50)), make_embodiment(simulated=True))
     grip_recorder = _TimedRecorder(world.clock)
     harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
-    harness.commands['target_grip']._bind(grip_recorder)
+    harness.commands[keys.TARGET_GRIP]._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
     frame_em = world.pair(harness.observations[CAM])
