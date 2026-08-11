@@ -321,6 +321,16 @@ def test_a_sim_that_judges_live_states_what_a_timeout_means(eval_cfg, verdict):
     assert eval_cfg.instantiate().task.timeout_verdict == verdict
 
 
+def _policy_inputs(embodiment: Embodiment, adapter: EnvAdapter, raw_obs: dict) -> dict:
+    """The observation a policy receives: the adapter's canonical signals through the embodiment's serializers,
+    unfolded into wire keys the way ``Harness._build_obs`` assembles them, plus the task the context carries."""
+    inputs = {keys.TASK: 'pick up the black bowl'}
+    for name, value in adapter.observations(raw_obs).items():
+        serializer = embodiment.observations[name].serializer
+        inputs.update(expand_suffixed(name, serializer(value) if serializer is not None else value))
+    return inputs
+
+
 # A LIBERO ``step`` payload, the shape ``LiberoEnv._observe`` returns over the wire.
 _LIBERO_RAW_OBS = {
     'eef_pos': np.array([0.1, 0.2, 0.3]),
@@ -332,16 +342,6 @@ _LIBERO_RAW_OBS = {
     'eye_in_hand_image': np.zeros((256, 256, 3), dtype=np.uint8),
     'sim_state': np.zeros(4),
 }
-
-
-def _policy_inputs(embodiment: Embodiment, adapter: EnvAdapter, raw_obs: dict) -> dict:
-    """The observation a policy receives: the adapter's canonical signals through the embodiment's serializers,
-    unfolded into wire keys the way ``Harness._build_obs`` assembles them, plus the task the context carries."""
-    inputs = {keys.TASK: 'pick up the black bowl'}
-    for name, value in adapter.observations(raw_obs).items():
-        serializer = embodiment.observations[name].serializer
-        inputs.update(expand_suffixed(name, serializer(value) if serializer is not None else value))
-    return inputs
 
 
 @pytest.mark.parametrize('codec_cfg', [openpi_codecs.droid_obs, openpi_codecs.libero_obs], ids=['droid', 'libero'])

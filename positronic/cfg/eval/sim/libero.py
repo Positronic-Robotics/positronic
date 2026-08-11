@@ -14,9 +14,6 @@ _SUITE_NUM_TASKS = {'libero_spatial': 10, 'libero_object': 10, 'libero_goal': 10
 
 
 @cfn.config(
-    # Agentview stands in for the exterior camera. Sharing the key is what lets a codec written for another env
-    # encode this one's observation; it does not make the viewpoints alike, so a checkpoint trained on an
-    # over-shoulder view scores its viewpoint gap here rather than its skill.
     camera_dict={keys.EXTERIOR_IMAGE: 'agentview_image', keys.WRIST_IMAGE: 'eye_in_hand_image'},
     camera_resolution=256,
     control_mode='ee',
