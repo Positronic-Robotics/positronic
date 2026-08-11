@@ -28,9 +28,6 @@ def _check_error(is_error, was_error):
 DESK_USER_ENV = 'FRANKA_DESK_USER'
 DESK_PASSWORD_ENV = 'FRANKA_DESK_PASSWORD'
 
-# How long a caller waits between two reads of a joint goal in flight.
-_GOAL_POLL_INTERVAL_S = 0.005
-
 
 def _read_desk_credentials() -> tuple[str, str]:
     """Franka Desk login and password from the environment. Credentials stay out of the config so they never reach
@@ -229,14 +226,10 @@ class Robot(pimm.ControlSystem):
         """Command ``target`` and poll the goal until the arm arrives; raise if the goal stops advancing.
 
         Returns whether the arm arrived: ``False`` means ``should_stop`` ended the wait first. It is asked
-        HERE, before each poll, rather than in the loop body: the caller only regains control after a poll
-        has already happened, and a goal cancelled by the very event that ended the wait reports failure —
-        so a caller that gave up one poll too late would turn its own clean exit into a fault.
-
-        The yielded ``Sleep`` paces a caller that drives this with ``yield from``. A caller running its own
-        rate limiter drives it with a ``for`` loop instead and paces itself, which is why the command is
-        given per poll rather than taken as an argument.
+        before each poll, never after one, because a goal cancelled by the same event that ends the wait
+        reports failure — and reading it then would turn a clean exit into a fault.
         """
+        POLL_INTERVAL_S = 0.005
         robot.set_target_joints(target)
         while not should_stop():
             goal = robot.goal()
@@ -244,7 +237,7 @@ class Robot(pimm.ControlSystem):
                 return True
             if goal.status != pf.GoalStatus.IN_FLIGHT:
                 raise RuntimeError(f'homing failed: {goal.reason or goal.status}')
-            yield pimm.Sleep(_GOAL_POLL_INTERVAL_S)
+            yield pimm.Sleep(POLL_INTERVAL_S)
         return False
 
     def _reset(self, robot, robot_state: FrankaState, rate_limiter, should_stop) -> Iterator[pimm.Sleep]:
