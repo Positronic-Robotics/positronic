@@ -34,7 +34,7 @@ def _str_literals(tree: ast.AST):
             yield node.value, node.lineno
 
 
-def test_no_raw_observation_key_literals():
+def test_no_guarded_key_literals():
     offenders = []
     for root in _GUARDED_ROOTS:
         for path in sorted(root.rglob('*.py')):
@@ -44,9 +44,8 @@ def test_no_raw_observation_key_literals():
             for value, lineno in _str_literals(tree):
                 if value in _GUARDED:
                     offenders.append(f'{path.relative_to(_REPO_ROOT)}:{lineno}: {value!r}')
-    assert not offenders, (
-        'Raw observation-key literals found — import the constant from `positronic.keys`:\n' + '\n'.join(offenders)
-    )
+    listing = '\n'.join(offenders)
+    assert not offenders, f'Guarded key literals found — import the constant from `positronic.keys`:\n{listing}'
 
 
 def test_keys_module_imports_nothing():
