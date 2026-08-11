@@ -4,7 +4,9 @@
 # The job pulls `positro/robolab` and boots the benchmark's env server inside the
 # job container (Isaac Sim for RoboLab — needs an RTX-class GPU, so the platform
 # is L40S, not H100). The policy is remote: serve it first (e.g. `serve.sh openpi
-# ...`) and point `--policy.url` at the endpoint IP.
+# ...`) and point `--policy.url` at the endpoint's managed https:// URL. The
+# endpoint's bearer token is injected here as AUTH_TOKEN, which is where
+# `positronic.cfg.policy.authed_remote` reads it.
 #
 # Cache: unlike the other scripts, the shared filesystem mounts at /root/.cache,
 # not /cache. The env-server launcher keeps its pinned checkout and venv at fixed
@@ -19,9 +21,9 @@
 # corrupt it — seed the cache with one run before fanning out (same rule as the
 # shared uv cache, see e2e.sh).
 #
-# Hardcoded: MysteryBox secret names, S3 endpoint URL. Override-able via env:
-# NEBIUS_PARENT_ID, NEBIUS_SUBNET_ID, NEBIUS_PLATFORM, NEBIUS_PRESET,
-# NEBIUS_IMAGE_REPO, NEBIUS_IMAGE_TAG, NEBIUS_CACHE_FS, NEBIUS_JOB_TIMEOUT.
+# Settings of its own, via env: NEBIUS_IMAGE_REPO, NEBIUS_PLATFORM,
+# NEBIUS_PRESET, NEBIUS_JOB_TIMEOUT. Everything shared with the other scripts
+# here lives in common.sh.
 #
 # NEBIUS_IMAGE_REPO defaults to the Docker Hub `positro/robolab`; set it to an
 # in-region registry path (e.g. cr.<region>.nebius.cloud/<registry-id>/robolab,
@@ -30,11 +32,9 @@
 
 set -euo pipefail
 
-PARENT_ID="${NEBIUS_PARENT_ID:-project-e00f38wexevrr52b8j}"
-SUBNET_ID="${NEBIUS_SUBNET_ID:-vpcsubnet-e00pk1j1x6hjmr4m92}"
-CACHE_FS="${NEBIUS_CACHE_FS:-computefilesystem-e00f6jyfr5wkawyrab}"
+source "$(dirname "$0")/common.sh"
+
 IMAGE_REPO="${NEBIUS_IMAGE_REPO:-positro/robolab}"
-IMAGE_TAG="${NEBIUS_IMAGE_TAG:-latest}"
 # RTX-class platform: Isaac Sim's RTX renderer needs RT cores. gpu-l40s-d is the
 # Intel-host L40S; gpu-l40s-a is the AMD-host variant with the same GPU.
 PLATFORM="${NEBIUS_PLATFORM:-gpu-l40s-d}"
@@ -46,13 +46,13 @@ if [ $# -lt 1 ]; then
 Usage: bash workflows/nebius/eval.sh [eval run args...]
 
 Forwards all arguments to `positronic eval run`. Serve the policy first
-(workflows/nebius/serve.sh) and pass its endpoint IP. Example:
+(workflows/nebius/serve.sh) and pass the managed URL it printed. Example:
 
   bash workflows/nebius/eval.sh \
     --eval=@positronic.cfg.eval.sim.robolab.banana_in_bowl \
     --eval.trial_count=10 \
-    --policy=@positronic.cfg.policy.remote \
-    --policy.url=<endpoint-ip>:8000 \
+    --policy=@positronic.cfg.policy.authed_remote \
+    --policy.url=https://<endpoint-managed-url> \
     --output_dir=s3://<your-bucket>/evals/robolab_banana/
 EOF
   exit 1
@@ -79,7 +79,5 @@ nebius ai job create \
   --working-dir /positronic \
   --volume "${CACHE_FS}:/root/.cache:rw" \
   --env PYTHONUNBUFFERED=1 \
-  --env-secret AWS_ACCESS_KEY_ID=positronic-serverless-aws-access-key-id \
-  --env-secret AWS_SECRET_ACCESS_KEY=positronic-serverless-aws-secret-access-key \
-  --env AWS_ENDPOINT_URL=https://storage.eu-north1.nebius.cloud:443 \
-  --env AWS_DEFAULT_REGION=eu-north1
+  --env-secret "${AUTH_TOKEN_KEY}=${AUTH_TOKEN_SECRET}" \
+  "${S3_ENV_FLAGS[@]}"

@@ -1,13 +1,16 @@
+import os
+
 import configuronic as cfn
 import pos3
 
 from positronic import keys
 from positronic.cfg import codecs
+from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, bearer
 from positronic.policy import Codec, Policy, RemotePolicy, SampledPolicy
 from positronic.policy.sampler import Sampler
 from positronic.policy.spec import PolicySource, inline
 from positronic.policy.wrappers import ChunkedSchedule
-from positronic.utils import get_latest_checkpoint
+from positronic.utils import get_latest_checkpoint, nebius
 
 
 @cfn.config()
@@ -60,6 +63,25 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
 
 
 remote = cfn.Config(RemotePolicy, url='ws://localhost:8000')
+
+
+@cfn.config()
+def bearer_headers():
+    token = os.environ.get(AUTH_TOKEN_ENV)
+    if not token:
+        raise ValueError(f'{AUTH_TOKEN_ENV} is not set; export the endpoint token before running inference')
+    return {AUTH_HEADER: bearer(token)}
+
+
+@cfn.config()
+def nebius_bearer_headers():
+    return {AUTH_HEADER: bearer(nebius.auth_token())}
+
+
+# Neither carries a default URL: it names one specific endpoint, and a token must not be handed to
+# whichever host a stale default points at.
+authed_remote = cfn.Config(RemotePolicy, headers=bearer_headers)
+nebius_remote = cfn.Config(RemotePolicy, headers=nebius_bearer_headers)
 
 
 @cfn.config(balance=2)

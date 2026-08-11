@@ -1,14 +1,20 @@
+import os
+import socket
+import time
 import urllib.parse
 from collections.abc import Callable, Generator
 from typing import Any
 from unittest.mock import MagicMock
 
 import configuronic as cfn
+import httpx
 import pytest
+from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
 
+from positronic import keys
 from positronic.offboard.client import InferenceClient, InferenceSession
-from positronic.offboard.server import PolicyServer
+from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
@@ -51,7 +57,7 @@ def test_full_inference_cycle(stub_server):
         assert session.metadata['model_name'] == 'stub'
         assert session.metadata['type'] == 'stub'
         assert session.metadata['local_stack'] == {'name': 'chunked_schedule'}
-        assert 'positronic_version' in session.metadata
+        assert keys.POSITRONIC_VERSION in session.metadata
 
         obs = {'image': 'test'}
         result = session.infer(obs)
@@ -380,3 +386,107 @@ def test_duplicate_session_param_keys_rejected(param_server):
     host, port = param_server
     with pytest.raises(RuntimeError, match='[Dd]uplicate'):
         _param_session(host, port, [('pad_start', 'false'), ('pad_start', 'true')])
+
+
+_TOKEN = 'test-secret-token'
+
+# The deployed endpoint the ``endpoint`` marker's tests address. Unset, those tests serve their own server
+# and prove its behaviour; set, the same assertions run through whatever ingress fronts that deployment,
+# which is the only place the two can disagree.
+ENDPOINT_URL_ENV = 'POSITRONIC_ENDPOINT_URL'
+_LIVE_ENDPOINT = os.environ.get(ENDPOINT_URL_ENV)
+
+
+@pytest.fixture
+def authed_endpoint(start_server, make_mock_policy) -> tuple[str, str]:
+    """An authenticated server's URL, and the token gating it."""
+    if _LIVE_ENDPOINT:
+        return _LIVE_ENDPOINT, os.environ[AUTH_TOKEN_ENV]
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    host, port, _server = start_server(ChunkedSchedule() | remote | _StubSource(policy), auth_token=_TOKEN)
+    return f'{host}:{port}', _TOKEN
+
+
+@pytest.mark.endpoint
+@pytest.mark.parametrize(
+    'make_header',
+    [
+        pytest.param(lambda token: None, id='absent'),
+        pytest.param(lambda token: bearer(f'not-{token}'), id='wrong-token'),
+        pytest.param(lambda token: token, id='no-bearer-prefix'),
+    ],
+)
+def test_auth_rejects_requests_without_the_token(authed_endpoint, make_header):
+    url, token = authed_endpoint
+    header = make_header(token)
+    client = InferenceClient(url, headers=None if header is None else {AUTH_HEADER: header})
+    with pytest.raises(InvalidStatus):
+        client.new_session()
+    with pytest.raises(httpx.HTTPStatusError):
+        client.list_models()
+
+
+@pytest.mark.endpoint
+def test_auth_accepts_the_token(authed_endpoint):
+    url, token = authed_endpoint
+    client = InferenceClient(url, headers={AUTH_HEADER: bearer(token)})
+    assert client.list_models()
+    session = client.new_session()
+    try:
+        # Reaching the handshake metadata means the upgrade completed and the server's first frame arrived.
+        # An ingress that drops ``Upgrade`` never gets that far: it answers the handshake with a plain 200.
+        assert keys.POSITRONIC_VERSION in session.metadata
+    finally:
+        session.close()
+
+
+# A managed ingress closes a connection it has read nothing from — Nebius' does after ~90s, shorter than one
+# cold inference. Nothing crosses the wire while a session waits for actions except the client's keepalive
+# pings, so idling past that window and still getting a pong is those pings doing their job.
+_IDLE_WINDOW_SEC = 120.0
+
+
+@pytest.mark.endpoint
+@pytest.mark.skipif(not _LIVE_ENDPOINT, reason=f'no ingress to idle against; set {ENDPOINT_URL_ENV}')
+def test_session_outlives_an_idle_ingress_window(authed_endpoint):
+    url, token = authed_endpoint
+    session = InferenceClient(url, headers={AUTH_HEADER: bearer(token)}).new_session()
+    try:
+        time.sleep(_IDLE_WINDOW_SEC)
+        assert session._websocket.ping().wait(timeout=30.0)
+    finally:
+        session.close()
+
+
+def test_server_without_a_token_serves_open(stub_server):
+    host, port, _server, _policy = stub_server
+    assert InferenceClient(f'{host}:{port}').list_models() == ['stub']
+
+
+@pytest.mark.parametrize(
+    'token',
+    [
+        pytest.param('', id='empty'),
+        pytest.param('tökén', id='non-ascii'),
+        # What a secret read from a file that ends in one looks like.
+        pytest.param('a-token\n', id='trailing-newline'),
+        pytest.param('a token', id='space'),
+    ],
+)
+def test_a_token_that_could_never_gate_fails_closed_at_startup(make_mock_policy, token):
+    with pytest.raises(ValueError, match='ASCII'):
+        PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})), auth_token=token)
+
+
+def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_server, make_mock_policy):
+    """A header carries bytes, and Starlette hands them over latin-1 decoded, so a peer can put a
+    non-ASCII ``str`` in front of the token comparison."""
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
+    host, port, _server = start_server(ChunkedSchedule() | remote | _StubSource(policy), auth_token=_TOKEN)
+    with socket.create_connection((host, port), timeout=5.0) as sock:
+        sock.sendall(
+            b'GET /api/v1/models HTTP/1.1\r\nHost: localhost\r\n'
+            b'Authorization: Bearer t\xf6ken\r\nConnection: close\r\n\r\n'
+        )
+        status = sock.recv(64).split(b' ')[1]
+    assert status == b'401'
