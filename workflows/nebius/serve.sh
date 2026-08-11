@@ -23,6 +23,11 @@ IMAGE_TAG="${NEBIUS_IMAGE_TAG:-latest}"
 # Nebius GPU preset. Default is one H100; multi-GPU presets must match the server's GPU count
 # (DreamZero's --num_gpus runs torchrun --nproc_per_node, so an 8-GPU server needs an 8-GPU preset).
 PRESET="${NEBIUS_PRESET:-1gpu-16vcpu-200gb}"
+# A public IP is only needed by a consumer outside the cloud. The project's public-IP quota is small and
+# permanently occupied by the long-lived instances, and a --public create against a full quota waits for an
+# allocation that never comes — the endpoint sits in PROVISIONING with no error. An in-cloud consumer on the
+# same subnet reaches the endpoint on its private IP, so set NEBIUS_PUBLIC=0 there.
+PUBLIC="${NEBIUS_PUBLIC:-1}"
 
 if [ $# -lt 2 ]; then
   cat >&2 <<'EOF'
@@ -87,12 +92,8 @@ esac
 
 SERVER_ARGS="run --python 3.13 ${EXTRA}python -m positronic.vendors.${VENDOR}.server $*"
 
-# A public IP is only needed by a consumer outside the cloud. The project's public-IP quota is small and
-# permanently occupied by the long-lived instances, and a --public create against a full quota waits for an
-# allocation that never comes — the endpoint sits in PROVISIONING with no error. An in-cloud consumer on the
-# same subnet reaches the endpoint on its private IP, so set NEBIUS_PUBLIC=0 there.
 PUBLIC_FLAG=(--public)
-[ "${NEBIUS_PUBLIC:-1}" = "0" ] && PUBLIC_FLAG=()
+[ "$PUBLIC" = "0" ] && PUBLIC_FLAG=()
 
 echo "Creating $VENDOR endpoint '$NAME'..."
 nebius ai endpoint create \
@@ -128,7 +129,7 @@ echo "Endpoint ID: $ID"
 
 # The two fields carry different shapes: a private address is bare `host:port`, a public one is a full
 # tunnel URL with its own scheme. Prefixing a scheme unconditionally corrupts the public form.
-if [ "${NEBIUS_PUBLIC:-1}" = "0" ]; then
+if [ "$PUBLIC" = "0" ]; then
   FIELD=private_endpoints
   SCHEME=http://
 else
