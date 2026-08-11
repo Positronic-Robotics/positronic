@@ -1,8 +1,4 @@
-"""Values held in a Nebius project, read through the `nebius` CLI rather than an API client.
-
-The CLI is what the workflow scripts under `workflows/nebius/` already require and authenticate, so reading
-a value the same way needs no second set of credentials.
-"""
+"""Values held in a Nebius project, read through the `nebius` CLI rather than an API client."""
 
 import json
 import os
