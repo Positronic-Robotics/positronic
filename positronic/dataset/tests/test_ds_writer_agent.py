@@ -50,12 +50,20 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
         self.discarded = reason
 
 
+class UndiscardableEpisodeWriter(FakeEpisodeWriter):
+    """A writer whose discard fails — a video encoder failing to finalize, say."""
+
+    def abort(self, reason: DiscardReason) -> None:
+        raise RuntimeError('discard failed')
+
+
 class FakeDatasetWriter(DatasetWriter):
-    def __init__(self) -> None:
+    def __init__(self, episode_writer: type[FakeEpisodeWriter] = FakeEpisodeWriter) -> None:
         self.created: list[FakeEpisodeWriter] = []
+        self._episode_writer = episode_writer
 
     def new_episode(self) -> FakeEpisodeWriter:
-        w = FakeEpisodeWriter()
+        w = self._episode_writer()
         self.created.append(w)
         return w
 
@@ -122,6 +130,17 @@ def test_an_episode_still_open_when_the_run_stops_is_discarded(world):
     assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 42)]
     assert w.discarded is DiscardReason.RUN_ENDED
     assert w.exited is True
+
+
+def test_an_episode_that_fails_to_discard_is_not_finalized(world):
+    ds = FakeDatasetWriter(episode_writer=UndiscardableEpisodeWriter)
+    agent, cmd_em, _ = build_agent_with_pipes({'a': None}, ds, world)
+
+    script = [(partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001)]
+
+    run_scripted_agent(agent, script, world=world)
+
+    assert ds.created[-1].exited is False  # __exit__ commits, which a failed discard must not reach
 
 
 def test_an_episode_stopped_before_the_run_ends_is_not_discarded(world):

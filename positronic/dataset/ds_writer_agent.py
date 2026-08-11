@@ -262,7 +262,11 @@ class DsWriterAgent(pimm.ControlSystem):
             if ep_writer is not None:
                 try:
                     ep_writer.abort(DiscardReason.RUN_ENDED)
-                finally:
+                except Exception:
+                    # __exit__ finalizes and commits, which is the wrong move for an episode that failed to
+                    # discard; it stays unfinished instead. Teardown carries on — the run is already ending.
+                    logger.exception(f'DsWriterAgent: [ABORT] Episode {ep_counter} could not be discarded')
+                else:
                     ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
 

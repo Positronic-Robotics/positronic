@@ -24,6 +24,7 @@ from .dataset import ConcatDataset, Dataset, DatasetWriter
 from .edits import EditedDataset
 from .episode import (
     EPISODE_SCHEMA_VERSION,
+    META_UID,
     SIGNAL_FACTORY_T,
     DiscardReason,
     Episode,
@@ -69,6 +70,20 @@ def _clear_unfinished(path: Path) -> None:
     marker = path / UNFINISHED_MARKER
     with suppress(FileNotFoundError):
         marker.unlink()
+
+
+def _free_destination(parent: Path, name: str) -> Path:
+    """First unused of `parent/name`, `parent/name-1`, `parent/name-2`, …
+
+    Moving onto a directory that exists nests the source inside it, which leaves the marker at the expected
+    path describing the older discard.
+    """
+    candidate = parent / name
+    n = 1
+    while candidate.exists():
+        candidate = parent / f'{name}-{n}'
+        n += 1
+    return candidate
 
 
 @lru_cache(maxsize=1)
@@ -129,7 +144,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         # NB: falsy created_ts_ns (including 0) defaults to current time — epoch 0 is not a valid episode timestamp
         self._meta = {
             'schema_version': EPISODE_SCHEMA_VERSION,
-            'uid': uid or uuid.uuid4().hex,
+            META_UID: uid or uuid.uuid4().hex,
             'created_ts_ns': created_ts_ns or time.time_ns(),
         }
         self._meta['writer'] = _cached_env_writer_info()
@@ -233,7 +248,11 @@ class DiskEpisodeWriter(EpisodeWriter):
 
     def __exit__(self, exc_type, exc, tb) -> None:
         """Finalize all signal writers and persist static items on context exit."""
-        if exc_type is not None and not self._aborted:
+        # A discarded episode is never committed, whether the discard completed or failed part-way: this method
+        # writes metadata and clears the unfinished marker, which would publish it as a complete recording.
+        if self._aborted:
+            return
+        if exc_type is not None:
             with suppress(Exception):
                 self.abort(DiscardReason.WRITE_FAILED)
             return
@@ -247,8 +266,6 @@ class DiskEpisodeWriter(EpisodeWriter):
                 if exc is None:
                     raise
 
-        if self._aborted:
-            return
         self._finished = True
 
         # Compute duration by scanning parquet files
@@ -275,24 +292,34 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         What reached disk is kept so a run that ended mid-episode can be inspected. The ``.unfinished``
         marker stays, so a copy of the directory returned to a dataset root is still not read as an episode.
+
+        A discard that fails part-way raises, and leaves the episode where it fell — unfinished, and never
+        committed. That is the same end state as a process killed outright.
         """
         if self._aborted:
             return
         if self._finished:
             raise RuntimeError('Cannot abort a finished writer')
+        # Before the first step that can fail: __exit__ commits an episode this flag does not cover.
+        self._aborted = True
 
+        failure: Exception | None = None
         for w in list(self._writers.values()):
-            w.__exit__(None, None, None)  # finalize rather than abort, whose unlink is what loses the bytes
+            try:
+                w.__exit__(None, None, None)  # finalize rather than abort, whose unlink is what loses the bytes
+            except Exception as e:  # finalize the rest before propagating, so no encoder is left running
+                failure = failure or e
+        if failure is not None:
+            raise failure
 
-        marker = {DISCARD_REASON: reason.value, DISCARD_TS_NS: time.time_ns(), DISCARD_UID: self._meta['uid']}
+        marker = {DISCARD_REASON: reason.value, DISCARD_TS_NS: time.time_ns(), DISCARD_UID: self._meta[META_UID]}
         with (self._path / DISCARD_MARKER).open('w', encoding='utf-8') as f:
             json.dump(marker, f, indent=2)
 
         self._discarded_dir.mkdir(parents=True, exist_ok=True)
-        # The dataset reuses an episode id once its directory is gone, so the uid is what keeps two
-        # discards of the same id apart.
-        shutil.move(self._path, self._discarded_dir / f'{self._path.name}-{self._meta["uid"]}')
-        self._aborted = True
+        # The dataset reuses an episode id once its directory is gone, and a caller may pass the uid in too, so
+        # the name is not assumed free: an id+uid pair can be discarded more than once.
+        shutil.move(self._path, _free_destination(self._discarded_dir, f'{self._path.name}-{self._meta[META_UID]}'))
 
     @property
     def meta(self) -> dict:
@@ -433,8 +460,8 @@ class DiskEpisode(Episode):
 
             # Episodes without a stamped uid derive a stable identity from the recording timestamp,
             # which is immutable and travels with the episode across copies
-            if 'uid' not in meta and 'created_ts_ns' in meta:
-                meta['uid'] = f'ts-{meta["created_ts_ns"]}'
+            if META_UID not in meta and 'created_ts_ns' in meta:
+                meta[META_UID] = f'ts-{meta["created_ts_ns"]}'
 
             meta['path'] = str(self._dir.expanduser().resolve(strict=False))
 

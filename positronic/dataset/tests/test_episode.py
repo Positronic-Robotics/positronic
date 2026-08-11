@@ -17,6 +17,7 @@ from positronic.dataset.local_dataset import (
 )
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
+from positronic.dataset.vector import SimpleSignalWriter
 
 
 def test_episode_writer_and_reader_basic(tmp_path):
@@ -238,6 +239,48 @@ def test_episode_writer_abort_moves_the_recording_out_and_blocks_further_use(tmp
     assert marker[DISCARD_REASON] == DiscardReason.ABORTED.value
     assert marker[DISCARD_UID] == uid
     assert marker[DISCARD_TS_NS] > 0
+
+
+def test_discarding_the_same_episode_identity_twice_keeps_both_recordings(tmp_path):
+    discarded_dir = tmp_path / 'discarded'
+    for value in (1, 2):
+        w = DiskEpisodeWriter(tmp_path / 'ep_twice', discarded_dir=discarded_dir, uid='same-uid')
+        w.append('a', value, 1000)
+        w.abort(DiscardReason.ABORTED)
+
+    kept = sorted(discarded_dir.iterdir())
+    assert [p.name for p in kept] == ['ep_twice-same-uid', 'ep_twice-same-uid-1']
+    for path in kept:
+        assert (path / 'a.parquet').exists()
+        assert json.loads((path / DISCARD_MARKER).read_text())[DISCARD_UID] == 'same-uid'
+
+
+def test_a_discard_whose_finalization_fails_leaves_the_episode_unfinished(tmp_path, monkeypatch):
+    ep_dir = tmp_path / 'ep_discard_fails'
+    committed: list[DiskEpisodeWriter] = []
+    w = DiskEpisodeWriter(ep_dir, discarded_dir=tmp_path / 'discarded', on_close=committed.append)
+    w.append('a', 1, 1000)
+
+    real_exit = SimpleSignalWriter.__exit__
+    failures_left = [1]
+
+    def fail_once(self, exc_type, exc, tb):
+        # A real signal writer marks itself finished before it can raise (a video encoder failure), so the
+        # second finalization of the same writer is a no-op — which is what let a failed discard commit.
+        real_exit(self, exc_type, exc, tb)
+        if failures_left[0]:
+            failures_left[0] -= 1
+            raise RuntimeError('encoder failed')
+
+    monkeypatch.setattr(SimpleSignalWriter, '__exit__', fail_once)
+
+    with pytest.raises(RuntimeError, match='encoder failed'):
+        w.abort(DiscardReason.RUN_ENDED)
+    w.__exit__(None, None, None)  # what a caller's teardown does next
+
+    assert (ep_dir / UNFINISHED_MARKER).exists()
+    assert not (ep_dir / 'meta.json').exists()
+    assert committed == []
 
 
 def test_episode_writer_keeps_a_finished_episode_out_of_the_discarded_dir(tmp_path):
