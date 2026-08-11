@@ -1,7 +1,6 @@
 """Unit tests for PolicyWrapper composition, ChunkedSchedule, TemporalStack, and the
 policy-pipeline algebra."""
 
-import time
 from typing import Any
 
 import numpy as np
@@ -33,32 +32,26 @@ from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
 
 
 class _ConstSession(Session):
-    def __init__(self, actions, wall_sec: float = 0.0):
+    def __init__(self, actions):
         self._actions = actions
-        self._wall_sec = wall_sec
         self.call_count = 0
 
     def __call__(self, obs):
         self.call_count += 1
-        time.sleep(self._wall_sec)
         return self._actions
 
 
 class _ConstPolicy(Policy):
-    def __init__(self, actions, wall_sec: float = 0.0):
+    def __init__(self, actions):
         self._actions = actions
-        self._wall_sec = wall_sec
         self._session: _ConstSession | None = None
 
-    def new_session(self, context=None):
-        self._session = _ConstSession(self._actions, wall_sec=self._wall_sec)
+    def new_session(self, context=None, now=None):
+        self._session = _ConstSession(self._actions)
         return self._session
 
 
 _ONE_ACTION = [{'v': 1, 'timestamp': 0.0}]
-
-# The sim default: model calls charge the world nothing, so chunks anchor at their observation instant.
-_NO_LATENCY = {keys.INFERENCE_LATENCY: 0.0}
 
 
 def _obs(now_sec=0.0):
@@ -69,7 +62,7 @@ class TestChunkedSchedule:
     def test_first_call_runs_inference(self):
         # Relative timestamps: trajectory of duration 0.5s
         inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
-        session = ChunkedSchedule().wrap(inner).new_session(_NO_LATENCY)
+        session = ChunkedSchedule().wrap(inner).new_session(now=lambda: 1.0)
         result = session(_obs(1.0))
         assert result is not None
         assert len(result) == 2
@@ -80,50 +73,47 @@ class TestChunkedSchedule:
     def test_returns_none_while_trajectory_active(self):
         # Trajectory starts at 1.0, ends at 1.0+0.5=1.5.
         inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
-        session = ChunkedSchedule().wrap(inner).new_session(_NO_LATENCY)
+        session = ChunkedSchedule().wrap(inner).new_session(now=lambda: 1.0)
         session(_obs(1.0))
         assert session(_obs(1.2)) is None
         assert session(_obs(1.4)) is None
 
     def test_re_infers_after_trajectory_consumed(self):
+        clock = [1.0]
         inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
-        session = ChunkedSchedule().wrap(inner).new_session(_NO_LATENCY)
+        session = ChunkedSchedule().wrap(inner).new_session(now=lambda: clock[0])
         session(_obs(1.0))  # trajectory ends at 1.5
         assert session(_obs(1.3)) is None
+        clock[0] = 1.6
         result = session(_obs(1.6))
         assert result is not None
         assert inner._session.call_count == 2
 
     def test_single_action_refires_immediately_after(self):
-        """Single action at ts=0 → trajectory_end = the observation instant → next tick re-infers."""
-        session = ChunkedSchedule().wrap(_ConstPolicy(_ONE_ACTION)).new_session(_NO_LATENCY)
+        """Single action at ts=0 → trajectory_end = the anchor instant → next tick re-infers."""
+        session = ChunkedSchedule().wrap(_ConstPolicy(_ONE_ACTION)).new_session(now=lambda: 1.0)
         session(_obs(1.0))
         assert session(_obs(1.01)) is not None
 
-    def test_constant_charge_anchors_at_obs_time_plus_charge(self):
-        """The anchor is ``t0 + C`` whatever the call's wall duration — the reproducible mode."""
-        inner = _ConstPolicy(_ONE_ACTION, wall_sec=0.02)
-        session = ChunkedSchedule().wrap(inner).new_session({keys.INFERENCE_LATENCY: 0.5})
+    def test_anchors_at_now_not_at_the_observation(self):
+        """``now`` reads the instant the call's charge is paid; the chunk is stamped there, not at the obs."""
+        session = ChunkedSchedule().wrap(_ConstPolicy(_ONE_ACTION)).new_session(now=lambda: 1.5)
         result = session(_obs(1.0))
         assert result is not None
         assert result[0]['timestamp'] == 1.5
-        assert session(_obs(1.4)) is None  # within the charged window the chunk is still due to play
-        assert session(_obs(1.6)) is not None
 
-    def test_measured_charge_anchors_at_obs_time_plus_wall_duration(self):
-        inner = _ConstPolicy(_ONE_ACTION, wall_sec=0.05)
-        session = ChunkedSchedule().wrap(inner).new_session({keys.INFERENCE_LATENCY: True})
-        result = session(_obs(1.0))
-        assert result is not None
-        assert 1.05 <= result[0]['timestamp'] < 1.5
+    def test_expiry_is_judged_at_the_observation_instant(self):
+        """Whether the trajectory has run out is a question about the observation, not about ``now``."""
+        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
+        session = ChunkedSchedule().wrap(inner).new_session(now=lambda: 2.0)
+        session(_obs(1.0))  # anchored at now() = 2.0, so the trajectory ends at 2.5
+        assert session(_obs(2.4)) is None
+        assert session(_obs(2.6)) is not None
 
-    def test_no_latency_key_charges_wall_duration(self):
-        """Hardware passes no latency key; each call is charged what it really took."""
-        inner = _ConstPolicy(_ONE_ACTION, wall_sec=0.05)
-        session = ChunkedSchedule().wrap(inner).new_session()
-        result = session(_obs(1.0))
-        assert result is not None
-        assert 1.05 <= result[0]['timestamp'] < 1.5
+    def test_running_inference_without_a_clock_raises(self):
+        session = ChunkedSchedule().wrap(_ConstPolicy(_ONE_ACTION)).new_session()
+        with pytest.raises(ValueError, match='clock'):
+            session(_obs(1.0))
 
 
 class TestPipelineComposition:
@@ -133,7 +123,7 @@ class TestPipelineComposition:
         pipeline = TemporalStack(keys=('v',), offsets_sec=(0.0,)) | ChunkedSchedule()
         assert isinstance(pipeline, PolicyWrapper)
         policy = pipeline.wrap(_ConstPolicy(_ONE_ACTION))
-        session = policy.new_session(_NO_LATENCY)
+        session = policy.new_session(now=lambda: 1.0)
         result = session({keys.OBS_TIME_NS: int(1e9), 'v': np.array([5.0])})
         assert result is not None
         assert result[0]['v'] == 1
@@ -143,7 +133,7 @@ class TestPipelineComposition:
         pipeline = codec | ChunkedSchedule()
         assert isinstance(pipeline, PolicyWrapper)
         policy = pipeline.wrap(_ConstPolicy([{'action': 'test', 'timestamp': 0.0}]))
-        session = policy.new_session(_NO_LATENCY)
+        session = policy.new_session(now=lambda: 1.0)
         result = session(_obs())
         assert result is not None
 
@@ -154,7 +144,7 @@ class TestPipelineComposition:
         # 5 raw actions → codec stamps relative 0.0, 0.1, 0.2, 0.3, 0.4
         # → ChunkedSchedule shifts to 1.0, 1.1, 1.2, 1.3, 1.4 (obs at 1.0).
         policy = pipeline.wrap(_ConstPolicy([{'action': f'a{i}'} for i in range(5)]))
-        session = policy.new_session(_NO_LATENCY)
+        session = policy.new_session(now=lambda: 1.0)
         result = session(_obs(1.0))
         assert result is not None
         assert result[0]['timestamp'] == 1.0
@@ -231,7 +221,7 @@ class _CapturePolicy(Policy):
     def __init__(self):
         self.session = _CaptureSession()
 
-    def new_session(self, context=None, *, now=None, gate=None):
+    def new_session(self, context=None, now=None):
         return self.session
 
 
@@ -461,7 +451,7 @@ class TestPipe:
         inner = _ConstPolicy([{'action': f'a{i}'} for i in range(5)])
         policy = spec.inline(ChunkedSchedule() | spec.remote | ActionTimestamp(fps=10.0) | spec.PolicySource(inner))
         assert isinstance(policy, Policy)
-        session = policy.new_session(_NO_LATENCY)
+        session = policy.new_session(now=lambda: 1.0)
         result = session(_obs(1.0))
         assert result is not None
         assert result[0]['timestamp'] == 1.0
@@ -470,7 +460,7 @@ class TestPipe:
     def test_inline_tolerates_marker_less_pipe(self):
         inner = _ConstPolicy(_ONE_ACTION)
         policy = spec.inline(ChunkedSchedule() | spec.PolicySource(inner))
-        session = policy.new_session(_NO_LATENCY)
+        session = policy.new_session(now=lambda: 1.0)
         result = session(_obs(1.0))
         assert result is not None and result[0]['timestamp'] == 1.0
 

@@ -140,7 +140,7 @@ class OpenpiPolicy(Policy):
     def __init__(self, subproc: OpenpiSubprocess):
         self._subproc = subproc
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         client = self._subproc.client
         client.reset()
         return _OpenpiSession(client)

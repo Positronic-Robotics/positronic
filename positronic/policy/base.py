@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
+
+Now = Callable[[], float]
+
 
 # Structural keys of the wire spec: ``|`` serializes as ``{SEQ: [...]}``, ``&`` as ``{PAR: [...]}``.
 SEQ = 'seq'
@@ -78,11 +81,16 @@ class Policy(ABC):
     """
 
     @abstractmethod
-    def new_session(self, context: dict[str, Any] | None = None) -> Session:
+    def new_session(self, context: dict[str, Any] | None = None, now: Now | None = None) -> Session:
         """Create a new inference session for an episode.
 
         Args:
             context: Episode context (task description, eval metadata, etc.).
+            now: The policy stack's clock (seconds), supplied by the harness and passed down to every
+                wrapped session. During a session call it reads the trial instant the call's output takes
+                effect — the observation instant plus the inference charge paid so far — so a chunk
+                stamped at ``now()`` lands when its call is paid for. ``None`` where no runtime clock
+                exists (server-side, warmup).
         """
 
     @property
@@ -100,8 +108,8 @@ class DelegatingPolicy(Policy):
     def __init__(self, inner: Policy):
         self._inner = inner
 
-    def new_session(self, context=None):
-        return self._inner.new_session(context)
+    def new_session(self, context=None, now=None):
+        return self._inner.new_session(context, now)
 
     @property
     def meta(self):
@@ -133,12 +141,12 @@ class PolicyWrapper:
     def wrap(self, policy: Policy) -> Policy:
         """Apply this wrapper to a policy. Default: wrap every session it creates via ``wrap_session``.
 
-        Composition happens at config time; the trial context reaches the wrapped
+        Composition happens at config time; the trial context and clock reach the wrapped
         sessions through ``new_session``.
         """
         return _WrapperPolicy(policy, self)
 
-    def wrap_session(self, inner: Session, context: dict[str, Any] | None) -> Session:
+    def wrap_session(self, inner: Session, context: dict[str, Any] | None, now: Now | None) -> Session:
         """Wrap a single session. Subclasses override this for per-session wrapping."""
         raise NotImplementedError('Override wrap_session or wrap')
 
@@ -176,8 +184,8 @@ class _WrapperPolicy(DelegatingPolicy):
         super().__init__(inner)
         self._wrapper = wrapper
 
-    def new_session(self, context=None):
-        return self._wrapper.wrap_session(self._inner.new_session(context), context)
+    def new_session(self, context=None, now=None):
+        return self._wrapper.wrap_session(self._inner.new_session(context, now), context, now)
 
     @property
     def meta(self):

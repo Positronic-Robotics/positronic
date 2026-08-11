@@ -36,7 +36,7 @@ Every field is *also* logged as ``rr.Scalars`` on a dedicated ``action_time`` ti
 (each action stamped at the inference-request time plus its horizon offset), so a
 ``TimeSeriesView`` reads commanded values with real axes. That anchor is the pre-inference
 ``obs_time_ns``, so it precedes true execution — which the scheduling wrapper anchors at the instant
-the inference gate releases its call — by the inference latency. Select ``action_time`` to see them.
+its call's charge is paid — by the inference latency. Select ``action_time`` to see them.
 
 Entity paths are ``{tap_name}/{data_key}``. A tap's incoming observation keys and
 outgoing action keys share that namespace; in the rare case the same key appears on
@@ -222,7 +222,7 @@ def _log_action_series(path: str, arr: np.ndarray, horizon: np.ndarray, base_ns:
     Each action is stamped at ``base_ns + horizon_i``, where ``base_ns`` is the
     inference-request time; successive chunks lay out along one clock so a ``TimeSeriesView``
     has real axes. This precedes true execution by the inference latency: the scheduling wrapper
-    anchors commands at the instant the gate releases its call, which a recorder tap cannot observe.
+    anchors commands at the instant its call's charge is paid, which a recorder tap cannot observe.
     """
     arr = np.asarray(arr, dtype=np.float64)
     if arr.ndim == 1:
@@ -342,7 +342,7 @@ class _RecordingTap(PolicyWrapper):
         self._rec = rec
         self._name = name
 
-    def wrap_session(self, inner: Session, context) -> Session:
+    def wrap_session(self, inner: Session, context, now) -> Session:
         stream = self._rec._open_stream()
         return _RecordingTapSession(inner, self._rec, self._name, stream)
 

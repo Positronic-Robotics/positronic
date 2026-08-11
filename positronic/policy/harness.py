@@ -184,8 +184,10 @@ class Harness(pimm.ControlSystem):
     error recovery, blending, absolute time stamping — lives in the policy/session layer: the wrapper owns
     the plan, the harness plays it, one command per channel per round. The session call runs on a worker
     thread so playing continues while the model does; the harness withholds the trajectory, and the world
-    clock, until the trial's inference charge (``inference_latency``) is paid. The RUN context is handed
-    whole to the task's scene reset, which reads the per-trial keys it needs (e.g. ``eval.seed``).
+    clock, until the trial's inference charge (``inference_latency``) is paid, and the ``now`` it hands
+    ``new_session`` reads time the same way — so wrappers stamp chunks for the paid instant without
+    knowing the mode. The RUN context is handed whole to the task's scene reset, which reads the
+    per-trial keys it needs (e.g. ``eval.seed``).
 
     A ``trials`` plan (a sequence of RUN contexts) makes the harness self-driving: it starts the next trial
     whenever idle and returns once the plan is exhausted, so the unattended path needs no driver. A task's
@@ -349,7 +351,7 @@ class Harness(pimm.ControlSystem):
                 self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
-        self._policy_session = self.policy.new_session(self.context)
+        self._policy_session = self.policy.new_session(self.context, self._policy_now)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
         self.ds_command.emit(DsWriterCommand.START())
@@ -422,6 +424,14 @@ class Harness(pimm.ControlSystem):
         inputs.update(self.context)
         inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
         return inputs
+
+    def _policy_now(self) -> float:
+        """The trial instant the in-flight call's output takes effect: its observation instant plus the
+        charge — the declared constant whole, or the wall time elapsed so far. Read on the worker thread;
+        the loop thread writes the call's start fields before submitting it.
+        """
+        charge = time.monotonic() - self._wall_t0 if self._charge is None else self._charge
+        return self._t0_ns / 1e9 + charge
 
     def _step(self, clock: pimm.Clock) -> None:
         """Keep one session call in flight and install the trajectory it returns.

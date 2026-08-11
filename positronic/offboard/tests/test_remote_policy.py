@@ -391,7 +391,7 @@ def test_empty_declaration_fails_before_motion():
 def test_declared_stack_built_at_session_open():
     """The server-declared local stack runs in front of the connection."""
     policy, mock_ws = _mock_remote_policy(CHUNKED_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}])
-    session = policy.new_session({keys.INFERENCE_LATENCY: 0.0})
+    session = policy.new_session(now=lambda: 1.0)
     actions = session({keys.OBS_TIME_NS: int(1e9)})
     assert actions == [{'a': 1, 'timestamp': 1.0}]
 
@@ -511,7 +511,7 @@ def test_remote_policy_lifecycle(inference_server, mock_policy):
     host, port = inference_server
 
     policy = RemotePolicy(f'{host}:{port}')
-    session = policy.new_session({keys.INFERENCE_LATENCY: 0.0})
+    session = policy.new_session(now=lambda: 0.0)
 
     meta = session.meta
     assert meta['server.model_name'] == 'test_model'

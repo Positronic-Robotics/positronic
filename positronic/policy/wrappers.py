@@ -1,18 +1,17 @@
 """Composable policy wrappers — scheduling and temporal frame stacking.
 
 Wrappers are composable serving-time concerns layered around a policy with ``|`` (left is
-outermost), exactly like codecs. All timing comes from the observation: ``obs_time_ns`` is the world
-instant the harness built the observation at, and ``ChunkedSchedule`` derives the chunk's anchor from
-it plus the trial's inference charge (``keys.INFERENCE_LATENCY`` in the session context).
+outermost), exactly like codecs. Most read time from the observation (``obs_time_ns``); only
+``ChunkedSchedule`` needs the clock — it anchors a chunk at the instant its call's charge is paid,
+which the observation stamp cannot give — so the harness passes ``now`` (a ``Callable[[], float]``
+in seconds) to ``new_session`` and it reaches that one session.
 """
 
-import time
 from collections import deque
 
 import numpy as np
 
-from positronic import keys
-from positronic.policy.base import DelegatingSession, PolicyWrapper, Session
+from positronic.policy.base import DelegatingSession, Now, PolicyWrapper, Session
 
 
 def _obs_time(obs) -> float:
@@ -24,25 +23,28 @@ class ChunkedSchedule(PolicyWrapper):
     """Wait for the current trajectory to finish before calling the inner policy again.
 
     Owns relative→absolute time conversion: inner layers (codecs, models) emit relative timestamps;
-    this wrapper anchors them to the instant the model's answer is due — the observation instant plus
-    the trial's inference charge. Returns ``None`` ("keep executing the current trajectory") until the
-    last action's timestamp is reached, then calls the inner policy.
+    this wrapper anchors them to ``now()`` after the inner call — the instant the call's charge is
+    paid. Returns ``None`` ("keep executing the current trajectory") until the last action's timestamp
+    is reached at the observation instant, then calls the inner policy.
     """
 
     class _Session(DelegatingSession):
         """Skips inner calls while the current trajectory plays; stamps absolute on emit."""
 
-        def __init__(self, inner: Session, charge_sec: float | None):
+        def __init__(self, inner: Session, now: Now | None):
             super().__init__(inner)
-            # Seconds the trial charges each model call, or ``None`` to charge the call's wall duration.
-            self._charge_sec = charge_sec
+            self._now = now
             self._trajectory_end: float | None = None
 
         def __call__(self, obs):
-            t0 = _obs_time(obs)
-            if self._trajectory_end is not None and t0 < self._trajectory_end:
+            if self._trajectory_end is not None and _obs_time(obs) < self._trajectory_end:
                 return None
-            wall_t0 = time.monotonic()
+            if self._now is None:
+                raise ValueError(
+                    'ChunkedSchedule needs a clock to run inference: pass now (a callable returning seconds) to '
+                    'new_session. The harness supplies it; a direct RemotePolicy.new_session() outside the harness '
+                    'must too.'
+                )
             result = self._inner(obs)
             if result is not None:
                 # A single-action session may return a bare dict, and a no-codec path may omit
@@ -50,7 +52,7 @@ class ChunkedSchedule(PolicyWrapper):
                 # immediate action executes instead of raising.
                 if isinstance(result, dict):
                     result = [result]
-                anchor = t0 + (time.monotonic() - wall_t0 if self._charge_sec is None else self._charge_sec)
+                anchor = self._now()
                 # Copy dicts so we don't mutate caller-owned data (sessions may reuse templates).
                 result = [{**r, keys.ACTION_TIMESTAMP: anchor + r.get(keys.ACTION_TIMESTAMP, 0.0)} for r in result]
                 self._trajectory_end = result[-1][keys.ACTION_TIMESTAMP] if result else None
@@ -60,10 +62,8 @@ class ChunkedSchedule(PolicyWrapper):
             self._trajectory_end = None
             super().cancel()
 
-    def wrap_session(self, inner: Session, context):
-        # ``True`` (or no key — the hardware case) charges each call what it really took.
-        latency = (context or {}).get(keys.INFERENCE_LATENCY, True)
-        return ChunkedSchedule._Session(inner, None if latency is True else float(latency))
+    def wrap_session(self, inner: Session, context, now: Now | None):
+        return ChunkedSchedule._Session(inner, now)
 
     def to_spec(self):
         return {'name': 'chunked_schedule'}
@@ -156,7 +156,7 @@ class TemporalStack(PolicyWrapper):
             'in-range targets and the stack would be empty'
         )
 
-    def wrap_session(self, inner: Session, context):
+    def wrap_session(self, inner: Session, context, now):
         return TemporalStack._Session(inner, self._keys, self._offsets_sec, self._pad_start)
 
     def to_spec(self):

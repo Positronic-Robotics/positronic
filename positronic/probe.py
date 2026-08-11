@@ -134,7 +134,7 @@ def main(
     image_keys = [k for k in obs if k.startswith(keys.IMAGE_PREFIX)]
 
     rec = Recorder(pos3.sync(output_dir))
-    session = rec.tap(_TAP).wrap(policy).new_session({keys.TASK: task} if task else None)
+    session = rec.tap(_TAP).wrap(policy).new_session({keys.TASK: task} if task else None, time.time)
     meta = dict(session.meta)
     name = label or _recording_name(meta)
     try:

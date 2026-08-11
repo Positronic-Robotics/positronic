@@ -82,7 +82,7 @@ class SpyPolicy(Policy):
         self.reset_calls: int = 0
         self.last_reset_context = None
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _SpySession(self)
@@ -127,7 +127,7 @@ class StubPolicy(Policy):
     def meta(self) -> dict[str, object]:
         return self._meta
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _StubSession(self)
@@ -157,7 +157,7 @@ class ChunkPolicy(StubPolicy):
         super().__init__(*args, **kwargs)
         self.counter = 0
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _ChunkSession(self)
@@ -192,7 +192,7 @@ class RemoteStubPolicy(Policy):
         self.command = command
         self.target_grip = float(target_grip)
 
-    def new_session(self, context=None) -> RemoteSession:
+    def new_session(self, context=None, now=None) -> RemoteSession:
         action = [{'robot_command': self.command, 'target_grip': self.target_grip, 'timestamp': 0.0}]
         return RemoteSession(_FakeInferenceSession(action))
 
@@ -536,7 +536,7 @@ def test_episode_meta_includes_policy_static_meta(world):
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             self._command = CartesianPosition(pose=pose)
 
-        def new_session(self, context=None):
+        def new_session(self, context=None, now=None):
             return _StaticMetaSession(self._command)  # Session.meta defaults to {}
 
         @property
@@ -1088,7 +1088,7 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
             return []
 
     class EmptyChunkPolicy(Policy):
-        def new_session(self, context=None):
+        def new_session(self, context=None, now=None):
             return _EmptyChunkSession()
 
     harness = Harness(EmptyChunkPolicy(), make_embodiment())
@@ -1574,7 +1574,7 @@ class SlowPolicy(Policy):
         self._span_sec = span_sec
         self._steps = steps
 
-    def new_session(self, context=None):
+    def new_session(self, context=None, now=None):
         return _SlowSession(self._wall_sec, self._span_sec, self._steps)
 
 
@@ -1586,9 +1586,9 @@ class _ReplanEarly(PolicyWrapper):
     """
 
     class _Session(DelegatingSession):
-        def __init__(self, inner: Session, charge_sec: float):
+        def __init__(self, inner: Session, now):
             super().__init__(inner)
-            self._charge_sec = charge_sec
+            self._now = now
             self._replan_at: float | None = None
 
         def __call__(self, obs):
@@ -1597,14 +1597,14 @@ class _ReplanEarly(PolicyWrapper):
                 return None
             result = self._inner(obs)
             assert result is not None, 'the inner policy of this test wrapper always returns a chunk'
-            anchor = t0 + self._charge_sec
+            anchor = self._now()
             result = [{**action, 'timestamp': anchor + action['timestamp']} for action in result]
             self._replan_at = t0 + (result[-1]['timestamp'] - t0) / 2
             return result
 
-    def wrap_session(self, inner: Session, context):
-        assert context is not None  # the harness always passes the trial context
-        return _ReplanEarly._Session(inner, float(context[keys.INFERENCE_LATENCY]))
+    def wrap_session(self, inner: Session, context, now):
+        assert now is not None  # the harness always passes its clock
+        return _ReplanEarly._Session(inner, now)
 
 
 class _TimedRecorder(pimm.SignalEmitter):
@@ -1704,7 +1704,7 @@ def test_installed_trajectory_clears_the_channels_it_omits(world):
             return [{keys.ROBOT_COMMAND: command, 'timestamp': i * 0.01} for i in range(10)]
 
     class _GripThenArmPolicy(Policy):
-        def new_session(self, context=None):
+        def new_session(self, context=None, now=None):
             return _GripThenArm()
 
     harness = Harness(ChunkedSchedule().wrap(_GripThenArmPolicy()), make_embodiment())
