@@ -4,7 +4,7 @@ import pytest
 
 pytest.importorskip('huggingface_hub')
 
-from positronic.vendors.dreamzero import codecs, roboarena, server  # noqa: E402
+from positronic.vendors.dreamzero import roboarena, server  # noqa: E402
 from positronic.vendors.dreamzero.server import (  # noqa: E402
     DreamZeroSource,
     _checkpoint_id,
@@ -161,7 +161,7 @@ def test_meta_does_not_relist_the_bucket(monkeypatch):
     assert source.meta('100000')['experiment_name'] == 'w22f1_100k_200626'
 
 
-def test_warmup_observation_falls_back_to_the_codec_geometry_when_none_is_announced():
+def test_a_server_that_announces_no_resolution_cannot_be_warmed():
     announced = {
         roboarena.RESOLUTION: None,
         roboarena.NEEDS_WRIST_CAMERA: True,
@@ -169,6 +169,5 @@ def test_warmup_observation_falls_back_to_the_codec_geometry_when_none_is_announ
         roboarena.NEEDS_STEREO_CAMERA: False,
     }
 
-    obs = _warm_observation(announced, 'session-1')
-
-    assert obs[roboarena.WRIST_IMAGE].shape == (codecs.IMAGE_HEIGHT, codecs.IMAGE_WIDTH, 3)
+    with pytest.raises(ValueError, match='no image resolution'):
+        _warm_observation(announced, 'session-1')

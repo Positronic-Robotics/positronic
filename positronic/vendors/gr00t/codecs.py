@@ -20,6 +20,7 @@ from positronic.vendors import gr00t
 
 RotRep = geom.Rotation.Representation
 
+
 class GrootObservationCodec(Codec):
     """GR00T N1.6 observation encoder.
 

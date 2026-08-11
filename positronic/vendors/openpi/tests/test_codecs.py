@@ -15,7 +15,6 @@ def raw_observation() -> dict:
         keys.GRIP: 0.0,
         keys.WRIST_IMAGE: frame,
         keys.EXTERIOR_IMAGE: frame,
-        'image.agentview': frame,
         keys.TASK: 'pick up the cube',
     }
 

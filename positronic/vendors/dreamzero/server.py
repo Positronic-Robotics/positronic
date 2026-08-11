@@ -145,9 +145,11 @@ def _warm_observation(server_config: dict, session_id: str) -> dict[str, Any]:
     if server_config[roboarena.NEEDS_STEREO_CAMERA]:
         raise ValueError('roboarena server asks for stereo cameras, which this source does not send')
     resolution = server_config[roboarena.RESOLUTION]
-    # No announced resolution means the server resizes nothing and takes frames at whatever size it is sent,
-    # which for this source is the geometry its codec produces.
-    height, width = resolution if resolution is not None else (codecs.IMAGE_HEIGHT, codecs.IMAGE_WIDTH)
+    if resolution is None:
+        # The announcement is the only geometry this source has: the codec's is a rig-side setting it cannot
+        # see, and the backbones differ on it — the pretrained DROID one accepts 320x180 and nothing else.
+        raise ValueError('roboarena server announced no image resolution, so there is no geometry to warm it at')
+    height, width = resolution
     frame = np.zeros((height, width, 3), dtype=np.uint8)
     obs: dict[str, Any] = {
         roboarena.JOINT_POSITION: np.zeros(7, dtype=np.float32),

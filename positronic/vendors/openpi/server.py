@@ -160,6 +160,8 @@ class OpenpiSource(ModelSource):
     A ``gs://`` checkpoints_dir is a published openpi checkpoint served as-is: openpi fetches it
     itself via fsspec[gcs] (pos3 handles only s3://), and there are no numeric-step subdirs to
     resolve — the dir is the single model.
+
+    ``warm_observation`` is the observation each load runs one inference on, before the policy serves.
     """
 
     def __init__(
@@ -168,11 +170,15 @@ class OpenpiSource(ModelSource):
         config_name: str = 'pi05_positronic_lowmem',
         checkpoint: str | None = None,
         openpi_ws_port: int = 8001,
+        warm_observation: dict[str, Any] | None = None,
     ):
         self.checkpoints_dir = str(checkpoints_dir).rstrip('/')
         self.config_name = config_name
         self.checkpoint = checkpoint
         self.openpi_ws_port = openpi_ws_port
+        # The default carries every field the shipped configs read; a ``config_name`` that reads something
+        # else states the observation that warms it.
+        self.warm_observation = warm_observation if warm_observation is not None else openpi.warm_observation()
 
     @property
     def _passthrough(self) -> bool:
@@ -219,7 +225,7 @@ class OpenpiSource(ModelSource):
             subproc.start(on_progress)
             policy = OpenpiPolicy(subproc)
             # The subprocess compiles the model on its first inference, which outlasts a rig's inference timeout.
-            warmup(policy, openpi.warm_observation(), on_progress)
+            warmup(policy, self.warm_observation, on_progress)
         except Exception:
             subproc.stop()
             raise
