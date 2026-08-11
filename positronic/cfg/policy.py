@@ -91,30 +91,34 @@ def balanced(balance: int):
     return BalancedSampler(balance=balance)
 
 
-@cfn.config(endpoints={}, weights={}, recording_dir=None, sampler=None, group_fields=None)
+@cfn.config(endpoints={}, weights={}, sampler=None, group_fields=None)
 def production(
-    endpoints: dict[str, str],
+    endpoints: dict[str, RemotePolicy],
     weights: dict[str, float],
-    recording_dir: str | None,
     sampler: Sampler | None,
     group_fields: list[str] | None,
 ):
     """Routes each episode to one of several remote endpoints, each named for CLI overrides.
 
-    An endpoint is one URL, so `--policy.endpoints.groot=ws://desktop:8000` adds or repoints one without
-    restating the others. `weights` name the same endpoints and set their sampling odds; endpoints left
+    An endpoint is a whole `remote` config rather than a URL, so what one server needs stays that
+    server's and reaches no other: `--policy.endpoints.groot.url=ws://desktop:8000` repoints one and
+    `--policy.endpoints.groot.headers='{"Authorization": "Bearer <token>"}'` credentials it. Adding one
+    names the config it is built from, `--policy.endpoints.groot=@positronic.cfg.policy.remote`, and
+    then its arguments. `weights` name the same endpoints and set their sampling odds; endpoints left
     out of it weigh 1.0.
     """
     if not endpoints:
-        raise ValueError('At least one endpoint must be given, e.g. --policy.endpoints.groot=ws://desktop:8000')
+        raise ValueError(
+            'At least one endpoint must be given, e.g. --policy.endpoints.groot=@positronic.cfg.policy.remote '
+            '--policy.endpoints.groot.url=ws://desktop:8000'
+        )
     if unknown := weights.keys() - endpoints.keys():
         raise ValueError(f'weights name unknown endpoints: {sorted(unknown)}; known are {sorted(endpoints)}')
     # Every Sampler but the default uniform one picks by episode counts alone, so weights would be dropped.
     if weights and sampler is not None:
         raise ValueError(f'weights cannot be combined with {type(sampler).__name__}, which samples by count')
-    policies = [RemotePolicy(url, recording_dir=recording_dir) for url in endpoints.values()]
     w = [weights.get(name, 1.0) for name in endpoints] if weights else None
-    return SampledPolicy(*policies, weights=w, sampler=sampler, group_fields=group_fields)
+    return SampledPolicy(*endpoints.values(), weights=w, sampler=sampler, group_fields=group_fields)
 
 
 @cfn.config()
@@ -128,12 +132,12 @@ def phail_single(hostname, w_openpi=1.0, w_groot=1.0, w_act=1.0):
 
 phail_multiple = production.override(
     endpoints={
-        'smolvla': 'ws://notebook:8000',
-        'act': 'ws://notebook:8001',
-        'groot': 'ws://desktop:8000',
-        'openpi': 'ws://vm-openpi:8000',
+        'smolvla': remote.override(url='ws://notebook:8000'),
+        'act': remote.override(url='ws://notebook:8001'),
+        'groot': remote.override(url='ws://desktop:8000'),
+        'openpi': remote.override(url='ws://vm-openpi:8000'),
         # DreamZero's 5B wan2.2 needs an H100, so it cannot share the consumer boxes above.
-        'dreamzero': 'ws://vm-train2:8000',
+        'dreamzero': remote.override(url='ws://vm-train2:8000'),
     },
     sampler=balanced,
     group_fields=[keys.TASK, 'eval.object', 'eval.tote_placement', 'eval.external_camera'],
