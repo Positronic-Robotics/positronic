@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import platform
 import shutil
 import sys
@@ -38,6 +39,8 @@ from .signal import Signal
 from .vector import SimpleSignal, SimpleSignalWriter
 from .video import VideoSignal, VideoSignalWriter
 
+logger = logging.getLogger(__name__)
+
 UNFINISHED_MARKER = '.unfinished'
 DISCARD_MARKER = 'discarded.json'
 # Fields of that marker. Written here, read by anything inspecting or sweeping the discarded tree.
@@ -72,20 +75,6 @@ def _clear_unfinished(path: Path) -> None:
         marker.unlink()
 
 
-def _free_destination(parent: Path, name: str) -> Path:
-    """First unused of `parent/name`, `parent/name-1`, `parent/name-2`, …
-
-    Moving onto a directory that exists nests the source inside it, which leaves the marker at the expected
-    path describing the older discard.
-    """
-    candidate = parent / name
-    n = 1
-    while candidate.exists():
-        candidate = parent / f'{name}-{n}'
-        n += 1
-    return candidate
-
-
 @lru_cache(maxsize=1)
 def _cached_env_writer_info() -> dict:
     info = {'python': sys.version.split(' ')[0], 'platform': platform.platform()}
@@ -116,7 +105,7 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         Args:
             directory: Directory to write episode data to (must not exist)
-            discarded_dir: Directory `abort` moves this episode into. Must sit outside the dataset,
+            discarded_dir: Directory `discard` moves this episode into. Must sit outside the dataset,
                 so a discarded episode is neither indexed nor mirrored with the recordings.
             on_close: Optional callback invoked after successful episode close
             created_ts_ns: Optional creation timestamp (defaults to current time).
@@ -136,7 +125,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         # Accumulated static items to be stored in a single static.json
         self._static_items: dict[str, Any] = {}
         self._finished = False
-        self._aborted = False
+        self._discarded = False
         self._on_close = on_close
         self._video_options = video_options
 
@@ -166,8 +155,8 @@ class DiskEpisodeWriter(EpisodeWriter):
         """
         if self._finished:
             raise RuntimeError(f'Cannot append to a finished writer {self._path}')
-        if self._aborted:
-            raise RuntimeError(f'Cannot append to an aborted writer {self._path}')
+        if self._discarded:
+            raise RuntimeError(f'Cannot append to a discarded writer {self._path}')
         if signal_name in self._static_items:
             raise ValueError(f"Static item '{signal_name}' already set for this episode {self._path}")
 
@@ -200,8 +189,8 @@ class DiskEpisodeWriter(EpisodeWriter):
         """
         if self._finished:
             raise RuntimeError('Cannot set static on a finished writer')
-        if self._aborted:
-            raise RuntimeError('Cannot set static on an aborted writer')
+        if self._discarded:
+            raise RuntimeError('Cannot set static on a discarded writer')
         if name in self._writers:
             raise ValueError(f"Signal '{name}' already exists for this episode")
 
@@ -246,15 +235,28 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         return first_ts, last_ts
 
+    def _write_static_and_meta(self) -> None:
+        episode_json = self._path / 'static.json'
+        if self._static_items or not episode_json.exists():
+            with episode_json.open('w', encoding='utf-8') as f:
+                json.dump(self._static_items, f, indent=2, cls=_StaticEncoder)
+
+        with (self._path / 'meta.json').open('w', encoding='utf-8') as f:
+            json.dump(self._meta, f, indent=2)
+
     def __exit__(self, exc_type, exc, tb) -> None:
         """Finalize all signal writers and persist static items on context exit."""
         # A discarded episode is never committed, whether the discard completed or failed part-way: this method
-        # writes metadata and clears the unfinished marker, which would publish it as a complete recording.
-        if self._aborted:
+        # clears the unfinished marker, which would publish it as a complete recording.
+        if self._discarded:
             return
         if exc_type is not None:
-            with suppress(Exception):
-                self.abort(DiscardReason.WRITE_FAILED)
+            try:
+                self.discard(DiscardReason.WRITE_FAILED)
+            except Exception:
+                # Carry on so the exception that ended the context is the one that propagates. The recording
+                # is left unfinished where it fell, which is what a failed discard leaves anyway.
+                logger.exception('Discarding %s after a write failure did not complete', self._path)
             return
 
         # Always try to close all signal writers
@@ -273,35 +275,43 @@ class DiskEpisodeWriter(EpisodeWriter):
         if first_ts is not None and last_ts is not None:
             self._meta['duration_ns'] = int(last_ts - first_ts)
 
-        # Write all static items into a single static.json
-        episode_json = self._path / 'static.json'
-        if self._static_items or not episode_json.exists():
-            with episode_json.open('w', encoding='utf-8') as f:
-                json.dump(self._static_items, f, indent=2, cls=_StaticEncoder)
-
-        with (self._path / 'meta.json').open('w', encoding='utf-8') as f:
-            json.dump(self._meta, f, indent=2)
+        self._write_static_and_meta()
 
         _clear_unfinished(self._path)
 
         if exc_type is None and self._on_close is not None:
             self._on_close(self)
 
-    def abort(self, reason: DiscardReason) -> None:
+    @staticmethod
+    def _free_destination(parent: Path, name: str) -> Path:
+        """First unused of `parent/name`, `parent/name-1`, `parent/name-2`, …
+
+        Moving onto a directory that exists nests the source inside it, which leaves the marker at the expected
+        path describing the older discard.
+        """
+        candidate = parent / name
+        n = 1
+        while candidate.exists():
+            candidate = parent / f'{name}-{n}'
+            n += 1
+        return candidate
+
+    def discard(self, reason: DiscardReason) -> None:
         """Stop recording and move the episode into ``discarded_dir`` under a ``discarded.json`` marker.
 
-        What reached disk is kept so a run that ended mid-episode can be inspected. The ``.unfinished``
-        marker stays, so a copy of the directory returned to a dataset root is still not read as an episode.
+        What reached disk is kept so a run that ended mid-episode can be inspected: the signals, the static
+        items and the episode metadata, under the ``.unfinished`` marker, which stays so a copy of the
+        directory returned to a dataset root is still not read as an episode.
 
         A discard that fails part-way raises, and leaves the episode where it fell — unfinished, and never
         committed. That is the same end state as a process killed outright.
         """
-        if self._aborted:
+        if self._discarded:
             return
         if self._finished:
-            raise RuntimeError('Cannot abort a finished writer')
+            raise RuntimeError('Cannot discard a finished writer')
         # Before the first step that can fail: __exit__ commits an episode this flag does not cover.
-        self._aborted = True
+        self._discarded = True
 
         failure: Exception | None = None
         for w in list(self._writers.values()):
@@ -312,6 +322,8 @@ class DiskEpisodeWriter(EpisodeWriter):
         if failure is not None:
             raise failure
 
+        self._write_static_and_meta()
+
         marker = {DISCARD_REASON: reason.value, DISCARD_TS_NS: time.time_ns(), DISCARD_UID: self._meta[META_UID]}
         with (self._path / DISCARD_MARKER).open('w', encoding='utf-8') as f:
             json.dump(marker, f, indent=2)
@@ -319,7 +331,8 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._discarded_dir.mkdir(parents=True, exist_ok=True)
         # The dataset reuses an episode id once its directory is gone, and a caller may pass the uid in too, so
         # the name is not assumed free: an id+uid pair can be discarded more than once.
-        shutil.move(self._path, _free_destination(self._discarded_dir, f'{self._path.name}-{self._meta[META_UID]}'))
+        destination = self._free_destination(self._discarded_dir, f'{self._path.name}-{self._meta[META_UID]}')
+        shutil.move(self._path, destination)
 
     @property
     def meta(self) -> dict:

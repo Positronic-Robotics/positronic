@@ -21,7 +21,7 @@ from positronic.dataset.local_dataset import DISCARD_MARKER, DISCARD_REASON, Loc
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as rcmd
-from positronic.tests.testing_coutils import run_scripted_agent
+from positronic.tests.testing_coutils import ManualCommandReceiver, drive_until, run_scripted_agent
 
 
 @pytest.fixture
@@ -46,14 +46,14 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
     def __exit__(self, exc_type, exc, tb) -> None:
         self.exited = True
 
-    def abort(self, reason: DiscardReason) -> None:
+    def discard(self, reason: DiscardReason) -> None:
         self.discarded = reason
 
 
 class UndiscardableEpisodeWriter(FakeEpisodeWriter):
     """A writer whose discard fails — a video encoder failing to finalize, say."""
 
-    def abort(self, reason: DiscardReason) -> None:
+    def discard(self, reason: DiscardReason) -> None:
         raise RuntimeError('discard failed')
 
 
@@ -156,6 +156,25 @@ def test_an_episode_stopped_before_the_run_ends_is_not_discarded(world):
     run_scripted_agent(agent, script, world=world)
 
     assert ds.created[-1].discarded is None
+
+
+def test_a_stop_the_loop_never_read_does_not_commit_the_episode(world):
+    ds = FakeDatasetWriter()
+    agent = DsWriterAgent(ds)
+    commands: ManualCommandReceiver[DsWriterCommand] = ManualCommandReceiver()
+    agent.command = cast(pimm.ControlSystemReceiver[DsWriterCommand], commands)
+
+    scheduler = world.interleave(agent.run)
+    commands.push(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+    drive_until(scheduler, lambda: len(ds.created) == 1)
+
+    # Queued while the loop is between turns: the world stops before the read that would have handled it.
+    commands.push(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+    world.request_stop()
+    with pytest.raises(StopIteration):
+        next(scheduler)
+
+    assert ds.created[-1].discarded is DiscardReason.RUN_ENDED
 
 
 def test_ignore_duplicate_commands_and_empty_stop(world):

@@ -166,7 +166,7 @@ class EpisodeWriter:
         ...
 
     # Discard the episode: finalize what was captured and move the directory out of the dataset
-    def abort(self, reason: DiscardReason) -> None:
+    def discard(self, reason: DiscardReason) -> None:
         pass
 
 class Dataset:
@@ -269,7 +269,7 @@ Episodes are recorded via an `EpisodeWriter` implementations. You add time-varyi
 Name collisions are disallowed: attempting to `append` to a name that already exists as a static item raises an error, and vice versa.
 
 Use as a context manager: exiting the `with` block finalizes all underlying `Signal` writers and persists metadata.
-Discarding: `abort(reason)` stops recording, finalizes each underlying `Signal` writer, writes a `discarded.json` marker (the `DiscardReason` and the wall-clock instant), and moves the `Episode` directory into the writer's `discarded_dir`. After that, all writer operations (`append`, `set_static`) raise. `LocalDatasetWriter` points every episode at the `{root}.discarded` sibling of the dataset root, so a discarded recording is kept for inspection while staying outside everything that reads or mirrors the root; it also keeps its `.unfinished` marker, so a copy returned to a root is still not read as an episode. Nothing prunes that sibling — it grows until an operator or a sweep clears it. A process killed outright writes no marker: whatever reached disk stays in the dataset root under `.unfinished`. So does an episode whose discard raised part-way (a signal writer failing to finalize): the writer is aborted from the first step that can fail, so what a discard cannot finish is left unfinished rather than committed by the `__exit__` that follows it.
+Discarding: `discard(reason)` stops recording, finalizes each underlying `Signal` writer, writes `static.json` and `meta.json` so the kept recording still names its task and its identity, writes a `discarded.json` marker (the `DiscardReason` and the wall-clock instant), and moves the `Episode` directory into the writer's `discarded_dir`. After that, all writer operations (`append`, `set_static`) raise. `LocalDatasetWriter` points every episode at the `{root}.discarded` sibling of the dataset root, so a discarded recording is kept for inspection while staying outside everything that reads or mirrors the root; it also keeps its `.unfinished` marker, so a copy returned to a root is still not read as an episode. Nothing prunes that sibling — it grows until an operator or a sweep clears it. A process killed outright writes no marker: whatever reached disk stays in the dataset root under `.unfinished`. So does an episode whose discard raised part-way (a signal writer failing to finalize): the writer is marked discarded from the first step that can fail, so what a discard cannot finish is left unfinished rather than committed by the `__exit__` that follows it.
 
 ### System Metadata (meta)
 
@@ -381,7 +381,7 @@ Lifecycle
   metadata (`DsWriterCommand(static_data=...)`).
 - `STOP_EPISODE`: finalizes the episode (applies static data then closes).
 - `ABORT_EPISODE`: discards the episode (`DiscardReason.ABORTED`).
-- An episode still open when the run stops is discarded from the agent's teardown (`DiscardReason.RUN_ENDED`): the stop event reaches every control system at once, so there is no round left in which a stop command could be delivered and committed.
+- An episode still open when the run stops is discarded from the agent's teardown (`DiscardReason.RUN_ENDED`). Commands still queued then are not read: a STOP the loop never saw would commit an episode missing every sample queued behind it, as a complete recording.
 
 Notes
 - Use `CLOCK` when building training datasets: it aligns updates with the recorder’s processing timeline so downstream sampling matches what was actually ready for learning.

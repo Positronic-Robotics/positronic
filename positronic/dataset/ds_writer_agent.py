@@ -255,13 +255,11 @@ class DsWriterAgent(pimm.ControlSystem):
 
                 yield pace()
         finally:
-            cmd_msg = self.command.read()
-            if cmd_msg.updated:
-                ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter, cmd_msg.ts)
-
+            # Commands left in the channel are not read here: a STOP the loop never saw would commit an
+            # episode missing every sample queued behind it, as a complete recording.
             if ep_writer is not None:
                 try:
-                    ep_writer.abort(DiscardReason.RUN_ENDED)
+                    ep_writer.discard(DiscardReason.RUN_ENDED)
                 except Exception:
                     # __exit__ finalizes and commits, which is the wrong move for an episode that failed to
                     # discard; it stays unfinished instead. Teardown carries on — the run is already ending.
@@ -300,7 +298,7 @@ class DsWriterAgent(pimm.ControlSystem):
                     logger.warning('Episode not started, ignoring stop command')
             case DsWriterCommandType.ABORT_EPISODE:
                 if ep_writer is not None:
-                    ep_writer.abort(DiscardReason.ABORTED)
+                    ep_writer.discard(DiscardReason.ABORTED)
                     ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
                     ep_writer = None

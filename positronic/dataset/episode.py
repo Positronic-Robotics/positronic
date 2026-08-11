@@ -185,7 +185,7 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
         ...
 
     @abstractmethod
-    def abort(self, reason: DiscardReason) -> None:
+    def discard(self, reason: DiscardReason) -> None:
         """Stop recording and drop the episode from the dataset."""
         pass
 
