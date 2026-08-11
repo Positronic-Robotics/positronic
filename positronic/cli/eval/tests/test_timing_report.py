@@ -374,9 +374,9 @@ def test_render_names_the_episode_window_it_reduced_over(tmp_path):
     rendered = _render(_build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)).splitlines()
 
     assert f'no {SPAN_EVAL_PASS} span closed' in rendered[0]
-    assert 'W_episodes (wall):   90.0 s (0.03 h)' in rendered
-    assert 'wall split (share of W_episodes):' in rendered
-    assert not any('W_pass' in line for line in rendered)
+    assert f'{WallWindow.W_EPISODES} (wall):   90.0 s (0.03 h)' in rendered
+    assert f'wall split (share of {WallWindow.W_EPISODES}):' in rendered
+    assert not any(WallWindow.W_PASS in line for line in rendered)
 
 
 def test_multi_gpu_peak_vram_sums_devices_per_sample(tmp_path):
