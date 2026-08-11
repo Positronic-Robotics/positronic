@@ -221,6 +221,22 @@ class Robot(pimm.ControlSystem):
         else:
             robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
 
+    @staticmethod
+    def _travel(robot, target) -> Iterator[None]:
+        """Command ``target`` and yield once per poll until the arm arrives; raise if the goal stops advancing.
+
+        The caller decides what a poll costs and when to give up — a running loop pays a rate-limited tick and
+        watches the stop signal, a teardown pays a short sleep and watches a deadline.
+        """
+        robot.set_target_joints(target)
+        while True:
+            goal = robot.goal()
+            if goal.status == pf.GoalStatus.REACHED:
+                return
+            if goal.status != pf.GoalStatus.IN_FLIGHT:
+                raise RuntimeError(f'homing failed: {goal.reason or goal.status}')
+            yield
+
     def _reset(self, robot, robot_state: FrankaState, rate_limiter, should_stop) -> Iterator[pimm.Sleep]:
         """Home the arm, yielding until it arrives. Drive with ``yield from``."""
         # The first emit must not ship an unfilled state.
@@ -234,17 +250,10 @@ class Robot(pimm.ControlSystem):
                 -np.asarray(self._home_joints_variation), np.asarray(self._home_joints_variation)
             )
             target = target + variation
-        robot.set_target_joints(target)
 
-        while True:
+        for _ in self._travel(robot, target):
             if should_stop.value:
                 return
-            goal = robot.goal()
-            if goal.status == pf.GoalStatus.REACHED:
-                break
-            if goal.status != pf.GoalStatus.IN_FLIGHT:
-                raise RuntimeError(f'homing failed: {goal.reason or goal.status}')
-
             st = robot.state()
             robot_state.encode(st)
             robot_state._start_reset()  # `encode` clears RESETTING; the arm has not arrived
@@ -286,7 +295,8 @@ class Robot(pimm.ControlSystem):
         """Move the arm to the home pose, giving up after ``park_timeout_s``.
 
         Autonomous motion: bounded, at the configured dynamics factor, to the configured ``home_joints``
-        and nowhere else. Every failure reaches the log and no further.
+        and nowhere else. Every failure — including a goal that stops advancing — reaches the log and no
+        further.
         """
         SLACK_RAD = 0.05
         STILL_RAD_PER_S = 0.01
@@ -303,17 +313,12 @@ class Robot(pimm.ControlSystem):
                 return
             logging.info('Parking the arm at the home pose')
             robot.recover_from_errors()  # once, before the move: a reflex during the move ends the park
-            robot.set_target_joints(target)
             deadline = time.monotonic() + self._park_timeout_s
-            while time.monotonic() < deadline:
-                goal = robot.goal()
-                if goal.status == pf.GoalStatus.REACHED:
-                    return
-                if goal.status != pf.GoalStatus.IN_FLIGHT:
-                    logging.error(f'Parking gave up, the arm stays where it stands: {goal.reason or goal.status}')
+            for _ in self._travel(robot, target):
+                if time.monotonic() >= deadline:
+                    logging.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
                     return
                 time.sleep(0.005)
-            logging.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
         # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
         except Exception:
             logging.exception('Parking failed, the arm stays where it stands')
