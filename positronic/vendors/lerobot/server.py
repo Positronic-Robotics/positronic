@@ -47,7 +47,7 @@ class LerobotSource(ModelSource):
             lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {model_id}', on_progress
         )
         policy = LerobotPolicy(str(local), self.device, extra_meta={keys.CHECKPOINT_PATH: checkpoint_path})
-        warmup(policy, warm_observation(local), on_progress)
+        warmup(policy, warm_observation(policy.config), on_progress)
         return policy
 
     def meta(self, model_id: str) -> dict[str, Any]:

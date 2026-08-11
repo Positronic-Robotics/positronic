@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
@@ -71,14 +70,15 @@ class _LerobotSession(Session):
         return self._meta
 
 
-def warm_observation(checkpoint_path: Path) -> dict[str, Any]:
-    """Zero-filled inputs matching the features the checkpoint's config declares.
+def warm_observation(config: PreTrainedConfig) -> dict[str, Any]:
+    """Zero-filled inputs matching the features ``config`` declares.
 
-    Visual features are declared channels-first and arrive here channels-last, the way a session takes them.
+    Taken from the policy that was built rather than from the checkpoint directory, so a factory is free to
+    load one however it likes. Visual features are declared channels-first and arrive here channels-last, the
+    way a session takes them.
     """
-    config = PreTrainedConfig.from_pretrained(checkpoint_path)
     if not config.input_features:
-        raise ValueError(f'{checkpoint_path} declares no input features, so there is nothing to warm it with')
+        raise ValueError('The policy declares no input features, so there is nothing to warm it with')
     obs: dict[str, Any] = {TASK: ''}
     for name, feature in config.input_features.items():
         if feature.type is FeatureType.VISUAL:

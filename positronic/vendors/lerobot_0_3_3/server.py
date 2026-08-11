@@ -70,7 +70,7 @@ class LerobotSource(ModelSource):
         backbone = self._policy_factory(str(local))
         meta = {keys.TYPE: self._model_type, keys.CHECKPOINT_PATH: checkpoint_path}
         policy = LerobotPolicy(backbone, self._device, extra_meta=meta)
-        warmup(policy, warm_observation(local), on_progress)
+        warmup(policy, warm_observation(backbone.config), on_progress)
         return policy
 
     def meta(self, model_id: str) -> dict[str, Any]:

@@ -18,6 +18,16 @@ from positronic.vendors.lerobot_0_3_3 import server as lerobot_server  # noqa: E
 from positronic.vendors.lerobot_0_3_3.policy import TASK, warm_observation  # noqa: E402
 
 
+def _act_config() -> ACTConfig:
+    return ACTConfig(
+        input_features={
+            'observation.state': PolicyFeature(type=FeatureType.STATE, shape=(8,)),
+            'observation.images.left': PolicyFeature(type=FeatureType.VISUAL, shape=(3, 224, 320)),
+        },
+        output_features={'action': PolicyFeature(type=FeatureType.ACTION, shape=(7,))},
+    )
+
+
 class _DummyWebSocket:
     def __init__(self):
         self.client = ('test', 0)
@@ -43,11 +53,12 @@ def test_handshake_metadata_does_not_depend_on_the_factory(monkeypatch):
     """A factory's whole contract is returning a policy, so a plain one carrying no extra attributes
     still yields complete metadata — ``checkpoint_path`` included, since sampling keys on it."""
     monkeypatch.setattr(lerobot_server.pos3, 'download', lambda path: path)
-    # No checkpoint on disk here, so there is no config to build a warm observation from and nothing to run it on.
-    monkeypatch.setattr(lerobot_server, 'warm_observation', lambda _path: {})
+    # A mock cannot answer an inference, but the warm observation is still built from what the factory returned,
+    # so the load reaches no checkpoint on disk.
     monkeypatch.setattr(lerobot_server, 'warmup', lambda *_args, **_kwargs: None)
     source = lerobot_server.LerobotSource(
-        policy_factory=lambda _path: MagicMock(spec=lerobot_server.PreTrainedPolicy), checkpoints_dir='s3://bucket/exp'
+        policy_factory=lambda _path: MagicMock(spec=lerobot_server.PreTrainedPolicy, config=_act_config()),
+        checkpoints_dir='s3://bucket/exp',
     )
     assert source.load('42').meta == {
         'type': 'act',
@@ -132,16 +143,8 @@ async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
     server._manager.release_session.assert_not_called()
 
 
-def test_warmup_observation_matches_the_features_the_checkpoint_declares(tmp_path):
-    ACTConfig(
-        input_features={
-            'observation.state': PolicyFeature(type=FeatureType.STATE, shape=(8,)),
-            'observation.images.left': PolicyFeature(type=FeatureType.VISUAL, shape=(3, 224, 320)),
-        },
-        output_features={'action': PolicyFeature(type=FeatureType.ACTION, shape=(7,))},
-    ).save_pretrained(tmp_path)
-
-    obs = warm_observation(tmp_path)
+def test_warmup_observation_matches_the_features_the_policy_declares():
+    obs = warm_observation(_act_config())
 
     assert obs['observation.state'].shape == (8,)
     # Declared channels-first, handed over channels-last the way a session takes it.

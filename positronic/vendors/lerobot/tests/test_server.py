@@ -105,16 +105,16 @@ async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
     server._manager.release_session.assert_not_called()
 
 
-def test_warmup_observation_matches_the_features_the_checkpoint_declares(tmp_path):
-    ACTConfig(
+def test_warmup_observation_matches_the_features_the_policy_declares():
+    config = ACTConfig(
         input_features={
             'observation.state': PolicyFeature(type=FeatureType.STATE, shape=(8,)),
             'observation.images.left': PolicyFeature(type=FeatureType.VISUAL, shape=(3, 224, 320)),
         },
         output_features={'action': PolicyFeature(type=FeatureType.ACTION, shape=(7,))},
-    ).save_pretrained(tmp_path)
+    )
 
-    obs = warm_observation(tmp_path)
+    obs = warm_observation(config)
 
     assert obs['observation.state'].shape == (8,)
     # Declared channels-first, handed over channels-last the way a session takes it.

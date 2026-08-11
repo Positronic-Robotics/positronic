@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -74,14 +73,14 @@ class _LerobotSession(Session):
         return self._meta
 
 
-def warm_observation(checkpoint_path: Path) -> dict[str, Any]:
-    """Zero-filled inputs matching the features the checkpoint's config declares.
+def warm_observation(config: PreTrainedConfig) -> dict[str, Any]:
+    """Zero-filled inputs matching the features ``config`` declares.
 
-    Visual features are declared channels-first and arrive here channels-last, the way a session takes them.
+    Taken from the policy that was built rather than read from the checkpoint a second time. Visual features
+    are declared channels-first and arrive here channels-last, the way a session takes them.
     """
-    config = PreTrainedConfig.from_pretrained(checkpoint_path)
     if not config.input_features:
-        raise ValueError(f'{checkpoint_path} declares no input features, so there is nothing to warm it with')
+        raise ValueError('The policy declares no input features, so there is nothing to warm it with')
     obs: dict[str, Any] = {TASK: ''}
     for name, feature in config.input_features.items():
         if feature.type is FeatureType.VISUAL:
@@ -100,6 +99,11 @@ class LerobotPolicy(Policy):
         self._policy = policy_cls.from_pretrained(checkpoint_path).to(self._device)
         self._preprocessor, self._postprocessor = make_pre_post_processors(config, pretrained_path=checkpoint_path)
         self._meta = {**(extra_meta or {}), keys.TYPE: config.type}
+
+    @property
+    def config(self) -> PreTrainedConfig:
+        """The checkpoint's own declaration of what this policy takes."""
+        return self._policy.config
 
     def new_session(self, context=None, now=None):
         self._policy.reset()
