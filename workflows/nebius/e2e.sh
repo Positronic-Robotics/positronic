@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Full-pipeline validation harness for one vendor:
-#   convert (+ openpi stats) → train (200 steps) → serve → /api/v1/models smoke → teardown
+#   convert (+ openpi stats) → train (200 steps) → serve → served-endpoint contract → teardown
 #
 # Submits jobs via the user-facing primitives (convert.sh / train.sh / serve.sh / stop.sh),
 # polls Nebius for completion, and reports a status line per stage. Intended for CI or for
@@ -11,7 +11,8 @@
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-PARENT_ID="${NEBIUS_PARENT_ID:-project-e00f38wexevrr52b8j}"
+source "$SCRIPT_DIR/common.sh"
+
 S3_BASE="${E2E_S3_BASE:-s3://tmp/e2e_validation}"
 EXP_NAME="${E2E_EXP_NAME:-e2e_$(date +%Y%m%d_%H%M%S)}"
 LOG_ROOT="${E2E_LOG_ROOT:-/tmp/e2e_logs}"
@@ -157,26 +158,62 @@ wait_job "$TRAIN_ID" "train" || exit 1
 
 # ---- 3. Serve ----
 note "serve -> $ENDPOINT_NAME"
+# Armed before the endpoint can exist: from here on every exit, including a `serve.sh` that created
+# one and then failed, has to release the GPU rather than leave it billing.
+teardown() {
+  local status=$?   # whatever the run was already exiting with; a teardown failure may worsen it, never hide it
+  note "teardown -> $ENDPOINT_NAME"
+  if bash "$SCRIPT_DIR/stop.sh" "$ENDPOINT_NAME" >> "$LOG" 2>&1; then
+    note "DONE"
+  else
+    note "FAIL: teardown left $ENDPOINT_NAME alive and billing; delete it by hand"
+    status=1
+  fi
+  exit "$status"
+}
+trap teardown EXIT
 SERVE_OUT=$(bash "$SCRIPT_DIR/serve.sh" "$VENDOR" "$ENDPOINT_NAME" "${SERVE_SUBCMD[@]}" 2>&1)
 echo "$SERVE_OUT" >> "$LOG"
 SERVE_URL=$(echo "$SERVE_OUT" | awk '/Endpoint URL:/ {print $3; exit}')
 [ -z "$SERVE_URL" ] && { note "FAIL: no serve URL"; exit 1; }
 note "serve URL: $SERVE_URL"
 
-# ---- 4. Smoke /api/v1/models (up to 25 min for warm-up) ----
+# ---- 4. Wait out the warm-up (up to 25 min), then check the served-endpoint contract ----
+SECRET_ID=$(nebius mysterybox secret list --parent-id "$PARENT_ID" --format json \
+  | jq -r --arg n "$AUTH_TOKEN_SECRET" '.items[]? | select(.metadata.name==$n) | .metadata.id')
+[ -z "$SECRET_ID" ] && { note "FAIL: no MysteryBox secret named $AUTH_TOKEN_SECRET"; exit 1; }
+AUTH_TOKEN=$(nebius mysterybox payload get-by-key --secret-id "$SECRET_ID" --key "$AUTH_TOKEN_KEY" --format json \
+  | jq -r '.data.string_value')
+case "$AUTH_TOKEN" in
+  ''|null) note "FAIL: no $AUTH_TOKEN_KEY payload in $AUTH_TOKEN_SECRET"; exit 1 ;;
+esac
+
+# Only a 200 means the model is loaded and serving. A warming endpoint answers 502/503 and a bad token
+# answers 401, both with a body of their own, so "got bytes back" would call either one warm.
 RESP=""
+CODE=""
 for i in $(seq 1 50); do
-  RESP=$(curl --max-time 5 -s "$SERVE_URL/api/v1/models" 2>/dev/null || true)
-  [ -n "$RESP" ] && break
+  OUT=$(curl --max-time 5 -s -w '\n%{http_code}' -H "Authorization: Bearer $AUTH_TOKEN" "$SERVE_URL/api/v1/models" || true)
+  CODE=${OUT##*$'\n'}
+  if [ "$CODE" = "200" ]; then RESP=${OUT%$'\n'*}; break; fi
   sleep 30
 done
-if [ -n "$RESP" ]; then
-  note "infer: $RESP"
+STATUS=0
+if [ "$CODE" = "200" ]; then
+  note "models: $RESP"
+  # That was an HTTP route. Sessions are WebSockets, and a managed ingress can carry the two differently,
+  # so the endpoint answers the same assertions the suite otherwise makes against a server of its own.
+  if POSITRONIC_ENDPOINT_URL="$SERVE_URL" AUTH_TOKEN="$AUTH_TOKEN" \
+      uv run --directory "$SCRIPT_DIR/../.." --locked \
+      pytest positronic/offboard/tests/test_server.py -m endpoint --no-cov >> "$LOG" 2>&1; then
+    note "endpoint contract: OK"
+  else
+    note "endpoint contract: FAILED (see $LOG)"
+    STATUS=1
+  fi
 else
-  note "infer: TIMEOUT"
+  note "warm-up: FAILED, last status ${CODE:-none}"
+  STATUS=1
 fi
 
-# ---- 5. Teardown ----
-note "teardown -> $ENDPOINT_NAME"
-bash "$SCRIPT_DIR/stop.sh" "$ENDPOINT_NAME" >> "$LOG" 2>&1 || true
-note "DONE"
+exit "$STATUS"

@@ -332,7 +332,7 @@ def test_declared_stack_built_at_session_open():
 
 
 def test_unknown_declared_entry_fails_before_motion():
-    policy, _ = _mock_remote_policy({'local_stack': {'name': 'run_arbitrary_code'}, 'positronic_version': '9.9.9'})
+    policy, _ = _mock_remote_policy({'local_stack': {'name': 'run_arbitrary_code'}, keys.POSITRONIC_VERSION: '9.9.9'})
     with pytest.raises(ValueError, match='9.9.9'):
         policy.new_session()
 

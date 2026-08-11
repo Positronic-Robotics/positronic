@@ -195,6 +195,9 @@ addopts = [
 filterwarnings = [
     "ignore:.*DISPLAY environment variable is missing:glfw.GLFWError",
 ]
+markers = [
+    "endpoint: what a served endpoint must do. Runs in-process, or against POSITRONIC_ENDPOINT_URL when it names one",
+]
 
 [tool.coverage.run]
 branch = true
