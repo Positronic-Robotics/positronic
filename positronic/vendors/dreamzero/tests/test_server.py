@@ -4,7 +4,7 @@ import pytest
 
 pytest.importorskip('huggingface_hub')
 
-from positronic.vendors.dreamzero import roboarena, server  # noqa: E402
+from positronic.vendors.dreamzero import codecs, roboarena, server  # noqa: E402
 from positronic.vendors.dreamzero.server import (  # noqa: E402
     DreamZeroSource,
     _checkpoint_id,
@@ -159,3 +159,16 @@ def test_meta_does_not_relist_the_bucket(monkeypatch):
 
     # rules-allow: hardcoded-keys — as above, the spelling is the assertion.
     assert source.meta('100000')['experiment_name'] == 'w22f1_100k_200626'
+
+
+def test_warmup_observation_falls_back_to_the_codec_geometry_when_none_is_announced():
+    announced = {
+        roboarena.RESOLUTION: None,
+        roboarena.NEEDS_WRIST_CAMERA: True,
+        roboarena.NUM_EXTERIOR_CAMERAS: 1,
+        roboarena.NEEDS_STEREO_CAMERA: False,
+    }
+
+    obs = _warm_observation(announced, 'session-1')
+
+    assert obs[roboarena.WRIST_IMAGE].shape == (codecs.IMAGE_HEIGHT, codecs.IMAGE_WIDTH, 3)

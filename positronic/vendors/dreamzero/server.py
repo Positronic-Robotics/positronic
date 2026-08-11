@@ -144,7 +144,10 @@ def _warm_observation(server_config: dict, session_id: str) -> dict[str, Any]:
     """Zero-filled inputs at the geometry and camera count ``server_config`` announced on connect."""
     if server_config[roboarena.NEEDS_STEREO_CAMERA]:
         raise ValueError('roboarena server asks for stereo cameras, which this source does not send')
-    height, width = server_config[roboarena.RESOLUTION]
+    resolution = server_config[roboarena.RESOLUTION]
+    # No announced resolution means the server resizes nothing and takes frames at whatever size it is sent,
+    # which for this source is the geometry its codec produces.
+    height, width = resolution if resolution is not None else (codecs.IMAGE_HEIGHT, codecs.IMAGE_WIDTH)
     frame = np.zeros((height, width, 3), dtype=np.uint8)
     obs: dict[str, Any] = {
         roboarena.JOINT_POSITION: np.zeros(7, dtype=np.float32),
