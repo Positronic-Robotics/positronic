@@ -102,7 +102,7 @@ class _Endpoint(Policy):
                 ws_session.close()
         return self._server_meta
 
-    def new_session(self, context=None, *, now=None, gate=None) -> RemoteSession:
+    def new_session(self, context=None) -> RemoteSession:
         compress = bool(self.server_meta().get(keys.COMPRESS_IMAGES))
         ws_session = self._client.new_session()
         return RemoteSession(ws_session, compress_images=compress)
@@ -166,8 +166,8 @@ class RemotePolicy(Policy):
             self._stacked = stack.wrap(self._endpoint)
         return self._stacked
 
-    def new_session(self, context=None, *, now=None, gate=None) -> Session:
-        return self._policy().new_session(context, now=now, gate=gate)
+    def new_session(self, context=None) -> Session:
+        return self._policy().new_session(context)
 
     @property
     def meta(self) -> dict[str, Any]:

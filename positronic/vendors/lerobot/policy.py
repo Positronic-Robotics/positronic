@@ -102,7 +102,7 @@ class LerobotPolicy(Policy):
         """The checkpoint's own declaration of what this policy takes."""
         return self._policy.config
 
-    def new_session(self, context=None, *, now=None, gate=None):
+    def new_session(self, context=None):
         self._policy.reset()
         return _LerobotSession(self._policy, self._preprocessor, self._postprocessor, self._device, self._meta)
 

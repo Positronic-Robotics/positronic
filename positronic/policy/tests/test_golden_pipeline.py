@@ -82,7 +82,7 @@ class ScriptedProportionalPolicy(Policy):
     clock, no images. Codec stamps/truncates; the harness anchors/schedules.
     """
 
-    def new_session(self, context=None, *, now=None, gate=None):
+    def new_session(self, context=None):
         return _ScriptedSession()
 
 

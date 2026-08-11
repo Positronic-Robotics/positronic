@@ -14,7 +14,7 @@ from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
-from positronic.policy.base import InferenceGate, LatencyMode, Policy, Session
+from positronic.policy.base import Policy, Session
 from positronic.utils import flatten_dict, frozen_view
 
 # How far from now an action may be scheduled. A chunk spans seconds, so this is loose enough that no real
@@ -25,6 +25,11 @@ MAX_ACTION_SKEW_SEC = 60.0
 # How long a real-time round may last when no waypoint is due sooner. It bounds how late a directive is
 # noticed, and with it the granularity every command timestamp is quantized to.
 POLL_PERIOD_SEC = 0.01
+
+# How long a submitted session call may take to answer and still resolve within its round. A wrapper that
+# skips inference answers in microseconds; a real model call runs far past this and is then paced by
+# ``_take`` across rounds.
+SKIP_REPLY_SEC = 0.001
 
 # One channel's schedule: waypoints stamped with absolute clock ns, ascending.
 Trajectory: TypeAlias = list[tuple[int, Any]]
@@ -180,9 +185,9 @@ class Harness(pimm.ControlSystem):
     Handles directives (RUN/FINISH/ABORT) and dataset recording. Inference intelligence — scheduling,
     error recovery, blending, absolute time stamping — lives in the policy/session layer: the wrapper owns
     the plan, the harness plays it, one command per channel per round. The session call runs on a worker
-    thread so playing continues while the model does, and the ``InferenceGate`` installed below the
-    scheduling wrapper charges that call the trial's inference latency. The RUN context is handed whole to
-    the task's scene reset, which reads the per-trial keys it needs (e.g. ``eval.seed``).
+    thread so playing continues while the model does; the harness withholds the trajectory, and the world
+    clock, until the trial's inference charge (``inference_latency``) is paid. The RUN context is handed
+    whole to the task's scene reset, which reads the per-trial keys it needs (e.g. ``eval.seed``).
 
     A ``trials`` plan (a sequence of RUN contexts) makes the harness self-driving: it starts the next trial
     whenever idle and returns once the plan is exhausted, so the unattended path needs no driver. A task's
@@ -192,8 +197,7 @@ class Harness(pimm.ControlSystem):
     timeout records False. A task-less session has neither deadline nor budget and ends only on directives.
 
     The ``Embodiment`` supplies the observation serializers (which own the canonical key names), the command
-    channels and the home action. The policy owns its wrapper stack; the harness runs what it is given,
-    passing ``new_session`` the clock the scheduling wrapper anchors chunks to.
+    channels and the home action. The policy owns its wrapper stack; the harness runs what it is given.
     """
 
     def __init__(
@@ -216,11 +220,16 @@ class Harness(pimm.ControlSystem):
         self._policy_session: Session | None = None
         # True between RUN and FINISH/ABORT: the trial is live — stepping and recording happen together.
         self._running = False
-        # One session call at a time, on a worker so the harness keeps playing while the model runs, and the
-        # gate that charges it the trial's inference latency. The gate lives for one episode.
+        # One session call at a time, on a worker so the harness keeps playing while the model runs.
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='harness-session')
         self._future: Future[list[dict[str, Any]] | None] | None = None
-        self._gate: InferenceGate | None = None
+        # The in-flight call's start: the world instant its observation was built, and the wall instant it
+        # was submitted.
+        self._t0_ns = 0
+        self._wall_t0 = 0.0
+        # Seconds each model call costs the world clock this episode, or ``None`` to charge the call's own
+        # wall duration (hardware pace, and the sim's ``inference_latency=True``).
+        self._charge: float | None = None
         # ``task.timeout``, set per episode; a task-less session has no deadline and ends on directives.
         self._deadline: float | None = None
         # Whether this episode's first observation has landed. Until it does the deadline stands where the
@@ -293,8 +302,6 @@ class Harness(pimm.ControlSystem):
         """
         for player in self._players.values():
             player.set([])
-        if self._gate is not None:
-            self._gate.cancel()
         if self._future is not None:
             future, self._future = self._future, None
             future.result()  # nothing may close or re-enter the session while the worker is still inside it
@@ -317,20 +324,6 @@ class Harness(pimm.ControlSystem):
         # period) to the closing episode — the cooperative scheduler cannot give the recorder a turn alone.
         self._telemetry.end(virtual_now)
 
-    def _new_gate(self, clock: pimm.Clock) -> InferenceGate:
-        """The inference cost this trial imposes on the scheduling wrapper's call.
-
-        Hardware pays whatever the model takes. A sim trial pays what its ``inference_latency`` asks for: the
-        call's own wall duration (``True``), or a fixed delay — the reproducible mode, and by default zero,
-        which holds the world still for the whole call as sim-only harnesses do.
-        """
-        if not self._embodiment.simulated:
-            return InferenceGate(clock.now, LatencyMode.LIVE)
-        latency = self.context.get(keys.INFERENCE_LATENCY, False)
-        if latency is True:  # bool is an int subclass — check identity first
-            return InferenceGate(clock.now, LatencyMode.MEASURED)
-        return InferenceGate(clock.now, LatencyMode.DECLARED, float(latency))
-
     def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> None:
         """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
 
@@ -340,7 +333,13 @@ class Harness(pimm.ControlSystem):
         armed here and moved to that first observation once it lands, so an episode that never gets one is
         still bounded.
         """
-        self.context = context
+        self.context = dict(context)
+        if self._embodiment.simulated:
+            # A sim trial that doesn't ask for latency simulation runs free of it: the world holds still for
+            # every model call. Hardware (no key) pays what the call really takes.
+            self.context.setdefault(keys.INFERENCE_LATENCY, False)
+        latency = self.context.get(keys.INFERENCE_LATENCY, True)
+        self._charge = None if latency is True else float(latency)
         self._awaiting_obs = set(self._embodiment.observations)
         self._rollout_started = False
         # Before the reset, so the reset and the rollout's other phase spans parent to the episode span.
@@ -352,8 +351,7 @@ class Harness(pimm.ControlSystem):
                 self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
-        self._gate = self._new_gate(clock)
-        self._policy_session = self.policy.new_session(self.context, now=clock.now, gate=self._gate)
+        self._policy_session = self.policy.new_session(self.context)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
         self.ds_command.emit(DsWriterCommand.START())
@@ -377,7 +375,6 @@ class Harness(pimm.ControlSystem):
         if self._policy_session:
             self._policy_session.close()
             self._policy_session = None
-        self._gate = None
         self._home()
         self._running = False
 
@@ -432,51 +429,66 @@ class Harness(pimm.ControlSystem):
         """Keep one session call in flight and install the trajectory it returns.
 
         The call goes to the worker so the harness keeps playing while the model runs; a wrapper that
-        answers without inference still resolves in the round it was asked. A stack with no
-        ``SchedulingWrapper`` never enters the gate, so its call blocks the round like a direct one.
+        answers without inference still resolves in the round it was asked.
         """
-        session, gate = self._policy_session, self._gate
-        assert session is not None and gate is not None  # only a live episode steps
-        if self._future is None:
-            obs = self._build_obs(clock)
-            if obs is None:
-                return
-            if not self._rollout_started:
-                # The rollout begins at its first observation, not when the reset returned: a reset only asks
-                # the producer for a scene, and the turns spent delivering it are neither the trial's budget
-                # nor its duration.
-                self._rollout_started = True
-                self._telemetry.start_rollout(clock.now())
-                if self._task is not None:
-                    self._deadline = clock.now() + self._task.timeout
-            self._future = self._executor.submit(session, frozen_view(obs))
-            # Sleeping zero hands the worker the GIL without adding a wake-up granularity to the handshake.
-            while not (self._future.done() or gate.entered):
-                time.sleep(0)
-        self._collect(self._future, gate, clock)
+        session = self._policy_session
+        assert session is not None  # only a live episode steps
+        if self._future is not None and not self._take(self._future, clock):
+            return
+        obs = self._build_obs(clock)
+        if obs is None:
+            return
+        if not self._rollout_started:
+            # The rollout begins at its first observation, not when the reset returned: a reset only asks
+            # the producer for a scene, and the turns spent delivering it are neither the trial's budget
+            # nor its duration.
+            self._rollout_started = True
+            self._telemetry.start_rollout(clock.now())
+            if self._task is not None:
+                self._deadline = clock.now() + self._task.timeout
+        self._t0_ns = clock.now_ns()
+        self._wall_t0 = time.monotonic()
+        self._future = self._executor.submit(session, frozen_view(obs))
+        # Sleeping zero hands the worker the GIL without adding a wake-up granularity to the handshake.
+        while not self._future.done() and time.monotonic() - self._wall_t0 < SKIP_REPLY_SEC:
+            time.sleep(0)
+        self._take(self._future, clock)
 
-    def _collect(self, future: Future[list[dict[str, Any]] | None], gate: InferenceGate, clock: pimm.Clock) -> None:
-        """Take the call's trajectory once the latency mode lets the harness have it.
+    def _take(self, future: Future[list[dict[str, Any]] | None], clock: pimm.Clock) -> bool:
+        """Install the call's trajectory once the world has paid for it; True once the future is consumed.
 
-        A mode that holds the world does it by not returning: the loop thread is what advances the sim clock,
-        so blocking here freezes it for exactly as long as the call is owed.
+        A skip (``None``) costs nothing and is consumed on sight. A model call's trajectory is stamped for
+        ``t0`` plus the trial's charge, so it is withheld until the world clock reaches that instant — and
+        the world is withheld from running past it: blocking here blocks the loop thread, which is what
+        advances a virtual clock.
         """
-        if not future.done():
-            hold = gate.hold()
-            if hold is not None and hold <= 0.0:
-                return
-            concurrent.futures.wait([future], timeout=hold)
+        if future.done() and future.result() is None:
+            self._future = None
+            return True
+        if self._charge is not None:
+            # Integer ns, the world's own timeline: a float compare misses the release instant by one ULP
+            # and slips the install a full round.
+            if clock.now_ns() < self._t0_ns + round(self._charge * 1e9):
+                return False
+            concurrent.futures.wait([future])
+        elif not future.done():
+            # The world may run no further ahead of the call's start than wall time has.
+            ahead = clock.now() - (self._t0_ns / 1e9 + time.monotonic() - self._wall_t0)
+            if ahead <= 0.0:
+                return False
+            concurrent.futures.wait([future], timeout=ahead)
             if not future.done():
-                return
+                return False
         self._future = None
         actions = future.result()  # taken on the loop thread, so a failing call still seals the episode
         if actions is not None:
             self._install(actions, clock)
+        return True
 
     def _install(self, actions: list[dict[str, Any]], clock: pimm.Clock) -> None:
         """Replace the schedule being played with the session's trajectory. Every channel it names gets that
         channel's waypoints; one it omits is cleared and holds. The timestamps are already absolute, stamped
-        by the scheduling wrapper at the instant the gate released it.
+        by the scheduling wrapper for the instant its charge is paid.
         """
         _assert_anchored(actions, clock.now())
         self._telemetry.step()
@@ -526,14 +538,12 @@ class Harness(pimm.ControlSystem):
             self._shutdown()
 
     def _shutdown(self) -> None:
-        """Release the worker and the session. A call still in flight is unparked and its result dropped: the
-        run is over and nothing is left to install it.
+        """Release the worker and the session. A call still in flight runs to completion and its result is
+        dropped: the run is over and nothing is left to install it.
 
         The harness does not own the policy's lifetime: the caller may run several harnesses over one policy
         (a multi-eval sweep), so it closes the policy once, after the last run.
         """
-        if self._gate is not None:
-            self._gate.cancel()
         self._future = None
         self._executor.shutdown(wait=True, cancel_futures=True)
         if self._policy_session is not None:

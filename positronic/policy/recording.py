@@ -342,7 +342,7 @@ class _RecordingTap(PolicyWrapper):
         self._rec = rec
         self._name = name
 
-    def wrap_session(self, inner: Session, context, now) -> Session:
+    def wrap_session(self, inner: Session, context) -> Session:
         stream = self._rec._open_stream()
         return _RecordingTapSession(inner, self._rec, self._name, stream)
 

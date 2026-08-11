@@ -1,10 +1,7 @@
-"""Unit tests for PolicyWrapper composition, the InferenceGate, ChunkedSchedule, TemporalStack, and the
+"""Unit tests for PolicyWrapper composition, ChunkedSchedule, TemporalStack, and the
 policy-pipeline algebra."""
 
-import concurrent.futures
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
@@ -20,7 +17,7 @@ from positronic.policy.action import (
     JointDeltaAction,
     RelativePositionAction,
 )
-from positronic.policy.base import InferenceGate, LatencyMode, Policy, PolicyWrapper, Session
+from positronic.policy.base import Policy, PolicyWrapper, Session
 from positronic.policy.codec import (
     ActionHorizon,
     ActionTimestamp,
@@ -33,19 +30,6 @@ from positronic.policy.codec import (
 )
 from positronic.policy.observation import ObservationCodec
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
-
-
-class _FakeClock:
-    """Minimal clock stub for unit tests — caller sets ``t`` directly."""
-
-    def __init__(self, t: float = 0.0):
-        self.t = t
-
-    def now(self) -> float:
-        return self.t
-
-    def now_ns(self) -> int:
-        return int(self.t * 1e9)
 
 
 class _ConstSession(Session):
@@ -61,16 +45,20 @@ class _ConstSession(Session):
 
 
 class _ConstPolicy(Policy):
-    def __init__(self, actions):
+    def __init__(self, actions, wall_sec: float = 0.0):
         self._actions = actions
+        self._wall_sec = wall_sec
         self._session: _ConstSession | None = None
 
-    def new_session(self, context=None, *, now=None, gate=None):
-        self._session = _ConstSession(self._actions)
+    def new_session(self, context=None):
+        self._session = _ConstSession(self._actions, wall_sec=self._wall_sec)
         return self._session
 
 
 _ONE_ACTION = [{'v': 1, 'timestamp': 0.0}]
+
+# The sim default: model calls charge the world nothing, so chunks anchor at their observation instant.
+_NO_LATENCY = {keys.INFERENCE_LATENCY: 0.0}
 
 
 def _obs(now_sec=0.0):
@@ -80,11 +68,9 @@ def _obs(now_sec=0.0):
 class TestChunkedSchedule:
     def test_first_call_runs_inference(self):
         # Relative timestamps: trajectory of duration 0.5s
-        clock = _FakeClock(t=1.0)
         inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
-        policy = ChunkedSchedule().wrap(inner)
-        session = policy.new_session(now=clock.now)
-        result = session(_obs())
+        session = ChunkedSchedule().wrap(inner).new_session(_NO_LATENCY)
+        result = session(_obs(1.0))
         assert result is not None
         assert len(result) == 2
         # Timestamps stamped to absolute by ChunkedSchedule.
@@ -92,78 +78,88 @@ class TestChunkedSchedule:
         assert result[1]['timestamp'] == 1.5
 
     def test_returns_none_while_trajectory_active(self):
-        # Trajectory starts at clock=1.0, ends at 1.0+0.5=1.5.
-        clock = _FakeClock(t=1.0)
+        # Trajectory starts at 1.0, ends at 1.0+0.5=1.5.
         inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
-        policy = ChunkedSchedule().wrap(inner)
-        session = policy.new_session(now=clock.now)
-        session(_obs())
-        clock.t = 1.2
-        assert session(_obs()) is None
-        clock.t = 1.4
-        assert session(_obs()) is None
+        session = ChunkedSchedule().wrap(inner).new_session(_NO_LATENCY)
+        session(_obs(1.0))
+        assert session(_obs(1.2)) is None
+        assert session(_obs(1.4)) is None
 
     def test_re_infers_after_trajectory_consumed(self):
-        clock = _FakeClock(t=1.0)
         inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
-        session = ChunkedSchedule().wrap(inner).new_session(now=clock.now)
-        session(_obs())  # trajectory ends at clock=1.5
-        clock.t = 1.3
-        assert session(_obs()) is None
-        clock.t = 1.6
-        result = session(_obs())
+        session = ChunkedSchedule().wrap(inner).new_session(_NO_LATENCY)
+        session(_obs(1.0))  # trajectory ends at 1.5
+        assert session(_obs(1.3)) is None
+        result = session(_obs(1.6))
         assert result is not None
         assert inner._session.call_count == 2
 
     def test_single_action_refires_immediately_after(self):
-        """Single action at ts=0 → trajectory_end = now → next tick re-infers."""
-        clock = _FakeClock(t=1.0)
-        policy = ChunkedSchedule().wrap(_ConstPolicy(_ONE_ACTION))
-        session = policy.new_session(now=clock.now)
-        session(_obs())
-        clock.t = 1.01
-        result = session(_obs())
+        """Single action at ts=0 → trajectory_end = the observation instant → next tick re-infers."""
+        session = ChunkedSchedule().wrap(_ConstPolicy(_ONE_ACTION)).new_session(_NO_LATENCY)
+        session(_obs(1.0))
+        assert session(_obs(1.01)) is not None
+
+    def test_constant_charge_anchors_at_obs_time_plus_charge(self):
+        """The anchor is ``t0 + C`` whatever the call's wall duration — the reproducible mode."""
+        inner = _ConstPolicy(_ONE_ACTION, wall_sec=0.02)
+        session = ChunkedSchedule().wrap(inner).new_session({keys.INFERENCE_LATENCY: 0.5})
+        result = session(_obs(1.0))
         assert result is not None
+        assert result[0]['timestamp'] == 1.5
+        assert session(_obs(1.4)) is None  # within the charged window the chunk is still due to play
+        assert session(_obs(1.6)) is not None
+
+    def test_measured_charge_anchors_at_obs_time_plus_wall_duration(self):
+        inner = _ConstPolicy(_ONE_ACTION, wall_sec=0.05)
+        session = ChunkedSchedule().wrap(inner).new_session({keys.INFERENCE_LATENCY: True})
+        result = session(_obs(1.0))
+        assert result is not None
+        assert 1.05 <= result[0]['timestamp'] < 1.5
+
+    def test_no_latency_key_charges_wall_duration(self):
+        """Hardware passes no latency key; each call is charged what it really took."""
+        inner = _ConstPolicy(_ONE_ACTION, wall_sec=0.05)
+        session = ChunkedSchedule().wrap(inner).new_session()
+        result = session(_obs(1.0))
+        assert result is not None
+        assert 1.05 <= result[0]['timestamp'] < 1.5
 
 
 class TestPipelineComposition:
     """Test | operator across PolicyWrapper and Codec types."""
 
     def test_wrapper_pipe_wrapper(self):
-        clock = _FakeClock(t=1.0)
         pipeline = TemporalStack(keys=('v',), offsets_sec=(0.0,)) | ChunkedSchedule()
         assert isinstance(pipeline, PolicyWrapper)
         policy = pipeline.wrap(_ConstPolicy(_ONE_ACTION))
-        session = policy.new_session(now=clock.now)
+        session = policy.new_session(_NO_LATENCY)
         result = session({keys.OBS_TIME_NS: int(1e9), 'v': np.array([5.0])})
         assert result is not None
         assert result[0]['v'] == 1
 
     def test_codec_pipe_wrapper(self):
-        clock = _FakeClock(t=1.0)
         codec = ActionTimestamp(fps=10.0)
         pipeline = codec | ChunkedSchedule()
         assert isinstance(pipeline, PolicyWrapper)
         policy = pipeline.wrap(_ConstPolicy([{'action': 'test', 'timestamp': 0.0}]))
-        session = policy.new_session(now=clock.now)
+        session = policy.new_session(_NO_LATENCY)
         result = session(_obs())
         assert result is not None
 
     def test_full_pipeline(self):
-        clock = _FakeClock(t=1.0)
         codec = ActionTimestamp(fps=10.0)
         pipeline = ChunkedSchedule() | codec
         assert isinstance(pipeline, PolicyWrapper)
         # 5 raw actions → codec stamps relative 0.0, 0.1, 0.2, 0.3, 0.4
-        # → ChunkedSchedule shifts to 1.0, 1.1, 1.2, 1.3, 1.4 (clock=1.0).
+        # → ChunkedSchedule shifts to 1.0, 1.1, 1.2, 1.3, 1.4 (obs at 1.0).
         policy = pipeline.wrap(_ConstPolicy([{'action': f'a{i}'} for i in range(5)]))
-        session = policy.new_session(now=clock.now)
-        result = session(_obs())
+        session = policy.new_session(_NO_LATENCY)
+        result = session(_obs(1.0))
         assert result is not None
         assert result[0]['timestamp'] == 1.0
         # Second call within trajectory window returns None (ChunkedSchedule).
-        clock.t = 1.2
-        assert session(_obs()) is None
+        assert session(_obs(1.2)) is None
 
     def test_codec_and_stays_codec_only(self):
         """& only works between codecs, not wrappers."""
@@ -247,19 +243,17 @@ class TestTemporalStack:
     OFFSETS = (-0.2, -0.1, 0.0)
 
     def test_pad_start_repeats_oldest(self):
-        clock = _FakeClock(t=0.0)
         inner = _CapturePolicy()
-        session = TemporalStack(keys=('v',), offsets_sec=self.OFFSETS).wrap(inner).new_session(now=clock.now)
+        session = TemporalStack(keys=('v',), offsets_sec=self.OFFSETS).wrap(inner).new_session()
         session(_stack_obs(0.0, 1.0))
         stack = inner.session.seen[0]['v']
         assert stack.shape == (3, 1)
         assert (stack == 1.0).all()
 
     def test_no_pad_start_grows_from_one(self):
-        clock = _FakeClock(t=0.0)
         inner = _CapturePolicy()
         wrapper = TemporalStack(keys=('v',), offsets_sec=self.OFFSETS, pad_start=False)
-        session = wrapper.wrap(inner).new_session(now=clock.now)
+        session = wrapper.wrap(inner).new_session()
 
         session(_stack_obs(0.0, 1.0))
         assert inner.session.seen[0]['v'].shape == (1, 1)
@@ -276,10 +270,9 @@ class TestTemporalStack:
         offsets = self.OFFSETS
         stacks = {}
         for pad_start in (True, False):
-            clock = _FakeClock(t=0.0)
             inner = _CapturePolicy()
             wrapper = TemporalStack(keys=('v',), offsets_sec=offsets, pad_start=pad_start)
-            session = wrapper.wrap(inner).new_session(now=clock.now)
+            session = wrapper.wrap(inner).new_session()
             for i in range(4):
                 session(_stack_obs(0.1 * i, float(i)))
             stacks[pad_start] = inner.session.seen[-1]['v']
@@ -465,23 +458,20 @@ class TestPipe:
             _ = pipeline | spec.PolicySource(_ConstPolicy([]))
 
     def test_inline_full_pipe(self):
-        clock = _FakeClock(t=1.0)
         inner = _ConstPolicy([{'action': f'a{i}'} for i in range(5)])
         policy = spec.inline(ChunkedSchedule() | spec.remote | ActionTimestamp(fps=10.0) | spec.PolicySource(inner))
         assert isinstance(policy, Policy)
-        session = policy.new_session(now=clock.now)
-        result = session(_obs())
+        session = policy.new_session(_NO_LATENCY)
+        result = session(_obs(1.0))
         assert result is not None
         assert result[0]['timestamp'] == 1.0
-        clock.t = 1.2
-        assert session(_obs()) is None
+        assert session(_obs(1.2)) is None
 
     def test_inline_tolerates_marker_less_pipe(self):
-        clock = _FakeClock(t=1.0)
         inner = _ConstPolicy(_ONE_ACTION)
         policy = spec.inline(ChunkedSchedule() | spec.PolicySource(inner))
-        session = policy.new_session(now=clock.now)
-        result = session(_obs())
+        session = policy.new_session(_NO_LATENCY)
+        result = session(_obs(1.0))
         assert result is not None and result[0]['timestamp'] == 1.0
 
     def test_inline_bare_source_pipe_is_the_loaded_policy(self):
@@ -581,104 +571,3 @@ class TestRestrictImageSize:
         rebuilt = spec.from_spec(RestrictImageSize(64, 48).to_spec())
         assert isinstance(rebuilt, RestrictImageSize)
         assert rebuilt.encode({'cam': _image(480, 640)})['cam'].shape == (48, 64, 3)
-
-
-class _BlockingSession(Session):
-    """Holds the call inside the gate until the test releases it, and reports when it was entered."""
-
-    def __init__(self):
-        self.entered = threading.Event()
-        self.release = threading.Event()
-
-    def __call__(self, obs):
-        self.entered.set()
-        self.release.wait(timeout=5.0)
-        return _ONE_ACTION
-
-
-def _run_gated(gate: InferenceGate, inner: Session, executor: ThreadPoolExecutor):
-    return executor.submit(gate.wrap(inner), _obs())
-
-
-class TestInferenceGate:
-    def test_declared_mode_parks_the_call_until_its_delay_has_passed(self):
-        clock = _FakeClock(t=1.0)
-        gate = InferenceGate(clock.now, LatencyMode.DECLARED, 0.5)
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = _run_gated(gate, _ConstSession(_ONE_ACTION), executor)
-            concurrent.futures.wait([future], timeout=0.05)
-            assert not future.done(), 'the gate let the call through before its declared delay'
-            clock.t = 1.5
-            assert future.result(timeout=5.0) is not None
-            assert gate.t0 == 1.0
-
-    def test_measured_mode_parks_the_call_for_its_own_wall_duration(self):
-        clock = _FakeClock(t=1.0)
-        gate = InferenceGate(clock.now, LatencyMode.MEASURED)
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = _run_gated(gate, _ConstSession(_ONE_ACTION, wall_sec=0.1), executor)
-            concurrent.futures.wait([future], timeout=0.3)
-            assert not future.done(), 'the gate charged nothing for a call that took 0.1s'
-            clock.t = 1.5  # past t0 + the wall duration, whatever it measured
-            assert future.result(timeout=5.0) is not None
-
-    @pytest.mark.parametrize(
-        'mode,delay_sec', [(LatencyMode.LIVE, 0.0), (LatencyMode.DECLARED, 0.0)], ids=['live', 'declared-zero']
-    )
-    def test_a_call_owed_nothing_is_never_parked(self, mode, delay_sec):
-        """Hardware pays what the model took, and sim's default charges nothing: neither owes the wrapper a
-        wait, so the call returns with the clock standing still."""
-        clock = _FakeClock(t=1.0)
-        gate = InferenceGate(clock.now, mode, delay_sec)
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = _run_gated(gate, _ConstSession(_ONE_ACTION), executor)
-            assert future.result(timeout=1.0) is not None  # the clock never moves and the call still returns
-            assert gate.entered is False
-
-    def test_entered_is_visible_while_the_call_is_at_the_model(self):
-        clock = _FakeClock(t=1.0)
-        gate = InferenceGate(clock.now, LatencyMode.LIVE)
-        inner = _BlockingSession()
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = _run_gated(gate, inner, executor)
-            assert inner.entered.wait(timeout=5.0)
-            assert gate.entered is True
-            inner.release.set()
-            future.result(timeout=5.0)
-            assert gate.entered is False
-
-    def test_cancel_unparks_a_call_the_harness_no_longer_wants(self):
-        clock = _FakeClock(t=1.0)
-        gate = InferenceGate(clock.now, LatencyMode.DECLARED, 60.0)
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = _run_gated(gate, _ConstSession(_ONE_ACTION), executor)
-            concurrent.futures.wait([future], timeout=0.05)
-            assert not future.done()
-            gate.cancel()
-            assert future.result(timeout=5.0) is not None  # released without waiting out the 60s delay
-
-    def test_gate_wraps_the_inner_session_of_a_scheduling_wrapper(self):
-        """The cost lands below the wrapper: by the time ``ChunkedSchedule`` anchors its chunk, the delay
-        has already been paid, so the anchor is the release instant."""
-        clock = _FakeClock(t=1.0)
-        gate = InferenceGate(clock.now, LatencyMode.DECLARED, 0.5)
-        policy = ChunkedSchedule().wrap(_ConstPolicy(_ONE_ACTION))
-        session = policy.new_session(now=clock.now, gate=gate)
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(session, _obs())
-            concurrent.futures.wait([future], timeout=0.05)
-            assert not future.done()
-            clock.t = 1.5
-            chunk = future.result(timeout=5.0)
-            assert chunk is not None and chunk[0]['timestamp'] == 1.5
-
-    def test_a_stack_without_a_scheduling_wrapper_gets_no_gate(self):
-        """``TemporalStack`` owns no plan, so it is not what the platform charges; its call runs straight
-        through and the gate is never entered."""
-        clock = _FakeClock(t=1.0)
-        gate = InferenceGate(clock.now, LatencyMode.DECLARED, 60.0)
-        policy = TemporalStack(keys=('v',), offsets_sec=(0.0,)).wrap(_ConstPolicy(_ONE_ACTION))
-        session = policy.new_session(now=clock.now, gate=gate)
-
-        assert session({**_obs(), 'v': np.array([1.0])}) is not None
-        assert gate.entered is False

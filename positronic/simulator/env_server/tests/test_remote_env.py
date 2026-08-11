@@ -312,7 +312,7 @@ class _JointposChunks(Policy):
         self.chunk_len = chunk_len
         self.chunks = 0
 
-    def new_session(self, context=None, *, now=None, gate=None):
+    def new_session(self, context=None):
         return _JointposChunkSession(self)
 
 

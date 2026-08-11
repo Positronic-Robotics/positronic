@@ -80,7 +80,7 @@ class Codec(PolicyWrapper):
     def meta(self) -> dict:
         return {}
 
-    def wrap_session(self, inner: Session, context, now):
+    def wrap_session(self, inner: Session, context):
         return _CodecSession(inner, self)
 
     @final

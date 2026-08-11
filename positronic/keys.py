@@ -89,5 +89,7 @@ SERVER_META = f'{POLICY_META}.{SERVER}'
 EVAL_SUCCESS = 'eval.success'
 EVAL_TERMINATED = 'eval.terminated'
 
-# The sim-only inference cost a trial's RUN context asks the platform to charge the model call.
+# The inference cost each model call charges the world clock: seconds (fixed, reproducible), or ``True``
+# for the call's own wall duration. A sim trial without the key charges nothing (the world holds still per
+# call); hardware always pays wall.
 INFERENCE_LATENCY = 'inference_latency'

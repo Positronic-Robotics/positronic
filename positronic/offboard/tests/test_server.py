@@ -244,7 +244,7 @@ class _ScriptedSession(Session):
 class _ScriptedPolicy(Policy):
     """Deterministic base policy: every session returns the same untimestamped chunk."""
 
-    def new_session(self, context=None, *, now=None, gate=None) -> Session:
+    def new_session(self, context=None) -> Session:
         return _ScriptedSession()
 
 
@@ -254,15 +254,15 @@ def test_in_process_equals_remote_for_same_pipeline(start_server):
     def pipeline():
         return ChunkedSchedule() | remote | ActionTimestamp(fps=10.0) | PolicySource(_ScriptedPolicy())
 
-    clock = [100.0]
+    context = {keys.INFERENCE_LATENCY: 0.0}
 
     host, port, _server = start_server(pipeline())
-    remote_session = RemotePolicy(f'{host}:{port}').new_session(now=lambda: clock[0])
+    remote_session = RemotePolicy(f'{host}:{port}').new_session(context)
 
-    local_session = inline(pipeline()).new_session(now=lambda: clock[0])
+    local_session = inline(pipeline()).new_session(context)
 
-    remote_actions = remote_session({keys.OBS_TIME_NS: 0})
-    local_actions = local_session({keys.OBS_TIME_NS: 0})
+    remote_actions = remote_session({keys.OBS_TIME_NS: int(100.0 * 1e9)})
+    local_actions = local_session({keys.OBS_TIME_NS: int(100.0 * 1e9)})
     assert remote_actions == local_actions
     # Three scripted actions plus the chunk-closing validity sentinel ActionTimestamp appends.
     assert local_actions == [
@@ -273,9 +273,8 @@ def test_in_process_equals_remote_for_same_pipeline(start_server):
     ]
 
     # Both gate identically while the chunk plays out.
-    clock[0] = 100.15
-    assert remote_session({keys.OBS_TIME_NS: 0}) is None
-    assert local_session({keys.OBS_TIME_NS: 0}) is None
+    assert remote_session({keys.OBS_TIME_NS: int(100.15 * 1e9)}) is None
+    assert local_session({keys.OBS_TIME_NS: int(100.15 * 1e9)}) is None
 
     remote_session.close()
 

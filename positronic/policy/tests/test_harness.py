@@ -18,7 +18,7 @@ from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, bundled_fr
 from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
-from positronic.policy.base import DelegatingSession, Policy, SchedulingWrapper, Session
+from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import Directive, DirectiveType, Harness, TrajectoryPlayer, _assert_anchored
 from positronic.policy.remote import RemoteSession
@@ -82,7 +82,7 @@ class SpyPolicy(Policy):
         self.reset_calls: int = 0
         self.last_reset_context = None
 
-    def new_session(self, context=None, *, now=None, gate=None):
+    def new_session(self, context=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _SpySession(self)
@@ -127,7 +127,7 @@ class StubPolicy(Policy):
     def meta(self) -> dict[str, object]:
         return self._meta
 
-    def new_session(self, context=None, *, now=None, gate=None):
+    def new_session(self, context=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _StubSession(self)
@@ -157,7 +157,7 @@ class ChunkPolicy(StubPolicy):
         super().__init__(*args, **kwargs)
         self.counter = 0
 
-    def new_session(self, context=None, *, now=None, gate=None):
+    def new_session(self, context=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _ChunkSession(self)
@@ -192,7 +192,7 @@ class RemoteStubPolicy(Policy):
         self.command = command
         self.target_grip = float(target_grip)
 
-    def new_session(self, context=None, *, now=None, gate=None) -> RemoteSession:
+    def new_session(self, context=None) -> RemoteSession:
         action = [{'robot_command': self.command, 'target_grip': self.target_grip, 'timestamp': 0.0}]
         return RemoteSession(_FakeInferenceSession(action))
 
@@ -536,7 +536,7 @@ def test_episode_meta_includes_policy_static_meta(world):
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             self._command = CartesianPosition(pose=pose)
 
-        def new_session(self, context=None, *, now=None, gate=None):
+        def new_session(self, context=None):
             return _StaticMetaSession(self._command)  # Session.meta defaults to {}
 
         @property
@@ -922,7 +922,7 @@ def test_timeout_during_inference_drops_the_chunk(world):
         ChunkedSchedule().wrap(policy),
         make_embodiment(simulated=True),
         task=Task(instruction='test', timeout=0.05),
-        trials=[{keys.INFERENCE_LATENCY: 0.2}],  # the gate holds the answer well past the deadline
+        trials=[{keys.INFERENCE_LATENCY: 0.2}],  # the charge holds the answer well past the deadline
     )
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
@@ -1088,7 +1088,7 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
             return []
 
     class EmptyChunkPolicy(Policy):
-        def new_session(self, context=None, *, now=None, gate=None):
+        def new_session(self, context=None):
             return _EmptyChunkSession()
 
     harness = Harness(EmptyChunkPolicy(), make_embodiment())
@@ -1574,11 +1574,11 @@ class SlowPolicy(Policy):
         self._span_sec = span_sec
         self._steps = steps
 
-    def new_session(self, context=None, *, now=None, gate=None):
+    def new_session(self, context=None):
         return _SlowSession(self._wall_sec, self._span_sec, self._steps)
 
 
-class _ReplanEarly(SchedulingWrapper):
+class _ReplanEarly(PolicyWrapper):
     """Infers on the first observation and again halfway through the chunk it returned.
 
     The re-query-before-exhaustion shape (RTC, temporal ensembling) that the substrate exists for: unlike
@@ -1586,23 +1586,25 @@ class _ReplanEarly(SchedulingWrapper):
     """
 
     class _Session(DelegatingSession):
-        def __init__(self, inner: Session, now):
+        def __init__(self, inner: Session, charge_sec: float):
             super().__init__(inner)
-            self._now = now
+            self._charge_sec = charge_sec
             self._replan_at: float | None = None
 
         def __call__(self, obs):
-            if self._replan_at is not None and self._now() < self._replan_at:
+            t0 = obs['obs_time_ns'] / 1e9
+            if self._replan_at is not None and t0 < self._replan_at:
                 return None
             result = self._inner(obs)
             assert result is not None, 'the inner policy of this test wrapper always returns a chunk'
-            now = self._now()
-            result = [{**action, 'timestamp': now + action['timestamp']} for action in result]
-            self._replan_at = now + (result[-1]['timestamp'] - now) / 2
+            anchor = t0 + self._charge_sec
+            result = [{**action, 'timestamp': anchor + action['timestamp']} for action in result]
+            self._replan_at = t0 + (result[-1]['timestamp'] - t0) / 2
             return result
 
-    def wrap_session(self, inner: Session, context, now):
-        return _ReplanEarly._Session(inner, now)
+    def wrap_session(self, inner: Session, context):
+        assert context is not None  # the harness always passes the trial context
+        return _ReplanEarly._Session(inner, float(context[keys.INFERENCE_LATENCY]))
 
 
 class _TimedRecorder(pimm.SignalEmitter):
@@ -1702,7 +1704,7 @@ def test_installed_trajectory_clears_the_channels_it_omits(world):
             return [{keys.ROBOT_COMMAND: command, 'timestamp': i * 0.01} for i in range(10)]
 
     class _GripThenArmPolicy(Policy):
-        def new_session(self, context=None, *, now=None, gate=None):
+        def new_session(self, context=None):
             return _GripThenArm()
 
     harness = Harness(ChunkedSchedule().wrap(_GripThenArmPolicy()), make_embodiment())

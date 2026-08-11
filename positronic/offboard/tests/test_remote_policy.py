@@ -390,10 +390,9 @@ def test_empty_declaration_fails_before_motion():
 
 def test_declared_stack_built_at_session_open():
     """The server-declared local stack runs in front of the connection."""
-    clock = [1.0]
     policy, mock_ws = _mock_remote_policy(CHUNKED_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}])
-    session = policy.new_session(now=lambda: clock[0])
-    actions = session({keys.OBS_TIME_NS: 0})
+    session = policy.new_session({keys.INFERENCE_LATENCY: 0.0})
+    actions = session({keys.OBS_TIME_NS: int(1e9)})
     assert actions == [{'a': 1, 'timestamp': 1.0}]
 
 
@@ -512,13 +511,13 @@ def test_remote_policy_lifecycle(inference_server, mock_policy):
     host, port = inference_server
 
     policy = RemotePolicy(f'{host}:{port}')
-    session = policy.new_session(now=lambda: 0.0)
+    session = policy.new_session({keys.INFERENCE_LATENCY: 0.0})
 
     meta = session.meta
     assert meta['server.model_name'] == 'test_model'
     assert meta['type'] == 'remote'
 
-    obs = {'dataset': 'test'}
+    obs = {'dataset': 'test', 'obs_time_ns': 0}
     action = session(obs)
     # Single-dict server response is normalized to a 1-element list (Session contract) and
     # anchored to absolute time by the declared ChunkedSchedule.
@@ -527,7 +526,7 @@ def test_remote_policy_lifecycle(inference_server, mock_policy):
     session.close()
 
     # New session
-    session2 = policy.new_session(now=lambda: 0.0)
+    session2 = policy.new_session()
     session2.close()
 
 
@@ -535,7 +534,7 @@ def test_remote_session_meta(inference_server):
     """Session meta must include server metadata."""
     host, port = inference_server
     policy = RemotePolicy(f'{host}:{port}')
-    session = policy.new_session(now=lambda: 0.0)
+    session = policy.new_session()
 
     meta = session.meta
     assert meta['type'] == 'remote'

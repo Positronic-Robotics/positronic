@@ -6210,16 +6210,6 @@
                 }
             }
         ],
-        "./positronic/policy/wrappers.py": [
-            {
-                "code": "reportIncompatibleMethodOverride",
-                "range": {
-                    "startColumn": 8,
-                    "endColumn": 20,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./positronic/probe.py": [
             {
                 "code": "reportAttributeAccessIssue",
