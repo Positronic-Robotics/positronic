@@ -184,6 +184,10 @@ to use regular Python. Emitters (`ControlSystemEmitter`) and receivers
 (`ControlSystemReceiver`) are just fields on the object; they keep track of their
 owner so the world can wire them correctly.
 
+**Don't use system libs for sleeping — `yield pimm.Sleep(secs)` instead.** In the main-process
+group `interleave` advances the peers while one loop sleeps, so a blocking call there stalls them
+all.
+
 The `World` runtime plays three roles:
 
 1. **Connection planner.** Each call to `world.connect(emitter, receiver, ...)`
