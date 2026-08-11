@@ -44,7 +44,7 @@ GROOT_META = {
         'action': {
             'target_robot_position_translation': {'start': 0, 'end': 3},
             'target_robot_position_quaternion': {'start': 3, 'end': 7, 'rotation_type': 'quaternion'},
-            'target_grip': {'start': 7, 'end': 8},
+            keys.TARGET_GRIP: {'start': 7, 'end': 8},
         }
     },
 }
