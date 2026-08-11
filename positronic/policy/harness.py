@@ -1,5 +1,6 @@
 import concurrent.futures
 import time
+from collections import deque
 from collections.abc import Generator, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -40,16 +41,14 @@ class TrajectoryPlayer:
     to emit."""
 
     def __init__(self):
-        self._trajectory: Trajectory = []
-        self._index: int = 0
+        self._pending: deque[tuple[int, Any]] = deque()
 
     def set(self, trajectory: Trajectory):
-        self._trajectory = trajectory
-        self._index = 0
+        self._pending = deque(trajectory)
 
     def next_due(self) -> int | None:
         """Timestamp of the earliest waypoint not yet played, or ``None`` once the schedule is exhausted."""
-        return self._trajectory[self._index][0] if self._index < len(self._trajectory) else None
+        return self._pending[0][0] if self._pending else None
 
     def advance(self, current_time: int):
         """The single value due at ``current_time``, or ``None`` when no waypoint has come due since the
@@ -59,9 +58,8 @@ class TrajectoryPlayer:
         the final one. Revisit if pacing turns out not to hold one waypoint due per round.
         """
         value = None
-        while self._index < len(self._trajectory) and self._trajectory[self._index][0] <= current_time:
-            value = self._trajectory[self._index][1]
-            self._index += 1
+        while self._pending and self._pending[0][0] <= current_time:
+            value = self._pending.popleft()[1]
         return value
 
 
