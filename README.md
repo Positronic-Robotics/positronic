@@ -252,7 +252,7 @@ Run trained policies through the [inference script](positronic/inference.py):
 
 ```bash
 uv run --locked positronic-inference sim \
-    --policy=@positronic.cfg.policy.act_absolute \
+    --policy=@positronic.vendors.lerobot_0_3_3.policy.act_absolute \
     --policy.base.checkpoints_dir=~/checkpoints/lerobot/<run_id> \
     --eval.timeout=60 \
     --show_gui=True \

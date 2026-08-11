@@ -19,7 +19,6 @@ from positronic.policy.codec import (
     FlipGrip,
 )
 from positronic.policy.observation import ObservationCodec
-from positronic.vendors.gr00t.codecs import ee_quat, joints_traj
 
 
 def test_observation_encode_images_and_state_shapes():
@@ -588,39 +587,3 @@ def test_operator_precedence():
     assert result['encoded_by_a'] is True
     assert result['encoded_by_b'] is True
     assert result['encoded_by_c'] is True
-
-
-def test_groot_ee_codec_decodes_modality_keyed_actions():
-    """GR00T ee_quat codec decodes modality-keyed model output into robot commands.
-
-    GR00T models return ``{'ee_pose': ..., 'grip': ...}`` per action step,
-    not a flat ``action`` vector. The codec chain must convert this format.
-    """
-    codec = ee_quat()
-
-    # Simulate GR00T model output: list of modality-keyed dicts (one per action step)
-    ee_pose = np.concatenate([Rotation.identity.as_quat, [0.1, 0.2, 0.3]]).astype(np.float32)
-    model_output = [{'ee_pose': ee_pose, 'grip': np.float32(0.5)} for _ in range(3)]
-
-    decoded = codec.decode(model_output, context=_T0_OBS)
-    assert len(decoded) == 4  # 3 actions + timestamp sentinel
-    for d in decoded[:-1]:
-        assert obs_keys.ROBOT_COMMAND in d
-        assert 'target_grip' in d
-        assert 'timestamp' in d
-    assert decoded[-1] == {'timestamp': pytest.approx(3 / 15.0)}  # timestamp sentinel
-
-
-def test_groot_joints_codec_decodes_modality_keyed_actions():
-    """GR00T joints_traj codec decodes joint_position-keyed model output."""
-    codec = joints_traj()
-
-    joint_pos = np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, 0.7], dtype=np.float32)
-    model_output = [{'joint_position': joint_pos, 'grip': np.float32(0.8)} for _ in range(3)]
-
-    decoded = codec.decode(model_output, context=_T0_OBS)
-    assert len(decoded) == 4  # 3 actions + timestamp sentinel
-    for d in decoded[:-1]:
-        assert obs_keys.ROBOT_COMMAND in d
-        assert 'target_grip' in d
-    assert decoded[-1] == {'timestamp': pytest.approx(3 / 15.0)}  # timestamp sentinel

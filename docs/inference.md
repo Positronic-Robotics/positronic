@@ -81,7 +81,7 @@ Load model directly on robot/simulator machine. Only ACT is supported locally (G
 
 ```bash
 uv run positronic-inference sim \
-  --policy=@positronic.cfg.policy.act_absolute \
+  --policy=@positronic.vendors.lerobot_0_3_3.policy.act_absolute \
   --policy.base.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
   --policy.base.checkpoint=10000
 ```
