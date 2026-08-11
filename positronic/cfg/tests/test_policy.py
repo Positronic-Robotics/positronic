@@ -8,7 +8,8 @@ def test_a_credential_reaches_only_the_endpoint_it_was_set_on(monkeypatch):
     monkeypatch.setenv(AUTH_TOKEN_ENV, 'tok')
     cfg = phail_multiple.override(**{'endpoints.groot': '.authed_remote', 'endpoints.groot.url': 'https://gpu.example'})
     built = {p._endpoint._client.session_url: p._endpoint._client.headers for p in cfg.instantiate()._policies}
-    assert built.pop('wss://gpu.example/api/v1/session') == {AUTH_HEADER: bearer('tok')}
+    gated = built.pop('wss://gpu.example/api/v1/session')
+    assert gated == {AUTH_HEADER: bearer('tok')}
     assert set(built.values()) == {None}
 
 
