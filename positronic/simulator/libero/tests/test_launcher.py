@@ -1,7 +1,7 @@
 """The environment the launcher hands its env-server subprocess.
 
 Nothing here clones LIBERO or spawns it: the checkout and ``Popen`` are stubbed, so what is under test is the
-choice ``_spawn`` makes rather than the rendering it leads to (``test_e2e`` covers that).
+choice ``_spawn`` makes rather than the rendering it leads to.
 """
 
 import subprocess
