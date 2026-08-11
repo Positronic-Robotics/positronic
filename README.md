@@ -255,7 +255,6 @@ uv run --locked positronic-inference sim \
     --policy=@positronic.vendors.lerobot_0_3_3.policy.act_absolute \
     --policy.base.checkpoints_dir=~/checkpoints/lerobot/<run_id> \
     --eval.timeout=60 \
-    --show_gui=True \
     --output_dir=~/datasets/inference_logs/stack_cubes_act
 ```
 

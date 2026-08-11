@@ -26,7 +26,6 @@ In a separate terminal, run inference inside the simulation:
 ```bash
 uv run positronic-inference sim \
   --policy=.remote --policy.url=localhost:8000 \
-  --show_gui=True \
   --output_dir=~/datasets/demo_run
 ```
 

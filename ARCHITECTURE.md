@@ -90,7 +90,6 @@ in-process inside the world and needs no shim.)
 | Scenes / task batteries | instantiated inside the env server | reset tokens (suite, task, seed) carried through the `EnvAdapter` |
 | Scoring / success criteria | computed where the ground truth lives (usually the env server) | reported alongside observations and recorded into the dataset; aggregation happens on the Positronic side |
 | Hardware embodiment | pimm drivers inside the world | the same canonical embodiment contract the sims speak |
-| Attended operator surface (an evaluation console, a manual rig UI) | control systems inside the world | the `Operator` seam: directives into the harness, cameras keyed by observation name |
 
 The corollary for frameworks that ship their own eval harness: when a third-party benchmark expects
 a policy object plugged into *its* loop, the integration still separates that framework's sim/task
@@ -132,14 +131,14 @@ lifecycle — nothing else. Scheduling, blending, history stacking and error rec
 wrapper stack around the policy; a session returning `None` means "keep executing the current
 trajectory".
 
-**An attended run is driven through one seam.** Unattended, the harness self-drives a trial plan; attended,
-something outside the loop decides when an episode starts, finishes or is abandoned. Positronic owns the
-loop either way, so that something never calls in: it enters as `Operator`
-(`positronic/cli/eval/run.py`) and as nothing else — directives into the harness, control systems the world
-schedules in the foreground, and optionally cameras to show and commands to apply while the run is idle. A
-foreground control system returning ends the world, so an operator finishes a run by returning. Keeping it
-to one seam is what lets an operator surface be built and shipped outside this repository without the loop
-knowing which one it is talking to.
+**Positronic owns the loop; an attended surface owns its own binary.** Unattended, the harness self-drives a
+trial plan; attended, something outside the loop decides when an episode starts, finishes or is abandoned.
+That something composes the run rather than plugging into one: it builds its own `pimm.World` around
+`Harness` and `wire.wire_embodiment`, schedules its control systems in it, and emits directives into
+`harness.directive`. A main-process control system returning ends the world, so a surface finishes a run by
+returning from its loop. The library ships one surface — the keyboard, in `positronic/inference.py` — and no
+seam for the others, because a seam is a contract every console would have to be expressible in, and the
+composition it would replace is a dozen lines a console already writes for itself.
 
 **Recordings are canonical; codecs bind the dialect late.** The dataset records every run in the
 canonical conventions (frames, key names, absolute time) — never in a model's dialect. Every

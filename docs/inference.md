@@ -88,15 +88,38 @@ uv run positronic-inference sim \
 
 Use local when latency is critical (<50ms), robot has built-in GPU, or offline operation required. Use remote when GPU server is separate, models are heavy, or multiple robots share one server.
 
-## Operator Surfaces
+## Who Decides Episode Boundaries
 
-An attended run is driven by an operator surface — the thing that decides when an episode starts, finishes or is abandoned (see [`positronic/inference.py`](../positronic/inference.py)). Positronic ships one, plus an unattended mode:
+Something has to say when an episode starts, finishes or is abandoned. `positronic-inference` ships two commands, one per answer (see [`positronic/inference.py`](../positronic/inference.py)):
 
-**Unattended (automatic):** The default for `sim` — runs `--eval.trial_count=10` episodes back-to-back, each ending when the task's `timeout` expires (override with `--eval.timeout=60`, seconds per episode); optionally `--show_gui=True` for DearPyGui visualization. Useful for batch evaluation without manual intervention.
+**Unattended (`sim`):** the harness self-drives the eval's trial plan — `--eval.trial_count=10` episodes back-to-back, each ending when the task's `timeout` expires (override with `--eval.timeout=60`, seconds per episode). Batch evaluation with nobody in the loop.
 
-**Keyboard operator (manual):** Control inference with keyboard. Press `s` to start episode, `p` to stop and save, `r` to home the robot, `q` to quit. The default for `real`; optionally pass `--operator.show_gui=True` for DearPyGui visualization. Useful for manual evaluation and debugging.
+**Keyboard (`real`):** press `s` to start an episode, `p` to stop and save, `r` to home the robot, `q` to quit. Headless — it renders nothing — and it takes `--task`, `--embodiment`, `--policy` and `--output_dir`. Manual evaluation and debugging on hardware.
 
-A surface of your own — a console, a web UI, a foot pedal — plugs in through the same seam: pass `main` an `operator=` factory that builds a `positronic.cli.eval.run.Operator`. It is a factory rather than an instance because it is called with the resolved output directory, which exists only once the run has synced it. The contract is documented on the class.
+### A console of your own
+
+Anything richer — a web console, a foot pedal, a rig UI — is a binary of its own rather than a plug-in: it composes its own `pimm.World` out of the public pieces, and nothing in the library needs to know which surface is driving. The shape:
+
+```python
+import pimm
+from positronic import wire
+from positronic.cli.eval.run import completion_sink, prepare_output_dir, warm_up
+from positronic.dataset.local_dataset import LocalDatasetWriter
+from positronic.policy.harness import Harness
+
+warm_up(policy)
+output_dir = prepare_output_dir(policy, output_dir)
+harness = Harness(policy, embodiment, on_episode_complete=completion_sink(policy))
+console = MyConsole()  # emits positronic.policy.harness.Directive
+
+with LocalDatasetWriter(output_dir) as writer, pimm.World() as world:
+    ds_agent = wire.wire_embodiment(world, harness, embodiment, writer)
+    world.connect(console.directives, harness.directive)
+    world.connect(harness.ds_command, ds_agent.command)
+    world.run([harness, console], [*embodiment.control_systems, ds_agent])
+```
+
+The world stops when a main-process control system returns, so the console ends the run by returning from its loop. To show the cameras, connect every observation whose name starts with `positronic.keys.IMAGE_PREFIX` into a viewer's `cameras` — `positronic.gui.dpg_ui()` is one, and the naming convention is what identifies a camera on the wire. To let the operator jog the arm between episodes, emit robot commands into `harness.manual_command`, which the harness applies only while idle.
 
 ## Recording and Replay
 
