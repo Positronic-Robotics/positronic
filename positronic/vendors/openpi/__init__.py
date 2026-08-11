@@ -25,24 +25,21 @@ WRIST_IMAGE_LEFT = 'observation/wrist_image_left'
 
 PROMPT = 'prompt'
 
-# The ``STATE`` width a config takes. ``LiberoInputs`` hands the field to the model untouched, so its width is
-# the model's own and exact. Every other transform pads what it gets up to the action dimension, so any width
-# within that bound is equivalent once the transform has run, and the widest a codec feeds them —
-# ``ee_joints_obs``, at EE pose 7 + grip 1 + joints 7 — warms no less than serving will.
-_STATE_DIM = {'pi05_libero': 8}
-_PADDED_STATE_DIM = 15
+# The one ``STATE`` width every config accepts: the transform that does not pad takes exactly this, and the
+# ones that do pad it up to the action dimension. What a codec encodes is wider or narrower, but never
+# reaches the model as either — padding runs first, so the width a warmup sends is not observable to it.
+_STATE_DIM = 8
 
 
-def warm_observation(config_name: str) -> dict[str, Any]:
+def warm_observation() -> dict[str, Any]:
     """Zero-filled inputs carrying every field above, so one observation warms a checkpoint under any config.
 
     A config's input transform pulls out the fields it names and ignores the rest, which is what lets one
-    observation stand in for the codec that normally feeds the subprocess. Only ``STATE`` has a width that
-    the config rather than the codec decides; images are resized by openpi itself.
+    observation stand in for the codec that normally feeds the subprocess. Images are resized by openpi itself.
     """
     frame = np.zeros((224, 224, 3), dtype=np.uint8)
     return {
-        STATE: np.zeros(_STATE_DIM.get(config_name, _PADDED_STATE_DIM), dtype=np.float32),
+        STATE: np.zeros(_STATE_DIM, dtype=np.float32),
         IMAGE: frame,
         WRIST_IMAGE: frame,
         JOINT_POSITION: np.zeros(7, dtype=np.float32),

@@ -20,39 +20,15 @@ def raw_observation() -> dict:
     }
 
 
-# Each pair is a deployment's observation codec and the openpi config it is served under.
-# rules-allow: hardcoded-keys — the pairing is the assertion; reading it from the code under test would pass
-# whatever that code held.
-_SERVED = [
-    ('ee_obs', 'pi05_positronic_lowmem'),
-    ('ee_joints_obs', 'pi05_positronic_lowmem'),
-    ('joints_obs', 'pi05_positronic_lowmem'),
-    ('droid_obs', 'pi05_droid'),
-    ('libero_obs', 'pi05_libero'),
-]
+@pytest.mark.parametrize('name', ['ee_obs', 'ee_joints_obs', 'joints_obs', 'droid_obs', 'libero_obs'])
+def test_warmup_observation_carries_every_field_a_codec_encodes(name, raw_observation):
+    encoded = getattr(codecs, name).instantiate().encode(raw_observation)
+
+    assert set(encoded) <= set(openpi.warm_observation())
 
 
-@pytest.mark.parametrize('codec_name, config_name', _SERVED)
-def test_warmup_observation_carries_every_field_a_codec_encodes(codec_name, config_name, raw_observation):
-    encoded = getattr(codecs, codec_name).instantiate().encode(raw_observation)
-
-    assert set(encoded) <= set(openpi.warm_observation(config_name))
-
-
-@pytest.mark.parametrize('codec_name', ['ee_obs', 'ee_joints_obs', 'joints_obs'])
-def test_a_padding_config_warms_no_narrower_than_its_codec_encodes(codec_name, raw_observation):
-    """The transform pads up to the action dimension, so the warm has only to reach the widest state served."""
-    encoded = getattr(codecs, codec_name).instantiate().encode(raw_observation)
-
-    warm = openpi.warm_observation('pi05_positronic_lowmem')
-
-    assert warm[openpi.STATE].size >= encoded[openpi.STATE].size
-
-
-def test_libero_warms_at_the_width_its_transform_hands_over(raw_observation):
-    """``LiberoInputs`` does not pad, so this width is the model's own and has to match exactly."""
+def test_warmup_state_is_the_width_the_transform_that_does_not_pad_hands_over(raw_observation):
+    """``LiberoInputs`` passes the state straight to the model, so this is the one width that has to be right."""
     encoded = codecs.libero_obs.instantiate().encode(raw_observation)
 
-    warm = openpi.warm_observation('pi05_libero')
-
-    assert warm[openpi.STATE].shape == encoded[openpi.STATE].shape
+    assert openpi.warm_observation()[openpi.STATE].shape == encoded[openpi.STATE].shape

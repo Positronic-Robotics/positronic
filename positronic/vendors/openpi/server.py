@@ -219,7 +219,7 @@ class OpenpiSource(ModelSource):
             subproc.start(on_progress)
             policy = OpenpiPolicy(subproc)
             # The subprocess compiles the model on its first inference, which outlasts a rig's inference timeout.
-            warmup(policy, openpi.warm_observation(self.config_name), on_progress)
+            warmup(policy, openpi.warm_observation(), on_progress)
         except Exception:
             subproc.stop()
             raise
