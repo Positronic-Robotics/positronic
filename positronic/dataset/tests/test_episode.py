@@ -235,7 +235,9 @@ def test_discarding_moves_the_recording_out_and_blocks_further_use(tmp_path):
             w.set_static('z', 2)
 
     discarded = tmp_path / 'discarded' / f'ep_abort-{uid}'
-    assert (discarded / 'a.parquet').exists()  # what was captured before the discard
+    # Readable, not merely present: the discard closes the signal writers, and `__exit__` returns
+    # without closing anything once a discard has begun.
+    assert pq.read_table(discarded / 'a.parquet').to_pydict()['value'] == [1]
     assert (discarded / UNFINISHED_MARKER).exists()
     marker = json.loads((discarded / DISCARD_MARKER).read_text())
     assert marker[DISCARD_REASON] == DiscardReason.ABORTED.value
