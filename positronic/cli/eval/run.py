@@ -38,9 +38,11 @@ class Operator:
     - ``directives`` emits ``Directive`` (RUN, FINISH, ABORT) into the harness, through
       ``directive_wrapper`` — the emitter wrapper that maps whatever the surface emits (a keystroke, a
       button press) onto a ``Directive``.
-    - ``control_systems`` are scheduled in the foreground, so one of them returning ends the world, and
-      ending the world is how an attended run finishes. Anything the surface must do before the run ends
-      happens before its loop returns.
+    - ``control_systems`` run in the main process, alongside the harness. A surface that holds a GUI
+      handle or a socket goes in ``gui`` instead, which is spawned as its own process. Placement changes
+      the clock a message is stamped with, not who may end the run: any control system returning stops
+      the world, wherever it runs, and ending the world is how an attended run finishes. Anything the
+      surface must do before the run ends happens before its loop returns.
     - ``gui`` is any control system exposing ``cameras``, a receiver dict keyed by observation name; the
       run connects every observation named with ``keys.IMAGE_PREFIX`` into it.
     - ``manual_commands`` emits robot commands, which the harness applies only while idle.
