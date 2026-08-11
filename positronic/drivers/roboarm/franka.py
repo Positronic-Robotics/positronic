@@ -98,6 +98,8 @@ def _revolute_joint_names(urdf_xml):
 
 
 _MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collision'
+_PARK_SLACK_RAD = 0.05
+_PARK_TIMEOUT_S = 10.0
 
 
 class Robot(pimm.ControlSystem):
@@ -116,7 +118,7 @@ class Robot(pimm.ControlSystem):
         """
         :param ip: IP address of the robot.
         :param relative_dynamics_factor: Relative dynamics factor in [0, 1]. Smaller values are more conservative.
-        :param home_joints: Joints of "reset" position.
+        :param home_joints: Joints of "reset" position, and the pose the arm is parked at when the run ends.
         :param home_joints_variation: Max random deviation per joint in radians. Set to [0]*7 to disable.
         :param collision_coeff: Multiplier for collision thresholds. Higher = more tolerant.
             Default 2.0 (data collection). Use 6.0 for inference.
@@ -274,6 +276,36 @@ class Robot(pimm.ControlSystem):
                     yield desk
                     return
 
+    def _park(self, robot) -> None:
+        """Move the arm to the home pose, giving up after ``_PARK_TIMEOUT_S``.
+
+        Autonomous motion at shutdown: bounded, at the configured dynamics factor, to the configured
+        ``home_joints`` and nowhere else. Every failure reaches the log and no further, so the brake
+        engagement and control release that follow run whatever happens here.
+        """
+        target = np.asarray(self._home_joints, dtype=np.float64)
+        # A reset lands anywhere inside home_joints_variation, so an arm within that spread is already parked.
+        tolerance = np.asarray(self._home_joints_variation, dtype=np.float64) + _PARK_SLACK_RAD
+        try:
+            if np.all(np.abs(np.asarray(robot.state().q, dtype=np.float64) - target) <= tolerance):
+                return
+            logging.info('Parking the arm at the home pose')
+            robot.recover_from_errors()  # once, before the move: a reflex during the move ends the park
+            robot.set_target_joints(target)
+            deadline = time.monotonic() + _PARK_TIMEOUT_S
+            while time.monotonic() < deadline:
+                goal = robot.goal()
+                if goal.status == pf.GoalStatus.REACHED:
+                    return
+                if goal.status != pf.GoalStatus.IN_FLIGHT:
+                    logging.error(f'Parking gave up, the arm stays where it stands: {goal.reason or goal.status}')
+                    return
+                time.sleep(0.005)
+            logging.error(f'Parking timed out after {_PARK_TIMEOUT_S}s, the arm stays where it stands')
+        # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
+        except Exception:
+            logging.exception('Parking failed, the arm stays where it stands')
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         with self._desk_session():
             robot = self._ensure_robot()
@@ -337,6 +369,7 @@ class Robot(pimm.ControlSystem):
 
                     yield rate_limiter.wait()
             finally:
+                self._park(robot)
                 # Halt the driver's control thread before _desk_session deactivates FCI, or it dies mid-control
                 # with "TCP connection got interrupted".
                 robot.stop()
