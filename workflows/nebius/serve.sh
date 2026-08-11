@@ -126,10 +126,14 @@ fi
 
 echo "Endpoint ID: $ID"
 
+# The two fields carry different shapes: a private address is bare `host:port`, a public one is a full
+# tunnel URL with its own scheme. Prefixing a scheme unconditionally corrupts the public form.
 if [ "${NEBIUS_PUBLIC:-1}" = "0" ]; then
   FIELD=private_endpoints
+  SCHEME=http://
 else
   FIELD=public_endpoints
+  SCHEME=
 fi
 
 echo "Waiting for the $FIELD address (typically <1 min)..."
@@ -146,12 +150,7 @@ if [ -z "$ADDRESS" ]; then
   exit 1
 fi
 
-# The two fields carry different shapes: a private address is bare `host:port`, a public one is a
-# full tunnel URL with its own scheme. Prefixing a scheme unconditionally corrupts the public form.
-case "$ADDRESS" in
-  http://*|https://*) URL="$ADDRESS" ;;
-  *)                  URL="http://$ADDRESS" ;;
-esac
+URL="$SCHEME$ADDRESS"
 
 cat <<BANNER
 
