@@ -1,4 +1,4 @@
-"""Legacy ``positronic-inference`` CLI: the attended ``real``/``phail`` aliases over the ``cli.eval.run`` runner."""
+"""Legacy ``positronic-inference`` CLI: the attended ``real`` alias over the ``cli.eval.run`` runner."""
 
 from collections import Counter
 from pathlib import Path
@@ -12,9 +12,8 @@ import positronic.cfg.policy as policy_cfg
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import Operator, main, run
 from positronic.dataset.local_dataset import load_all_datasets
-from positronic.gui import dpg_ui, handover
+from positronic.gui import dpg_ui
 from positronic.gui.keyboard import KeyboardControl
-from positronic.gui.web import WebEvalUI
 from positronic.policy.harness import Directive
 from positronic.utils.logging import init_logging
 
@@ -34,17 +33,6 @@ class KeyboardHandler:
         return None
 
 
-@cfn.config(ui_scale=1, handover_dir=handover.DEFAULT_DIR)
-def eval_ui(ui_scale, handover_dir):
-    def make(output_dir: Path | None) -> Operator:
-        from positronic.gui.eval import EvalUI  # noqa: PLC0415
-
-        gui = EvalUI(output_dir, ui_scale=ui_scale, handover_dir=Path(handover_dir))
-        return Operator(gui, gui.directive, pimm.utils.identity, [])
-
-    return make
-
-
 @cfn.config(show_gui=False)
 def keyboard(show_gui, task):
     def make(output_dir: Path | None) -> Operator:
@@ -61,34 +49,6 @@ def keyboard(show_gui, task):
     return make
 
 
-@cfn.config(
-    port=8080,
-    fps=20,
-    width=640,
-    bitrate=2_000_000,
-    translation_fine=0.01,
-    translation_coarse=0.05,
-    rotation_fine=2.0,
-    rotation_coarse=10.0,
-)
-def web(port, fps, width, bitrate, translation_fine, translation_coarse, rotation_fine, rotation_coarse, task):
-    def make(output_dir: Path | None) -> Operator:
-        ui = WebEvalUI(
-            task=task,
-            port=port,
-            fps=fps,
-            width=width,
-            bitrate=bitrate,
-            translation_fine=translation_fine,
-            translation_coarse=translation_coarse,
-            rotation_fine=rotation_fine,
-            rotation_coarse=rotation_coarse,
-        )
-        return Operator(ui, ui.directive, pimm.utils.identity, [], manual_commands=ui.manual_command)
-
-    return make
-
-
 run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder, operator=keyboard)
 
 
@@ -100,12 +60,6 @@ def _internal_main():
         'run': run_cfg,
         'real': run_cfg,  # `real` is the documented name for the hardware path
         'sim': run.override(eval=stack_cubes),
-        'web': run_cfg.override(operator=web),
-        'phail': run_cfg.override(
-            policy=policy_cfg.phail_multiple,
-            operator=eval_ui,
-            **{'operator.ui_scale': 3, 'embodiment.robot_arm.collision_coeff': 2.0},
-        ),
         'stats': stats,
     })
 

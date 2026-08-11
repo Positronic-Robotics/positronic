@@ -96,7 +96,7 @@ An attended run is driven by an operator surface — the thing that decides when
 
 **Keyboard operator (manual):** Control inference with keyboard. Press `s` to start episode, `p` to stop and save, `r` to home the robot, `q` to quit. The default for `real`; optionally pass `--operator.show_gui=True` for DearPyGui visualization. Useful for manual evaluation and debugging.
 
-**Eval UI driver:** Dedicated evaluation interface for policy assessment. The default for `phail` — graphical controls and metrics visualization. Useful for systematic policy evaluation with visual feedback.
+A surface of your own — a console, a web UI, a foot pedal — plugs in through the same seam: build a `positronic.cli.eval.run.Operator` and pass it to `main` as `operator=`. Its contract is documented on the class.
 
 ## Recording and Replay
 
