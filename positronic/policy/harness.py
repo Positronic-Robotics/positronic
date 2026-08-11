@@ -510,11 +510,8 @@ class Harness(pimm.ControlSystem):
             yield self._pace()
 
         if self._running:
-            # The world ending is the run's designed finish, and it is edge-triggered: peers get one
-            # observation round and the recorder exits almost immediately, so an episode open here cannot be
-            # committed — a STOP racing the recorder's exit either lands a truncated episode as a complete
-            # one or does nothing. Cancel the in-flight chunk so devices hold and leave it uncommitted; the
-            # recorder's teardown discards it.
+            # The world ends edge-triggered, so a STOP raced against the recorder's exit either commits a
+            # truncated episode or does nothing. Cancel the chunk and leave it for teardown to discard.
             self._cancel_trajectories()
             self._telemetry.abort()
         if self._policy_session:

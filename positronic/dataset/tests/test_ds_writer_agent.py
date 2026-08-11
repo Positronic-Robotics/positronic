@@ -10,7 +10,7 @@ import pytest
 
 import pimm
 from positronic import geom, keys, telemetry, telemetry_keys
-from positronic.dataset import DatasetWriter, DiscardReason, EpisodeWriter
+from positronic.dataset import DatasetWriter, EpisodeWriter
 from positronic.dataset.ds_writer_agent import (
     DsWriterAgent,
     DsWriterCommand,
@@ -18,6 +18,7 @@ from positronic.dataset.ds_writer_agent import (
     TimeMode,
     TrajectoryOverrideSerializer,
 )
+from positronic.dataset.episode import DiscardReason
 from positronic.dataset.local_dataset import (
     DISCARD_MARKER,
     DISCARD_REASON,

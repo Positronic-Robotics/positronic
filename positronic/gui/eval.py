@@ -12,8 +12,8 @@ import numpy as np
 import pimm
 from positronic import keys
 from positronic.cfg.eval.real.tasks import SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK, UNIFIED_TASK
-from positronic.dataset import META_UID
 from positronic.dataset.edits import EditedDataset
+from positronic.dataset.episode import META_UID
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.gui import handover
 from positronic.policy.harness import Directive

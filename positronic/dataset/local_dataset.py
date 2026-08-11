@@ -43,11 +43,11 @@ logger = logging.getLogger(__name__)
 
 UNFINISHED_MARKER = '.unfinished'
 DISCARD_MARKER = 'discarded.json'
-# Fields of that marker. Written here, read by anything inspecting or sweeping the discarded tree.
+# Fields of that marker, read by anything inspecting or sweeping the discarded tree.
 DISCARD_REASON = 'reason'
 DISCARD_TS_NS = 'discarded_ts_ns'
 DISCARD_UID = 'uid'
-# Appended to a dataset root's name to make the sibling directory discarded episodes are moved into.
+# Appended to a dataset root's name to name the sibling directory discarded episodes move into.
 DISCARDED_ROOT_SUFFIX = '.discarded'
 
 
@@ -125,16 +125,14 @@ class DiskEpisodeWriter(EpisodeWriter):
         # Accumulated static items to be stored in a single static.json
         self._static_items: dict[str, Any] = {}
         self._finished = False
-        # Why a discard was asked for, set before the first step of it that can fail: from then on `__exit__`
-        # commits nothing, whether or not the discard reached the end.
+        # Set before the first step of a discard that can fail; from then on `__exit__` commits nothing.
         self._discard_reason: DiscardReason | None = None
-        # The move into the discarded tree landed. Until then the discard is unfinished and a later call retries it.
+        # The move into the discarded tree landed; until then a later `discard` retries it.
         self._discard_completed = False
         self._on_close = on_close
         self._video_options = video_options
 
-        # A caller may supply the uid to preserve identity across a copy, and it names the directory a
-        # discard moves into, so it has to be one path segment and not a way out of that tree.
+        # A caller-supplied uid names the directory a discard moves into, so it must be one path segment.
         if uid is not None and (Path(uid).name != uid or uid in ('.', '..')):
             raise ValueError(f'{uid!r} is not a usable episode uid: it must be a single path segment')
 
@@ -255,16 +253,14 @@ class DiskEpisodeWriter(EpisodeWriter):
 
     def __exit__(self, exc_type, exc, tb) -> None:
         """Finalize all signal writers and persist static items on context exit."""
-        # A discarded episode is never committed, whether the discard completed or failed part-way: this method
-        # clears the unfinished marker, which would publish it as a complete recording.
+        # A discarded episode is never committed, completed discard or not: the clear below would publish it.
         if self._discard_reason is not None:
             return
         if exc_type is not None:
             try:
                 self.discard(DiscardReason.WRITE_FAILED)
             except Exception:
-                # Carry on so the exception that ended the context is the one that propagates. The recording
-                # is left unfinished where it fell, which is what a failed discard leaves anyway.
+                # Carry on so the exception that ended the context propagates; the episode stays unfinished.
                 logger.exception('Discarding %s after a write failure did not complete', self._path)
             return
 
@@ -345,8 +341,7 @@ class DiskEpisodeWriter(EpisodeWriter):
             json.dump(marker, f, indent=2)
 
         self._discarded_dir.mkdir(parents=True, exist_ok=True)
-        # The dataset reuses an episode id once its directory is gone, and a caller may pass the uid in too, so
-        # the name is not assumed free: an id+uid pair can be discarded more than once.
+        # Episode ids are reused once a directory is gone, so the same id+uid can be discarded twice.
         destination = self._free_destination(self._discarded_dir, f'{self._path.name}-{self._meta[META_UID]}')
         shutil.move(self._path, destination)
         self._discard_completed = True

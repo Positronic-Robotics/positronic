@@ -1508,9 +1508,8 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
     p = _pair_all(world, harness)
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    # A latched observation set makes every step's inference fire (the harness reads the latest value). The
-    # producer outlives the trial's timeout, so the episode ends on its own budget rather than on the world
-    # stopping — which discards it, leaving nothing to read the step count off.
+    # The producer outlives the trial's timeout, so the episode ends on its own budget rather than on the
+    # world stopping — which would discard it, leaving no step count to read.
     producer = ManualDriver([
         (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.0),
         (None, 0.2),

@@ -27,7 +27,8 @@ from starlette.requests import Request
 
 import positronic.cfg.ds
 from positronic import keys, utils
-from positronic.dataset import META_UID, CachedDataset, Dataset, Episode
+from positronic.dataset import CachedDataset, Dataset, Episode
+from positronic.dataset.episode import META_UID
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import get_dataset_root, get_episodes_list, stream_episode_rrd
 from positronic.utils.logging import init_logging

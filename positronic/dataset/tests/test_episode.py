@@ -6,7 +6,8 @@ import pyarrow.parquet as pq
 import pytest
 
 from positronic import keys
-from positronic.dataset import META_UID, DiscardReason, Episode
+from positronic.dataset import Episode
+from positronic.dataset.episode import META_UID, DiscardReason
 from positronic.dataset.local_dataset import (
     DISCARD_MARKER,
     DISCARD_REASON,
@@ -283,8 +284,7 @@ def test_a_discard_whose_finalization_fails_leaves_the_episode_unfinished(tmp_pa
     failures_left = [1]
 
     def fail_once(self, exc_type, exc, tb):
-        # A real signal writer marks itself finished before it can raise (a video encoder failure), so a
-        # second finalization of the same writer is a no-op.
+        # A real writer marks itself finished before it can raise, so re-finalizing it is a no-op.
         real_exit(self, exc_type, exc, tb)
         if failures_left[0]:
             failures_left[0] -= 1
