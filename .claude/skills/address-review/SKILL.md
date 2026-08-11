@@ -1,7 +1,7 @@
 ---
 name: address-review
 description: Respond to GitHub PR review comments in one pass — fetch, triage (agree or disagree), fix the valid ones, commit, push, reply to all, and resolve only the threads you fixed (declines, defers, and discussion questions stay open for the human). Use when a PR has reviewer or bot (e.g. Codex) comments to address.
-allowed-tools: Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git diff:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(awk:*), Bash(gh api:*), Bash(gh pr:*), Bash(gh repo:*), Bash(gh run:*), Bash(uv run:*), Bash(bash .claude/skills/address-review/watch.sh:*), Edit, Write
+allowed-tools: Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git diff:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(awk:*), Bash(gh api:*), Bash(gh pr:*), Bash(gh repo:*), Bash(gh run:*), Bash(uv run:*), Bash(bash .claude/skills/address-review/watch.sh:*), Edit, Write, Skill(check-rules), Task
 ---
 
 # Address Review Comments
@@ -128,6 +128,14 @@ comments checks from the `polish` skill (Steps 2 and 4 there) over it — explic
 including the structural-twins check. Fix what emerges before committing; fold those
 changes into the same commit and mention them in the relevant replies.
 
+**Then run `check-rules`, once.** After the polish pass above has settled, run the
+`check-rules` skill a single time over this pass's changes; skip it when the pass changed
+no code (a decline/defer/discuss-only round has nothing to check). One run, at this point:
+run it earlier and the polish fixes land behind it unchecked; run it every iteration and
+each round pays its one-agent-per-rule fan-out. Fix the violations it reports and fold the
+fixes into the same commit — without re-running it on them. A finding you judge wrong is a
+note in the Step 6 report, not a new waiver.
+
 ## Step 4: Verify, commit, push
 
 Re-run the Step 1 fetch right before committing and triage anything new. A comment that lands
@@ -222,6 +230,7 @@ and the human resolves when satisfied.
 
 Summarize:
 - a table of comment → verdict → fix (with commit SHA),
+- what `check-rules` found and you fixed (by rule id), plus any finding you judged wrong,
 - what was pushed,
 - which threads you resolved (fixes only) vs left open (declines / defers / discussion),
 - any follow-ups the user should track.
