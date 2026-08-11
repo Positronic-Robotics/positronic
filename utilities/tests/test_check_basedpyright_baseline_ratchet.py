@@ -1,9 +1,7 @@
 import subprocess
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import check_basedpyright_baseline_ratchet as ratchet  # noqa: E402
+from utilities import check_basedpyright_baseline_ratchet as ratchet
 
 
 def _git(repo: Path, *args: str) -> None:
