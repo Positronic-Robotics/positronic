@@ -5,9 +5,8 @@ from typing import cast
 
 import pytest
 
-import pimm
 from positronic import telemetry, telemetry_keys
-from positronic.cli.eval.run import Operator, _pass_span, _timed_pass, main
+from positronic.cli.eval.run import _pass_span, main, timed_pass
 from positronic.eval import Embodiment, Eval, Task
 
 
@@ -22,19 +21,6 @@ def test_timed_sweep_rejects_real_embodiment(tmp_path):
         main(policy=object(), evals=[_eval(True), _eval(False)], output_dir=tmp_path, timing=True)
 
 
-def test_timed_attended_run_rejects_real_embodiment(tmp_path):
-    """The attended path runs one embodiment rather than a sweep, and reaches the same check."""
-    real = cast(Embodiment, SimpleNamespace(simulated=False))
-    with pytest.raises(ValueError, match='all-simulated'):
-        main(
-            policy=object(),
-            embodiment=real,
-            operator=lambda _: cast(Operator, SimpleNamespace()),
-            output_dir=tmp_path,
-            timing=True,
-        )
-
-
 class _IdlePolicy:
     """Enough policy for ``main`` to warm up and close; it is never asked for an action."""
 
@@ -45,34 +31,14 @@ class _IdlePolicy:
         pass
 
 
-class _FinishingOperator(pimm.ControlSystem):
-    """An operator surface that paces a few rounds and then returns, emitting nothing."""
-
-    def __init__(self, rounds: int = 3):
-        self._rounds = rounds
-        self.directive = pimm.ControlSystemEmitter(self)
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        for _ in range(self._rounds):
-            yield pimm.Sleep(0.01)
-
-
 @pytest.mark.timeout(30.0)
-def test_an_operator_control_system_returning_ends_the_run():
-    """How an attended run finishes: an operator's foreground loop returns, the world stops, ``main`` returns.
-
-    An operator that never returns can only be ended from outside the run, so this is the seam's whole
-    finish contract — anything the surface must do first happens before its loop returns.
-    """
+def test_an_exhausted_trial_plan_ends_the_sweep():
+    """How an unattended run finishes: the harness runs out of trials, the world stops, ``main`` returns."""
     embodiment = Embodiment(
         descriptor='stub', observations={}, commands={}, static_meta={}, meta_source=None, simulated=True
     )
-    surface = _FinishingOperator()
-    main(
-        policy=_IdlePolicy(),
-        embodiment=embodiment,
-        operator=lambda _: Operator(None, surface.directive, pimm.utils.identity, [surface]),
-    )
+    task = Task(instruction='stub', timeout=0.05)
+    main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, task=task, trials=[])])
 
 
 def test_timed_sweep_needs_an_output_dir():
@@ -125,7 +91,7 @@ def test_the_stats_sampler_runs_inside_the_pass_span(tmp_path, monkeypatch):
     # object whose global is being replaced comes from `sys.modules`.
     monkeypatch.setattr(sys.modules['positronic.cli.eval.run'], '_pass_span', _recording_pass)
 
-    with _timed_pass(tmp_path, True, object()):
+    with timed_pass(tmp_path, True, object()):
         pass
 
     assert order == ['sampler built', 'pass in', 'sampler in', 'sampler out', 'pass out']
