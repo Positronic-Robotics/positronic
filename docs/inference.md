@@ -96,7 +96,7 @@ An attended run is driven by an operator surface — the thing that decides when
 
 **Keyboard operator (manual):** Control inference with keyboard. Press `s` to start episode, `p` to stop and save, `r` to home the robot, `q` to quit. The default for `real`; optionally pass `--operator.show_gui=True` for DearPyGui visualization. Useful for manual evaluation and debugging.
 
-A surface of your own — a console, a web UI, a foot pedal — plugs in through the same seam: build a `positronic.cli.eval.run.Operator` and pass it to `main` as `operator=`. Its contract is documented on the class.
+A surface of your own — a console, a web UI, a foot pedal — plugs in through the same seam: pass `main` an `operator=` factory that builds a `positronic.cli.eval.run.Operator`. It is a factory rather than an instance because it is called with the resolved output directory, which exists only once the run has synced it. The contract is documented on the class.
 
 ## Recording and Replay
 
