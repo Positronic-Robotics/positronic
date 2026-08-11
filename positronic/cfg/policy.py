@@ -101,11 +101,11 @@ def production(
     """Routes each episode to one of several remote endpoints, each named for CLI overrides.
 
     An endpoint is a whole `remote` config rather than a URL, so what one server needs stays that
-    server's and reaches no other: `--policy.endpoints.groot.url=ws://desktop:8000` repoints one and
-    `--policy.endpoints.groot.headers='{"Authorization": "Bearer <token>"}'` credentials it. Adding one
-    names the config it is built from, `--policy.endpoints.groot=@positronic.cfg.policy.remote`, and
-    then its arguments. `weights` name the same endpoints and set their sampling odds; endpoints left
-    out of it weigh 1.0.
+    server's and reaches no other — `--policy.endpoints.groot.url=ws://desktop:8000` repoints one, and
+    `--policy.endpoints.groot=.nebius_remote` with its own `.url` moves that one alone behind a token
+    while the rest stay open. A name not already here is built from the config it is given,
+    `@positronic.cfg.policy.remote`. `weights` name the same endpoints and set their sampling odds;
+    endpoints left out of it weigh 1.0.
     """
     if not endpoints:
         raise ValueError(
