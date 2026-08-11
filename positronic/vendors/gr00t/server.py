@@ -130,7 +130,7 @@ class Gr00tSubprocess:
     def __init__(
         self,
         checkpoint_dir: str,
-        modality_config_path: str,
+        modality_config_path: Path,
         groot_venv_path: str,
         zmq_port: int = 5555,
         ready_timeout: float = 120.0,
@@ -150,7 +150,7 @@ class Gr00tSubprocess:
         command = [python_bin, 'gr00t/eval/run_gr00t_server.py']
         command.extend(['--model_path', str(self.checkpoint_dir)])
         command.extend(['--embodiment_tag', 'NEW_EMBODIMENT'])
-        command.extend(['--modality_config_path', self.modality_config_path])
+        command.extend(['--modality_config_path', str(self.modality_config_path)])
         command.extend(['--host', '127.0.0.1'])
         command.extend(['--port', str(self.zmq_port)])
 
@@ -262,16 +262,24 @@ class Gr00tSource(ModelSource):
         self,
         checkpoints_dir: str,
         checkpoint: str | None = None,
-        modality_config: str = 'ee',
+        modality_config: str | gr00t.ModalityConfig = 'ee',
         groot_venv_path: str = '/.venv/',
         zmq_port: int = 5555,
         ready_timeout: float = 120.0,
     ):
-        if modality_config not in gr00t.MODALITY_CONFIGS:
-            raise ValueError(f'Unknown modality config: {modality_config}. Available: {sorted(gr00t.MODALITY_CONFIGS)}')
+        if isinstance(modality_config, str):
+            if modality_config not in gr00t.MODALITY_CONFIGS:
+                raise ValueError(
+                    f'Unknown modality config: {modality_config}. Available: {sorted(gr00t.MODALITY_CONFIGS)}. '
+                    'A config of your own is passed as a ModalityConfig, which states the state block to warm it with'
+                )
+            self._modality = gr00t.MODALITY_CONFIGS[modality_config]
+        else:
+            self._modality = modality_config
         self.checkpoints_dir = checkpoints_dir.rstrip('/')
         self.checkpoint = checkpoint
-        self.modality_config = modality_config
+        # What to call the config being served: the alias where there is one, else the module it points at.
+        self.modality_config = modality_config if isinstance(modality_config, str) else str(self._modality.path)
         self.groot_venv_path = groot_venv_path
         self.zmq_port = zmq_port
         self.ready_timeout = ready_timeout
@@ -309,10 +317,9 @@ class Gr00tSource(ModelSource):
             f'Downloading checkpoint checkpoint-{model_id}',
             on_progress,
         )
-        modality = gr00t.MODALITY_CONFIGS[self.modality_config]
         groot = Gr00tSubprocess(
             checkpoint_dir=str(checkpoint_dir),
-            modality_config_path=modality.path,
+            modality_config_path=self._modality.path,
             groot_venv_path=self.groot_venv_path,
             zmq_port=self.zmq_port,
             ready_timeout=self.ready_timeout,
@@ -321,7 +328,7 @@ class Gr00tSource(ModelSource):
             groot.start(on_progress)
             policy = Gr00tPolicy(groot, str(checkpoint_dir))
             # The subprocess initializes CUDA on its first forward, which outlasts a rig's inference timeout.
-            warmup(policy, _warm_observation(modality), on_progress)
+            warmup(policy, _warm_observation(self._modality), on_progress)
         except Exception:
             groot.stop()
             raise

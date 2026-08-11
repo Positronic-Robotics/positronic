@@ -26,8 +26,11 @@ def warm_observation() -> dict[str, Any]:
     """Zero-filled inputs carrying every field above, so one observation warms a checkpoint under any config.
 
     A config's input transform pulls out the fields it names and ignores the rest, which is what lets one
-    observation stand in for the codec that normally feeds the subprocess. Sizes need only stay within the
-    model's own bounds: OpenPI pads the state to the action dimension and resizes images itself.
+    observation stand in for the codec that normally feeds the subprocess.
+
+    Widths need not match what a codec encodes. ``STATE`` is 8 because ``LiberoInputs`` hands it to the model
+    untouched at exactly that width; the ``pi05_positronic`` transforms pad whatever they get up to the action
+    dimension, and the ``pi05_droid`` ones read joints and gripper instead. Images are resized by openpi itself.
     """
     frame = np.zeros((224, 224, 3), dtype=np.uint8)
     return {
