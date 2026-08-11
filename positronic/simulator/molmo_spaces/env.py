@@ -252,7 +252,10 @@ class MolmoSpacesEnv(EnvProtocol):
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         arm = mapping.wire_command_to_arm_action(
-            action[protocol.ACTION_COMMAND], self._measured_arm_q(), ik=self._ik, current_eef=self._measured_eef_pose()
+            action[protocol.ACTION_COMMAND],
+            self._measured_arm_q(),
+            ik=self._ik_robot_frame,
+            current_eef=self._measured_eef_pose(),
         )
         gripper = np.array([mapping.grip_command_to_actuator(action[protocol.ACTION_GRIP])], dtype=np.float32)
         obs, _reward, _term, _trunc, _infos = self._task.step({
@@ -277,12 +280,31 @@ class MolmoSpacesEnv(EnvProtocol):
         return np.asarray(self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP).joint_pos, dtype=np.float32)
 
     def _measured_eef_pose(self) -> tuple[np.ndarray, np.ndarray]:
-        """The measured grasp-site world pose as ``(translation, 3x3 rotation)`` — the frame a Cartesian
-        command targets and the one ``_observe`` reports, so command and observation share a frame."""
-        eef_world = np.asarray(
-            self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP).leaf_frame_to_world, dtype=np.float64
+        """The measured grasp-site pose in the ROBOT frame as ``(translation, 3x3 rotation)`` — the frame a
+        Cartesian command targets and the one ``_observe`` reports, so command and observation share a frame.
+
+        Robot-frame rather than world: a scene-world pose puts the arm metres from the origin (the ProcTHOR
+        house frame), which no DROID-trained checkpoint has ever seen as proprioception. MolmoSpaces' own
+        ``tcp_pose`` sensor reports ``leaf_frame_to_robot`` for the same reason.
+        """
+        eef_robot = np.asarray(
+            self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP).leaf_frame_to_robot, dtype=np.float64
         )
-        return eef_world[:3, 3].copy(), eef_world[:3, :3].copy()
+        return eef_robot[:3, 3].copy(), eef_robot[:3, :3].copy()
+
+    def _robot_to_world(self) -> tuple[np.ndarray, np.ndarray]:
+        """The robot base pose as ``(translation, 3x3 rotation)``, composing a robot-frame pose into world."""
+        base = np.asarray(self._robot_view.base.pose, dtype=np.float64)
+        return base[:3, 3].copy(), base[:3, :3].copy()
+
+    def _ik_robot_frame(self, target_pos: np.ndarray, target_rot: np.ndarray) -> np.ndarray:
+        """A robot-frame Cartesian target -> arm joint targets, through the world-frame solver.
+
+        Commands arrive in the frame ``_observe`` reports; ``_ik`` solves in world, so the base transform is
+        applied here rather than duplicated in either.
+        """
+        t, r = self._robot_to_world()
+        return self._ik(r @ np.asarray(target_pos, dtype=np.float64) + t, r @ np.asarray(target_rot, dtype=np.float64))
 
     def _scratch_data(self, move_group: Any) -> Any:
         """The scratch ``MjData``, refreshed from the live one, for off-sim kinematics probing.
@@ -355,19 +377,19 @@ class MolmoSpacesEnv(EnvProtocol):
     def _observe(self, env_obs: dict[str, Any]) -> dict[str, Any]:
         """The raw observation payload for one env frame: measured joints, the eef world pose, grip, camera frames.
 
-        MolmoSpaces' obs carries the joint positions/velocities and camera frames; the eef *world* pose is read
-        from the arm move group's grasp-site frame, since obs exposes only a robot-relative tcp pose.
+        MolmoSpaces' obs carries the joint positions/velocities and camera frames; the eef pose is read from the
+        arm move group's grasp-site frame, in the robot frame the policy is trained against.
         """
         arm = self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
-        eef_world = np.asarray(arm.leaf_frame_to_world, dtype=np.float64)  # 4x4 grasp-site world transform
+        eef_robot = np.asarray(arm.leaf_frame_to_robot, dtype=np.float64)  # 4x4 grasp-site robot-frame transform
         eef_quat = np.zeros(4)  # filled wxyz below
-        rot9 = np.ascontiguousarray(eef_world[:3, :3].reshape(9))
+        rot9 = np.ascontiguousarray(eef_robot[:3, :3].reshape(9))
         # mju_mat2Quat is a C binding absent from mujoco's type stubs, so pyright can't see the attribute.
         mujoco.mju_mat2Quat(eef_quat, rot9)  # pyright: ignore[reportAttributeAccessIssue]
         payload = {
             mapping.OBS_JOINT_POS: np.asarray(arm.joint_pos, dtype=np.float32),
             mapping.OBS_JOINT_VEL: np.asarray(arm.joint_vel, dtype=np.float32),
-            mapping.OBS_EEF_POS: eef_world[:3, 3].astype(np.float32),
+            mapping.OBS_EEF_POS: eef_robot[:3, 3].astype(np.float32),
             mapping.OBS_EEF_QUAT: eef_quat.astype(np.float32),
             mapping.OBS_GRIP: np.float32(
                 mapping.normalize_grip_qpos(env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP])
