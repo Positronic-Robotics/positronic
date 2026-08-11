@@ -18,8 +18,13 @@ class GoalStatus(Enum):
     ABORTED = 'aborted'
 
 
+PACKAGE = 'positronic_franka'
+VENDOR = f'{PACKAGE}._franka'
+DESK = f'{PACKAGE}.desk'
+
+
 def _install_vendor_stub() -> None:
-    vendor = types.ModuleType('positronic_franka._franka')
+    vendor = types.ModuleType(VENDOR)
     vendor.__dict__.update(
         GoalStatus=GoalStatus,
         State=object,
@@ -28,18 +33,14 @@ def _install_vendor_stub() -> None:
         InternalImpedance=lambda stiffness: ('internal_impedance', stiffness),
     )
 
-    desk = types.ModuleType('positronic_franka.desk')
+    desk = types.ModuleType(DESK)
     desk.__dict__.update(Desk=object, SafetyControllerError=type('SafetyControllerError', (Exception,), {}))
 
-    package = types.ModuleType('positronic_franka')
+    package = types.ModuleType(PACKAGE)
     package.__dict__.update(_franka=vendor, desk=desk)
 
-    sys.modules.update({
-        'positronic_franka': package,
-        'positronic_franka._franka': vendor,
-        'positronic_franka.desk': desk,
-    })
+    sys.modules.update({PACKAGE: package, VENDOR: vendor, DESK: desk})
 
 
-if importlib.util.find_spec('positronic_franka') is None:
+if importlib.util.find_spec(PACKAGE) is None:
     _install_vendor_stub()

@@ -225,8 +225,7 @@ class Robot(pimm.ControlSystem):
     def _travel(robot, target) -> Iterator[None]:
         """Command ``target`` and yield once per poll until the arm arrives; raise if the goal stops advancing.
 
-        The caller decides what a poll costs and when to give up — a running loop pays a rate-limited tick and
-        watches the stop signal, a teardown pays a short sleep and watches a deadline.
+        Yielding is the only wait: what a poll costs, and when to give up waiting, are the caller's.
         """
         robot.set_target_joints(target)
         while True:
