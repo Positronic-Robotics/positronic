@@ -109,7 +109,10 @@ nebius ai endpoint create \
   --env HF_HOME=/cache/hf \
   --env OPENPI_DATA_HOME=/cache/openpi \
   --env-secret "${AUTH_TOKEN_KEY}=${AUTH_TOKEN_SECRET}" \
-  "${S3_ENV_FLAGS[@]}" >/dev/null
+  "${S3_ENV_FLAGS[@]}"
+# Left on stdout, not discarded: `create` reports `Endpoint ID:` as soon as the resource exists and can
+# still fail afterwards — a container that will not start does exactly that — so a caller logging this
+# output learns what to release even on the paths where this script never reaches its banner.
 
 ID=$(nebius ai endpoint list --parent-id "$PARENT_ID" --format json \
   | jq -r --arg n "$NAME" '.items[]? | select(.metadata.name==$n) | .metadata.id')
