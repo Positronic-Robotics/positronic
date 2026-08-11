@@ -2,9 +2,10 @@
 # Full-pipeline validation harness for one vendor:
 #   convert (+ openpi stats) → train (200 steps) → serve → served-endpoint contract → teardown
 #
-# Submits jobs via the user-facing primitives (convert.sh / train.sh / serve.sh / stop.sh),
-# polls Nebius for completion, and reports a status line per stage. Intended for CI or for
-# verifying a vendor's pipeline still works after an image / dependency / script change.
+# Submits jobs via the user-facing primitives (convert.sh / train.sh / serve.sh), polls Nebius for
+# completion, and reports a status line per stage. Intended for CI or for verifying a vendor's
+# pipeline still works after an image / dependency / script change. Teardown deletes by endpoint id
+# rather than through stop.sh, which takes a name and so cannot tell one run's endpoint from another's.
 #
 # Cost: ~$2-5 per run (cold-start dominated; the actual compute is short).
 
@@ -158,29 +159,28 @@ wait_job "$TRAIN_ID" "train" || exit 1
 
 # ---- 3. Serve ----
 note "serve -> $ENDPOINT_NAME"
-# Armed before the endpoint can exist: from here on every exit, including a `serve.sh` that created
-# one and then failed, has to release the GPU rather than leave it billing.
+# Deletes by id, not by name: a name is only what this run asked for, and an endpoint answering to it
+# may be a concurrent run's. An id comes back from a create this run made.
 teardown() {
   local status=$?   # whatever the run was already exiting with; a teardown failure may worsen it, never hide it
-  note "teardown -> $ENDPOINT_NAME"
-  if bash "$SCRIPT_DIR/stop.sh" "$ENDPOINT_NAME" >> "$LOG" 2>&1; then
+  note "teardown -> $ENDPOINT_ID"
+  if nebius ai endpoint delete "$ENDPOINT_ID" >> "$LOG" 2>&1; then
     note "DONE"
   else
-    note "FAIL: teardown left $ENDPOINT_NAME alive and billing; delete it by hand"
+    note "FAIL: teardown left $ENDPOINT_ID alive and billing; delete it by hand"
     status=1
   fi
   exit "$status"
 }
-# The trap deletes by name, so the name has to be ours before it is armed: an endpoint already holding
-# it belongs to another run, and `serve.sh` would refuse it while the trap deleted it anyway.
-if nebius ai endpoint list --parent-id "$PARENT_ID" --format json \
-  | jq -e --arg n "$ENDPOINT_NAME" '.items[]? | select(.metadata.name==$n)' >/dev/null 2>&1; then
-  note "FAIL: an endpoint named $ENDPOINT_NAME already exists; it is not this run's to delete"
-  exit 1
-fi
-trap teardown EXIT
 SERVE_OUT=$(bash "$SCRIPT_DIR/serve.sh" "$VENDOR" "$ENDPOINT_NAME" "${SERVE_SUBCMD[@]}" 2>&1)
 echo "$SERVE_OUT" >> "$LOG"
+# `serve.sh` reports the id as soon as the endpoint exists and before the minutes it then spends waiting
+# for a managed URL, so arming here still covers the failure that leaves a GPU running: that wait timing
+# out. It exits before reporting anything when the create itself fails, including on a taken name.
+ENDPOINT_ID=$(echo "$SERVE_OUT" | awk '/Endpoint ID:/ {print $3; exit}')
+[ -z "$ENDPOINT_ID" ] && { note "FAIL: serve.sh created no endpoint (see $LOG)"; exit 1; }
+trap teardown EXIT
+note "endpoint: $ENDPOINT_ID"
 SERVE_URL=$(echo "$SERVE_OUT" | awk '/Endpoint URL:/ {print $3; exit}')
 [ -z "$SERVE_URL" ] && { note "FAIL: no serve URL"; exit 1; }
 note "serve URL: $SERVE_URL"
