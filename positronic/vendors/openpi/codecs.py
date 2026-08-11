@@ -230,7 +230,7 @@ class LiberoObservationCodec(Codec):
 
     def __init__(
         self,
-        exterior_camera: str = 'image.agentview',
+        exterior_camera: str = keys.EXTERIOR_IMAGE,
         wrist_camera: str = keys.WRIST_IMAGE,
         image_size: tuple[int, int] = (224, 224),
     ):

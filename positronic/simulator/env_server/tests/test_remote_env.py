@@ -7,6 +7,10 @@ import pytest
 
 import pimm
 from positronic import geom, keys
+from positronic.cfg.eval.sim import libero as libero_cfg
+from positronic.cfg.eval.sim import positronic as native_cfg
+from positronic.cfg.eval.sim import robolab as robolab_cfg
+from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Task
@@ -261,7 +265,8 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
 @pytest.mark.timeout(60.0)
 def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     """The real ``stack_cubes`` wrapper, end to end: no terminal, so the trial runs to the task timeout
-    (``eval.terminated`` False) and records the canonical signals."""
+    (``eval.terminated`` False, ``eval.success`` absent) and records the canonical signals under the shared
+    camera key."""
     host, port = env_server
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
@@ -276,14 +281,26 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
     episode = ds[0]
+    assert isinstance(episode, Episode)
     assert episode.static[keys.EVAL_TERMINATED] is False
+    assert keys.EVAL_SUCCESS not in episode.static
     assert episode.static['eval.universe'] == 'sim'
     assert episode.static['eval.embodiment'] == 'remote.mujoco.franka'
     assert episode.static['scene_xml'].startswith('<mujoco')
     signals = episode.signals
-    assert 'image.agentview' in signals
+    assert keys.EXTERIOR_IMAGE in signals
     assert keys.TARGET_JOINTS in signals
     assert 'sim_state.mjSTATE_INTEGRATION' in signals
+
+
+@pytest.mark.parametrize(
+    'eval_cfg', [libero_cfg.spatial, robolab_cfg.benchmark, native_cfg.stack_cubes], ids=['libero', 'robolab', 'mujoco']
+)
+def test_every_sim_eval_publishes_the_shared_camera_keys(eval_cfg):
+    """A codec names the camera it wants, so a sim spelling its cameras its own way can be scored only by a codec
+    written for it. Every sim publishes the shared pair, whatever the benchmark calls those cameras."""
+    observations = eval_cfg.instantiate().embodiment.observations
+    assert {keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE} <= set(observations)
 
 
 class _JointposChunks(Policy):

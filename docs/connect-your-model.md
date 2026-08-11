@@ -103,7 +103,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `robot_state.q` | float32 | (7,) | Joint positions (radians) |
 | `robot_state.dq` | float32 | (7,) | Joint velocities (radians/s) |
 | `grip` | float32 | scalar | Gripper closure in `[0, 1]`: 0 = open, 1 = closed |
-| `image.<name>` | uint8 | (H, W, 3) | Camera RGB. Stream names come from the run config — sim and PhAIL send `image.exterior` and `image.wrist` (sim also adds `image.agent_view`) |
+| `image.<name>` | uint8 | (H, W, 3) | Camera RGB. Every eval target — PhAIL and each sim — sends `image.exterior` and `image.wrist`, whatever the underlying benchmark calls those cameras, so one codec reads them all; a target with more views adds its own names beside them (the MuJoCo sim adds `image.agent_view`) |
 | `obs_time_ns` | int | scalar | Harness-clock timestamp of this observation (ns) |
 | `wall_time_ns` | int | scalar | Wall-clock timestamp (ns) |
 | `task` | str | — | Language instruction for the episode |
