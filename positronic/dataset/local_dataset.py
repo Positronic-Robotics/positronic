@@ -133,6 +133,11 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._on_close = on_close
         self._video_options = video_options
 
+        # A caller may supply the uid to preserve identity across a copy, and it names the directory a
+        # discard moves into, so it has to be one path segment and not a way out of that tree.
+        if uid is not None and (Path(uid).name != uid or uid in ('.', '..')):
+            raise ValueError(f'{uid!r} is not a usable episode uid: it must be a single path segment')
+
         # Write system metadata immediately
         # NB: falsy created_ts_ns (including 0) defaults to current time — epoch 0 is not a valid episode timestamp
         self._meta = {

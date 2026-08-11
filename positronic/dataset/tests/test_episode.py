@@ -704,3 +704,14 @@ def test_group_first_transform_takes_precedence(tmp_path):
     result = Group(Derive(existing=FromValue('overwritten'), missing=FromValue('filled')), Identity())(ep)
     assert result['existing'] == 'overwritten'
     assert result['missing'] == 'filled'
+
+
+def test_episode_writer_refuses_a_uid_that_could_leave_the_discarded_tree(tmp_path):
+    with pytest.raises(ValueError, match='single path segment'):
+        DiskEpisodeWriter(tmp_path / 'ep_escape', discarded_dir=tmp_path / 'discarded', uid='../../escaped')
+
+
+def test_episode_writer_takes_an_ordinary_uid(tmp_path):
+    writer = DiskEpisodeWriter(tmp_path / 'ep_plain', discarded_dir=tmp_path / 'discarded', uid='deadbeef')
+
+    assert writer.meta[META_UID] == 'deadbeef'
