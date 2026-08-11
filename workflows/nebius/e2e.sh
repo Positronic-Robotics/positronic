@@ -171,6 +171,13 @@ teardown() {
   fi
   exit "$status"
 }
+# The trap deletes by name, so the name has to be ours before it is armed: an endpoint already holding
+# it belongs to another run, and `serve.sh` would refuse it while the trap deleted it anyway.
+if nebius ai endpoint list --parent-id "$PARENT_ID" --format json \
+  | jq -e --arg n "$ENDPOINT_NAME" '.items[]? | select(.metadata.name==$n)' >/dev/null 2>&1; then
+  note "FAIL: an endpoint named $ENDPOINT_NAME already exists; it is not this run's to delete"
+  exit 1
+fi
 trap teardown EXIT
 SERVE_OUT=$(bash "$SCRIPT_DIR/serve.sh" "$VENDOR" "$ENDPOINT_NAME" "${SERVE_SUBCMD[@]}" 2>&1)
 echo "$SERVE_OUT" >> "$LOG"

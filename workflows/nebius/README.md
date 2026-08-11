@@ -333,9 +333,9 @@ which is why the same request upgrades there. Nebius confirmed the defect on tic
 open with their Serverless team; gRPC goes through the same proxy and is affected the same way, so it is
 no escape hatch.
 
-Two things that hold today are not promised. Nebius documents no WebSocket or connection-lifetime
-contract for Serverless Endpoints at all, so the managed URL carrying sessions is observed behaviour
-rather than a guarantee. And the managed ingress closes any connection it has read nothing from after
+Two behaviours this depends on are observed rather than promised. Nebius documents no WebSocket or
+connection-lifetime contract for Serverless Endpoints at all, so nothing obliges the managed URL to keep
+carrying sessions. And the managed ingress closes any connection it has read nothing from after
 ~90 seconds — longer than a cold checkpoint's first inference takes — so the client holds sessions open
 with WebSocket pings (the `ping_interval` its `connect` call passes, in `positronic/offboard/client.py`).
 `pytest -m endpoint` below is what catches either of them changing under us.
