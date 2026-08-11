@@ -124,6 +124,20 @@ lifecycle — nothing else. Scheduling, blending, history stacking and error rec
 wrapper stack around the policy; a session returning `None` means "keep executing the current
 trajectory".
 
+**A run ends when its control loop returns.** A foreground control system returning sets the world's stop
+flag; that is the finish, and there is no second protocol to invoke. The stop is edge-triggered — peers get
+one observation round and background processes exit almost immediately — so whatever must happen in order
+happens before a loop returns: the harness cancels its in-flight trajectory so devices hold, and each driver
+stops its own hardware in its own teardown. An episode still open at that point is discarded rather than
+committed, because a stop command racing the recorder's exit either lands a truncated episode looking like a
+complete one or does not land at all, and an episode wrongly recorded as complete corrupts the one artifact
+everything else is derived from. What was captured is kept outside the dataset for inspection, where nothing
+that reads or mirrors the recordings picks it up. A process killed outright is the case this does not cover:
+whatever reached disk stays where it fell, unmarked.
+
+Hence no finish-request channel: finishing at an episode boundary is the business of whatever drives the
+episodes, which holds that boundary already — it finishes the episode, then returns while idle.
+
 **Recordings are canonical; codecs bind the dialect late.** The dataset records every run in the
 canonical conventions (frames, key names, absolute time) — never in a model's dialect. Every
 model-facing view — action space, control frame, vendor format — is a codec's projection.
