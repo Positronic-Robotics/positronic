@@ -101,6 +101,8 @@ Something has to say when an episode starts, finishes or is abandoned. `positron
 Anything richer — a web console, a foot pedal, a rig UI — is a binary of its own rather than a plug-in: it composes its own `pimm.World` out of the public pieces, and nothing in the library needs to know which surface is driving. The shape:
 
 ```python
+from contextlib import nullcontext
+
 import pimm
 from positronic import wire
 from positronic.cli.eval.run import completion_sink, prepare_output_dir, warm_up
@@ -108,15 +110,23 @@ from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.policy.harness import Harness
 
 warm_up(policy)
+# `None` where the run records nothing, which is why the writer is a nullcontext below.
 output_dir = prepare_output_dir(policy, output_dir)
 harness = Harness(policy, embodiment, on_episode_complete=completion_sink(policy))
 console = MyConsole()  # emits positronic.policy.harness.Directive
 
-with LocalDatasetWriter(output_dir) as writer, pimm.World() as world:
-    ds_agent = wire.wire_embodiment(world, harness, embodiment, writer)
-    world.connect(console.directives, harness.directive)
-    world.connect(harness.ds_command, ds_agent.command)
-    world.run([harness, console], [*embodiment.control_systems, ds_agent])
+# The caller owns the policy's lifetime from `warm_up` on, so it closes it — including
+# when the world comes down on an exception.
+try:
+    writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
+    with writer_cm as writer, pimm.World() as world:
+        ds_agent = wire.wire_embodiment(world, harness, embodiment, writer)
+        world.connect(console.directives, harness.directive)
+        if ds_agent is not None:
+            world.connect(harness.ds_command, ds_agent.command)
+        world.run([harness, console], [*embodiment.control_systems, ds_agent])
+finally:
+    policy.close()
 ```
 
 The world stops when a main-process control system returns, so the console ends the run by returning from its loop. To show the cameras, connect every observation whose name starts with `positronic.keys.IMAGE_PREFIX` into a viewer's `cameras` — `positronic.gui.dpg_ui()` is one, and the naming convention is what identifies a camera on the wire. To let the operator jog the arm between episodes, emit robot commands into `harness.manual_command`, which the harness applies only while idle.

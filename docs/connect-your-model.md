@@ -29,7 +29,7 @@ uv run positronic-inference sim \
   --output_dir=~/datasets/demo_run
 ```
 
-A UI window shows the robot arm executing the policy. `--output_dir` records every episode (robot state, camera feeds, actions); browse them with:
+The run is headless. `--output_dir` records every episode (robot state, camera feeds, actions); browse them with:
 
 ```bash
 uv run positronic-server --dataset.path=~/datasets/demo_run --port=5001
