@@ -184,6 +184,16 @@ to use regular Python. Emitters (`ControlSystemEmitter`) and receivers
 (`ControlSystemReceiver`) are just fields on the object; they keep track of their
 owner so the world can wire them correctly.
 
+**Wait by yielding, never by sleeping.** A `yield pimm.Sleep(seconds)` hands the wait to whatever
+is running the loop; a `time.sleep` takes it. In the main-process group the difference is the whole
+schedule — `interleave` advances every other control system while one of them sleeps, so a blocking
+call there stalls the peers, not just its own loop. A control system that only ever runs as its own
+background process gets away with it, which is exactly why it turns up in drivers: the code works,
+until the day it is scheduled in the foreground or a test drives it directly, and then it stops the
+world instead of pausing itself. Yielding also makes the wait visible — a test can drive the loop
+and see what it asked for. This holds during teardown too: the wrapper keeps advancing the
+generator after the stop signal, so a driver parking its hardware yields like any other.
+
 The `World` runtime plays three roles:
 
 1. **Connection planner.** Each call to `world.connect(emitter, receiver, ...)`
