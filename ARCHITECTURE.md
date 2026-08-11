@@ -136,8 +136,9 @@ trajectory".
 `inference_latency` — a constant charge in seconds, or the call's own wall duration — and the harness
 alone reads it: it withholds a returned trajectory, and the world clock, until the charge is paid,
 and the clock it hands the policy stack (`now`) reads the instant the in-flight call's output takes
-effect. A scheduling wrapper stamps its chunk at `now()` and never learns the mode, so the charge
-is deterministic wherever a constant one is asked for.
+effect. An answer with no waypoints to place — a skip, or the empty trajectory that stops what is
+executing — lands at once. A scheduling wrapper stamps its chunk at `now()` and never learns the
+mode, so the charge is deterministic wherever a constant one is asked for.
 
 **Recordings are canonical; codecs bind the dialect late.** The dataset records every run in the
 canonical conventions (frames, key names, absolute time) — never in a model's dialect. Every

@@ -513,10 +513,11 @@ class Harness(pimm.ControlSystem):
         Under a constant charge the world holds still until the call answers — blocking here blocks the loop
         thread, which is what advances a virtual clock. Until a call answers there is no telling a skip from
         a model call, so letting the world run meanwhile would spend trial time on whichever the machine
-        turned out to be slow at. A skip then costs nothing; a trajectory is stamped for ``t0`` plus the
-        charge and withheld until the world reaches that instant, playing what is already scheduled on the
-        way. A charge measured in wall time can hold nothing still, so there the world runs no further ahead
-        of the call's start than wall time has.
+        turned out to be slow at. What the charge then buys is the instant a trajectory takes effect: it is
+        stamped for ``t0`` plus the charge and withheld until the world reaches it, playing what is already
+        scheduled on the way. An answer with no waypoints to place — a skip, or the empty trajectory that
+        stops what is executing — has no such instant and lands at once. A charge measured in wall time can
+        hold nothing still, so there the world runs no further ahead of the call's start than wall time has.
         """
         if self._charge is not None:
             concurrent.futures.wait([future])
@@ -528,7 +529,7 @@ class Harness(pimm.ControlSystem):
             if not future.done():
                 return False
         actions = future.result()  # taken on the loop thread, so a failing call still seals the episode
-        if actions is not None and self._charge is not None:
+        if actions and self._charge is not None:
             # Integer ns, the world's own timeline: a float compare misses the release instant by one ULP
             # and slips the install a full round.
             if clock.now_ns() < self._t0_ns + round(self._charge * 1e9):

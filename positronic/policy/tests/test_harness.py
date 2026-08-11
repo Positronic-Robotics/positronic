@@ -22,7 +22,7 @@ from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Ses
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import Directive, DirectiveType, Harness, TrajectoryPlayer, _assert_anchored
 from positronic.policy.remote import RemoteSession
-from positronic.policy.wrappers import ChunkedSchedule
+from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
 
@@ -1810,6 +1810,37 @@ def test_a_faulted_arm_reaches_the_policy_without_its_state(world):
     assert policy.last_obs[keys.ROBOT_FAULT] is True
     assert keys.JOINTS not in policy.last_obs
     assert keys.EE_POSE not in policy.last_obs
+
+
+@pytest.mark.timeout(20.0)
+def test_a_stop_lands_without_waiting_out_the_charge(world):
+    """A charge places a trajectory's waypoints, and a stop has none: an arm that faults mid-chunk stops in
+    the round its fault is seen, not a charge later."""
+    charge, fault_at, period = 0.3, 0.5, 0.005
+    stack = StopOnFault() | ChunkedSchedule()
+    harness = Harness(stack.wrap(SlowPolicy(span_sec=1.0, steps=50)), make_embodiment(simulated=True))
+    grip_recorder = _TimedRecorder(world.clock)
+    harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
+    harness.commands['target_grip']._bind(grip_recorder)
+    harness.ds_command._bind(RecordingEmitter())
+
+    frame_em = world.pair(harness.observations[CAM])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations[keys.GRIP])
+    directive_em = world.pair(harness.directive)
+
+    pose, joints = [0.1, 0.2, 0.3], [0.4, 0.5, 0.6]
+    driver = ManualDriver([
+        (partial(directive_em.emit, Directive.RUN(task='t', inference_latency=charge)), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, make_robot_state(pose, joints)), fault_at),
+        (partial(robot_em.emit, make_robot_state(pose, joints, status=RobotStatus.ERROR)), charge + 0.2),
+    ])
+    drive_scheduler(world.start([harness, driver, _Pacer(period)]), steps=4000)
+
+    played = [t for t, _ in grip_recorder.emitted[1:]]  # drop the startup home
+    assert [t for t in played if t < fault_at], 'the chunk was not playing when the arm faulted'
+    late = [t for t in played if t > fault_at + 3 * period]
+    assert not late, f'the faulted arm was still being driven at {late}'
 
 
 @pytest.mark.timeout(20.0)
