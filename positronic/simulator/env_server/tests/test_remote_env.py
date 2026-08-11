@@ -268,8 +268,8 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
 @pytest.mark.timeout(60.0)
 def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     """The real ``stack_cubes`` wrapper, end to end: no terminal, so the trial runs to the task timeout
-    (``eval.terminated`` False) and records the canonical signals under the shared camera key. This env scores
-    downstream rather than live, so it states no timeout verdict and none is invented for it."""
+    (``eval.terminated`` False, ``eval.success`` absent) and records the canonical signals under the shared
+    camera key."""
     host, port = env_server
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
@@ -304,21 +304,6 @@ def test_every_sim_eval_publishes_the_shared_camera_keys(eval_cfg):
     written for it. Every sim publishes the shared pair, whatever the benchmark calls those cameras."""
     observations = eval_cfg.instantiate().embodiment.observations
     assert {keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE} <= set(observations)
-
-
-@pytest.mark.parametrize(
-    ('eval_cfg', 'verdict'),
-    [
-        (libero_cfg.spatial, {keys.EVAL_SUCCESS: False}),
-        (robolab_cfg.benchmark, {keys.EVAL_SUCCESS: False}),
-        (native_cfg.stack_cubes, {}),  # scored offline from recorded state, so a timeout is nobody's verdict
-    ],
-    ids=['libero', 'robolab', 'mujoco'],
-)
-def test_a_sim_that_judges_live_states_what_a_timeout_means(eval_cfg, verdict):
-    """Only an env that decides success during the trial can call a spent budget a failure. Each sim says which
-    it is, so the harness never has to guess from the presence of a ``done`` source."""
-    assert eval_cfg.instantiate().task.timeout_verdict == verdict
 
 
 def _policy_inputs(embodiment: Embodiment, adapter: EnvAdapter, raw_obs: dict) -> dict:

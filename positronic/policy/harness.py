@@ -451,16 +451,12 @@ class Harness(pimm.ControlSystem):
         than a late success. Only a freshly delivered ``done`` counts — the receiver latches its last value,
         so a prior trial's terminal would otherwise re-fire; gating on delivery clears it without asking the
         producer to republish. Reached only for a task with a deadline.
-
-        A timeout records the task's ``timeout_verdict`` alongside, so an env that judges its trials live
-        reports a failure rather than leaving the key absent for a reader to interpret.
         """
-        assert self._task is not None  # a deadline is armed only for a task, and only it reaches here
         done_msg = self.done.read()
         if done_msg.updated and done_msg.data and done_msg.ts <= self._deadline * 1e9:
             return {**done_msg.data, keys.EVAL_TERMINATED: True}
         if clock.now() >= self._deadline:
-            return {**self._task.timeout_verdict, keys.EVAL_TERMINATED: False}
+            return {keys.EVAL_TERMINATED: False}
         return None
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:

@@ -599,8 +599,7 @@ def test_finish_emits_ds_stop_with_data_and_homes(world):
 
 @pytest.mark.timeout(3.0)
 def test_trial_timeout_self_terminates(world):
-    """A self-driven trial ends at ``task.timeout``: terminated=False, robot homed. The task names no ``done``
-    source, so nothing here can judge the trial and no verdict is invented for it."""
+    """A self-driven trial ends at ``task.timeout``: terminated=False, robot homed."""
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=0.05), trials=[{}])
     p = _pair_all(world, harness)
@@ -650,24 +649,6 @@ def test_trial_budget_starts_at_the_first_usable_observation(world):
 
     assert policy.last_obs is not None, 'the trial expired before its first observation landed'
     assert policy.last_obs[keys.GRIP] == 0.75, 'the budget expired early — measured from reset, not the first obs'
-
-
-@pytest.mark.timeout(3.0)
-def test_trial_timeout_records_the_tasks_verdict(world):
-    """An env that judges its trials live states what a spent budget means, so the timeout records that
-    verdict — not just the bare ``eval.terminated`` a reader would have to interpret."""
-    policy = StubPolicy()
-    task = Task(instruction='test', timeout=0.05, timeout_verdict={keys.EVAL_SUCCESS: False})
-    harness = Harness(policy, make_embodiment(), task=task, trials=[{}])
-    p = _pair_all(world, harness)
-
-    scheduler = world.start([harness])
-    drive_scheduler(scheduler, steps=200)
-
-    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
-    assert len(stops) == 1
-    assert stops[0].static_data[keys.EVAL_TERMINATED] is False
-    assert stops[0].static_data[keys.EVAL_SUCCESS] is False
 
 
 @pytest.mark.timeout(3.0)
@@ -876,11 +857,11 @@ def test_task_done_terminates_through_wire_embodiment(world):
 @pytest.mark.timeout(3.0)
 def test_done_after_deadline_is_a_timeout(world):
     """The deadline is hard: a ``done`` delivered past it (here during the latency sleep) records as a
-    timeout — ``eval.terminated`` False, the payload dropped and the trial marked failed — not a late stop-signal
-    success."""
+    timeout — ``eval.terminated`` False, payload dropped — not a late stop-signal success."""
     policy = StubPolicy()
-    task = Task(instruction='t', timeout=0.05, timeout_verdict={keys.EVAL_SUCCESS: False})
-    harness = Harness(policy, make_embodiment(), task=task, trials=[{'inference_latency': 0.2}])
+    harness = Harness(
+        policy, make_embodiment(), task=Task(instruction='t', timeout=0.05), trials=[{'inference_latency': 0.2}]
+    )
     p = _pair_all(world, harness)
     done_em = world.pair(harness.done)
 
@@ -898,7 +879,7 @@ def test_done_after_deadline_is_a_timeout(world):
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
     assert stops[0].static_data[keys.EVAL_TERMINATED] is False
-    assert stops[0].static_data[keys.EVAL_SUCCESS] is False
+    assert keys.EVAL_SUCCESS not in stops[0].static_data
 
 
 @pytest.mark.timeout(3.0)

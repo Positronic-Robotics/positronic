@@ -85,11 +85,6 @@ class Task:
     ``done`` is the optional terminating signal: a source that delivers a dict payload when the
     trial ends. The Harness reads it to stop the trial early and records the payload into the
     episode's static data.
-
-    ``timeout_verdict`` is what a trial records instead when its budget runs out. An env that judges live —
-    reporting ``eval.success`` in its terminal — states its failing verdict here, so a timed-out trial carries
-    one either way and absence never has to stand for failure. Empty for an env that judges elsewhere: one
-    scored offline from recorded state, or by an operator.
     """
 
     def __init__(
@@ -99,14 +94,12 @@ class Task:
         privileged: dict[str, Observation] | None = None,
         reset: Callable[[dict[str, Any]], None] | None = None,
         done: pimm.SignalEmitter | None = None,
-        timeout_verdict: dict[str, Any] | None = None,
     ):
         self._instruction = (lambda: instruction) if isinstance(instruction, str) else instruction
         self.timeout = timeout
         self.privileged = privileged or {}
         self.reset = reset
         self.done = done
-        self.timeout_verdict = timeout_verdict or {}
 
     @property
     def instruction(self) -> str:

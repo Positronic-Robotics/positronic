@@ -63,8 +63,6 @@ def _libero_eval(
         privileged=privileged,
         reset=proxy.reset,
         done=proxy.done,
-        # LIBERO reaches ``done`` only on success, so a trial that runs out of budget is the failing case.
-        timeout_verdict={keys.EVAL_SUCCESS: False},
     )
     # One scene per (suite, task) pair: an unbound ``task_id`` sweeps each suite, a pinned one runs that task
     # in every bound suite. The scene spec rides each trial's reset token, so the single task-agnostic env
