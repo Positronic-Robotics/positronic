@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Submit a Nebius Serverless Endpoint running a vendor inference server.
 #
-# After creation, polls until a public IP is allocated and prints connection
+# After creation, polls until the endpoint reports an address and prints connection
 # details. The container itself takes ~10-15 min more to finish uv sync and
-# load the model into GPU memory after the IP appears.
+# load the model into GPU memory after the address appears.
 #
 # Hardcoded: GPU platform, MysteryBox secret names, S3 endpoint URL,
 # container port. Vendor selects image + uv extra. Override-able via env:
-# NEBIUS_PARENT_ID, NEBIUS_SUBNET_ID.
+# NEBIUS_PARENT_ID, NEBIUS_SUBNET_ID, NEBIUS_PUBLIC.
 
 set -euo pipefail
 
@@ -126,35 +126,37 @@ fi
 
 echo "Endpoint ID: $ID"
 
-IP=""
 if [ "${NEBIUS_PUBLIC:-1}" = "0" ]; then
-  echo "Waiting for private IP (typically <1 min)..."
-  for i in $(seq 1 30); do
-    IP=$(nebius vpc allocation list --parent-id "$PARENT_ID" --format json 2>/dev/null \
-      | jq -r --arg n "${ID}-private" '.items[]? | select(.metadata.name==$n)
-               | .status.details.allocated_cidr? // empty' | cut -d/ -f1)
-    if [ -n "$IP" ]; then break; fi
-    sleep 10
-  done
+  FIELD=private_endpoints
 else
-  echo "Waiting for public IP (typically <1 min)..."
-  for i in $(seq 1 30); do
-    IP=$(nebius ai endpoint get "$ID" --format json 2>/dev/null \
-      | jq -r '.status.public_endpoints[0]? // empty')
-    if [ -n "$IP" ]; then break; fi
-    sleep 10
-  done
+  FIELD=public_endpoints
 fi
 
-if [ -z "$IP" ]; then
-  echo "IP not allocated within 5 min. Check: nebius ai endpoint get $ID" >&2
+echo "Waiting for the $FIELD address (typically <1 min)..."
+ADDRESS=""
+for i in $(seq 1 30); do
+  ADDRESS=$(nebius ai endpoint get "$ID" --format json 2>/dev/null \
+    | jq -r --arg f "$FIELD" '.status[$f][0]? // empty')
+  if [ -n "$ADDRESS" ]; then break; fi
+  sleep 10
+done
+
+if [ -z "$ADDRESS" ]; then
+  echo "No $FIELD address within 5 min. Check: nebius ai endpoint get $ID" >&2
   exit 1
 fi
+
+# The two fields carry different shapes: a private address is bare `host:port`, a public one is a
+# full tunnel URL with its own scheme. Prefixing a scheme unconditionally corrupts the public form.
+case "$ADDRESS" in
+  http://*|https://*) URL="$ADDRESS" ;;
+  *)                  URL="http://$ADDRESS" ;;
+esac
 
 cat <<BANNER
 
 ==============================================================
-  Endpoint URL:  http://$IP
+  Endpoint URL:  $URL
   Endpoint ID:   $ID
   Endpoint name: $NAME
   Vendor:        $VENDOR
@@ -167,9 +169,9 @@ The container is still warming up (image pull + uv sync + checkpoint load,
 
 Once the model is loaded, sanity-check with:
 
-  curl http://$IP/api/v1/models
+  curl $URL/api/v1/models
 
-To release the endpoint and its public IP:
+To release the endpoint and its address:
 
   bash workflows/nebius/stop.sh $NAME
 
