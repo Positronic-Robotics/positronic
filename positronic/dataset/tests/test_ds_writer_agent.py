@@ -18,7 +18,13 @@ from positronic.dataset.ds_writer_agent import (
     TimeMode,
     TrajectoryOverrideSerializer,
 )
-from positronic.dataset.local_dataset import DISCARD_MARKER, DISCARD_REASON, LocalDataset, LocalDatasetWriter
+from positronic.dataset.local_dataset import (
+    DISCARD_MARKER,
+    DISCARD_REASON,
+    DISCARDED_ROOT_SUFFIX,
+    LocalDataset,
+    LocalDatasetWriter,
+)
 from positronic.dataset.serializers import Serializers
 from positronic.dataset.vector import SimpleSignalWriter
 from positronic.drivers.roboarm import RobotStatus, State
@@ -331,7 +337,7 @@ def test_run_stopping_mid_episode_keeps_the_recording_outside_the_dataset(tmp_pa
         run_scripted_agent(agent, script, world=world)
 
     assert len(LocalDataset(root)) == 0
-    discarded = list((tmp_path / 'ds.discarded').iterdir())
+    discarded = list((tmp_path / f'ds{DISCARDED_ROOT_SUFFIX}').iterdir())
     assert len(discarded) == 1
     assert (discarded[0] / 'a.parquet').exists()
     assert json.loads((discarded[0] / DISCARD_MARKER).read_text())[DISCARD_REASON] == DiscardReason.RUN_ENDED.value
@@ -363,10 +369,9 @@ def test_a_run_ending_after_a_failed_abort_still_moves_the_episode_out(tmp_path,
             with pytest.raises(RuntimeError, match='encoder failed'):
                 run_scripted_agent(agent, script, world=world)
 
-    # The abort's discard failed part-way; the run's teardown finished it rather than reporting a move nobody made.
     assert len(LocalDataset(root)) == 0
     assert not list(root.glob('*/*/a.parquet'))
-    discarded = list((tmp_path / 'ds.discarded').iterdir())
+    discarded = list((tmp_path / f'ds{DISCARDED_ROOT_SUFFIX}').iterdir())
     assert len(discarded) == 1
     assert (discarded[0] / 'a.parquet').exists()
     assert json.loads((discarded[0] / DISCARD_MARKER).read_text())[DISCARD_REASON] == DiscardReason.ABORTED.value
@@ -387,7 +392,7 @@ def test_a_committed_episode_is_never_swept_into_the_discarded_dir(tmp_path, wor
         run_scripted_agent(agent, script, world=world)
 
     assert len(LocalDataset(root)) == 1
-    assert not (tmp_path / 'ds.discarded').exists()
+    assert not (tmp_path / f'ds{DISCARDED_ROOT_SUFFIX}').exists()
 
 
 def test_inputs_mapping_is_immutable(world):
