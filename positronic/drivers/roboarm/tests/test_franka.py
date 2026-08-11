@@ -15,7 +15,7 @@ JOGGED = HOME + np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
 
 class Call(StrEnum):
-    """The vendor calls ``FakeArm`` records, named once for the fake and its assertions alike."""
+    """The vendor calls ``FakeArm`` records."""
 
     STATE = 'state'
     GOAL = 'goal'
