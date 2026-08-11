@@ -1,4 +1,4 @@
-"""Composable policy wrappers — scheduling and temporal frame stacking.
+"""Composable policy wrappers — scheduling, fault handling and temporal frame stacking.
 
 Wrappers are composable serving-time concerns layered around a policy with ``|`` (left is
 outermost), exactly like codecs. Most read time from the observation (``obs_time_ns``); only
@@ -11,12 +11,36 @@ from collections import deque
 
 import numpy as np
 
+from positronic import keys
 from positronic.policy.base import DelegatingSession, Now, PolicyWrapper, Session
 
 
 def _obs_time(obs) -> float:
     """Observation timestamp in seconds, from the harness's nanosecond stamp."""
     return obs[keys.OBS_TIME_NS] / 1e9
+
+
+class StopOnFault(PolicyWrapper):
+    """Stop the arm while it is faulted, and plan afresh once it recovers.
+
+    A faulted arm is not tracking the plan it was given, so the plan is worthless: this answers the empty
+    trajectory — stop what is executing — and resets the sessions below, so the first sound observation after
+    recovery reaches the model instead of resuming a chunk stamped before the fault. It belongs outside the
+    scheduling wrapper, which would otherwise answer "keep playing" without ever seeing the fault.
+    """
+
+    class _Session(DelegatingSession):
+        def __call__(self, obs):
+            if not obs[keys.ROBOT_FAULT]:
+                return self._inner(obs)
+            self.cancel()
+            return []
+
+    def wrap_session(self, inner: Session, context, now: Now | None):
+        return StopOnFault._Session(inner)
+
+    def to_spec(self):
+        return {'name': 'stop_on_fault'}
 
 
 class ChunkedSchedule(PolicyWrapper):

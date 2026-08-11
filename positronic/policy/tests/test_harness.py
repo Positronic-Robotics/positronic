@@ -197,12 +197,27 @@ class RemoteStubPolicy(Policy):
         return RemoteSession(_FakeInferenceSession(action))
 
 
-class FakeRobotState:
+class FakeRobotState(roboarm.State):
     def __init__(self, translation: np.ndarray, joints: np.ndarray, status: RobotStatus) -> None:
-        self.ee_pose = Transform3D(translation=translation, rotation=Rotation.identity)
-        self.q = joints
-        self.dq = np.zeros_like(joints)
-        self.status = status
+        self._ee_pose = Transform3D(translation=translation, rotation=Rotation.identity)
+        self._q = joints
+        self._status = status
+
+    @property
+    def q(self) -> np.ndarray:
+        return self._q
+
+    @property
+    def dq(self) -> np.ndarray:
+        return np.zeros_like(self._q)
+
+    @property
+    def ee_pose(self) -> Transform3D:
+        return self._ee_pose
+
+    @property
+    def status(self) -> RobotStatus:
+        return self._status
 
 
 @pytest.fixture
@@ -329,6 +344,7 @@ def test_harness_emits_cartesian_move(world):
         keys.JOINT_VEL,
         keys.EE_POSE,
         keys.GRIP,
+        keys.ROBOT_FAULT,
         keys.TASK,
         'descriptor',
     }
@@ -1686,6 +1702,73 @@ def test_a_real_rig_ignores_the_latency_a_trial_asks_for(world):
     assert played[0][0] < 1.0, f"first command at {played[0][0]}s: the trial's 5s charge was honoured"
 
 
+class _WallCost(PolicyWrapper):
+    """Burns real time on every call it passes down, answering or skipping — a stand-in for a stack that
+    copies buffers before the model ever sees the observation."""
+
+    def __init__(self, sec: float):
+        self._sec = sec
+
+    class _Session(DelegatingSession):
+        def __init__(self, inner: Session, sec: float):
+            super().__init__(inner)
+            self._sec = sec
+
+        def __call__(self, obs):
+            time.sleep(self._sec)
+            return self._inner(obs)
+
+    def wrap_session(self, inner: Session, context, now):
+        return _WallCost._Session(inner, self._sec)
+
+
+class _ObservedTicks(PolicyWrapper):
+    """Records the observation instant of every call that reaches it."""
+
+    def __init__(self):
+        self.seen: list[float] = []
+
+    class _Session(DelegatingSession):
+        def __init__(self, inner: Session, seen: list[float]):
+            super().__init__(inner)
+            self._seen = seen
+
+        def __call__(self, obs):
+            self._seen.append(obs['obs_time_ns'] / 1e9)
+            return self._inner(obs)
+
+    def wrap_session(self, inner: Session, context, now):
+        return _ObservedTicks._Session(inner, self.seen)
+
+
+@pytest.mark.timeout(60.0)
+def test_a_constant_charge_keeps_the_trace_off_the_machine_clock():
+    """The reproducible mode's promise: what the machine spends — inside the model call, or above it in a
+    wrapper that ends up skipping — must not reach the trial. Two worlds, one slow, one not."""
+
+    def played(wall_sec: float) -> list[tuple[float, Any]]:
+        with pimm.World(virtual_time=True) as w:
+            policy = SlowPolicy(wall_sec=wall_sec, span_sec=0.3, steps=15)
+            return _run_episode(w, policy, _WallCost(wall_sec) | ChunkedSchedule(), latency=0.2, run_sec=0.8)
+
+    assert played(0.0) == played(0.003)
+
+
+@pytest.mark.timeout(30.0)
+def test_the_wrappers_see_every_tick_outside_the_charge(world):
+    """What a temporal stack records: the charge is the only thing that keeps an observation from the
+    wrappers above the scheduler — never the machine, and never the rounds in between."""
+    ticks = _ObservedTicks()
+    _run_episode(
+        world, SlowPolicy(wall_sec=0.01, span_sec=0.3, steps=15), ticks | ChunkedSchedule(), latency=0.2, run_sec=1.0
+    )
+
+    period, charge = 0.005, 0.2  # the pacer's control period, and the trial's charge
+    gaps = [round(b - a, 4) for a, b in zip(ticks.seen, ticks.seen[1:], strict=False)]
+    assert all(gap <= period or charge <= gap <= charge + 2 * period for gap in gaps), gaps
+    assert len([gap for gap in gaps if gap > period]) >= 2, f'the trial inferred too few times: {gaps}'
+
+
 @pytest.mark.timeout(20.0)
 def test_harness_keeps_playing_while_a_call_is_in_flight(world):
     """A wrapper that replans before its chunk is exhausted leaves waypoints due during inference, and the
@@ -1698,46 +1781,81 @@ def test_harness_keeps_playing_while_a_call_is_in_flight(world):
     assert len(during) >= 3, f'the harness stopped playing during inference: {[t for t, _ in played]}'
 
 
+@pytest.mark.timeout(3.0)
+def test_a_faulted_arm_reaches_the_policy_without_its_state(world):
+    """A fault is not swallowed as "no observation": it goes up to the policy stack, which owns what to do
+    about it. The arm's own entries are absent — a faulted arm has no sample to give."""
+    policy = SpyPolicy()
+    harness = Harness(policy, make_embodiment())
+    p = _pair_all(world, harness)
+
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.0),
+        (
+            partial(
+                emit_ready_payload,
+                p['frame_em'],
+                p['robot_em'],
+                p['grip_em'],
+                make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR),
+            ),
+            0.01,
+        ),
+        (None, 0.02),
+    ])
+
+    drive_scheduler(world.start([harness, driver]), steps=40)
+
+    assert policy.last_obs is not None, 'the fault never reached the policy'
+    assert policy.last_obs[keys.ROBOT_FAULT] is True
+    assert keys.JOINTS not in policy.last_obs
+    assert keys.EE_POSE not in policy.last_obs
+
+
 @pytest.mark.timeout(20.0)
-def test_finish_during_a_failing_call_still_stops_and_homes(world):
-    """A FINISH arriving while the call it cancels has failed still commits the recording and homes: the
-    failure is discarded with the schedule rather than unwinding the episode's end."""
+def test_finish_does_not_wait_for_the_call_in_flight():
+    """FINISH ends the episode where it lands: the recording stops and the arm homes while the model is
+    still inside its call, and the failure that call ends in reaches nobody.
 
-    class _FailingSession(Session):
-        """Fails after the directive lands, so the harness meets the failure only when it reaps the worker."""
+    Real time, real rig: a wall-charged call is the only one the harness leaves in flight across rounds.
+    """
+    hang_sec = 1.0
 
+    class _HangingSession(Session):
         def __call__(self, obs):
-            time.sleep(0.05)
+            time.sleep(hang_sec)
             raise RuntimeError('inference boom')
 
-    class _FailingPolicy(Policy):
+    class _HangingPolicy(Policy):
         def new_session(self, context=None, now=None):
-            return _FailingSession()
+            return _HangingSession()
 
-    harness = Harness(_FailingPolicy(), make_embodiment(simulated=True))
-    cmd_recorder = RecordingEmitter()
-    ds_recorder = RecordingEmitter()
-    harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
-    harness.commands['target_grip']._bind(RecordingEmitter())
-    harness.ds_command._bind(ds_recorder)
+    with pimm.World() as world:
+        harness = Harness(_HangingPolicy(), make_embodiment())
+        cmd_recorder = RecordingEmitter()
+        ds_recorder = _TimedRecorder(world.clock)
+        harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
+        harness.commands['target_grip']._bind(RecordingEmitter())
+        harness.ds_command._bind(ds_recorder)
 
-    frame_em = world.pair(harness.observations[CAM])
-    robot_em = world.pair(harness.observations['robot_state'])
-    grip_em = world.pair(harness.observations[keys.GRIP])
-    directive_em = world.pair(harness.directive)
+        frame_em = world.pair(harness.observations[CAM])
+        robot_em = world.pair(harness.observations['robot_state'])
+        grip_em = world.pair(harness.observations[keys.GRIP])
+        directive_em = cast(pimm.SignalEmitter, world.pair(harness.directive))
 
-    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    driver = ManualDriver([
-        # The charge holds the failed call in flight, so FINISH is what reaps it.
-        (partial(directive_em.emit, Directive.RUN(task='t', inference_latency=0.3)), 0.0),
-        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
-        (partial(directive_em.emit, Directive.FINISH()), 0.05),
-        (None, 0.05),
-    ])
-    drive_scheduler(world.start([harness, driver, _Pacer()]), steps=2000)
+        robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+        driver = ManualDriver([
+            (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+            (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+            (partial(directive_em.emit, Directive.FINISH()), 0.05),
+            (None, 0.05),
+        ])
+        started = world.clock.now()
+        drive_scheduler(world.start([harness, driver]), steps=40)
 
-    stops = [data for _, data in ds_recorder.emitted if data.type == DsWriterCommandType.STOP_EPISODE]
+    stops = [(t, data) for t, data in ds_recorder.emitted if data.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
+    assert stops[0][0] - started < hang_sec, 'the stop waited for the call to answer'
     assert isinstance(cmd_recorder.emitted[-1][1], Reset)
 
 

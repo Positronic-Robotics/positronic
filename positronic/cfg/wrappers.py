@@ -1,7 +1,7 @@
 import configuronic as cfn
 
 from positronic import keys as obs_keys
-from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
+from positronic.policy.wrappers import ChunkedSchedule, StopOnFault, TemporalStack
 
 chunked_schedule = cfn.Config(ChunkedSchedule)
 temporal_stack = cfn.Config(TemporalStack)
@@ -47,4 +47,4 @@ def video_context_wrappers(history_frames: int, stride: int, keys: tuple[str, ..
     stack = TemporalStack(
         keys=tuple(keys), offsets_sec=_frame_offsets_sec(history_frames, stride, fps), pad_start=pad_start
     )
-    return stack | ChunkedSchedule()
+    return StopOnFault() | stack | ChunkedSchedule()

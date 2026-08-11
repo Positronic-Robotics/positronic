@@ -14,6 +14,7 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
+from positronic.drivers import roboarm
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy, Session
@@ -53,7 +54,12 @@ class TrajectoryPlayer:
 
     def advance(self, current_time: int):
         """The single value due at ``current_time`` — the last, when several came due since the previous
-        call — or ``None`` when none did."""
+        call — or ``None`` when none did.
+
+        Collapsing to the last is exact for an absolute setpoint and lossy for a relative one: a run of
+        deltas due together arrives as its final step alone. Pacing keeps one waypoint due per round
+        wherever a round is shorter than the spacing between waypoints.
+        """
         value = None
         while self._pending and self._pending[0][0] <= current_time:
             value = self._pending.popleft()[1]
@@ -217,8 +223,10 @@ class Harness(pimm.ControlSystem):
         self._policy_session: Session | None = None
         # True between RUN and FINISH/ABORT: the trial is live — stepping and recording happen together.
         self._running = False
-        # One session call at a time, on a worker so the harness keeps playing while the model runs.
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='harness-session')
+        # One session call at a time, on a worker so the harness keeps playing while the model runs. The
+        # worker belongs to the episode: ending one abandons the call in flight rather than waiting for it,
+        # so the next episode must not queue behind it.
+        self._executor: ThreadPoolExecutor | None = None
         self._future: Future[list[dict[str, Any]] | None] | None = None
         # The in-flight call's start: the world instant its observation was built, and the wall instant it
         # was submitted.
@@ -293,21 +301,33 @@ class Harness(pimm.ControlSystem):
         return pimm.Sleep(min(POLL_PERIOD_SEC, max(min(due) - clock.now_ns(), 1) / 1e9))
 
     def _cancel_session(self) -> None:
-        """Drop everything the episode has going: the schedule being played, the call on the worker, and the
-        session's scheduling state so the next inference is not held back. Devices hold their last commanded
-        position — nothing is buffered downstream to clear.
+        """Drop everything the episode has going: the schedule being played, and the call on the worker.
+
+        The call is let go of rather than waited for — a model that hangs must not hold up the recording's
+        stop or the home — so its worker is retired with it and whatever it eventually answers, or raises,
+        lands nowhere. Devices hold their last commanded position; nothing is buffered downstream to clear.
         """
         for player in self._players.values():
             player.set([])
+        self._retire_worker()
+
+    @staticmethod
+    def _report_abandoned(future: Future[list[dict[str, Any]] | None]) -> None:
+        """Report the failure of a call nobody is waiting for any more."""
+        # rules-allow: swallowed-error — the call outlived the episode that asked for it, so there is no
+        # caller left to raise to; the log is the only place its failure can go.
+        if not future.cancelled() and (exc := future.exception()) is not None:
+            logging.error(f'Inference failed after the episode that asked for it ended: {exc}')
+
+    def _retire_worker(self) -> None:
+        """Let go of this episode's worker and the call it is running: the answer lands nowhere and the
+        failure only reaches the log."""
         if self._future is not None:
-            future, self._future = self._future, None
-            concurrent.futures.wait([future])  # nothing may close or re-enter the session while the worker is inside
-            # rules-allow: swallowed-error — the cancelled call's failure must not pre-empt the stop and the home
-            # this cancel runs before; a live episode's failure still surfaces from ``_take``.
-            if (exc := future.exception()) is not None:
-                logging.warning(f'Inference failed on the call this episode cancelled: {exc}')
-        if self._policy_session is not None:
-            self._policy_session.cancel()
+            self._future.add_done_callback(self._report_abandoned)
+            self._future = None
+        if self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+            self._executor = None
 
     def _finalize_recording(
         self, clock: pimm.Clock, payload: dict[str, Any] | None = None
@@ -359,6 +379,7 @@ class Harness(pimm.ControlSystem):
         # episode's start, not the release time of the last episode's final call.
         self._t0_ns = clock.now_ns()
         self._wall_t0 = time.monotonic()
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='harness-session')
         self._policy_session = self.policy.new_session(self.context, self._effect_time)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
@@ -400,17 +421,27 @@ class Harness(pimm.ControlSystem):
             case _:
                 raise ValueError(f'Unknown directive type: {directive.type}')
 
+    @staticmethod
+    def _is_faulted(value: Any) -> bool:
+        """Whether a raw observation is an arm reporting a fault. Every other not-ready sample is simply absent."""
+        return isinstance(value, roboarm.State) and value.status is roboarm.RobotStatus.ERROR
+
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any] | None:
         """Read every observation channel and assemble the policy input dict.
 
         Raises ``NoValueException`` if any channel has no value yet. Returns ``None`` while a serializer
         reports a sample is not ready (``robot_state`` during a ``RESETTING`` arm) or a channel still holds a
         pre-reset value — either way the harness skips inference rather than feed a partial or stale obs.
+
+        A faulted arm is the exception: it has no sample either, but the plan being played was made for an
+        arm that is now somewhere else, so the observation goes to the policy stack carrying
+        ``keys.ROBOT_FAULT`` and without the arm's own entries.
         """
         # Against the live model, not the one known at episode start: a remote env publishes its ``robot_meta``
         # a turn after the reset that produced it, so at episode start there is no model to check.
         assert_default_frame(self._statics())
         inputs: dict[str, Any] = {}
+        faulted = False
         for name, obs in self._embodiment.observations.items():
             message = self.observations[name].read()
             if message is None:
@@ -421,12 +452,16 @@ class Harness(pimm.ControlSystem):
             if obs.serializer is not None:
                 value = obs.serializer(value)
                 if value is None:
-                    return None
+                    if not self._is_faulted(message.data):
+                        return None
+                    faulted = True
+                    continue
             for full_name, v in expand_suffixed(name, value):
                 if v is not None:
                     inputs[full_name] = v
         if self._awaiting_obs:
             return None
+        inputs[keys.ROBOT_FAULT] = faulted
         inputs[keys.WALL_TIME_NS] = time.time_ns()
         inputs[keys.OBS_TIME_NS] = clock.now_ns()
         inputs.update(self.context)
@@ -447,8 +482,8 @@ class Harness(pimm.ControlSystem):
         The call goes to the worker so the harness keeps playing while the model runs; a wrapper that
         answers without inference still resolves in the round it was asked.
         """
-        session = self._policy_session
-        assert session is not None  # only a live episode steps
+        session, executor = self._policy_session, self._executor
+        assert session is not None and executor is not None  # only a live episode steps
         if self._future is not None and not self._take(self._future, clock):
             return
         obs = self._build_obs(clock)
@@ -465,39 +500,40 @@ class Harness(pimm.ControlSystem):
         self._t0_ns = clock.now_ns()
         self._wall_t0 = time.monotonic()
         # Sessions declare ``dict`` but must not mutate the obs, so they get a read-only view.
-        self._future = self._executor.submit(session, frozen_view(obs))  # pyright: ignore[reportArgumentType]
-        # Sleeping zero hands the worker the GIL without adding a wake-up granularity to the handshake.
-        while not self._future.done() and time.monotonic() - self._wall_t0 < SKIP_REPLY_SEC:
-            time.sleep(0)
+        self._future = executor.submit(session, frozen_view(obs))  # pyright: ignore[reportArgumentType]
+        if self._charge is None:
+            # Sleeping zero hands the worker the GIL without adding a wake-up granularity to the handshake.
+            while not self._future.done() and time.monotonic() - self._wall_t0 < SKIP_REPLY_SEC:
+                time.sleep(0)
         self._take(self._future, clock)
 
     def _take(self, future: Future[list[dict[str, Any]] | None], clock: pimm.Clock) -> bool:
         """Install the call's trajectory once the world has paid for it; True once the future is consumed.
 
-        A skip (``None``) costs nothing and is consumed on sight. A model call's trajectory is stamped for
-        ``t0`` plus the trial's charge, so it is withheld until the world clock reaches that instant — and
-        the world is withheld from running past it: blocking here blocks the loop thread, which is what
-        advances a virtual clock.
+        Under a constant charge the world holds still until the call answers — blocking here blocks the loop
+        thread, which is what advances a virtual clock. Until a call answers there is no telling a skip from
+        a model call, so letting the world run meanwhile would spend trial time on whichever the machine
+        turned out to be slow at. A skip then costs nothing; a trajectory is stamped for ``t0`` plus the
+        charge and withheld until the world reaches that instant, playing what is already scheduled on the
+        way. A charge measured in wall time can hold nothing still, so there the world runs no further ahead
+        of the call's start than wall time has.
         """
-        if future.done() and future.result() is None:
-            self._future = None
-            return True
         if self._charge is not None:
-            # Integer ns, the world's own timeline: a float compare misses the release instant by one ULP
-            # and slips the install a full round.
-            if clock.now_ns() < self._t0_ns + round(self._charge * 1e9):
-                return False
             concurrent.futures.wait([future])
         elif not future.done():
-            # The world may run no further ahead of the call's start than wall time has.
             ahead = clock.now() - (self._t0_ns / 1e9 + time.monotonic() - self._wall_t0)
             if ahead <= 0.0:
                 return False
             concurrent.futures.wait([future], timeout=ahead)
             if not future.done():
                 return False
-        self._future = None
         actions = future.result()  # taken on the loop thread, so a failing call still seals the episode
+        if actions is not None and self._charge is not None:
+            # Integer ns, the world's own timeline: a float compare misses the release instant by one ULP
+            # and slips the install a full round.
+            if clock.now_ns() < self._t0_ns + round(self._charge * 1e9):
+                return False  # the schedule already playing carries the world to the release instant
+        self._future = None
         if actions is not None:
             self._install(actions, clock)
         return True
@@ -561,8 +597,7 @@ class Harness(pimm.ControlSystem):
         The harness does not own the policy's lifetime: the caller may run several harnesses over one policy
         (a multi-eval sweep), so it closes the policy once, after the last run.
         """
-        self._future = None
-        self._executor.shutdown(wait=True, cancel_futures=True)
+        self._retire_worker()
         if self._policy_session is not None:
             self._policy_session.close()
             self._policy_session = None

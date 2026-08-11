@@ -29,6 +29,10 @@ def is_robot_command(name: str) -> bool:
 JOINTS = 'robot_state.q'
 JOINT_VEL = 'robot_state.dq'
 EE_POSE = 'robot_state.ee_pose'
+# Whether the arm is faulted, in every observation the harness builds. A faulted arm has no sample to give
+# and is not tracking the plan it was handed, so the policy stack — not the harness — decides what happens
+# next: the rest of ``robot_state`` is absent from that observation.
+ROBOT_FAULT = 'robot_state.fault'
 GRIP = 'grip'
 TASK = 'task'
 # The prefix that identifies a camera on the wire: an embodiment declares its cameras by naming

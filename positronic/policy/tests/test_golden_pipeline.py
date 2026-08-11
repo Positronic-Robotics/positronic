@@ -36,6 +36,7 @@ from positronic import keys, wire
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, CommandType, Reset
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
@@ -43,7 +44,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import ActionTiming
 from positronic.policy.harness import Directive, Harness
-from positronic.policy.wrappers import ChunkedSchedule
+from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 GOLDEN_FILE = Path(__file__).parent / 'golden_pipeline.json.gz'
@@ -86,13 +87,17 @@ class ScriptedProportionalPolicy(Policy):
         return _ScriptedSession()
 
 
-class _FakeRobotState:
+class _FakeRobotState(roboarm.State):
     """Lossless re-expression of the last applied command over sim-time."""
 
     def __init__(self, pos: np.ndarray, q: np.ndarray, status: RobotStatus):
         self._pos = pos
         self._q = q
-        self.status = status
+        self._status = status
+
+    @property
+    def status(self) -> RobotStatus:
+        return self._status
 
     @property
     def q(self) -> np.ndarray:
@@ -193,7 +198,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
             # world's sole time-master — the shape a sim eval runs in.
             simulated=True,
         )
-        harness = Harness(ChunkedSchedule().wrap(policy), embodiment)
+        harness = Harness((StopOnFault() | ChunkedSchedule()).wrap(policy), embodiment)
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
         directive_em = world.pair(harness.directive)

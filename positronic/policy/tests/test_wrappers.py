@@ -27,7 +27,7 @@ from positronic.policy.codec import (
     RestrictImageSize,
 )
 from positronic.policy.observation import ObservationCodec
-from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
+from positronic.policy.wrappers import ChunkedSchedule, StopOnFault, TemporalStack
 
 
 class _FakeClock:
@@ -63,8 +63,35 @@ class _ConstPolicy(Policy):
         return self._session
 
 
-def _obs(now_sec=0.0):
-    return {keys.OBS_TIME_NS: int(now_sec * 1e9)}
+def _obs(now_sec=0.0, fault=False):
+    return {keys.OBS_TIME_NS: int(now_sec * 1e9), keys.ROBOT_FAULT: fault}
+
+
+class TestStopOnFault:
+    def test_a_faulted_arm_stops_what_is_executing(self):
+        inner = _ConstSession([{'v': 1, 'timestamp': 0.0}])
+        session = StopOnFault().wrap_session(inner, None, None)
+
+        assert session(_obs(0.0, fault=True)) == []
+        assert inner.call_count == 0, 'the model was asked about an arm that is not tracking it'
+
+    def test_a_sound_arm_reaches_the_model(self):
+        inner = _ConstSession([{'v': 1, 'timestamp': 0.0}])
+        session = StopOnFault().wrap_session(inner, None, None)
+
+        assert session(_obs(0.0)) is not None
+        assert inner.call_count == 1
+
+    def test_recovery_plans_afresh_instead_of_resuming(self):
+        """The fault resets the scheduler below it, so the first sound observation infers again rather than
+        waiting out the chunk stamped before the fault."""
+        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 1.0}])
+        session = (StopOnFault() | ChunkedSchedule()).wrap(inner).new_session(now=_FakeClock(t=0.0).now)
+
+        assert session(_obs(0.0)) is not None  # a chunk that runs until 1.0
+        assert session(_obs(0.2, fault=True)) == []
+        assert session(_obs(0.3)) is not None
+>>>>>>> 0595b577 (Let the policy stop a faulted arm, and keep a constant charge off the machine clock)
 
 
 class TestChunkedSchedule:
@@ -378,6 +405,7 @@ class TestPipelineSpec:
     def test_wire_names_match_table(self):
         instances = {
             'chunked_schedule': ChunkedSchedule(),
+            'stop_on_fault': StopOnFault(),
             'temporal_stack': TemporalStack(('v',), (0.0,)),
             'action_timestamp': ActionTimestamp(fps=10.0),
             'action_horizon': ActionHorizon(1.0),

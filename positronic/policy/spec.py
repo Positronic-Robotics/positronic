@@ -46,7 +46,7 @@ from positronic.policy.codec import (
     RestrictImageSize,
 )
 from positronic.policy.observation import ObservationCodec
-from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
+from positronic.policy.wrappers import ChunkedSchedule, StopOnFault, TemporalStack
 
 
 class RemoteMarker(PolicyWrapper):
@@ -150,6 +150,7 @@ class PolicySource(ModelSource):
 # names the whole-table fix, and the test above catches a desync meanwhile
 WIRE_WRAPPERS: dict[str, type[PolicyWrapper]] = {
     'chunked_schedule': ChunkedSchedule,
+    'stop_on_fault': StopOnFault,
     'temporal_stack': TemporalStack,
     'action_timestamp': ActionTimestamp,
     'action_horizon': ActionHorizon,

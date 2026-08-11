@@ -16,7 +16,7 @@ from positronic.offboard.server_utils import run_with_progress, wait_for_subproc
 from positronic.policy import Codec, Policy, Session
 from positronic.policy.codec import ChangeEEFrame, RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
-from positronic.policy.wrappers import ChunkedSchedule
+from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.vendors import openpi
@@ -258,7 +258,7 @@ def pipeline(codec: Codec, source: ModelSource, ee_frame: geom.Transform3D | Non
     ``ee_frame`` places the end-effector frame this checkpoint's poses live in relative to ``DEFAULT_FRAME``
     (``models.DROID_EE_FRAME``); ``None`` for a checkpoint trained in ``default``, or one speaking joints.
     """
-    local = ChunkedSchedule() | RestrictImageSize(224, 224)
+    local = StopOnFault() | ChunkedSchedule() | RestrictImageSize(224, 224)
     if ee_frame is not None:
         # Outermost, so everything downstream — the wire, the server's codec — sees poses already in ``ee_frame``.
         local = ChangeEEFrame(ee_frame) | local
