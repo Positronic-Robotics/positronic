@@ -27,7 +27,7 @@ from starlette.requests import Request
 
 import positronic.cfg.ds
 from positronic import keys, utils
-from positronic.dataset import CachedDataset, Dataset, Episode
+from positronic.dataset import META_UID, CachedDataset, Dataset, Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import get_dataset_root, get_episodes_list, stream_episode_rrd
 from positronic.utils.logging import init_logging
@@ -77,7 +77,7 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     os.makedirs(episode_cache_dir, exist_ok=True)
     # Key the cache by episode uid, not position: position is view-dependent, and datasets without a
     # resolvable root (e.g. concatenated ones) all share the 'unknown_dataset' namespace.
-    return os.path.join(episode_cache_dir, f'{ds[episode_id].meta["uid"]}.rrd')
+    return os.path.join(episode_cache_dir, f'{ds[episode_id].meta[META_UID]}.rrd')
 
 
 @asynccontextmanager

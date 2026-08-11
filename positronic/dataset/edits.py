@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from .dataset import Dataset, FilterDataset
-from .episode import Episode, _is_valid_static_value, _static_decode_hook, _StaticEncoder
+from .episode import META_UID, Episode, _is_valid_static_value, _static_decode_hook, _StaticEncoder
 from .signal import Signal
 
 EDITS_FILE = 'edits.jsonl'
@@ -107,7 +107,7 @@ class EditedDataset(Dataset):
         self._base = base
         self._edits_dir = Path(edits_dir)
         self._statics, self._dropped = _load_edits(self._edits_dir)
-        self._kept = FilterDataset(base, lambda ep: ep.meta['uid'] not in self._dropped)
+        self._kept = FilterDataset(base, lambda ep: ep.meta[META_UID] not in self._dropped)
 
     def __len__(self) -> int:
         return len(self._kept)
@@ -121,7 +121,7 @@ class EditedDataset(Dataset):
         A dropped episode is returned untouched — its edits are irrelevant to the curated view, and skipping the
         overlay lets the editor navigate to a dropped row (to undrop it) even when an edit collides with a signal.
         """
-        uid = episode.meta.get('uid')
+        uid = episode.meta.get(META_UID)
         if uid in self._dropped:
             return episode
         edits = self._statics.get(uid)

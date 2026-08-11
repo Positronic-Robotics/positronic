@@ -12,6 +12,7 @@ import numpy as np
 import pimm
 from positronic import keys
 from positronic.cfg.eval.real.tasks import SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK, UNIFIED_TASK
+from positronic.dataset import META_UID
 from positronic.dataset.edits import EditedDataset
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.gui import handover
@@ -608,7 +609,7 @@ class EvalUI(pimm.ControlSystem):
             if not self._pending_reviews:
                 break
             review = self._pending_reviews.popleft()
-            uid = self._base[idx].meta['uid']
+            uid = self._base[idx].meta[META_UID]
             self._edited = self._edited.set_static(
                 uid, {'eval.outcome': review['outcome'], 'eval.successful_items': review['successful']}
             )
@@ -628,7 +629,7 @@ class EvalUI(pimm.ControlSystem):
         else:
             key = (self.TEXT_FIELDS | self.RADIO_FIELDS)[user_data]
             data = {key: dpg.get_value(user_data)}
-        self._edited = self._edited.set_static(self._base[self._sel].meta['uid'], data)
+        self._edited = self._edited.set_static(self._base[self._sel].meta[META_UID], data)
 
     def _bind_review_video(self):
         # GUI video binding follows the `image.` observation naming convention, like the live feeds.
@@ -676,12 +677,12 @@ class EvalUI(pimm.ControlSystem):
         dpg.set_value('rv_time', f'{(ts - t0) / 1e9:.1f} / {(self._rv_signal.last_ts - t0) / 1e9:.1f}s')
 
     def drop_episode(self, sender=None, app_data=None):
-        self._edited = self._edited.drop(self._base[self._sel].meta['uid'])
+        self._edited = self._edited.drop(self._base[self._sel].meta[META_UID])
         self._dropped = self._edited.dropped
         self._select(self._sel)
 
     def undrop_episode(self, sender=None, app_data=None):
-        self._edited = self._edited.undrop(self._base[self._sel].meta['uid'])
+        self._edited = self._edited.undrop(self._base[self._sel].meta[META_UID])
         self._dropped = self._edited.dropped
         self._select(self._sel)
 
@@ -696,7 +697,7 @@ class EvalUI(pimm.ControlSystem):
             dpg.set_value('ed_status', '')
             dropped = False
         else:
-            dropped = self._base[self._sel].meta['uid'] in self._dropped
+            dropped = self._base[self._sel].meta[META_UID] in self._dropped
             dpg.set_value('ed_pos', f'{self._sel + 1}/{self._count}')
             dpg.set_value('ed_status', 'DROPPED' if dropped else '')
         editable = self._sel is not None and not dropped

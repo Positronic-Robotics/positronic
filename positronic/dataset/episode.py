@@ -11,6 +11,8 @@ import numpy as np
 from .signal import Signal
 
 EPISODE_SCHEMA_VERSION = 1
+# Key an episode's identity is stamped under in `meta`: what every writer writes and every reader addresses by.
+META_UID = 'uid'
 T = TypeVar('T')
 SIGNAL_FACTORY_T = Callable[[], Signal[Any]]
 

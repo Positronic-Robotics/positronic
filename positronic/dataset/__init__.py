@@ -1,5 +1,5 @@
 from .dataset import CachedDataset, Dataset, DatasetWriter
-from .episode import DiscardReason, Episode, EpisodeWriter
+from .episode import META_UID, DiscardReason, Episode, EpisodeWriter
 from .signal import IndicesLike, RealNumericArrayLike, Signal, SignalWriter, is_realnum_dtype
 
 __all__ = [
@@ -8,6 +8,7 @@ __all__ = [
     'IndicesLike',
     'RealNumericArrayLike',
     'is_realnum_dtype',
+    'META_UID',
     'DiscardReason',
     'Episode',
     'EpisodeWriter',
