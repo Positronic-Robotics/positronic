@@ -41,7 +41,6 @@ jobs:
       - name: Replay a LIBERO demo through the env server (software rendering)
         env:
           MUJOCO_GL: osmesa
-        # `addopts` ignores this file, so passing its directory collects nothing — the path must name it.
         run: uv run pytest positronic/simulator/libero/tests/test_e2e.py --no-cov -rs
 
       # Reuses the LIBERO checkout the replay above cloned (``~/.cache/positronic/libero/src``). Validates the
