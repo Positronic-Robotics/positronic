@@ -121,24 +121,6 @@ class GrootObservationCodec(Codec):
         w, h = self._image_size
         return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
 
-    def dummy_encoded(self, data=None) -> dict[str, Any]:
-        """Return a zero-filled encoded observation in GR00T's nested format."""
-        w, h = self._image_size
-        state: dict[str, Any] = {GRIP: np.zeros((1, 1, 1), dtype=np.float32)}
-        if self._include_ee_pose:
-            ee_dim = self._rotation_rep.size + 3 if self._rotation_rep else 7
-            state[EE_POSE] = np.zeros((1, 1, ee_dim), dtype=np.float32)
-        if self._include_joints:
-            state[JOINT_POSITION] = np.zeros((1, 1, self._num_joints), dtype=np.float32)
-        return {
-            'video': {
-                'wrist_image': np.zeros((1, 1, h, w, 3), dtype=np.uint8),
-                'exterior_image_1': np.zeros((1, 1, h, w, 3), dtype=np.uint8),
-            },
-            'state': state,
-            'language': {'annotation.language.language_instruction': [['warmup']]},
-        }
-
     def _decode_single(self, data: dict, context: dict | None) -> dict:
         return {}
 

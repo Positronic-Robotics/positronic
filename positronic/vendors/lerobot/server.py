@@ -8,7 +8,7 @@ import pos3
 
 from positronic import keys
 from positronic.offboard.server import serve
-from positronic.offboard.server_utils import run_with_progress
+from positronic.offboard.server_utils import run_with_progress, warmup
 from positronic.policy import Codec, Policy
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, Pipeline, remote
@@ -16,7 +16,7 @@ from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.checkpoints import list_checkpoints, resolve_checkpoint
 from positronic.utils.logging import init_logging
 from positronic.vendors.lerobot import codecs as lerobot_codecs
-from positronic.vendors.lerobot.policy import LerobotPolicy, _detect_device
+from positronic.vendors.lerobot.policy import LerobotPolicy, _detect_device, warm_observation
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,9 @@ class LerobotSource(ModelSource):
         local = run_with_progress(
             lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {model_id}', on_progress
         )
-        return LerobotPolicy(str(local), self.device, extra_meta={keys.CHECKPOINT_PATH: checkpoint_path})
+        policy = LerobotPolicy(str(local), self.device, extra_meta={keys.CHECKPOINT_PATH: checkpoint_path})
+        warmup(policy, warm_observation(local), on_progress)
+        return policy
 
     def meta(self, model_id: str) -> dict[str, Any]:
         return {'device': self.device, keys.EXPERIMENT_NAME: self.experiment_name}

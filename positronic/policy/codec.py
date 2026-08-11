@@ -80,16 +80,6 @@ class Codec(PolicyWrapper):
     def meta(self) -> dict:
         return {}
 
-    def dummy_encoded(self, data: dict | None = None) -> dict:
-        """Return a dummy version of what ``encode()`` would produce.
-
-        Each codec contributes its part of the encoded output. The default
-        pass-through returns the input unchanged — codecs that don't transform
-        observations (action decoders, timing) inherit this behavior.
-        Composed codecs pipeline left-to-right, mirroring ``encode()``.
-        """
-        return data or {}
-
     def wrap_session(self, inner: Session, context, now):
         return _CodecSession(inner, self)
 
@@ -193,9 +183,6 @@ class _ComposedCodec(Codec):
     def to_spec(self):
         return {SEQ: [self._left.to_spec(), self._right.to_spec()]}
 
-    def dummy_encoded(self, data=None):
-        return self._right.dummy_encoded(self._left.dummy_encoded(data))
-
 
 class _ParallelCodec(Codec):
     """Two codecs composed via ``&``. Both see the same input, outputs merged."""
@@ -224,9 +211,6 @@ class _ParallelCodec(Codec):
 
     def to_spec(self):
         return {PAR: [self._left.to_spec(), self._right.to_spec()]}
-
-    def dummy_encoded(self, data=None):
-        return {**self._left.dummy_encoded(data), **self._right.dummy_encoded(data)}
 
 
 def is_action(entry: dict) -> bool:

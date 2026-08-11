@@ -4,8 +4,13 @@ import pytest
 
 pytest.importorskip('huggingface_hub')
 
-from positronic.vendors.dreamzero import server  # noqa: E402
-from positronic.vendors.dreamzero.server import DreamZeroSource, _checkpoint_id, _experiment_name  # noqa: E402
+from positronic.vendors.dreamzero import roboarena, server  # noqa: E402
+from positronic.vendors.dreamzero.server import (  # noqa: E402
+    DreamZeroSource,
+    _checkpoint_id,
+    _experiment_name,
+    _warm_observation,
+)
 
 RUN_DIR = 's3://checkpoints/phail/dreamzero/w22f1_100k_200626/'
 
@@ -16,6 +21,9 @@ class _FakeSubprocess:
         self.roboarena_port = roboarena_port
 
     def start(self, on_progress=None):
+        pass
+
+    def warmup(self, on_progress=None):
         pass
 
     def stop(self):
@@ -106,6 +114,43 @@ def test_a_zero_padded_step_is_reached_by_the_name_its_directory_carries(holding
     source.load(pinned)
 
     assert downloaded == [RUN_DIR + 'checkpoint-005000']
+
+
+def test_warmup_observation_follows_the_cameras_the_server_announced():
+    announced = {
+        roboarena.RESOLUTION: (176, 320),
+        roboarena.NEEDS_WRIST_CAMERA: True,
+        roboarena.NUM_EXTERIOR_CAMERAS: 2,
+        roboarena.NEEDS_STEREO_CAMERA: False,
+    }
+
+    obs = _warm_observation(announced, 'session-1')
+
+    assert set(obs) == {
+        roboarena.JOINT_POSITION,
+        roboarena.GRIPPER_POSITION,
+        roboarena.PROMPT,
+        roboarena.SESSION_ID,
+        roboarena.WRIST_IMAGE,
+        roboarena.exterior_image(0),
+        roboarena.exterior_image(1),
+    }
+    # The announcement gives the resolution height-first, the way an image array is shaped.
+    assert obs[roboarena.WRIST_IMAGE].shape == (176, 320, 3)
+
+
+def test_warmup_observation_drops_a_camera_the_server_does_not_want():
+    announced = {
+        roboarena.RESOLUTION: (176, 320),
+        roboarena.NEEDS_WRIST_CAMERA: False,
+        roboarena.NUM_EXTERIOR_CAMERAS: 1,
+        roboarena.NEEDS_STEREO_CAMERA: False,
+    }
+
+    obs = _warm_observation(announced, 'session-1')
+
+    assert roboarena.WRIST_IMAGE not in obs
+    assert roboarena.exterior_image(1) not in obs
 
 
 def test_meta_does_not_relist_the_bucket(monkeypatch):

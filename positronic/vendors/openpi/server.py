@@ -12,14 +12,14 @@ from openpi_client.websocket_client_policy import WebsocketClientPolicy
 
 from positronic import geom, keys
 from positronic.offboard.server import serve
-from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
+from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
 from positronic.policy import Codec, Policy, Session
 from positronic.policy.codec import ChangeEEFrame, RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
-from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer
+from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer, wire
 
 logger = logging.getLogger(__name__)
 
@@ -216,10 +216,13 @@ class OpenpiSource(ModelSource):
         )
         try:
             subproc.start(on_progress)
+            policy = OpenpiPolicy(subproc)
+            # The subprocess compiles the model on its first inference, which outlasts a rig's inference timeout.
+            warmup(policy, wire.warm_observation(), on_progress)
         except Exception:
             subproc.stop()
             raise
-        return OpenpiPolicy(subproc)
+        return policy
 
     def meta(self, model_id: str) -> dict[str, Any]:
         return {

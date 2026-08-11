@@ -166,17 +166,6 @@ class TestGrootObservationCodec:
         assert result['video']['wrist_image'].shape == (1, 1, 128, 128, 3)
         assert result['video']['exterior_image_1'].shape == (1, 1, 128, 128, 3)
 
-    @pytest.mark.parametrize(
-        'rotation_rep, include_joints', [(None, False), (RotRep.ROT6D, False), (None, True), (RotRep.ROT6D, True)]
-    )
-    def test_dummy_encoded_shape(self, rotation_rep, include_joints):
-        """Test that dummy_encoded() produces valid encoded observations for all variants."""
-        codec = GrootObservationCodec(rotation_rep=rotation_rep, include_joints=include_joints)
-        result = codec.dummy_encoded()
-        assert 'video' in result
-        assert 'state' in result
-        assert 'language' in result
-
     def test_custom_camera_keys(self, sample_inputs):
         """Test custom camera key mapping."""
         sample_inputs['cam1'] = sample_inputs.pop(keys.WRIST_IMAGE)

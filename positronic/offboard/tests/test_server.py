@@ -15,6 +15,7 @@ from websockets.sync.client import connect
 from positronic import keys
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
+from positronic.offboard.server_utils import warmup
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
@@ -68,9 +69,7 @@ def test_full_inference_cycle(stub_server):
 
 
 def test_no_codec(stub_server):
-    host, port, server, _policy = stub_server
-    assert server._remote is None
-
+    host, port, _server, _policy = stub_server
     client = InferenceClient(f'{host}:{port}')
     session = client.new_session()
     try:
@@ -178,9 +177,6 @@ class _IdentityCodec(Codec):
     def meta(self):
         return {'codec': 'identity'}
 
-    def dummy_encoded(self, data=None):
-        return data or {}
-
 
 @pytest.fixture
 def codec_server(start_server, make_mock_policy) -> tuple[str, int, MagicMock]:
@@ -201,10 +197,24 @@ def test_codec_wrapping(codec_server):
         session.close()
 
 
-def test_warmup_runs_dummy_inference_at_startup(codec_server):
-    _host, _port, policy = codec_server
-    # Startup warmed the pinned model up through the codec's dummy_encoded() before serving.
-    policy._mock_session.assert_called_once_with({})
+def test_warmup_runs_one_inference_and_ends_its_session(make_mock_policy):
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {})
+    obs = {'obs': 'zeros'}
+
+    warmup(policy, obs)
+
+    policy._mock_session.assert_called_once_with(obs)
+    policy._mock_session.close.assert_called_once()
+
+
+def test_a_backend_that_cannot_answer_its_warmup_raises_and_still_ends_its_session(make_mock_policy):
+    policy = make_mock_policy([], {})
+    policy._mock_session.side_effect = RuntimeError('shape mismatch')
+
+    with pytest.raises(RuntimeError, match='shape mismatch'):
+        warmup(policy, {})
+
+    policy._mock_session.close.assert_called_once()
 
 
 def test_local_stack_declared_in_handshake(start_server, make_mock_policy):

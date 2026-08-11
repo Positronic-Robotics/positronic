@@ -77,16 +77,6 @@ class ObservationCodec(Codec):
 
         return obs
 
-    def dummy_encoded(self, data=None) -> dict[str, Any]:
-        """Return a zero-filled encoded observation matching the shapes ``encode()`` produces."""
-        obs: dict[str, Any] = {}
-        for out_name, features in self._state.items():
-            obs[out_name] = np.zeros(sum(features.values()), dtype=np.float32)
-        for out_name, (_input_key, (width, height)) in self._image_configs.items():
-            obs[out_name] = np.zeros((height, width, 3), dtype=np.uint8)
-        obs[self._task_field] = 'warmup'
-        return obs
-
     @property
     def meta(self):
         sizes = {input_key: (w, h) for _out, (input_key, (w, h)) in self._image_configs.items()}

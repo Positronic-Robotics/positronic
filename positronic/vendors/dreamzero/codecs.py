@@ -17,6 +17,7 @@ from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver
 from positronic.policy.action import IKJointsAction
 from positronic.policy.codec import Codec, lerobot_action, lerobot_image, lerobot_state
+from positronic.vendors.dreamzero import roboarena
 
 IMAGE_WIDTH = 320
 IMAGE_HEIGHT = 176
@@ -108,28 +109,17 @@ class DreamZeroObservationCodec(Codec):
         grip = np.asarray(inputs[keys.GRIP], dtype=np.float32).reshape(-1)
 
         obs = {
-            'observation/joint_position': joint_pos,
-            'observation/gripper_position': grip,
-            'observation/wrist_image_left': self._encode_image(self._wrist_camera, inputs),
-            'observation/exterior_image_0_left': self._encode_image(self._exterior_camera_1, inputs),
-            'observation/exterior_image_1_left': self._encode_image(self._exterior_camera_2, inputs),
+            roboarena.JOINT_POSITION: joint_pos,
+            roboarena.GRIPPER_POSITION: grip,
+            roboarena.WRIST_IMAGE: self._encode_image(self._wrist_camera, inputs),
+            roboarena.exterior_image(0): self._encode_image(self._exterior_camera_1, inputs),
+            roboarena.exterior_image(1): self._encode_image(self._exterior_camera_2, inputs),
         }
 
         if keys.TASK in inputs:
-            obs['prompt'] = inputs[keys.TASK]
+            obs[roboarena.PROMPT] = inputs[keys.TASK]
 
         return obs
-
-    def dummy_encoded(self, data=None) -> dict[str, Any]:
-        w, h = self._image_size
-        return {
-            'observation/joint_position': np.zeros(7, dtype=np.float32),
-            'observation/gripper_position': np.zeros(1, dtype=np.float32),
-            'observation/wrist_image_left': np.zeros((h, w, 3), dtype=np.uint8),
-            'observation/exterior_image_0_left': np.zeros((h, w, 3), dtype=np.uint8),
-            'observation/exterior_image_1_left': np.zeros((h, w, 3), dtype=np.uint8),
-            'prompt': 'warmup',
-        }
 
     @property
     def meta(self):

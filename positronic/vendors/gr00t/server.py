@@ -295,6 +295,10 @@ class Gr00tSource(ModelSource):
             zmq_port=self.zmq_port,
             ready_timeout=self.ready_timeout,
         )
+        # TODO: Warm the subprocess here, as the other sources do, so the first inference a rig asks for is not
+        # the one that pays the backend's startup cost. Building the observation needs a state dimension per
+        # modality key, which the ZMQ `get_modality_config` endpoint does not carry and the checkpoint holds
+        # only inside gr00t's own processor config.
         try:
             groot.start(on_progress)
         except Exception:

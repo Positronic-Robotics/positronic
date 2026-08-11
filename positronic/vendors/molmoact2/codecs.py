@@ -8,10 +8,7 @@ import numpy as np
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.policy.codec import Codec
-
-# MolmoAct2 resizes and tiles every image to 378x378 internally, so the codec forwards camera
-# frames untouched; this placeholder size is only for warmup observations.
-_DUMMY_IMAGE_SIZE = (256, 256)
+from positronic.vendors import molmoact2
 
 
 class MolmoAct2ObservationCodec(Codec):
@@ -44,16 +41,9 @@ class MolmoAct2ObservationCodec(Codec):
         joints = np.asarray(inputs[self._joint_key], dtype=np.float32).reshape(-1)
         grip = np.asarray(inputs[self._grip_key], dtype=np.float32).reshape(-1)
         return {
-            'images': [self._image(k, inputs) for k in self._cameras],
-            'state': np.concatenate([joints, grip]).astype(np.float32),
-            'task': inputs.get(keys.TASK, ''),
-        }
-
-    def dummy_encoded(self, data=None) -> dict[str, Any]:
-        return {
-            'images': [np.zeros((*_DUMMY_IMAGE_SIZE, 3), dtype=np.uint8) for _ in self._cameras],
-            'state': np.zeros(8, dtype=np.float32),
-            'task': 'warmup',
+            molmoact2.IMAGES: [self._image(k, inputs) for k in self._cameras],
+            molmoact2.STATE: np.concatenate([joints, grip]).astype(np.float32),
+            molmoact2.TASK: inputs.get(keys.TASK, ''),
         }
 
 

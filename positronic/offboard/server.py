@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocke
 from starlette.datastructures import QueryParams
 
 from positronic import keys
-from positronic.policy import Codec, Policy, Recorder
+from positronic.policy import Policy, Recorder
 from positronic.policy.base import PolicyWrapper
 from positronic.policy.spec import ModelSource, Pipeline, split
 from positronic.utils.serialization import deserialise, serialise
@@ -184,7 +184,7 @@ class PolicyServer:
     The WebSocket session flow is:
         accept → session params → resolve → load via manager → remote-half wrap → reset → inference loop
 
-    On startup (before accepting connections): resolve(None) → load → warmup.
+    On startup (before accepting connections): resolve(None) → load.
 
     The default checkpoint is resolved once, at startup, and pinned for every request that names no
     explicit one — a running server never switches to a newer checkpoint that lands later. A request
@@ -205,7 +205,7 @@ class PolicyServer:
         assert isinstance(self._pipeline, Pipeline), (
             f'PolicyServer serves a policy pipeline closed by a model source, got {type(self._pipeline).__name__}'
         )
-        local, _, self._remote = split(self._pipeline)
+        local, _, _ = split(self._pipeline)
         # A local half that is missing or cannot be rendered fails at startup, not at a client's connect.
         # The spec itself is built per session, which params may have changed.
         _declared_stack(local)
@@ -370,27 +370,10 @@ class PolicyServer:
                 if policy is not None:
                     await self._manager.release_session()
 
-    async def _warmup(self, policy: Policy):
-        """Run one warmup inference through the launch codec's ``dummy_encoded()``. Non-fatal on failure."""
-        if not isinstance(self._remote, Codec):
-            return
-        session = None
-        try:
-            logger.info('Running warmup inference...')
-            session = policy.new_session()
-            await asyncio.to_thread(session, self._remote.dummy_encoded())
-            logger.info('Warmup inference complete')
-        except Exception:
-            logger.warning('Warmup inference failed (non-fatal)', exc_info=True)
-        finally:
-            if session is not None:
-                session.close()
-
     async def _startup(self):
         self._default_id = self._source.resolve(None)
         logger.info(f'Pinned default checkpoint at startup: {self._default_id}')
-        policy = await self._manager.get_policy(self._default_id)
-        await self._warmup(policy)
+        await self._manager.get_policy(self._default_id)
 
     async def _idle_watchdog(self, server: uvicorn.Server):
         assert self.idle_timeout_min is not None

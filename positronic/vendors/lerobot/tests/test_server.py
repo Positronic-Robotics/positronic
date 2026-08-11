@@ -11,6 +11,10 @@ from positronic.utils.serialization import deserialise
 
 pytest.importorskip('lerobot', minversion='0.4')
 
+from lerobot.configs.types import FeatureType, PolicyFeature  # noqa: E402
+from lerobot.policies.act.configuration_act import ACTConfig  # noqa: E402
+
+from positronic.vendors.lerobot.policy import TASK, warm_observation  # noqa: E402
 from positronic.vendors.lerobot.server import LerobotSource  # noqa: E402
 
 
@@ -99,3 +103,20 @@ async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
     assert "Available: ['41']" in error_response['error']
     server._manager.get_policy.assert_not_called()
     server._manager.release_session.assert_not_called()
+
+
+def test_warmup_observation_matches_the_features_the_checkpoint_declares(tmp_path):
+    ACTConfig(
+        input_features={
+            'observation.state': PolicyFeature(type=FeatureType.STATE, shape=(8,)),
+            'observation.images.left': PolicyFeature(type=FeatureType.VISUAL, shape=(3, 224, 320)),
+        },
+        output_features={'action': PolicyFeature(type=FeatureType.ACTION, shape=(7,))},
+    ).save_pretrained(tmp_path)
+
+    obs = warm_observation(tmp_path)
+
+    assert obs['observation.state'].shape == (8,)
+    # Declared channels-first, handed over channels-last the way a session takes it.
+    assert obs['observation.images.left'].shape == (224, 320, 3)
+    assert obs[TASK] == ''
