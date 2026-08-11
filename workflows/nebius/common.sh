@@ -5,8 +5,7 @@
 # resource from different sides — the project a job is created in and an endpoint is looked up in,
 # the secret `serve.sh` injects and `e2e.sh` reads back.
 #
-# What does not: a value each script sets for itself. NEBIUS_PRESET is one GPU for training and
-# serving but a smaller one for eval; NEBIUS_JOB_TIMEOUT is 4h for a conversion and 24h for a run.
+# What does not: a value each script sets for itself, such as NEBIUS_PRESET or NEBIUS_JOB_TIMEOUT.
 # Those live beside the script that means them, so hoisting one script's default never becomes
 # another's.
 
