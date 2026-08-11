@@ -3,6 +3,7 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager
+from enum import Enum
 from typing import Any, Generic, TypeVar
 
 import numpy as np
@@ -153,6 +154,16 @@ class EpisodeContainer(Episode):
         return self._meta.copy()
 
 
+class DiscardReason(Enum):
+    """Why an episode never joined the dataset."""
+
+    ABORTED = 'aborted'
+    # The recording run ended with the episode still open.
+    RUN_ENDED = 'run_ended'
+    # The writer's context exited with an exception.
+    WRITE_FAILED = 'write_failed'
+
+
 class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
     """Abstract interface for recording an episode's dynamic and static data."""
 
@@ -172,8 +183,8 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
         ...
 
     @abstractmethod
-    def abort(self) -> None:
-        """Abort the write and discard any partially written data."""
+    def abort(self, reason: DiscardReason) -> None:
+        """Stop recording and drop the episode from the dataset."""
         pass
 
     @property

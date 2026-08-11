@@ -14,7 +14,7 @@ from positronic.server.dataset_utils import (
 
 
 def _episode(ep_dir, widths: dict[str, int], static: dict[str, Any] | None = None) -> DiskEpisode:
-    with DiskEpisodeWriter(ep_dir) as writer:
+    with DiskEpisodeWriter(ep_dir, discarded_dir=ep_dir.parent / 'discarded') as writer:
         for name, width in widths.items():
             writer.append(name, np.zeros(width, dtype=np.float32), 1000)
             writer.append(name, np.ones(width, dtype=np.float32), 2000)

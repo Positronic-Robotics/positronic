@@ -9,7 +9,7 @@ import pimm
 from positronic.utils import frozen_keys_dict
 
 from .dataset import DatasetWriter
-from .episode import EpisodeWriter
+from .episode import DiscardReason, EpisodeWriter
 from .serializers import Serializer, StatefulSerializer, Timestamped, _PureSerializer, expand_suffixed
 
 logger = logging.getLogger(__name__)
@@ -152,7 +152,8 @@ class DsWriterAgent(pimm.ControlSystem):
     that turn's inputs, so the trial's last frame is recorded before STOP
     finalizes the writer; samples timestamped after STOP — post-episode home or
     sensor data the async real path may queue — are dropped, and ABORT discards
-    the episode. Invalid or out-of-order commands are ignored with a log message.
+    the episode. An episode still open when the run stops is discarded the same way, from the
+    loop's teardown. Invalid or out-of-order commands are ignored with a log message.
 
     `TimeMode` selects whether timestamps come from the control loop clock
     (`CLOCK`) or from the producing message (`MESSAGE`).
@@ -260,7 +261,7 @@ class DsWriterAgent(pimm.ControlSystem):
 
             if ep_writer is not None:
                 try:
-                    ep_writer.abort()
+                    ep_writer.abort(DiscardReason.RUN_ENDED)
                 finally:
                     ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
@@ -295,7 +296,7 @@ class DsWriterAgent(pimm.ControlSystem):
                     logger.warning('Episode not started, ignoring stop command')
             case DsWriterCommandType.ABORT_EPISODE:
                 if ep_writer is not None:
-                    ep_writer.abort()
+                    ep_writer.abort(DiscardReason.ABORTED)
                     ep_writer.__exit__(None, None, None)
                     logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
                     ep_writer = None

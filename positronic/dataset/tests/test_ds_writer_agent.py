@@ -1,6 +1,7 @@
+import json
 import pickle
 from functools import partial
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -8,7 +9,7 @@ import pytest
 
 import pimm
 from positronic import geom, keys, telemetry, telemetry_keys
-from positronic.dataset import DatasetWriter, EpisodeWriter
+from positronic.dataset import DatasetWriter, DiscardReason, EpisodeWriter
 from positronic.dataset.ds_writer_agent import (
     DsWriterAgent,
     DsWriterCommand,
@@ -16,7 +17,7 @@ from positronic.dataset.ds_writer_agent import (
     TimeMode,
     TrajectoryOverrideSerializer,
 )
-from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
+from positronic.dataset.local_dataset import DISCARD_MARKER, LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as rcmd
@@ -34,7 +35,7 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
         self.statics: dict[str, Any] = {}
         self.appends: list[tuple[str, Any, int, dict[str, int] | None]] = []
         self.exited = False
-        self.aborted = False
+        self.discarded: DiscardReason | None = None
 
     def append(self, signal_name: str, data: Any, ts_ns: int, extra_ts: dict[str, int] | None = None) -> None:
         self.appends.append((signal_name, data, int(ts_ns), extra_ts))
@@ -45,8 +46,8 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
     def __exit__(self, exc_type, exc, tb) -> None:
         self.exited = True
 
-    def abort(self) -> None:
-        self.aborted = True
+    def abort(self, reason: DiscardReason) -> None:
+        self.discarded = reason
 
 
 class FakeDatasetWriter(DatasetWriter):
@@ -77,9 +78,9 @@ def build_agent_with_pipes(
     agent = DsWriterAgent(ds_writer, time_mode=time_mode)
     for name, serializer in signals_spec.items():
         agent.add_signal(name, serializer)
-    emitters: dict[str, pimm.SignalEmitter[Any]] = {name: world.pair(agent.inputs[name]) for name in signals_spec}
+    emitters = {name: cast(pimm.SignalEmitter[Any], world.pair(agent.inputs[name])) for name in signals_spec}
 
-    cmd_em = world.pair(agent.command)
+    cmd_em = cast(pimm.SignalEmitter[DsWriterCommand], world.pair(agent.command))
 
     return agent, cmd_em, emitters
 
@@ -105,7 +106,7 @@ def test_start_stop_happy_path(world):
     assert w.statics.get('done') is True
 
 
-def test_episode_finalizes_when_run_stops(world):
+def test_an_episode_still_open_when_the_run_stops_is_discarded(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
 
@@ -119,7 +120,23 @@ def test_episode_finalizes_when_run_stops(world):
     assert len(ds.created) == 1
     w = ds.created[-1]
     assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 42)]
+    assert w.discarded is DiscardReason.RUN_ENDED
     assert w.exited is True
+
+
+def test_an_episode_stopped_before_the_run_ends_is_not_discarded(world):
+    ds = FakeDatasetWriter()
+    agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
+
+    script = [
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
+        (partial(emitters['a'].emit, 42), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+    ]
+
+    run_scripted_agent(agent, script, world=world)
+
+    assert ds.created[-1].discarded is None
 
 
 def test_ignore_duplicate_commands_and_empty_stop(world):
@@ -156,7 +173,7 @@ def test_abort_flow_then_restart(world):
 
     assert len(ds.created) == 2
     w1, w2 = ds.created[0], ds.created[1]
-    assert w1.aborted is True and w1.exited is True
+    assert w1.discarded is DiscardReason.ABORTED and w1.exited is True
     assert [(s, v) for (s, v, _, _) in w2.appends] == [('s', 11)]
 
 
@@ -246,6 +263,42 @@ def test_integration_with_local_dataset_writer(tmp_path, world):
     assert 'ts_ns.message' in table_a.column_names
     assert 'ts_ns.system' in table_a.column_names
     assert 'ts_ns.world' in table_a.column_names
+
+
+def test_run_stopping_mid_episode_keeps_the_recording_outside_the_dataset(tmp_path, world):
+    root = tmp_path / 'ds'
+    with LocalDatasetWriter(root) as writer:
+        agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, writer, world)
+
+        script = [
+            (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE, {'task': 'unit'})), 0.001),
+            (partial(emitters['a'].emit, 10), 0.001),
+        ]
+
+        run_scripted_agent(agent, script, world=world)
+
+    assert len(LocalDataset(root)) == 0
+    discarded = list((tmp_path / 'ds.discarded').iterdir())
+    assert len(discarded) == 1
+    assert (discarded[0] / 'a.parquet').exists()
+    assert json.loads((discarded[0] / DISCARD_MARKER).read_text())['reason'] == DiscardReason.RUN_ENDED.value
+
+
+def test_a_committed_episode_is_never_swept_into_the_discarded_dir(tmp_path, world):
+    root = tmp_path / 'ds'
+    with LocalDatasetWriter(root) as writer:
+        agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, writer, world)
+
+        script = [
+            (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE, {'task': 'unit'})), 0.001),
+            (partial(emitters['a'].emit, 10), 0.001),
+            (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
+        ]
+
+        run_scripted_agent(agent, script, world=world)
+
+    assert len(LocalDataset(root)) == 1
+    assert not (tmp_path / 'ds.discarded').exists()
 
 
 def test_inputs_mapping_is_immutable(world):

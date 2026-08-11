@@ -25,6 +25,7 @@ from .edits import EditedDataset
 from .episode import (
     EPISODE_SCHEMA_VERSION,
     SIGNAL_FACTORY_T,
+    DiscardReason,
     Episode,
     EpisodeWriter,
     T,
@@ -37,6 +38,9 @@ from .vector import SimpleSignal, SimpleSignalWriter
 from .video import VideoSignal, VideoSignalWriter
 
 UNFINISHED_MARKER = '.unfinished'
+DISCARD_MARKER = 'discarded.json'
+# Appended to a dataset root's name to make the sibling directory discarded episodes are moved into.
+DISCARDED_ROOT_SUFFIX = '.discarded'
 
 
 def _is_numeric_dir(p: Path) -> bool:
@@ -83,6 +87,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         self,
         directory: Path,
         *,
+        discarded_dir: Path,
         on_close: Callable[[DiskEpisodeWriter], None] | None = None,
         created_ts_ns: int | None = None,
         uid: str | None = None,
@@ -92,6 +97,8 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         Args:
             directory: Directory to write episode data to (must not exist)
+            discarded_dir: Directory `abort` moves this episode into. Must sit outside the dataset,
+                so a discarded episode is neither indexed nor mirrored with the recordings.
             on_close: Optional callback invoked after successful episode close
             created_ts_ns: Optional creation timestamp (defaults to current time).
                 Use this to preserve original creation time during migration.
@@ -100,6 +107,7 @@ class DiskEpisodeWriter(EpisodeWriter):
             video_options: Optional encoder options for video signals; None keeps the codec defaults.
         """
         self._path = directory
+        self._discarded_dir = discarded_dir
         assert not self._path.exists(), f'Writing to existing directory {self._path}'
         # Create the episode directory for output files
         self._path.mkdir(parents=True, exist_ok=False)
@@ -223,7 +231,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         """Finalize all signal writers and persist static items on context exit."""
         if exc_type is not None and not self._aborted:
             with suppress(Exception):
-                self.abort()
+                self.abort(DiscardReason.WRITE_FAILED)
             return
 
         # Always try to close all signal writers
@@ -258,17 +266,28 @@ class DiskEpisodeWriter(EpisodeWriter):
         if exc_type is None and self._on_close is not None:
             self._on_close(self)
 
-    def abort(self) -> None:
-        """Abort writing: close resources and remove episode directory."""
+    def abort(self, reason: DiscardReason) -> None:
+        """Stop recording and move the episode into ``discarded_dir`` under a ``discarded.json`` marker.
+
+        What reached disk is kept so a run that ended mid-episode can be inspected. The ``.unfinished``
+        marker stays, so a copy of the directory returned to a dataset root is still not read as an episode.
+        """
         if self._aborted:
             return
         if self._finished:
             raise RuntimeError('Cannot abort a finished writer')
 
         for w in list(self._writers.values()):
-            w.abort()
+            w.__exit__(None, None, None)  # finalize rather than abort, whose unlink is what loses the bytes
 
-        shutil.rmtree(self._path, ignore_errors=True)
+        marker = {'reason': reason.value, 'discarded_ts_ns': time.time_ns(), 'uid': self._meta['uid']}
+        with (self._path / DISCARD_MARKER).open('w', encoding='utf-8') as f:
+            json.dump(marker, f, indent=2)
+
+        self._discarded_dir.mkdir(parents=True, exist_ok=True)
+        # The dataset reuses an episode id once its directory is gone, so the uid is what keeps two
+        # discards of the same id apart.
+        shutil.move(self._path, self._discarded_dir / f'{self._path.name}-{self._meta["uid"]}')
         self._aborted = True
 
     @property
@@ -497,11 +516,15 @@ class LocalDatasetWriter(DatasetWriter):
     - Scans existing structure on init to continue episode numbering safely.
     - `new_episode()` allocates a new episode directory and returns a
       DiskEpisodeWriter.
+    - A discarded episode is moved to the `{root}.discarded` sibling. Outside the root, it is invisible
+      both to anything reading the dataset and to anything mirroring its directory. Nothing prunes that
+      sibling: it grows until an operator or a sweep clears it.
     """
 
     def __init__(self, root: Path, *, video_options: dict[str, str] | None = None) -> None:
         self.root = root.expanduser()
         self.root.mkdir(parents=True, exist_ok=True)
+        self._discarded_dir = self.root.parent / f'{self.root.name}{DISCARDED_ROOT_SUFFIX}'
         self._next_episode_id = self._compute_next_episode_id()
         self._video_options = video_options
 
@@ -535,7 +558,13 @@ class LocalDatasetWriter(DatasetWriter):
         # responsible for creating it and expects it to not exist yet.
         ep_dir = block_dir / f'{eid:012d}'
 
-        writer = DiskEpisodeWriter(ep_dir, created_ts_ns=created_ts_ns, uid=uid, video_options=self._video_options)
+        writer = DiskEpisodeWriter(
+            ep_dir,
+            discarded_dir=self._discarded_dir,
+            created_ts_ns=created_ts_ns,
+            uid=uid,
+            video_options=self._video_options,
+        )
         return writer
 
     def __exit__(self, exc_type, exc, tb) -> None:
