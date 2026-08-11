@@ -58,11 +58,10 @@ def test_nothing_outside_vendors_imports_a_vendor():
     offenders = []
     for root in _CORE_ROOTS:
         for path in sorted(root.rglob('*.py')):
-            if path.is_relative_to(_VENDORS_ROOT):
-                continue
-            offenders += [
-                f'{path.relative_to(_REPO_ROOT)}:{lineno}: imports {name}' for name, lineno in _vendor_imports(path)
-            ]
+            if not path.is_relative_to(_VENDORS_ROOT):
+                offenders += [
+                    f'{path.relative_to(_REPO_ROOT)}:{lineno}: imports {name}' for name, lineno in _vendor_imports(path)
+                ]
     assert not offenders, (
         'Only code under `positronic/vendors/` may import from it '
         '(see "Foreign components plug in through shims" in ARCHITECTURE.md):\n' + '\n'.join(offenders)
@@ -76,10 +75,9 @@ def test_no_vendor_imports_another_vendor():
         # Files at the vendors root belong to no vendor, so for them every vendor is foreign.
         vendor = rel.parts[0] if len(rel.parts) > 1 else None
         for name, lineno in _vendor_imports(path):
+            # A bare `positronic.vendors` import names the shared parent, which no vendor owns — allowed.
             suffix = name.removeprefix(_VENDORS_PACKAGE + '.')
-            if suffix == name:  # the bare `positronic.vendors` — the shared parent, owned by no vendor
-                continue
-            if suffix.split('.')[0] != vendor:
+            if suffix != name and suffix.split('.')[0] != vendor:
                 offenders.append(f'{path.relative_to(_REPO_ROOT)}:{lineno}: imports {name}')
     assert not offenders, (
         'A vendor may not import another vendor — a helper both need belongs in core '
