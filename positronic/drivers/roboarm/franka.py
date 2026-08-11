@@ -98,8 +98,6 @@ def _revolute_joint_names(urdf_xml):
 
 
 _MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collision'
-_PARK_SLACK_RAD = 0.05
-_PARK_TIMEOUT_S = 10.0
 
 
 class Robot(pimm.ControlSystem):
@@ -114,6 +112,7 @@ class Robot(pimm.ControlSystem):
         collision_coeff: float = 2.0,
         manage_desk: bool = True,
         reboot_on_safety_error: bool = False,
+        park_timeout_s: float = 10.0,
     ) -> None:
         """
         :param ip: IP address of the robot.
@@ -129,6 +128,8 @@ class Robot(pimm.ControlSystem):
         :param reboot_on_safety_error: When the control box is in an unrecoverable ``SafetyError`` on start, reboot
             it, wait for it to come back, and try once more before giving up. Only applies when ``manage_desk`` is
             set.
+        :param park_timeout_s: How long the arm may travel back to ``home_joints`` when the run ends before the
+            driver gives up and stops control where it stands. It is spent inside the world's teardown budget.
         """
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
@@ -146,6 +147,7 @@ class Robot(pimm.ControlSystem):
         self._robot: pf.Robot | None = None
         self._desk_credentials = _read_desk_credentials() if manage_desk else None
         self._reboot_on_safety_error = reboot_on_safety_error
+        self._park_timeout_s = park_timeout_s
 
     @staticmethod
     def _build_robot_meta(robot) -> dict:
@@ -277,22 +279,28 @@ class Robot(pimm.ControlSystem):
                     return
 
     def _park(self, robot) -> None:
-        """Move the arm to the home pose, giving up after ``_PARK_TIMEOUT_S``.
+        """Move the arm to the home pose, giving up after ``park_timeout_s``.
 
-        Autonomous motion at shutdown: bounded, at the configured dynamics factor, to the configured
-        ``home_joints`` and nowhere else. Every failure reaches the log and no further, so the brake
-        engagement and control release that follow run whatever happens here.
+        Autonomous motion: bounded, at the configured dynamics factor, to the configured ``home_joints``
+        and nowhere else. Every failure reaches the log and no further.
         """
+        SLACK_RAD = 0.05
+        STILL_RAD_PER_S = 0.01
         target = np.asarray(self._home_joints, dtype=np.float64)
         # A reset lands anywhere inside home_joints_variation, so an arm within that spread is already parked.
-        tolerance = np.asarray(self._home_joints_variation, dtype=np.float64) + _PARK_SLACK_RAD
+        tolerance = np.asarray(self._home_joints_variation, dtype=np.float64) + SLACK_RAD
         try:
-            if np.all(np.abs(np.asarray(robot.state().q, dtype=np.float64) - target) <= tolerance):
+            state = robot.state()
+            at_home = np.all(np.abs(np.asarray(state.q, dtype=np.float64) - target) <= tolerance)
+            # An arm merely passing through the spread is still travelling somewhere else, and stopping there
+            # brakes it away from home.
+            still = np.all(np.abs(np.asarray(state.dq, dtype=np.float64)) <= STILL_RAD_PER_S)
+            if at_home and still:
                 return
             logging.info('Parking the arm at the home pose')
             robot.recover_from_errors()  # once, before the move: a reflex during the move ends the park
             robot.set_target_joints(target)
-            deadline = time.monotonic() + _PARK_TIMEOUT_S
+            deadline = time.monotonic() + self._park_timeout_s
             while time.monotonic() < deadline:
                 goal = robot.goal()
                 if goal.status == pf.GoalStatus.REACHED:
@@ -301,7 +309,7 @@ class Robot(pimm.ControlSystem):
                     logging.error(f'Parking gave up, the arm stays where it stands: {goal.reason or goal.status}')
                     return
                 time.sleep(0.005)
-            logging.error(f'Parking timed out after {_PARK_TIMEOUT_S}s, the arm stays where it stands')
+            logging.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
         # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
         except Exception:
             logging.exception('Parking failed, the arm stays where it stands')
@@ -368,8 +376,11 @@ class Robot(pimm.ControlSystem):
                                 raise NotImplementedError(f'Unsupported command {cmd}')
 
                     yield rate_limiter.wait()
-            finally:
+
+                # Only a stop request earns the park. Answering a setup or control fault with a recovery and a
+                # fresh joint target would be autonomous motion in response to something going wrong.
                 self._park(robot)
+            finally:
                 # Halt the driver's control thread before _desk_session deactivates FCI, or it dies mid-control
                 # with "TCP connection got interrupted".
                 robot.stop()
