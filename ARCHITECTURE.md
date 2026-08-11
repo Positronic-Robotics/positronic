@@ -96,6 +96,13 @@ a policy object plugged into *its* loop, the integration still separates that fr
 layer and serves it behind the env wire. Handing a Positronic policy to a foreign loop forfeits
 both invariants — the run produces no dataset, and execution is scheduled by code we don't control.
 
+Two import boundaries follow for `positronic/vendors/`, where the shims live, and a structural test
+(`positronic/tests/test_vendor_boundary.py`) enforces both. Nothing outside `positronic/vendors/`
+imports from it: core defines the contract and a vendor adapts to it, so an import the other way
+inverts the dependency and drags the vendor's optional extra into code that must work without it.
+And no vendor imports another: each shim answers to its own upstream, on its own pinned deps and
+often its own interpreter — a helper two of them need belongs in core.
+
 ## Derived decisions
 
 What the goals and principles force. Each is stated with what forces it —

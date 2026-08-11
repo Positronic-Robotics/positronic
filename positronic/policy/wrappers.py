@@ -11,12 +11,13 @@ from collections import deque
 
 import numpy as np
 
+from positronic import keys
 from positronic.policy.base import DelegatingSession, Now, PolicyWrapper, Session
 
 
 def _obs_time(obs) -> float:
     """Observation timestamp in seconds, from the harness's nanosecond stamp."""
-    return obs['obs_time_ns'] / 1e9
+    return obs[keys.OBS_TIME_NS] / 1e9
 
 
 class ChunkedSchedule(PolicyWrapper):
@@ -55,8 +56,8 @@ class ChunkedSchedule(PolicyWrapper):
                 # Anchor to post-inference time so execution starts when inference *finished*.
                 # Copy dicts so we don't mutate caller-owned data (sessions may reuse templates).
                 now = self._now()
-                result = [{**r, 'timestamp': now + r.get('timestamp', 0.0)} for r in result]
-                self._trajectory_end = result[-1]['timestamp'] if result else None
+                result = [{**r, keys.ACTION_TIMESTAMP: now + r.get(keys.ACTION_TIMESTAMP, 0.0)} for r in result]
+                self._trajectory_end = result[-1][keys.ACTION_TIMESTAMP] if result else None
             return result
 
         def cancel(self):

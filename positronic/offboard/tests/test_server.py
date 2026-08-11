@@ -251,8 +251,8 @@ def test_in_process_equals_remote_for_same_pipeline(start_server):
 
     local_session = inline(pipeline()).new_session(now=lambda: clock[0])
 
-    remote_actions = remote_session({'obs_time_ns': 0})
-    local_actions = local_session({'obs_time_ns': 0})
+    remote_actions = remote_session({keys.OBS_TIME_NS: 0})
+    local_actions = local_session({keys.OBS_TIME_NS: 0})
     assert remote_actions == local_actions
     # Three scripted actions plus the chunk-closing validity sentinel ActionTimestamp appends.
     assert local_actions == [
@@ -264,8 +264,8 @@ def test_in_process_equals_remote_for_same_pipeline(start_server):
 
     # Both gate identically while the chunk plays out.
     clock[0] = 100.15
-    assert remote_session({'obs_time_ns': 0}) is None
-    assert local_session({'obs_time_ns': 0}) is None
+    assert remote_session({keys.OBS_TIME_NS: 0}) is None
+    assert local_session({keys.OBS_TIME_NS: 0}) is None
 
     remote_session.close()
 

@@ -64,7 +64,7 @@ class _ConstPolicy(Policy):
 
 
 def _obs(now_sec=0.0):
-    return {'obs_time_ns': int(now_sec * 1e9)}
+    return {keys.OBS_TIME_NS: int(now_sec * 1e9)}
 
 
 class TestChunkedSchedule:
@@ -125,7 +125,7 @@ class TestPipelineComposition:
         assert isinstance(pipeline, PolicyWrapper)
         policy = pipeline.wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}]))
         session = policy.new_session(now=clock.now)
-        result = session({'obs_time_ns': int(1e9), 'v': np.array([5.0])})
+        result = session({keys.OBS_TIME_NS: int(1e9), 'v': np.array([5.0])})
         assert result is not None
         assert result[0]['v'] == 1
 
@@ -230,7 +230,7 @@ class _CapturePolicy(Policy):
 
 
 def _stack_obs(now_sec, value):
-    return {'obs_time_ns': int(now_sec * 1e9), 'v': np.array([value])}
+    return {keys.OBS_TIME_NS: int(now_sec * 1e9), 'v': np.array([value])}
 
 
 class TestTemporalStack:

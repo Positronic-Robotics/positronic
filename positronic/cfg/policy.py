@@ -1,16 +1,12 @@
 import os
 
 import configuronic as cfn
-import pos3
 
 from positronic import keys
-from positronic.cfg import codecs
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, bearer
-from positronic.policy import Codec, Policy, RemotePolicy, SampledPolicy
-from positronic.policy.sampler import Sampler
-from positronic.policy.spec import PolicySource, inline
-from positronic.policy.wrappers import ChunkedSchedule
-from positronic.utils import get_latest_checkpoint, nebius
+from positronic.policy import RemotePolicy, SampledPolicy
+from positronic.policy.sampler import BalancedSampler, Sampler
+from positronic.utils import nebius
 
 
 @cfn.config()
@@ -21,43 +17,10 @@ def placeholder():
     )
 
 
-@cfn.config(checkpoint=None)
-def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None = None, device=None):
-    from lerobot.policies.act.modeling_act import ACTPolicy
-
-    from positronic.vendors.lerobot_0_3_3.backbone import register_all
-    from positronic.vendors.lerobot_0_3_3.policy import LerobotPolicy
-
-    register_all()
-
-    checkpoints_dir = checkpoints_dir.rstrip('/') + '/checkpoints/'
-    if checkpoint is None:
-        checkpoint = get_latest_checkpoint(checkpoints_dir)
-    else:
-        checkpoint = str(checkpoint).strip('/')
-
-    fully_specified_checkpoint_dir = checkpoints_dir.rstrip('/') + '/' + checkpoint + '/pretrained_model/'
-    policy = ACTPolicy.from_pretrained(pos3.download(fully_specified_checkpoint_dir), strict=True)
-    if n_action_steps is not None:
-        policy.config.n_action_steps = n_action_steps
-
-    return LerobotPolicy(
-        policy, device, extra_meta={keys.TYPE: 'act', keys.CHECKPOINT_PATH: fully_specified_checkpoint_dir}
-    )
-
-
-@cfn.config(
-    base=act, codec=codecs.compose.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action, horizon=1.0)
-)
-def act_absolute(base: Policy, codec: Codec):
-    """ACT with the absolute-position codec, composed in-process."""
-    return inline(ChunkedSchedule() | codec | PolicySource(base))
-
-
 @cfn.config(weights=None)
 def sample(origins: list[cfn.Config], weights: list[float] | None):
     """One could use the following CLI:
-    --policy=.sample --policy.origins='[".act"]' --policy.origins.0.checkpoint_path=<yada-yada>
+    --policy=.sample --policy.origins='[".remote"]' --policy.origins.0.url=<yada-yada>
     """
     return SampledPolicy(*origins, weights=weights)
 
@@ -86,8 +49,6 @@ nebius_remote = cfn.Config(RemotePolicy, headers=nebius_bearer_headers)
 
 @cfn.config(balance=2)
 def balanced(balance: int):
-    from positronic.policy.sampler import BalancedSampler
-
     return BalancedSampler(balance=balance)
 
 

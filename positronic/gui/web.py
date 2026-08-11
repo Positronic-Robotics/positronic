@@ -281,7 +281,7 @@ class WebEvalUI(pimm.ControlSystem):
 
         @app.post('/grip')
         async def grip(body: _GripBody):
-            self.manual_command.emit({'target_grip': body.value}, clock.now_ns())
+            self.manual_command.emit({keys.TARGET_GRIP: body.value}, clock.now_ns())
 
         # The legacy asyncio `websockets` backend drains the transport from its reader and keepalive
         # coroutines concurrently with our send loop, tripping an assertion that kills the feed. The

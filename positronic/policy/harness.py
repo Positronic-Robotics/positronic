@@ -24,7 +24,7 @@ MAX_ACTION_SKEW_SEC = 60.0
 
 def _assert_anchored(actions: list[dict[str, Any]], now: float) -> None:
     """Reject a chunk whose timestamps are not times on the harness clock."""
-    skew = max((abs(action['timestamp'] - now) for action in actions), default=0.0)
+    skew = max((abs(action[keys.ACTION_TIMESTAMP] - now) for action in actions), default=0.0)
     if skew > MAX_ACTION_SKEW_SEC:
         raise ValueError(
             f'Action scheduled {skew:.0f}s from now, over the {MAX_ACTION_SKEW_SEC:.0f}s bound: the rig-side '
@@ -378,8 +378,8 @@ class Harness(pimm.ControlSystem):
                     inputs[full_name] = v
         if self._awaiting_obs:
             return None
-        inputs['wall_time_ns'] = time.time_ns()
-        inputs['obs_time_ns'] = clock.now_ns()
+        inputs[keys.WALL_TIME_NS] = time.time_ns()
+        inputs[keys.OBS_TIME_NS] = clock.now_ns()
         inputs.update(self.context)
         inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
         return inputs
@@ -394,7 +394,7 @@ class Harness(pimm.ControlSystem):
         for name, emitter in self.commands.items():
             # Wrappers do action-timing math in float seconds; every pimm channel client expects ns. This is
             # the single explicit seconds->ns seam.
-            traj = [(int(a['timestamp'] * 1e9), a[name]) for a in actions if name in a]
+            traj = [(int(a[keys.ACTION_TIMESTAMP] * 1e9), a[name]) for a in actions if name in a]
             emitter.emit(traj)
 
     def _inference_delay(self, wall_start: float) -> float:
@@ -430,7 +430,7 @@ class Harness(pimm.ControlSystem):
         delay = self._inference_delay(wall_start)
         if delay > 0.0:
             yield pimm.Sleep(delay)
-            actions = [{**a, 'timestamp': a['timestamp'] + delay} for a in actions]
+            actions = [{**a, keys.ACTION_TIMESTAMP: a[keys.ACTION_TIMESTAMP] + delay} for a in actions]
             self._bump_schedule_end(delay)
 
         # The latency sleep (or a slow inference call on a real clock) may have crossed the deadline. Drop
