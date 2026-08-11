@@ -281,29 +281,19 @@ When you're done, `stop.sh` deletes the endpoint:
 bash workflows/nebius/stop.sh my-act-demo
 ```
 
-Deleting retires the managed URL. To pause an endpoint and keep the URL, use `nebius ai endpoint
-stop <id>` directly — it releases the compute too, and `start` resumes on the same URL.
+Deleting retires the managed URL, and a re-created endpoint of the same name gets a new one — so anything
+holding it, a robot config or an eval job, breaks on redeploy. To keep the URL, use `nebius ai endpoint
+stop <id>` instead: it releases the compute too, and `start` resumes on the same URL.
 
 ### The managed URL is assigned, not chosen
 
-The URL belongs to [a tunnel](https://docs.nebius.com/tunnels/overview) Nebius creates alongside the
-endpoint, and reads `https://<service>-<tunnel-id>.tunnel.applications.<region>.nebius.cloud` — for an
-endpoint, `<service>` is `port` plus the container port, and `<tunnel-id>` is that tunnel's identifier.
-Nothing about it is derivable in advance and no flag on `nebius ai endpoint create` sets it, so a caller
-learns the URL only by reading `status.public_endpoints` after the endpoint exists, which is what
-`serve.sh` polls for and prints.
+It belongs to [a tunnel](https://docs.nebius.com/tunnels/overview) Nebius creates with the endpoint —
+`https://port8000-<tunnel-id>.tunnel.applications.<region>.nebius.cloud`. No flag sets it and nothing
+derives it, which is why `serve.sh` polls `status.public_endpoints` to learn it.
 
-Its lifetime is the endpoint's. `stop` and `start` keep it; delete and re-create earns a new one, under
-the same endpoint name as much as a different one. So anything holding the URL — a robot config, an eval
-job — breaks on a redeploy, and `stop.sh` deletes.
-
-A URL that outlives the endpoint has to come from a tunnel of your own: `nebius tunnel create` makes a
-standalone one whose id, and so whose URL, is permanent, and the container runs the tunnel agent instead
-of relying on the endpoint's own. That also names the first component (`services.name`, up to 20
-characters, lowercase letters and digits, no dashes or dots) — `phail` rather than `port8000`. The agent
-and its credentials are the price, and the tunnel edge is a path the [endpoint
-contract](#checking-a-deployment) has not been run against. Nebius supports no custom domain and no
-uploaded certificate on either path, so a `positronic.ro` name needs a proxy in front that terminates TLS.
+A URL that outlives the endpoint needs a tunnel of your own (`nebius tunnel create`) with its agent in the
+container, which also names the host (`services.name`, up to 20 lowercase alphanumerics — `phail` rather
+than `port8000`). Nebius offers no custom domain or uploaded certificate on either path.
 
 ## Authenticated inference
 
@@ -325,26 +315,20 @@ uv run positronic-inference sim \
   --output_dir=.data/inference/<run-name>/
 ```
 
-Nebius offers `--auth token` at its own ingress, which would spare us the in-server check. It is
-unusable here: that mode routes through an authentication proxy that does not preserve the WebSocket
-upgrade on its upstream connection, so the inference route answers a plain `200` instead of upgrading
-and no session can ever open — with a valid token as much as without. `--auth none` bypasses that proxy,
-which is why the same request upgrades there. Nebius confirmed the defect on ticket U22281505 and has it
-open with their Serverless team; gRPC goes through the same proxy and is affected the same way, so it is
-no escape hatch.
+Nebius' own `--auth token` would spare the in-server check, but its auth proxy does not preserve the
+WebSocket upgrade upstream: the session route answers `200` instead of upgrading, with a valid token as
+much as without. `--auth none` bypasses that proxy, which is why the same request upgrades there. Nebius
+confirmed it on ticket U22281505; gRPC shares the proxy, so it is no escape hatch.
 
-Two behaviours this depends on are observed rather than promised. Nebius documents no WebSocket or
-connection-lifetime contract for Serverless Endpoints at all, so nothing obliges the managed URL to keep
-carrying sessions. And the managed ingress closes any connection it has read nothing from after
-~90 seconds — longer than a cold checkpoint's first inference takes — so the client holds sessions open
-with WebSocket pings (the `ping_interval` its `connect` call passes, in `positronic/offboard/client.py`).
-`pytest -m endpoint` below is what catches either of them changing under us.
+Two behaviours here are observed, not promised: Nebius documents no WebSocket or connection-lifetime
+contract at all, and the ingress closes a connection it has read nothing from after ~90 s — shorter than a
+cold checkpoint's first inference, so the client holds sessions open with pings (`ping_interval` in
+`positronic/offboard/client.py`). `pytest -m endpoint` is what catches either changing.
 
 ### Letting the config read the secret
 
-`.nebius_remote` fetches the token from MysteryBox itself, through the same CLI these scripts already use.
-Nothing is exported, and a [rotated](#rotating-the-token) token is picked up on the next run rather than by
-everyone re-exporting:
+`.nebius_remote` fetches the token from MysteryBox itself, so nothing is exported and a
+[rotated](#rotating-the-token) token is picked up on the next run:
 
 ```bash
 uv run positronic-inference sim \
@@ -353,22 +337,18 @@ uv run positronic-inference sim \
   --output_dir=.data/inference/<run-name>/
 ```
 
-It costs two CLI calls per run and a logged-in `nebius`, which is why it is an operator's convenience
-rather than the path a robot takes: a field host runs `.authed_remote` against `AUTH_TOKEN` and needs no
-cloud credentials at all, and neither does the eval job, which `eval.sh` hands the same secret directly.
-The lookup lives in `positronic/utils/nebius.py`.
+It needs a logged-in `nebius`, so it is an operator's convenience: a robot host and the eval job use
+`.authed_remote` against `AUTH_TOKEN` and need no cloud credentials. Lookup in `positronic/utils/nebius.py`.
 
 ### Checking a deployment
 
-`pytest -m endpoint` covers what a served endpoint must do: the model list and the session both refuse a
-request with no token, a wrong token, or a raw token missing the `Bearer` prefix; both serve with the right
-one; and a session survives an idle longer than the ~90 s close above. With `POSITRONIC_ENDPOINT_URL` unset
-the tests serve their own server, which proves the code. Pointed at a URL they run the same assertions
-through the managed ingress. That is where an in-process pass stops meaning anything: `--auth token` and the
-idle close are both invisible from inside the container.
+`pytest -m endpoint` states what a served endpoint must do: both routes refuse a missing, wrong, or
+`Bearer`-less token and serve with the right one, and a session survives an idle past the ~90 s close.
+Unset, the tests serve their own server and prove the code; pointed at `POSITRONIC_ENDPOINT_URL` they run
+the same assertions through the managed ingress, where `--auth token` and the idle close are invisible from
+inside the container. `e2e.sh` runs them after its serve stage.
 
-`e2e.sh` runs them after its serve stage. Against an endpoint of your own, the public demo checkpoint needs
-no training and no S3 credentials (`AUTH_TOKEN` exported as above):
+Against an endpoint of your own — the demo checkpoint needs no training and no S3 credentials:
 
 ```bash
 bash workflows/nebius/serve.sh lerobot_0_3_3 auth-smoke demo
@@ -392,20 +372,18 @@ nebius mysterybox secret-version create --parent-id "$SECRET_ID" --set-primary \
     '[{key:$k,string_value:$v}]')"
 ```
 
-`.nebius_remote` picks the new value up on its next run; an exported `AUTH_TOKEN` holds the old one until
-whoever exported it does so again. Either way a running endpoint keeps validating the token its container
-read at start, and until it is replaced the old token still opens sessions — which matters when the
-rotation answers a disclosure. Replacing one means deleting it first, since `serve.sh` only creates and the
-name has to be free:
+`.nebius_remote` picks the new value up next run; an exported `AUTH_TOKEN` holds the old one until
+re-exported. Either way a running endpoint keeps the token its container read at start, so the old one
+opens sessions until the endpoint is replaced — which matters when the rotation answers a disclosure.
+`serve.sh` only creates and the name must be free, so replacing means deleting first:
 
 ```bash
 bash workflows/nebius/stop.sh <endpoint-name>
 bash workflows/nebius/serve.sh <vendor> <endpoint-name> <same args as before>
 ```
 
-That issues a new managed URL — see [The managed URL is assigned, not
-chosen](#the-managed-url-is-assigned-not-chosen). Whether `nebius ai endpoint stop <id>` then `start <id>`
-also picks up the new token, which would keep the URL, is untested here.
+That issues a new managed URL. Whether `stop` then `start` picks the token up instead, keeping the URL, is
+untested.
 
 ## Run a simulator eval (RoboLab)
 
