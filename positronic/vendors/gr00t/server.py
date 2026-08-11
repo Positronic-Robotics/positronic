@@ -13,15 +13,17 @@ import pos3
 import zmq
 
 from positronic import keys
+from positronic.offboard.client import DEFAULT_INFER_TIMEOUT
 from positronic.offboard.server import serve
-from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
+from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
 from positronic.policy import Policy, Session
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.checkpoints import list_checkpoints
 from positronic.utils.logging import init_logging
-from positronic.vendors.gr00t import MODALITY_CONFIGS, codecs
+from positronic.vendors import gr00t
+from positronic.vendors.gr00t import codecs
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +175,10 @@ class Gr00tSubprocess:
     @property
     def client(self) -> PolicyClient:
         if self._client is None:
-            self._client = PolicyClient(host='127.0.0.1', port=self.zmq_port, timeout_ms=15000)
+            # The backend must not give up before the rig does, so this follows the rig's own per-call bound.
+            # A warmup runs through here too, and pays the cold-start cost that bound exists to cover.
+            timeout_ms = int(DEFAULT_INFER_TIMEOUT * 1000)
+            self._client = PolicyClient(host='127.0.0.1', port=self.zmq_port, timeout_ms=timeout_ms)
         return self._client
 
     def stop(self):
@@ -232,6 +237,20 @@ def _step_id(raw: str) -> str:
     return str(int(raw)) if raw.isdigit() else raw
 
 
+def _warm_observation(modality: gr00t.ModalityConfig) -> dict[str, Any]:
+    """Zero-filled inputs in GR00T's nested format, carrying the state block ``modality`` declares.
+
+    Leading axes are ``(batch, time)``, the way a session hands one step over.
+    """
+    width, height = gr00t.IMAGE_SIZE
+    frame = np.zeros((1, 1, height, width, 3), dtype=np.uint8)
+    return {
+        gr00t.VIDEO: {gr00t.WRIST_IMAGE: frame, gr00t.EXTERIOR_IMAGE: frame},
+        gr00t.STATE: {key: np.zeros((1, 1, dim), dtype=np.float32) for key, dim in modality.state.items()},
+        gr00t.LANGUAGE: {gr00t.TASK: [['']]},
+    }
+
+
 class Gr00tSource(ModelSource):
     """GR00T checkpoints under ``checkpoints_dir``, each served through a dedicated ZMQ subprocess.
 
@@ -248,6 +267,8 @@ class Gr00tSource(ModelSource):
         zmq_port: int = 5555,
         ready_timeout: float = 120.0,
     ):
+        if modality_config not in gr00t.MODALITY_CONFIGS:
+            raise ValueError(f'Unknown modality config: {modality_config}. Available: {sorted(gr00t.MODALITY_CONFIGS)}')
         self.checkpoints_dir = checkpoints_dir.rstrip('/')
         self.checkpoint = checkpoint
         self.modality_config = modality_config
@@ -288,23 +309,23 @@ class Gr00tSource(ModelSource):
             f'Downloading checkpoint checkpoint-{model_id}',
             on_progress,
         )
+        modality = gr00t.MODALITY_CONFIGS[self.modality_config]
         groot = Gr00tSubprocess(
             checkpoint_dir=str(checkpoint_dir),
-            modality_config_path=MODALITY_CONFIGS.get(self.modality_config, self.modality_config),
+            modality_config_path=modality.path,
             groot_venv_path=self.groot_venv_path,
             zmq_port=self.zmq_port,
             ready_timeout=self.ready_timeout,
         )
-        # TODO: Warm the subprocess here, as the other sources do, so the first inference a rig asks for is
-        # not the one that pays the backend's startup cost. GR00T is the one backend with no positronic-side
-        # statement of the observation it takes: the ZMQ protocol offers only `ping`/`get_action`/`reset`, and
-        # `modality_config` names a module inside the gr00t fork that only gr00t's own venv can import.
         try:
             groot.start(on_progress)
+            policy = Gr00tPolicy(groot, str(checkpoint_dir))
+            # The subprocess initializes CUDA on its first forward, which outlasts a rig's inference timeout.
+            warmup(policy, _warm_observation(modality), on_progress)
         except Exception:
             groot.stop()
             raise
-        return Gr00tPolicy(groot, str(checkpoint_dir))
+        return policy
 
     def meta(self, model_id: str) -> dict[str, Any]:
         return {
@@ -326,7 +347,7 @@ gr00t_source = cfn.Config(Gr00tSource)
 # so none has a transform to declare.
 @cfn.config(codec=codecs.ee_quat, source=gr00t_source)
 def pipeline(codec, source):
-    return ChunkedSchedule() | RestrictImageSize(224, 224) | remote | codec | source
+    return ChunkedSchedule() | RestrictImageSize(*gr00t.IMAGE_SIZE) | remote | codec | source
 
 
 # Each entry pairs the codec with the matching GR00T modality config; they must agree with training.

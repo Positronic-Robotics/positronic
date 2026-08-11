@@ -16,16 +16,9 @@ from positronic.dataset.signal import Signal
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get, Identity
 from positronic.policy.codec import Codec, lerobot_image, lerobot_state
+from positronic.vendors import gr00t
 
 RotRep = geom.Rotation.Representation
-
-# GR00T's modality vocabulary: the state/action fields its data config declares and its model emits.
-# ``GRIP`` shares a value with ``keys.GRIP`` by vocabulary, not by contract — renaming the positronic
-# wire key must not rename the modality.
-EE_POSE = 'ee_pose'
-JOINT_POSITION = 'joint_position'
-GRIP = 'grip'
-
 
 class GrootObservationCodec(Codec):
     """GR00T N1.6 observation encoder.
@@ -39,7 +32,7 @@ class GrootObservationCodec(Codec):
         rotation_rep: RotRep | None = None,
         include_joints: bool = False,
         include_ee_pose: bool = True,
-        image_size: tuple[int, int] = (224, 224),
+        image_size: tuple[int, int] = gr00t.IMAGE_SIZE,
         exterior_camera: str = keys.EXTERIOR_IMAGE,
         wrist_camera: str = keys.WRIST_IMAGE,
         num_joints: int = 7,
@@ -53,35 +46,35 @@ class GrootObservationCodec(Codec):
         self._num_joints = num_joints
 
         self._derive_transforms: dict[str, Any] = {
-            GRIP: self._derive_grip,
-            'wrist_image': partial(self._derive_image, wrist_camera),
-            'exterior_image_1': partial(self._derive_image, exterior_camera),
+            gr00t.GRIP: self._derive_grip,
+            gr00t.WRIST_IMAGE: partial(self._derive_image, wrist_camera),
+            gr00t.EXTERIOR_IMAGE: partial(self._derive_image, exterior_camera),
             'task': Get(keys.TASK, ''),
         }
 
-        state_meta: dict[str, Any] = {GRIP: {'start': 0, 'end': 1, 'original_key': GRIP}}
+        state_meta: dict[str, Any] = {gr00t.GRIP: {'start': 0, 'end': 1, 'original_key': gr00t.GRIP}}
         lerobot_features: dict[str, Any] = {
-            GRIP: lerobot_state(1),
-            'wrist_image': lerobot_image(*image_size),
-            'exterior_image_1': lerobot_image(*image_size),
+            gr00t.GRIP: lerobot_state(1),
+            gr00t.WRIST_IMAGE: lerobot_image(*image_size),
+            gr00t.EXTERIOR_IMAGE: lerobot_image(*image_size),
         }
 
         if include_ee_pose:
             obs_ee_dim = rotation_rep.size + 3 if rotation_rep else 7
-            state_meta[EE_POSE] = {'start': 0, 'end': obs_ee_dim, 'original_key': EE_POSE}
-            lerobot_features[EE_POSE] = lerobot_state(obs_ee_dim)
-            self._derive_transforms[EE_POSE] = self._derive_ee_pose
+            state_meta[gr00t.EE_POSE] = {'start': 0, 'end': obs_ee_dim, 'original_key': gr00t.EE_POSE}
+            lerobot_features[gr00t.EE_POSE] = lerobot_state(obs_ee_dim)
+            self._derive_transforms[gr00t.EE_POSE] = self._derive_ee_pose
         if include_joints:
-            state_meta[JOINT_POSITION] = {'start': 0, 'end': num_joints, 'original_key': JOINT_POSITION}
-            lerobot_features[JOINT_POSITION] = lerobot_state(num_joints)
-            self._derive_transforms[JOINT_POSITION] = self._derive_joints
+            state_meta[gr00t.JOINT_POSITION] = {'start': 0, 'end': num_joints, 'original_key': gr00t.JOINT_POSITION}
+            lerobot_features[gr00t.JOINT_POSITION] = lerobot_state(num_joints)
+            self._derive_transforms[gr00t.JOINT_POSITION] = self._derive_joints
 
         self._training_meta = {
             'gr00t_modality': {
-                'state': state_meta,
-                'video': {
-                    'exterior_image_1': {'original_key': 'exterior_image_1'},
-                    'wrist_image': {'original_key': 'wrist_image'},
+                gr00t.STATE: state_meta,
+                gr00t.VIDEO: {
+                    gr00t.EXTERIOR_IMAGE: {'original_key': gr00t.EXTERIOR_IMAGE},
+                    gr00t.WRIST_IMAGE: {'original_key': gr00t.WRIST_IMAGE},
                 },
                 'annotation': {'language.language_instruction': {'original_key': 'task_index'}},
             },
@@ -126,22 +119,22 @@ class GrootObservationCodec(Codec):
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         grip = np.asarray(inputs[keys.GRIP], dtype=np.float32).reshape(-1)
-        state_dict: dict[str, Any] = {GRIP: grip[np.newaxis, np.newaxis, ...]}
+        state_dict: dict[str, Any] = {gr00t.GRIP: grip[np.newaxis, np.newaxis, ...]}
 
         if self._include_ee_pose:
             ee_pose = self._encode_ee_pose(inputs)
-            state_dict[EE_POSE] = ee_pose[np.newaxis, np.newaxis, ...]
+            state_dict[gr00t.EE_POSE] = ee_pose[np.newaxis, np.newaxis, ...]
         if self._include_joints:
             joints = np.asarray(inputs[keys.JOINTS], dtype=np.float32).reshape(-1)
-            state_dict[JOINT_POSITION] = joints[np.newaxis, np.newaxis, ...]
+            state_dict[gr00t.JOINT_POSITION] = joints[np.newaxis, np.newaxis, ...]
 
         return {
-            'video': {
-                'wrist_image': self._encode_image(self._wrist_camera, inputs)[np.newaxis, np.newaxis, ...],
-                'exterior_image_1': self._encode_image(self._exterior_camera, inputs)[np.newaxis, np.newaxis, ...],
+            gr00t.VIDEO: {
+                gr00t.WRIST_IMAGE: self._encode_image(self._wrist_camera, inputs)[np.newaxis, np.newaxis, ...],
+                gr00t.EXTERIOR_IMAGE: self._encode_image(self._exterior_camera, inputs)[np.newaxis, np.newaxis, ...],
             },
-            'state': state_dict,
-            'language': {'annotation.language.language_instruction': [[inputs.get(keys.TASK, '')]]},
+            gr00t.STATE: state_dict,
+            gr00t.LANGUAGE: {gr00t.TASK: [[inputs.get(keys.TASK, '')]]},
         }
 
     @property
@@ -170,7 +163,7 @@ class _GrootActionModality(Codec):
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
         action_part = np.asarray(data[self._action_key], dtype=np.float32).reshape(-1)
-        grip_part = np.asarray(data[GRIP], dtype=np.float32).reshape(-1)
+        grip_part = np.asarray(data[gr00t.GRIP], dtype=np.float32).reshape(-1)
         return {'action': np.concatenate([action_part, grip_part])}
 
     @property
@@ -187,7 +180,7 @@ def groot_obs(rotation_rep: str | None, include_joints: bool, include_ee_pose: b
     )
 
 
-@cfn.config(action_key=EE_POSE, action_dim=7)
+@cfn.config(action_key=gr00t.EE_POSE, action_dim=7)
 def groot_action(base, action_key: str, action_dim: int):
     """Wrap an action codec with GR00T modality metadata and decode adapter.
 
@@ -196,7 +189,7 @@ def groot_action(base, action_key: str, action_dim: int):
     into a flat ``action`` vector that ``base`` can decode.
     """
     return base | _GrootActionModality(
-        {action_key: {'start': 0, 'end': action_dim}, GRIP: {'start': action_dim, 'end': action_dim + 1}},
+        {action_key: {'start': 0, 'end': action_dim}, gr00t.GRIP: {'start': action_dim, 'end': action_dim + 1}},
         action_key=action_key,
     )
 
@@ -222,7 +215,7 @@ joints_traj = codecs.compose.override(
     obs=groot_obs.override(include_joints=True, include_ee_pose=False),
     action=groot_action.override(
         base=codecs.absolute_joints_action.override(tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP),
-        action_key=JOINT_POSITION,
+        action_key=gr00t.JOINT_POSITION,
     ),
     binarize_grip=(keys.GRIP,),
 )
@@ -230,6 +223,6 @@ joints_traj = codecs.compose.override(
 # IK variants: GR00T obs (with joints) + IK joint-space action via groot_action wrapper
 ee_joints_ik = codecs.compose.override(
     obs=groot_obs.override(include_joints=True),
-    action=groot_action.override(base=codecs.ik_joints_action, action_key=JOINT_POSITION),
+    action=groot_action.override(base=codecs.ik_joints_action, action_key=gr00t.JOINT_POSITION),
 )
 ee_joints_ik_sim = ee_joints_ik.override(**{'action.base.solver': 'lm'})
