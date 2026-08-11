@@ -1653,8 +1653,8 @@ def test_default_latency_pauses_the_world_for_the_call(world):
 
 @pytest.mark.timeout(20.0)
 @pytest.mark.parametrize('wall_sec', [0.0, 0.05])
-def test_declared_latency_ignores_what_the_call_really_took(world, wall_sec):
-    """The reproducible mode: the wrapper is released a fixed delay after the call started, so the played
+def test_constant_latency_ignores_what_the_call_really_took(world, wall_sec):
+    """The reproducible mode: the wrapper is released a constant delay after the call started, so the played
     trace is the same against a fast server and a slow one."""
     played = _run_sim_episode(world, SlowPolicy(wall_sec=wall_sec), ChunkedSchedule(), latency=0.3)
 

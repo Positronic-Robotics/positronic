@@ -52,12 +52,8 @@ class TrajectoryPlayer:
         return self._pending[0][0] if self._pending else None
 
     def advance(self, current_time: int):
-        """The single value due at ``current_time``, or ``None`` when no waypoint has come due since the
-        last call.
-
-        TODO: several waypoints due at once collapse to the last, which drops the motion of every delta but
-        the final one. Revisit if pacing turns out not to hold one waypoint due per round.
-        """
+        """The single value due at ``current_time`` — the last, when several came due since the previous
+        call — or ``None`` when none did."""
         value = None
         while self._pending and self._pending[0][0] <= current_time:
             value = self._pending.popleft()[1]
@@ -356,6 +352,10 @@ class Harness(pimm.ControlSystem):
                 self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
+        # Arm the clock before handing it out: a session reading it before its first call must see this
+        # episode's start, not the release time of the last episode's final call.
+        self._t0_ns = clock.now_ns()
+        self._wall_t0 = time.monotonic()
         self._policy_session = self.policy.new_session(self.context, self._effect_time)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
