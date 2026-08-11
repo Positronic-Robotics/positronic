@@ -125,8 +125,8 @@ class StopFlag(pimm.SignalReceiver[bool]):
 
 @pytest.fixture
 def desk(monkeypatch) -> FakeDesk:
-    monkeypatch.setenv('FRANKA_DESK_USER', 'user')
-    monkeypatch.setenv('FRANKA_DESK_PASSWORD', 'password')
+    monkeypatch.setenv(franka.DESK_USER_ENV, 'user')
+    monkeypatch.setenv(franka.DESK_PASSWORD_ENV, 'password')
     session = FakeDesk()
     monkeypatch.setattr(franka, 'Desk', lambda *credentials: session)
     return session

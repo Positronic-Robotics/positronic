@@ -25,13 +25,17 @@ def _check_error(is_error, was_error):
     return is_error, is_error and not was_error
 
 
+DESK_USER_ENV = 'FRANKA_DESK_USER'
+DESK_PASSWORD_ENV = 'FRANKA_DESK_PASSWORD'
+
+
 def _read_desk_credentials() -> tuple[str, str]:
     """Franka Desk login and password from the environment. Credentials stay out of the config so they never reach
     the command line, which is recorded verbatim in every run's metadata."""
-    login, password = os.environ.get('FRANKA_DESK_USER'), os.environ.get('FRANKA_DESK_PASSWORD')
+    login, password = os.environ.get(DESK_USER_ENV), os.environ.get(DESK_PASSWORD_ENV)
     if not (login and password):
         missing = ' and '.join(
-            name for name, value in (('FRANKA_DESK_USER', login), ('FRANKA_DESK_PASSWORD', password)) if not value
+            name for name, value in ((DESK_USER_ENV, login), (DESK_PASSWORD_ENV, password)) if not value
         )
         raise RuntimeError(
             f'{missing} not set in the environment. The driver needs Desk credentials to open the brakes and '
