@@ -133,8 +133,10 @@ changes into the same commit and mention them in the relevant replies.
 no code (a decline/defer/discuss-only round has nothing to check). One run, at this point:
 run it earlier and the polish fixes land behind it unchecked; run it every iteration and
 each round pays its one-agent-per-rule fan-out. Fix the violations it reports and fold the
-fixes into the same commit — without re-running it on them. A finding you judge wrong is a
-note in the Step 6 report, not a new waiver.
+fixes into the same commit — without re-running it on them. Those fixes, like any late
+arrivals folded in at Step 4, land behind the check: the single run bounds the pass's cost,
+and the reviewer's re-review of the pushed commit backstops what slips through. A finding
+you judge wrong is a note in the Step 6 report, not a new waiver.
 
 ## Step 4: Verify, commit, push
 
