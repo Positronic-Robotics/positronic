@@ -184,11 +184,9 @@ to use regular Python. Emitters (`ControlSystemEmitter`) and receivers
 (`ControlSystemReceiver`) are just fields on the object; they keep track of their
 owner so the world can wire them correctly.
 
-**Wait by yielding, never by sleeping.** `yield pimm.Sleep(seconds)` hands the wait to the runner;
-`time.sleep` takes it. In the main-process group `interleave` advances the peers while one loop
-sleeps, so a blocking call there stalls them all. It works in a background process, which is why it
-survives review and breaks the day that control system is scheduled in the foreground. Teardown is
-no exception: the runner keeps advancing the generator after the stop signal.
+**Don't use system libs for sleeping — `yield pimm.Sleep(secs)` instead.** In the main-process
+group `interleave` advances the peers while one loop sleeps, so a blocking call there stalls them
+all. `positronic/drivers/tests/test_no_blocking_sleep.py` enforces it.
 
 The `World` runtime plays three roles:
 
