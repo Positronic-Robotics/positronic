@@ -988,6 +988,54 @@ def test_abort_discards_recording_and_homes(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_a_world_end_mid_episode_discards_the_open_episode(world):
+    """A control system returning ends the world and the recorder exits with it, so an episode still open
+    cannot be committed truthfully — a STOP here lands a truncated episode indistinguishable from one the
+    policy ran to the end."""
+    completed = []
+    policy = StubPolicy()
+    harness = Harness(policy, make_embodiment(), on_episode_complete=lambda session, context: completed.append(context))
+    p = _pair_all(world, harness)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    # The script running out ends the world with the episode still open.
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.0),
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
+        (None, 0.02),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=50)
+
+    assert DsWriterCommandType.STOP_EPISODE not in _ds_types(p)
+    assert completed == []
+
+
+@pytest.mark.timeout(3.0)
+def test_a_world_end_between_episodes_keeps_the_finished_episode(world):
+    """The other half: an episode the operator finished is committed and counted, whenever the world ends."""
+    completed = []
+    policy = StubPolicy()
+    harness = Harness(policy, make_embodiment(), on_episode_complete=lambda session, context: completed.append(context))
+    p = _pair_all(world, harness)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.0),
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
+        (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),
+        (None, 0.02),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=50)
+
+    assert _ds_types(p).count(DsWriterCommandType.STOP_EPISODE) == 1
+    assert len(completed) == 1
+
+
+@pytest.mark.timeout(3.0)
 def test_run_while_running_is_ignored(world):
     """A RUN mid-trial is ignored — the operator must finish the live trial before starting a new one."""
     policy = StubPolicy()
@@ -1004,9 +1052,9 @@ def test_run_while_running_is_ignored(world):
     drive_scheduler(scheduler, steps=20)
 
     types = _ds_types(p)
-    # ep2's RUN is ignored; ep1 stays live and is finalized once at shutdown.
+    # ep2's RUN is ignored; ep1 stays live, and the shutdown that follows discards it rather than stopping it.
     assert types.count(DsWriterCommandType.START_EPISODE) == 1
-    assert types.count(DsWriterCommandType.STOP_EPISODE) == 1
+    assert types.count(DsWriterCommandType.STOP_EPISODE) == 0
     assert policy.reset_calls == 1
 
 
@@ -1353,12 +1401,10 @@ def test_robot_state_serializer_available_has_no_error_key():
 
 
 @pytest.mark.timeout(3.0)
-def test_shutdown_cancels_trajectory_before_stop(world):
-    """Shutdown while recording must cancel buffered trajectories before STOP_EPISODE.
-
-    ``STOP_EPISODE`` flushes ``TrajectoryOverrideSerializer``; without a prior
-    cancel it would commit the unexecuted tail of an in-flight chunk (the
-    FINISH/RUN paths already cancel first).
+def test_shutdown_cancels_the_in_flight_chunk_and_stops_no_episode(world):
+    """Shutdown while recording cancels the buffered trajectory, so each driver's player clears its buffer
+    and the device holds where it is instead of playing out a chunk nobody is watching. The episode itself is
+    left uncommitted for the recorder to discard.
     """
     events: list[tuple[str, object]] = []
 
@@ -1391,15 +1437,14 @@ def test_shutdown_cancels_trajectory_before_stop(world):
     scheduler = world.start([harness, driver])
     drive_scheduler(scheduler, steps=200)
 
-    cancels = [i for i, (lbl, data) in enumerate(events) if lbl == keys.ROBOT_COMMAND and data == []]
+    last_command = [data for lbl, data in events if lbl == keys.ROBOT_COMMAND][-1]
     stops = [
-        i
-        for i, (lbl, data) in enumerate(events)
+        data
+        for lbl, data in events
         if lbl == 'ds_command' and getattr(data, 'type', None) is DsWriterCommandType.STOP_EPISODE
     ]
-    assert cancels, 'shutdown did not cancel robot_command'
-    assert stops, 'shutdown did not emit STOP_EPISODE'
-    assert cancels[0] < stops[0], 'cancel must precede STOP_EPISODE on shutdown'
+    assert last_command == [], 'shutdown did not cancel robot_command'
+    assert not stops, 'shutdown committed an episode it had no boundary for'
 
 
 @pytest.mark.timeout(5.0)
@@ -1418,11 +1463,11 @@ class _ManualClock:
 
 
 @pytest.mark.timeout(3.0)
-def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(tmp_path):
-    """A stop arriving mid-episode winds down through the same close order as ``_end_episode``: the harness
-    yields a turn between queueing the recorder's STOP and closing the episode span, so the recorder's
-    shutdown-flush ``record.io`` span parents to the episode, not the pass. Driven straight through the
-    generator protocol: the yield after the queued STOP is the recorder's flush slot."""
+def test_stop_mid_episode_closes_the_episode_span_as_aborted(tmp_path):
+    """A stop arriving mid-episode leaves the recording uncommitted, and its span must not leak open — an
+    unended span is dropped by the batch processor, orphaning the finished children and losing their phases.
+    Marked aborted, so the reduce drops the partial rollout rather than charging its wall to a real episode.
+    Driven straight through the generator protocol, so the stop lands on a chosen round."""
     policy = StubPolicy()
     task = Task(instruction='stack', timeout=10.0, reset=lambda context: None)  # never ends within the drive
     harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
@@ -1441,24 +1486,15 @@ def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(tmp_path):
             pytest.fail('the self-driven trial never started')
 
         stop.value = True
-        try:
-            next(gen)  # the post-STOP yield: the turn the recorder commits the queued STOP on
-        except StopIteration:
-            pytest.fail('harness must yield a recorder turn between queueing STOP and ending the episode span')
-        assert any(d.type == DsWriterCommandType.STOP_EPISODE for _, d in ds_recorder.emitted)
-        with telemetry.span(telemetry_keys.SPAN_RECORD_IO):  # the recorder's shutdown flush, emitted in that turn
-            pass
         with pytest.raises(StopIteration):
             while True:
                 next(gen)
+        assert not any(d.type == DsWriterCommandType.STOP_EPISODE for _, d in ds_recorder.emitted)
 
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     assert len(episodes) == 1
-    episode = episodes[0]
-    assert telemetry_keys.ATTR_EPISODE_STEPS in episode.attrs  # sealed via end_episode, neither leaked open nor aborted
-    flushes = [s for s in spans if s.name == telemetry_keys.SPAN_RECORD_IO]
-    assert flushes and all(s.parent_id == episode.span_id for s in flushes)
+    assert episodes[0].attrs[telemetry_keys.ATTR_EPISODE_ABORTED] is True
 
 
 def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
@@ -1472,9 +1508,12 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
     p = _pair_all(world, harness)
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    # A latched observation set makes every step's inference fire (the harness reads the latest value).
+    # A latched observation set makes every step's inference fire (the harness reads the latest value). The
+    # producer outlives the trial's timeout, so the episode ends on its own budget rather than on the world
+    # stopping — which discards it, leaving nothing to read the step count off.
     producer = ManualDriver([
-        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.0)
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.0),
+        (None, 0.2),
     ])
 
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-taxonomy'), _eval_pass('run-taxonomy'):

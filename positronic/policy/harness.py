@@ -151,6 +151,10 @@ class Harness(pimm.ControlSystem):
     privileged ``done``, recording ``eval.terminated`` True and the delivered payload in its static data; a
     timeout records False. A task-less session has neither deadline nor budget and ends only on directives.
 
+    The run ends when the world stops. An episode still open then is discarded rather than committed: the
+    stop event is edge-triggered, so nothing ordered after it is guaranteed to run. A surface that wants an
+    episode kept finishes it and returns while idle.
+
     The ``Embodiment`` supplies the observation serializers (which own the canonical key names), the command
     channels and the home action. The policy owns its wrapper stack; the harness runs what it is given,
     passing ``new_session`` the clock the scheduling wrapper anchors chunks to.
@@ -506,7 +510,13 @@ class Harness(pimm.ControlSystem):
             yield self._pace()
 
         if self._running:
-            yield from self._finalize_recording(clock)
+            # The world ending is the run's designed finish, and it is edge-triggered: peers get one
+            # observation round and the recorder exits almost immediately, so an episode open here cannot be
+            # committed — a STOP racing the recorder's exit either lands a truncated episode as a complete
+            # one or does nothing. Cancel the in-flight chunk so devices hold and leave it uncommitted; the
+            # recorder's teardown discards it.
+            self._cancel_trajectories()
+            self._telemetry.abort()
         if self._policy_session:
             self._policy_session.close()
         # The harness does not own the policy's lifetime: the caller may run several harnesses over

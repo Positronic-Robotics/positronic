@@ -73,7 +73,7 @@ The span names are the contract:
 | Span | Parent | Attributes | Measures |
 |---|---|---|---|
 | `eval.pass` | root | `run.id`, policy name | one eval sweep (its wall is `W_pass`) |
-| `episode` | `eval.pass` | `episode.index` + flat trial-context keys; at end `episode.steps`, `episode.virtual_s`; `episode.aborted` on an abort | one rollout's wall |
+| `episode` | `eval.pass` | `episode.index` + flat trial-context keys; at end `episode.steps`, `episode.virtual_s`; `episode.aborted` on an episode discarded rather than committed (an abort, or a world end mid-episode) | one rollout's wall |
 | `reset` | `episode` | — | scene reset (harness arming + producer frame-0 materialisation) |
 | `env.step` | `episode` | — | the client-observed env step (materialisation included) |
 | `materialize` | `env.step` | — | client-side observation assembly (shared-memory image alloc + camera copies) |
