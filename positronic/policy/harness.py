@@ -1,7 +1,7 @@
 import time
 from collections.abc import Callable, Generator, Iterable, Iterator
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any
 
 from opentelemetry.trace import Span
@@ -10,6 +10,7 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
+from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy, Session
@@ -52,13 +53,42 @@ class Directive:
 
     @classmethod
     def FINISH(cls, **kwargs) -> 'Directive':
-        """Finalize the recording with optional eval data, then home devices."""
+        """Finalize the live recording, if any, with optional eval data, then home devices."""
         return cls(DirectiveType.FINISH, kwargs)
 
     @classmethod
     def ABORT(cls) -> 'Directive':
         """Discard the live recording and home the devices."""
         return cls(DirectiveType.ABORT)
+
+
+class Phase(StrEnum):
+    """Episode phase of a harness."""
+
+    IDLE = 'idle'
+    STARTING = 'starting'
+    RUNNING = 'running'
+
+
+@dataclass(frozen=True)
+class HarnessStatus:
+    """Live episode state published on ``Harness.status`` for an operator surface.
+
+    ``robot_error`` is true only for the cycles a safety reflex is tripped, since the driver clears
+    one every control cycle.
+    ``homes_commanded`` counts the home commands issued, and ``robot_ready`` is the arm's own report that
+    it has stopped moving — the drivers name a motion differently, but all report ready when it ends.
+    ``robot_ready`` is ``None`` where there is no arm state to read, which a waiter must not read as busy.
+    ``directives_taken`` counts the directives picked off the queue, which is what a sender correlates
+    against: a directive whose execution blocks has still been taken.
+    """
+
+    phase: Phase
+    waiting_for_policy: bool
+    robot_error: bool
+    robot_ready: bool | None
+    directives_taken: int
+    homes_commanded: int
 
 
 class _EpisodeTelemetry:
@@ -209,6 +239,45 @@ class Harness(pimm.ControlSystem):
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
         # Privileged stop-signal: a truthy value within the trial's budget ends it.
         self.done = pimm.ControlSystemReceiver[dict](self, default={})
+        # Live status for an operator surface: episode phase + whether the policy is producing actions.
+        # May be unbound.
+        self.status = pimm.ControlSystemEmitter(self)
+        self._chunk_end_s: float | None = None  # last waypoint time of the current chunk = its drive horizon
+        self._directives_taken = 0
+        self._homes_commanded = 0
+
+    def _emit_status(self, clock: pimm.Clock, phase: Phase | None = None) -> None:
+        """Publish the live episode state for an operator surface. Emits nowhere when nothing is bound."""
+        phase = phase or (Phase.RUNNING if self._running else Phase.IDLE)
+        robot_status = self._robot_status()
+        # A chunked policy emits one chunk and then plays it for its whole span, so a policy that is
+        # driving looks idle from the last emit alone: the chunk's remaining horizon is what says it is
+        # driving, plus a 0.5s grace covering the inter-chunk inference gap.
+        driving = self._chunk_end_s is not None and clock.now() <= self._chunk_end_s + 0.5
+        self.status.emit(
+            HarnessStatus(
+                phase=phase,
+                waiting_for_policy=bool(self._running and not driving),
+                robot_error=robot_status is RobotStatus.ERROR,
+                robot_ready=None if robot_status is None else robot_status is RobotStatus.AVAILABLE,
+                directives_taken=self._directives_taken,
+                homes_commanded=self._homes_commanded,
+            ),
+            clock.now_ns(),
+        )
+
+    def _robot_status(self) -> RobotStatus | None:
+        """The arm's latest reported status, or ``None`` where there is no arm state to read.
+
+        An embodiment with no robot state, or one that has not delivered yet, reports nothing.
+        """
+        if keys.ROBOT_STATE not in self.observations:
+            return None
+        try:
+            state = self.observations[keys.ROBOT_STATE].value
+        except pimm.NoValueException:
+            return None
+        return state.status if isinstance(state, State) else None
 
     def _statics(self) -> dict[str, Any]:
         """What is known about the rig before the episode runs, live values winning."""
@@ -236,6 +305,7 @@ class Harness(pimm.ControlSystem):
             self.commands[name].emit([(now, value)])
 
     def _home(self, clock: pimm.Clock) -> None:
+        self._homes_commanded += 1
         self._emit_now(self._embodiment.home, clock)
 
     def _pace(self) -> pimm.Command:
@@ -288,7 +358,7 @@ class Harness(pimm.ControlSystem):
         # period) to the closing episode — the cooperative scheduler cannot give the recorder a turn alone.
         self._telemetry.end(virtual_now)
 
-    def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> None:
+    def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
 
         A resettable task's ``reset`` only arms the producer, which publishes the first observation on a later
@@ -310,6 +380,15 @@ class Harness(pimm.ControlSystem):
                 self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
+        # Fresh episode: no policy action yet, so "waiting for policy" until the first chunk.
+        self._chunk_end_s = None
+        self._emit_status(clock, phase=Phase.STARTING)
+        # The status channel holds one slot and a surface is a peer in this loop, so this phase is only
+        # observable if a scheduling point precedes ``new_session``, whose handshake blocks until the model
+        # is loaded. Not in sim: simulated producers are scheduled after the harness, so a yield here lets
+        # one publish its first observation before ``ds_command`` START, which the recorder then drops.
+        if self.status.num_bound and not self._embodiment.simulated:
+            yield self._pace()
         self._policy_session = self.policy.new_session(self.context, clock.now)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
@@ -338,14 +417,22 @@ class Harness(pimm.ControlSystem):
         self._running = False
 
     def _handle_directive(self, directive: Directive, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
-        """Dispatch a directive to the episode lifecycle; updates ``_running``."""
+        """Dispatch a directive to the episode lifecycle; updates ``_running``.
+
+        FINISH and ABORT both end whatever is open and home, from any phase, so a sender that only
+        knows a sampled phase cannot lose an episode opened since that sample. Only RUN is guarded,
+        against restarting an episode that is already live.
+
+        The count rises before dispatch, so a sender sees its directive taken even while the work it
+        started blocks — a policy handshake holds RUN open for as long as the model takes to load.
+        """
+        self._directives_taken += 1
         match directive.type:
             case DirectiveType.RUN:
-                if not self._running:  # a RUN mid-trial is ignored — the operator finishes before starting anew
-                    self._begin_episode(directive.payload or {}, clock)
+                if not self._running:
+                    yield from self._begin_episode(directive.payload or {}, clock)
             case DirectiveType.FINISH:
-                if self._running:  # a FINISH while idle is ignored — nothing to finalize
-                    yield from self._end_episode(clock, directive.payload)
+                yield from self._end_episode(clock, directive.payload)
             case DirectiveType.ABORT:
                 yield from self._end_episode(clock, abort=True)
             case _:
@@ -442,6 +529,12 @@ class Harness(pimm.ControlSystem):
         self._telemetry.step()
         _assert_anchored(actions, clock.now())
         self._emit_commands(actions)
+        # How far this chunk drives: its last waypoint time.
+        # TODO(hardcoded-keys): the waypoint-time name is a literal at every site that reads an action dict
+        # (here and above, plus ``policy/recording.py`` and ``policy/codec.py``, which writes it). It belongs
+        # in ``positronic.keys`` with the rest of the wire, migrated across those readers at once.
+        # rules-allow: hardcoded-keys — a name here alone leaves this file's two other reads on the literal
+        self._chunk_end_s = max((a['timestamp'] for a in actions), default=self._chunk_end_s)
 
     def _trial_terminal(self, clock: pimm.Clock) -> dict[str, Any] | None:
         """The terminal static payload if a self-driven trial has ended this round, else ``None``.
@@ -495,7 +588,7 @@ class Harness(pimm.ControlSystem):
                     if trial is None:  # plan exhausted — let the recorder commit the final episode, then exit
                         yield pimm.Sleep(0.5)
                         break
-                    self._begin_episode(trial, clock)
+                    yield from self._begin_episode(trial, clock)
             elif self._deadline is not None and (terminal := self._trial_terminal(clock)) is not None:
                 yield from self._end_episode(clock, terminal)
             else:
@@ -503,6 +596,7 @@ class Harness(pimm.ControlSystem):
                     yield from self._step(clock)
                 except pimm.NoValueException:
                     pass
+            self._emit_status(clock)
             yield self._pace()
 
         if self._running:
