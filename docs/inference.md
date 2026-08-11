@@ -88,13 +88,13 @@ uv run positronic-inference sim \
 
 Use local when latency is critical (<50ms), robot has built-in GPU, or offline operation required. Use remote when GPU server is separate, models are heavy, or multiple robots share one server.
 
-## Inference Drivers
+## Operator Surfaces
 
-Positronic provides two interactive drivers for managing inference episodes (see [`positronic/inference.py`](../positronic/inference.py)), plus an unattended mode:
+An attended run is driven by an operator surface — the thing that decides when an episode starts, finishes or is abandoned (see [`positronic/inference.py`](../positronic/inference.py)). Positronic ships one, plus an unattended mode:
 
 **Unattended (automatic):** The default for `sim` — runs `--eval.trial_count=10` episodes back-to-back, each ending when the task's `timeout` expires (override with `--eval.timeout=60`, seconds per episode); optionally `--show_gui=True` for DearPyGui visualization. Useful for batch evaluation without manual intervention.
 
-**Keyboard driver (manual):** Control inference with keyboard. Press `s` to start episode, `p` to stop and save, `r` to home the robot, `q` to quit. The default for `real`; optionally pass `--driver.show_gui=True` for DearPyGui visualization. Useful for manual evaluation and debugging.
+**Keyboard operator (manual):** Control inference with keyboard. Press `s` to start episode, `p` to stop and save, `r` to home the robot, `q` to quit. The default for `real`; optionally pass `--operator.show_gui=True` for DearPyGui visualization. Useful for manual evaluation and debugging.
 
 **Eval UI driver:** Dedicated evaluation interface for policy assessment. The default for `phail` — graphical controls and metrics visualization. Useful for systematic policy evaluation with visual feedback.
 

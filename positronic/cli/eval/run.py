@@ -11,7 +11,7 @@ import pos3
 
 import pimm
 import positronic.cfg.policy as policy_cfg
-from positronic import telemetry, telemetry_keys, utils, wire
+from positronic import keys, telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import placeholder
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
@@ -29,18 +29,28 @@ _ENV_TELEMETRY_VARS = (ENV_TELEMETRY_DIR, ENV_RUN_ID)
 
 
 @dataclass
-class Driver:
-    """An attended operator surface: the directive source ``main`` wires into the Harness.
+class Operator:
+    """The attended lifecycle surface: what decides episode boundaries when the harness self-drives no plan.
 
-    Driver configs produce a factory called with the resolved local output directory, since
-    the directory exists only after ``pos3.sync`` inside ``main``.
+    An operator is supplied to ``main`` as a factory over the resolved local output directory, since that
+    directory exists only after ``pos3.sync``. What the run requires of one:
+
+    - ``directives`` emits ``Directive`` (RUN, FINISH, ABORT) into the harness, through
+      ``directive_wrapper`` — the emitter wrapper that maps whatever the surface emits (a keystroke, a
+      button press) onto a ``Directive``.
+    - ``control_systems`` are scheduled in the foreground, so one of them returning ends the world, and
+      ending the world is how an attended run finishes. Anything the surface must do before the run ends
+      happens before its loop returns.
+    - ``gui`` is any control system exposing ``cameras``, a receiver dict keyed by observation name; the
+      run connects every observation named with ``keys.IMAGE_PREFIX`` into it.
+    - ``manual_commands`` emits robot commands, which the harness applies only while idle.
     """
 
     gui: pimm.ControlSystem | None
-    directives: pimm.SignalEmitter
+    directives: pimm.ControlSystemEmitter
     directive_wrapper: Callable
     control_systems: list[pimm.ControlSystem]
-    manual_commands: pimm.SignalEmitter | None = None
+    manual_commands: pimm.ControlSystemEmitter | None = None
 
 
 def _seed_counter(policy, output_dir: Path):
@@ -72,18 +82,17 @@ def _run_world(
     embodiment: Embodiment,
     task: Task | None,
     trials: list[dict] | None,
-    driver: Driver | None,
+    operator: Operator | None,
     output_dir: Path | None,
-    show_gui: bool,
+    gui: pimm.ControlSystem | None,
     on_complete,
 ):
     """Wire one embodiment under a fresh Harness + World and run it to completion.
 
-    ``driver`` (attended) and ``trials`` (unattended self-driving) are the two lifecycle sources, mutually
+    ``operator`` (attended) and ``trials`` (unattended self-driving) are the two lifecycle sources, mutually
     exclusive per the caller. The shared ``policy``'s lifetime stays with ``main``.
     """
     harness = Harness(policy, embodiment, task=task, trials=trials, on_episode_complete=on_complete)
-    gui = driver.gui if driver is not None else (dpg_ui() if show_gui else None)
 
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
@@ -94,16 +103,16 @@ def _run_world(
             world, harness, embodiment, dataset_writer, time_mode, privileged=privileged, done=done
         )
         if gui is not None:
-            # HACK: GUI cameras are matched to observations by the `image.` name prefix, which
+            # HACK: GUI cameras are matched to observations by the camera name prefix, which
             # hard-binds GUI wiring to the observation naming convention. TODO: resolve this
             # coupling (the right binding is still open).
             for name, obs in embodiment.observations.items():
-                if name.startswith('image.'):
+                if name.startswith(keys.IMAGE_PREFIX):
                     world.connect(obs.source, gui.cameras[name])
-        if driver is not None:
-            world.connect(driver.directives, harness.directive, emitter_wrapper=driver.directive_wrapper)
-            if driver.manual_commands is not None:
-                world.connect(driver.manual_commands, harness.manual_command)
+        if operator is not None:
+            world.connect(operator.directives, harness.directive, emitter_wrapper=operator.directive_wrapper)
+            if operator.manual_commands is not None:
+                world.connect(operator.manual_commands, harness.manual_command)
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)
 
@@ -114,9 +123,9 @@ def _run_world(
         # A reset arms the producer to publish frame-0 after the harness (last in the round); the recorder
         # drains its channels the turn it opens, dropping the pre-reset frame, so its first recorded sample
         # is the post-reset scene. Real runs the producers + recorder as background subprocesses; harness,
-        # driver, and GUI placement is otherwise identical.
+        # operator, and GUI placement is otherwise identical.
         producers = [cs for cs in embodiment.control_systems if cs is not None]
-        foreground = driver.control_systems if driver is not None else []
+        foreground = operator.control_systems if operator is not None else []
         if embodiment.simulated:
             world.run([*foreground, harness, ds_agent, *producers], gui)
         else:
@@ -200,30 +209,30 @@ def main(
     *,
     evals: list[Eval] | None = None,
     embodiment: Embodiment | None = None,
-    driver: Callable[[Path | None], Driver] | None = None,
+    operator: Callable[[Path | None], Operator] | None = None,
     output_dir: str | Path | None = None,
-    show_gui: bool = False,
+    gui: Callable[[], pimm.ControlSystem] | None = None,
     timing: bool = False,
 ):
     """Run inference for an embodiment, real or simulated.
 
-    Exactly one of ``driver`` (attended: a factory producing the operator surface that emits the directives
-    over a single ``embodiment``) or ``evals`` (unattended: the harness self-drives each eval's trial plan,
-    rebuilding the World per eval) must be given; ``show_gui`` applies to the unattended path (attended surfaces
-    bring their own). ``main`` owns the policy lifetime: it warms the policy once up front and closes it once
-    after the last World, so a multi-eval sweep reuses one live policy across the rebuilds.
+    Exactly one of ``operator`` (attended: a factory producing the surface that emits the directives over a
+    single ``embodiment``) or ``evals`` (unattended: the harness self-drives each eval's trial plan,
+    rebuilding the World per eval) must be given. ``gui`` builds one viewer per World for the unattended path;
+    an operator brings its own. ``main`` owns the policy lifetime: it warms the policy once up front and closes
+    it once after the last World, so a multi-eval sweep reuses one live policy across the rebuilds.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + a machine-load stats
     stream). It needs an ``output_dir`` and an all-simulated sweep: everything under the bound tracer enters
     the report, so a real embodiment in a timed sweep is rejected rather than allowed to pollute it.
     """
-    assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
+    assert (operator is None) != (evals is None), 'Provide exactly one of operator or evals'
     # Validate timing up front, before the policy warmup, so a rejected sweep fails before it spends anything.
     if timing:
         if evals is not None:
             embodiments = [ev.embodiment for ev in evals]
         else:
-            assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
+            assert embodiment is not None, 'the attended path runs a single embodiment'
             embodiments = [embodiment]
         _validate_timing(embodiments, output_dir)
 
@@ -247,13 +256,15 @@ def main(
 
     try:
         with _timed_pass(output_dir, timing, policy):
-            if driver is not None:
-                assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
-                _run_world(policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete)
+            if operator is not None:
+                assert embodiment is not None, 'the attended path runs a single embodiment'
+                op = operator(output_dir)
+                _run_world(policy, embodiment, None, None, op, output_dir, op.gui, on_complete)
             else:
-                assert evals is not None  # driver/evals XOR asserted up front
+                assert evals is not None  # operator/evals XOR asserted up front
                 for ev in evals:
-                    _run_world(policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete)
+                    viewer = gui() if gui is not None else None
+                    _run_world(policy, ev.embodiment, ev.task, ev.trials, None, output_dir, viewer, on_complete)
     finally:
         policy.close()
 
@@ -268,4 +279,4 @@ def run(eval: Eval, policy, show_gui, output_dir=None, inference_latency=False, 
     # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob
     # (sim inference-cost simulation). Overlay it onto every trial context, then self-drive the eval.
     eval = replace(eval, trials=[{**trial, 'inference_latency': inference_latency} for trial in eval.trials])
-    main(policy=policy, evals=[eval], show_gui=show_gui, output_dir=output_dir, timing=timing)
+    main(policy=policy, evals=[eval], gui=dpg_ui if show_gui else None, output_dir=output_dir, timing=timing)

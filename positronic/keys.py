@@ -31,8 +31,11 @@ JOINT_VEL = 'robot_state.dq'
 EE_POSE = 'robot_state.ee_pose'
 GRIP = 'grip'
 TASK = 'task'
-WRIST_IMAGE = 'image.wrist'
-EXTERIOR_IMAGE = 'image.exterior'
+# The prefix that identifies a camera on the wire: an embodiment declares its cameras by naming
+# them this way, and every consumer picks them out of the observations by it.
+IMAGE_PREFIX = 'image.'
+WRIST_IMAGE = f'{IMAGE_PREFIX}wrist'
+EXTERIOR_IMAGE = f'{IMAGE_PREFIX}exterior'
 
 # The harness stamps each observation with the control clock's time (``OBS_TIME_NS``) and the wall
 # clock's (``WALL_TIME_NS``); recording timelines and action scheduling read time back off them.

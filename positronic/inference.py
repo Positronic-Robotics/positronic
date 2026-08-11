@@ -10,7 +10,7 @@ import pimm
 import positronic.cfg.embodiment
 import positronic.cfg.policy as policy_cfg
 from positronic.cfg.eval.sim.positronic import stack_cubes
-from positronic.cli.eval.run import Driver, main, run
+from positronic.cli.eval.run import Operator, main, run
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.gui import dpg_ui, handover
 from positronic.gui.keyboard import KeyboardControl
@@ -36,22 +36,22 @@ class KeyboardHandler:
 
 @cfn.config(ui_scale=1, handover_dir=handover.DEFAULT_DIR)
 def eval_ui(ui_scale, handover_dir):
-    def make(output_dir: Path | None) -> Driver:
+    def make(output_dir: Path | None) -> Operator:
         from positronic.gui.eval import EvalUI  # noqa: PLC0415
 
         gui = EvalUI(output_dir, ui_scale=ui_scale, handover_dir=Path(handover_dir))
-        return Driver(gui, gui.directive, pimm.utils.identity, [])
+        return Operator(gui, gui.directive, pimm.utils.identity, [])
 
     return make
 
 
 @cfn.config(show_gui=False)
 def keyboard(show_gui, task):
-    def make(output_dir: Path | None) -> Driver:
+    def make(output_dir: Path | None) -> Operator:
         keyboard = KeyboardControl(quit_key='q')
         keyboard_handler = KeyboardHandler(task=task)
         print('Keyboard controls: [s]tart, sto[p], abo[r]t, [q]uit')
-        return Driver(
+        return Operator(
             dpg_ui() if show_gui else None,
             keyboard.keyboard_inputs,
             pimm.map(keyboard_handler.harness_directive),
@@ -72,7 +72,7 @@ def keyboard(show_gui, task):
     rotation_coarse=10.0,
 )
 def web(port, fps, width, bitrate, translation_fine, translation_coarse, rotation_fine, rotation_coarse, task):
-    def make(output_dir: Path | None) -> Driver:
+    def make(output_dir: Path | None) -> Operator:
         ui = WebEvalUI(
             task=task,
             port=port,
@@ -84,12 +84,12 @@ def web(port, fps, width, bitrate, translation_fine, translation_coarse, rotatio
             rotation_fine=rotation_fine,
             rotation_coarse=rotation_coarse,
         )
-        return Driver(ui, ui.directive, pimm.utils.identity, [], manual_commands=ui.manual_command)
+        return Operator(ui, ui.directive, pimm.utils.identity, [], manual_commands=ui.manual_command)
 
     return make
 
 
-run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder, driver=keyboard)
+run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder, operator=keyboard)
 
 
 # Console entry point for [project.scripts].
@@ -100,11 +100,11 @@ def _internal_main():
         'run': run_cfg,
         'real': run_cfg,  # `real` is the documented name for the hardware path
         'sim': run.override(eval=stack_cubes),
-        'web': run_cfg.override(driver=web),
+        'web': run_cfg.override(operator=web),
         'phail': run_cfg.override(
             policy=policy_cfg.phail_multiple,
-            driver=eval_ui,
-            **{'driver.ui_scale': 3, 'embodiment.robot_arm.collision_coeff': 2.0},
+            operator=eval_ui,
+            **{'operator.ui_scale': 3, 'embodiment.robot_arm.collision_coeff': 2.0},
         ),
         'stats': stats,
     })

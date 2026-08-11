@@ -5,8 +5,9 @@ from typing import cast
 
 import pytest
 
+import pimm
 from positronic import telemetry, telemetry_keys
-from positronic.cli.eval.run import Driver, _pass_span, _timed_pass, main
+from positronic.cli.eval.run import Operator, _pass_span, _timed_pass, main
 from positronic.eval import Embodiment, Eval, Task
 
 
@@ -22,16 +23,56 @@ def test_timed_sweep_rejects_real_embodiment(tmp_path):
 
 
 def test_timed_attended_run_rejects_real_embodiment(tmp_path):
-    """The attended (driver) path runs one embodiment rather than a sweep, and reaches the same check."""
+    """The attended path runs one embodiment rather than a sweep, and reaches the same check."""
     real = cast(Embodiment, SimpleNamespace(simulated=False))
     with pytest.raises(ValueError, match='all-simulated'):
         main(
             policy=object(),
             embodiment=real,
-            driver=lambda _: cast(Driver, SimpleNamespace()),
+            operator=lambda _: cast(Operator, SimpleNamespace()),
             output_dir=tmp_path,
             timing=True,
         )
+
+
+class _IdlePolicy:
+    """Enough policy for ``main`` to warm up and close; it is never asked for an action."""
+
+    def new_session(self, *_args, **_kwargs):
+        return SimpleNamespace(close=lambda: None)
+
+    def close(self):
+        pass
+
+
+class _FinishingOperator(pimm.ControlSystem):
+    """An operator surface that paces a few rounds and then returns, emitting nothing."""
+
+    def __init__(self, rounds: int = 3):
+        self._rounds = rounds
+        self.directive = pimm.ControlSystemEmitter(self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        for _ in range(self._rounds):
+            yield pimm.Sleep(0.01)
+
+
+@pytest.mark.timeout(30.0)
+def test_an_operator_control_system_returning_ends_the_run():
+    """How an attended run finishes: an operator's foreground loop returns, the world stops, ``main`` returns.
+
+    An operator that never returns can only be ended from outside the run, so this is the seam's whole
+    finish contract — anything the surface must do first happens before its loop returns.
+    """
+    embodiment = Embodiment(
+        descriptor='stub', observations={}, commands={}, static_meta={}, meta_source=None, simulated=True
+    )
+    surface = _FinishingOperator()
+    main(
+        policy=_IdlePolicy(),
+        embodiment=embodiment,
+        operator=lambda _: Operator(None, surface.directive, pimm.utils.identity, [surface]),
+    )
 
 
 def test_timed_sweep_needs_an_output_dir():
