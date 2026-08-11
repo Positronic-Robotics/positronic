@@ -35,8 +35,8 @@ The robot's actual gripper is overlaid the same way in white for predicted-vs-re
 Every field is *also* logged as ``rr.Scalars`` on a dedicated ``action_time`` timeline
 (each action stamped at the inference-request time plus its horizon offset), so a
 ``TimeSeriesView`` reads commanded values with real axes. That anchor is the pre-inference
-``obs_time_ns``, so it precedes true execution — which the scheduling wrapper anchors at the instant
-its call's charge is paid — by the inference latency. Select ``action_time`` to see them.
+``obs_time_ns``, so it precedes the harness's true execution time (stamped after
+inference by ``ChunkedSchedule``) by the inference latency. Select ``action_time`` to see them.
 
 Entity paths are ``{tap_name}/{data_key}``. A tap's incoming observation keys and
 outgoing action keys share that namespace; in the rare case the same key appears on
@@ -221,8 +221,9 @@ def _log_action_series(path: str, arr: np.ndarray, horizon: np.ndarray, base_ns:
 
     Each action is stamped at ``base_ns + horizon_i``, where ``base_ns`` is the
     inference-request time; successive chunks lay out along one clock so a ``TimeSeriesView``
-    has real axes. This precedes true execution by the inference latency: the scheduling wrapper
-    anchors commands at the instant its call's charge is paid, which a recorder tap cannot observe.
+    has real axes. This precedes true execution by the inference latency: the harness's
+    ``ChunkedSchedule`` anchors commands at ``now()`` *after* inference, which a recorder
+    tap sitting inside it cannot observe.
     """
     arr = np.asarray(arr, dtype=np.float64)
     if arr.ndim == 1:
@@ -305,7 +306,6 @@ class Recorder:
         self._stream: rr.RecordingStream | None = None
         self._rrd_path: Path | None = None
         self._live = 0
-        # Shared across a pipeline's taps and unlocked: the harness keeps one session call in flight.
         self._depth = 0
         self._timeline_values: dict[str, Any] = {}
         self._image_paths: list[str] = []
