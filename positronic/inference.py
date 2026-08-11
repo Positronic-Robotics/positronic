@@ -14,8 +14,8 @@ from positronic import wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import completion_sink, prepare_output_dir, run, warm_up
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
+from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment
-from positronic.gui.keyboard import KeyboardControl
 from positronic.policy.harness import Directive, Harness
 from positronic.utils.logging import init_logging
 
