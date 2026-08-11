@@ -36,9 +36,8 @@ class FakeArm:
     set, is what every call but ``stop`` raises.
     """
 
-    def __init__(self, q, *, polls_to_reach: int = 2, goal_status: object | None = None, dq=None):
+    def __init__(self, q, *, polls_to_reach: int = 2, goal_status: object | None = None):
         self.q = np.asarray(q, dtype=np.float64)
-        self.dq = np.zeros(7) if dq is None else np.asarray(dq, dtype=np.float64)
         self.calls: list[str] = []
         self.targets: list[np.ndarray] = []
         self.raises: Exception | None = None
@@ -57,9 +56,7 @@ class FakeArm:
 
     def state(self) -> _ArmState:
         self._record('state')
-        return _ArmState(
-            self.q.copy(), self.dq.copy(), np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]), np.zeros(6), 0, ''
-        )
+        return _ArmState(self.q.copy(), np.zeros(7), np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]), np.zeros(6), 0, '')
 
     def goal(self) -> _Goal:
         self._record('goal')
@@ -147,22 +144,16 @@ def test_park_drives_the_arm_to_the_home_pose():
     np.testing.assert_allclose(arm.q, HOME)
 
 
-def test_park_leaves_an_arm_within_the_homing_spread_alone():
+def test_park_commands_the_exact_home_pose_from_inside_the_homing_spread():
     variation = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
     arm = FakeArm(HOME + np.asarray(variation))
 
     _driver(arm, variation=variation, manage_desk=False)._park(arm)
 
-    assert arm.targets == []
-
-
-def test_park_commands_home_for_an_arm_passing_through_the_spread():
-    variation = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
-    arm = FakeArm(HOME + np.asarray(variation), dq=[0.4] + [0.0] * 6)
-
-    _driver(arm, variation=variation, manage_desk=False)._park(arm)
-
+    # An arm inside the spread, or travelling through it, is not asked to be judged already home: the
+    # controller reports arrival, and a pose it already holds arrives at once.
     np.testing.assert_allclose(arm.targets, [HOME])
+    np.testing.assert_allclose(arm.q, HOME)
 
 
 def test_park_gives_up_when_the_goal_stops_advancing():
@@ -229,7 +220,8 @@ def test_teardown_stops_control_and_releases_desk_when_parking_fails(desk):
     with pytest.raises(StopIteration):
         next(loop)
 
-    assert arm.calls[mark:] == ['state', 'stop']  # the park was attempted and its failure went no further
+    # the park was attempted, and its failure went no further
+    assert arm.calls[mark:] == ['recover_from_errors', 'stop']
     assert desk.released
 
 

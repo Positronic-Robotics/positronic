@@ -294,22 +294,12 @@ class Robot(pimm.ControlSystem):
         """Move the arm to the home pose, giving up after ``park_timeout_s``.
 
         Autonomous motion: bounded, at the configured dynamics factor, to the configured ``home_joints``
-        and nowhere else. Every failure — including a goal that stops advancing — reaches the log and no
-        further.
+        and nowhere else. An arm already there arrives immediately, so arrival is the controller's to
+        report rather than something to pre-check. Every failure — including a goal that stops advancing —
+        reaches the log and no further.
         """
-        SLACK_RAD = 0.05
-        STILL_RAD_PER_S = 0.01
         target = np.asarray(self._home_joints, dtype=np.float64)
-        # A reset lands anywhere inside home_joints_variation, so an arm within that spread is already parked.
-        tolerance = np.asarray(self._home_joints_variation, dtype=np.float64) + SLACK_RAD
         try:
-            state = robot.state()
-            at_home = np.all(np.abs(np.asarray(state.q, dtype=np.float64) - target) <= tolerance)
-            # An arm merely passing through the spread is still travelling somewhere else, and stopping there
-            # brakes it away from home.
-            still = np.all(np.abs(np.asarray(state.dq, dtype=np.float64)) <= STILL_RAD_PER_S)
-            if at_home and still:
-                return
             logging.info('Parking the arm at the home pose')
             robot.recover_from_errors()  # once, before the move: a reflex during the move ends the park
             deadline = time.monotonic() + self._park_timeout_s
