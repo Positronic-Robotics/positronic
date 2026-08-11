@@ -18,12 +18,15 @@ from positronic.policy.observation import TASK_FIELD
 from positronic.vendors.lerobot_0_3_3 import server as lerobot_server  # noqa: E402
 from positronic.vendors.lerobot_0_3_3.policy import warm_observation  # noqa: E402
 
+STATE_FEATURE = 'observation.state'
+CAMERA_FEATURE = 'observation.images.left'
+
 
 def _act_config() -> ACTConfig:
     return ACTConfig(
         input_features={
-            'observation.state': PolicyFeature(type=FeatureType.STATE, shape=(8,)),
-            'observation.images.left': PolicyFeature(type=FeatureType.VISUAL, shape=(3, 224, 320)),
+            STATE_FEATURE: PolicyFeature(type=FeatureType.STATE, shape=(8,)),
+            CAMERA_FEATURE: PolicyFeature(type=FeatureType.VISUAL, shape=(3, 224, 320)),
         },
         output_features={'action': PolicyFeature(type=FeatureType.ACTION, shape=(7,))},
     )
@@ -147,7 +150,7 @@ async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
 def test_warmup_observation_matches_the_features_the_policy_declares():
     obs = warm_observation(_act_config())
 
-    assert obs['observation.state'].shape == (8,)
+    assert obs[STATE_FEATURE].shape == (8,)
     # Declared channels-first, handed over channels-last the way a session takes it.
-    assert obs['observation.images.left'].shape == (224, 320, 3)
+    assert obs[CAMERA_FEATURE].shape == (224, 320, 3)
     assert obs[TASK_FIELD] == ''
