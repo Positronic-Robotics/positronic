@@ -1,4 +1,5 @@
 import concurrent.futures
+import logging
 import time
 from collections import deque
 from collections.abc import Generator, Iterable, Iterator
@@ -304,7 +305,11 @@ class Harness(pimm.ControlSystem):
             player.set([])
         if self._future is not None:
             future, self._future = self._future, None
-            future.result()  # nothing may close or re-enter the session while the worker is still inside it
+            concurrent.futures.wait([future])  # nothing may close or re-enter the session while the worker is inside
+            # rules-allow: swallowed-error — the cancelled call's failure must not pre-empt the stop and the home
+            # this cancel runs before; a live episode's failure still surfaces from ``_take``.
+            if (exc := future.exception()) is not None:
+                logging.warning(f'Inference failed on the call this episode cancelled: {exc}')
         if self._policy_session is not None:
             self._policy_session.cancel()
 
@@ -351,7 +356,7 @@ class Harness(pimm.ControlSystem):
                 self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
-        self._policy_session = self.policy.new_session(self.context, self._policy_now)
+        self._policy_session = self.policy.new_session(self.context, self._effect_time)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
         self.ds_command.emit(DsWriterCommand.START())
@@ -425,7 +430,7 @@ class Harness(pimm.ControlSystem):
         inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
         return inputs
 
-    def _policy_now(self) -> float:
+    def _effect_time(self) -> float:
         """The trial instant the in-flight call's output takes effect: its observation instant plus the
         charge — the declared constant whole, or the wall time elapsed so far. Read on the worker thread;
         the loop thread writes the call's start fields before submitting it.

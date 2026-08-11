@@ -1684,6 +1684,49 @@ def test_harness_keeps_playing_while_a_call_is_in_flight(world):
     assert len(during) >= 3, f'the harness stopped playing during inference: {[t for t, _ in played]}'
 
 
+@pytest.mark.timeout(20.0)
+def test_finish_during_a_failing_call_still_stops_and_homes(world):
+    """A FINISH arriving while the call it cancels has failed still commits the recording and homes: the
+    failure is discarded with the schedule rather than unwinding the episode's end."""
+
+    class _FailingSession(Session):
+        """Fails after the directive lands, so the harness meets the failure only when it reaps the worker."""
+
+        def __call__(self, obs):
+            time.sleep(0.05)
+            raise RuntimeError('inference boom')
+
+    class _FailingPolicy(Policy):
+        def new_session(self, context=None, now=None):
+            return _FailingSession()
+
+    harness = Harness(_FailingPolicy(), make_embodiment(simulated=True))
+    cmd_recorder = RecordingEmitter()
+    ds_recorder = RecordingEmitter()
+    harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
+    harness.commands['target_grip']._bind(RecordingEmitter())
+    harness.ds_command._bind(ds_recorder)
+
+    frame_em = world.pair(harness.observations[CAM])
+    robot_em = world.pair(harness.observations['robot_state'])
+    grip_em = world.pair(harness.observations[keys.GRIP])
+    directive_em = world.pair(harness.directive)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        # The charge holds the failed call in flight, so FINISH is what reaps it.
+        (partial(directive_em.emit, Directive.RUN(task='t', inference_latency=0.3)), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
+        (partial(directive_em.emit, Directive.FINISH()), 0.05),
+        (None, 0.05),
+    ])
+    drive_scheduler(world.start([harness, driver, _Pacer()]), steps=2000)
+
+    stops = [data for _, data in ds_recorder.emitted if data.type == DsWriterCommandType.STOP_EPISODE]
+    assert len(stops) == 1
+    assert isinstance(cmd_recorder.emitted[-1][1], Reset)
+
+
 @pytest.mark.timeout(3.0)
 def test_installed_trajectory_clears_the_channels_it_omits(world):
     """A trajectory naming only one channel replaces the whole schedule: the omitted channel stops being
