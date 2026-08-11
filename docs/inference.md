@@ -98,7 +98,7 @@ Something has to say when an episode starts, finishes or is abandoned. `positron
 
 ### A console of your own
 
-Anything richer — a web console, a foot pedal, a rig UI — is a binary of its own rather than a plug-in: it composes its own `pimm.World` out of the public pieces, and nothing in the library needs to know which surface is driving. The shape:
+Anything richer — a web console, a foot pedal, a rig UI — is a binary of its own rather than a plug-in: it composes its own `pimm.World` out of the public pieces, and nothing in the library needs to know which surface is driving. The shape, for a **hardware** embodiment:
 
 ```python
 from contextlib import nullcontext
@@ -109,15 +109,16 @@ from positronic.cli.eval.run import completion_sink, prepare_output_dir, warm_up
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.policy.harness import Harness
 
+# Warming up opens a session, so the policy is yours to close from here on — and the setup
+# under the `try` can raise: `prepare_output_dir` syncs a directory and snapshots sources
+# into it, and `LocalDatasetWriter` scans the one it is given.
 warm_up(policy)
-# `None` where the run records nothing, which is why the writer is a nullcontext below.
-output_dir = prepare_output_dir(policy, output_dir)
-harness = Harness(policy, embodiment, on_episode_complete=completion_sink(policy))
-console = MyConsole()  # emits positronic.policy.harness.Directive
-
-# The caller owns the policy's lifetime from `warm_up` on, so it closes it — including
-# when the world comes down on an exception.
 try:
+    # `None` where the run records nothing, which is why the writer is a nullcontext below.
+    output_dir = prepare_output_dir(policy, output_dir)
+    harness = Harness(policy, embodiment, on_episode_complete=completion_sink(policy))
+    console = MyConsole()  # emits positronic.policy.harness.Directive
+
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as writer, pimm.World() as world:
         ds_agent = wire.wire_embodiment(world, harness, embodiment, writer)
@@ -128,6 +129,8 @@ try:
 finally:
     policy.close()
 ```
+
+**A simulated embodiment is not this.** Three things change together, and a copy of the shape above records a sim run against the wall clock: the world takes `virtual_time=True`, `wire_embodiment` takes `TimeMode.MESSAGE`, and the producers are scheduled in the foreground beside the harness rather than as background processes, so one scheduler round is one control period. `_run_world` in [`positronic/cli/eval/run.py`](../positronic/cli/eval/run.py) is the worked version, including why the ordering within a round is what it is.
 
 The world stops when a main-process control system returns, so the console ends the run by returning from its loop. To show the cameras, connect every observation whose name starts with `positronic.keys.IMAGE_PREFIX` into a viewer's `cameras` — `positronic.gui.dpg_ui()` is one, and the naming convention is what identifies a camera on the wire. To let the operator jog the arm between episodes, emit robot commands into `harness.manual_command`, which the harness applies only while idle.
 
