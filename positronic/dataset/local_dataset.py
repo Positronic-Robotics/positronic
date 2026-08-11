@@ -39,6 +39,10 @@ from .video import VideoSignal, VideoSignalWriter
 
 UNFINISHED_MARKER = '.unfinished'
 DISCARD_MARKER = 'discarded.json'
+# Fields of that marker. Written here, read by anything inspecting or sweeping the discarded tree.
+DISCARD_REASON = 'reason'
+DISCARD_TS_NS = 'discarded_ts_ns'
+DISCARD_UID = 'uid'
 # Appended to a dataset root's name to make the sibling directory discarded episodes are moved into.
 DISCARDED_ROOT_SUFFIX = '.discarded'
 
@@ -280,7 +284,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         for w in list(self._writers.values()):
             w.__exit__(None, None, None)  # finalize rather than abort, whose unlink is what loses the bytes
 
-        marker = {'reason': reason.value, 'discarded_ts_ns': time.time_ns(), 'uid': self._meta['uid']}
+        marker = {DISCARD_REASON: reason.value, DISCARD_TS_NS: time.time_ns(), DISCARD_UID: self._meta['uid']}
         with (self._path / DISCARD_MARKER).open('w', encoding='utf-8') as f:
             json.dump(marker, f, indent=2)
 

@@ -17,7 +17,7 @@ from positronic.dataset.ds_writer_agent import (
     TimeMode,
     TrajectoryOverrideSerializer,
 )
-from positronic.dataset.local_dataset import DISCARD_MARKER, LocalDataset, LocalDatasetWriter
+from positronic.dataset.local_dataset import DISCARD_MARKER, DISCARD_REASON, LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as rcmd
@@ -241,7 +241,7 @@ def test_integration_with_local_dataset_writer(tmp_path, world):
         agent, cmd_em, emitters = build_agent_with_pipes({'a': None, 'b': None}, writer, world)
 
         script = [
-            (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE, {'task': 'unit'})), 0.001),
+            (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE, {keys.TASK: 'unit'})), 0.001),
             (partial(emitters['a'].emit, 10), 0.001),
             (partial(emitters['b'].emit, 20), 0.001),
             (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE, {'ok': True})), 0.001),
@@ -271,7 +271,7 @@ def test_run_stopping_mid_episode_keeps_the_recording_outside_the_dataset(tmp_pa
         agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, writer, world)
 
         script = [
-            (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE, {'task': 'unit'})), 0.001),
+            (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE, {keys.TASK: 'unit'})), 0.001),
             (partial(emitters['a'].emit, 10), 0.001),
         ]
 
@@ -281,7 +281,7 @@ def test_run_stopping_mid_episode_keeps_the_recording_outside_the_dataset(tmp_pa
     discarded = list((tmp_path / 'ds.discarded').iterdir())
     assert len(discarded) == 1
     assert (discarded[0] / 'a.parquet').exists()
-    assert json.loads((discarded[0] / DISCARD_MARKER).read_text())['reason'] == DiscardReason.RUN_ENDED.value
+    assert json.loads((discarded[0] / DISCARD_MARKER).read_text())[DISCARD_REASON] == DiscardReason.RUN_ENDED.value
 
 
 def test_a_committed_episode_is_never_swept_into_the_discarded_dir(tmp_path, world):
@@ -290,7 +290,7 @@ def test_a_committed_episode_is_never_swept_into_the_discarded_dir(tmp_path, wor
         agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, writer, world)
 
         script = [
-            (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE, {'task': 'unit'})), 0.001),
+            (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE, {keys.TASK: 'unit'})), 0.001),
             (partial(emitters['a'].emit, 10), 0.001),
             (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
         ]

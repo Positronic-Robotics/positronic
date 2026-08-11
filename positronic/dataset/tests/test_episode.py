@@ -6,7 +6,15 @@ import pyarrow.parquet as pq
 import pytest
 
 from positronic.dataset import DiscardReason, Episode
-from positronic.dataset.local_dataset import DISCARD_MARKER, UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter
+from positronic.dataset.local_dataset import (
+    DISCARD_MARKER,
+    DISCARD_REASON,
+    DISCARD_TS_NS,
+    DISCARD_UID,
+    UNFINISHED_MARKER,
+    DiskEpisode,
+    DiskEpisodeWriter,
+)
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
 
@@ -227,9 +235,9 @@ def test_episode_writer_abort_moves_the_recording_out_and_blocks_further_use(tmp
     assert (discarded / 'a.parquet').exists()  # what was captured before the abort
     assert (discarded / UNFINISHED_MARKER).exists()
     marker = json.loads((discarded / DISCARD_MARKER).read_text())
-    assert marker['reason'] == DiscardReason.ABORTED.value
-    assert marker['uid'] == uid
-    assert marker['discarded_ts_ns'] > 0
+    assert marker[DISCARD_REASON] == DiscardReason.ABORTED.value
+    assert marker[DISCARD_UID] == uid
+    assert marker[DISCARD_TS_NS] > 0
 
 
 def test_episode_writer_keeps_a_finished_episode_out_of_the_discarded_dir(tmp_path):
@@ -252,7 +260,7 @@ def test_episode_writer_context_aborts_on_exception(tmp_path):
             raise RuntimeError('boom')
     assert not ep_dir.exists()
     marker = json.loads((tmp_path / 'discarded' / f'ep_context_abort-{uid}' / DISCARD_MARKER).read_text())
-    assert marker['reason'] == DiscardReason.WRITE_FAILED.value
+    assert marker[DISCARD_REASON] == DiscardReason.WRITE_FAILED.value
 
 
 def test_episode_writer_set_static_twice_raises(tmp_path):
