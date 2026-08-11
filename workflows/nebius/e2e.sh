@@ -159,29 +159,38 @@ wait_job "$TRAIN_ID" "train" || exit 1
 
 # ---- 3. Serve ----
 note "serve -> $ENDPOINT_NAME"
-# Deletes by id, not by name: a name is only what this run asked for, and an endpoint answering to it
-# may be a concurrent run's. An id comes back from a create this run made.
+# Armed before an endpoint can exist, and deleting by id rather than by name: a name is only what this
+# run asked for and may answer for a concurrent run's endpoint, while an id appears in SERVE_LOG only
+# once a create this run made has succeeded. Nothing there means nothing to release.
+SERVE_LOG="$LOG_ROOT/$VENDOR.serve.log"
+: > "$SERVE_LOG"
 teardown() {
   local status=$?   # whatever the run was already exiting with; a teardown failure may worsen it, never hide it
-  note "teardown -> $ENDPOINT_ID"
-  if nebius ai endpoint delete "$ENDPOINT_ID" >> "$LOG" 2>&1; then
-    note "DONE"
+  local id
+  id=$(awk '/Endpoint ID:/ {print $3; exit}' "$SERVE_LOG")
+  if [ -n "$id" ]; then
+    note "teardown -> $id"
+    if nebius ai endpoint delete "$id" >> "$LOG" 2>&1; then
+      note "DONE"
+    else
+      note "FAIL: teardown left $id alive and billing; delete it by hand"
+      status=1
+    fi
   else
-    note "FAIL: teardown left $ENDPOINT_ID alive and billing; delete it by hand"
-    status=1
+    note "DONE (no endpoint created)"
   fi
   exit "$status"
 }
-SERVE_OUT=$(bash "$SCRIPT_DIR/serve.sh" "$VENDOR" "$ENDPOINT_NAME" "${SERVE_SUBCMD[@]}" 2>&1)
-echo "$SERVE_OUT" >> "$LOG"
-# `serve.sh` reports the id as soon as the endpoint exists and before the minutes it then spends waiting
-# for a managed URL, so arming here still covers the failure that leaves a GPU running: that wait timing
-# out. It exits before reporting anything when the create itself fails, including on a taken name.
-ENDPOINT_ID=$(echo "$SERVE_OUT" | awk '/Endpoint ID:/ {print $3; exit}')
-[ -z "$ENDPOINT_ID" ] && { note "FAIL: serve.sh created no endpoint (see $LOG)"; exit 1; }
 trap teardown EXIT
+# Written to a file rather than captured: `serve.sh` reports the id as soon as the endpoint exists and
+# then spends minutes waiting for a managed URL, and a command substitution would hold that line until it
+# returned — so an interrupt during the wait would leave a GPU running with nothing recording its id.
+bash "$SCRIPT_DIR/serve.sh" "$VENDOR" "$ENDPOINT_NAME" "${SERVE_SUBCMD[@]}" > "$SERVE_LOG" 2>&1
+cat "$SERVE_LOG" >> "$LOG"
+ENDPOINT_ID=$(awk '/Endpoint ID:/ {print $3; exit}' "$SERVE_LOG")
+[ -z "$ENDPOINT_ID" ] && { note "FAIL: serve.sh created no endpoint (see $LOG)"; exit 1; }
 note "endpoint: $ENDPOINT_ID"
-SERVE_URL=$(echo "$SERVE_OUT" | awk '/Endpoint URL:/ {print $3; exit}')
+SERVE_URL=$(awk '/Endpoint URL:/ {print $3; exit}' "$SERVE_LOG")
 [ -z "$SERVE_URL" ] && { note "FAIL: no serve URL"; exit 1; }
 note "serve URL: $SERVE_URL"
 
