@@ -337,9 +337,12 @@ class Harness(pimm.ControlSystem):
         self.context = dict(context)
         if self._embodiment.simulated:
             # A sim trial that doesn't ask for latency simulation runs free of it: the world holds still for
-            # every model call. Hardware (no key) pays what the call really takes.
-            self.context.setdefault(keys.INFERENCE_LATENCY, False)
-        latency = self.context.get(keys.INFERENCE_LATENCY, True)
+            # every model call.
+            latency = self.context.setdefault(keys.INFERENCE_LATENCY, False)
+        else:
+            # The charge is a device for simulating a trial, so a real rig ignores it and pays the wall time
+            # its calls really take.
+            latency = True
         self._charge = None if latency is True else float(latency)
         self._awaiting_obs = set(self._embodiment.observations)
         self._rollout_started = False

@@ -1618,9 +1618,12 @@ class _TimedRecorder(pimm.SignalEmitter):
         self.emitted.append((self._clock.now(), data))
 
 
-def _run_sim_episode(world, policy, wrapper, *, latency, steps=4000, run_sec=1.5) -> list[tuple[float, Any]]:
-    """One sim trial under ``latency``; returns the grip commands with the world time each went out at."""
-    harness = Harness(wrapper.wrap(policy), make_embodiment(simulated=True))
+def _run_episode(
+    world, policy, wrapper, *, latency, simulated=True, steps=4000, run_sec=1.5
+) -> list[tuple[float, Any]]:
+    """One trial whose context asks for ``latency``; returns the grip commands with the world time each went
+    out at. A sim trial runs against a pacer, the sole time-master a real rig doesn't need."""
+    harness = Harness(wrapper.wrap(policy), make_embodiment(simulated=simulated))
     grip_recorder = _TimedRecorder(world.clock)
     harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
     harness.commands['target_grip']._bind(grip_recorder)
@@ -1637,7 +1640,8 @@ def _run_sim_episode(world, policy, wrapper, *, latency, steps=4000, run_sec=1.5
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
         (None, run_sec),
     ])
-    drive_scheduler(world.start([harness, driver, _Pacer()]), steps=steps)
+    systems = [harness, driver, _Pacer()] if simulated else [harness, driver]
+    drive_scheduler(world.start(systems), steps=steps)
     return grip_recorder.emitted[1:]  # drop the startup home
 
 
@@ -1645,7 +1649,7 @@ def _run_sim_episode(world, policy, wrapper, *, latency, steps=4000, run_sec=1.5
 def test_default_latency_pauses_the_world_for_the_call(world):
     """Sim's default charges nothing: the world does not advance while the model runs, so the chunk is
     anchored at the observation's own instant however long the call really took."""
-    played = _run_sim_episode(world, SlowPolicy(wall_sec=0.05), ChunkedSchedule(), latency=False)
+    played = _run_episode(world, SlowPolicy(wall_sec=0.05), ChunkedSchedule(), latency=False)
 
     assert played, 'no command was played'
     assert played[0][0] < 0.01, f'the world advanced during the call: first command at {played[0][0]}s'
@@ -1656,7 +1660,7 @@ def test_default_latency_pauses_the_world_for_the_call(world):
 def test_constant_latency_ignores_what_the_call_really_took(world, wall_sec):
     """The reproducible mode: the wrapper is released a constant delay after the call started, so the played
     trace is the same against a fast server and a slow one."""
-    played = _run_sim_episode(world, SlowPolicy(wall_sec=wall_sec), ChunkedSchedule(), latency=0.3)
+    played = _run_episode(world, SlowPolicy(wall_sec=wall_sec), ChunkedSchedule(), latency=0.3)
 
     assert played, 'no command was played'
     assert played[0][0] == pytest.approx(0.3, abs=0.02), f'first command at {played[0][0]}s, expected the 0.3s delay'
@@ -1666,17 +1670,27 @@ def test_constant_latency_ignores_what_the_call_really_took(world, wall_sec):
 def test_measured_latency_charges_the_calls_own_wall_duration(world):
     """``inference_latency=True`` charges the world what the model really took, so a slow server is scored
     as slow — at the cost of a trace that inherits the machine's noise."""
-    played = _run_sim_episode(world, SlowPolicy(wall_sec=0.2), ChunkedSchedule(), latency=True)
+    played = _run_episode(world, SlowPolicy(wall_sec=0.2), ChunkedSchedule(), latency=True)
 
     assert played, 'no command was played'
     assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the call took'
 
 
 @pytest.mark.timeout(20.0)
+def test_a_real_rig_ignores_the_latency_a_trial_asks_for(world):
+    """The charge simulates a trial; a real rig pays what its calls take, so a context carrying a constant
+    (the eval CLI writes one into every trial) does not hold the chunk back for it."""
+    played = _run_episode(world, SlowPolicy(), ChunkedSchedule(), latency=5.0, simulated=False)
+
+    assert played, 'no command was played'
+    assert played[0][0] < 1.0, f"first command at {played[0][0]}s: the trial's 5s charge was honoured"
+
+
+@pytest.mark.timeout(20.0)
 def test_harness_keeps_playing_while_a_call_is_in_flight(world):
     """A wrapper that replans before its chunk is exhausted leaves waypoints due during inference, and the
     harness emits them on time instead of standing still until the model answers."""
-    played = _run_sim_episode(world, SlowPolicy(span_sec=0.4, steps=20), _ReplanEarly(), latency=0.15)
+    played = _run_episode(world, SlowPolicy(span_sec=0.4, steps=20), _ReplanEarly(), latency=0.15)
 
     # The second call starts halfway through the first chunk (0.2s in) and is owed 0.15s; the waypoints due
     # in that window have to keep going out.
