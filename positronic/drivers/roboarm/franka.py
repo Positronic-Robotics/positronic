@@ -3,7 +3,7 @@ import logging
 import os
 import time
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator
+from collections.abc import Callable, Generator, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -25,13 +25,17 @@ def _check_error(is_error, was_error):
     return is_error, is_error and not was_error
 
 
+DESK_USER_ENV = 'FRANKA_DESK_USER'
+DESK_PASSWORD_ENV = 'FRANKA_DESK_PASSWORD'
+
+
 def _read_desk_credentials() -> tuple[str, str]:
     """Franka Desk login and password from the environment. Credentials stay out of the config so they never reach
     the command line, which is recorded verbatim in every run's metadata."""
-    login, password = os.environ.get('FRANKA_DESK_USER'), os.environ.get('FRANKA_DESK_PASSWORD')
+    login, password = os.environ.get(DESK_USER_ENV), os.environ.get(DESK_PASSWORD_ENV)
     if not (login and password):
         missing = ' and '.join(
-            name for name, value in (('FRANKA_DESK_USER', login), ('FRANKA_DESK_PASSWORD', password)) if not value
+            name for name, value in ((DESK_USER_ENV, login), (DESK_PASSWORD_ENV, password)) if not value
         )
         raise RuntimeError(
             f'{missing} not set in the environment. The driver needs Desk credentials to open the brakes and '
@@ -112,11 +116,12 @@ class Robot(pimm.ControlSystem):
         collision_coeff: float = 2.0,
         manage_desk: bool = True,
         reboot_on_safety_error: bool = False,
+        park_timeout_s: float = 10.0,
     ) -> None:
         """
         :param ip: IP address of the robot.
         :param relative_dynamics_factor: Relative dynamics factor in [0, 1]. Smaller values are more conservative.
-        :param home_joints: Joints of "reset" position.
+        :param home_joints: Joints of "reset" position, and the pose the arm is parked at when the run ends.
         :param home_joints_variation: Max random deviation per joint in radians. Set to [0]*7 to disable.
         :param collision_coeff: Multiplier for collision thresholds. Higher = more tolerant.
             Default 2.0 (data collection). Use 6.0 for inference.
@@ -127,6 +132,8 @@ class Robot(pimm.ControlSystem):
         :param reboot_on_safety_error: When the control box is in an unrecoverable ``SafetyError`` on start, reboot
             it, wait for it to come back, and try once more before giving up. Only applies when ``manage_desk`` is
             set.
+        :param park_timeout_s: How long the arm may travel back to ``home_joints`` when the run ends before the
+            driver gives up and stops control where it stands. It is spent inside the world's teardown budget.
         """
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
@@ -144,6 +151,7 @@ class Robot(pimm.ControlSystem):
         self._robot: pf.Robot | None = None
         self._desk_credentials = _read_desk_credentials() if manage_desk else None
         self._reboot_on_safety_error = reboot_on_safety_error
+        self._park_timeout_s = park_timeout_s
 
     @staticmethod
     def _build_robot_meta(robot) -> dict:
@@ -213,6 +221,25 @@ class Robot(pimm.ControlSystem):
         else:
             robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
 
+    @staticmethod
+    def _travel(robot, target, should_stop: Callable[[], bool]) -> Generator[pimm.Sleep, None, bool]:
+        """Command ``target`` and poll the goal until the arm arrives; raise if the goal stops advancing.
+
+        Returns whether the arm arrived: ``False`` means ``should_stop`` ended the wait first. It is asked
+        before each poll and never after one, so a caller that gives up never reads a goal it has already
+        given up on.
+        """
+        POLL_INTERVAL_S = 0.005
+        robot.set_target_joints(target)
+        while not should_stop():
+            goal = robot.goal()
+            if goal.status == pf.GoalStatus.REACHED:
+                return True
+            if goal.status != pf.GoalStatus.IN_FLIGHT:
+                raise RuntimeError(f'homing failed: {goal.reason or goal.status}')
+            yield pimm.Sleep(POLL_INTERVAL_S)
+        return False
+
     def _reset(self, robot, robot_state: FrankaState, rate_limiter, should_stop) -> Iterator[pimm.Sleep]:
         """Home the arm, yielding until it arrives. Drive with ``yield from``."""
         # The first emit must not ship an unfilled state.
@@ -226,17 +253,8 @@ class Robot(pimm.ControlSystem):
                 -np.asarray(self._home_joints_variation), np.asarray(self._home_joints_variation)
             )
             target = target + variation
-        robot.set_target_joints(target)
 
-        while True:
-            if should_stop.value:
-                return
-            goal = robot.goal()
-            if goal.status == pf.GoalStatus.REACHED:
-                break
-            if goal.status != pf.GoalStatus.IN_FLIGHT:
-                raise RuntimeError(f'homing failed: {goal.reason or goal.status}')
-
+        for _ in self._travel(robot, target, lambda: should_stop.value):
             st = robot.state()
             robot_state.encode(st)
             robot_state._start_reset()  # `encode` clears RESETTING; the arm has not arrived
@@ -245,6 +263,8 @@ class Robot(pimm.ControlSystem):
                 robot.recover_from_errors()
             yield rate_limiter.wait()
 
+        if should_stop.value:  # the travel gave up on the stop rather than on arrival
+            return
         robot_state._finish_reset()
         self.state.emit(robot_state)
 
@@ -273,6 +293,30 @@ class Robot(pimm.ControlSystem):
                         logging.info('Control box recovered after reboot')
                     yield desk
                     return
+
+    def _park(self, robot) -> Iterator[pimm.Sleep]:
+        """Move the arm to the home pose, giving up after ``park_timeout_s``. Drive with ``yield from``.
+
+        Runs after the control loop rather than in its ``finally``, so that only a stop request earns it.
+        Answering a setup or control fault with a recovery and a fresh joint target would be autonomous
+        motion in response to something going wrong.
+
+        The motion itself is bounded: at the configured dynamics factor, to the configured ``home_joints``
+        and nowhere else. An arm already there arrives immediately, so arrival is the controller's to
+        report rather than something to pre-check. Every failure — including a goal that stops advancing —
+        reaches the log and no further.
+        """
+        target = np.asarray(self._home_joints, dtype=np.float64)
+        try:
+            logging.info('Parking the arm at the home pose')
+            robot.recover_from_errors()  # once, before the move: a reflex during the move ends the park
+            deadline = time.monotonic() + self._park_timeout_s
+            arrived = yield from self._travel(robot, target, lambda: time.monotonic() >= deadline)
+            if not arrived:
+                logging.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
+        # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
+        except Exception:
+            logging.exception('Parking failed, the arm stays where it stands')
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         with self._desk_session():
@@ -336,6 +380,8 @@ class Robot(pimm.ControlSystem):
                                 raise NotImplementedError(f'Unsupported command {cmd}')
 
                     yield rate_limiter.wait()
+
+                yield from self._park(robot)
             finally:
                 # Halt the driver's control thread before _desk_session deactivates FCI, or it dies mid-control
                 # with "TCP connection got interrupted".

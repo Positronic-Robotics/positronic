@@ -366,7 +366,7 @@ def uph_sim(episode: Episode) -> float | None:
     return 1 / (t / 3600)
 
 
-sim_episodes = base_cfg.transform.override(
+stacking_episodes = base_cfg.transform.override(
     base=base_cfg.local_all,
     transforms=[
         Group(
@@ -389,7 +389,7 @@ sim_episodes = base_cfg.transform.override(
 
 
 @cfn.config()
-def sim_episodes_table():
+def stacking_episodes_table():
     return {
         '__index__': C(label='#', format='%d'),
         '__duration__': C(label='Duration', format='%.2f sec'),
@@ -416,7 +416,7 @@ def _effective_duration(key: str, ep: Episode) -> float:
 
 
 @cfn.config()
-def sim_checkpoint_table():
+def stacking_checkpoint_table():
     """Grouped table by checkpoint with UPH and MTBF metrics."""
 
     def group_fn(episodes: list[Episode]):
@@ -490,8 +490,8 @@ def calculate_units(episode: Episode) -> int:  # noqa: C901
     if episode[keys.TASK] in FIXED_ITEM_COUNTS:
         return FIXED_ITEM_COUNTS[episode[keys.TASK]]
 
-    if 'target_grip' in episode.signals:
-        grip_sig = episode.signals['target_grip']
+    if keys.TARGET_GRIP in episode.signals:
+        grip_sig = episode.signals[keys.TARGET_GRIP]
     elif keys.GRIP in episode.signals:
         grip_sig = episode.signals[keys.GRIP]
     else:
@@ -903,8 +903,8 @@ def phail_leaderboard():
 # Pre-configured servers
 # ========================================================================================
 #
-# Sim evaluation:
-#   uv run --locked python -m positronic.cfg.analysis sim --dataset.base.path=s3://inference/sim_stack_validation/090226/
+# Cube-stacking evaluation:
+#   uv run --locked python -m positronic.cfg.analysis stacking --dataset.base.path=s3://inference/sim_stack_validation/090226/
 #
 # Real (unified) evaluation:
 #   uv run --locked python -m positronic.cfg.analysis real --dataset.base.path=s3://inference/real/191225/
@@ -921,10 +921,10 @@ server = server_main.override(
     port=5001,
 )
 
-sim_server = server_main.override(
-    dataset=sim_episodes,
-    ep_table_cfg=sim_episodes_table,
-    group_tables={'checkpoints': sim_checkpoint_table},
+stacking_server = server_main.override(
+    dataset=stacking_episodes,
+    ep_table_cfg=stacking_episodes_table,
+    group_tables={'checkpoints': stacking_checkpoint_table},
     home_page='checkpoints',
     port=5001,
 )
@@ -940,4 +940,4 @@ phail_server = server_main.override(
 if __name__ == '__main__':
     init_logging()
     with pos3.mirror():
-        cfn.cli({'sim': sim_server, 'real': server, 'phail': phail_server})
+        cfn.cli({'stacking': stacking_server, 'real': server, 'phail': phail_server})

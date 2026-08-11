@@ -112,6 +112,7 @@ class KinovaAPI:
         if self.base.GetArmState().active_state == Base_pb2.ARMSTATE_IN_FAULT:
             self.base.ClearFaults()
             while self.base.GetArmState().active_state != Base_pb2.ARMSTATE_SERVOING_READY:
+                # blocking-sleep-ok: connect-time handshake, before any control loop exists to yield from
                 time.sleep(0.1)
         # Initialize control loop
         self.base.SetServoingMode(Base_pb2.ServoingModeInformation(servoing_mode=Base_pb2.LOW_LEVEL_SERVOING))

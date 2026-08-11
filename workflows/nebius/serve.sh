@@ -1,25 +1,30 @@
 #!/usr/bin/env bash
 # Submit a Nebius Serverless Endpoint running a vendor inference server.
 #
-# After creation, polls until a public IP is allocated and prints connection
-# details. The container itself takes ~10-15 min more to finish uv sync and
-# load the model into GPU memory after the IP appears.
+# The endpoint gets no public IP: Nebius fronts every HTTP container port with a
+# managed https:// URL, which is what this polls for and prints. The container
+# itself takes ~10-15 min more to finish uv sync and load the model into GPU
+# memory after the URL appears.
 #
-# Hardcoded: GPU platform, MysteryBox secret names, S3 endpoint URL,
-# container port. Vendor selects image + uv extra. Override-able via env:
-# NEBIUS_PARENT_ID, NEBIUS_SUBNET_ID.
+# That URL carries the id of a tunnel created with the endpoint, so it cannot be
+# chosen or known in advance, and a delete plus re-create earns a new one even
+# under the same name. Nothing may hold it across a redeploy. `nebius ai endpoint
+# stop`/`start` keeps it where `stop.sh` would not; a URL that survives re-create
+# needs a standalone `nebius tunnel` and its agent in the container. See the
+# README's "The managed URL is assigned, not chosen".
+#
+# The server is gated on a bearer token (AUTH_TOKEN, from MysteryBox). Auth is
+# in-process rather than `nebius ai endpoint create --auth token`, because that
+# ingress mode strips the WebSocket upgrade headers and so cannot pass inference
+# sessions at all.
+#
+# Hardcoded: GPU platform, container port. Vendor selects image + uv extra. One
+# setting of its own, via env: NEBIUS_PRESET. Everything shared with the other
+# scripts here lives in common.sh.
 
 set -euo pipefail
+source "$(dirname "$0")/common.sh"
 
-PARENT_ID="${NEBIUS_PARENT_ID:-project-e00f38wexevrr52b8j}"
-SUBNET_ID="${NEBIUS_SUBNET_ID:-vpcsubnet-e00pk1j1x6hjmr4m92}"
-# Shared filesystem (RWX) holding the uv / HF / openpi caches across cold starts.
-# pos3's cache stays on local disk (~/.cache/positronic/s3) — never redirected here.
-CACHE_FS="${NEBIUS_CACHE_FS:-computefilesystem-e00f6jyfr5wkawyrab}"
-# Docker image tag pulled by the endpoint. `make push-*` only updates `:latest`
-# under CI; locally it pushes `:<branch>`/`:<sha>`. To serve a branch build:
-# `make push-<x> IMAGE_TAG=<branch>` then run with `NEBIUS_IMAGE_TAG=<branch>`.
-IMAGE_TAG="${NEBIUS_IMAGE_TAG:-latest}"
 # Nebius GPU preset. Default is one H100; multi-GPU presets must match the server's GPU count
 # (DreamZero's --num_gpus runs torchrun --nproc_per_node, so an 8-GPU server needs an 8-GPU preset).
 PRESET="${NEBIUS_PRESET:-1gpu-16vcpu-200gb}"
@@ -103,11 +108,11 @@ nebius ai endpoint create \
   --env UV_CACHE_DIR=/cache/uv \
   --env HF_HOME=/cache/hf \
   --env OPENPI_DATA_HOME=/cache/openpi \
-  --env-secret AWS_ACCESS_KEY_ID=positronic-serverless-aws-access-key-id \
-  --env-secret AWS_SECRET_ACCESS_KEY=positronic-serverless-aws-secret-access-key \
-  --env AWS_ENDPOINT_URL=https://storage.eu-north1.nebius.cloud:443 \
-  --env AWS_DEFAULT_REGION=eu-north1 \
-  --public >/dev/null
+  --env-secret "${AUTH_TOKEN_KEY}=${AUTH_TOKEN_SECRET}" \
+  "${S3_ENV_FLAGS[@]}"
+# Left on stdout, not discarded: `create` reports `Endpoint ID:` as soon as the resource exists and can
+# still fail afterwards — a container that will not start does exactly that — so a caller logging this
+# output learns what to release even on the paths where this script never reaches its banner.
 
 ID=$(nebius ai endpoint list --parent-id "$PARENT_ID" --format json \
   | jq -r --arg n "$NAME" '.items[]? | select(.metadata.name==$n) | .metadata.id')
@@ -118,25 +123,27 @@ if [ -z "$ID" ]; then
 fi
 
 echo "Endpoint ID: $ID"
-echo "Waiting for public IP (typically <1 min)..."
+echo "Waiting for the managed HTTPS URL (typically <1 min)..."
 
-IP=""
+URL=""
 for i in $(seq 1 30); do
-  IP=$(nebius ai endpoint get "$ID" --format json 2>/dev/null \
-    | jq -r '.status.public_endpoints[0]? // empty')
-  if [ -n "$IP" ]; then break; fi
+  # This field also carries bare `IP:port` entries, which serve no TLS and would put the bearer token
+  # on the wire in cleartext — take the https:// one, and fail rather than fall back.
+  URL=$(nebius ai endpoint get "$ID" --format json 2>/dev/null \
+    | jq -r '[.status.public_endpoints[]? | select(startswith("https://"))] | first // empty')
+  if [ -n "$URL" ]; then break; fi
   sleep 10
 done
 
-if [ -z "$IP" ]; then
-  echo "Public IP not allocated within 5 min. Check: nebius ai endpoint get $ID" >&2
+if [ -z "$URL" ]; then
+  echo "No managed https:// URL within 5 min. Check: nebius ai endpoint get $ID" >&2
   exit 1
 fi
 
 cat <<BANNER
 
 ==============================================================
-  Endpoint URL:  http://$IP
+  Endpoint URL:  $URL
   Endpoint ID:   $ID
   Endpoint name: $NAME
   Vendor:        $VENDOR
@@ -147,11 +154,12 @@ The container is still warming up (image pull + uv sync + checkpoint load,
 
   nebius ai endpoint logs $ID --follow
 
-Once the model is loaded, sanity-check with:
+Once the model is loaded, sanity-check with (see workflows/nebius/README.md
+for loading AUTH_TOKEN out of MysteryBox):
 
-  curl http://$IP/api/v1/models
+  curl -H "Authorization: Bearer \$AUTH_TOKEN" $URL/api/v1/models
 
-To release the endpoint and its public IP:
+To release the endpoint:
 
   bash workflows/nebius/stop.sh $NAME
 

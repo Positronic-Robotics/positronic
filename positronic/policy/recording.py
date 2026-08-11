@@ -60,7 +60,7 @@ from positronic.policy.base import DelegatingSession, PolicyWrapper, Session
 from positronic.policy.codec import is_action
 from positronic.utils.rerun_compat import log_numeric_series, set_timeline_sequence, set_timeline_time
 
-DEFAULT_TIMELINES = {'wall_time': 'wall_time_ns', 'obs_time': 'obs_time_ns'}
+DEFAULT_TIMELINES = {'wall_time': obs_keys.WALL_TIME_NS, 'obs_time': obs_keys.OBS_TIME_NS}
 
 # Process-wide episode counter so files stay unique even across concurrent
 # ``Recorder`` instances (e.g. one per websocket session on a server).
@@ -165,8 +165,8 @@ def _command_field_arrays(key: str, commands: list, horizons: np.ndarray) -> lis
 
 def _horizon(actions: list[dict]) -> np.ndarray:
     """Relative chunk time (seconds) used as the curve x-axis, falling back to action index."""
-    if actions and all('timestamp' in a for a in actions):
-        ts = _stack_numeric([a['timestamp'] for a in actions])
+    if actions and all(obs_keys.ACTION_TIMESTAMP in a for a in actions):
+        ts = _stack_numeric([a[obs_keys.ACTION_TIMESTAMP] for a in actions])
         if ts is not None and ts.ndim == 1:
             return ts.astype(np.float64)
     return np.arange(len(actions), dtype=np.float64)
@@ -388,7 +388,11 @@ class _RecordingTapSession(DelegatingSession):
         horizon = _horizon(actions)
         tv = self._rec._timeline_values
         base_ns = int(tv.get('obs_time', tv.get('wall_time', next(iter(tv.values()), 0))))
-        grip = _stack_numeric([a['target_grip'] for a in actions]) if all('target_grip' in a for a in actions) else None
+        grip = (
+            _stack_numeric([a[obs_keys.TARGET_GRIP] for a in actions])
+            if all(obs_keys.TARGET_GRIP in a for a in actions)
+            else None
+        )
         actual_pos = obs.get(obs_keys.EE_POSE) if isinstance(obs, Mapping) else None
         actual_grip = obs.get(obs_keys.GRIP) if isinstance(obs, Mapping) else None
         # Under TemporalStack these arrive as (T, 7) / (T,) stacks; the overlay draws the current pose,
@@ -401,7 +405,7 @@ class _RecordingTapSession(DelegatingSession):
         keys: list[str] = []
         for action in actions:
             for key in action:
-                if key not in keys and key != 'timestamp':
+                if key not in keys and key != obs_keys.ACTION_TIMESTAMP:
                     keys.append(key)
         for key in keys:
             idx = [i for i, a in enumerate(actions) if key in a]

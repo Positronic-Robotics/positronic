@@ -1,10 +1,6 @@
-import sys
-from pathlib import Path
-
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import generate_mujoco_stubs as gms  # noqa: E402
+from utilities import generate_mujoco_stubs as gms
 
 
 def test_machine_specific_constants_keep_their_type_and_lose_their_value():

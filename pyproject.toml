@@ -190,10 +190,13 @@ addopts = [
     "--cov=positronic",
     "--cov-report=term-missing",
     # Needs the `libero` extra and OSMesa; `libero-e2e.yaml` runs it by path, which `--ignore` allows.
-    "--ignore=positronic/simulator/libero/tests",
+    "--ignore=positronic/simulator/libero/tests/test_e2e.py",
 ]
 filterwarnings = [
     "ignore:.*DISPLAY environment variable is missing:glfw.GLFWError",
+]
+markers = [
+    "endpoint: what a served endpoint must do. Runs in-process, or against POSITRONIC_ENDPOINT_URL when it names one",
 ]
 
 [tool.coverage.run]
