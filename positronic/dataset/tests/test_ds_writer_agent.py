@@ -1,4 +1,5 @@
 import json
+import logging
 import pickle
 from functools import partial
 from typing import Any, cast
@@ -19,6 +20,7 @@ from positronic.dataset.ds_writer_agent import (
 )
 from positronic.dataset.local_dataset import DISCARD_MARKER, DISCARD_REASON, LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.dataset.vector import SimpleSignalWriter
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as rcmd
 from positronic.tests.testing_coutils import ManualCommandReceiver, drive_until, run_scripted_agent
@@ -130,6 +132,19 @@ def test_an_episode_still_open_when_the_run_stops_is_discarded(world):
     assert [(s, v) for (s, v, _, _) in w.appends] == [('a', 42)]
     assert w.discarded is DiscardReason.RUN_ENDED
     assert w.exited is True
+
+
+def test_the_run_ended_discard_is_logged_under_its_own_reason(world, caplog):
+    ds = FakeDatasetWriter()
+    agent, cmd_em, _ = build_agent_with_pipes({'a': None}, ds, world)
+
+    script = [(partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001)]
+
+    with caplog.at_level(logging.INFO, logger='positronic.dataset.ds_writer_agent'):
+        run_scripted_agent(agent, script, world=world)
+
+    assert f'[DISCARD {DiscardReason.RUN_ENDED.value}] Episode 1' in caplog.text
+    assert '[ABORT]' not in caplog.text  # the operator aborted nothing
 
 
 def test_an_episode_that_fails_to_discard_is_not_finalized(world):
@@ -320,6 +335,42 @@ def test_run_stopping_mid_episode_keeps_the_recording_outside_the_dataset(tmp_pa
     assert len(discarded) == 1
     assert (discarded[0] / 'a.parquet').exists()
     assert json.loads((discarded[0] / DISCARD_MARKER).read_text())[DISCARD_REASON] == DiscardReason.RUN_ENDED.value
+
+
+def test_a_run_ending_after_a_failed_abort_still_moves_the_episode_out(tmp_path, world, monkeypatch, caplog):
+    root = tmp_path / 'ds'
+    real_exit = SimpleSignalWriter.__exit__
+    failures_left = [1]
+
+    def fail_once(self, exc_type, exc, tb):
+        real_exit(self, exc_type, exc, tb)
+        if failures_left[0]:
+            failures_left[0] -= 1
+            raise RuntimeError('encoder failed')
+
+    monkeypatch.setattr(SimpleSignalWriter, '__exit__', fail_once)
+
+    with LocalDatasetWriter(root) as writer:
+        agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, writer, world)
+
+        script = [
+            (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE, {keys.TASK: 'unit'})), 0.001),
+            (partial(emitters['a'].emit, 10), 0.001),
+            (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.ABORT_EPISODE)), 0.001),
+        ]
+
+        with caplog.at_level(logging.INFO, logger='positronic.dataset.ds_writer_agent'):
+            with pytest.raises(RuntimeError, match='encoder failed'):
+                run_scripted_agent(agent, script, world=world)
+
+    # The abort's discard failed part-way; the run's teardown finished it rather than reporting a move nobody made.
+    assert len(LocalDataset(root)) == 0
+    assert not list(root.glob('*/*/a.parquet'))
+    discarded = list((tmp_path / 'ds.discarded').iterdir())
+    assert len(discarded) == 1
+    assert (discarded[0] / 'a.parquet').exists()
+    assert json.loads((discarded[0] / DISCARD_MARKER).read_text())[DISCARD_REASON] == DiscardReason.ABORTED.value
+    assert f'[DISCARD {DiscardReason.RUN_ENDED.value}] Episode 1' in caplog.text
 
 
 def test_a_committed_episode_is_never_swept_into_the_discarded_dir(tmp_path, world):

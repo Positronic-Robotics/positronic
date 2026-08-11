@@ -258,15 +258,20 @@ class DsWriterAgent(pimm.ControlSystem):
             # Commands left in the channel are not read here: a STOP the loop never saw would commit an
             # episode missing every sample queued behind it, as a complete recording.
             if ep_writer is not None:
+                # Its own tag: an operator's ABORT and a run that ended under an open episode are different
+                # events, and a log that calls both [ABORT] cannot tell them apart afterwards.
+                tag = f'[DISCARD {DiscardReason.RUN_ENDED.value}]'
                 try:
                     ep_writer.discard(DiscardReason.RUN_ENDED)
                 except Exception:
                     # __exit__ finalizes and commits, which is the wrong move for an episode that failed to
                     # discard; it stays unfinished instead. Teardown carries on — the run is already ending.
-                    logger.exception(f'DsWriterAgent: [ABORT] Episode {ep_counter} could not be discarded')
+                    logger.exception(f'DsWriterAgent: {tag} Episode {ep_counter} could not be discarded')
                 else:
+                    # A return means the episode is out of the dataset, including when this call retried one an
+                    # earlier discard left part-done — so the success below is the move, not the attempt.
                     ep_writer.__exit__(None, None, None)
-                    logger.info(f'DsWriterAgent: [ABORT] Episode {ep_counter}')
+                    logger.info(f'DsWriterAgent: {tag} Episode {ep_counter}')
 
     def _handle_command(  # noqa: C901
         self, cmd: DsWriterCommand, ep_writer: EpisodeWriter | None, ep_counter: int, now_ns: int | None = None

@@ -186,7 +186,12 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
 
     @abstractmethod
     def discard(self, reason: DiscardReason) -> None:
-        """Stop recording and drop the episode from the dataset."""
+        """Stop recording and drop the episode from the dataset.
+
+        Returns only once the episode is out; one that did not get out raises, and a later call retries it. A
+        caller may read a return as the drop having landed, and must not read a raise as the episode being safe
+        to commit — `__exit__` refuses it from the first attempt onwards.
+        """
         pass
 
     @property

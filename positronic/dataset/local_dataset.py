@@ -125,7 +125,11 @@ class DiskEpisodeWriter(EpisodeWriter):
         # Accumulated static items to be stored in a single static.json
         self._static_items: dict[str, Any] = {}
         self._finished = False
-        self._discarded = False
+        # Why a discard was asked for, set before the first step of it that can fail: from then on `__exit__`
+        # commits nothing, whether or not the discard reached the end.
+        self._discard_reason: DiscardReason | None = None
+        # The move into the discarded tree landed. Until then the discard is unfinished and a later call retries it.
+        self._discard_completed = False
         self._on_close = on_close
         self._video_options = video_options
 
@@ -155,7 +159,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         """
         if self._finished:
             raise RuntimeError(f'Cannot append to a finished writer {self._path}')
-        if self._discarded:
+        if self._discard_reason is not None:
             raise RuntimeError(f'Cannot append to a discarded writer {self._path}')
         if signal_name in self._static_items:
             raise ValueError(f"Static item '{signal_name}' already set for this episode {self._path}")
@@ -189,7 +193,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         """
         if self._finished:
             raise RuntimeError('Cannot set static on a finished writer')
-        if self._discarded:
+        if self._discard_reason is not None:
             raise RuntimeError('Cannot set static on a discarded writer')
         if name in self._writers:
             raise ValueError(f"Signal '{name}' already exists for this episode")
@@ -248,7 +252,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         """Finalize all signal writers and persist static items on context exit."""
         # A discarded episode is never committed, whether the discard completed or failed part-way: this method
         # clears the unfinished marker, which would publish it as a complete recording.
-        if self._discarded:
+        if self._discard_reason is not None:
             return
         if exc_type is not None:
             try:
@@ -304,14 +308,17 @@ class DiskEpisodeWriter(EpisodeWriter):
         directory returned to a dataset root is still not read as an episode.
 
         A discard that fails part-way raises, and leaves the episode where it fell — unfinished, and never
-        committed. That is the same end state as a process killed outright.
+        committed. That is the same end state as a process killed outright. Calling this again retries from the
+        start and can still finish the job, so only a return means the episode is out of the dataset. The
+        marker keeps the reason the first attempt gave: that is why the episode left, and a retry that names
+        the run ending only finished a move the abort began.
         """
-        if self._discarded:
+        if self._discard_completed:
             return
         if self._finished:
             raise RuntimeError('Cannot discard a finished writer')
-        # Before the first step that can fail: __exit__ commits an episode this flag does not cover.
-        self._discarded = True
+        # Before the first step that can fail: __exit__ commits an episode this does not cover.
+        self._discard_reason = self._discard_reason or reason
 
         failure: Exception | None = None
         for w in list(self._writers.values()):
@@ -324,7 +331,11 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         self._write_static_and_meta()
 
-        marker = {DISCARD_REASON: reason.value, DISCARD_TS_NS: time.time_ns(), DISCARD_UID: self._meta[META_UID]}
+        marker = {
+            DISCARD_REASON: self._discard_reason.value,
+            DISCARD_TS_NS: time.time_ns(),
+            DISCARD_UID: self._meta[META_UID],
+        }
         with (self._path / DISCARD_MARKER).open('w', encoding='utf-8') as f:
             json.dump(marker, f, indent=2)
 
@@ -333,6 +344,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         # the name is not assumed free: an id+uid pair can be discarded more than once.
         destination = self._free_destination(self._discarded_dir, f'{self._path.name}-{self._meta[META_UID]}')
         shutil.move(self._path, destination)
+        self._discard_completed = True
 
     @property
     def meta(self) -> dict:

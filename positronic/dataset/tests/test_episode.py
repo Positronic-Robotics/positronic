@@ -301,6 +301,41 @@ def test_a_discard_whose_finalization_fails_leaves_the_episode_unfinished(tmp_pa
     assert committed == []
 
 
+def test_a_second_discard_finishes_the_move_the_failed_one_left(tmp_path, monkeypatch):
+    ep_dir = tmp_path / 'ep_discard_retry'
+    committed: list[DiskEpisodeWriter] = []
+    w = DiskEpisodeWriter(ep_dir, discarded_dir=tmp_path / 'discarded', on_close=committed.append)
+    w.append('a', 1, 1000)
+    uid = w.meta[META_UID]
+
+    real_exit = SimpleSignalWriter.__exit__
+    failures_left = [1]
+
+    def fail_once(self, exc_type, exc, tb):
+        real_exit(self, exc_type, exc, tb)
+        if failures_left[0]:
+            failures_left[0] -= 1
+            raise RuntimeError('encoder failed')
+
+    monkeypatch.setattr(SimpleSignalWriter, '__exit__', fail_once)
+
+    with pytest.raises(RuntimeError, match='encoder failed'):
+        w.discard(DiscardReason.ABORTED)
+    assert ep_dir.exists()  # the failed attempt left it in the dataset root
+
+    w.discard(DiscardReason.RUN_ENDED)  # what the run's teardown does with the episode still open
+
+    assert not ep_dir.exists()
+    discarded = tmp_path / 'discarded' / f'ep_discard_retry-{uid}'
+    assert (discarded / 'a.parquet').exists()
+    assert (discarded / UNFINISHED_MARKER).exists()
+    # The abort is why the episode left the dataset; the retry only finished the move it began.
+    assert json.loads((discarded / DISCARD_MARKER).read_text())[DISCARD_REASON] == DiscardReason.ABORTED.value
+
+    w.__exit__(None, None, None)
+    assert committed == []
+
+
 def test_episode_writer_keeps_a_finished_episode_out_of_the_discarded_dir(tmp_path):
     ep_dir = tmp_path / 'ep_done'
     with DiskEpisodeWriter(ep_dir, discarded_dir=tmp_path / 'discarded') as w:
