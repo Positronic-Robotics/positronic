@@ -490,8 +490,8 @@ def calculate_units(episode: Episode) -> int:  # noqa: C901
     if episode[keys.TASK] in FIXED_ITEM_COUNTS:
         return FIXED_ITEM_COUNTS[episode[keys.TASK]]
 
-    if 'target_grip' in episode.signals:
-        grip_sig = episode.signals['target_grip']
+    if keys.TARGET_GRIP in episode.signals:
+        grip_sig = episode.signals[keys.TARGET_GRIP]
     elif keys.GRIP in episode.signals:
         grip_sig = episode.signals[keys.GRIP]
     else:

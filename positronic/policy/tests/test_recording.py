@@ -95,7 +95,7 @@ def test_tap_delegates_inner_call(tmp_path):
     actions = [{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.1}]
     policy = Recorder(tmp_path).tap('t').wrap(_TrackingPolicy(actions))
     session = policy.new_session()
-    result = session({'x': 1.0, 'wall_time_ns': 1_000_000})
+    result = session({'x': 1.0, keys.WALL_TIME_NS: 1_000_000})
     assert result == actions
 
 
@@ -109,7 +109,7 @@ def test_obs_log_filtering_uses_pure_tap_names(tmp_path):
     rec = Recorder(tmp_path)
     session = rec.tap('cam').wrap(_TrackingPolicy([{'v': 1.0, 'timestamp': 0.0}])).new_session()
     session({
-        'wall_time_ns': 1_000_000,
+        keys.WALL_TIME_NS: 1_000_000,
         keys.TASK: 'pick up the cube',
         'camera': np.zeros((4, 4, 3), dtype=np.uint8),
         'joint_pos': np.array([1.0, 2.0], dtype=np.float32),
@@ -136,7 +136,7 @@ def test_logs_command_chunk_without_mutating(tmp_path):
         {keys.ROBOT_COMMAND: CartesianPosition(pose=pose), 'target_grip': 0.6, 'timestamp': 0.1},
     ]
     session = Recorder(tmp_path).tap('t').wrap(_TrackingPolicy(actions)).new_session()
-    result = session({'x': 1.0, 'wall_time_ns': 1})
+    result = session({'x': 1.0, keys.WALL_TIME_NS: 1})
     assert result[0][keys.ROBOT_COMMAND] is actions[0][keys.ROBOT_COMMAND]  # unchanged on return
 
 
@@ -174,7 +174,7 @@ def test_two_taps_log_both_seams(tmp_path):
     actions = [{'v': 1.0, 'timestamp': 0.0}]
     policy = (rec.tap('raw') | rec.tap('server')).wrap(_TrackingPolicy(actions))
     session = policy.new_session()
-    session({'camera': np.zeros((4, 4, 3), dtype=np.uint8), 'wall_time_ns': 1})
+    session({'camera': np.zeros((4, 4, 3), dtype=np.uint8), keys.WALL_TIME_NS: 1})
 
     assert 'raw/camera' in rec._image_paths
     assert 'server/camera' in rec._image_paths
@@ -187,7 +187,7 @@ def test_timeline_values_captured_once_and_carried(tmp_path):
     policy = (rec.tap('raw') | rec.tap('server')).wrap(inner)
     session = policy.new_session()
 
-    session({'wall_time_ns': 111, 'obs_time_ns': 222, 'x': 1.0})
+    session({keys.WALL_TIME_NS: 111, keys.OBS_TIME_NS: 222, 'x': 1.0})
 
     # Both taps entered before the inner session ran, and both share the values
     # captured once from the raw obs at the outermost tap.
@@ -203,7 +203,7 @@ def test_partial_timelines_only_set_present_keys(tmp_path):
     inner = _CapturingPolicy(rec, [{'v': 1.0, 'timestamp': 0.0}])
     session = rec.tap('raw').wrap(inner).new_session()
 
-    session({'wall_time_ns': 555, 'x': 1.0})  # no obs_time_ns
+    session({keys.WALL_TIME_NS: 555, 'x': 1.0})  # no obs_time_ns
     assert inner.last_session.seen_timeline_values == {'wall_time': 555}
 
 

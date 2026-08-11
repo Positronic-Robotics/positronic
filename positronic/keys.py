@@ -14,6 +14,9 @@ ROBOT_COMMAND = 'robot_command'
 TARGET_EE_POSE = f'{ROBOT_COMMAND}.pose'
 TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
 
+# The gripper's command channel: a scalar target beside the arm's ``ROBOT_COMMAND``.
+TARGET_GRIP = 'target_grip'
+
 
 def is_robot_command(name: str) -> bool:
     """Whether ``name`` is in the robot-command family: ``robot_command``, or an arm's ``robot_command.{side}``.
@@ -30,6 +33,14 @@ GRIP = 'grip'
 TASK = 'task'
 WRIST_IMAGE = 'image.wrist'
 EXTERIOR_IMAGE = 'image.exterior'
+
+# The harness stamps each observation with the control clock's time (``OBS_TIME_NS``) and the wall
+# clock's (``WALL_TIME_NS``); recording timelines and action scheduling read time back off them.
+# ``ACTION_TIMESTAMP`` is where a decoded action carries its schedule slot, in seconds from the
+# observation it answers.
+OBS_TIME_NS = 'obs_time_ns'
+WALL_TIME_NS = 'wall_time_ns'
+ACTION_TIMESTAMP = 'timestamp'
 
 # The robot model, carried in episode statics for the transforms that solve against it (``IKJointsAction``).
 # ``CONTROL_FRAME`` names the frame in ``URDF`` that the embodiment reports ``EE_POSE`` in; every embodiment
