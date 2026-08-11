@@ -91,7 +91,6 @@ class TestStopOnFault:
         assert session(_obs(0.0)) is not None  # a chunk that runs until 1.0
         assert session(_obs(0.2, fault=True)) == []
         assert session(_obs(0.3)) is not None
->>>>>>> 0595b577 (Let the policy stop a faulted arm, and keep a constant charge off the machine clock)
 
 
 class TestChunkedSchedule:

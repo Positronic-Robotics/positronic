@@ -1608,7 +1608,7 @@ class _ReplanEarly(PolicyWrapper):
             self._replan_at: float | None = None
 
         def __call__(self, obs):
-            t0 = obs['obs_time_ns'] / 1e9
+            t0 = obs[keys.OBS_TIME_NS] / 1e9
             if self._replan_at is not None and t0 < self._replan_at:
                 return None
             result = self._inner(obs)
@@ -1734,7 +1734,7 @@ class _ObservedTicks(PolicyWrapper):
             self._seen = seen
 
         def __call__(self, obs):
-            self._seen.append(obs['obs_time_ns'] / 1e9)
+            self._seen.append(obs[keys.OBS_TIME_NS] / 1e9)
             return self._inner(obs)
 
     def wrap_session(self, inner: Session, context, now):

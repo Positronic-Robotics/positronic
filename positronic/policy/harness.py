@@ -548,7 +548,7 @@ class Harness(pimm.ControlSystem):
         for name, player in self._players.items():
             # Wrappers do action-timing math in float seconds; the schedule and every pimm channel are in ns.
             # This is the single explicit seconds->ns seam.
-            player.set([(int(a['timestamp'] * 1e9), a[name]) for a in actions if name in a])
+            player.set([(int(a[keys.ACTION_TIMESTAMP] * 1e9), a[name]) for a in actions if name in a])
 
     def _play(self, clock: pimm.Clock) -> None:
         """Emit each channel's command due this round, and nothing on a channel with none."""

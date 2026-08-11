@@ -12,6 +12,7 @@ import pytest
 from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
 
+from positronic import keys
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
