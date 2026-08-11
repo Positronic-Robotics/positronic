@@ -226,8 +226,8 @@ class Robot(pimm.ControlSystem):
         """Command ``target`` and poll the goal until the arm arrives; raise if the goal stops advancing.
 
         Returns whether the arm arrived: ``False`` means ``should_stop`` ended the wait first. It is asked
-        before each poll, never after one, because a goal cancelled by the same event that ends the wait
-        reports failure — and reading it then would turn a clean exit into a fault.
+        before each poll and never after one, so a caller that gives up never reads a goal it has already
+        given up on.
         """
         POLL_INTERVAL_S = 0.005
         robot.set_target_joints(target)
