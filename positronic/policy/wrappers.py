@@ -2,8 +2,8 @@
 
 Wrappers are composable serving-time concerns layered around a policy with ``|`` (left is
 outermost), exactly like codecs. Most read time from the observation (``obs_time_ns``); only
-``ChunkedSchedule`` needs the clock — it anchors a chunk at the instant its call's charge is paid,
-which the observation stamp cannot give — so the harness passes ``now`` (a ``Callable[[], float]``
+``ChunkedSchedule`` needs the live clock — it anchors a chunk to inference *completion*, which the
+pre-inference observation stamp cannot give — so the harness passes ``now`` (a ``Callable[[], float]``
 in seconds) to ``new_session`` and it reaches that one session.
 """
 
@@ -23,9 +23,9 @@ class ChunkedSchedule(PolicyWrapper):
     """Wait for the current trajectory to finish before calling the inner policy again.
 
     Owns relative→absolute time conversion: inner layers (codecs, models) emit relative timestamps;
-    this wrapper anchors them to ``now()`` after the inner call — the instant the call's charge is
-    paid. Returns ``None`` ("keep executing the current trajectory") until the last action's timestamp
-    is reached at the observation instant, then calls the inner policy.
+    this wrapper anchors them to ``now()`` *after* inner inference returns, so execution aligns to
+    inference-finish (not inference-start). Returns ``None`` ("keep executing the current trajectory")
+    until the last action's timestamp is reached, then calls the inner policy.
     """
 
     class _Session(DelegatingSession):
@@ -37,14 +37,14 @@ class ChunkedSchedule(PolicyWrapper):
             self._trajectory_end: float | None = None
 
         def __call__(self, obs):
-            if self._trajectory_end is not None and _obs_time(obs) < self._trajectory_end:
-                return None
             if self._now is None:
                 raise ValueError(
                     'ChunkedSchedule needs a clock to run inference: pass now (a callable returning seconds) to '
                     'new_session. The harness supplies it; a direct RemotePolicy.new_session() outside the harness '
                     'must too.'
                 )
+            if self._trajectory_end is not None and _obs_time(obs) < self._trajectory_end:
+                return None
             result = self._inner(obs)
             if result is not None:
                 # A single-action session may return a bare dict, and a no-codec path may omit
@@ -52,9 +52,10 @@ class ChunkedSchedule(PolicyWrapper):
                 # immediate action executes instead of raising.
                 if isinstance(result, dict):
                     result = [result]
-                anchor = self._now()
+                # Anchor to post-inference time so execution starts when inference *finished*.
                 # Copy dicts so we don't mutate caller-owned data (sessions may reuse templates).
-                result = [{**r, keys.ACTION_TIMESTAMP: anchor + r.get(keys.ACTION_TIMESTAMP, 0.0)} for r in result]
+                now = self._now()
+                result = [{**r, keys.ACTION_TIMESTAMP: now + r.get(keys.ACTION_TIMESTAMP, 0.0)} for r in result]
                 self._trajectory_end = result[-1][keys.ACTION_TIMESTAMP] if result else None
             return result
 
@@ -156,7 +157,7 @@ class TemporalStack(PolicyWrapper):
             'in-range targets and the stack would be empty'
         )
 
-    def wrap_session(self, inner: Session, context, now):
+    def wrap_session(self, inner: Session, context, now: Now | None):
         return TemporalStack._Session(inner, self._keys, self._offsets_sec, self._pad_start)
 
     def to_spec(self):

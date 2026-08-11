@@ -27,8 +27,9 @@ class Session(ABC):
 
     **Return contract**: ``list[dict] | None``. ``None`` means "no new
     trajectory, keep executing the current one" (used by scheduling wrappers).
-    A list is a new trajectory, replacing whatever is playing. Single-action
-    returns must be wrapped into a 1-element list by the producer.
+    An empty list means "stop whatever is executing now". A non-empty list is
+    a new trajectory. Single-action returns must be wrapped into a 1-element
+    list by the producer.
     """
 
     @abstractmethod
@@ -86,11 +87,8 @@ class Policy(ABC):
 
         Args:
             context: Episode context (task description, eval metadata, etc.).
-            now: The policy stack's clock (seconds), supplied by the harness and passed down to every
-                wrapped session. During a session call it reads the trial instant the call's output takes
-                effect — the observation instant plus the inference charge paid so far — so a chunk
-                stamped at ``now()`` lands when its call is paid for. ``None`` where no runtime clock
-                exists (server-side, warmup).
+            now: The runtime clock (current time in seconds), supplied by the harness and passed down
+                to every wrapped session. ``None`` where no runtime clock exists (server-side, warmup).
         """
 
     @property
@@ -141,7 +139,7 @@ class PolicyWrapper:
     def wrap(self, policy: Policy) -> Policy:
         """Apply this wrapper to a policy. Default: wrap every session it creates via ``wrap_session``.
 
-        Composition happens at config time; the trial context and clock reach the wrapped
+        Composition happens at config time; the runtime clock reaches the wrapped
         sessions through ``new_session``.
         """
         return _WrapperPolicy(policy, self)
