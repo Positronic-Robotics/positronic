@@ -87,6 +87,13 @@ esac
 
 SERVER_ARGS="run --python 3.13 ${EXTRA}python -m positronic.vendors.${VENDOR}.server $*"
 
+# A public IP is only needed by a consumer outside the cloud. The project's public-IP quota is small and
+# permanently occupied by the long-lived instances, and a --public create against a full quota waits for an
+# allocation that never comes — the endpoint sits in PROVISIONING with no error. An in-cloud consumer on the
+# same subnet reaches the endpoint on its private IP, so set NEBIUS_PUBLIC=0 there.
+PUBLIC_FLAG=(--public)
+[ "${NEBIUS_PUBLIC:-1}" = "0" ] && PUBLIC_FLAG=()
+
 echo "Creating $VENDOR endpoint '$NAME'..."
 nebius ai endpoint create \
   --parent-id "$PARENT_ID" \
@@ -107,7 +114,7 @@ nebius ai endpoint create \
   --env-secret AWS_SECRET_ACCESS_KEY=positronic-serverless-aws-secret-access-key \
   --env AWS_ENDPOINT_URL=https://storage.eu-north1.nebius.cloud:443 \
   --env AWS_DEFAULT_REGION=eu-north1 \
-  --public >/dev/null
+  "${PUBLIC_FLAG[@]}" >/dev/null
 
 ID=$(nebius ai endpoint list --parent-id "$PARENT_ID" --format json \
   | jq -r --arg n "$NAME" '.items[]? | select(.metadata.name==$n) | .metadata.id')
@@ -118,18 +125,29 @@ if [ -z "$ID" ]; then
 fi
 
 echo "Endpoint ID: $ID"
-echo "Waiting for public IP (typically <1 min)..."
 
 IP=""
-for i in $(seq 1 30); do
-  IP=$(nebius ai endpoint get "$ID" --format json 2>/dev/null \
-    | jq -r '.status.public_endpoints[0]? // empty')
-  if [ -n "$IP" ]; then break; fi
-  sleep 10
-done
+if [ "${NEBIUS_PUBLIC:-1}" = "0" ]; then
+  echo "Waiting for private IP (typically <1 min)..."
+  for i in $(seq 1 30); do
+    IP=$(nebius vpc allocation list --parent-id "$PARENT_ID" --format json 2>/dev/null \
+      | jq -r --arg n "${ID}-private" '.items[]? | select(.metadata.name==$n)
+               | .status.details.allocated_cidr? // empty' | cut -d/ -f1)
+    if [ -n "$IP" ]; then break; fi
+    sleep 10
+  done
+else
+  echo "Waiting for public IP (typically <1 min)..."
+  for i in $(seq 1 30); do
+    IP=$(nebius ai endpoint get "$ID" --format json 2>/dev/null \
+      | jq -r '.status.public_endpoints[0]? // empty')
+    if [ -n "$IP" ]; then break; fi
+    sleep 10
+  done
+fi
 
 if [ -z "$IP" ]; then
-  echo "Public IP not allocated within 5 min. Check: nebius ai endpoint get $ID" >&2
+  echo "IP not allocated within 5 min. Check: nebius ai endpoint get $ID" >&2
   exit 1
 fi
 
