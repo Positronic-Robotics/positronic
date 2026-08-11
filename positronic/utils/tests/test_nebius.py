@@ -6,6 +6,10 @@ import pytest
 
 from positronic.utils import nebius
 
+# These spell out Nebius' response shape rather than reading it from the parser. A fixture built from
+# the parser's own field names could only assert that the code agrees with itself; written independently,
+# it fails when the code stops reading what Nebius sends.
+# rules-allow: hardcoded-keys — an independent restatement of an external wire format is what a fixture is
 _SECRET = {'metadata': {'id': 'mbsec-abc'}}
 _PAYLOAD = {'data': {'string_value': 'a-token'}}
 

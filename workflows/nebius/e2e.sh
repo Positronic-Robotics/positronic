@@ -162,8 +162,9 @@ note "serve -> $ENDPOINT_NAME"
 # Armed before an endpoint can exist, and deleting by id rather than by name: a name is only what this
 # run asked for and may answer for a concurrent run's endpoint, while an id appears in SERVE_LOG only
 # once a create this run made has succeeded. Nothing there means nothing to release.
-SERVE_LOG="$LOG_ROOT/$VENDOR.serve.log"
-: > "$SERVE_LOG"
+# Unique per invocation, unlike $LOG: the teardown reads an endpoint id back out of this file, so two
+# runs of one vendor sharing it would each delete whichever endpoint wrote last and leak their own.
+SERVE_LOG=$(mktemp "$LOG_ROOT/$VENDOR.serve.XXXXXX.log")
 teardown() {
   local status=$?   # whatever the run was already exiting with; a teardown failure may worsen it, never hide it
   local id
