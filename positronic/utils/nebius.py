@@ -8,9 +8,10 @@ from positronic.offboard.server import AUTH_TOKEN_ENV
 
 # The project holding the secrets, and the secret `serve.sh` injects into every endpoint it creates.
 # `workflows/nebius/common.sh` carries the same two values under the same overrides for the shell scripts;
-# no constant can span both languages.
-PARENT_ID = os.environ.get('NEBIUS_PARENT_ID', 'project-e00f38wexevrr52b8j')
-AUTH_TOKEN_SECRET = os.environ.get('NEBIUS_AUTH_TOKEN_SECRET', 'positronic-serverless-inference-token')
+# no constant can span both languages. ``or`` rather than a ``get`` default, because those overrides are
+# read there as ``${VAR:-default}``, which falls back on a variable set to nothing as well as an unset one.
+PARENT_ID = os.environ.get('NEBIUS_PARENT_ID') or 'project-e00f38wexevrr52b8j'
+AUTH_TOKEN_SECRET = os.environ.get('NEBIUS_AUTH_TOKEN_SECRET') or 'positronic-serverless-inference-token'
 
 # Nebius injects a secret as `--env-secret <KEY>=<secret>` and takes the payload key from that same KEY,
 # so the payload key is not free: it is whichever variable the server reads the token from.
