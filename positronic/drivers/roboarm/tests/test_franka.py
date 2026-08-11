@@ -58,7 +58,7 @@ class FakeArm:
         self.raises_once: Exception | None = None
         self._polls_to_reach = polls_to_reach
         self._polls = 0
-        self._goal_status = goal_status
+        self.goal_status = goal_status
 
     def _record(self, call: Call) -> None:
         self.calls.append(call)
@@ -75,8 +75,8 @@ class FakeArm:
     def goal(self) -> _Goal:
         self._record(Call.GOAL)
         self._polls += 1
-        if self._goal_status is not None:
-            return _Goal(self._goal_status, 'scripted')
+        if self.goal_status is not None:
+            return _Goal(self.goal_status, 'scripted')
         if self._polls >= self._polls_to_reach:
             self.q = self.targets[-1].copy()
             return _Goal(franka.pf.GoalStatus.REACHED, None)
@@ -255,3 +255,20 @@ def test_a_control_fault_stops_the_arm_without_parking_it(desk):
     assert Call.SET_TARGET_JOINTS not in arm.calls[mark:]  # a fault is not answered with autonomous motion
     assert arm.calls[-1] == Call.STOP
     assert desk.released
+
+
+def test_a_stop_during_the_reset_ends_the_run_without_a_fault(desk):
+    """The event that ends the world also cancels the in-flight goal, so a poll taken after the stop
+    reports failure. Reading it would turn a clean shutdown into a control fault — which skips the park."""
+    arm = FakeArm(JOGGED, polls_to_reach=10**9)  # the opening reset never lands on its own
+    stop = StopFlag()
+    loop = _driver(arm).run(stop, SystemClock())
+
+    next(loop)  # suspended inside the reset's travel
+    stop.stopped = True
+    arm.goal_status = franka.pf.GoalStatus.ABORTED
+
+    with pytest.raises(StopIteration):
+        next(loop)
+
+    assert arm.calls[-1] == Call.STOP

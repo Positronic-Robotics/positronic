@@ -3,7 +3,7 @@ import logging
 import os
 import time
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -222,13 +222,16 @@ class Robot(pimm.ControlSystem):
             robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
 
     @staticmethod
-    def _travel(robot, target) -> Iterator[None]:
+    def _travel(robot, target, keep_waiting: Callable[[], bool]) -> Iterator[None]:
         """Command ``target`` and yield once per poll until the arm arrives; raise if the goal stops advancing.
 
-        Yielding is the only wait: what a poll costs, and when to give up waiting, are the caller's.
+        Yielding is the only wait, so what a poll costs is the caller's. When to give up is the caller's too,
+        but it is asked HERE, before each poll, rather than in the loop body: the caller only regains control
+        after a poll has already happened, and a goal cancelled by the very event that ended the wait reports
+        failure — so a caller that gave up one poll too late would turn its own clean exit into a fault.
         """
         robot.set_target_joints(target)
-        while True:
+        while keep_waiting():
             goal = robot.goal()
             if goal.status == pf.GoalStatus.REACHED:
                 return
@@ -250,9 +253,7 @@ class Robot(pimm.ControlSystem):
             )
             target = target + variation
 
-        for _ in self._travel(robot, target):
-            if should_stop.value:
-                return
+        for _ in self._travel(robot, target, lambda: not should_stop.value):
             st = robot.state()
             robot_state.encode(st)
             robot_state._start_reset()  # `encode` clears RESETTING; the arm has not arrived
@@ -261,6 +262,8 @@ class Robot(pimm.ControlSystem):
                 robot.recover_from_errors()
             yield rate_limiter.wait()
 
+        if should_stop.value:  # the travel gave up on the stop rather than on arrival
+            return
         robot_state._finish_reset()
         self.state.emit(robot_state)
 
@@ -303,11 +306,17 @@ class Robot(pimm.ControlSystem):
             logging.info('Parking the arm at the home pose')
             robot.recover_from_errors()  # once, before the move: a reflex during the move ends the park
             deadline = time.monotonic() + self._park_timeout_s
-            for _ in self._travel(robot, target):
-                if time.monotonic() >= deadline:
-                    logging.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
-                    return
+            timed_out = False
+
+            def before_deadline() -> bool:
+                nonlocal timed_out
+                timed_out = time.monotonic() >= deadline
+                return not timed_out
+
+            for _ in self._travel(robot, target, before_deadline):
                 time.sleep(0.005)
+            if timed_out:
+                logging.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
         # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
         except Exception:
             logging.exception('Parking failed, the arm stays where it stands')
