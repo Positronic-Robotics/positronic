@@ -499,9 +499,10 @@ class World:
 
         logging.info(f'Waiting for {len(self.background_processes)} background processes to terminate...')
         for process in self.background_processes:
-            # Control systems run teardown (with-blocks in run()) after the stop signal; hardware cleanup such as
-            # engaging robot brakes takes tens of seconds, so give it time before resorting to SIGTERM.
-            process.join(timeout=60)
+            # Control systems run teardown (with-blocks in run()) after the stop signal; hardware cleanup parks
+            # the arm under the driver's own bounded timeout and then engages brakes, which takes tens of
+            # seconds, so give it time before resorting to SIGTERM.
+            process.join(timeout=90)
             if process.is_alive():
                 logging.warning(f'Process {process.name} (pid {process.pid}) did not respond, terminating...')
                 process.terminate()
