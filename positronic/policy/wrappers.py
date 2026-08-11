@@ -27,11 +27,14 @@ class StopOnFault(PolicyWrapper):
     trajectory — stop what is executing — and resets the sessions below, so the first sound observation after
     recovery reaches the model instead of resuming a chunk stamped before the fault. It belongs outside the
     scheduling wrapper, which would otherwise answer "keep playing" without ever seeing the fault.
+
+    The fault is ``keys.ROBOT_FAULT``, which the harness stamps on every observation it builds. An
+    observation from anywhere else — a probe replaying a recording — carries no arm to fault.
     """
 
     class _Session(DelegatingSession):
         def __call__(self, obs):
-            if not obs[keys.ROBOT_FAULT]:
+            if not obs.get(keys.ROBOT_FAULT, False):
                 return self._inner(obs)
             self.cancel()
             return []

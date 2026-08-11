@@ -1090,7 +1090,7 @@ def test_finish_stops_playing_the_live_chunk(world):
 
     stops = [i for i, (_, data) in enumerate(events) if getattr(data, 'type', None) is DsWriterCommandType.STOP_EPISODE]
     assert stops, 'FINISH did not emit STOP_EPISODE'
-    grips_after = [data for lbl, data in events[stops[0] :] if lbl == 'target_grip']
+    grips_after = [data for lbl, data in events[stops[0] :] if lbl == keys.TARGET_GRIP]
     assert grips_after == [0.0], f'the cancelled chunk kept playing past FINISH: {grips_after}'
 
 
@@ -1293,7 +1293,7 @@ def test_shutdown_stops_playing_the_live_chunk(world):
     wrapped = ActionTimestamp(fps=5.0).wrap(ChunkPolicy())  # 1.8 s chunk — won't drain before shutdown
     harness = Harness(wrapped, make_embodiment())
     harness.commands[keys.ROBOT_COMMAND]._bind(_LabeledRecorder(keys.ROBOT_COMMAND, events))
-    harness.commands['target_grip']._bind(_LabeledRecorder('target_grip', events))
+    harness.commands[keys.TARGET_GRIP]._bind(_LabeledRecorder(keys.TARGET_GRIP, events))
     harness.ds_command._bind(_LabeledRecorder('ds_command', events))
 
     frame_em = world.pair(harness.observations[CAM])
@@ -1314,7 +1314,7 @@ def test_shutdown_stops_playing_the_live_chunk(world):
 
     stops = [i for i, (_, data) in enumerate(events) if getattr(data, 'type', None) is DsWriterCommandType.STOP_EPISODE]
     assert stops, 'shutdown did not emit STOP_EPISODE'
-    assert not [lbl for lbl, _ in events[stops[0] :] if lbl == 'target_grip']
+    assert not [lbl for lbl, _ in events[stops[0] :] if lbl == keys.TARGET_GRIP]
 
 
 @pytest.mark.timeout(5.0)
@@ -1579,7 +1579,11 @@ class _SlowSession(Session):
         dt = self._span_sec / self._steps
         pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
         return [
-            {keys.ROBOT_COMMAND: CartesianPosition(pose=pose), 'target_grip': float(i), 'timestamp': i * dt}
+            {
+                keys.ROBOT_COMMAND: CartesianPosition(pose=pose),
+                keys.TARGET_GRIP: float(i),
+                keys.ACTION_TIMESTAMP: i * dt,
+            }
             for i in range(self._steps)
         ]
 
@@ -1614,8 +1618,8 @@ class _ReplanEarly(PolicyWrapper):
             result = self._inner(obs)
             assert result is not None, 'the inner policy of this test wrapper always returns a chunk'
             anchor = self._now()
-            result = [{**action, 'timestamp': anchor + action['timestamp']} for action in result]
-            self._replan_at = t0 + (result[-1]['timestamp'] - t0) / 2
+            result = [{**action, keys.ACTION_TIMESTAMP: anchor + action[keys.ACTION_TIMESTAMP]} for action in result]
+            self._replan_at = t0 + (result[-1][keys.ACTION_TIMESTAMP] - t0) / 2
             return result
 
     def wrap_session(self, inner: Session, context, now):
@@ -1642,7 +1646,7 @@ def _run_episode(
     harness = Harness(wrapper.wrap(policy), make_embodiment(simulated=simulated))
     grip_recorder = _TimedRecorder(world.clock)
     harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
-    harness.commands['target_grip']._bind(grip_recorder)
+    harness.commands[keys.TARGET_GRIP]._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
     frame_em = world.pair(harness.observations[CAM])
@@ -1866,7 +1870,7 @@ def test_finish_does_not_wait_for_the_call_in_flight():
         cmd_recorder = RecordingEmitter()
         ds_recorder = _TimedRecorder(world.clock)
         harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
-        harness.commands['target_grip']._bind(RecordingEmitter())
+        harness.commands[keys.TARGET_GRIP]._bind(RecordingEmitter())
         harness.ds_command._bind(ds_recorder)
 
         frame_em = world.pair(harness.observations[CAM])
@@ -1906,8 +1910,11 @@ def test_installed_trajectory_clears_the_channels_it_omits(world):
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             command = CartesianPosition(pose=pose)
             if self._calls == 1:
-                return [{keys.ROBOT_COMMAND: command, 'target_grip': 0.5, 'timestamp': i * 0.01} for i in range(10)]
-            return [{keys.ROBOT_COMMAND: command, 'timestamp': i * 0.01} for i in range(10)]
+                return [
+                    {keys.ROBOT_COMMAND: command, keys.TARGET_GRIP: 0.5, keys.ACTION_TIMESTAMP: i * 0.01}
+                    for i in range(10)
+                ]
+            return [{keys.ROBOT_COMMAND: command, keys.ACTION_TIMESTAMP: i * 0.01} for i in range(10)]
 
     class _GripThenArmPolicy(Policy):
         def new_session(self, context=None, now=None):
@@ -1916,7 +1923,7 @@ def test_installed_trajectory_clears_the_channels_it_omits(world):
     harness = Harness(ChunkedSchedule().wrap(_GripThenArmPolicy()), make_embodiment())
     grip_recorder = RecordingEmitter()
     harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
-    harness.commands['target_grip']._bind(grip_recorder)
+    harness.commands[keys.TARGET_GRIP]._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
 
     frame_em = world.pair(harness.observations[CAM])
@@ -1944,7 +1951,7 @@ def test_home_and_manual_commands_are_emitted_as_plain_values(world):
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
     harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
-    harness.commands['target_grip']._bind(grip_recorder)
+    harness.commands[keys.TARGET_GRIP]._bind(grip_recorder)
     harness.ds_command._bind(RecordingEmitter())
     manual_em = world.pair(harness.manual_command)
 
@@ -1964,7 +1971,7 @@ def test_abort_discards_a_call_that_is_still_in_flight(world):
     harness = Harness(ChunkedSchedule().wrap(SlowPolicy()), make_embodiment(simulated=True))
     cmd_recorder = RecordingEmitter()
     harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
-    harness.commands['target_grip']._bind(RecordingEmitter())
+    harness.commands[keys.TARGET_GRIP]._bind(RecordingEmitter())
     harness.ds_command._bind(RecordingEmitter())
 
     frame_em = world.pair(harness.observations[CAM])

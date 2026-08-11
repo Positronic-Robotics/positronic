@@ -82,6 +82,14 @@ class TestStopOnFault:
         assert session(_obs(0.0)) is not None
         assert inner.call_count == 1
 
+    def test_an_observation_with_no_flag_is_not_a_fault(self):
+        """Only the harness stamps the flag; a probe replaying a recording has no arm to fault."""
+        inner = _ConstSession([{'v': 1, 'timestamp': 0.0}])
+        session = StopOnFault().wrap_session(inner, None, None)
+
+        assert session({keys.OBS_TIME_NS: 0}) is not None
+        assert inner.call_count == 1
+
     def test_recovery_plans_afresh_instead_of_resuming(self):
         """The fault resets the scheduler below it, so the first sound observation infers again rather than
         waiting out the chunk stamped before the fault."""
