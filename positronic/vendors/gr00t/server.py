@@ -295,10 +295,10 @@ class Gr00tSource(ModelSource):
             zmq_port=self.zmq_port,
             ready_timeout=self.ready_timeout,
         )
-        # TODO: Warm the subprocess here, as the other sources do, so the first inference a rig asks for is not
-        # the one that pays the backend's startup cost. Building the observation needs a state dimension per
-        # modality key, which the ZMQ `get_modality_config` endpoint does not carry and the checkpoint holds
-        # only inside gr00t's own processor config.
+        # TODO(#611): Warm the subprocess here, as the other sources do, so the first inference a rig asks for is
+        # not the one that pays the backend's startup cost. GR00T is the one backend with no positronic-side
+        # statement of the observation it takes: the ZMQ protocol offers only `ping`/`get_action`/`reset`, and
+        # `modality_config` names a module inside the gr00t fork that only gr00t's own venv can import.
         try:
             groot.start(on_progress)
         except Exception:

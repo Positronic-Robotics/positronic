@@ -1,9 +1,12 @@
+from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
 import numpy as np
 import pos3
 import torch
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.configs.types import FeatureType
 from lerobot.constants import CHECKPOINTS_DIR, PRETRAINED_MODEL_DIR
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
@@ -15,6 +18,10 @@ from positronic.policy.spec import PolicySource, inline
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot_0_3_3.backbone import register_all
+
+# The language instruction a session takes, which is not a declared input feature and so is named rather
+# than derived from the checkpoint's config.
+TASK = 'task'
 
 
 def _detect_device() -> str:
@@ -45,7 +52,7 @@ class _LerobotSession(Session):
     def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
         obs_int = {}
         for key, val in obs.items():
-            if key == 'task':
+            if key == TASK:
                 obs_int[key] = val
             elif isinstance(val, np.ndarray):
                 if key.startswith('observation.images.'):
@@ -62,6 +69,24 @@ class _LerobotSession(Session):
     @property
     def meta(self) -> dict[str, Any]:
         return self._meta
+
+
+def warm_observation(checkpoint_path: Path) -> dict[str, Any]:
+    """Zero-filled inputs matching the features the checkpoint's config declares.
+
+    Visual features are declared channels-first and arrive here channels-last, the way a session takes them.
+    """
+    config = PreTrainedConfig.from_pretrained(checkpoint_path)
+    if not config.input_features:
+        raise ValueError(f'{checkpoint_path} declares no input features, so there is nothing to warm it with')
+    obs: dict[str, Any] = {TASK: ''}
+    for name, feature in config.input_features.items():
+        if feature.type is FeatureType.VISUAL:
+            channels, height, width = feature.shape
+            obs[name] = np.zeros((height, width, channels), dtype=np.uint8)
+        else:
+            obs[name] = np.zeros(feature.shape, dtype=np.float32)
+    return obs
 
 
 class LerobotPolicy(Policy):
