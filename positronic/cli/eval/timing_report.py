@@ -14,6 +14,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, fields
+from enum import StrEnum
 from pathlib import Path
 
 import configuronic as cfn
@@ -98,15 +99,29 @@ class GpuReport:
     policy: GpuSummary | None
 
 
+class WallWindow(StrEnum):
+    """The wall window every share in a report is a fraction of, named by the symbol the report prints.
+
+    ``W_PASS`` is the ``eval.pass`` span, which covers the whole pass including the setup and teardown either
+    side of its episodes. ``W_EPISODES`` is the fallback for a run whose pass span never closed: the wall from
+    its first episode's start to its last one's end. That window is narrower — whatever ran before the first
+    episode or after the last is outside it — so a share of it is not a share of a pass, and the two carry
+    different names for that reason.
+    """
+
+    W_PASS = 'W_pass'
+    W_EPISODES = 'W_episodes'
+
+
 @dataclass
 class WallSplit:
-    """Each phase's share of pass wall time.
+    """Each phase's share of the report's wall window.
 
     ``overhead`` is the within-episode wall unattributed to a measured phase (including the recorder's
     parquet/video close flush, which runs after record IO); ``between_episodes`` is the inter-episode wall
-    (session teardown, homing, world rebuild) inside the pass span between one episode's finish and the next's
-    start. The measured phases plus these two cover the pass span minus any aborted-episode wall, which is
-    excluded from W_pass entirely.
+    (session teardown, homing, world rebuild) inside the window between one episode's finish and the next's
+    start. The measured phases plus these two cover the window minus any aborted-episode wall, which is
+    excluded from it entirely.
     """
 
     reset: float
@@ -135,10 +150,16 @@ class EnvStepSplit:
 
 @dataclass
 class PassReport:
-    """Pass-level wall-clock roll-up reduced from the recorded telemetry spans and stats."""
+    """Pass-level wall-clock roll-up reduced from the recorded telemetry spans and stats.
+
+    ``window`` names which wall ``wall_s`` measures and which every share in ``wall_split``, and the real-time
+    factor, are fractions of. It rides with the numbers because a run killed mid-pass reduces against the
+    narrower episode window, and a figure normalised by that one is not comparable with a pass figure.
+    """
 
     episodes: int
-    wall_pass_s: float
+    window: WallWindow
+    wall_s: float
     real_time_factor: float
     infer_calls: int
     infer_p50_ms: float
@@ -167,12 +188,12 @@ def _read_stats_dir(telemetry_dir: Path) -> list[dict]:
     return samples
 
 
-def _gpu_summary_from_stats(stats: list[dict], pass_windows: list[tuple[int, int]]) -> GpuSummary | None:
-    """The sim box's GPU summary from the machine-load stream. Only samples taken inside a completed pass's
-    wall window count — a reused directory carries an earlier (possibly killed) run's samples, the stats twin
+def _gpu_summary_from_stats(stats: list[dict], windows: list[tuple[int, int]]) -> GpuSummary | None:
+    """The sim box's GPU summary from the machine-load stream. Only samples taken inside one of the report's
+    wall windows count — a reused directory carries an earlier (possibly killed) run's samples, the stats twin
     of the orphan-episode exclusion. ``None`` when no counted sample held a device at all (a CPU sim box); a
     box whose devices all refused their queries is a summary with nothing measured, not a CPU box."""
-    in_window = [s for s in stats if any(start <= int(s[STAT_T_NS]) <= end for start, end in pass_windows)]
+    in_window = [s for s in stats if any(start <= int(s[STAT_T_NS]) <= end for start, end in windows)]
     # The recorded count is the box's NVML handle count, so it stands whether or not any device answered:
     # reading it across every sample, including the empty ones, separates an unreadable GPU box from a CPU one.
     box_devices = max((int(s[STAT_GPU_COUNT]) for s in in_window), default=0)
@@ -423,27 +444,60 @@ def _env_step_split(spans: list[SpanRec], episodes: list[SpanRec], env_step_sum:
     )
 
 
+def _episode_windows(episodes: list[SpanRec]) -> dict[str | None, tuple[int, int]]:
+    """One wall window per run whose ``eval.pass`` span never closed, keyed by the pass span the episodes name
+    as their parent — from that run's first episode start to its last episode end.
+
+    Grouping by parent is what keeps two killed runs appended to one directory apart: each contributes its own
+    window, so the dead wall between them falls outside both, exactly as the gap between two pass spans does.
+    Aborted episodes count towards the window, because they are subtracted from it by the same rule that
+    subtracts them from a pass span's wall.
+    """
+    by_parent: dict[str | None, list[SpanRec]] = defaultdict(list)
+    for episode in episodes:
+        by_parent[episode.parent_id].append(episode)
+    return {
+        parent: (min(e.start_ns for e in group), max(e.end_ns for e in group)) for parent, group in by_parent.items()
+    }
+
+
 def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummary | None) -> PassReport:
     children: dict[str, list[SpanRec]] = defaultdict(list)
     for span in spans:
         if span.parent_id is not None:
             children[span.parent_id].append(span)
 
-    # W_pass is the pass span's wall (summed if several passes appended to one dir), so inter-episode teardown
-    # counts in the denominator; the wall gap between two separate passes falls outside every pass span. An
-    # aborted episode's wall is subtracted out: the episode is dropped as invalid data (its virtual time, phases
-    # and infers never reduce), so its wall must also leave every W_pass-normalised figure rather than land in
-    # ``between_episodes`` and deflate the policy-wait / real-time factors.
+    # The denominator is the pass span's wall (summed if several passes appended to one dir), so inter-episode
+    # teardown counts in it; the wall gap between two separate passes falls outside every pass span. A run
+    # killed or preempted mid-pass never writes that span, so it falls back to the wall its complete episodes
+    # span — narrower, and named W_episodes rather than W_pass because a share of it is not a share of a pass.
+    all_episodes = [s for s in spans if s.name == SPAN_EPISODE]
     passes = [p for p in spans if p.name == SPAN_EVAL_PASS]
-    pass_ids = {p.span_id for p in passes}
-    aborted_wall = float(
-        sum(
-            _dur_s(s)
-            for s in spans
-            if s.name == SPAN_EPISODE and s.attrs.get(ATTR_EPISODE_ABORTED, False) and s.parent_id in pass_ids
+    if passes:
+        window = WallWindow.W_PASS
+        windows = {p.span_id: (p.start_ns, p.end_ns) for p in passes}
+    else:
+        window = WallWindow.W_EPISODES
+        windows = _episode_windows(all_episodes)
+        if windows:
+            logger.warning(
+                'no %s span closed (a killed or preempted run?); reducing over the wall its complete episodes '
+                'span, so every share is of %s rather than of a pass window',
+                SPAN_EVAL_PASS,
+                window.value,
+            )
+    if not windows:
+        raise ValueError(
+            f'the recorded telemetry holds {len(spans)} span(s) but no closed `{SPAN_EVAL_PASS}` span and no '
+            f'`{SPAN_EPISODE}` span, so there is nothing to reduce (killed before its first episode finished?)'
         )
+    # An aborted episode's wall is subtracted out: the episode is dropped as invalid data (its virtual time,
+    # phases and infers never reduce), so its wall must also leave every normalised figure rather than land in
+    # ``between_episodes`` and deflate the policy-wait / real-time factors.
+    aborted_wall = float(
+        sum(_dur_s(s) for s in all_episodes if s.attrs.get(ATTR_EPISODE_ABORTED, False) and s.parent_id in windows)
     )
-    wall_pass = float(sum(_dur_s(p) for p in passes)) - aborted_wall
+    wall = float(sum(end - start for start, end in windows.values())) / 1e9 - aborted_wall
     # A failed pass still reduces — its partial window, episodes and samples are real recorded data — but
     # never silently: the mix is named so a skewed-looking split has its explanation on the console.
     failed = sum(bool(p.attrs.get(ATTR_PASS_FAILED, False)) for p in passes)
@@ -451,10 +505,9 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
         logger.warning(
             '%d of %d pass(es) failed mid-run; their partial windows are included in the report', failed, len(passes)
         )
-    # Only episodes under a completed pass reduce: a killed run flushes its episodes but never writes its
-    # ``eval.pass`` span, and such orphans would inflate every pass-normalized figure when the directory is
-    # reused for a later run.
-    episodes = [s for s in spans if s.name == SPAN_EPISODE and not s.attrs.get(ATTR_EPISODE_ABORTED, False)]
+    # Only episodes belonging to a window reduce: where one pass completed, a killed earlier run's episodes are
+    # in the same reused directory but under no window of their own, and would inflate every normalised figure.
+    episodes = [s for s in all_episodes if not s.attrs.get(ATTR_EPISODE_ABORTED, False)]
     # A partial episode (its rollout failed mid-run) is kept, not dropped: its finished phases are real wall
     # and must attribute rather than fall into ``between_episodes``. Named, like ``pass.failed``, so the split
     # is read with its incomplete window in view.
@@ -463,10 +516,10 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
         logger.warning(
             '%d episode(s) did not run to completion (a failed pass?); their finished phases are included', partial
         )
-    orphans = sum(e.parent_id not in pass_ids for e in episodes)
+    orphans = sum(e.parent_id not in windows for e in episodes)
     if orphans:
         logger.warning('%d episode(s) belong to no completed pass (a killed run?); excluded from the report', orphans)
-        episodes = [e for e in episodes if e.parent_id in pass_ids]
+        episodes = [e for e in episodes if e.parent_id in windows]
     timings = [_episode_timing(e, children) for e in episodes]
 
     episode_wall_sum = float(sum(t.wall_s for t in timings))
@@ -475,7 +528,7 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
     all_infer_ms = np.array([ms for t in timings for ms in t.infer_ms], dtype=float)
 
     def phase_fraction(total: float) -> float:
-        return (total / wall_pass) if wall_pass else 0.0
+        return (total / wall) if wall else 0.0
 
     wall_split = WallSplit(
         reset=phase_fraction(sum(t.reset_s for t in timings)),
@@ -483,18 +536,19 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
         policy_wait=phase_fraction(sum(t.policy_wait_s for t in timings)),
         record_io=phase_fraction(sum(t.record_io_s for t in timings)),
         overhead=phase_fraction(sum(t.overhead_s for t in timings)),
-        between_episodes=phase_fraction(wall_pass - episode_wall_sum),
+        between_episodes=phase_fraction(wall - episode_wall_sum),
     )
     return PassReport(
         episodes=len(episodes),
-        wall_pass_s=wall_pass,
-        real_time_factor=(sum(t.virtual_s for t in timings) / wall_pass) if wall_pass else 0.0,
+        window=window,
+        wall_s=wall,
+        real_time_factor=(sum(t.virtual_s for t in timings) / wall) if wall else 0.0,
         infer_calls=int(all_infer_ms.size),
         infer_p50_ms=float(np.percentile(all_infer_ms, 50)) if all_infer_ms.size else 0.0,
         infer_p95_ms=float(np.percentile(all_infer_ms, 95)) if all_infer_ms.size else 0.0,
         wall_split=wall_split,
         env_step_split=_env_step_split(spans, episodes, env_step_sum, materialize_sum),
-        gpu=GpuReport(sim=_gpu_summary_from_stats(stats, [(p.start_ns, p.end_ns) for p in passes]), policy=policy_gpu),
+        gpu=GpuReport(sim=_gpu_summary_from_stats(stats, list(windows.values())), policy=policy_gpu),
     )
 
 
@@ -508,13 +562,22 @@ def _share_row(name: str, fraction: float) -> str:
 
 
 def _render(report: PassReport) -> str:
-    lines = [
+    window = report.window.value
+    lines = []
+    # The console warning is lost the moment this text is pasted anywhere, and the numbers under a narrower
+    # window read exactly like pass numbers, so the report says which window it reduced over in its own body.
+    if report.window is WallWindow.W_EPISODES:
+        lines.append(
+            f'no {SPAN_EVAL_PASS} span closed (a killed or preempted run?): {window} is the wall from the first '
+            f'complete episode to the last, and every share below is of that, not of a pass'
+        )
+    lines += [
         f'episodes:            {report.episodes}',
-        f'W_pass (wall):       {report.wall_pass_s:.1f} s ({report.wall_pass_s / 3600:.2f} h)',
+        f'{window + " (wall):":<21}{report.wall_s:.1f} s ({report.wall_s / 3600:.2f} h)',
         f'real-time factor:    {report.real_time_factor * 100:>6.1f}% (sim-s per wall-s)',
         f'infer calls:         {report.infer_calls}',
         f'infer p50 / p95:     {report.infer_p50_ms:.1f} / {report.infer_p95_ms:.1f} ms',
-        'wall split (share of W_pass):',
+        f'wall split (share of {window}):',
     ]
     for f in fields(WallSplit):
         share = getattr(report.wall_split, f.name)
@@ -560,7 +623,7 @@ def timing_report(run_dir: str, gpu_policy_log: str | None):
     root = Path(pos3.download(run_dir)) if '://' in run_dir else Path(run_dir)
     telemetry_dir = root / TELEMETRY_SUBDIR
     spans = _read_spans_dir(telemetry_dir) if telemetry_dir.is_dir() else []
-    if not any(s.name == SPAN_EVAL_PASS for s in spans):
+    if not spans:
         raise ValueError(f'no telemetry under {telemetry_dir} (recorded without --timing?)')
 
     policy_gpu = _parse_dmon(Path(gpu_policy_log)) if gpu_policy_log is not None else None

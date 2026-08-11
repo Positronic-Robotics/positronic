@@ -105,9 +105,9 @@ positronic eval timing-report <run_dir> [--gpu_policy_log <nvidia-smi dmon log>]
 Reduces the sidecars under `<run_dir>/telemetry/` into a pass report and writes `timing_summary.json` beside
 the input (`<run_dir>` may be an `s3://` URI). It reports:
 
-- the **wall split** — each phase's share of `W_pass` (reset / env.step / policy wait / record IO / overhead /
-  between-episodes), summing to 1; the policy-wait share also carries the sizing figure derived from it, how
-  many such evals one policy server could keep fed;
+- the **wall split** — each phase's share of the report's wall window (reset / env.step / policy wait / record
+  IO / overhead / between-episodes), summing to 1; the policy-wait share also carries the sizing figure derived
+  from it, how many such evals one policy server could keep fed;
 - the **env-step split** — physics / render / server-other (the env server's own decomposition), plus the wire
   and materialisation shares of the client step; absent for a native sim, which reports no server decomposition;
 - **inference latency** — call count and p50 / p95;
@@ -120,6 +120,13 @@ the input (`<run_dir>` may be an `s3://` URI). It reports:
   a GPU box, with the metrics unavailable — only a box holding no device at all carries no GPU line.
 
 Shares print as percentages; `timing_summary.json` keeps them as fractions.
+
+Every share, and the real-time factor, is a fraction of one wall window, and `window` names which: `W_pass`,
+the `eval.pass` span, whenever that span closed. A run killed or preempted mid-pass never writes it, so the
+reduce falls back to `W_episodes` — the wall from its first complete episode to its last, one window per run
+where a directory holds several. That window excludes whatever ran either side of those episodes, so a share
+of it is not a share of a pass; the report says which one it used in its own body as well as on the console.
+A directory holding neither a closed pass span nor an episode has nothing to reduce, and the reduce refuses.
 
 `--gpu_policy_log` folds in the policy endpoint (a different box) from an `nvidia-smi dmon -s um` log; it reads
 the `sm` / `fb` column positions from the log header and fails loudly if the `fb` (framebuffer) column is
