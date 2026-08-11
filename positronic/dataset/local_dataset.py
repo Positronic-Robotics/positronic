@@ -114,6 +114,11 @@ class DiskEpisodeWriter(EpisodeWriter):
                 Use this to preserve identity when copying an existing recording.
             video_options: Optional encoder options for video signals; None keeps the codec defaults.
         """
+        # A caller-supplied uid names the directory a discard moves into, so it must be one path segment.
+        # Checked before anything reaches disk: a rejected uid would otherwise strand this episode's id.
+        if uid is not None and (Path(uid).name != uid or uid in ('.', '..')):
+            raise ValueError(f'{uid!r} is not a usable episode uid: it must be a single path segment')
+
         self._path = directory
         self._discarded_dir = discarded_dir
         assert not self._path.exists(), f'Writing to existing directory {self._path}'
@@ -131,10 +136,6 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._discard_completed = False
         self._on_close = on_close
         self._video_options = video_options
-
-        # A caller-supplied uid names the directory a discard moves into, so it must be one path segment.
-        if uid is not None and (Path(uid).name != uid or uid in ('.', '..')):
-            raise ValueError(f'{uid!r} is not a usable episode uid: it must be a single path segment')
 
         # Write system metadata immediately
         # NB: falsy created_ts_ns (including 0) defaults to current time — epoch 0 is not a valid episode timestamp

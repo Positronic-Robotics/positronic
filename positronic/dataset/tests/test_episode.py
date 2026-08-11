@@ -329,7 +329,6 @@ def test_a_second_discard_finishes_the_move_the_failed_one_left(tmp_path, monkey
     discarded = tmp_path / 'discarded' / f'ep_discard_retry-{uid}'
     assert (discarded / 'a.parquet').exists()
     assert (discarded / UNFINISHED_MARKER).exists()
-    # The abort is why the episode left the dataset; the retry only finished the move it began.
     assert json.loads((discarded / DISCARD_MARKER).read_text())[DISCARD_REASON] == DiscardReason.ABORTED.value
 
     w.__exit__(None, None, None)
@@ -707,8 +706,12 @@ def test_group_first_transform_takes_precedence(tmp_path):
 
 
 def test_episode_writer_refuses_a_uid_that_could_leave_the_discarded_tree(tmp_path):
+    ep_dir = tmp_path / 'ep_escape'
+
     with pytest.raises(ValueError, match='single path segment'):
-        DiskEpisodeWriter(tmp_path / 'ep_escape', discarded_dir=tmp_path / 'discarded', uid='../../escaped')
+        DiskEpisodeWriter(ep_dir, discarded_dir=tmp_path / 'discarded', uid='../../escaped')
+
+    assert not ep_dir.exists()  # a refused writer leaves nothing behind, so the dataset keeps the id
 
 
 def test_episode_writer_takes_an_ordinary_uid(tmp_path):
