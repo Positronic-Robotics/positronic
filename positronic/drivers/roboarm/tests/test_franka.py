@@ -149,10 +149,16 @@ def _driver(arm: FakeArm, *, variation: list[float] | None = None, **kwargs) -> 
     return robot
 
 
+def _drive(loop) -> None:
+    """Pump a driver loop to exhaustion, honouring each yielded Sleep — what the world does to it."""
+    for command in loop:
+        time.sleep(command.seconds)
+
+
 def test_park_drives_the_arm_to_the_home_pose():
     arm = FakeArm(JOGGED)
 
-    _driver(arm, manage_desk=False)._park(arm)
+    _drive(_driver(arm, manage_desk=False)._park(arm))
 
     np.testing.assert_allclose(arm.targets, [HOME])
     np.testing.assert_allclose(arm.q, HOME)
@@ -162,7 +168,7 @@ def test_park_commands_the_exact_home_pose_from_inside_the_homing_spread():
     variation = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
     arm = FakeArm(HOME + np.asarray(variation))
 
-    _driver(arm, variation=variation, manage_desk=False)._park(arm)
+    _drive(_driver(arm, variation=variation, manage_desk=False)._park(arm))
 
     # An arm inside the spread, or travelling through it, is not asked to be judged already home: the
     # controller reports arrival, and a pose it already holds arrives at once.
@@ -170,10 +176,19 @@ def test_park_commands_the_exact_home_pose_from_inside_the_homing_spread():
     np.testing.assert_allclose(arm.q, HOME)
 
 
+def test_the_park_waits_by_yielding_rather_than_blocking():
+    """A driver's waits are the world's to honour, teardown included: the park asks for them with Sleep."""
+    arm = FakeArm(JOGGED, polls_to_reach=3)
+
+    commands = list(_driver(arm, manage_desk=False)._park(arm))
+
+    assert commands and all(isinstance(command, pimm.Sleep) for command in commands)
+
+
 def test_park_gives_up_when_the_goal_stops_advancing():
     arm = FakeArm(JOGGED, goal_status=franka.pf.GoalStatus.ABORTED)
 
-    _driver(arm, manage_desk=False)._park(arm)
+    _drive(_driver(arm, manage_desk=False)._park(arm))
 
     assert arm.calls.count(Call.GOAL) == 1
     np.testing.assert_allclose(arm.q, JOGGED)
@@ -183,7 +198,7 @@ def test_park_gives_up_when_the_arm_does_not_arrive_in_time():
     arm = FakeArm(JOGGED, polls_to_reach=10**9)
 
     started = time.monotonic()
-    _driver(arm, manage_desk=False, park_timeout_s=0.05)._park(arm)
+    _drive(_driver(arm, manage_desk=False, park_timeout_s=0.05)._park(arm))
     elapsed = time.monotonic() - started
 
     assert 0.05 <= elapsed < 2.0
@@ -195,7 +210,7 @@ def test_park_swallows_a_robot_that_fails_mid_move():
     arm = FakeArm(JOGGED)
     arm.raises = RuntimeError('libfranka: connection lost')
 
-    _driver(arm, manage_desk=False)._park(arm)
+    _drive(_driver(arm, manage_desk=False)._park(arm))
 
     np.testing.assert_allclose(arm.q, JOGGED)
 
@@ -210,8 +225,7 @@ def test_teardown_parks_the_arm_before_stopping_control(desk):
     arm.q = JOGGED  # the operator jogs the arm, then finishes the run from there
     mark = len(arm.calls)
     stop.stopped = True
-    with pytest.raises(StopIteration):
-        next(loop)
+    _drive(loop)
 
     teardown = arm.calls[mark:]
     assert teardown.index(Call.SET_TARGET_JOINTS) < teardown.index(Call.STOP)
@@ -231,8 +245,7 @@ def test_teardown_stops_control_and_releases_desk_when_parking_fails(desk):
     arm.raises = RuntimeError('libfranka: connection lost')
     mark = len(arm.calls)
     stop.stopped = True
-    with pytest.raises(StopIteration):
-        next(loop)
+    _drive(loop)
 
     # the park was attempted, and its failure went no further
     assert arm.calls[mark:] == [Call.RECOVER_FROM_ERRORS, Call.STOP]
@@ -250,7 +263,7 @@ def test_a_control_fault_stops_the_arm_without_parking_it(desk):
     arm.raises_once = RuntimeError('libfranka: connection lost')  # the fault, not a dead arm — a park could move it
     mark = len(arm.calls)
     with pytest.raises(RuntimeError):
-        next(loop)
+        _drive(loop)
 
     assert Call.SET_TARGET_JOINTS not in arm.calls[mark:]  # a fault is not answered with autonomous motion
     assert arm.calls[-1] == Call.STOP
@@ -268,7 +281,6 @@ def test_a_stop_during_the_reset_ends_the_run_without_a_fault(desk):
     stop.stopped = True
     arm.goal_status = franka.pf.GoalStatus.ABORTED
 
-    with pytest.raises(StopIteration):
-        next(loop)
+    _drive(loop)
 
     assert arm.calls[-1] == Call.STOP

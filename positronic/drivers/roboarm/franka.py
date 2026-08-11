@@ -3,7 +3,7 @@ import logging
 import os
 import time
 import xml.etree.ElementTree as ET
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,9 @@ def _check_error(is_error, was_error):
 
 DESK_USER_ENV = 'FRANKA_DESK_USER'
 DESK_PASSWORD_ENV = 'FRANKA_DESK_PASSWORD'
+
+# How long a caller waits between two reads of a joint goal in flight.
+_GOAL_POLL_INTERVAL_S = 0.005
 
 
 def _read_desk_credentials() -> tuple[str, str]:
@@ -222,22 +225,27 @@ class Robot(pimm.ControlSystem):
             robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
 
     @staticmethod
-    def _travel(robot, target, keep_waiting: Callable[[], bool]) -> Iterator[None]:
-        """Command ``target`` and yield once per poll until the arm arrives; raise if the goal stops advancing.
+    def _travel(robot, target, should_stop: Callable[[], bool]) -> Generator[pimm.Sleep, None, bool]:
+        """Command ``target`` and poll the goal until the arm arrives; raise if the goal stops advancing.
 
-        Yielding is the only wait, so what a poll costs is the caller's. When to give up is the caller's too,
-        but it is asked HERE, before each poll, rather than in the loop body: the caller only regains control
-        after a poll has already happened, and a goal cancelled by the very event that ended the wait reports
-        failure — so a caller that gave up one poll too late would turn its own clean exit into a fault.
+        Returns whether the arm arrived: ``False`` means ``should_stop`` ended the wait first. It is asked
+        HERE, before each poll, rather than in the loop body: the caller only regains control after a poll
+        has already happened, and a goal cancelled by the very event that ended the wait reports failure —
+        so a caller that gave up one poll too late would turn its own clean exit into a fault.
+
+        The yielded ``Sleep`` paces a caller that drives this with ``yield from``. A caller running its own
+        rate limiter drives it with a ``for`` loop instead and paces itself, which is why the command is
+        given per poll rather than taken as an argument.
         """
         robot.set_target_joints(target)
-        while keep_waiting():
+        while not should_stop():
             goal = robot.goal()
             if goal.status == pf.GoalStatus.REACHED:
-                return
+                return True
             if goal.status != pf.GoalStatus.IN_FLIGHT:
                 raise RuntimeError(f'homing failed: {goal.reason or goal.status}')
-            yield
+            yield pimm.Sleep(_GOAL_POLL_INTERVAL_S)
+        return False
 
     def _reset(self, robot, robot_state: FrankaState, rate_limiter, should_stop) -> Iterator[pimm.Sleep]:
         """Home the arm, yielding until it arrives. Drive with ``yield from``."""
@@ -253,7 +261,7 @@ class Robot(pimm.ControlSystem):
             )
             target = target + variation
 
-        for _ in self._travel(robot, target, lambda: not should_stop.value):
+        for _ in self._travel(robot, target, lambda: should_stop.value):
             st = robot.state()
             robot_state.encode(st)
             robot_state._start_reset()  # `encode` clears RESETTING; the arm has not arrived
@@ -293,10 +301,14 @@ class Robot(pimm.ControlSystem):
                     yield desk
                     return
 
-    def _park(self, robot) -> None:
-        """Move the arm to the home pose, giving up after ``park_timeout_s``.
+    def _park(self, robot) -> Iterator[pimm.Sleep]:
+        """Move the arm to the home pose, giving up after ``park_timeout_s``. Drive with ``yield from``.
 
-        Autonomous motion: bounded, at the configured dynamics factor, to the configured ``home_joints``
+        Runs after the control loop rather than in its ``finally``, so that only a stop request earns it.
+        Answering a setup or control fault with a recovery and a fresh joint target would be autonomous
+        motion in response to something going wrong.
+
+        The motion itself is bounded: at the configured dynamics factor, to the configured ``home_joints``
         and nowhere else. An arm already there arrives immediately, so arrival is the controller's to
         report rather than something to pre-check. Every failure — including a goal that stops advancing —
         reaches the log and no further.
@@ -306,16 +318,8 @@ class Robot(pimm.ControlSystem):
             logging.info('Parking the arm at the home pose')
             robot.recover_from_errors()  # once, before the move: a reflex during the move ends the park
             deadline = time.monotonic() + self._park_timeout_s
-            timed_out = False
-
-            def before_deadline() -> bool:
-                nonlocal timed_out
-                timed_out = time.monotonic() >= deadline
-                return not timed_out
-
-            for _ in self._travel(robot, target, before_deadline):
-                time.sleep(0.005)
-            if timed_out:
+            arrived = yield from self._travel(robot, target, lambda: time.monotonic() >= deadline)
+            if not arrived:
                 logging.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
         # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
         except Exception:
@@ -384,9 +388,7 @@ class Robot(pimm.ControlSystem):
 
                     yield rate_limiter.wait()
 
-                # Only a stop request earns the park. Answering a setup or control fault with a recovery and a
-                # fresh joint target would be autonomous motion in response to something going wrong.
-                self._park(robot)
+                yield from self._park(robot)
             finally:
                 # Halt the driver's control thread before _desk_session deactivates FCI, or it dies mid-control
                 # with "TCP connection got interrupted".
