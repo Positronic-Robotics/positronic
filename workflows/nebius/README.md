@@ -353,6 +353,7 @@ Against an endpoint of your own — the demo checkpoint needs no training and no
 ```bash
 bash workflows/nebius/serve.sh lerobot_0_3_3 auth-smoke demo
 # wait for `INFO Started server process` in: nebius ai endpoint logs <id> --follow
+# AUTH_TOKEN as exported above; the tests read it and fail on a KeyError without it
 POSITRONIC_ENDPOINT_URL=https://<endpoint-managed-url> \
   uv run --locked pytest positronic/offboard/tests/test_server.py -m endpoint --no-cov
 bash workflows/nebius/stop.sh auth-smoke
