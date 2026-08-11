@@ -13,14 +13,11 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.policy import Codec, Policy, Session
+from positronic.policy.observation import TASK_FIELD
 from positronic.policy.spec import PolicySource, inline
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot_0_3_3.backbone import register_all
-
-# The language instruction a session takes, which is not a declared input feature and so is named rather
-# than derived from the checkpoint's config.
-TASK = 'task'
 
 
 def _detect_device() -> str:
@@ -51,7 +48,7 @@ class _LerobotSession(Session):
     def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
         obs_int = {}
         for key, val in obs.items():
-            if key == TASK:
+            if key == TASK_FIELD:
                 obs_int[key] = val
             elif isinstance(val, np.ndarray):
                 if key.startswith('observation.images.'):
@@ -79,7 +76,7 @@ def warm_observation(config: PreTrainedConfig) -> dict[str, Any]:
     """
     if not config.input_features:
         raise ValueError('The policy declares no input features, so there is nothing to warm it with')
-    obs: dict[str, Any] = {TASK: ''}
+    obs: dict[str, Any] = {TASK_FIELD: ''}
     for name, feature in config.input_features.items():
         if feature.type is FeatureType.VISUAL:
             channels, height, width = feature.shape

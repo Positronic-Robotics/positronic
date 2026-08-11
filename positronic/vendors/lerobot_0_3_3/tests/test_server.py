@@ -14,8 +14,9 @@ from lerobot.configs.types import FeatureType, PolicyFeature  # noqa: E402
 from lerobot.policies.act.configuration_act import ACTConfig  # noqa: E402
 
 from positronic.offboard import PolicyServer  # noqa: E402
+from positronic.policy.observation import TASK_FIELD
 from positronic.vendors.lerobot_0_3_3 import server as lerobot_server  # noqa: E402
-from positronic.vendors.lerobot_0_3_3.policy import TASK, warm_observation  # noqa: E402
+from positronic.vendors.lerobot_0_3_3.policy import warm_observation  # noqa: E402
 
 
 def _act_config() -> ACTConfig:
@@ -149,4 +150,4 @@ def test_warmup_observation_matches_the_features_the_policy_declares():
     assert obs['observation.state'].shape == (8,)
     # Declared channels-first, handed over channels-last the way a session takes it.
     assert obs['observation.images.left'].shape == (224, 320, 3)
-    assert obs[TASK] == ''
+    assert obs[TASK_FIELD] == ''
