@@ -290,8 +290,9 @@ class SampledPolicy(Policy):
             duplicates = sorted(k for k, n in Counter(keys).items() if n > 1)
             if duplicates:
                 raise ValueError(
-                    f'Sampled policies must be distinguishable by {self._key_field!r}, but {duplicates} name more '
-                    f'than one of them: sampling would pick the first every time and never run the others'
+                    f'Sampled policies must be distinguishable, but {duplicates} name more than one of them: '
+                    f'sampling would pick the first every time and never run the others. A policy is named by '
+                    f'{self._key_field!r} in its meta, or failing that by what it calls itself'
                 )
             self._keys = keys
         return self._keys
