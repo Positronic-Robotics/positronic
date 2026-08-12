@@ -26,16 +26,21 @@ IMAGE_SIZE = (224, 224)
 
 @dataclass(frozen=True)
 class ModalityConfig:
-    """One GR00T modality config: the fork module registering it, and the widths of the state block it declares.
+    """One GR00T modality config: the fork module registering it, and the observation it declares.
 
-    ``path`` is relative to the gr00t checkout, which is where the subprocess runs. ``state`` is positronic's
+    ``path`` is relative to the gr00t checkout, which is where the subprocess runs. The rest is positronic's
     own statement of what a checkpoint served under this config takes. The fork's config module is the other
     statement, and only gr00t's venv can import it, so nothing reconciles the two but the test pairing each
     config with the codec that feeds it.
+
+    ``cameras`` and ``task_key`` default to what every config shipped here declares; gr00t's other embodiments
+    name their cameras and their language field differently, so a config of your own states its own.
     """
 
     path: Path
     state: dict[str, int]
+    cameras: tuple[str, ...] = (WRIST_IMAGE, EXTERIOR_IMAGE)
+    task_key: str = TASK
 
 
 _CONFIG_DIR = Path('gr00t/configs/data')

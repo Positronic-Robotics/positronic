@@ -1,10 +1,12 @@
 """Tests for GrootObservationCodec."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from positronic import geom, keys
-from positronic.vendors.gr00t import MODALITY_CONFIGS, codecs
+from positronic.vendors.gr00t import GRIP, JOINT_POSITION, LANGUAGE, MODALITY_CONFIGS, VIDEO, ModalityConfig, codecs
 from positronic.vendors.gr00t.codecs import GrootObservationCodec
 from positronic.vendors.gr00t.server import _warm_observation
 
@@ -208,3 +210,17 @@ def test_warmup_observation_matches_what_the_paired_codec_encodes(codec_name, mo
     warm = _warm_observation(MODALITY_CONFIGS[modality_config])
 
     assert _shapes(warm) == _shapes(encoded)
+
+
+def test_a_custom_config_warms_at_the_cameras_and_language_field_it_declares():
+    custom = ModalityConfig(
+        path=Path('gr00t/configs/data/my_own.py'),
+        state={GRIP: 1, JOINT_POSITION: 7},
+        cameras=('ego_view',),
+        task_key='annotation.human.coarse_action',
+    )
+
+    warm = _warm_observation(custom)
+
+    assert set(warm[VIDEO]) == {'ego_view'}
+    assert set(warm[LANGUAGE]) == {'annotation.human.coarse_action'}

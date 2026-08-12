@@ -245,9 +245,9 @@ def _warm_observation(modality: gr00t.ModalityConfig) -> dict[str, Any]:
     width, height = gr00t.IMAGE_SIZE
     frame = np.zeros((1, 1, height, width, 3), dtype=np.uint8)
     return {
-        gr00t.VIDEO: {gr00t.WRIST_IMAGE: frame, gr00t.EXTERIOR_IMAGE: frame},
+        gr00t.VIDEO: dict.fromkeys(modality.cameras, frame),
         gr00t.STATE: {key: np.zeros((1, 1, dim), dtype=np.float32) for key, dim in modality.state.items()},
-        gr00t.LANGUAGE: {gr00t.TASK: [['']]},
+        gr00t.LANGUAGE: {modality.task_key: [['']]},
     }
 
 
