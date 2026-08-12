@@ -77,9 +77,9 @@ things happened under the hood:
   `time.sleep`).
 - When the with-block ends—or the user kills the program—the world notifies every
   loop through the `should_stop` signal so they can exit gracefully.
-- A `main_process` control system RETURNING raises that same signal, so stopping a world is a
-  supervisor loop returning when it decides the run is over. A background one returning takes
-  only its own process down.
+- A control system RETURNING raises that same signal, from either group: `interleave` sets it
+  when a `main_process` loop finishes, and `_bg_wrapper` sets it as a background process
+  unwinds. So stopping a world is a supervisor loop returning when it decides the run is over.
 
 That is the whole workflow: build small `ControlSystem` classes, `connect` their
 signals, and `start` whichever group you want to supervise directly. Everything
