@@ -1,9 +1,9 @@
 import logging
 import os
 import uuid
-from collections.abc import Callable, Generator, Iterable
+from collections.abc import Generator, Iterable
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 
 import configuronic as cfn
@@ -16,7 +16,6 @@ from positronic.cfg.eval import placeholder
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.eval import Embodiment, Eval, Task
-from positronic.gui import dpg_ui
 from positronic.offboard.client import DEFAULT_READY_TIMEOUT
 from positronic.policy.base import SampledPolicy
 from positronic.policy.harness import Harness
@@ -29,19 +28,21 @@ logger = logging.getLogger(__name__)
 _ENV_TELEMETRY_VARS = (ENV_TELEMETRY_DIR, ENV_RUN_ID)
 
 
-@dataclass
-class Driver:
-    """An attended operator surface: the directive source ``main`` wires into the Harness.
+def prepare_output_dir(policy, output_dir: str | Path | None) -> Path | None:
+    """Resolve where a run records: sync the directory, snapshot the sources into it, seed the counter.
 
-    Driver configs produce a factory called with the resolved local output directory, since
-    the directory exists only after ``pos3.sync`` inside ``main``.
+    Returns the local path a ``LocalDatasetWriter`` opens, or ``None`` when the run records nothing.
+
+    TODO(Positronic-Robotics/internal#378): take ``Path | None``. configuronic parses a CLI value with
+    ``ast.literal_eval`` and falls back to ``str``, so ``--output_dir=s3://…`` arrives here as a ``str``
+    whatever this says; narrowing before it coerces would make the annotation lie about what arrives.
     """
-
-    gui: pimm.ControlSystem | None
-    directives: pimm.SignalEmitter
-    directive_wrapper: Callable
-    control_systems: list[pimm.ControlSystem]
-    manual_commands: pimm.SignalEmitter | None = None
+    if output_dir is None:
+        return None
+    local_dir = pos3.sync(str(output_dir), sync_on_error=True)
+    utils.save_run_metadata(local_dir, patterns=['*.py', '*.toml'])
+    _seed_counter(policy, local_dir)
+    return local_dir
 
 
 def _seed_counter(policy, output_dir: Path):
@@ -58,7 +59,7 @@ def _seed_counter(policy, output_dir: Path):
     logger.info(f'Seeded counter from {seeded} existing episodes')
 
 
-def _completion_sink(policy):
+def completion_sink(policy):
     """Harness ``on_episode_complete`` callback that tallies completed episodes.
 
     Returns the ``SampledPolicy``'s counter ``record`` (which reads the sampled
@@ -69,22 +70,13 @@ def _completion_sink(policy):
 
 
 def _run_world(
-    policy,
-    embodiment: Embodiment,
-    task: Task | None,
-    trials: list[dict] | None,
-    driver: Driver | None,
-    output_dir: Path | None,
-    show_gui: bool,
-    on_complete,
+    policy, embodiment: Embodiment, task: Task | None, trials: list[dict] | None, output_dir: Path | None, on_complete
 ):
     """Wire one embodiment under a fresh Harness + World and run it to completion.
 
-    ``driver`` (attended) and ``trials`` (unattended self-driving) are the two lifecycle sources, mutually
-    exclusive per the caller. The shared ``policy``'s lifetime stays with ``main``.
+    The harness self-drives ``trials``; the shared ``policy``'s lifetime stays with ``main``.
     """
     harness = Harness(policy, embodiment, task=task, trials=trials, on_episode_complete=on_complete)
-    gui = driver.gui if driver is not None else (dpg_ui() if show_gui else None)
 
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
@@ -94,17 +86,6 @@ def _run_world(
         ds_agent = wire.wire_embodiment(
             world, harness, embodiment, dataset_writer, time_mode, privileged=privileged, done=done
         )
-        if gui is not None:
-            # HACK: GUI cameras are matched to observations by the `image.` name prefix, which
-            # hard-binds GUI wiring to the observation naming convention. TODO: resolve this
-            # coupling (the right binding is still open).
-            for name, obs in embodiment.observations.items():
-                if name.startswith('image.'):
-                    world.connect(obs.source, gui.cameras[name])
-        if driver is not None:
-            world.connect(driver.directives, harness.directive, emitter_wrapper=driver.directive_wrapper)
-            if driver.manual_commands is not None:
-                world.connect(driver.manual_commands, harness.manual_command)
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)
 
@@ -114,14 +95,13 @@ def _run_world(
         # observation with the command; the producer applies the command and publishes the next observation.
         # A reset arms the producer to publish frame-0 after the harness (last in the round); the recorder
         # drains its channels the turn it opens, dropping the pre-reset frame, so its first recorded sample
-        # is the post-reset scene. Real runs the producers + recorder as background subprocesses; harness,
-        # driver, and GUI placement is otherwise identical.
+        # is the post-reset scene. Real runs the producers + recorder as background subprocesses; the
+        # harness's placement is otherwise identical.
         producers = [cs for cs in embodiment.control_systems if cs is not None]
-        foreground = driver.control_systems if driver is not None else []
         if embodiment.simulated:
-            world.run([*foreground, harness, ds_agent, *producers], gui)
+            world.run([harness, ds_agent, *producers])
         else:
-            world.run([harness, *foreground], [*producers, ds_agent, gui])
+            world.run([harness], [*producers, ds_agent])
 
 
 def _validate_timing(embodiments: Iterable[Embodiment], output_dir: str | Path | None) -> None:
@@ -159,7 +139,7 @@ def _pass_span(**attrs) -> Generator[None, None, None]:
 
 
 @contextmanager
-def _timed_pass(output_dir: str | Path | None, timing: bool, policy):
+def timed_pass(output_dir: str | Path | None, timing: bool, policy):
     """Bracket a sweep in the harness-process telemetry: the bound tracer, the machine-load sampler and one
     ``eval.pass`` span, with the environment a launched env server reads set around them. Inert without
     ``timing``."""
@@ -199,21 +179,15 @@ def _timed_pass(output_dir: str | Path | None, timing: bool, policy):
 def main(
     policy,
     *,
-    evals: list[Eval] | None = None,
-    embodiment: Embodiment | None = None,
-    driver: Callable[[Path | None], Driver] | None = None,
+    evals: list[Eval],
     output_dir: str | Path | None = None,
-    show_gui: bool = False,
     timing: bool = False,
     ready_timeout: float = DEFAULT_READY_TIMEOUT,
 ):
-    """Run inference for an embodiment, real or simulated.
+    """Run an unattended sweep: the harness self-drives each eval's trial plan, rebuilding the World per eval.
 
-    Exactly one of ``driver`` (attended: a factory producing the operator surface that emits the directives
-    over a single ``embodiment``) or ``evals`` (unattended: the harness self-drives each eval's trial plan,
-    rebuilding the World per eval) must be given; ``show_gui`` applies to the unattended path (attended surfaces
-    bring their own). ``main`` owns the policy lifetime: it gates the run on the policy reporting itself ready
-    and closes it once after the last World, so a multi-eval sweep reuses one live policy across the rebuilds.
+    ``main`` owns the policy lifetime: it gates the run on the policy reporting itself ready and closes it
+    once after the last World, so a multi-eval sweep reuses one live policy across the rebuilds.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + a machine-load stats
     stream). It needs an ``output_dir`` and an all-simulated sweep: everything under the bound tracer enters
@@ -222,51 +196,31 @@ def main(
     ``ready_timeout`` bounds the wait for each remote endpoint to report itself ready; the sweep is
     refused when it elapses.
     """
-    assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
     # Timing is validated before the readiness wait, so a rejected sweep fails before it spends anything.
     if timing:
-        if evals is not None:
-            embodiments = [ev.embodiment for ev in evals]
-        else:
-            assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
-            embodiments = [embodiment]
-        _validate_timing(embodiments, output_dir)
+        _validate_timing([ev.embodiment for ev in evals], output_dir)
 
-    # Ahead of the driver factory and the worlds: nothing downstream is built for a policy that cannot serve.
+    # Ahead of the output directory and the worlds: nothing downstream is built for a policy that cannot serve.
     logger.info('Waiting for policy endpoints to report ready (up to %.0fs)', ready_timeout)
     policy.wait_ready(ready_timeout)
 
-    if output_dir is not None:
-        output_dir = pos3.sync(output_dir, sync_on_error=True)
-        utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
-        _seed_counter(policy, output_dir)
+    output_dir = prepare_output_dir(policy, output_dir)
 
     # One completion sink — so one ``SampledPolicy`` counter — across every eval, keeping sampling balanced
     # over the whole sweep.
-    on_complete = _completion_sink(policy)
+    on_complete = completion_sink(policy)
 
     try:
-        with _timed_pass(output_dir, timing, policy):
-            if driver is not None:
-                assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
-                _run_world(policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete)
-            else:
-                assert evals is not None  # driver/evals XOR asserted up front
-                for ev in evals:
-                    _run_world(policy, ev.embodiment, ev.task, ev.trials, None, output_dir, show_gui, on_complete)
+        with timed_pass(output_dir, timing, policy):
+            for ev in evals:
+                _run_world(policy, ev.embodiment, ev.task, ev.trials, output_dir, on_complete)
     finally:
         policy.close()
 
 
-@cfn.config(eval=placeholder, policy=policy_cfg.placeholder, show_gui=False)
+@cfn.config(eval=placeholder, policy=policy_cfg.placeholder)
 def run(
-    eval: Eval,
-    policy,
-    show_gui,
-    output_dir=None,
-    inference_latency=False,
-    timing=False,
-    ready_timeout=DEFAULT_READY_TIMEOUT,
+    eval: Eval, policy, output_dir=None, inference_latency=False, timing=False, ready_timeout=DEFAULT_READY_TIMEOUT
 ):
     """Run a selected eval (embodiment + task + its trial sweep) through the shared inference harness.
 
@@ -276,11 +230,4 @@ def run(
     # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob
     # (sim inference-cost simulation). Overlay it onto every trial context, then self-drive the eval.
     eval = replace(eval, trials=[{**trial, 'inference_latency': inference_latency} for trial in eval.trials])
-    main(
-        policy=policy,
-        evals=[eval],
-        show_gui=show_gui,
-        output_dir=output_dir,
-        timing=timing,
-        ready_timeout=ready_timeout,
-    )
+    main(policy=policy, evals=[eval], output_dir=output_dir, timing=timing, ready_timeout=ready_timeout)

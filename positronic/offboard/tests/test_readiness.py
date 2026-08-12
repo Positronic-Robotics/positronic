@@ -23,7 +23,7 @@ import websockets
 
 from positronic import keys
 from positronic.cli.eval.run import main
-from positronic.eval import Embodiment
+from positronic.eval import Eval
 from positronic.offboard.client import InferenceClient, ServerNotReady
 from positronic.offboard.protocol import ERROR, LOADING, MESSAGE, META, READY, STATUS
 from positronic.policy.base import Policy, SampledPolicy
@@ -349,18 +349,23 @@ def test_a_local_policy_is_ready_when_it_is_constructed():
 # --- the gate, where the run is refused --------------------------------------------------------
 
 
-@pytest.mark.timeout(30)
-def test_a_run_is_refused_before_the_operator_surface_is_built(fake_server):
-    """The driver factory builds the operator's UI, and must never be called for a policy that
-    cannot answer."""
-    built = []
+class _Untouchable:
+    """An embodiment nothing may read: the first attribute read is a world coming up."""
 
+    def __getattr__(self, name):
+        raise AssertionError(f'a world was built for a policy that cannot serve: read {name!r}')
+
+
+@pytest.mark.timeout(30)
+def test_a_run_is_refused_before_anything_downstream_is_built(fake_server, tmp_path):
+    """Everything the sweep sets up costs something a refused run should not pay: the output directory
+    is synced and snapshotted into, and each eval brings a world up around the hardware."""
     with pytest.raises(ServerNotReady):
         main(
             policy=RemotePolicy(fake_server(_forever_loading)),
-            embodiment=cast(Embodiment, SimpleNamespace(simulated=False)),
-            driver=lambda _out: built.append('driver') or (_ for _ in ()).throw(AssertionError('not reached')),
+            evals=[cast(Eval, SimpleNamespace(embodiment=_Untouchable(), task=None, trials=[]))],
+            output_dir=tmp_path,
             ready_timeout=1.0,
         )
 
-    assert built == [], 'the operator surface was built for a policy that cannot serve'
+    assert list(tmp_path.iterdir()) == [], 'the output directory was prepared for a policy that cannot serve'

@@ -284,8 +284,6 @@ positronic = [
   "assets/**",
   "drivers/**/*.xml",
   "drivers/**/*.urdf",
-  "gui/static/**",
-  "gui/templates/**",
   "server/static/**",
   "server/templates/**",
 ]

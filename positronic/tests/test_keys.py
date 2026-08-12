@@ -15,6 +15,8 @@ _GUARDED = {
     keys.EXTERIOR_IMAGE,
     keys.EVAL_SUCCESS,
     keys.EVAL_TERMINATED,
+    keys.OBS_TIME_NS,
+    keys.WALL_TIME_NS,
 }
 # keys.GRIP and keys.TASK are deliberately not guarded: their values are bare tokens the wire reuses
 # across unrelated namespaces (action-command grip, vendor state-vectors, scene/reset tokens), so a

@@ -459,6 +459,8 @@ def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, nam
         print(f'{"=" * 60}\n', file=sys.stderr)
         logging.error(f'Error in control system {name}:\n{traceback.format_exc()}')
     finally:
+        # Whatever ended this loop — a return, a raise, an interrupt — ends the WORLD: the event is
+        # the one every other control system reads, in this process and in the parent.
         logging.info(f'Stopping background process by {name}')
         stop_event.set()
 
@@ -558,7 +560,9 @@ class World:
         loop keeps its real rate (a ``Yield`` means "no wait, run again now").
 
         When a loop finishes (``StopIteration``) the stop event is set so the others can
-        observe ``should_stop`` and exit. The iterator ends once no loop is left.
+        observe ``should_stop`` and exit. The iterator ends once no loop is left. A BACKGROUND
+        control system finishing sets the same event (``_bg_wrapper``), so any control system —
+        background or foreground — ending by returning, raising or being interrupted stops the world.
 
         A ``Yield`` is only legitimate when another loop in the same instant sleeps to pace it.
         A round where every due loop yields and none sleeps cannot move the clock; finite yield-only
@@ -783,9 +787,10 @@ class World:
         rate. On a virtual-time world the clock is advanced inside ``interleave``, so
         there is nothing to wait for — just pump as fast as the machine allows.
 
-        Runs until the scheduler is exhausted: when one loop finishes and sets
-        ``should_stop``, the others still run once more to observe it and finalize
-        (flush the episode, close the policy) before the iterator ends.
+        Runs until the scheduler is exhausted: when any loop finishes — here or in a
+        background process — it sets ``should_stop``, and the others still run once more
+        to observe it and finalize (flush the episode, close the policy) before the
+        iterator ends.
         """
         real_time = not isinstance(self._clock, VirtualClock)
         for command in self.start(main_process, background):

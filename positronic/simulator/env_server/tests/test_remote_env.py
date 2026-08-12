@@ -10,11 +10,11 @@ from positronic import geom, keys
 from positronic.cfg.eval.sim import libero as libero_cfg
 from positronic.cfg.eval.sim import positronic as native_cfg
 from positronic.cfg.eval.sim import robolab as robolab_cfg
+from positronic.cli.eval.run import main
 from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Task
-from positronic.inference import main
 from positronic.policy import Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.tests.test_harness import StubPolicy

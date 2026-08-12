@@ -45,7 +45,7 @@ CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports
 # Run sim inference locally (only inference is remote; MuJoCo runs on your machine).
 uv run --locked positronic-inference sim \
   --policy=.remote --policy.url=<h100-host>:8000 \
-  --eval.trial_count=2 --show_gui=True
+  --eval.trial_count=2
 ```
 
 The server owns the whole policy pipeline: it runs the codec (raw observations in, decoded joint
@@ -195,7 +195,7 @@ launch). With `positronic-inference`, pass them through the remote policy:
 # padding the window with the current frame repeated.
 uv run --locked positronic-inference sim \
   --policy=.remote --policy.url='<h100-host>:8000?local.pad_start=false' \
-  --eval.trial_count=2 --show_gui=True
+  --eval.trial_count=2
 ```
 
 `local` is the rig-side video-context stack, `codec` the server-side codec (e.g. `{"codec.fps": 10}`);

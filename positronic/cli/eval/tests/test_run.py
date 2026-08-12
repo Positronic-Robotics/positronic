@@ -6,7 +6,7 @@ from typing import cast
 import pytest
 
 from positronic import telemetry, telemetry_keys
-from positronic.cli.eval.run import Driver, _pass_span, _timed_pass, main
+from positronic.cli.eval.run import _pass_span, main, timed_pass
 from positronic.eval import Embodiment, Eval, Task
 
 
@@ -21,17 +21,27 @@ def test_timed_sweep_rejects_real_embodiment(tmp_path):
         main(policy=object(), evals=[_eval(True), _eval(False)], output_dir=tmp_path, timing=True)
 
 
-def test_timed_attended_run_rejects_real_embodiment(tmp_path):
-    """The attended (driver) path runs one embodiment rather than a sweep, and reaches the same check."""
-    real = cast(Embodiment, SimpleNamespace(simulated=False))
-    with pytest.raises(ValueError, match='all-simulated'):
-        main(
-            policy=object(),
-            embodiment=real,
-            driver=lambda _: cast(Driver, SimpleNamespace()),
-            output_dir=tmp_path,
-            timing=True,
-        )
+class _IdlePolicy:
+    """Enough policy for ``main`` to gate on and close; it is never asked for an action."""
+
+    def wait_ready(self, _timeout):
+        pass
+
+    def new_session(self, *_args, **_kwargs):
+        return SimpleNamespace(close=lambda: None)
+
+    def close(self):
+        pass
+
+
+@pytest.mark.timeout(30.0)
+def test_an_exhausted_trial_plan_ends_the_sweep():
+    """How an unattended run finishes: the harness runs out of trials, the world stops, ``main`` returns."""
+    embodiment = Embodiment(
+        descriptor='stub', observations={}, commands={}, static_meta={}, meta_source=None, simulated=True
+    )
+    task = Task(instruction='stub', timeout=0.05)
+    main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, task=task, trials=[])])
 
 
 def test_timed_sweep_needs_an_output_dir():
@@ -84,7 +94,7 @@ def test_the_stats_sampler_runs_inside_the_pass_span(tmp_path, monkeypatch):
     # object whose global is being replaced comes from `sys.modules`.
     monkeypatch.setattr(sys.modules['positronic.cli.eval.run'], '_pass_span', _recording_pass)
 
-    with _timed_pass(tmp_path, True, object()):
+    with timed_pass(tmp_path, True, object()):
         pass
 
     assert order == ['sampler built', 'pass in', 'sampler in', 'sampler out', 'pass out']

@@ -1,10 +1,20 @@
 from typing import Any
 
+import configuronic as cfn
 import numpy as np
+import pos3
 import torch
+from lerobot.constants import CHECKPOINTS_DIR, PRETRAINED_MODEL_DIR
+from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
-from positronic.policy import Policy, Session
+from positronic import keys
+from positronic.cfg import codecs
+from positronic.policy import Codec, Policy, Session
+from positronic.policy.spec import PolicySource, inline
+from positronic.policy.wrappers import ChunkedSchedule
+from positronic.utils.checkpoints import resolve_checkpoint
+from positronic.vendors.lerobot_0_3_3.backbone import register_all
 
 
 def _detect_device() -> str:
@@ -74,3 +84,25 @@ class LerobotPolicy(Policy):
             self._policy = None
             if self._device.startswith('cuda'):
                 torch.cuda.empty_cache()
+
+
+@cfn.config(checkpoint=None)
+def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None = None, device: str | None = None):
+    register_all()
+
+    checkpoints_dir = checkpoints_dir.rstrip('/') + f'/{CHECKPOINTS_DIR}'
+    checkpoint = resolve_checkpoint(checkpoints_dir, checkpoint, None)
+    checkpoint_dir = f'{checkpoints_dir}/{checkpoint}/{PRETRAINED_MODEL_DIR}/'
+    policy = ACTPolicy.from_pretrained(pos3.download(checkpoint_dir), strict=True)
+    if n_action_steps is not None:
+        policy.config.n_action_steps = n_action_steps
+
+    return LerobotPolicy(policy, device, extra_meta={keys.TYPE: 'act', keys.CHECKPOINT_PATH: checkpoint_dir})
+
+
+@cfn.config(
+    base=act, codec=codecs.compose.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action, horizon=1.0)
+)
+def act_absolute(base: Policy, codec: Codec):
+    """ACT with the absolute-position codec, composed in-process."""
+    return inline(ChunkedSchedule() | codec | PolicySource(base))

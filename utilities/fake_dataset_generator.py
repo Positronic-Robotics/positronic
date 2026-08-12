@@ -44,7 +44,7 @@ GROOT_META = {
         'action': {
             'target_robot_position_translation': {'start': 0, 'end': 3},
             'target_robot_position_quaternion': {'start': 3, 'end': 7, 'rotation_type': 'quaternion'},
-            'target_grip': {'start': 7, 'end': 8},
+            keys.TARGET_GRIP: {'start': 7, 'end': 8},
         }
     },
 }
@@ -59,7 +59,7 @@ TASKS = [TOWELS_TASK, SPOONS_TASK, SCISSORS_TASK]
 
 META_MAP = {'act': ACT_META, 'openpi': OPENPI_META, 'groot': GROOT_META}
 
-# Fake eval outcomes (kept in sync with UI options in `positronic/gui/eval.py`)
+# Fake eval outcomes, named as an operator console offers them.
 FAILURE_OUTCOMES = ('Fail', 'Ran out of time', 'Safety', 'System')
 # Weights are relative probabilities when an episode is not a success.
 FAILURE_OUTCOME_WEIGHTS = (0.25, 0.20, 0.10, 0.10)

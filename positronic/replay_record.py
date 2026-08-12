@@ -43,7 +43,7 @@ class Replay(DsPlayerAgent):
         self.robot_meta_in = pimm.FakeReceiver(self)
         self.frames = pimm.ReceiverDict(self, fake=True)
         self.outputs['robot_commands'] = _TrajectoryEmitter(self)
-        self.outputs['target_grip'] = _TrajectoryEmitter(self)
+        self.outputs[keys.TARGET_GRIP] = _TrajectoryEmitter(self)
 
     @property
     def robot_commands(self) -> pimm.ControlSystemEmitter:
@@ -51,7 +51,7 @@ class Replay(DsPlayerAgent):
 
     @property
     def target_grip(self) -> pimm.ControlSystemEmitter:
-        return self.outputs['target_grip']
+        return self.outputs[keys.TARGET_GRIP]
 
 
 class RestoreCommand(Derive):

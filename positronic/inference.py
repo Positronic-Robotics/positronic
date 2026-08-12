@@ -1,7 +1,8 @@
-"""Legacy ``positronic-inference`` CLI: the attended ``real``/``phail`` aliases over the ``cli.eval.run`` runner."""
+"""Legacy ``positronic-inference`` CLI: the attended keyboard ``real`` path plus the ``sim`` and ``stats``
+aliases over ``cli.eval.run``."""
 
 from collections import Counter
-from pathlib import Path
+from contextlib import nullcontext
 
 import configuronic as cfn
 import pos3
@@ -9,13 +10,13 @@ import pos3
 import pimm
 import positronic.cfg.embodiment
 import positronic.cfg.policy as policy_cfg
+from positronic import wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
-from positronic.cli.eval.run import Driver, main, run
-from positronic.dataset.local_dataset import load_all_datasets
-from positronic.gui import dpg_ui, handover
-from positronic.gui.keyboard import KeyboardControl
-from positronic.gui.web import WebEvalUI
-from positronic.policy.harness import Directive
+from positronic.cli.eval.run import completion_sink, prepare_output_dir, run
+from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
+from positronic.drivers.keyboard import KeyboardControl
+from positronic.eval import Embodiment
+from positronic.policy.harness import Directive, Harness
 from positronic.utils.logging import init_logging
 
 
@@ -34,62 +35,52 @@ class KeyboardHandler:
         return None
 
 
-@cfn.config(ui_scale=1, handover_dir=handover.DEFAULT_DIR)
-def eval_ui(ui_scale, handover_dir):
-    def make(output_dir: Path | None) -> Driver:
-        from positronic.gui.eval import EvalUI  # noqa: PLC0415
+def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
+    """Run one hardware embodiment attended and headless, the keyboard deciding when an episode starts,
+    finishes or aborts.
 
-        gui = EvalUI(output_dir, ui_scale=ui_scale, handover_dir=Path(handover_dir))
-        return Driver(gui, gui.directive, pimm.utils.identity, [])
+    The world is composed here rather than by the runner: an attended surface is the binary's own business,
+    and the keyboard is the only one this library ships. There is no viewer — a console that shows the
+    cameras is a binary of its own, composing a world around ``Harness``, ``wire.wire_embodiment`` and
+    ``gui.dpg_ui``. A run ends when ``KeyboardControl`` returns — on ``q``, or on a stdin that is not a
+    terminal — since a control system returning stops the world.
+    """
+    if embodiment.simulated:
+        raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
 
-    return make
+    # The policy is this function's to close from here on, and everything below can raise:
+    # `prepare_output_dir` syncs a directory and snapshots sources into it, and `LocalDatasetWriter`
+    # scans the one it is given.
+    try:
+        _run_attended(policy, embodiment, task, output_dir)
+    finally:
+        policy.close()
 
 
-@cfn.config(show_gui=False)
-def keyboard(show_gui, task):
-    def make(output_dir: Path | None) -> Driver:
-        keyboard = KeyboardControl(quit_key='q')
-        keyboard_handler = KeyboardHandler(task=task)
-        print('Keyboard controls: [s]tart, sto[p], abo[r]t, [q]uit')
-        return Driver(
-            dpg_ui() if show_gui else None,
+def _run_attended(policy, embodiment: Embodiment, task: str | None, output_dir) -> None:
+    """Record from a warmed policy until the keyboard returns. The caller owns the policy."""
+    output_dir = prepare_output_dir(policy, output_dir)
+    harness = Harness(policy, embodiment, on_episode_complete=completion_sink(policy))
+    keyboard = KeyboardControl(quit_key='q')
+    handler = KeyboardHandler(task=task)
+    print('Keyboard controls: [s]tart, sto[p], abo[r]t, [q]uit')
+
+    writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
+    with writer_cm as dataset_writer, pimm.World() as world:
+        ds_agent = wire.wire_embodiment(world, harness, embodiment, dataset_writer)
+        world.connect(
             keyboard.keyboard_inputs,
-            pimm.map(keyboard_handler.harness_directive),
-            [keyboard],
+            harness.directive,
+            # `World.connect` types its wrapper same-in-same-out; a keystroke->Directive map is not.
+            emitter_wrapper=pimm.map(handler.harness_directive),  # pyright: ignore[reportArgumentType]
         )
-
-    return make
-
-
-@cfn.config(
-    port=8080,
-    fps=20,
-    width=640,
-    bitrate=2_000_000,
-    translation_fine=0.01,
-    translation_coarse=0.05,
-    rotation_fine=2.0,
-    rotation_coarse=10.0,
-)
-def web(port, fps, width, bitrate, translation_fine, translation_coarse, rotation_fine, rotation_coarse, task):
-    def make(output_dir: Path | None) -> Driver:
-        ui = WebEvalUI(
-            task=task,
-            port=port,
-            fps=fps,
-            width=width,
-            bitrate=bitrate,
-            translation_fine=translation_fine,
-            translation_coarse=translation_coarse,
-            rotation_fine=rotation_fine,
-            rotation_coarse=rotation_coarse,
-        )
-        return Driver(ui, ui.directive, pimm.utils.identity, [], manual_commands=ui.manual_command)
-
-    return make
+        if ds_agent is not None:
+            world.connect(harness.ds_command, ds_agent.command)
+        producers = [cs for cs in embodiment.control_systems if cs is not None]
+        world.run([harness, keyboard], [*producers, ds_agent])
 
 
-run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder, driver=keyboard)
+real_cfg = cfn.Config(real, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder)
 
 
 # Console entry point for [project.scripts].
@@ -97,15 +88,9 @@ run_cfg = cfn.Config(main, embodiment=positronic.cfg.embodiment.droid, policy=po
 def _internal_main():
     init_logging()
     cfn.cli({
-        'run': run_cfg,
-        'real': run_cfg,  # `real` is the documented name for the hardware path
+        'run': real_cfg,
+        'real': real_cfg,  # `real` is the documented name for the hardware path
         'sim': run.override(eval=stack_cubes),
-        'web': run_cfg.override(driver=web),
-        'phail': run_cfg.override(
-            policy=policy_cfg.phail_multiple,
-            driver=eval_ui,
-            **{'driver.ui_scale': 3, 'embodiment.robot_arm.collision_coeff': 2.0},
-        ),
         'stats': stats,
     })
 

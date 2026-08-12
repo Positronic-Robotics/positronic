@@ -24,8 +24,8 @@ from pathlib import Path
 
 import configuronic as cfn
 import pos3
-from lerobot.configs.train import TrainPipelineConfig
-from lerobot.constants import ACTION, OBS_IMAGE, OBS_STATE
+from lerobot.configs.train import TRAIN_CONFIG_NAME, TrainPipelineConfig
+from lerobot.constants import ACTION, CHECKPOINTS_DIR, OBS_IMAGE, OBS_STATE, PRETRAINED_MODEL_DIR
 from lerobot.envs.configs import EnvConfig, FeatureType, PolicyFeature
 from lerobot.scripts import train as lerobot_train
 
@@ -120,7 +120,7 @@ def train(
         codec = getattr(module, parts[-1])
         logging.info(f'Resolved codec from string: {codec}')
 
-    base_config = str(Path(__file__).resolve().parent.joinpath('train_config.json'))
+    base_config = str(Path(__file__).resolve().parent.joinpath(TRAIN_CONFIG_NAME))
     assert Path(base_config).is_file(), f'Base config file {base_config} does not exist.'
     exp_name = str(exp_name)
     cfg = TrainPipelineConfig.from_pretrained(base_config)
@@ -154,13 +154,13 @@ def train(
     _update_config(cfg, **cfg_kwargs)
 
     if cfg.resume:
-        checkpoints_dir = Path(cfg.output_dir) / 'checkpoints'
+        checkpoints_dir = Path(cfg.output_dir) / CHECKPOINTS_DIR
         if checkpoints_dir.exists():
             # Find the latest checkpoint directory (highest integer value)
             checkpoint_dirs = [d for d in checkpoints_dir.iterdir() if d.is_dir() and d.name.isdigit()]
             if checkpoint_dirs:
                 latest_checkpoint = max(checkpoint_dirs, key=lambda d: int(d.name))
-                config_path = latest_checkpoint / 'pretrained_model' / 'train_config.json'
+                config_path = latest_checkpoint / PRETRAINED_MODEL_DIR / TRAIN_CONFIG_NAME
                 logging.info(f'Resuming run. Automatically setting config_path to {config_path}')
                 # Hack: lerobot requires config_path to be in sys.argv for validation
                 sys.argv.append(f'--config_path={config_path}')
