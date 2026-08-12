@@ -43,7 +43,7 @@ _STATE_KEYS = (keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP)
 
 def _build_wire_obs(sample: dict, task: str | None, now_ns: int, recorded_ts: int) -> dict:
     obs = {k: sample[k] for k in _STATE_KEYS if k in sample}
-    obs.update({k: v for k, v in sample.items() if k.startswith('image.')})
+    obs.update({k: v for k, v in sample.items() if k.startswith(keys.IMAGE_PREFIX)})
     if task:
         obs[keys.TASK] = task
     obs[keys.WALL_TIME_NS] = now_ns  # rerun wall_time timeline
@@ -131,7 +131,7 @@ def main(
 
     now_ns = time.time_ns()
     obs = _build_wire_obs(sample, task, now_ns, ts)
-    image_keys = [k for k in obs if k.startswith('image.')]
+    image_keys = [k for k in obs if k.startswith(keys.IMAGE_PREFIX)]
 
     rec = Recorder(pos3.sync(output_dir))
     session = rec.tap(_TAP).wrap(policy).new_session({keys.TASK: task} if task else None, time.time)

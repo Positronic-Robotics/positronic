@@ -1,7 +1,7 @@
 """Canonical PhAIL tote pick-and-place task instructions.
 
 The single source of truth for these instruction strings, shared by the policy goal (the real eval configs in this
-package), the recorded `task` label (dataset configs), the operator task picker (`EvalUI`), and scoring (analysis).
+package), the recorded `task` label (dataset configs), an operator surface's task picker, and scoring (analysis).
 Dependency-free so any of those can import it without pulling heavy deps.
 """
 

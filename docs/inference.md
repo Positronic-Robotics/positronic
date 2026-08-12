@@ -88,15 +88,50 @@ uv run positronic-inference sim \
 
 Use local when latency is critical (<50ms), robot has built-in GPU, or offline operation required. Use remote when GPU server is separate, models are heavy, or multiple robots share one server.
 
-## Inference Drivers
+## Who Decides Episode Boundaries
 
-Positronic provides two interactive drivers for managing inference episodes (see [`positronic/inference.py`](../positronic/inference.py)), plus an unattended mode:
+Something has to say when an episode starts, finishes or is abandoned. `positronic-inference` ships two commands, one per answer (see [`positronic/inference.py`](../positronic/inference.py)):
 
-**Unattended (automatic):** The default for `sim` — runs `--eval.trial_count=10` episodes back-to-back, each ending when the task's `timeout` expires (override with `--eval.timeout=60`, seconds per episode); optionally `--show_gui=True` for DearPyGui visualization. Useful for batch evaluation without manual intervention.
+**Unattended (`sim`):** the harness self-drives the eval's trial plan — `--eval.trial_count=10` episodes back-to-back, each ending when the task's `timeout` expires (override with `--eval.timeout=60`, seconds per episode). Batch evaluation with nobody in the loop.
 
-**Keyboard driver (manual):** Control inference with keyboard. Press `s` to start episode, `p` to stop and save, `r` to home the robot, `q` to quit. The default for `real`; optionally pass `--driver.show_gui=True` for DearPyGui visualization. Useful for manual evaluation and debugging.
+**Keyboard (`real`):** press `s` to start an episode, `p` to stop and save, `r` to home the robot, `q` to quit. Headless — it renders nothing — and it takes `--task`, `--embodiment`, `--policy` and `--output_dir`. Manual evaluation and debugging on hardware.
 
-**Eval UI driver:** Dedicated evaluation interface for policy assessment. The default for `phail` — graphical controls and metrics visualization. Useful for systematic policy evaluation with visual feedback.
+### A console of your own
+
+Anything richer — a web console, a foot pedal, a rig UI — is a binary of its own rather than a plug-in: it composes its own `pimm.World` out of the public pieces, and nothing in the library needs to know which surface is driving. The shape, for a **hardware** embodiment:
+
+```python
+from contextlib import nullcontext
+
+import pimm
+from positronic import wire
+from positronic.cli.eval.run import completion_sink, prepare_output_dir
+from positronic.dataset.local_dataset import LocalDatasetWriter
+from positronic.policy.harness import Harness
+
+# The setup under the `try` can raise — `prepare_output_dir` syncs a directory and snapshots
+# sources into it, `LocalDatasetWriter` scans the one it is given — and the policy is yours to
+# close from the moment you first touch it.
+try:
+    # `None` where the run records nothing, which is why the writer is a nullcontext below.
+    output_dir = prepare_output_dir(policy, output_dir)
+    harness = Harness(policy, embodiment, on_episode_complete=completion_sink(policy))
+    console = MyConsole()  # emits positronic.policy.harness.Directive
+
+    writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
+    with writer_cm as writer, pimm.World() as world:
+        ds_agent = wire.wire_embodiment(world, harness, embodiment, writer)
+        world.connect(console.directives, harness.directive)
+        if ds_agent is not None:
+            world.connect(harness.ds_command, ds_agent.command)
+        world.run([harness, console], [*embodiment.control_systems, ds_agent])
+finally:
+    policy.close()
+```
+
+**A simulated embodiment is not this.** Three things change together, and a copy of the shape above records a sim run against the wall clock: the world takes `virtual_time=True`, `wire_embodiment` takes `TimeMode.MESSAGE`, and the producers are scheduled in the foreground beside the harness rather than as background processes, so one scheduler round is one control period. `_run_world` in [`positronic/cli/eval/run.py`](../positronic/cli/eval/run.py) is the worked version, including why the ordering within a round is what it is.
+
+The world stops when any of its control systems returns, so the console ends the run by returning from its loop. To show the cameras, connect every observation whose name starts with `positronic.keys.IMAGE_PREFIX` into a viewer's `cameras` — `positronic.gui.dpg_ui()` is one, and the naming convention is what identifies a camera on the wire. To let the operator jog the arm between episodes, emit robot commands into `harness.manual_command`, which the harness applies only while idle.
 
 ## Recording and Replay
 
