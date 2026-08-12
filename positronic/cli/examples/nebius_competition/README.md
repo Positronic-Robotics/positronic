@@ -5,7 +5,7 @@ Walkthroughs for the competition's sim qualifier, on top of the same client ever
 - `submit_sample.py` — submit a policy image to the `robolab.public_subset` eval, wait for it to
   finish, and report what it scored.
 
-Three things about the competition flow that the generic walkthrough does not cover:
+What the generic walkthrough does not cover:
 
 - **Pin your image by digest.** The platform resolves the reference to a digest at submission time
   and runs those exact bytes; submitting a mutable tag means the run may not be the build you
