@@ -131,14 +131,16 @@ lifecycle — nothing else. Scheduling, blending, history stacking and error rec
 wrapper stack around the policy; a session returning `None` means "keep executing the current
 trajectory".
 
-**Positronic owns the loop; an attended surface owns its own binary.** Unattended, the harness self-drives a
-trial plan; attended, something outside the loop decides when an episode starts, finishes or is abandoned.
-That something composes the run rather than plugging into one: it builds its own `pimm.World` around
-`Harness` and `wire.wire_embodiment`, schedules its control systems in it, and emits directives into
-`harness.directive`. A main-process control system returning ends the world, so a surface finishes a run by
-returning from its loop. The library ships one surface — the keyboard, in `positronic/inference.py` — and no
-seam for the others, because a seam is a contract every console would have to be expressible in, and the
-composition it would replace is a dozen lines a console already writes for itself.
+**No execution environment beyond the reproducibility minimum.** This library runs one policy against one
+embodiment and records it; orchestration, campaigns and operator plumbing are automation, and automation
+lives in the platform that drives this. So the library ships one attended surface — the keyboard, in
+`positronic/inference.py` — and no seam for others: a console composes its own `pimm.World` around `Harness`
+and `wire.wire_embodiment`, which is a dozen lines it writes for itself.
+
+**A run is finished by stopping a control system.** Control systems in a world live and die together — a
+main-process loop returning stops the rest and unwinds the world safely — so that is already the way to end
+a run, and nothing here invents a second one: no stop verb, no flag file, no hook. An attended surface
+returns from its own loop ([`pimm/README.md`](pimm/README.md)).
 
 **Recordings are canonical; codecs bind the dialect late.** The dataset records every run in the
 canonical conventions (frames, key names, absolute time) — never in a model's dialect. Every

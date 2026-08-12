@@ -205,6 +205,32 @@ The `World` runtime plays three roles:
    resources; exiting it cleans up queues, shared-memory buffers, and background
    processes even if exceptions occur.
 
+### Ending a run: return from a control system
+
+The systems in a world live and die together. When a main-process loop returns, the world
+sets `should_stop`; every other loop runs once more to observe it and finalize — flush an
+episode, close a policy, park hardware — and then the world unwinds.
+
+That is the way to end a run, so do not build a second one. A supervisor is an ordinary
+control system that watches for whatever "done" means to it and returns when it sees it:
+
+```python
+class FinishOnRequest(pimm.ControlSystem):
+    def __init__(self, requested):
+        self._requested = requested          # a shared flag, a receiver, a file — its own business
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        while not should_stop.value:
+            if self._requested():
+                return                       # the world comes down from here
+            yield pimm.Sleep(0.2)
+```
+
+Two consequences worth stating. Such a loop must have exactly one reason to return, since any
+other one also ends the run — a loop that returns when it runs out of things to say would end
+a run by accident. And it must be scheduled in the **main process**: a background loop
+returning takes only itself down.
+
 ### Pairing Connectors
 
 Once you have declared your wiring it is often handy to keep a handle to the
