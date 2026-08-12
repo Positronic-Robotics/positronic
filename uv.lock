@@ -68,6 +68,10 @@ positronic = false
 positronic-franka = false
 
 [manifest]
+members = [
+    "positronic",
+    "positronic-platform-client",
+]
 constraints = [
     { name = "cmake", specifier = "<4.3" },
     { name = "evdev", specifier = "<1.9" },
@@ -4853,6 +4857,7 @@ dependencies = [
     { name = "opentelemetry-api" },
     { name = "plotly" },
     { name = "pos3" },
+    { name = "positronic-platform-client" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pyturbojpeg" },
@@ -4971,6 +4976,7 @@ requires-dist = [
     { name = "plotly", specifier = ">=6.5.0" },
     { name = "pos3", specifier = ">=0.3.1" },
     { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.7.0" },
+    { name = "positronic-platform-client", editable = "client" },
     { name = "protobuf", marker = "extra == 'molmoact2'" },
     { name = "psutil", marker = "extra == 'telemetry'" },
     { name = "pyarrow" },
@@ -5030,6 +5036,21 @@ dependencies = [
     { name = "requests", marker = "sys_platform == 'linux' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/16/45/029c72cffe797d8265328405552f3f4d7dae76ee900ca811095200e471f4/positronic_franka-0.7.0.tar.gz", hash = "sha256:b9381ffa52d9fa9c998619bc40bb568733ceb2b7bd86d5c407483ae29ec08c2e", size = 1809759, upload-time = "2026-08-03T22:29:36.532Z" }
+
+[[package]]
+name = "positronic-platform-client"
+version = "0.1.0"
+source = { editable = "client" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pydantic", specifier = ">=2.7" },
+]
 
 [[package]]
 name = "prometheus-client"

@@ -1,0 +1,284 @@
+"""Response models for every gateway endpoint — the typed shape both sides bind to.
+
+- Timestamps are aware UTC datetimes; the wire form is ISO 8601.
+- Ids are hex strings on the wire (`platform_client.ids`), closed sets are slugs
+  (`platform_client.slug`).
+- Locations stay plain strings: to a caller they are opaque locators.
+- `submissions.get` answers one of five variants, discriminated on the status slug.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated, Any, Self
+
+from platform_client.enums import BoardVisibility, KeyStatus, OnExhausted, QuotaSubject, ReasonCode, SubmissionStatus
+from platform_client.evals import EvalRef
+from platform_client.ids import ApiKey, SubmissionId, UserId
+from platform_client.slug import Slugged
+from pydantic import AwareDatetime, BaseModel, Discriminator, Field, Tag, model_validator
+
+
+class Scores(BaseModel):
+    """The scorer's output for a finished run. `primary` is the value a board ranks on."""
+
+    primary: float | None = None
+    success_rate: float | None = None
+    per_task: dict[str, float] = Field(default_factory=dict)
+    episodes: int = 0
+    unscored: int = 0
+
+
+# The rule keys this platform's plans declare. Published because a caller matches on them: a 429
+# names one in its `details`, and `MeResponse.quota_for` takes one. Renaming a key is a contract
+# change; a plan declaring a NEW rule is not, so a key absent from this list is not an error.
+# An engagement's own rules are not published here — its words are its own (test_vocabulary).
+QUOTA_SUBMISSIONS_DAY = 'submissions.day'
+QUOTA_SUBMISSIONS_CONCURRENT = 'submissions.concurrent'
+
+
+class QuotaLimit(BaseModel):
+    """One rule of the caller's plan, and what is left of it at the moment of the read."""
+
+    key: str  # the rule's identity, one of the published keys above — what a 429 names
+    meter: str  # open set: a plan may declare one. 'submissions' | 'credits'
+    unit: str  # the display unit, open for the same reason
+    scale: int  # meter units per display unit (credits: 6, submissions: 1)
+    window: str  # a display label: 'day', '24 Jul – 23 Aug', 'concurrent'
+    subject: Slugged[QuotaSubject]
+    scope: list[str] = Field(default_factory=list)  # tags this rule counts; empty counts the whole meter
+    limit: int  # meter units
+    used: int  # meter units; may exceed limit under on_exhausted=meter
+    resets_at: AwareDatetime | None
+    on_exhausted: Slugged[OnExhausted]
+
+    @property
+    def remaining(self) -> int:
+        """Meter units left, clamped at 0."""
+        return max(self.limit - self.used, 0)
+
+
+class ArtifactRefs(BaseModel):
+    """Where a finished submission's outputs are readable."""
+
+    result: str
+
+
+# The outcomes that mint a key. `existing` is the one that does not.
+_MINTING_OUTCOMES = frozenset({KeyStatus.created, KeyStatus.rotated})
+
+
+class RegisterResponse(BaseModel):
+    """`users.register`. `api_key` is present exactly when a key was minted: `created` or `rotated`."""
+
+    user_id: UserId
+    artifact_location: str
+    api_key: ApiKey | None = None
+    key_status: Slugged[KeyStatus]
+
+    @model_validator(mode='after')
+    def _the_key_and_the_outcome_agree(self) -> Self:
+        # Held here so no consumer has to infer the outcome from the key's presence: a `created`
+        # response missing its key would otherwise read as `existing` and prompt a needless rotate.
+        minted = self.key_status in _MINTING_OUTCOMES
+        if minted and self.api_key is None:
+            raise ValueError(f'key_status is {self.key_status.name} but no api_key came with it')
+        if not minted and self.api_key is not None:
+            raise ValueError(f'key_status is {self.key_status.name}, which mints no key, yet an api_key is present')
+        return self
+
+
+class MeResponse(BaseModel):
+    """`users.me`."""
+
+    user_id: UserId
+    alias: str | None = None
+    tenant: str
+    plan: str
+    quota: list[QuotaLimit]
+
+    def quota_for(self, key: str) -> QuotaLimit | None:
+        """The limit under a rule key (`QUOTA_SUBMISSIONS_DAY` and friends), or None where the plan
+        carries no such rule."""
+        return next((limit for limit in self.quota if limit.key == key), None)
+
+
+class SubmissionCreateResponse(BaseModel):
+    """`submissions.create` — covers a fresh create, an idempotent replay, and an unpullable image.
+
+    An unpullable image is a caller fault: the submission is terminal and charged, so it comes
+    back `errored` with a `reason_code` rather than as an error envelope.
+    """
+
+    submission_id: SubmissionId
+    status: Slugged[SubmissionStatus]
+    policy_image_digest: str | None = None
+    eval_version: str | None = None
+    reason_code: Slugged[ReasonCode] | None = None
+
+
+class SubmissionListRow(BaseModel):
+    """One row of `submissions.list`. `user_id` attributes it — an admin listing spans users."""
+
+    id: SubmissionId
+    user_id: UserId
+    alias: str | None = None
+    status: Slugged[SubmissionStatus]
+    eval: EvalRef
+    received_at: AwareDatetime
+    reason_code: Slugged[ReasonCode] | None = None
+
+
+class SubmissionListResponse(BaseModel):
+    submissions: list[SubmissionListRow] = Field(default_factory=list)
+
+
+class _TaggedView(BaseModel):
+    """One `submissions.get` variant. Its `status` default IS the tag the union selects it by, so a
+    payload carrying any other status belongs to a different variant and is refused rather than
+    validated into this one — which is what stops an internal state the union has no variant for,
+    `submitting`, from arriving dressed as a pending view.
+    """
+
+    status: Slugged[SubmissionStatus]
+
+    @model_validator(mode='after')
+    def _the_status_is_this_variants_tag(self) -> Self:
+        tag = type(self).model_fields['status'].default
+        if self.status is not tag:
+            raise ValueError(f'{type(self).__name__} carries status {self.status.name}, not {tag.name}')
+        return self
+
+
+class PendingSubmissionView(_TaggedView):
+    """Queued, not yet running. `queue_position` is 1-based by arrival and computed on read."""
+
+    id: SubmissionId
+    alias: str | None = None
+    received_at: AwareDatetime
+    queued_at: AwareDatetime
+    queue_position: int = Field(gt=0)
+    status: Slugged[SubmissionStatus] = SubmissionStatus.pending
+
+
+class RunningSubmissionView(_TaggedView):
+    """Executing. `stage` names the orchestrator stage; `stage_detail` decorates it for display."""
+
+    id: SubmissionId
+    running_since: AwareDatetime
+    stage: str | None = None
+    stage_detail: str | None = None
+    status: Slugged[SubmissionStatus] = SubmissionStatus.running
+
+
+class ErroredSubmissionView(_TaggedView):
+    """Terminal failure. `reason_code` is the machine-readable taxonomy; `reason` is for humans."""
+
+    id: SubmissionId
+    reason_code: Slugged[ReasonCode] | None = None
+    reason: str | None = None
+    status: Slugged[SubmissionStatus] = SubmissionStatus.errored
+
+
+class FinishedSubmissionView(_TaggedView):
+    """Terminal success."""
+
+    id: SubmissionId
+    scores: Scores = Field(default_factory=Scores)
+    artifacts: ArtifactRefs
+    status: Slugged[SubmissionStatus] = SubmissionStatus.finished
+
+
+class CancelledSubmissionView(_TaggedView):
+    """Terminal, cancelled by the caller."""
+
+    id: SubmissionId
+    cancelled_at: AwareDatetime | None = None
+    status: Slugged[SubmissionStatus] = SubmissionStatus.cancelled
+
+
+# The discriminator's field name, and the fields a consumer rendering a view puts in its own header
+# line rather than in the body — named here so a model rename cannot leave a consumer excluding a
+# field that no longer exists.
+STATUS_FIELD = 'status'
+VIEW_HEADER_FIELDS = frozenset({'id', STATUS_FIELD})
+
+
+def _status_tag(value: Any) -> str | None:
+    """The status slug a `submissions.get` payload selects its variant by.
+
+    Reads the raw input, so it runs before validation and must handle both a decoded JSON mapping
+    and an already-built model.
+    """
+    raw = value.get(STATUS_FIELD) if isinstance(value, dict) else getattr(value, STATUS_FIELD, None)
+    if isinstance(raw, SubmissionStatus):
+        return raw.name.lower()
+    return raw if isinstance(raw, str) else None
+
+
+SubmissionView = Annotated[
+    Annotated[PendingSubmissionView, Tag('pending')]
+    | Annotated[RunningSubmissionView, Tag('running')]
+    | Annotated[ErroredSubmissionView, Tag('errored')]
+    | Annotated[FinishedSubmissionView, Tag('finished')]
+    | Annotated[CancelledSubmissionView, Tag('cancelled')],
+    Discriminator(_status_tag),
+]
+
+
+class CancelResponse(BaseModel):
+    """`submissions.cancel`. `refunded` is false once the run started — started work is charged."""
+
+    status: Slugged[SubmissionStatus]
+    refunded: bool
+
+
+class RankingRow(BaseModel):
+    """One row of a board: a user's best submission on it.
+
+    `display_name` is what the board shows — the user's alias, or a placeholder where a board is
+    anonymous or the user set none. It is NOT an identifier: aliases are not unique, so two rows may
+    carry the same one. `tag` is what tells them apart, and is what lets a user find their own row;
+    it is stable for a user across boards. Render them together (`ateam#0ddba7`).
+
+    The value the board ranks on is `scores.primary`, which `Scores` already defines as exactly that;
+    a second copy beside it is a number the gateway can contradict itself with.
+    """
+
+    rank: int
+    display_name: str
+    tag: str
+    scores: Scores = Field(default_factory=Scores)
+    submission_id: SubmissionId
+    submitted_at: AwareDatetime
+
+
+class BoardSummary(BaseModel):
+    """One board of `rankings.list`. `board` is the slug `rankings.get` takes."""
+
+    board: str
+    title: str
+    eval: EvalRef
+    eval_version: str
+    primary_metric: str
+    visibility: Slugged[BoardVisibility]
+
+
+class BoardListResponse(BaseModel):
+    """`rankings.list` — the boards the caller can see. A board they cannot see is absent, not refused."""
+
+    boards: list[BoardSummary] = Field(default_factory=list)
+
+
+class RankingsResponse(BaseModel):
+    """`rankings.get` for one board.
+
+    `primary_metric` NAMES the metric the board sorts on — `scores.primary`, whatever the eval calls
+    it. It is a label for a reader, never a key: nothing looks a value up by it, and it is not
+    guaranteed to name a field of `Scores`.
+    """
+
+    board: str
+    eval: EvalRef
+    eval_version: str
+    primary_metric: str
+    rankings: list[RankingRow] = Field(default_factory=list)

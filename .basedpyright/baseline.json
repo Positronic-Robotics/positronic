@@ -1278,16 +1278,6 @@
                 }
             }
         ],
-        "./positronic/cli/__init__.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 12,
-                    "endColumn": 35,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./positronic/data_collection.py": [
             {
                 "code": "reportOptionalOperand",

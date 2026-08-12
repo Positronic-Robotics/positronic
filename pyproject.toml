@@ -33,6 +33,10 @@ dependencies = [
     # openpi-client: optional, see [project.optional-dependencies] openpi
     "plotly>=6.5.0",
     "pos3>=0.3.1",
+    # The platform's wire contract, which `positronic eval submit` and `positronic platform` speak.
+    # A workspace member in a clone (see [tool.uv.sources]); a released `positronic` resolves it
+    # from the index, so the client is published first (.github/workflows/release.yaml).
+    "positronic-platform-client",
     "pyarrow",
     "pydantic",
     "pyturbojpeg<2",
@@ -129,6 +133,11 @@ dev = [
     "positronic[telemetry]",  # the telemetry tests exercise the SDK and the samplers
 ]
 
+[tool.uv.workspace]
+# `client/` builds the standalone `positronic-platform-client` distribution, which stays installable
+# on its own — it may depend on nothing in this repo.
+members = ["client"]
+
 [tool.uv]
 # lerobot_0_3_3 extra pulls in lerobot==0.3.3 which declares rerun-sdk<0.23,
 # but our usage of lerobot doesn't need rerun — override to unblock resolution.
@@ -172,6 +181,7 @@ pos3 = false
 positronic-franka = false
 
 [tool.uv.sources]
+positronic-platform-client = { workspace = true }
 # ZED SDK ships one ABI-specific wheel per CPython version; pick by interpreter.
 pyzed = [
     { url = "https://download.stereolabs.com/zedsdk/5.0/whl/linux_x86_64/pyzed-5.0-cp311-cp311-linux_x86_64.whl", marker = "python_full_version < '3.12'" },
@@ -183,10 +193,11 @@ i2rt = { git = "https://github.com/i2rt-robotics/i2rt.git", rev = "5d47b358bafb3
 
 [tool.pytest.ini_options]
 # Search roots, not a list of suites, so a new `tests/` directory is collected without being registered
-testpaths = ["pimm", "positronic", "utilities"]
+testpaths = ["client", "pimm", "positronic", "utilities"]
 python_files = ["test_*.py", "*_test.py"]
 addopts = [
     "--cov=pimm",
+    "--cov=platform_client",
     "--cov=positronic",
     "--cov-report=term-missing",
     # Needs the `libero` extra and OSMesa; `libero-e2e.yaml` runs it by path, which `--ignore` allows.
@@ -201,7 +212,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["pimm", "positronic"]
+source = ["pimm", "platform_client", "positronic"]
 
 [tool.coverage.report]
 show_missing = true
@@ -248,7 +259,7 @@ skip-magic-trailing-comma = true
 # .basedpyright/baseline.json; only NEW errors fail. Modules are strictened incrementally.
 typeCheckingMode = "standard"
 pythonVersion = "3.11"
-include = ["pimm", "positronic"]
+include = ["client", "pimm", "positronic"]
 # mujoco ships no `.pyi` and re-exports from binary extension modules, so its whole API reads as
 # attribute errors without these. Regenerate with utilities/generate_mujoco_stubs.py.
 stubPath = "stubs"

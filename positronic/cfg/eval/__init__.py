@@ -6,7 +6,10 @@ import configuronic as cfn
 @cfn.config()
 def placeholder():
     # Lets ``--eval=.sim.positronic.stack_cubes`` resolve relative to this package; never instantiated.
-    raise SystemExit('--eval is required, e.g. --eval=.sim.positronic.stack_cubes')
+    raise SystemExit(
+        '--eval is required: a config to run here (--eval=.sim.positronic.stack_cubes), '
+        'or the name of one the platform offers (--eval=robolab.public_subset, with --policy-image)'
+    )
 
 
 def build_trials(seed: int | None, trial_count: int, scenes: list[dict] | None = None) -> list[dict]:
