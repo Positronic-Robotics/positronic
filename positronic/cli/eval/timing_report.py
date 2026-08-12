@@ -620,13 +620,17 @@ def timing_report(run_dir: str, gpu_policy_log: str | None):
     for an ``s3://`` input to the sibling key ``<run_dir>.timing_summary.json`` (pos3 forbids uploading inside
     the downloaded prefix) — and prints the report.
     """
-    root = Path(pos3.download(run_dir)) if '://' in run_dir else Path(run_dir)
+    root = Path(pos3.download(run_dir)) if '://' in run_dir else Path(run_dir).expanduser()
     telemetry_dir = root / TELEMETRY_SUBDIR
-    spans = _read_spans_dir(telemetry_dir) if telemetry_dir.is_dir() else []
+    if not telemetry_dir.is_dir():
+        raise ValueError(
+            f'no telemetry directory at {telemetry_dir}: not a run directory, or recorded without --timing'
+        )
+    spans = _read_spans_dir(telemetry_dir)
     if not spans:
-        raise ValueError(f'no telemetry under {telemetry_dir} (recorded without --timing?)')
+        raise ValueError(f'{telemetry_dir} carries no spans (a run killed before its sidecars were flushed?)')
 
-    policy_gpu = _parse_dmon(Path(gpu_policy_log)) if gpu_policy_log is not None else None
+    policy_gpu = _parse_dmon(Path(gpu_policy_log).expanduser()) if gpu_policy_log is not None else None
     report = _build_report(spans, _read_stats_dir(telemetry_dir), policy_gpu)
     summary_path = root / 'timing_summary.json'
     summary_path.write_text(json.dumps(asdict(report), indent=2))

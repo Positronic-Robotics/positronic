@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from pathlib import Path
 
 import configuronic as cfn
 import mujoco as mj
@@ -151,7 +152,8 @@ def main(
     kv: float,
     actuator_type: str,
 ):
-    with open(urdf_path, 'w') as f:
+    urdf, target = Path(urdf_path).expanduser(), Path(target_path).expanduser()
+    with open(urdf, 'w') as f:
         xml = create_arm(
             link_lengths=link_lengths,
             motors=motors,
@@ -161,9 +163,9 @@ def main(
         )
         f.write(xml)
 
-    spec = convert_urdf_to_mujoco(urdf_path, wall_mounted=wall_mounted, kp=kp, kv=kv, actuator_type=actuator_type)
+    spec = convert_urdf_to_mujoco(str(urdf), wall_mounted=wall_mounted, kp=kp, kv=kv, actuator_type=actuator_type)
     spec.compile()
-    with open(target_path, 'w') as f:
+    with open(target, 'w') as f:
         f.write(spec.to_xml())
 
 

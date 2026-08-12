@@ -35,7 +35,7 @@ def main(
 ):
     exp_name = str(exp_name)
     groot_root = Path(__file__).parents[4] / 'gr00t'
-    python_bin = str(Path(groot_venv_path) / 'bin' / 'python')
+    python_bin = str(Path(groot_venv_path).expanduser() / 'bin' / 'python')
     modality_config_path = MODALITY_CONFIGS.get(modality_config, modality_config)
 
     with pos3.mirror():
