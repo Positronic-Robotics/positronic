@@ -452,6 +452,10 @@ class Harness(pimm.ControlSystem):
             if obs.serializer is not None:
                 value = obs.serializer(value)
                 if value is None:
+                    # HACK(#619): a serializer answers `None` for a resetting arm and a faulted one alike, so the
+                    # fault is recovered from the raw sample and stapled on below as `keys.ROBOT_FAULT` — a name
+                    # already claiming to be part of `robot_state`. Emit it from the serializer and this branch,
+                    # the raw-type check and the flag all go, and the fault reaches the recording as well.
                     if not self._is_faulted(message.data):
                         return None
                     faulted = True
