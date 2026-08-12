@@ -151,7 +151,7 @@ def test_the_run_ended_discard_is_logged_under_its_own_reason(world, caplog):
         run_scripted_agent(agent, script, world=world)
 
     assert f'[DISCARD {DiscardReason.RUN_ENDED.value}] Episode 1' in caplog.text
-    assert '[ABORT]' not in caplog.text  # the operator aborted nothing
+    assert '[ABORT]' not in caplog.text
 
 
 def test_an_episode_that_fails_to_discard_is_not_finalized(world):

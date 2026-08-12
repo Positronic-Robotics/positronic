@@ -1053,7 +1053,6 @@ def test_run_while_running_is_ignored(world):
     drive_scheduler(scheduler, steps=20)
 
     types = _ds_types(p)
-    # ep2's RUN is ignored; ep1 stays live, and the shutdown that follows discards it rather than stopping it.
     assert types.count(DsWriterCommandType.START_EPISODE) == 1
     assert types.count(DsWriterCommandType.STOP_EPISODE) == 0
     assert policy.reset_calls == 1

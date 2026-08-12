@@ -1,4 +1,6 @@
 import json
+import logging
+from unittest.mock import patch
 
 import numpy as np
 import pyarrow as pa
@@ -7,12 +9,14 @@ import pytest
 
 from positronic import keys
 from positronic.dataset import Episode
-from positronic.dataset.episode import META_UID, DiscardReason
+from positronic.dataset.episode import META_CREATED_TS_NS, META_UID, DiscardReason
 from positronic.dataset.local_dataset import (
     DISCARD_MARKER,
     DISCARD_REASON,
     DISCARD_TS_NS,
     DISCARD_UID,
+    META_FILE,
+    STATIC_FILE,
     UNFINISHED_MARKER,
     DiskEpisode,
     DiskEpisodeWriter,
@@ -255,10 +259,10 @@ def test_a_discarded_episode_keeps_its_static_data_and_identity(tmp_path):
     w.discard(DiscardReason.RUN_ENDED)
 
     discarded = tmp_path / 'discarded' / f'ep_discard_static-{uid}'
-    assert json.loads((discarded / 'static.json').read_text())[keys.TASK] == 'pick_place'
-    meta = json.loads((discarded / 'meta.json').read_text())
+    assert json.loads((discarded / STATIC_FILE).read_text())[keys.TASK] == 'pick_place'
+    meta = json.loads((discarded / META_FILE).read_text())
     assert meta[META_UID] == uid
-    assert meta['created_ts_ns'] > 0
+    assert meta[META_CREATED_TS_NS] > 0
     assert (discarded / UNFINISHED_MARKER).exists()
 
 
@@ -720,3 +724,20 @@ def test_episode_writer_takes_an_ordinary_uid(tmp_path):
     writer = DiskEpisodeWriter(tmp_path / 'ep_plain', discarded_dir=tmp_path / 'discarded', uid='deadbeef')
 
     assert writer.meta[META_UID] == 'deadbeef'
+
+
+def test_every_signal_that_fails_to_finalize_is_reported(tmp_path, caplog):
+    """The first failure is raised, so the retry contract holds; the rest are logged rather than
+    dropped, since each is a different encoder's reason."""
+    w = DiskEpisodeWriter(tmp_path / 'ep_multi_fail', discarded_dir=tmp_path / 'discarded', uid='multi')
+    w.append('a', 1, ts_ns=1)
+    w.append('b', 2, ts_ns=1)
+
+    def fail(self, *exc):
+        raise RuntimeError('encoder failed')
+
+    with patch.object(SimpleSignalWriter, '__exit__', fail), caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match='failed'):
+            w.discard(DiscardReason.RUN_ENDED)
+
+    assert 'also failed to finalize' in caplog.text

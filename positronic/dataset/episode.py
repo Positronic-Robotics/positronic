@@ -13,6 +13,9 @@ from .signal import Signal
 EPISODE_SCHEMA_VERSION = 1
 # Key an episode's identity is stamped under in `meta`; every writer writes it and every reader addresses by it.
 META_UID = 'uid'
+# Written by a writer and read back by a reader, a migration and a dataset — one spelling, since
+# nothing but the shared name keeps the four in step.
+META_CREATED_TS_NS = 'created_ts_ns'
 T = TypeVar('T')
 SIGNAL_FACTORY_T = Callable[[], Signal[Any]]
 

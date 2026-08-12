@@ -25,6 +25,7 @@ from .dataset import ConcatDataset, Dataset, DatasetWriter
 from .edits import EditedDataset
 from .episode import (
     EPISODE_SCHEMA_VERSION,
+    META_CREATED_TS_NS,
     META_UID,
     SIGNAL_FACTORY_T,
     DiscardReason,
@@ -41,6 +42,10 @@ from .video import VideoSignal, VideoSignalWriter
 
 logger = logging.getLogger(__name__)
 
+# The storage format's own filenames: a writer creates them and a reader opens them, so they are
+# named here rather than spelled at each end.
+STATIC_FILE = 'static.json'
+META_FILE = 'meta.json'
 UNFINISHED_MARKER = '.unfinished'
 DISCARD_MARKER = 'discarded.json'
 # Fields of that marker, read by anything inspecting or sweeping the discarded tree.
@@ -142,7 +147,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._meta = {
             'schema_version': EPISODE_SCHEMA_VERSION,
             META_UID: uid or uuid.uuid4().hex,
-            'created_ts_ns': created_ts_ns or time.time_ns(),
+            META_CREATED_TS_NS: created_ts_ns or time.time_ns(),
         }
         self._meta['writer'] = _cached_env_writer_info()
         self._meta['writer']['name'] = f'{self.__class__.__module__}.{self.__class__.__qualname__}'
@@ -244,12 +249,12 @@ class DiskEpisodeWriter(EpisodeWriter):
         return first_ts, last_ts
 
     def _write_static_and_meta(self) -> None:
-        episode_json = self._path / 'static.json'
+        episode_json = self._path / STATIC_FILE
         if self._static_items or not episode_json.exists():
             with episode_json.open('w', encoding='utf-8') as f:
                 json.dump(self._static_items, f, indent=2, cls=_StaticEncoder)
 
-        with (self._path / 'meta.json').open('w', encoding='utf-8') as f:
+        with (self._path / META_FILE).open('w', encoding='utf-8') as f:
             json.dump(self._meta, f, indent=2)
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -322,14 +327,19 @@ class DiskEpisodeWriter(EpisodeWriter):
         # Before the first step that can fail: __exit__ commits an episode this does not cover.
         self._discard_reason = self._discard_reason or reason
 
-        failure: Exception | None = None
-        for w in list(self._writers.values()):
+        failures: list[tuple[str, Exception]] = []
+        for name, w in list(self._writers.items()):
             try:
                 w.__exit__(None, None, None)  # finalize rather than abort, whose unlink is what loses the bytes
             except Exception as e:  # finalize the rest before propagating, so no encoder is left running
-                failure = failure or e
-        if failure is not None:
-            raise failure
+                failures.append((name, e))
+        if failures:
+            # The first is raised, so a caller's `except` keeps working and the retry contract holds. The
+            # rest are logged rather than dropped: each is a distinct encoder's reason, and one discard
+            # failing twice is two different bugs as often as it is one.
+            for name, e in failures[1:]:
+                logger.error('Signal %r also failed to finalize during discard: %s', name, e, exc_info=e)
+            raise failures[0][1]
 
         self._write_static_and_meta()
 
@@ -420,7 +430,7 @@ class DiskEpisode(Episode):
     def _static_data(self) -> dict[str, Any]:
         if self._static is None:
             self._static = {}
-            ep_json = self._dir / 'static.json'
+            ep_json = self._dir / STATIC_FILE
             if ep_json.exists():
                 with ep_json.open('r', encoding='utf-8') as f:
                     data = json.load(f, object_hook=_static_decode_hook)
@@ -470,7 +480,7 @@ class DiskEpisode(Episode):
     def meta(self) -> dict:
         if self._meta is None:
             meta: dict[str, Any] = {}
-            meta_json = self._dir / 'meta.json'
+            meta_json = self._dir / META_FILE
             if meta_json.exists():
                 with meta_json.open('r', encoding='utf-8') as f:
                     try:
@@ -486,8 +496,8 @@ class DiskEpisode(Episode):
 
             # Episodes without a stamped uid derive a stable identity from the recording timestamp,
             # which is immutable and travels with the episode across copies
-            if META_UID not in meta and 'created_ts_ns' in meta:
-                meta[META_UID] = f'ts-{meta["created_ts_ns"]}'
+            if META_UID not in meta and META_CREATED_TS_NS in meta:
+                meta[META_UID] = f'ts-{meta[META_CREATED_TS_NS]}'
 
             meta['path'] = str(self._dir.expanduser().resolve(strict=False))
 
