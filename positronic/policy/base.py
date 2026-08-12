@@ -106,8 +106,7 @@ class Policy(ABC):
     def sampling_key(self) -> str | None:
         """A stable identity for this policy within a sampled set, or ``None`` where it has none.
 
-        Stable means independent of where the policy sits in the set: a resumed run re-attaches
-        recorded episode counts by this key, so one that moved would carry a tally to another policy.
+        Stable means it does not depend on where the policy sits in the set.
         """
         return None
 
@@ -276,8 +275,8 @@ class SampledPolicy(Policy):
     def _key_for(self, index: int, policy: Policy) -> str:
         """How one sub-policy is named, most stable first.
 
-        The index is the last resort, and it is not stable: reordering the set re-attaches a resumed
-        run's counts to a different policy, so a policy that can name itself is asked before it.
+        The index is the last resort: it moves when the set is reordered, and ``counter`` tallies
+        against whatever this returns.
         """
         key = policy.meta.get(self._key_field)
         if key is not None:

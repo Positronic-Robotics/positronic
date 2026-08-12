@@ -132,11 +132,8 @@ def test_a_boolean_episode_is_refused():
 
 
 def test_a_relative_dataset_is_refused_in_the_whole_mapping_form():
-    """A leading dot is configuronic's relative-import sigil, applied to nested override values too.
-
-    It fails at override time, before the run starts, which is the difference between a footgun and a
-    corruption. The per-key form below is the route a relative path takes.
-    """
+    """A leading dot is configuronic's relative-import sigil, applied to nested override values too,
+    so the override raises rather than carrying the path."""
     for dataset in ('./run', '../data/run', '.run'):
         with pytest.raises(cfn.ConfigError, match="Failed to override 'endpoints'"):
             _built(endpoints={'arm_a': {'kind': 'replay', 'dataset': dataset}})
@@ -155,15 +152,14 @@ def test_a_relative_dataset_is_carried_through_the_per_key_form(tmp_path, monkey
 
 
 def test_a_relative_config_reference_inside_an_endpoint_still_resolves():
-    """The boundary on the two above: the sigil is configuronic's and is untouched here, so a dotted
-    value that names a config still becomes one — which is why a dataset cannot be written that way."""
+    """A dotted value nested in an endpoint still resolves to the config it names."""
     built = policy_cfg.production.override(endpoints={'arm_a': {'kind': 'replay', 'dataset': '.replay'}})
 
     assert isinstance(built.kwargs['endpoints']['arm_a']['dataset'], cfn.Config)
 
 
 def test_two_replay_endpoints_on_one_recording_are_refused(tmp_path):
-    """They report one identity, so an episode of either could not be joined back to the endpoint."""
+    """Both endpoints report one identity, so the set has nothing to tell them apart by."""
     dataset = _dataset(tmp_path / 'ds', episodes=1)
     endpoints = {'arm_a': {'kind': 'replay', 'dataset': dataset}, 'arm_b': {'kind': 'replay', 'dataset': dataset}}
 
@@ -172,7 +168,7 @@ def test_two_replay_endpoints_on_one_recording_are_refused(tmp_path):
 
 
 def test_reordering_the_endpoints_keeps_each_one_keyed_to_its_own_recording(tmp_path):
-    """A resumed run re-attaches counts by the key an episode recorded, so it may not follow position."""
+    """Reordering the mapping leaves each endpoint's key with the recording that named it."""
     dataset = _dataset(tmp_path / 'ds', episodes=2)
     a = {'kind': 'replay', 'dataset': dataset, 'episode': 0}
     b = {'kind': 'replay', 'dataset': dataset, 'episode': 1}

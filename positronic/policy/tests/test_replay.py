@@ -434,7 +434,7 @@ def test_reading_meta_fetches_the_recording_so_a_sampled_set_warms_together(tmp_
 
 
 def test_a_replay_names_itself_by_the_recording_it_plays(tmp_path):
-    """Its sampling key. A resumed run re-attaches recorded episode counts by it, so it must not move."""
+    """Its sampling key: equal for an equal dataset and episode, and different for any other."""
     dataset = str(tmp_path / 'a')
     _joint_fixture(tmp_path / 'a', count=2)
 
@@ -446,7 +446,7 @@ def test_a_replay_names_itself_by_the_recording_it_plays(tmp_path):
 
 
 def test_a_sampled_set_keys_replays_by_name_so_reordering_it_moves_no_key(tmp_path):
-    """Keyed by position instead, a resumed run would re-attach one endpoint's counts to the other."""
+    """Reordering the set leaves each replay's key with the replay that named it."""
     a, b = tmp_path / 'a', tmp_path / 'b'
     _joint_fixture(a, count=2)
     _joint_fixture(b, count=2)
@@ -457,7 +457,7 @@ def test_a_sampled_set_keys_replays_by_name_so_reordering_it_moves_no_key(tmp_pa
 
 
 def test_two_replays_of_one_recording_are_refused(tmp_path):
-    """Nothing tells their episodes apart, so a resumed run could not re-attach their counts either."""
+    """Both name one recording, so the set has nothing to tell them apart by."""
     _joint_fixture(tmp_path, count=2)
 
     with pytest.raises(ValueError, match='must be distinguishable'):
