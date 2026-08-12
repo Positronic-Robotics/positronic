@@ -5,6 +5,7 @@ from typing import Any
 
 import configuronic as cfn
 import pos3
+from lerobot.constants import CHECKPOINTS_DIR, PRETRAINED_MODEL_DIR
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
 
@@ -48,7 +49,7 @@ class LerobotSource(ModelSource):
         model_type: str = 'act',
     ):
         self._policy_factory = policy_factory
-        self._checkpoints_dir = str(checkpoints_dir).rstrip('/') + '/checkpoints'
+        self._checkpoints_dir = str(checkpoints_dir).rstrip('/') + f'/{CHECKPOINTS_DIR}'
         self._checkpoint = checkpoint
         self._device = device or _detect_device()
         self._model_type = model_type
@@ -61,7 +62,7 @@ class LerobotSource(ModelSource):
         return resolve_checkpoint(self._checkpoints_dir, self._checkpoint, model_id)
 
     def load(self, model_id: str, on_progress: Callable[[str], None] | None = None) -> Policy:
-        checkpoint_path = f'{self._checkpoints_dir}/{model_id}/pretrained_model'
+        checkpoint_path = f'{self._checkpoints_dir}/{model_id}/{PRETRAINED_MODEL_DIR}'
         logger.info(f'Loading checkpoint from {checkpoint_path}')
         local = run_with_progress(
             lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {model_id}', on_progress

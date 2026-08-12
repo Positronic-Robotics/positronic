@@ -26,11 +26,10 @@ In a separate terminal, run inference inside the simulation:
 ```bash
 uv run positronic-inference sim \
   --policy=.remote --policy.url=localhost:8000 \
-  --show_gui=True \
   --output_dir=~/datasets/demo_run
 ```
 
-A UI window shows the robot arm executing the policy. `--output_dir` records every episode (robot state, camera feeds, actions); browse them with:
+The run is headless. `--output_dir` records every episode (robot state, camera feeds, actions); browse them with:
 
 ```bash
 uv run positronic-server --dataset.path=~/datasets/demo_run --port=5001
@@ -103,7 +102,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `robot_state.q` | float32 | (7,) | Joint positions (radians) |
 | `robot_state.dq` | float32 | (7,) | Joint velocities (radians/s) |
 | `grip` | float32 | scalar | Gripper closure in `[0, 1]`: 0 = open, 1 = closed |
-| `image.<name>` | uint8 | (H, W, 3) | Camera RGB. Stream names come from the run config — sim and PhAIL send `image.exterior` and `image.wrist` (sim also adds `image.agent_view`) |
+| `image.<name>` | uint8 | (H, W, 3) | Camera RGB. Every eval target — PhAIL and each sim — sends `image.exterior` and `image.wrist`, whatever the underlying benchmark calls those cameras, so one codec reads them all; a target with more views adds its own names beside them (the MuJoCo sim adds `image.agent_view`) |
 | `obs_time_ns` | int | scalar | Harness-clock timestamp of this observation (ns) |
 | `wall_time_ns` | int | scalar | Wall-clock timestamp (ns) |
 | `task` | str | — | Language instruction for the episode |

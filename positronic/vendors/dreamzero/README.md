@@ -45,7 +45,7 @@ CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports
 # Run sim inference locally (only inference is remote; MuJoCo runs on your machine).
 uv run --locked positronic-inference sim \
   --policy=.remote --policy.url=<h100-host>:8000 \
-  --eval.trial_count=2 --show_gui=True
+  --eval.trial_count=2
 ```
 
 The server owns the whole policy pipeline: it runs the codec (raw observations in, decoded joint
@@ -195,7 +195,7 @@ launch). With `positronic-inference`, pass them through the remote policy:
 # padding the window with the current frame repeated.
 uv run --locked positronic-inference sim \
   --policy=.remote --policy.url='<h100-host>:8000?local.pad_start=false' \
-  --eval.trial_count=2 --show_gui=True
+  --eval.trial_count=2
 ```
 
 `local` is the rig-side video-context stack, `codec` the server-side codec (e.g. `{"codec.fps": 10}`);
@@ -238,10 +238,11 @@ bash workflows/nebius/train.sh dreamzero wan22_full_h100x1 \
   --exp_name=<exp_name> \
   --max_steps=30000 --save_steps=2500 --gradient_accumulation_steps=4 --save_total_limit=9999
 
-# Serve (H100 endpoint; the public endpoint is exposed on :8000)
+# Serve (H100 endpoint, reachable at the managed https:// URL the banner prints)
 bash workflows/nebius/serve.sh dreamzero <endpoint-name> joints \
   --pipeline.source.model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
   --pipeline.source.backbone=wan2.2
-# ... infer against the printed endpoint IP with --policy.url=<ip>:8000, then tear down:
+# ... infer with --policy=.authed_remote --policy.url=<managed-url> (export AUTH_TOKEN first,
+# see workflows/nebius/README.md), then tear down:
 bash workflows/nebius/stop.sh <endpoint-name>
 ```

@@ -8,22 +8,15 @@
 # --output_dir stays as an s3:// URL handled by pos3 — vendor checkpoint savers
 # tend to use symlinks, which Mountpoint-S3 does not support.
 #
-# Hardcoded: GPU platform, MysteryBox secret names, S3 endpoint URL.
-# Vendor selects image + uv extra. Override-able via env: NEBIUS_PARENT_ID,
-# NEBIUS_SUBNET_ID.
+# Hardcoded: GPU platform. Vendor selects image + uv extra. Settings of its own,
+# via env: WANDB_SECRET, NEBIUS_DISK_SIZE, NEBIUS_JOB_TIMEOUT, NEBIUS_PRESET.
+# Everything shared with the other scripts here lives in common.sh.
 
 set -euo pipefail
 
-PARENT_ID="${NEBIUS_PARENT_ID:-project-e00f38wexevrr52b8j}"
-SUBNET_ID="${NEBIUS_SUBNET_ID:-vpcsubnet-e00pk1j1x6hjmr4m92}"
+source "$(dirname "$0")/common.sh"
+
 WANDB_SECRET="${WANDB_SECRET-positronic-serverless-wandb-api-key}"
-# Shared filesystem (RWX) holding the uv / HF / openpi caches across cold starts.
-# pos3's cache stays on local disk (~/.cache/positronic/s3) — never redirected here.
-CACHE_FS="${NEBIUS_CACHE_FS:-computefilesystem-e00f6jyfr5wkawyrab}"
-# Docker image tag pulled by the job. `make push-*` only updates `:latest` under
-# CI; locally it pushes `:<branch>`/`:<sha>`. To test a branch build remotely:
-# `make push-<x> IMAGE_TAG=<branch>` then run with `NEBIUS_IMAGE_TAG=<branch>`.
-IMAGE_TAG="${NEBIUS_IMAGE_TAG:-latest}"
 # Local job disk. GR00T checkpoints are ~23GB each and the trainer keeps all of
 # them (--save_total_limit 9999), so the 250Gi default fills mid-run for long runs.
 # Default 750Gi holds a full keep-all gr00t run; override for small jobs.
@@ -123,8 +116,5 @@ nebius ai job create \
   --env UV_CACHE_DIR=/cache/uv \
   --env HF_HOME=/cache/hf \
   --env OPENPI_DATA_HOME=/cache/openpi \
-  --env-secret AWS_ACCESS_KEY_ID=positronic-serverless-aws-access-key-id \
-  --env-secret AWS_SECRET_ACCESS_KEY=positronic-serverless-aws-secret-access-key \
-  ${WANDB_FLAGS[@]+"${WANDB_FLAGS[@]}"} \
-  --env AWS_ENDPOINT_URL=https://storage.eu-north1.nebius.cloud:443 \
-  --env AWS_DEFAULT_REGION=eu-north1
+  "${S3_ENV_FLAGS[@]}" \
+  ${WANDB_FLAGS[@]+"${WANDB_FLAGS[@]}"}

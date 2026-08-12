@@ -86,7 +86,7 @@ def compose(
     return result
 
 
-@cfn.config(rotation_rep=None, tgt_ee_pose_key=keys.TARGET_EE_POSE, tgt_grip_key='target_grip')
+@cfn.config(rotation_rep=None, tgt_ee_pose_key=keys.TARGET_EE_POSE, tgt_grip_key=keys.TARGET_GRIP)
 def absolute_pos_action(rotation_rep: str | None, tgt_ee_pose_key: str, tgt_grip_key: str):
     """Absolute position action codec for ACT/OpenPI."""
     from positronic.policy.action import AbsolutePositionAction
@@ -116,7 +116,7 @@ traj_ee_action = absolute_pos_action.override(tgt_ee_pose_key=keys.EE_POSE, tgt_
 @cfn.config(
     solver='dls_limits',
     tgt_ee_pose_key=keys.TARGET_EE_POSE,
-    tgt_grip_key='target_grip',
+    tgt_grip_key=keys.TARGET_GRIP,
     current_q_key=keys.JOINTS,
     num_joints=7,
 )

@@ -203,7 +203,7 @@ class PoseDeltaAction(Codec):
         physical = action[:6] * self.OUTPUT_MAX
         delta = geom.Transform3D(translation=physical[:3], rotation=geom.Rotation.from_rotvec(physical[3:6]))
         grip = (float(action[6]) + 1.0) / 2.0
-        return {keys.ROBOT_COMMAND: command.CartesianDelta(delta=delta), 'target_grip': grip}
+        return {keys.ROBOT_COMMAND: command.CartesianDelta(delta=delta), keys.TARGET_GRIP: grip}
 
 
 # Constants pi05_libero's training distribution requires that the env's wire observation does not carry
@@ -230,7 +230,7 @@ class LiberoObservationCodec(Codec):
 
     def __init__(
         self,
-        exterior_camera: str = 'image.agentview',
+        exterior_camera: str = keys.EXTERIOR_IMAGE,
         wrist_camera: str = keys.WRIST_IMAGE,
         image_size: tuple[int, int] = (224, 224),
     ):

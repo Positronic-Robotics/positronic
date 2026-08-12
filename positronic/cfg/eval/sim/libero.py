@@ -14,7 +14,7 @@ _SUITE_NUM_TASKS = {'libero_spatial': 10, 'libero_object': 10, 'libero_goal': 10
 
 
 @cfn.config(
-    camera_dict={'image.agentview': 'agentview_image', keys.WRIST_IMAGE: 'eye_in_hand_image'},
+    camera_dict={keys.EXTERIOR_IMAGE: 'agentview_image', keys.WRIST_IMAGE: 'eye_in_hand_image'},
     camera_resolution=256,
     control_mode='ee',
     timeout=20.0,

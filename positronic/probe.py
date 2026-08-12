@@ -43,11 +43,11 @@ _STATE_KEYS = (keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP)
 
 def _build_wire_obs(sample: dict, task: str | None, now_ns: int, recorded_ts: int) -> dict:
     obs = {k: sample[k] for k in _STATE_KEYS if k in sample}
-    obs.update({k: v for k, v in sample.items() if k.startswith('image.')})
+    obs.update({k: v for k, v in sample.items() if k.startswith(keys.IMAGE_PREFIX)})
     if task:
         obs[keys.TASK] = task
-    obs['wall_time_ns'] = now_ns  # rerun wall_time timeline
-    obs['obs_time_ns'] = recorded_ts  # rerun obs_time + action_time anchor
+    obs[keys.WALL_TIME_NS] = now_ns  # rerun wall_time timeline
+    obs[keys.OBS_TIME_NS] = recorded_ts  # rerun obs_time + action_time anchor
     return obs
 
 
@@ -91,11 +91,11 @@ def _log_commands(actions: list[dict], wall_ns: int, inf_ns: int) -> None:
         rows = [list(d) for d in deltas]
     else:
         return
-    horizon = np.array([float(a.get('timestamp', i)) for i, a in enumerate(actions)])
+    horizon = np.array([float(a.get(keys.ACTION_TIMESTAMP, i)) for i, a in enumerate(actions)])
     horizon -= horizon[0]
-    if all('target_grip' in a for a in actions):
-        labels.append('target_grip')
-        rows = [row + [a['target_grip']] for row, a in zip(rows, actions, strict=True)]
+    if all(keys.TARGET_GRIP in a for a in actions):
+        labels.append(keys.TARGET_GRIP)
+        rows = [row + [a[keys.TARGET_GRIP]] for row, a in zip(rows, actions, strict=True)]
     data = np.array(rows, float)
 
     rr.log('commands', rr.SeriesLines(names=labels), static=True)
@@ -131,7 +131,7 @@ def main(
 
     now_ns = time.time_ns()
     obs = _build_wire_obs(sample, task, now_ns, ts)
-    image_keys = [k for k in obs if k.startswith('image.')]
+    image_keys = [k for k in obs if k.startswith(keys.IMAGE_PREFIX)]
 
     rec = Recorder(pos3.sync(output_dir))
     session = rec.tap(_TAP).wrap(policy).new_session({keys.TASK: task} if task else None, time.time)

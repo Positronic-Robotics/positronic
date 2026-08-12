@@ -45,8 +45,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server ee \
 # 4. Run inference
 uv run --locked positronic-inference sim \
   --policy=.remote \
-  --policy.url=localhost:8000 \
-  --show_gui=True
+  --policy.url=localhost:8000
 ```
 
 See [Training Workflow](../../docs/training-workflow.md) for detailed step-by-step instructions.

@@ -124,7 +124,7 @@ old_to_new = Group(
         keys.EE_POSE: Concat('robot_position_translation', 'robot_position_quaternion'),
         keys.TASK: FromValue('Pick up the green cube and place it on the red cube.'),
         keys.GRIP: _flip_grip(keys.GRIP),
-        'target_grip': _flip_grip('target_grip'),
+        keys.TARGET_GRIP: _flip_grip(keys.TARGET_GRIP),
     }),
     Rename(**{
         keys.JOINTS: 'robot_joints',
@@ -146,7 +146,7 @@ sim_pnp = transform.override(
             Derive(
                 task=FromValue('Pick up objects from the red tote and place them in the green tote.'),
                 grip=_flip_grip(keys.GRIP),
-                target_grip=_flip_grip('target_grip'),
+                target_grip=_flip_grip(keys.TARGET_GRIP),
             ),
             Rename(**{keys.EXTERIOR_IMAGE: 'image.back_view'}),
             Identity(),
