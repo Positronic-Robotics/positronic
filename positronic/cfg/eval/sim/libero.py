@@ -5,7 +5,7 @@ from positronic.cfg.eval import build_tasks
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import Eval, Observation
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
-from positronic.simulator.libero.adapter import LiberoAdapter
+from positronic.simulator.libero import adapter
 from positronic.simulator.libero.launcher import serve_libero
 
 # Task count per LIBERO suite — the config expands an unbound ``task_id`` over ``range(num_tasks)``. positronic
@@ -49,7 +49,7 @@ def _libero_eval(
     LIBERO's full physics state is the privileged ground truth (recorded, never fed to the policy), so
     success is recomputable downstream; the live ``done`` flag also rides the rollout's terminal.
     """
-    proxy = RemoteEnvControlSystem(LiberoAdapter(camera_dict), serve_libero())
+    proxy = RemoteEnvControlSystem(adapter.LiberoAdapter(camera_dict), serve_libero())
     # LIBERO drives the same Franka Panda as the native sim, so recordings carry the same model (URDF + meshes +
     # joint names + control frame) for the 3D viewer and offline IK, supplied here since the 3.10 server can't
     # import positronic to emit it via ``robot_meta``.
@@ -61,11 +61,11 @@ def _libero_eval(
     # server serves every rollout.
     scenes = [
         {
-            'eval.suite': s,
-            'eval.task_id': t,
-            'eval.camera_resolution': camera_resolution,
-            'eval.control_mode': control_mode,
-            'eval.settle_steps': settle_steps,
+            adapter.SUITE: s,
+            adapter.TASK_ID: t,
+            adapter.CAMERA_RESOLUTION: camera_resolution,
+            adapter.CONTROL_MODE: control_mode,
+            adapter.SETTLE_STEPS: settle_steps,
         }
         for s in ([suite] if isinstance(suite, str) else suite)
         for t in ([task_id] if task_id is not None else range(_SUITE_NUM_TASKS[s]))

@@ -16,6 +16,11 @@ from positronic.drivers.roboarm.models import DROID_EE_FRAME
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
+# The scene-spec keys a RoboLab rollout's scene must carry. The eval config writes them and ``_reset_token``
+# reads them back into the server's reset token.
+TASK = 'eval.task'
+INSTRUCTION_TYPE = 'eval.instruction_type'
+
 
 class RobolabAdapter(WireCommandAdapter):
     def __init__(self, camera_dict: dict[str, str]):
@@ -25,7 +30,7 @@ class RobolabAdapter(WireCommandAdapter):
 
     def _reset_token(self, context: dict[str, Any]) -> Any:
         # No seed rides the token: RoboLab's eval path has no seed hook, so a recorded seed would only mislead.
-        return {'task': context['eval.task'], 'instruction_type': context['eval.instruction_type']}
+        return {'task': context[TASK], 'instruction_type': context[INSTRUCTION_TYPE]}
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         # The env reports the eef pose in the control frame IK drives; ``eef_quat`` is scalar-first (wxyz),

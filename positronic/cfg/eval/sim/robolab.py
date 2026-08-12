@@ -3,7 +3,7 @@ import configuronic as cfn
 from positronic import keys
 from positronic.eval import Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
-from positronic.simulator.robolab.adapter import RobolabAdapter
+from positronic.simulator.robolab import adapter
 from positronic.simulator.robolab.launcher import serve_robolab
 
 # The 120 benchmark tasks: name -> (categories, episode_length_s). positronic cannot import robolab (it lives in
@@ -179,12 +179,12 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
         # The env truncates itself at each task's episode_length_s; the harness deadline is a backstop above
         # the longest selected task.
         timeout = max(_TASKS[name][1] for name in names) + 10.0
-    proxy = RemoteEnvControlSystem(RobolabAdapter(camera_dict), serve_robolab())
+    proxy = RemoteEnvControlSystem(adapter.RobolabAdapter(camera_dict), serve_robolab())
     # The DROID rig's model (Franka arm + Robotiq 2F-85) rides the env's ``robot_meta`` — the launcher
     # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')
     tasks = [
-        Task(lambda: proxy.meta['task'], timeout, {'eval.task': name, 'eval.instruction_type': instruction_type})
+        Task(lambda: proxy.meta['task'], timeout, {adapter.TASK: name, adapter.INSTRUCTION_TYPE: instruction_type})
         for name in names
         for _ in range(trial_count)
     ]

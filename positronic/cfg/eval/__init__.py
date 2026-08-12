@@ -4,6 +4,7 @@ from typing import Any
 
 import configuronic as cfn
 
+from positronic import keys
 from positronic.eval import Task
 
 
@@ -35,7 +36,7 @@ def build_tasks(
         return seed + i if seed is not None else random.randrange(2**31)
 
     return [
-        Task(instruction, timeout, {**scene, 'eval.seed': draw(i)})
+        Task(instruction, timeout, {**scene, keys.EVAL_SEED: draw(i)})
         for scene in (scenes if scenes is not None else [{}])
         for i in range(trial_count)
     ]

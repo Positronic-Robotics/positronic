@@ -5,10 +5,10 @@ from positronic.cfg.eval.sim import libero, positronic, robolab
 
 @cfn.config(groups=[libero.all, robolab.benchmark, positronic.stack_cubes])
 def all(groups):
-    """Every sim benchmark in one command: each eval's World in turn, against one warm policy.
+    """Every sim benchmark in one command, against one warm policy.
 
     Each entry is itself a list of evals, so a group that grows a second embodiment joins this sweep without
-    touching it. Nothing runs concurrently — the evals rebuild the World one at a time, so only the env
-    server of the eval in flight is alive.
+    touching it. Listing backends together is only safe because ``eval run`` rebuilds the World one eval at a
+    time: two env servers never hold the GPU at once.
     """
     return [ev for group in groups for ev in group]

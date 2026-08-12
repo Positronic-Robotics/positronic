@@ -38,7 +38,7 @@ def _mujoco_franka_eval(mujoco_model_path, loaders, camera_fps, camera_dict, ins
         Eval(
             embodiment,
             build_tasks(instruction, timeout, seed, trial_count),
-            reset=lambda scene: sim.reset(scene.get('eval.seed')),
+            reset=lambda scene: sim.reset(scene[keys.EVAL_SEED]),
             # Full sim state is the privileged ground truth; scoring is computed downstream.
             privileged={'sim_state': Observation(sim.sim_state, None)},
         )

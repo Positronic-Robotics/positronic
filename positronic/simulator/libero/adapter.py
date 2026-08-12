@@ -15,6 +15,14 @@ from positronic import geom, keys
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
+# The scene-spec keys a LIBERO rollout's scene must carry, alongside ``keys.EVAL_SEED``. The eval config
+# writes them and ``_reset_token`` reads them back into the server's reset token.
+SUITE = 'eval.suite'
+TASK_ID = 'eval.task_id'
+CAMERA_RESOLUTION = 'eval.camera_resolution'
+CONTROL_MODE = 'eval.control_mode'
+SETTLE_STEPS = 'eval.settle_steps'
+
 
 class LiberoAdapter(WireCommandAdapter):
     def __init__(self, camera_dict: dict[str, str]):
@@ -28,12 +36,12 @@ class LiberoAdapter(WireCommandAdapter):
         # the hold-arm/open-gripper wait the server runs after a seeded reset so dropped objects settle before
         # the first observation (openpi's num_steps_wait dummy-action wait).
         return {
-            'suite': context['eval.suite'],
-            'task_id': context['eval.task_id'],
-            'camera_resolution': context['eval.camera_resolution'],
-            'control_mode': context['eval.control_mode'],
-            'seed': context.get('eval.seed'),
-            'settle_steps': context['eval.settle_steps'],
+            'suite': context[SUITE],
+            'task_id': context[TASK_ID],
+            'camera_resolution': context[CAMERA_RESOLUTION],
+            'control_mode': context[CONTROL_MODE],
+            'seed': context[keys.EVAL_SEED],
+            'settle_steps': context[SETTLE_STEPS],
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
