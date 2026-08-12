@@ -131,17 +131,6 @@ lifecycle — nothing else. Scheduling, blending, history stacking and error rec
 wrapper stack around the policy; a session returning `None` means "keep executing the current
 trajectory".
 
-**No execution environment beyond the reproducibility minimum.** This library runs one policy against one
-embodiment and records it; orchestration, campaigns and operator plumbing are automation, and automation
-lives in the platform that drives this. So the library ships one attended surface — the keyboard, in
-`positronic/inference.py` — and no seam for others: a console composes its own `pimm.World` around `Harness`
-and `wire.wire_embodiment`, which is a dozen lines it writes for itself.
-
-**A run is finished by stopping a control system.** Control systems in a world live and die together — a
-main-process loop returning stops the rest and unwinds the world safely — so that is already the way to end
-a run, and nothing here invents a second one: no stop verb, no flag file, no hook. An attended surface
-returns from its own loop ([`pimm/README.md`](pimm/README.md)).
-
 **Recordings are canonical; codecs bind the dialect late.** The dataset records every run in the
 canonical conventions (frames, key names, absolute time) — never in a model's dialect. Every
 model-facing view — action space, control frame, vendor format — is a codec's projection.
