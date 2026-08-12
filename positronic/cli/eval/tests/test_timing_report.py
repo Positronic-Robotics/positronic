@@ -1,5 +1,6 @@
 import json
 
+import pos3
 import pytest
 
 from positronic.cli.eval.timing_report import (
@@ -9,6 +10,7 @@ from positronic.cli.eval.timing_report import (
     _read_spans_dir,
     _read_stats_dir,
     _render,
+    timing_report,
 )
 from positronic.simulator.env_server.telemetry import ENV_PROCESS
 from positronic.telemetry import (
@@ -744,3 +746,43 @@ def test_parse_dmon_fails_loudly_without_fb(tmp_path):
     log.write_text('# gpu    sm\n#  Idx     %\n    0    50\n')
     with pytest.raises(ValueError, match='fb'):
         _parse_dmon(log)
+
+
+def test_a_tilde_run_dir_and_dmon_log_resolve_against_home(tmp_path, monkeypatch):
+    """The documented eval quickstart writes to a `~`-relative directory, so the reduce reads one back."""
+    (tmp_path / 'run').mkdir()
+    _fixture(tmp_path / 'run' / TELEMETRY_SUBDIR)
+    (tmp_path / 'dmon.log').write_text('# gpu    sm    fb\n#  Idx     %    MB\n    0    50  1024\n')
+    monkeypatch.setenv('HOME', str(tmp_path))
+
+    timing_report(run_dir='~/run', gpu_policy_log='~/dmon.log')
+
+    summary = json.loads((tmp_path / 'run' / 'timing_summary.json').read_text())
+    assert summary['episodes'] == 2
+    assert summary['gpu']['policy']['peak_vram_gb'] == pytest.approx(1.0)
+
+
+def test_a_remote_run_dir_reaches_pos3_verbatim(tmp_path, monkeypatch):
+    """Expansion is the local branch's alone: an `s3://` URI is the remote store's to parse, `~` and all."""
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    downloaded, uploaded = [], []
+    monkeypatch.setattr(pos3, 'download', lambda uri: downloaded.append(uri) or tmp_path)
+    monkeypatch.setattr(pos3, 'upload', lambda key, path, delete=True: uploaded.append(key))
+
+    timing_report(run_dir='s3://bucket/~run')
+
+    assert downloaded == ['s3://bucket/~run']
+    assert uploaded == ['s3://bucket/~run.timing_summary.json']
+
+
+def test_a_run_dir_holding_no_telemetry_directory_names_it(tmp_path):
+    with pytest.raises(ValueError, match='no telemetry directory') as excinfo:
+        timing_report(run_dir=str(tmp_path))
+    assert str(tmp_path / TELEMETRY_SUBDIR) in str(excinfo.value)
+
+
+def test_a_telemetry_directory_holding_no_spans_is_not_reported_as_untimed(tmp_path):
+    """The sidecar directory exists, so the run was timed — what is missing is its flushed spans."""
+    (tmp_path / TELEMETRY_SUBDIR).mkdir()
+    with pytest.raises(ValueError, match='carries no spans'):
+        timing_report(run_dir=str(tmp_path))

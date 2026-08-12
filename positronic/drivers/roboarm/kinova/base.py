@@ -9,6 +9,7 @@
 # sublicensed, and/or sold without explicit permission from the copyright holder.
 
 import math
+from pathlib import Path
 
 import mujoco
 import numpy as np
@@ -40,7 +41,7 @@ class KinematicsSolver:
     """Solves forward and inverse kinematics for the Kinova arm."""
 
     def __init__(self, path: str = 'positronic/drivers/roboarm/kinova/gen3.xml', ee_offset=0.0, site_name='pinch_site'):
-        self.model = mujoco.MjModel.from_xml_path(path)
+        self.model = mujoco.MjModel.from_xml_path(str(Path(path).expanduser()))
         self.data = mujoco.MjData(self.model)
         self.model.body_gravcomp[:] = 1.0
 
@@ -259,7 +260,7 @@ class JointCompliantController:
         self.target_qpos = None
 
         # Initialize pinocchio model and data
-        self.model = pin.buildModelFromUrdf(path)
+        self.model = pin.buildModelFromUrdf(str(Path(path).expanduser()))
         self.joint_nq = [joint.nq for joint in self.model.joints]
         self.data = self.model.createData()
         self._q_pin = np.zeros(self.model.nq)

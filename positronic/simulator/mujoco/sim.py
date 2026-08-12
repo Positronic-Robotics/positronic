@@ -118,7 +118,7 @@ class MujocoSim(pimm.ControlSystem):
         grip_fps: float | None = None,
         sim_state_fps: float | None = None,
     ):
-        self.mujoco_model_path = mujoco_model_path
+        self.mujoco_model_path = str(Path(mujoco_model_path).expanduser())
         self.loaders = loaders
         self.warmup_steps = 1000
         self.fps_counter = pimm.utils.RateCounter('MujocoSim')

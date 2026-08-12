@@ -6,6 +6,7 @@ Usage:
 """
 
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
@@ -27,6 +28,7 @@ def main(dataset: Dataset, output: str):  # noqa: C901
         dataset: The dataset to evaluate. Defaults to stacking_episodes config.
         output: Path to the output HTML file.
     """
+    output_path = Path(output).expanduser()
     print(f'Loading dataset with {len(dataset)} episodes...')
 
     data_by_ckpt = defaultdict(list)
@@ -170,9 +172,9 @@ def main(dataset: Dataset, output: str):  # noqa: C901
         showlegend=False,  # Hiding legend to avoid clutter, titles are enough
     )
 
-    print(f'Saving plots to {output}...')
-    fig.write_html(output)
-    print(f'Done. Open {output} in your browser to view results.')
+    print(f'Saving plots to {output_path}...')
+    fig.write_html(output_path)
+    print(f'Done. Open {output_path} in your browser to view results.')
 
 
 if __name__ == '__main__':
