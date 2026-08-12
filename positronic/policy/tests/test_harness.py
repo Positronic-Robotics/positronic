@@ -884,10 +884,10 @@ def test_trial_seed_reaches_task_reset_and_meta(world):
     eval-identity block land in episode meta."""
     policy = StubPolicy()
     seeds = []
-    tasks = [Task('stack', 0.05, {'eval.seed': 7 + i}) for i in range(2)]
+    tasks = [Task('stack', 0.05, {keys.EVAL_SEED: 7 + i}) for i in range(2)]
 
     def reset(scene):
-        seeds.append(scene.get('eval.seed'))
+        seeds.append(scene[keys.EVAL_SEED])
         p['meta_em'].emit({})  # the producer publishes fresh scene meta, recorded into the episode at finalize
 
     harness = Harness(policy, make_embodiment(), tasks=tasks, reset=reset)
@@ -929,7 +929,7 @@ def test_scene_is_recorded_but_withheld_from_the_policy(world):
     """Of the rollout, only the instruction crosses to the policy. The scene is the ground truth the rollout
     is scored against, so it reaches the reset and the recording but never the observation dict."""
     policy = StubPolicy()
-    scene = {'eval.seed': 7, 'eval.task_id': 3}
+    scene = {keys.EVAL_SEED: 7, 'eval.task_id': 3}
     harness = Harness(policy, make_embodiment(), tasks=[Task('stack', 0.05, scene)])
     p = _pair_all(world, harness)
 

@@ -203,7 +203,7 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float, trial_count: i
         control_systems=(producer,),
         simulated=True,
     )
-    tasks = [Task('count', timeout, {'eval.seed': i}) for i in range(trial_count)]
+    tasks = [Task('count', timeout, {keys.EVAL_SEED: i}) for i in range(trial_count)]
     return Eval(embodiment, tasks, reset=producer.reset, done=producer.done)
 
 

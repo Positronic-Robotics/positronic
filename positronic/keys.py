@@ -89,8 +89,7 @@ SERVER_META = f'{POLICY_META}.{SERVER}'
 EVAL_SUCCESS = 'eval.success'
 EVAL_TERMINATED = 'eval.terminated'
 
-# The scene draw a rollout is staged from. Every seeded reset actuator reads it — the native sim, the LIBERO
-# env server — and a reader that misses it draws its own scene instead of the one the plan asked for.
+# The draw a rollout's scene is staged from: same seed, same scene.
 EVAL_SEED = 'eval.seed'
 
 # The rest of what the harness stamps into every episode it records: which eval produced it, the rollout's

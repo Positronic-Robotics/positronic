@@ -208,7 +208,7 @@ class _CountdownEnv(EnvProtocol):
 
 class _CountdownAdapter(EnvAdapter):
     def reset_token(self, context):
-        return context.get('eval.seed')
+        return context[keys.EVAL_SEED]
 
     def action(self, commands, now_ns):
         return {}
@@ -236,7 +236,7 @@ def test_proxy_publishes_frame0_then_free_runs():
         scheduler = world.start([proxy])
         drive_scheduler(scheduler, steps=2)  # inactive: the proxy paces time without an env
 
-        proxy.reset({'eval.seed': 0})  # arm frame-0; the run loop publishes it on its next turn
+        proxy.reset({keys.EVAL_SEED: 0})  # arm frame-0; the run loop publishes it on its next turn
         drive_scheduler(scheduler, steps=1)
         np.testing.assert_array_equal(obs_rx.read().data, np.zeros(7))
         assert done_rx.read().data == {}
@@ -255,7 +255,7 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
         task = Task(lambda: proxy.meta['task'], 1.0)
         scheduler = world.start([proxy])
 
-        proxy.reset({'eval.seed': 0})
+        proxy.reset({keys.EVAL_SEED: 0})
         assert task.instruction == 'countdown'  # resolved live off the cached reset meta
         drive_scheduler(scheduler, steps=4)  # the env steps, each ``step`` omitting meta ...
         assert task.instruction == 'countdown'  # ... yet the reset-scoped cache holds

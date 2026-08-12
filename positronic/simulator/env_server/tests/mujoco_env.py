@@ -165,7 +165,7 @@ class StackCubesAdapter(WireCommandAdapter):
         self._camera_dict = camera_dict  # logical observation name -> the env's model camera name
 
     def _reset_token(self, context: dict[str, Any]) -> Any:
-        return context.get('eval.seed')
+        return context[keys.EVAL_SEED]
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         state = MujocoFrankaState()
@@ -192,7 +192,7 @@ def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]
     # The server is already up (the test fixture owns it), so the proxy just receives its address.
     proxy = RemoteEnvControlSystem(StackCubesAdapter(camera_dict), nullcontext((host, port)))
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.mujoco.franka')
-    task = Task('Pick up the green cube and place it on the red cube.', timeout, {'eval.seed': 100})
+    task = Task('Pick up the green cube and place it on the red cube.', timeout, {keys.EVAL_SEED: 100})
     return Eval(
         embodiment,
         [task],
