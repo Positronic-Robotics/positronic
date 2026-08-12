@@ -32,6 +32,8 @@ ATTR_EPISODE_VIRTUAL_S = 'episode.virtual_s'
 ATTR_EPISODE_ABORTED = 'episode.aborted'
 ATTR_EPISODE_PARTIAL = 'episode.partial'
 ATTR_PASS_FAILED = 'pass.failed'
+# Which clock the pass was measured on: a sim sweep advances a virtual one, an attended run runs on wall.
+ATTR_PASS_VIRTUAL_CLOCK = 'pass.virtual_clock'
 
 # The harness process's sidecar name — the discriminator between client-side spans (episode, client env.step)
 # and an env server's own file, which reduces rely on.

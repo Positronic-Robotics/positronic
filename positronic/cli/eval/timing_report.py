@@ -3,10 +3,13 @@
 Everything is read back from the per-process sidecar files under ``<run_dir>/telemetry/`` — the harness
 process's nested spans (the pass, each episode, and its reset / env-step / materialize / record-IO / inference
 phases) and its machine-load stats stream, plus the env server's own spans file (its step decomposed into
-physics / render). A virtual-clock rollout cannot recover these wall costs from its own timestamps, so the
-report is an offline reduce over the raw spans and samples: the per-phase wall split, the env-step split, the
-inference-latency distribution, the real-time factor (recorded virtual duration over span wall) and the sim
-box's GPU load. The policy endpoint (a different box) folds in from an optional ``nvidia-smi dmon`` log.
+physics / render). A rollout cannot recover these wall costs from its own timestamps, so the report is an
+offline reduce over the raw spans and samples: the per-phase wall split, the env-step split, the
+inference-latency distribution, the rollout duration over span wall, and the sim box's GPU load. That last
+ratio is read as a real-time factor only where the pass ran on a virtual clock; an attended pass is paced by
+its operator on the wall clock, so the same ratio is the share of window wall spent in rollouts. A directory
+holding passes of both kinds is refused rather than reduced into one.
+The policy endpoint (a different box) folds in from an optional ``nvidia-smi dmon`` log.
 """
 
 import json
@@ -41,6 +44,7 @@ from positronic.telemetry_keys import (
     ATTR_EPISODE_PARTIAL,
     ATTR_EPISODE_VIRTUAL_S,
     ATTR_PASS_FAILED,
+    ATTR_PASS_VIRTUAL_CLOCK,
     HARNESS_PROCESS,
     SPAN_ENV_STEP,
     SPAN_EPISODE,
@@ -160,7 +164,12 @@ class PassReport:
     episodes: int
     window: WallWindow
     wall_s: float
-    real_time_factor: float
+    # ``real_time_factor`` is sim-s per wall-s and exists only under a virtual clock.
+    # An attended pass runs on the wall clock, where the ratio is the share of window wall spent in rollouts.
+    # ``None`` where no pass span survived to name the clock, so neither reading may be claimed.
+    virtual_clock: bool | None
+    real_time_factor: float | None
+    rollout_wall_share: float
     infer_calls: int
     infer_p50_ms: float
     infer_p95_ms: float
@@ -461,6 +470,23 @@ def _episode_windows(episodes: list[SpanRec]) -> dict[str | None, tuple[int, int
     }
 
 
+def _passes_virtual_clock(passes: list[SpanRec]) -> bool | None:
+    """Which clock the passes were measured on, refusing a directory that holds both.
+
+    ``None`` where no pass span survives to say: the clock is stamped on the pass alone, so a run killed
+    before its pass closed carries no marker, and either answer would be an assertion about a run nobody
+    measured. The default within a present pass is different and stays — a sidecar written before the pass
+    carried its clock is a sim sweep.
+    """
+    clocks = {bool(p.attrs.get(ATTR_PASS_VIRTUAL_CLOCK, True)) for p in passes}
+    if len(clocks) > 1:
+        raise ValueError(
+            'Telemetry holds passes measured on different clocks: sim seconds and wall seconds cannot be '
+            'summed into one ratio, so no label on the result would be true. Reduce each run separately.'
+        )
+    return clocks.pop() if clocks else None
+
+
 def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummary | None) -> PassReport:
     children: dict[str, list[SpanRec]] = defaultdict(list)
     for span in spans:
@@ -538,11 +564,15 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
         overhead=phase_fraction(sum(t.overhead_s for t in timings)),
         between_episodes=phase_fraction(wall - episode_wall_sum),
     )
+    virtual_clock = _passes_virtual_clock(passes)
+    rollout_share = (sum(t.virtual_s for t in timings) / wall) if wall else 0.0
     return PassReport(
         episodes=len(episodes),
         window=window,
         wall_s=wall,
-        real_time_factor=(sum(t.virtual_s for t in timings) / wall) if wall else 0.0,
+        virtual_clock=virtual_clock,
+        real_time_factor=rollout_share if virtual_clock else None,
+        rollout_wall_share=rollout_share,
         infer_calls=int(all_infer_ms.size),
         infer_p50_ms=float(np.percentile(all_infer_ms, 50)) if all_infer_ms.size else 0.0,
         infer_p95_ms=float(np.percentile(all_infer_ms, 95)) if all_infer_ms.size else 0.0,
@@ -561,6 +591,19 @@ def _share_row(name: str, fraction: float) -> str:
     return f'  {name:<16} {fraction * 100:>6.1f}%'
 
 
+def _render_ratio(report: PassReport) -> str:
+    """The rollout-over-pass ratio, named for the clock it was measured on."""
+    if report.virtual_clock is None:
+        return (
+            f'rollout share:       {report.rollout_wall_share * 100:>6.1f}% (clock unknown: no pass span '
+            'named it, so this is neither a real-time factor nor a wall share)'
+        )
+    if report.virtual_clock:
+        assert report.real_time_factor is not None  # populated together with the flag
+        return f'real-time factor:    {report.real_time_factor * 100:>6.1f}% (sim-s per wall-s)'
+    return f'rollout wall share:  {report.rollout_wall_share * 100:>6.1f}% (wall-s in rollouts per wall-s)'
+
+
 def _render(report: PassReport) -> str:
     window = report.window.value
     lines = []
@@ -574,7 +617,7 @@ def _render(report: PassReport) -> str:
     lines += [
         f'episodes:            {report.episodes}',
         f'{window + " (wall):":<21}{report.wall_s:.1f} s ({report.wall_s / 3600:.2f} h)',
-        f'real-time factor:    {report.real_time_factor * 100:>6.1f}% (sim-s per wall-s)',
+        _render_ratio(report),
         f'infer calls:         {report.infer_calls}',
         f'infer p50 / p95:     {report.infer_p50_ms:.1f} / {report.infer_p95_ms:.1f} ms',
         f'wall split (share of {window}):',

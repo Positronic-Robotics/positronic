@@ -85,9 +85,11 @@ def _run_world(
     harness = Harness(policy, embodiment, task=task, trials=trials, on_episode_complete=on_complete)
     gui = driver.gui if driver is not None else (dpg_ui() if show_gui else None)
 
+    # An operator drives against the wall clock, so an attended run cannot own a virtual one.
+    virtual_time = embodiment.simulated and driver is None
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
-    with writer_cm as dataset_writer, pimm.World(virtual_time=embodiment.simulated) as world:
+    with writer_cm as dataset_writer, pimm.World(virtual_time=virtual_time) as world:
         privileged = task.privileged if task is not None else {}
         done = task.done if task is not None else None
         ds_agent = wire.wire_embodiment(
@@ -107,10 +109,9 @@ def _run_world(
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)
 
-        # Sim schedules harness, recorder, then producers (the simulator) in-process under the virtual clock,
-        # in that order; each scheduler round is one control period. The harness decides the round's action
-        # (a reset, a policy command off the last round's observation, or finish); the recorder logs that
-        # observation with the command; the producer applies the command and publishes the next observation.
+        # Sim order: harness, recorder, producers, one control period per round.
+        # A reset arms the producer to publish frame-0 after the harness, so the recorder's open-turn drain
+        # drops the pre-reset frame. Real runs the producers and recorder as background subprocesses.
         # A reset arms the producer to publish frame-0 after the harness (last in the round); the recorder
         # drains its channels the turn it opens, dropping the pre-reset frame, so its first recorded sample
         # is the post-reset scene. Real runs the producers + recorder as background subprocesses; harness,
@@ -158,7 +159,7 @@ def _pass_span(**attrs) -> Generator[None, None, None]:
 
 
 @contextmanager
-def _timed_pass(output_dir: str | Path | None, timing: bool, policy):
+def _timed_pass(output_dir: str | Path | None, timing: bool, policy, virtual_clock: bool):
     """Bracket a sweep in the harness-process telemetry: the bound tracer, the machine-load sampler and one
     ``eval.pass`` span, with the environment a launched env server reads set around them. Inert without
     ``timing``."""
@@ -183,7 +184,11 @@ def _timed_pass(output_dir: str | Path | None, timing: bool, policy):
         # as CPU-only.
         with (
             telemetry.bind(timed_dir, telemetry_keys.HARNESS_PROCESS, run_id),
-            _pass_span(**{ATTR_RUN_ID: run_id, 'policy': type(policy).__name__}),
+            _pass_span(**{
+                ATTR_RUN_ID: run_id,
+                'policy': type(policy).__name__,
+                telemetry_keys.ATTR_PASS_VIRTUAL_CLOCK: virtual_clock,
+            }),
             sampler,
         ):
             yield
@@ -219,6 +224,8 @@ def main(
     """
     assert (driver is None) != (evals is None), 'Provide exactly one of driver or evals'
     # Validate timing up front, before the policy warmup, so a rejected sweep fails before it spends anything.
+    # The clock every world here runs on, stamped on the pass so the report labels what it measured.
+    virtual_clock = False
     if timing:
         if evals is not None:
             embodiments = [ev.embodiment for ev in evals]
@@ -226,6 +233,7 @@ def main(
             assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
             embodiments = [embodiment]
         _validate_timing(embodiments, output_dir)
+        virtual_clock = driver is None and all(e.simulated for e in embodiments)
 
     # Drive the policy's remote endpoints through their cold start before hardware and the operator
     # surface come up: opening a session blocks on the server handshake, which returns only once the
@@ -246,7 +254,7 @@ def main(
     on_complete = _completion_sink(policy)
 
     try:
-        with _timed_pass(output_dir, timing, policy):
+        with _timed_pass(output_dir, timing, policy, virtual_clock):
             if driver is not None:
                 assert embodiment is not None, 'the attended (driver) path runs a single embodiment'
                 _run_world(policy, embodiment, None, None, driver(output_dir), output_dir, show_gui, on_complete)

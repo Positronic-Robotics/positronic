@@ -13,9 +13,14 @@ configs, adapters and datasets.
 ROBOT_COMMAND = 'robot_command'
 TARGET_EE_POSE = f'{ROBOT_COMMAND}.pose'
 TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
+TARGET_RESET = f'{ROBOT_COMMAND}.reset'
 
 # The gripper's command channel: a scalar target beside the arm's ``ROBOT_COMMAND``.
 TARGET_GRIP = 'target_grip'
+
+# When an action falls due, in seconds.
+# A field of the action dict, not a signal — a different contract from a stored signal's ``timestamp``.
+ACTION_TIMESTAMP = 'timestamp'
 
 
 def is_robot_command(name: str) -> bool:
@@ -33,6 +38,8 @@ GRIP = 'grip'
 TASK = 'task'
 WRIST_IMAGE = 'image.wrist'
 EXTERIOR_IMAGE = 'image.exterior'
+# The scene camera a sim binds beside the two an arm carries: a fixed view of the whole workspace.
+AGENT_VIEW_IMAGE = 'image.agent_view'
 
 # The harness stamps each observation with the control clock's time (``OBS_TIME_NS``) and the wall
 # clock's (``WALL_TIME_NS``); recording timelines and action scheduling read time back off them.

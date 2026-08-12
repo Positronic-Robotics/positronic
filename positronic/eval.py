@@ -50,7 +50,9 @@ class Embodiment:
     serializers (which own the canonical key names), command channels, and home
     action; the Harness reads these to assemble policy inputs and demux actions.
     ``control_systems`` lists those devices for the runner to schedule, and
-    ``simulated`` marks a sim embodiment (virtual clock, in-process scheduling).
+    ``simulated`` marks a sim embodiment, whose devices are scheduled in-process rather
+    than as background subprocesses. It does not fix the clock: the runner chooses that,
+    and drives a simulated embodiment on the wall clock when an operator is attending.
     """
 
     descriptor: str

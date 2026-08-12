@@ -1,3 +1,4 @@
+import logging
 import time
 from collections import deque
 from collections.abc import Iterator
@@ -16,6 +17,7 @@ from positronic.dataset.edits import EditedDataset
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.gui import handover
 from positronic.policy.harness import Directive
+from positronic.utils.logging import init_logging
 
 
 class State(Enum):
@@ -857,7 +859,10 @@ class EvalUI(pimm.ControlSystem):
             self._refresh_view()
         self._select(self._count - 1)
 
+        fps_counter = pimm.utils.RateCounter('EvalUI', level=logging.INFO)
+
         while not should_stop.value and dpg.is_dearpygui_running():
+            fps_counter.tick()
             now = self.clock.now()
             if now - self._last_scan >= EDITOR_POLL_SEC:
                 self._last_scan = now
@@ -920,6 +925,14 @@ class EvalUI(pimm.ControlSystem):
 
 
 def main():
+    """Dev harness: the console alone, against one synthetic camera.
+
+    It is how the console is exercised on a machine with no rig — including a virtual display reached
+    over VNC, where the question is whether the surface renders fast enough to operate. Logging is
+    configured here, at the entry point, so the console's frame-rate counter is visible.
+    """
+    init_logging()
+
     class FakeCamera(pimm.ControlSystem):
         def __init__(self):
             super().__init__()

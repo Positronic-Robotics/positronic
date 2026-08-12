@@ -84,7 +84,7 @@ def test_the_stats_sampler_runs_inside_the_pass_span(tmp_path, monkeypatch):
     # object whose global is being replaced comes from `sys.modules`.
     monkeypatch.setattr(sys.modules['positronic.cli.eval.run'], '_pass_span', _recording_pass)
 
-    with _timed_pass(tmp_path, True, object()):
+    with _timed_pass(tmp_path, True, object(), virtual_clock=True):
         pass
 
     assert order == ['sampler built', 'pass in', 'sampler in', 'sampler out', 'pass out']

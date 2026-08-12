@@ -27,6 +27,7 @@ from positronic.telemetry import (
 from positronic.telemetry_keys import (
     ATTR_EPISODE_ABORTED,
     ATTR_EPISODE_VIRTUAL_S,
+    ATTR_PASS_VIRTUAL_CLOCK,
     HARNESS_PROCESS,
     SPAN_ENV_STEP,
     SPAN_EPISODE,
@@ -106,6 +107,84 @@ def _fixture(telemetry_dir):
         },
     ]
     (telemetry_dir / f'{HARNESS_PROCESS}{STATS_SUFFIX}').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+
+
+def _wall_clock_pass(telemetry_dir):
+    """One pass stamped as wall-clock — what an attended run records — with one 20 s rollout in 100 s."""
+    telemetry_dir.mkdir()
+    spans = [
+        _span(SPAN_EVAL_PASS, 0, 100, 'pass0', attrs={ATTR_PASS_VIRTUAL_CLOCK: False}),
+        _span(SPAN_EPISODE, 0, 40, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+    ]
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', spans)
+
+
+def test_an_attended_pass_reports_wall_time_as_wall_time(tmp_path):
+    """An attended world runs on the wall clock, so the ratio is a share of pass wall, not a real-time
+    factor: reporting `sim-s per wall-s` would name a sim quantity the run never measured."""
+    _wall_clock_pass(tmp_path / TELEMETRY_SUBDIR)
+    spans = _read_spans_dir(tmp_path / TELEMETRY_SUBDIR)
+
+    report = _build_report(spans, [], policy_gpu=None)
+
+    assert report.virtual_clock is False
+    assert report.real_time_factor is None  # there is no sim time to divide by wall time
+    assert report.rollout_wall_share == pytest.approx(0.20)
+    rendered = _render(report)
+    assert 'rollout wall share' in rendered
+    assert 'real-time factor' not in rendered
+    assert 'sim-s' not in rendered
+
+
+def test_a_directory_mixing_clock_modes_is_refused(tmp_path):
+    """Sidecars append, so one output dir can hold an attended pass and an unattended one.
+
+    Their durations are seconds on different clocks, so summing them into one ratio is invalid whichever
+    label it carries — the reduce refuses instead of picking the first pass's clock and labelling by it.
+    """
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    telemetry_dir.mkdir()
+    spans = [
+        _span(SPAN_EVAL_PASS, 0, 100, 'pass0', attrs={ATTR_PASS_VIRTUAL_CLOCK: True}),
+        _span(SPAN_EPISODE, 0, 40, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+        _span(SPAN_EVAL_PASS, 200, 300, 'pass1', attrs={ATTR_PASS_VIRTUAL_CLOCK: False}),
+        _span(SPAN_EPISODE, 200, 240, 'ep1', 'pass1', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+    ]
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', spans)
+
+    with pytest.raises(ValueError, match='different clocks'):
+        _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+
+
+def test_passes_of_one_clock_still_reduce_together(tmp_path):
+    """Several passes appended to one dir are the normal case and still sum, as long as they agree."""
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    telemetry_dir.mkdir()
+    spans = [
+        _span(SPAN_EVAL_PASS, 0, 100, 'pass0', attrs={ATTR_PASS_VIRTUAL_CLOCK: False}),
+        _span(SPAN_EPISODE, 0, 40, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+        _span(SPAN_EVAL_PASS, 200, 300, 'pass1', attrs={ATTR_PASS_VIRTUAL_CLOCK: False}),
+        _span(SPAN_EPISODE, 200, 240, 'ep1', 'pass1', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+    ]
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', spans)
+
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+
+    assert report.virtual_clock is False
+    assert report.rollout_wall_share == pytest.approx(40 / 200)
+
+
+def test_a_sim_pass_still_reports_a_real_time_factor(tmp_path):
+    """The virtual-clock reading is unchanged, including for a sidecar written before the pass carried
+    its clock — every one of those is a sim sweep."""
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    spans = _read_spans_dir(tmp_path / TELEMETRY_SUBDIR)
+
+    report = _build_report(spans, _read_stats_dir(tmp_path / TELEMETRY_SUBDIR), policy_gpu=None)
+
+    assert report.virtual_clock is True  # the fixture's pass carries no clock attr
+    assert report.real_time_factor == pytest.approx(0.40)
+    assert 'real-time factor' in _render(report)
 
 
 def test_report_aggregates(tmp_path):
@@ -321,7 +400,12 @@ def test_run_whose_pass_span_never_closed_reduces_over_its_episodes(tmp_path):
     assert report.episodes == 2
     assert report.window is WallWindow.W_EPISODES
     assert report.wall_s == pytest.approx(90.0)
-    assert report.real_time_factor == pytest.approx(40 / 90)
+    # The clock is stamped on the pass alone, and no pass survived, so the ratio is reported without a
+    # reading: a wall-clock attended run killed mid-flight looks identical here to a sim sweep.
+    assert report.virtual_clock is None
+    assert report.real_time_factor is None
+    assert report.rollout_wall_share == pytest.approx(40 / 90)
+    assert 'clock unknown' in _render(report)
     assert report.wall_split.reset == pytest.approx(5 / 90)
     # The 10 s between the two episodes is inside the window and attributes; the 10 s before the first is not.
     assert report.wall_split.between_episodes == pytest.approx(10 / 90)

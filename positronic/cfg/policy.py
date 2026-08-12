@@ -4,7 +4,7 @@ import configuronic as cfn
 
 from positronic import keys
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, bearer
-from positronic.policy import RemotePolicy, SampledPolicy
+from positronic.policy import RemotePolicy, ReplayPolicy, SampledPolicy
 from positronic.policy.sampler import BalancedSampler, Sampler
 from positronic.utils import nebius
 
@@ -26,6 +26,9 @@ def sample(origins: list[cfn.Config], weights: list[float] | None):
 
 
 remote = cfn.Config(RemotePolicy, url='ws://localhost:8000')
+
+# A recorded episode in place of a served model: `--policy=.replay --policy.dataset_path=<dataset>`.
+replay = cfn.Config(ReplayPolicy)
 
 
 @cfn.config()
