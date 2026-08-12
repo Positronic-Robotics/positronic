@@ -132,7 +132,7 @@ finally:
 
 **A simulated embodiment is not this.** Three things change together, and a copy of the shape above records a sim run against the wall clock: the world takes `virtual_time=True`, `wire_embodiment` takes `TimeMode.MESSAGE`, and the producers are scheduled in the foreground beside the harness rather than as background processes, so one scheduler round is one control period. `_run_world` in [`positronic/cli/eval/run.py`](../positronic/cli/eval/run.py) is the worked version, including why the ordering within a round is what it is.
 
-The world stops when a main-process control system returns, so the console ends the run by returning from its loop. To show the cameras, connect every observation whose name starts with `positronic.keys.IMAGE_PREFIX` into a viewer's `cameras` — `positronic.gui.dpg_ui()` is one, and the naming convention is what identifies a camera on the wire. To let the operator jog the arm between episodes, emit robot commands into `harness.manual_command`, which the harness applies only while idle.
+The world stops when any of its control systems returns, so the console ends the run by returning from its loop. To show the cameras, connect every observation whose name starts with `positronic.keys.IMAGE_PREFIX` into a viewer's `cameras` — `positronic.gui.dpg_ui()` is one, and the naming convention is what identifies a camera on the wire. To let the operator jog the arm between episodes, emit robot commands into `harness.manual_command`, which the harness applies only while idle.
 
 ## Recording and Replay
 

@@ -51,6 +51,32 @@ class DummyControlSystem(ControlSystem):
         return f'DummyControlSystem(name={self.name!r})'
 
 
+class Finisher(ControlSystem):
+    """Runs `rounds` rounds and returns — whichever group it is scheduled in."""
+
+    def __init__(self, rounds: int):
+        self._rounds = rounds
+
+    def run(self, should_stop, clock):
+        for _ in range(self._rounds):
+            yield Sleep(0.01)
+
+
+class StopWatcher(ControlSystem):
+    """Records whether it ever saw `should_stop`, in shared memory so a parent can read it."""
+
+    def __init__(self, seen, rounds: int = 500):
+        self._seen = seen
+        self._rounds = rounds
+
+    def run(self, should_stop, clock):
+        for _ in range(self._rounds):
+            if should_stop.value:
+                self._seen.value = 1
+                return
+            yield Sleep(0.01)
+
+
 class DummySMValue(SMCompliant):
     """Simple SMCompliant payload used to test adaptive transports."""
 
@@ -608,6 +634,23 @@ class TestWorldControlSystems:
 
 
 # Integration tests
+class TestAnyControlSystemEndsTheWorld:
+    """Either group stops the world. The docs said only the main-process one did, and a console
+    built on that would wait for a finish its own producer had already triggered."""
+
+    def test_a_main_process_loop_returning_stops_the_world(self):
+        seen = mp.Value('i', 0)
+        with World() as world:
+            world.run([Finisher(3), StopWatcher(seen)])
+        assert seen.value == 1
+
+    def test_a_background_loop_returning_stops_the_world(self):
+        seen = mp.Value('i', 0)
+        with World() as world:
+            world.run(StopWatcher(seen), Finisher(3))
+        assert seen.value == 1
+
+
 class TestIntegration:
     """Integration tests for world components."""
 

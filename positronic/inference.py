@@ -43,7 +43,7 @@ def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
     and the keyboard is the only one this library ships. There is no viewer — a console that shows the
     cameras is a binary of its own, composing a world around ``Harness``, ``wire.wire_embodiment`` and
     ``gui.dpg_ui``. A run ends when ``KeyboardControl`` returns — on ``q``, or on a stdin that is not a
-    terminal — since a main-process control system returning stops the world.
+    terminal — since a control system returning stops the world.
     """
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
