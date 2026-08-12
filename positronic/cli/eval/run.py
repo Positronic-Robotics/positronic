@@ -44,6 +44,10 @@ def prepare_output_dir(policy, output_dir: str | Path | None) -> Path | None:
     """Resolve where a run records: sync the directory, snapshot the sources into it, seed the counter.
 
     Returns the local path a ``LocalDatasetWriter`` opens, or ``None`` when the run records nothing.
+
+    TODO(Positronic-Robotics/internal#378): take ``Path | None``. configuronic parses a CLI value with
+    ``ast.literal_eval`` and falls back to ``str``, so ``--output_dir=s3://…`` arrives here as a ``str``
+    whatever this says; narrowing before it coerces would make the annotation lie about what arrives.
     """
     if output_dir is None:
         return None

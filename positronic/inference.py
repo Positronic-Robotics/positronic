@@ -48,32 +48,37 @@ def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
 
-    # Warming up opens a session, so the policy is this function's to close from here on — and the
-    # setup below can raise: `prepare_output_dir` syncs a directory and snapshots sources into it,
-    # and `LocalDatasetWriter` scans the one it is given.
+    # Warming up opens a session, so the policy is this function's to close from here on — and
+    # everything the helper does can raise: `prepare_output_dir` syncs a directory and snapshots
+    # sources into it, and `LocalDatasetWriter` scans the one it is given.
     warm_up(policy)
     try:
-        output_dir = prepare_output_dir(policy, output_dir)
-        harness = Harness(policy, embodiment, on_episode_complete=completion_sink(policy))
-        keyboard = KeyboardControl(quit_key='q')
-        handler = KeyboardHandler(task=task)
-        print('Keyboard controls: [s]tart, sto[p], abo[r]t, [q]uit')
-
-        writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
-        with writer_cm as dataset_writer, pimm.World() as world:
-            ds_agent = wire.wire_embodiment(world, harness, embodiment, dataset_writer)
-            world.connect(
-                keyboard.keyboard_inputs,
-                harness.directive,
-                # `World.connect` types its wrapper same-in-same-out; a keystroke->Directive map is not.
-                emitter_wrapper=pimm.map(handler.harness_directive),  # pyright: ignore[reportArgumentType]
-            )
-            if ds_agent is not None:
-                world.connect(harness.ds_command, ds_agent.command)
-            producers = [cs for cs in embodiment.control_systems if cs is not None]
-            world.run([harness, keyboard], [*producers, ds_agent])
+        _run_attended(policy, embodiment, task, output_dir)
     finally:
         policy.close()
+
+
+def _run_attended(policy, embodiment: Embodiment, task: str | None, output_dir) -> None:
+    """Record from a warmed policy until the keyboard returns. The caller owns the policy."""
+    output_dir = prepare_output_dir(policy, output_dir)
+    harness = Harness(policy, embodiment, on_episode_complete=completion_sink(policy))
+    keyboard = KeyboardControl(quit_key='q')
+    handler = KeyboardHandler(task=task)
+    print('Keyboard controls: [s]tart, sto[p], abo[r]t, [q]uit')
+
+    writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
+    with writer_cm as dataset_writer, pimm.World() as world:
+        ds_agent = wire.wire_embodiment(world, harness, embodiment, dataset_writer)
+        world.connect(
+            keyboard.keyboard_inputs,
+            harness.directive,
+            # `World.connect` types its wrapper same-in-same-out; a keystroke->Directive map is not.
+            emitter_wrapper=pimm.map(handler.harness_directive),  # pyright: ignore[reportArgumentType]
+        )
+        if ds_agent is not None:
+            world.connect(harness.ds_command, ds_agent.command)
+        producers = [cs for cs in embodiment.control_systems if cs is not None]
+        world.run([harness, keyboard], [*producers, ds_agent])
 
 
 real_cfg = cfn.Config(real, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder)
