@@ -102,6 +102,15 @@ class Policy(ABC):
         """
         return {}
 
+    @property
+    def sampling_key(self) -> str | None:
+        """A stable identity for this policy within a sampled set, or ``None`` where it has none.
+
+        Stable means independent of where the policy sits in the set: a resumed run re-attaches
+        recorded episode counts by this key, so one that moved would carry a tally to another policy.
+        """
+        return None
+
     def close(self):  # noqa: B027
         """Release shared resources (model weights, connections, etc.)."""
 
@@ -118,6 +127,10 @@ class DelegatingPolicy(Policy):
     @property
     def meta(self):
         return self._inner.meta
+
+    @property
+    def sampling_key(self):
+        return self._inner.sampling_key
 
     def close(self):
         self._inner.close()
@@ -260,9 +273,20 @@ class SampledPolicy(Policy):
             self._sampler = UniformSampler(weight_map)
         return self._sampler
 
+    def _key_for(self, index: int, policy: Policy) -> str:
+        """How one sub-policy is named, most stable first.
+
+        The index is the last resort, and it is not stable: reordering the set re-attaches a resumed
+        run's counts to a different policy, so a policy that can name itself is asked before it.
+        """
+        key = policy.meta.get(self._key_field)
+        if key is not None:
+            return key
+        return policy.sampling_key or str(index)
+
     def _get_keys(self) -> tuple[str, ...]:
         if self._keys is None:
-            keys = tuple(p.meta.get(self._key_field, str(i)) for i, p in enumerate(self._policies))
+            keys = tuple(self._key_for(i, p) for i, p in enumerate(self._policies))
             duplicates = sorted(k for k, n in Counter(keys).items() if n > 1)
             if duplicates:
                 raise ValueError(

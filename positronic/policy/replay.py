@@ -158,6 +158,9 @@ class ReplaySession(Session):
 META_DATASET_PATH = 'replay.dataset_path'
 META_EPISODE = 'replay.episode'
 
+# What a replay's ``sampling_key`` is marked with, so a recorded key says which kind of policy it named.
+SAMPLING_KEY_PREFIX = 'replay:'
+
 
 class ReplayPolicy(Policy):
     """Plays a recorded episode back through the policy interface, with no model and no server.
@@ -212,3 +215,11 @@ class ReplayPolicy(Policy):
         """What this policy is. Reading it fetches the recording and checks the episode exists."""
         self._load()
         return {keys.TYPE: 'replay', META_DATASET_PATH: self._dataset_path, META_EPISODE: self._episode_index}
+
+    @property
+    def sampling_key(self) -> str:
+        """The recording it plays: the whole of what makes one replay distinct from another.
+
+        Answered from the constructor arguments, so unlike ``meta`` it fetches nothing.
+        """
+        return f'{SAMPLING_KEY_PREFIX}{self._dataset_path}#{self._episode_index}'

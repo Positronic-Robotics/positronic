@@ -138,9 +138,14 @@ A `remote` endpoint takes a `url` and a `replay` endpoint a `dataset` plus optio
 
 Passing the whole mapping replaces the endpoints the config carries; the per-key form (`--policy.endpoints.arm_a=…`) adds to them, which is how a run ends up sampling an endpoint nobody asked for.
 
-Give a `dataset` as an absolute path or a URI. A leading dot is configuronic's relative-import sigil inside an override value, so `"./run"` in the whole-mapping form is read as a config to import and the override raises before the run starts.
+Give a `dataset` in the whole-mapping form as an absolute path or a URI. A leading dot is configuronic's relative-import sigil inside an override value, so `"./run"` there is read as a config to import and the override raises before the run starts. A relative one is reached by the per-key form, which resolves against the value it replaces rather than against the config:
 
-**The names address endpoints on the command line and do not reach the recording.** Each episode records the identity its policy reports — a served endpoint's checkpoint path under `inference.policy.server.checkpoint_path`, a replay's `inference.policy.replay.dataset_path` and `.episode` — which is what tells the episodes of one endpoint from another's after the fact. A policy reporting no checkpoint path of its own, a replay among them, is keyed by its position in the mapping.
+```bash
+  --policy.endpoints='{"a": {"kind": "replay", "dataset": "unset"}}' \
+  --policy.endpoints.a.dataset=./run
+```
+
+**The names address endpoints on the command line and do not reach the recording.** Each episode records the identity its policy reports — a served endpoint's checkpoint path under `inference.policy.server.checkpoint_path`, a replay's `inference.policy.replay.dataset_path` and `.episode` — which is what tells the episodes of one endpoint from another's after the fact. A policy reporting no checkpoint path of its own is keyed by what it names itself: a replay by its dataset and episode, so reordering the mapping does not move a resumed run's counts from one endpoint to another. Two replay endpoints on the same dataset and episode are refused for the same reason — nothing tells their episodes apart.
 
 ## Following a Run From Its Log
 

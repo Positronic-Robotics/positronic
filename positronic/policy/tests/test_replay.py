@@ -433,6 +433,37 @@ def test_reading_meta_fetches_the_recording_so_a_sampled_set_warms_together(tmp_
         assert chunk is not None and len(chunk) == 3
 
 
+def test_a_replay_names_itself_by_the_recording_it_plays(tmp_path):
+    """Its sampling key. A resumed run re-attaches recorded episode counts by it, so it must not move."""
+    dataset = str(tmp_path / 'a')
+    _joint_fixture(tmp_path / 'a', count=2)
+
+    assert ReplayPolicy(dataset, episode=1).sampling_key == ReplayPolicy(dataset, episode=1).sampling_key
+    assert ReplayPolicy(dataset, episode=0).sampling_key != ReplayPolicy(dataset, episode=1).sampling_key
+    assert ReplayPolicy(dataset).sampling_key != ReplayPolicy(str(tmp_path / 'b')).sampling_key
+    # Answered from the constructor arguments: unlike `meta`, reading it fetches nothing.
+    assert ReplayPolicy(str(tmp_path / 'absent')).sampling_key
+
+
+def test_a_sampled_set_keys_replays_by_name_so_reordering_it_moves_no_key(tmp_path):
+    """Keyed by position instead, a resumed run would re-attach one endpoint's counts to the other."""
+    a, b = tmp_path / 'a', tmp_path / 'b'
+    _joint_fixture(a, count=2)
+    _joint_fixture(b, count=2)
+    first, second = ReplayPolicy(str(a)), ReplayPolicy(str(b))
+
+    assert SampledPolicy(first, second)._get_keys() == (first.sampling_key, second.sampling_key)
+    assert SampledPolicy(second, first)._get_keys() == (second.sampling_key, first.sampling_key)
+
+
+def test_two_replays_of_one_recording_are_refused(tmp_path):
+    """Nothing tells their episodes apart, so a resumed run could not re-attach their counts either."""
+    _joint_fixture(tmp_path, count=2)
+
+    with pytest.raises(ValueError, match='must be distinguishable'):
+        SampledPolicy(ReplayPolicy(str(tmp_path)), ReplayPolicy(str(tmp_path))).new_session()
+
+
 def test_meta_names_the_recording_it_plays(tmp_path):
     _joint_fixture(tmp_path)
     policy = ReplayPolicy(str(tmp_path), episode=0)

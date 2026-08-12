@@ -8,6 +8,7 @@ That holds for what a caller WRITES. What a policy REPORTS is read back by first
 imports, so the meta keys come from the module that produces them.
 """
 
+import configuronic as cfn
 import numpy as np
 import pos3
 import pytest
@@ -128,6 +129,58 @@ def test_a_boolean_episode_is_refused():
     for episode in (True, False):
         with pytest.raises(ValueError, match=f'declares episode={episode!r}, which is not an episode index'):
             _built(endpoints={'arm_a': {'kind': 'replay', 'dataset': '/tmp/x', 'episode': episode}})
+
+
+def test_a_relative_dataset_is_refused_in_the_whole_mapping_form():
+    """A leading dot is configuronic's relative-import sigil, applied to nested override values too.
+
+    It fails at override time, before the run starts, which is the difference between a footgun and a
+    corruption. The per-key form below is the route a relative path takes.
+    """
+    for dataset in ('./run', '../data/run', '.run'):
+        with pytest.raises(cfn.ConfigError, match="Failed to override 'endpoints'"):
+            _built(endpoints={'arm_a': {'kind': 'replay', 'dataset': dataset}})
+
+
+def test_a_relative_dataset_is_carried_through_the_per_key_form(tmp_path, monkeypatch):
+    """The per-key form resolves against the value it replaces, which is a plain string and no base."""
+    _dataset(tmp_path / 'ds', episodes=1)
+    monkeypatch.chdir(tmp_path)
+
+    meta = _session_meta(
+        _built(**{'endpoints': {'arm_a': {'kind': 'replay', 'dataset': 'unset'}}, 'endpoints.arm_a.dataset': './ds'})
+    )
+
+    assert meta[META_DATASET_PATH] == './ds'
+
+
+def test_a_relative_config_reference_inside_an_endpoint_still_resolves():
+    """The boundary on the two above: the sigil is configuronic's and is untouched here, so a dotted
+    value that names a config still becomes one — which is why a dataset cannot be written that way."""
+    built = policy_cfg.production.override(endpoints={'arm_a': {'kind': 'replay', 'dataset': '.replay'}})
+
+    assert isinstance(built.kwargs['endpoints']['arm_a']['dataset'], cfn.Config)
+
+
+def test_two_replay_endpoints_on_one_recording_are_refused(tmp_path):
+    """They report one identity, so an episode of either could not be joined back to the endpoint."""
+    dataset = _dataset(tmp_path / 'ds', episodes=1)
+    endpoints = {'arm_a': {'kind': 'replay', 'dataset': dataset}, 'arm_b': {'kind': 'replay', 'dataset': dataset}}
+
+    with pytest.raises(ValueError, match='must be distinguishable'):
+        _session_meta(_built(endpoints=endpoints))
+
+
+def test_reordering_the_endpoints_keeps_each_one_keyed_to_its_own_recording(tmp_path):
+    """A resumed run re-attaches counts by the key an episode recorded, so it may not follow position."""
+    dataset = _dataset(tmp_path / 'ds', episodes=2)
+    a = {'kind': 'replay', 'dataset': dataset, 'episode': 0}
+    b = {'kind': 'replay', 'dataset': dataset, 'episode': 1}
+
+    forwards = _built(endpoints={'arm_a': a, 'arm_b': b})
+    backwards = _built(endpoints={'arm_b': b, 'arm_a': a})
+
+    assert forwards._get_keys() == backwards._get_keys()[::-1]
 
 
 def test_weights_still_name_endpoints_declared_as_mappings(tmp_path):
