@@ -898,10 +898,10 @@ def test_trial_seed_reaches_task_reset_and_meta(world):
 
     assert seeds == [7, 8]
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
-    assert [s.static_data['eval.seed'] for s in stops] == [7, 8]
-    assert all(s.static_data['eval.universe'] == 'real' for s in stops)
-    assert all(s.static_data['eval.embodiment'] == '' for s in stops)
-    assert all(s.static_data['eval.timeout'] == 0.05 for s in stops)
+    assert [s.static_data[keys.EVAL_SEED] for s in stops] == [7, 8]
+    assert all(s.static_data[keys.EVAL_UNIVERSE] == 'real' for s in stops)
+    assert all(s.static_data[keys.EVAL_EMBODIMENT] == '' for s in stops)
+    assert all(s.static_data[keys.EVAL_TIMEOUT] == 0.05 for s in stops)
 
 
 @pytest.mark.timeout(3.0)
@@ -916,9 +916,9 @@ def test_trial_plan_self_drives(world):
     drive_scheduler(scheduler, steps=400)
 
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
-    assert [s.static_data['eval.rollout_index'] for s in stops] == [0, 1]
+    assert [s.static_data[keys.EVAL_ROLLOUT_INDEX] for s in stops] == [0, 1]
     assert all(s.static_data[keys.TASK] == 'stack' for s in stops)
-    assert all(s.static_data['eval.rollout_count'] == 2 for s in stops)
+    assert all(s.static_data[keys.EVAL_ROLLOUT_COUNT] == 2 for s in stops)
     assert len(stops) == 2
     assert all(s.static_data[keys.EVAL_TERMINATED] is False for s in stops)
     assert policy.reset_calls == 2
@@ -946,7 +946,7 @@ def test_scene_is_recorded_but_withheld_from_the_policy(world):
     assert all(scene.keys().isdisjoint(obs) for obs in policy.observations)
 
     (stop,) = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
-    assert stop.static_data['eval.seed'] == 7
+    assert stop.static_data[keys.EVAL_SEED] == 7
     assert stop.static_data['eval.task_id'] == 3
 
 

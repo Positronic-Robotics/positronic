@@ -16,8 +16,7 @@ from positronic.drivers.roboarm.models import DROID_EE_FRAME
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
-# The scene-spec keys a RoboLab rollout's scene must carry. The eval config writes them and ``_reset_token``
-# reads them back into the server's reset token.
+# The RoboLab scene a rollout runs in: which of the benchmark's tasks, and which of its three phrasings.
 TASK = 'eval.task'
 INSTRUCTION_TYPE = 'eval.instruction_type'
 

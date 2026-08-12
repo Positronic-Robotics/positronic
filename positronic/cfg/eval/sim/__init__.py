@@ -8,7 +8,6 @@ def all(groups):
     """Every sim benchmark in one command, against one warm policy.
 
     Each entry is itself a list of evals, so a group that grows a second embodiment joins this sweep without
-    touching it. Listing backends together is only safe because ``eval run`` rebuilds the World one eval at a
-    time: two env servers never hold the GPU at once.
+    touching it. Adding a GPU-hungry backend here is safe only while evals run one at a time.
     """
     return [ev for group in groups for ev in group]

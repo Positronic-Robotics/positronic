@@ -15,8 +15,9 @@ from positronic import geom, keys
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
-# The scene-spec keys a LIBERO rollout's scene must carry, alongside ``keys.EVAL_SEED``. The eval config
-# writes them and ``_reset_token`` reads them back into the server's reset token.
+# The LIBERO scene a rollout runs in, alongside ``keys.EVAL_SEED``: which task of which suite, rendered at
+# what resolution, driven in what control mode, and how long the arm holds after the reset so dropped
+# objects settle.
 SUITE = 'eval.suite'
 TASK_ID = 'eval.task_id'
 CAMERA_RESOLUTION = 'eval.camera_resolution'

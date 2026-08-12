@@ -61,20 +61,8 @@ class Directive:
         return cls(DirectiveType.ABORT)
 
 
-# ``Directive.RUN`` names the rollout's budget with this key and its instruction with ``keys.TASK``; every
-# other payload key describes the scene the operator staged.
+# The rollout's budget in a ``Directive.RUN`` payload; its instruction rides ``keys.TASK``.
 RUN_TIMEOUT = 'timeout'
-
-
-def _directive_rollout(payload: dict[str, Any]) -> Rollout:
-    """A RUN payload read as one rollout.
-
-    An operator names the goal and, where the rollout is to end on its own, a budget; the rest of what they
-    report describes the scene they staged, so it is recorded and withheld from the policy like any other
-    scene. Without a budget the episode is unbounded and ends on FINISH or ABORT.
-    """
-    scene = {k: v for k, v in payload.items() if k not in (keys.TASK, RUN_TIMEOUT)}
-    return Rollout(instruction=payload.get(keys.TASK), timeout=payload.get(RUN_TIMEOUT), scene=scene)
 
 
 class _EpisodeTelemetry:
@@ -366,12 +354,22 @@ class Harness(pimm.ControlSystem):
         self._home(clock)
         self._running = False
 
+    @staticmethod
+    def _directive_rollout(payload: dict[str, Any]) -> Rollout:
+        """A RUN payload read as one rollout.
+
+        An operator names the goal and, where the rollout is to end on its own, a budget; every other key
+        describes the scene they staged, and is recorded and withheld from the policy like any other scene.
+        """
+        scene = {k: v for k, v in payload.items() if k not in (keys.TASK, RUN_TIMEOUT)}
+        return Rollout(instruction=payload.get(keys.TASK), timeout=payload.get(RUN_TIMEOUT), scene=scene)
+
     def _handle_directive(self, directive: Directive, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         """Dispatch a directive to the episode lifecycle; updates ``_running``."""
         match directive.type:
             case DirectiveType.RUN:
                 if not self._running:  # a RUN mid-trial is ignored — the operator finishes before starting anew
-                    self._begin_episode(_directive_rollout(directive.payload or {}), clock)
+                    self._begin_episode(self._directive_rollout(directive.payload or {}), clock)
             case DirectiveType.FINISH:
                 if self._running:  # a FINISH while idle is ignored — nothing to finalize
                     yield from self._end_episode(clock, directive.payload)
