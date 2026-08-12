@@ -170,7 +170,7 @@ from positronic.drivers.roboarm import command
 from positronic.offboard import PolicyServer
 from positronic.policy import Policy, Session
 from positronic.policy.spec import PolicySource, remote
-from positronic.policy.wrappers import ChunkedSchedule
+from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 
 
 class MySession(Session):
@@ -201,13 +201,13 @@ class MyPolicy(Policy):
         return {'type': 'my_model'}
 
 
-pipeline = ChunkedSchedule() | remote | PolicySource(MyPolicy(load_my_model()))
+pipeline = StopOnFault() | ChunkedSchedule() | remote | PolicySource(MyPolicy(load_my_model()))
 PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()
 ```
 
-The pipeline reads left to right: everything left of the `remote` marker is the client-side stack the server declares in its handshake (here the standard `ChunkedSchedule`); everything right of it runs on the server. `PolicySource` is the pipeline's terminal — a model source that serves one already-built policy.
+The pipeline reads left to right: everything left of the `remote` marker is the client-side stack the server declares in its handshake (here the standard `StopOnFault` and `ChunkedSchedule`); everything right of it runs on the server. `PolicySource` is the pipeline's terminal — a model source that serves one already-built policy.
 
-The left side is not optional: a pipeline with nothing there is refused when the server starts, and a rig refuses a handshake that declares nothing. It needs a scheduler in particular, and on a real rig it wants `StopOnFault` outside that scheduler — a faulted arm is not tracking the plan it was given, and the wrapper answers the empty trajectory so the rig stops rather than resuming a chunk stamped before the fault. Actions come back timestamped relative to their chunk, and `ChunkedSchedule` is what turns those into times on the rig's clock; a stack that leaves them relative — or anchors them twice — makes the harness reject the chunk at the first inference, since it schedules nothing more than `MAX_ACTION_SKEW_SEC` from now.
+The left side is not optional: a pipeline with nothing there is refused when the server starts, and a rig refuses a handshake that declares nothing. It needs a scheduler in particular, and `StopOnFault` outside that scheduler — a faulted arm is not tracking the plan it was given, so the wrapper answers the empty trajectory and the rig stops rather than resuming a chunk stamped before the fault. It is what makes the session above safe to write: a faulted observation arrives without `robot_state.ee_pose`/`q`/`dq`, so a session reading them by name needs the wrapper ahead of it. Actions come back timestamped relative to their chunk, and `ChunkedSchedule` is what turns those into times on the rig's clock; a stack that leaves them relative — or anchors them twice — makes the harness reject the chunk at the first inference, since it schedules nothing more than `MAX_ACTION_SKEW_SEC` from now.
 
 `new_session`'s `now` argument is the runtime clock that wrappers scheduling against live time read; a policy that does no scheduling of its own just accepts and ignores it (server-side it is `None`).
 
