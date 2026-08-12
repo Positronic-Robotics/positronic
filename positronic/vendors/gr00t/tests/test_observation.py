@@ -213,14 +213,16 @@ def test_warmup_observation_matches_what_the_paired_codec_encodes(codec_name, mo
 
 
 def test_a_custom_config_warms_at_the_cameras_and_language_field_it_declares():
+    # Names GR00T's other embodiments use, which none of the configs shipped here declare.
+    camera, task_key = 'ego_view', 'annotation.human.coarse_action'
     custom = ModalityConfig(
         path=Path('gr00t/configs/data/my_own.py'),
         state={GRIP: 1, JOINT_POSITION: 7},
-        cameras=('ego_view',),
-        task_key='annotation.human.coarse_action',
+        cameras=(camera,),
+        task_key=task_key,
     )
 
     warm = _warm_observation(custom)
 
-    assert set(warm[VIDEO]) == {'ego_view'}
-    assert set(warm[LANGUAGE]) == {'annotation.human.coarse_action'}
+    assert set(warm[VIDEO]) == {camera}
+    assert set(warm[LANGUAGE]) == {task_key}
