@@ -13,9 +13,9 @@ from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
 
-# Only the checkpoint pinned at server startup is pre-warmed; a session that requests any other model loads it
-# cold, so its first ``infer`` can include the backend's JAX compilation. Bound each ``recv`` generously enough to
-# outlast that compile (still surfacing a stalled/half-open connection), and let callers override per use.
+# A first ``infer`` can include the backend's own startup cost, such as a JAX compilation. Bound each ``recv``
+# generously enough to outlast that (still surfacing a stalled/half-open connection), and let callers override
+# per use.
 DEFAULT_INFER_TIMEOUT = 180.0
 
 

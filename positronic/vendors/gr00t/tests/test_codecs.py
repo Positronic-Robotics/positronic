@@ -3,7 +3,8 @@ import pytest
 
 from positronic import keys
 from positronic.geom import Rotation
-from positronic.vendors.gr00t.codecs import EE_POSE, GRIP, JOINT_POSITION, ee_quat, joints_traj
+from positronic.vendors.gr00t import EE_POSE, GRIP, JOINT_POSITION
+from positronic.vendors.gr00t.codecs import ee_quat, joints_traj
 
 _T0_OBS = {keys.OBS_TIME_NS: 0}
 

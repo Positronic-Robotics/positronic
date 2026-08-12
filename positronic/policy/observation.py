@@ -11,6 +11,10 @@ from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import Derive, Get
 from positronic.policy.codec import Codec, lerobot_image, lerobot_state
 
+# The encoded observation's language prompt, under the name LeRobot training and its policies both use. It
+# shares a value with ``keys.TASK`` by vocabulary, not by contract: that one names the prompt on the way in.
+TASK_FIELD = 'task'
+
 
 class ObservationCodec(Codec):
     """Configurable observation encoder that uses the same keys for training and inference.
@@ -18,19 +22,22 @@ class ObservationCodec(Codec):
     Args:
         state: mapping from output state key to an ordered dict of {episode_key: dim} to concatenate.
         images: mapping from output image name to tuple (input_key, (width, height)).
-        task_field: output key carrying the language prompt at inference; LeRobot training always uses ``task``.
+        task_field: output key carrying the language prompt at inference.
     """
 
     def __init__(
-        self, state: dict[str, dict[str, int]], images: dict[str, tuple[str, tuple[int, int]]], task_field: str = 'task'
+        self,
+        state: dict[str, dict[str, int]],
+        images: dict[str, tuple[str, tuple[int, int]]],
+        task_field: str = TASK_FIELD,
     ):
         self._state = state
         self._image_configs = images
         self._task_field = task_field
 
-        self._derive_transforms = {k: partial(self._derive_state, k) for k in state.keys()}
+        self._derive_transforms: dict[str, Any] = {k: partial(self._derive_state, k) for k in state.keys()}
         self._derive_transforms.update({k: partial(self._derive_image, k) for k in images.keys()})
-        self._derive_transforms['task'] = Get(keys.TASK, '')
+        self._derive_transforms[TASK_FIELD] = Get(keys.TASK, '')
 
         lerobot_features: dict[str, Any] = {}
         for name, features in state.items():
@@ -75,16 +82,6 @@ class ObservationCodec(Codec):
                 parts.append(np.asarray(inputs[f], dtype=np.float32).reshape(-1))
             obs[out_name] = np.concatenate(parts) if parts else np.empty((0,), dtype=np.float32)
 
-        return obs
-
-    def dummy_encoded(self, data=None) -> dict[str, Any]:
-        """Return a zero-filled encoded observation matching the shapes ``encode()`` produces."""
-        obs: dict[str, Any] = {}
-        for out_name, features in self._state.items():
-            obs[out_name] = np.zeros(sum(features.values()), dtype=np.float32)
-        for out_name, (_input_key, (width, height)) in self._image_configs.items():
-            obs[out_name] = np.zeros((height, width, 3), dtype=np.uint8)
-        obs[self._task_field] = 'warmup'
         return obs
 
     @property

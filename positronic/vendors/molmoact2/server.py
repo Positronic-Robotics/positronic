@@ -5,13 +5,14 @@ from typing import Any
 import configuronic as cfn
 
 from positronic.offboard.server import serve
+from positronic.offboard.server_utils import warmup
 from positronic.policy import Codec, Policy
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.utils.logging import init_logging
 from positronic.vendors.molmoact2 import codecs as molmoact2_codecs
-from positronic.vendors.molmoact2.policy import MolmoAct2Policy
+from positronic.vendors.molmoact2.policy import MolmoAct2Policy, warm_observation
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +45,11 @@ class MolmoAct2Source(ModelSource):
         logger.info(message)
         if on_progress is not None:
             on_progress(message)
-        return MolmoAct2Policy(
+        policy = MolmoAct2Policy(
             self._hf_repo, device_map=self._device_map, norm_tag=self._norm_tag, num_steps=self._num_steps
         )
+        warmup(policy, warm_observation(), on_progress)
+        return policy
 
     def meta(self, model_id: str) -> dict[str, Any]:
         return {'model_id': model_id, 'hf_repo': self._hf_repo}

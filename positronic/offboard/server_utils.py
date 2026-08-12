@@ -1,8 +1,8 @@
-"""Sync progress helpers for ``ModelSource.load`` implementations.
+"""Sync helpers for ``ModelSource.load`` implementations.
 
 ``load`` runs in a worker thread while the connected client sits in the websocket handshake with a
-30s per-message timeout; these helpers pump ``on_progress`` every few seconds so long downloads and
-subprocess boots keep that handshake alive.
+30s per-message timeout; these helpers pump ``on_progress`` every few seconds so long downloads,
+subprocess boots and first inferences keep that handshake alive.
 """
 
 import logging
@@ -10,6 +10,8 @@ import threading
 import time
 from collections.abc import Callable
 from typing import Any
+
+from positronic.policy import Policy
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,18 @@ def run_with_progress(fn: Callable[[], Any], description: str, on_progress: Call
     finally:
         done.set()
         ticker.join()
+
+
+def warmup(policy: Policy, obs: dict[str, Any], on_progress: Callable[[str], None] | None = None) -> None:
+    """Run one inference through ``policy``, so a backend's first-call cost is paid before it serves.
+
+    ``obs`` has to be an observation the loaded backend accepts.
+    """
+    session = policy.new_session()
+    try:
+        run_with_progress(lambda: session(obs), 'Running warmup inference', on_progress)
+    finally:
+        session.close()
 
 
 def wait_for_subprocess_ready(

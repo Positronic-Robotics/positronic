@@ -59,17 +59,6 @@ class TestDreamZeroObservationCodec:
             result['observation/exterior_image_1_left'], result['observation/exterior_image_0_left']
         )
 
-    def test_dummy_encoded_shape(self):
-        codec = DreamZeroObservationCodec()
-        result = codec.dummy_encoded()
-
-        assert result['observation/joint_position'].shape == (7,)
-        assert result['observation/gripper_position'].shape == (1,)
-        assert result['observation/wrist_image_left'].shape == (176, 320, 3)
-        assert result['observation/exterior_image_0_left'].shape == (176, 320, 3)
-        assert result['observation/exterior_image_1_left'].shape == (176, 320, 3)
-        assert result['prompt'] == 'warmup'
-
     def test_meta(self):
         assert DreamZeroObservationCodec().meta == {'image_sizes': (320, 176)}
 
