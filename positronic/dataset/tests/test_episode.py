@@ -325,7 +325,7 @@ def test_a_second_discard_finishes_the_move_the_failed_one_left(tmp_path, monkey
         w.discard(DiscardReason.ABORTED)
     assert ep_dir.exists()  # the failed attempt left it in the dataset root
 
-    w.discard(DiscardReason.RUN_ENDED)  # what the run's teardown does with the episode still open
+    w.discard(DiscardReason.RUN_ENDED)
 
     assert not ep_dir.exists()
     discarded = tmp_path / 'discarded' / f'ep_discard_retry-{uid}'
@@ -713,7 +713,7 @@ def test_episode_writer_refuses_a_uid_that_could_leave_the_discarded_tree(tmp_pa
     with pytest.raises(ValueError, match='single path segment'):
         DiskEpisodeWriter(ep_dir, discarded_dir=tmp_path / 'discarded', uid='../../escaped')
 
-    assert not ep_dir.exists()  # a refused writer leaves nothing behind, so the dataset keeps the id
+    assert not ep_dir.exists()
 
 
 def test_episode_writer_takes_an_ordinary_uid(tmp_path):
