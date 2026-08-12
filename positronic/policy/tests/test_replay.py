@@ -20,6 +20,21 @@ def _mirror():
         yield
 
 
+# A multi-arm recording hangs each side off the command channel and carries the single-arm suffix
+# onto it; the gripper's channel takes the side the same way.
+_JOINTS_SUFFIX = keys.TARGET_JOINTS.removeprefix(keys.ROBOT_COMMAND)
+
+
+def _arm(side: str) -> str:
+    """One arm's command channel on a multi-arm rig."""
+    return f'{keys.ROBOT_COMMAND}.{side}'
+
+
+def _grip(side: str) -> str:
+    """One gripper's command channel on a multi-arm rig."""
+    return f'{keys.TARGET_GRIP}.{side}'
+
+
 def _write(root, signals: dict[str, list[tuple[Any, int]]]) -> Episode:
     """One episode holding the given ``name -> [(value, ts_ns)]`` streams."""
     with LocalDatasetWriter(root) as writer, writer.new_episode() as episode:
@@ -195,10 +210,14 @@ def test_load_actions_replays_every_channel_a_recording_carries(tmp_path):
     episode = _write(
         tmp_path,
         {
-            'robot_command.left.joints': [(np.full(7, 0.1, dtype=np.float32), start + i * step) for i in range(2)],
-            'robot_command.right.joints': [(np.full(7, 0.2, dtype=np.float32), start + i * step) for i in range(2)],
-            'target_grip.left': [(np.float32(0.0), start)],
-            'target_grip.right': [(np.float32(1.0), start)],
+            f'{_arm("left")}{_JOINTS_SUFFIX}': [
+                (np.full(7, 0.1, dtype=np.float32), start + i * step) for i in range(2)
+            ],
+            f'{_arm("right")}{_JOINTS_SUFFIX}': [
+                (np.full(7, 0.2, dtype=np.float32), start + i * step) for i in range(2)
+            ],
+            _grip('left'): [(np.float32(0.0), start)],
+            _grip('right'): [(np.float32(1.0), start)],
         },
     )
 
@@ -206,16 +225,10 @@ def test_load_actions_replays_every_channel_a_recording_carries(tmp_path):
 
     assert [a[keys.ACTION_TIMESTAMP] for a in actions] == pytest.approx([0.0, 0.1])
     for action in actions:
-        assert set(action) == {
-            keys.ACTION_TIMESTAMP,
-            'robot_command.left',
-            'robot_command.right',
-            'target_grip.left',
-            'target_grip.right',
-        }
-    assert actions[0]['robot_command.left'].positions[0] == pytest.approx(0.1)
-    assert actions[0]['robot_command.right'].positions[0] == pytest.approx(0.2)
-    assert (actions[0]['target_grip.left'], actions[0]['target_grip.right']) == (0.0, 1.0)
+        assert set(action) == {keys.ACTION_TIMESTAMP, _arm('left'), _arm('right'), _grip('left'), _grip('right')}
+    assert actions[0][_arm('left')].positions[0] == pytest.approx(0.1)
+    assert actions[0][_arm('right')].positions[0] == pytest.approx(0.2)
+    assert (actions[0][_grip('left')], actions[0][_grip('right')]) == (0.0, 1.0)
 
 
 def test_load_actions_rejects_a_delta_on_one_arm_of_a_bimanual_recording(tmp_path):
@@ -223,8 +236,10 @@ def test_load_actions_rejects_a_delta_on_one_arm_of_a_bimanual_recording(tmp_pat
     episode = _write(
         tmp_path,
         {
-            'robot_command.left.joints': [(np.full(7, 0.1, dtype=np.float32), 1_000_000_000)],
-            'robot_command.right.pose_delta': [(np.zeros(7, dtype=np.float32), 1_000_000_000)],
+            f'{_arm("left")}{_JOINTS_SUFFIX}': [(np.full(7, 0.1, dtype=np.float32), 1_000_000_000)],
+            # No canonical key spells a delta: they are the forms replay refuses, so the name is
+            # the recording's own rather than one composed from `keys`.
+            f'{_arm("right")}.pose_delta': [(np.zeros(7, dtype=np.float32), 1_000_000_000)],
         },
     )
 

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # The serializer suffix each replayable arm command is written under, most faithful first; pose targets
 # go back through the rig's IK. The delta forms are absent: a delta means something only against the
 # state it was issued from.
-# Taken off the single-arm keys rather than spelled again — a multi-arm channel carries the same suffix.
+# A multi-arm channel carries the same suffix as its single-arm key.
 _ARM_SUFFIXES = (
     (keys.TARGET_JOINTS.removeprefix(keys.ROBOT_COMMAND), roboarm_command.JointPosition),
     (keys.TARGET_EE_POSE.removeprefix(keys.ROBOT_COMMAND), roboarm_command.CartesianPosition),
