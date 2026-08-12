@@ -173,7 +173,11 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
 
     @abstractmethod
     def abort(self) -> None:
-        """Abort the write and discard any partially written data."""
+        """Stop writing without committing. The episode does not join the dataset.
+
+        What happens to what was already written is the implementation's: `DiskEpisodeWriter`
+        keeps it on disk, unfinished, for inspection.
+        """
         pass
 
     @property

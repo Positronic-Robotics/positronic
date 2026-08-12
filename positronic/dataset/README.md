@@ -165,7 +165,7 @@ class EpisodeWriter:
     def __exit__(self, exc_type, exc, tb) -> None:
         ...
 
-    # Abort the episode; underlying writers are aborted and the `Episode` directory is removed
+    # Abort the episode: it stays on disk, unfinished, and never joins the dataset
     def abort(self) -> None:
         pass
 
@@ -269,7 +269,7 @@ Episodes are recorded via an `EpisodeWriter` implementations. You add time-varyi
 Name collisions are disallowed: attempting to `append` to a name that already exists as a static item raises an error, and vice versa.
 
 Use as a context manager: exiting the `with` block finalizes all underlying `Signal` writers and persists metadata.
-Aborting: `abort()` stops recording, asks each underlying `Signal` writer to abort, and removes the `Episode` directory. After abort, all writer operations (`append`, `set_static`) raise.
+Aborting: `abort()` stops recording and finalizes each underlying `Signal` writer, leaving the episode on disk with its `.unfinished` marker and no `meta.json`. It never joins the dataset — `LocalDataset` skips it and `DiskEpisode` refuses to open it — and its bytes stay for inspection of whatever the run was doing when it stopped. After abort, all writer operations (`append`, `set_static`) raise.
 
 ### System Metadata (meta)
 

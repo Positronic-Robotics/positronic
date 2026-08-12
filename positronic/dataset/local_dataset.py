@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import platform
-import shutil
 import sys
 import time
 import uuid
@@ -259,16 +258,24 @@ class DiskEpisodeWriter(EpisodeWriter):
             self._on_close(self)
 
     def abort(self) -> None:
-        """Abort writing: close resources and remove episode directory."""
+        """Stop writing without committing: the episode stays on disk, unfinished.
+
+        It keeps its `.unfinished` marker and gets no `meta.json`, which is what every reader here
+        already keys off — `LocalDataset` skips it and `DiskEpisode` refuses to open it. So it is
+        out of the dataset while its bytes remain for whoever wants to see what a run was doing
+        when it stopped.
+
+        The signal writers are FINALIZED rather than aborted: their own abort unlinks what they
+        wrote, which is the thing being kept.
+        """
         if self._aborted:
             return
         if self._finished:
             raise RuntimeError('Cannot abort a finished writer')
 
         for w in list(self._writers.values()):
-            w.abort()
+            w.__exit__(None, None, None)
 
-        shutil.rmtree(self._path, ignore_errors=True)
         self._aborted = True
 
     @property

@@ -6,7 +6,13 @@ import pyarrow.parquet as pq
 import pytest
 
 from positronic.dataset import Episode
-from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter
+from positronic.dataset.local_dataset import (
+    UNFINISHED_MARKER,
+    DiskEpisode,
+    DiskEpisodeWriter,
+    LocalDataset,
+    LocalDatasetWriter,
+)
 from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
 
@@ -208,22 +214,37 @@ def test_episode_static_rejects_none(tmp_path):
             w.set_static('maybe', None)
 
 
-def test_episode_writer_abort_cleans_up_and_blocks_further_use(tmp_path):
+def test_episode_writer_abort_keeps_the_episode_unfinished_and_blocks_further_use(tmp_path):
     ep_dir = tmp_path / 'ep_abort'
     with DiskEpisodeWriter(ep_dir) as w:
-        # Append some data to create resources
         w.append('a', 1, 1000)
         w.set_static('k', 1)
-        assert ep_dir.exists()
 
-        # Abort should remove the directory and prevent further actions
         w.abort()
-        assert not ep_dir.exists()
 
+        assert ep_dir.exists()
+        assert (ep_dir / UNFINISHED_MARKER).exists()
+        assert not (ep_dir / 'meta.json').exists()
         with pytest.raises(RuntimeError):
             w.append('a', 2, 2000)
         with pytest.raises(RuntimeError):
             w.set_static('z', 2)
+
+    with pytest.raises(ValueError, match='unfinished'):
+        DiskEpisode(ep_dir)
+
+
+def test_an_aborted_episode_is_not_in_the_dataset(tmp_path):
+    """What keeps it out is the marker, not its absence: the bytes stay for inspection."""
+    ds = LocalDatasetWriter(tmp_path)
+    with ds.new_episode() as good:
+        good.append('a', 1, 1000)
+    aborted = ds.new_episode()
+    aborted.append('a', 2, 2000)
+    aborted.abort()
+    aborted.__exit__(None, None, None)
+
+    assert len(LocalDataset(tmp_path)) == 1
 
 
 def test_episode_writer_context_aborts_on_exception(tmp_path):
@@ -232,7 +253,9 @@ def test_episode_writer_context_aborts_on_exception(tmp_path):
         with DiskEpisodeWriter(ep_dir) as w:
             w.append('a', 1, 1000)
             raise RuntimeError('boom')
-    assert not ep_dir.exists()
+
+    assert (ep_dir / UNFINISHED_MARKER).exists()
+    assert not (ep_dir / 'meta.json').exists()
 
 
 def test_episode_writer_set_static_twice_raises(tmp_path):
