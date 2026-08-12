@@ -28,12 +28,14 @@ def test_a_policy_image_sends_the_run_to_the_platform(platform, run_command, cap
     assert 'digest sha256:abc' in out
 
 
-def test_an_image_rejected_at_the_door_is_reported(platform, run_command, capsys):
+def test_an_image_rejected_at_the_door_fails_the_command(platform, run_command, capsys):
+    # Terminal at the door and charged: a zero exit would let a script read it as a run that happened.
     platform.answer({'submission_id': ID, 'status': 'errored', 'reason_code': 'image_unpullable'})
 
-    run_command(run, eval='fake.smoke', policy_image='org/p:v1')
+    with pytest.raises(SystemExit, match='rejected: image_unpullable'):
+        run_command(run, eval='fake.smoke', policy_image='org/p:v1')
 
-    assert 'rejected: image_unpullable' in capsys.readouterr().out
+    assert f'submission {ID} (errored)' in capsys.readouterr().out
 
 
 def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(platform, run_command):
@@ -58,6 +60,16 @@ def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(p
 def test_an_image_reference_the_registry_could_never_resolve_is_refused_here(platform, run_command):
     with pytest.raises(ValueError):
         run_command(run, eval='fake.smoke', policy_image='org/policy@')
+    assert platform.seen is None
+
+
+@pytest.mark.parametrize(
+    'platform_only', [{'alias': 'demo'}, {'transaction_key': 'k'}, {'platform_url': 'http://x.test'}]
+)
+def test_a_local_run_refuses_what_only_a_platform_run_can_mean(platform, run_command, platform_only: dict):
+    # The mirror of the check below it: neither half may drop the other's arguments in silence.
+    with pytest.raises(SystemExit, match='a local run has no'):
+        run_command(run, eval='fake.smoke', policy='a policy', **platform_only)
     assert platform.seen is None
 
 

@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import re
+
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import core_schema
+
+# `<algorithm>:<hex>`, matched whole. The length is the registry's business — what is checked here
+# is the shape a typo breaks: a missing half, or an encoding that is not hex.
+_DIGEST = re.compile(r'[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9a-fA-F]+')
 
 
 class ImageRef(str):
@@ -18,6 +24,14 @@ class ImageRef(str):
         name, sep, digest = value.partition('@')
         if not name or any(c.isspace() for c in value) or (sep and not digest) or '@' in digest:
             raise ValueError(f'not an image reference: {value!r}')
+        # A tag or a digest with nothing behind it is a typo, and one the registry only refuses at
+        # submission time — where an unpullable image is a charged terminal submission.
+        if sep and not _DIGEST.fullmatch(digest):
+            raise ValueError(f'not a digest: {digest!r}')
+        # A trailing colon is an empty tag. A registry port (`reg.io:5000/org/policy`) is not one:
+        # what follows its colon is the rest of the path, so only an EMPTY remainder is the typo.
+        if name.rpartition(':')[1] and not name.rpartition(':')[2]:
+            raise ValueError(f'image reference has an empty tag: {value!r}')
         return super().__new__(cls, value)
 
     @classmethod

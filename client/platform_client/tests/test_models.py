@@ -57,7 +57,7 @@ USER = UserId(0xA0)
 SCORES = Scores(primary=0.75, success_rate=0.5, per_task={'banana_in_bowl': 0.75}, episodes=4, unscored=0)
 
 DAILY = QuotaLimit(
-    key='submissions.day',
+    key=QUOTA_SUBMISSIONS_DAY,
     meter='submissions',
     unit='submission',
     scale=1,
@@ -380,7 +380,7 @@ def test_the_published_keys_are_the_ones_a_caller_looks_up():
 def test_a_limit_is_found_by_its_rule_key():
     me = MeResponse(user_id=USER, tenant='nebius-2026', plan='nebius_competition_2026', quota=[DAILY, CREDITS])
     assert me.quota_for('credits.period') is CREDITS
-    assert me.quota_for('submissions.concurrent') is None
+    assert me.quota_for(QUOTA_SUBMISSIONS_CONCURRENT) is None
 
 
 def test_a_quota_refusal_carries_the_whole_rule_that_refused_it():
@@ -392,7 +392,7 @@ def test_a_quota_refusal_carries_the_whole_rule_that_refused_it():
                 'message': 'daily submission quota exhausted',
                 'details': {
                     QUOTA_DETAIL: {
-                        'key': 'submissions.day',
+                        'key': QUOTA_SUBMISSIONS_DAY,
                         'meter': 'submissions',
                         'unit': 'submission',
                         'scale': 1,
@@ -409,7 +409,7 @@ def test_a_quota_refusal_carries_the_whole_rule_that_refused_it():
         },
     )
     assert err.quota is not None
-    assert err.quota.key == 'submissions.day'
+    assert err.quota.key == QUOTA_SUBMISSIONS_DAY
     assert err.quota.remaining == 0
     assert err.quota.on_exhausted is OnExhausted.block
     assert err.quota.resets_at == datetime(2026, 8, 12, tzinfo=UTC)
@@ -418,3 +418,29 @@ def test_a_quota_refusal_carries_the_whole_rule_that_refused_it():
 def test_an_error_without_a_quota_detail_reports_none():
     err = PlatformError.from_payload(400, {'error': {'code': 'bad_request', 'message': 'nope'}})
     assert err.quota is None
+
+
+def test_a_scale_of_zero_is_refused_at_the_boundary():
+    # Consumers divide by it, so a zero would validate here and raise ZeroDivisionError there.
+    payload = DAILY.model_dump(mode='json') | {'scale': 0}
+    with pytest.raises(ValidationError):
+        QuotaLimit.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    'model, payload',
+    [
+        (SubmissionCreateResponse, {'submission_id': 'ff', 'status': 'submitting'}),
+        (CancelResponse, {'status': 'submitting', 'refunded': False}),
+    ],
+)
+def test_the_internal_claim_state_never_reaches_a_caller(model: type[BaseModel], payload: dict):
+    # The enum says the gateway reports `submitting` as `pending`; a payload carrying it is a
+    # gateway that forgot, refused here rather than left for every consumer to normalise.
+    with pytest.raises(ValidationError):
+        model.model_validate(payload)
+
+
+@pytest.mark.parametrize('status', ['pending', 'running', 'finished', 'errored', 'cancelled'])
+def test_every_status_a_caller_can_see_is_kept(status: str):
+    assert SubmissionCreateResponse.model_validate({'submission_id': 'ff', 'status': status}).status.name == status

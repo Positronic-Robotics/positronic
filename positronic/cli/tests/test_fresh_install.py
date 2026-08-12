@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -23,6 +24,7 @@ from pathlib import Path
 import pytest
 from platform_client import routes
 from platform_client.client import API_KEY_ENV, API_URL_ENV, CREDENTIAL_ENV
+from platform_client.responses import QUOTA_SUBMISSIONS_DAY
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SUBMISSION = '5f3a91c2b7d40e18'
@@ -44,7 +46,7 @@ ANSWERS: dict[str, object] = {
         'plan': 'demo-plan',
         'quota': [
             {
-                'key': 'submissions.day',
+                'key': QUOTA_SUBMISSIONS_DAY,
                 'meter': 'submissions',
                 'unit': 'submission',
                 'scale': 1,
@@ -188,27 +190,30 @@ README_FILES = (REPO_ROOT / 'client' / 'README.md', REPO_ROOT / 'positronic' / '
 
 
 def cited_commands() -> set[tuple[str, ...]]:
-    """Every `uv run …` line in the READMEs, cut to the words before its first placeholder."""
+    """Every `uv run …` line in the READMEs, as its command path and its option NAMES."""
     cited = set()
     for path in README_FILES:
         for line in path.read_text().splitlines():
             stripped = line.strip().removeprefix('$ ')
-            if not stripped.startswith('uv run '):
-                continue
-            # A cited line carries placeholders (`--board=<board slug>`), which are neither words
-            # nor runnable; everything from the first one on is the reader's to fill in.
-            cited.add(_words(stripped.split('<', 1)[0]))
+            if stripped.startswith('uv run '):
+                # A placeholder may hold a space (`--alias=<display name>`), so it goes before the
+                # split rather than being filtered out of the words afterwards.
+                cited.add(_shape(re.sub(r'<[^>]*>', '', stripped).split()))
     return cited
 
 
-def _words(command: str | list[str]) -> tuple[str, ...]:
-    """A command without its options — what identifies it, whatever arguments a citation carries."""
-    tokens = command.split() if isinstance(command, str) else command
-    return tuple(token for token in tokens if not token.startswith('--'))
+def _shape(command: list[str]) -> tuple[str, ...]:
+    """A command's path and the NAMES of its options, with every value dropped.
+
+    The values differ by construction — a README carries `--submission-id=<hex id>` where this test
+    runs a real one — but the names must not, or a README could rename an option to something the
+    CLI does not accept and this check would go on passing.
+    """
+    return tuple(token.split('=', 1)[0] for token in command)
 
 
 def test_every_uv_command_the_readmes_cite_is_one_this_test_runs():
     # What is documented and what is checked drift apart silently otherwise: a command renamed in a
     # README goes on passing here under its old name, and the first person to hit it is a new user.
-    run_here = {_words(command) for command in DOCUMENTED_COMMANDS.values()}
+    run_here = {_shape(command) for command in DOCUMENTED_COMMANDS.values()}
     assert cited_commands() <= run_here, f'cited but never run: {sorted(cited_commands() - run_here)}'

@@ -23,6 +23,7 @@ from platform_client.ids import ApiKey, SubmissionId
 from platform_client.images import ImageRef
 from platform_client.requests import CancelRequest, RegisterRequest, SubmissionCreateRequest
 from platform_client.responses import (
+    QUOTA_SUBMISSIONS_DAY,
     BoardListResponse,
     CancelResponse,
     MeResponse,
@@ -106,7 +107,7 @@ def test_me_sends_the_bearer_token_and_parses_every_limit():
             'plan': 'nebius_competition_2026',
             'quota': [
                 {
-                    'key': 'submissions.day',
+                    'key': QUOTA_SUBMISSIONS_DAY,
                     'meter': 'submissions',
                     'unit': 'submission',
                     'scale': 1,
@@ -125,7 +126,7 @@ def test_me_sends_the_bearer_token_and_parses_every_limit():
 
     assert isinstance(response, MeResponse)
     assert response.tenant == 'nebius-2026'
-    limit = response.quota_for('submissions.day')
+    limit = response.quota_for(QUOTA_SUBMISSIONS_DAY)
     assert limit is not None
     assert (limit.remaining, limit.subject, limit.on_exhausted) == (1, QuotaSubject.user, OnExhausted.block)
     assert gateway.request().url.path == routes.USERS_ME
@@ -391,3 +392,27 @@ def test_a_failure_that_names_no_evals_is_told_apart_from_one_that_names_none():
     with pytest.raises(PlatformError) as caught:
         make_client(gateway).list_submissions()
     assert caught.value.evals is None
+
+
+def test_a_supplied_client_carrying_an_authorization_default_is_refused():
+    # httpx merges client-level headers into every request, so a default here would reach
+    # `users.register` — which this module declares unauthenticated.
+    with pytest.raises(ValueError, match='Authorization'):
+        PlatformClient(client=httpx.Client(base_url=BASE, headers={'Authorization': 'Bearer leaked'}))
+
+
+def test_a_malformed_eval_list_raises_rather_than_reading_as_no_list():
+    # A short list is worse than none: a caller would pick from it believing it whole.
+    gateway = Gateway(404, {'error': {'code': 'not_found', 'message': 'x', 'details': {EVALS_DETAIL: 'fake.smoke'}}})
+    with pytest.raises(PlatformError) as caught:
+        make_client(gateway).list_submissions()
+    with pytest.raises(ValidationError):
+        _ = caught.value.evals
+
+
+def test_a_malformed_quota_detail_raises_rather_than_reading_as_no_rule():
+    gateway = Gateway(429, {'error': {'code': 'quota_exceeded', 'message': 'x', 'details': {'quota': 'all of it'}}})
+    with pytest.raises(PlatformError) as caught:
+        make_client(gateway).list_submissions()
+    with pytest.raises(ValidationError):
+        _ = caught.value.quota

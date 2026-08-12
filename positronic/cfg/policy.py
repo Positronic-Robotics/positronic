@@ -11,9 +11,8 @@ from positronic.utils import nebius
 
 @cfn.config()
 def unset():
-    """No policy chosen: what `positronic eval run` holds when the run goes to the platform, which
-    pulls an image instead. It lives here so a relative `--policy=.act` still resolves against this
-    package, and returns None so a local run can name the omission itself."""
+    """No policy. It lives in this package so a relative `--policy=.act` still resolves against it,
+    and instantiates to None rather than raising, so the absence is a value a caller can act on."""
     return None
 
 

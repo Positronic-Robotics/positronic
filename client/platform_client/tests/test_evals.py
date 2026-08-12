@@ -1,9 +1,10 @@
-"""EvalRef: the one name a submission chooses by."""
+"""The two validated references a submission carries: the eval it runs, and the image it runs."""
 
 from __future__ import annotations
 
 import pytest
 from platform_client.evals import EvalRef
+from platform_client.images import ImageRef
 from platform_client.requests import SubmissionCreateRequest
 from pydantic import ValidationError
 
@@ -30,3 +31,15 @@ def test_a_name_this_client_has_never_heard_of_still_reaches_the_platform():
 def test_the_boundary_refuses_an_empty_eval():
     with pytest.raises(ValidationError):
         SubmissionCreateRequest.model_validate({'policy_image': 'org/policy:v1', 'eval': ''})
+
+
+@pytest.mark.parametrize('value', ['org/policy:', 'org/policy@sha256:', 'org/policy@nope', 'org/policy@sha256:zz'])
+def test_an_image_reference_a_registry_could_never_resolve_is_refused_here(value: str):
+    # An unpullable image is a CHARGED terminal submission, so a typo caught locally is quota saved.
+    with pytest.raises(ValueError):
+        ImageRef(value)
+
+
+@pytest.mark.parametrize('value', ['org/policy', 'org/policy:v1', 'org/policy@sha256:abc', 'reg.io:5000/org/p:v1'])
+def test_a_reference_a_registry_can_resolve_is_kept(value: str):
+    assert ImageRef(value) == value

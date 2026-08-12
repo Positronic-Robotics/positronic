@@ -3,6 +3,7 @@
 Not a command of its own: running an eval is one act, and where it runs is an argument to it.
 """
 
+from platform_client.enums import SubmissionStatus
 from platform_client.evals import EvalRef
 from platform_client.ids import TransactionKey
 from platform_client.images import ImageRef
@@ -37,5 +38,8 @@ def submit(
     print(f'submission {created.submission_id} ({created.status.name})')
     if created.policy_image_digest is not None:
         print(f'digest {created.policy_image_digest}')
-    if created.reason_code is not None:
-        print(f'rejected: {created.reason_code.name}')
+    # Terminal at the door, and charged. A zero exit would let a script treat a run that never
+    # happened as one that did.
+    if created.status is SubmissionStatus.errored:
+        reason = created.reason_code.name if created.reason_code is not None else 'unknown'
+        raise SystemExit(f'rejected: {reason}')

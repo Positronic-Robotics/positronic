@@ -49,6 +49,10 @@ DEFAULT_PLATFORM_URL = 'https://platform.positronic.ro'
 
 # How a caller is configured. Both secrets are read from the environment and never taken as an
 # argument: a command line is readable by every process on the box and lands in shell history.
+# Named because three places agree on it: what an authenticated call sends, what an unauthenticated
+# one must not, and what a caller's own client may therefore not default.
+AUTH_HEADER = 'Authorization'
+
 API_URL_ENV = 'POSITRONIC_PLATFORM_URL'
 API_KEY_ENV = 'POSITRONIC_PLATFORM_API_KEY'
 CREDENTIAL_ENV = 'POSITRONIC_PLATFORM_CREDENTIAL'
@@ -94,6 +98,11 @@ class PlatformClient:
             client = httpx.Client(base_url=resolve_base_url(base_url), timeout=timeout)
         elif base_url is not None:
             raise ValueError('a client of your own already carries its base URL; pass one or the other')
+        elif AUTH_HEADER in client.headers:
+            # httpx MERGES client-level headers into every request, so a default here would reach
+            # `users.register`, which this module declares unauthenticated and the gateway reads as
+            # a registration by whoever that credential names.
+            raise ValueError(f'the supplied client carries a default {AUTH_HEADER} header; pass the key as api_key')
         self._client = client
         self.api_key = api_key
 
@@ -149,7 +158,7 @@ class PlatformClient:
         if auth is Auth.REQUIRED and self.api_key is None:
             raise ValueError(f'{path} needs an API key; set .api_key from a users.register response')
         if auth is not Auth.NONE and self.api_key is not None:
-            headers['Authorization'] = f'Bearer {self.api_key}'
+            headers[AUTH_HEADER] = f'Bearer {self.api_key}'
         response = self._client.request(method, path, headers=headers, **kwargs)
         # Not `>= 400`: httpx follows no redirect by default, so a 3xx arrives here with a body that
         # is not an envelope and would surface as a parse error instead of the promised PlatformError.

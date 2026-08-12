@@ -15,7 +15,21 @@ from platform_client.enums import BoardVisibility, KeyStatus, OnExhausted, Quota
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, UserId
 from platform_client.slug import Slugged
-from pydantic import AwareDatetime, BaseModel, Discriminator, Field, Tag, model_validator
+from pydantic import AfterValidator, AwareDatetime, BaseModel, Discriminator, Field, Tag, model_validator
+
+
+def _public(status: SubmissionStatus) -> SubmissionStatus:
+    """A status as a CALLER may see it. `submitting` is the gateway's internal claim state, which it
+    reports as `pending`; a payload carrying it is a gateway that forgot, and is refused here rather
+    than left for every consumer to normalise."""
+    if status is SubmissionStatus.submitting:
+        raise ValueError(f'{status.name} is an internal state and never reaches a caller')
+    return status
+
+
+# Every status a caller-facing model may carry. The five `submissions.get` variants pin their own
+# tag instead (`_TaggedView`), which is the same rule stated per variant.
+PublicStatus = Annotated[Slugged[SubmissionStatus], AfterValidator(_public)]
 
 
 class Scores(BaseModel):
@@ -42,7 +56,9 @@ class QuotaLimit(BaseModel):
     key: str  # the rule's identity, one of the published keys above — what a 429 names
     meter: str  # open set: a plan may declare one. 'submissions' | 'credits'
     unit: str  # the display unit, open for the same reason
-    scale: int  # meter units per display unit (credits: 6, submissions: 1)
+    # Meter units per display unit (credits: 6, submissions: 1). Consumers divide by it, so a
+    # zero would validate here and raise ZeroDivisionError in the caller instead.
+    scale: int = Field(gt=0)
     window: str  # a display label: 'day', '24 Jul – 23 Aug', 'concurrent'
     subject: Slugged[QuotaSubject]
     scope: list[str] = Field(default_factory=list)  # tags this rule counts; empty counts the whole meter
@@ -77,8 +93,7 @@ class RegisterResponse(BaseModel):
 
     @model_validator(mode='after')
     def _the_key_and_the_outcome_agree(self) -> Self:
-        # Held here so no consumer has to infer the outcome from the key's presence: a `created`
-        # response missing its key would otherwise read as `existing` and prompt a needless rotate.
+        # The outcome and the key are one fact, held together here rather than inferred apart.
         minted = self.key_status in _MINTING_OUTCOMES
         if minted and self.api_key is None:
             raise ValueError(f'key_status is {self.key_status.name} but no api_key came with it')
@@ -110,7 +125,7 @@ class SubmissionCreateResponse(BaseModel):
     """
 
     submission_id: SubmissionId
-    status: Slugged[SubmissionStatus]
+    status: PublicStatus
     policy_image_digest: str | None = None
     eval_version: str | None = None
     reason_code: Slugged[ReasonCode] | None = None
@@ -122,7 +137,7 @@ class SubmissionListRow(BaseModel):
     id: SubmissionId
     user_id: UserId
     alias: str | None = None
-    status: Slugged[SubmissionStatus]
+    status: PublicStatus
     eval: EvalRef
     received_at: AwareDatetime
     reason_code: Slugged[ReasonCode] | None = None
@@ -228,7 +243,7 @@ SubmissionView = Annotated[
 class CancelResponse(BaseModel):
     """`submissions.cancel`. `refunded` is false once the run started — started work is charged."""
 
-    status: Slugged[SubmissionStatus]
+    status: PublicStatus
     refunded: bool
 
 
@@ -240,8 +255,7 @@ class RankingRow(BaseModel):
     carry the same one. `tag` is what tells them apart, and is what lets a user find their own row;
     it is stable for a user across boards. Render them together (`ateam#0ddba7`).
 
-    The value the board ranks on is `scores.primary`, which `Scores` already defines as exactly that;
-    a second copy beside it is a number the gateway can contradict itself with.
+    The value the board ranks on is `scores.primary`.
     """
 
     rank: int

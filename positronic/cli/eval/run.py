@@ -211,6 +211,17 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
         policy.close()
 
 
+def _refuse(inapplicable: dict[str, object], where: str) -> None:
+    """Stop on an argument the chosen half of `run` cannot honour.
+
+    Dropping one silently hands back a run the caller believes they shaped. Every "not asked for"
+    value is falsy, which is what makes the test the value itself.
+    """
+    asked = sorted(flag for flag, value in inapplicable.items() if value)
+    if asked:
+        raise SystemExit(f'a {where} run has no {", ".join(asked)}')
+
+
 @cfn.config(eval=placeholder, policy=policy_cfg.unset)
 def run(
     eval: Eval | str,
@@ -237,6 +248,7 @@ def run(
     if policy_image is None:
         if policy is None:
             raise SystemExit('--policy is required to run here; --policy-image runs it on the platform instead')
+        _refuse({'--alias': alias, '--transaction-key': transaction_key, '--platform-url': platform_url}, 'local')
         if not isinstance(eval, Eval):
             raise SystemExit(f'--eval={eval!r} is a name, not a config: pass --policy-image to run it on the platform')
         # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob

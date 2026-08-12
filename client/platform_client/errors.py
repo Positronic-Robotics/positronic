@@ -14,12 +14,14 @@ from platform_client.enums import ErrorCode, ReasonCode
 from platform_client.evals import EvalRef
 from platform_client.responses import QuotaLimit
 from platform_client.slug import Slugged, members_by_slug
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 # The `details` keys the gateway writes and this module reads.
 REASON_CODE_DETAIL = 'reason_code'
 QUOTA_DETAIL = 'quota'
 EVALS_DETAIL = 'evals'
+
+_EVAL_LIST: TypeAdapter[list[EvalRef]] = TypeAdapter(list[EvalRef])
 
 
 class ApiErrorBody(BaseModel):
@@ -67,9 +69,14 @@ class PlatformError(Exception):
 
     @property
     def quota(self) -> QuotaLimit | None:
-        """The rule that refused the request, when the failure carries one."""
-        raw = self.details.get(QUOTA_DETAIL)
-        return QuotaLimit.model_validate(raw) if isinstance(raw, dict) else None
+        """The rule that refused the request, when the failure carries one.
+
+        Absent means absent. A present value that is not a rule is a gateway defect, so it raises
+        rather than reading as no rule at all.
+        """
+        if QUOTA_DETAIL not in self.details:
+            return None
+        return QuotaLimit.model_validate(self.details[QUOTA_DETAIL])
 
     @property
     def evals(self) -> list[EvalRef] | None:
@@ -77,11 +84,12 @@ class PlatformError(Exception):
 
         The set lives on the server, so a caller naming an eval it does not have learns the real
         ones from the refusal itself rather than from a list this client would have to keep current.
+        A present value that is not a list of names raises: a short list is worse than none, since a
+        caller would pick from it believing it whole.
         """
-        raw = self.details.get(EVALS_DETAIL)
-        if not isinstance(raw, list):
+        if EVALS_DETAIL not in self.details:
             return None
-        return [EvalRef(name) for name in raw if isinstance(name, str)]
+        return _EVAL_LIST.validate_python(self.details[EVALS_DETAIL])
 
     @classmethod
     def from_payload(cls, http_status: int, payload: object) -> PlatformError:
