@@ -40,8 +40,10 @@ def test_the_keyboard_path_ends_when_the_keyboard_returns(monkeypatch):
 
     real(policy=policy, embodiment=_embodiment(), task='stub')
 
-    assert policy.warmed
     assert policy.closed
+    # Not warmed: an attended run opens no throwaway session here. A binary that wants an endpoint
+    # driven through its cold start does that itself, before it calls in.
+    assert not policy.warmed
 
 
 def test_the_keyboard_path_refuses_a_simulated_embodiment():
