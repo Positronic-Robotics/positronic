@@ -1,9 +1,9 @@
 import configuronic as cfn
 
 from positronic import keys
-from positronic.cfg.eval import build_trials
+from positronic.cfg.eval import build_tasks
 from positronic.drivers.roboarm.models import bundled_panda_model
-from positronic.eval import Eval, Observation, Task
+from positronic.eval import Eval, Observation
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.libero.adapter import LiberoAdapter
 from positronic.simulator.libero.launcher import serve_libero
@@ -26,7 +26,7 @@ _SUITE_NUM_TASKS = {'libero_spatial': 10, 'libero_object': 10, 'libero_goal': 10
 def _libero_eval(
     suite, task_id, trial_count, timeout, camera_dict, camera_resolution, control_mode, seed, settle_steps
 ):
-    """A LIBERO eval: the embodiment proxies a remote LIBERO env, the task carries the scenario.
+    """A LIBERO eval: the embodiment proxies a remote LIBERO env, each rollout carries one scene of it.
 
     A LIBERO *suite* is a set of related manipulation tasks; ``task_id`` selects one within it — a fixed scene and
     language goal (see https://github.com/Lifelong-Robot-Learning/LIBERO). The suites bound below:
@@ -39,15 +39,15 @@ def _libero_eval(
 
     ``_libero_eval`` leaves ``suite`` unbound; each named config below is a ``.override`` binding it — to one
     suite, or to a list (``all``) swept in one run. An unbound ``task_id`` sweeps every task of each bound suite;
-    ``--eval.task_id`` pins one. The instruction is never pinned: the task reads its language live from the env,
-    which reports it (with ``suite`` and ``task_id``) in every reset's meta.
+    ``--eval.task_id`` pins one. The instruction is never pinned: each rollout reads its language live from the
+    env, which reports it (with ``suite`` and ``task_id``) in every reset's meta.
 
     positronic launches a single task-agnostic env server in its own 3.10 interpreter; the proxy drives it over
     the socket and the whole scene spec — suite, task_id, camera_resolution, control_mode, settle_steps — rides
-    each trial's reset token, so one embodiment serves any mix of suites and tasks. The per-trial seed selects a
-    saved init-state and re-randomizes the scene.
+    each rollout's reset token, so one embodiment serves any mix of suites and tasks. The per-rollout seed
+    selects a saved init-state and re-randomizes the scene.
     LIBERO's full physics state is the privileged ground truth (recorded, never fed to the policy), so
-    success is recomputable downstream; the live ``done`` flag also rides the trial's terminal.
+    success is recomputable downstream; the live ``done`` flag also rides the rollout's terminal.
     """
     proxy = RemoteEnvControlSystem(LiberoAdapter(camera_dict), serve_libero())
     # LIBERO drives the same Franka Panda as the native sim, so recordings carry the same model (URDF + meshes +
@@ -56,17 +56,9 @@ def _libero_eval(
     embodiment = remote_franka_embodiment(
         proxy, camera_dict, descriptor='remote.libero.franka', static_meta=bundled_panda_model()
     )
-    privileged = {'sim_state': Observation(proxy.privileged['sim_state'], None)}
-    task = Task(
-        instruction=lambda: proxy.meta['task'],
-        timeout=timeout,
-        privileged=privileged,
-        reset=proxy.reset,
-        done=proxy.done,
-    )
     # One scene per (suite, task) pair: an unbound ``task_id`` sweeps each suite, a pinned one runs that task
-    # in every bound suite. The scene spec rides each trial's reset token, so the single task-agnostic env
-    # server serves every trial.
+    # in every bound suite. The scene spec rides each rollout's reset token, so the single task-agnostic env
+    # server serves every rollout.
     scenes = [
         {
             'eval.suite': s,
@@ -78,7 +70,15 @@ def _libero_eval(
         for s in ([suite] if isinstance(suite, str) else suite)
         for t in ([task_id] if task_id is not None else range(_SUITE_NUM_TASKS[s]))
     ]
-    return Eval(embodiment, task, build_trials(seed, trial_count, scenes))
+    return [
+        Eval(
+            embodiment,
+            build_tasks(lambda: proxy.meta['task'], timeout, seed, trial_count, scenes),
+            reset=proxy.reset,
+            privileged={'sim_state': Observation(proxy.privileged['sim_state'], None)},
+            done=proxy.done,
+        )
+    ]
 
 
 # Each suite binds only its LIBERO ``suite``; an unbound ``task_id`` sweeps the whole suite, ``--eval.task_id``

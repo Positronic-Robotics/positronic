@@ -601,7 +601,7 @@ def test_finish_emits_ds_stop_with_data_and_homes(world):
 def test_trial_timeout_self_terminates(world):
     """A self-driven trial ends at ``task.timeout``: terminated=False, robot homed."""
     policy = StubPolicy()
-    harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=0.05), trials=[{}])
+    harness = Harness(policy, make_embodiment(), tasks=[Task('test', 0.05)])
     p = _pair_all(world, harness)
 
     scheduler = world.start([harness])
@@ -633,7 +633,7 @@ def test_trial_budget_starts_at_the_first_usable_observation(world):
     embodiment.observations[CAM] = Observation(
         pimm.NoOpEmitter(), lambda frames: next(usable, Serializers.camera_images(frames))
     )
-    harness = Harness(policy, embodiment, task=Task(instruction='test', timeout=0.05), trials=[{}])
+    harness = Harness(policy, embodiment, tasks=[Task('test', 0.05)])
     p = _pair_all(world, harness)
     robot_state = make_robot_state([0.2, 0.0, -0.1], [0.7, 0.1, -0.2])
     payload = partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
@@ -653,15 +653,15 @@ def test_trial_budget_starts_at_the_first_usable_observation(world):
 
 @pytest.mark.timeout(3.0)
 def test_attended_task_run_respects_timeout(world):
-    """A task's ``timeout`` bounds an attended (directive-driven) run too: RUN arrives but no FINISH, yet
-    the trial still self-terminates at the deadline. The deadline is armed whenever a task is supplied, not
-    only on the self-driven ``trials`` path."""
+    """A budget on the RUN directive bounds an attended run too: RUN arrives but no FINISH, yet the trial
+    still self-terminates at the deadline. The deadline is armed for whichever rollout the episode runs, not
+    only for one the plan authored."""
     policy = StubPolicy()
-    harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=0.05))
+    harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
 
     scheduler = world.start([harness])
-    p['directive_em'].emit(Directive.RUN(task='test'))
+    p['directive_em'].emit(Directive.RUN(task='test', timeout=0.05))
     drive_scheduler(scheduler, steps=200)
 
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
@@ -676,12 +676,12 @@ def test_attended_task_run_respects_done(world):
     episode even though no FINISH arrives. ``done`` is honored whenever a task supplies it, attended or
     self-driven."""
     policy = StubPolicy()
-    harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=100.0))
+    harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
     done_em = world.pair(harness.done)
 
     scheduler = world.start([harness])
-    p['directive_em'].emit(Directive.RUN(task='test'))
+    p['directive_em'].emit(Directive.RUN(task='test', timeout=100.0))
     drive_scheduler(scheduler, steps=5)
     assert not [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
 
@@ -698,7 +698,7 @@ def test_trial_stop_signal_terminates(world):
     """Delivering the privileged ``done`` ends a trial early: terminated=True, payload recorded, homed."""
     policy = StubPolicy()
     # Timeout far in the future so the stop-signal, not the clock, ends the trial.
-    harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=100.0), trials=[{}])
+    harness = Harness(policy, make_embodiment(), tasks=[Task('test', 100.0)])
     p = _pair_all(world, harness)
     done_em = world.pair(harness.done)
 
@@ -724,7 +724,7 @@ def test_stale_done_does_not_terminate_next_trial(world):
     latched value is ignored — no producer ``reset`` clears it here (``reset`` is ``None``, as on a real
     embodiment). A falsy payload never terminates; trial 1 runs until its own fresh terminal lands."""
     policy = StubPolicy()
-    harness = Harness(policy, make_embodiment(), task=Task(instruction='t', timeout=100.0), trials=[{}, {}])
+    harness = Harness(policy, make_embodiment(), tasks=[Task('t', 100.0), Task('t', 100.0)])
     p = _pair_all(world, harness)
     done_em = world.pair(harness.done)
 
@@ -796,9 +796,8 @@ def test_policy_first_obs_is_frame0(world):
         control_systems=(device,),
         simulated=True,
     )
-    task = Task(instruction='t', timeout=100.0, reset=device.reset)
     policy = StubPolicy()
-    harness = Harness(policy, embodiment, task=task, trials=[{}])
+    harness = Harness(policy, embodiment, tasks=[Task('t', 100.0)], reset=device.reset)
     wire.wire_embodiment(world, harness, embodiment, None)
 
     scheduler = world.start([harness, device])
@@ -837,13 +836,12 @@ def test_task_done_terminates_through_wire_embodiment(world):
         static_meta={},
         meta_source=None,
     )
-    task = Task(instruction='t', timeout=100.0, done=device.done)
     # Termination is independent of the policy wrappers; the minimal embodiment has no
     # ``robot_state``, so run the stub policy bare.
-    harness = Harness(StubPolicy(), embodiment, task=task, trials=[{}])
+    harness = Harness(StubPolicy(), embodiment, tasks=[Task('t', 100.0)])
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
-    wire.wire_embodiment(world, harness, embodiment, None, done=task.done)
+    wire.wire_embodiment(world, harness, embodiment, None, done=device.done)
 
     scheduler = world.start([harness, device])
     drive_scheduler(scheduler, steps=60)
@@ -859,9 +857,7 @@ def test_done_after_deadline_is_a_timeout(world):
     """The deadline is hard: a ``done`` delivered past it (here during the latency sleep) records as a
     timeout — ``eval.terminated`` False, payload dropped — not a late stop-signal success."""
     policy = StubPolicy()
-    harness = Harness(
-        policy, make_embodiment(), task=Task(instruction='t', timeout=0.05), trials=[{'inference_latency': 0.2}]
-    )
+    harness = Harness(policy, make_embodiment(), tasks=[Task('t', 0.05)], inference_latency=0.2)
     p = _pair_all(world, harness)
     done_em = world.pair(harness.done)
 
@@ -884,18 +880,17 @@ def test_done_after_deadline_is_a_timeout(world):
 
 @pytest.mark.timeout(3.0)
 def test_trial_seed_reaches_task_reset_and_meta(world):
-    """Each RUN hands its ``eval.seed`` to the task's scene reset; the seed and the
+    """Each rollout hands its ``eval.seed`` to the scene reset; the seed and the
     eval-identity block land in episode meta."""
     policy = StubPolicy()
     seeds = []
-    trials = [{'eval.seed': 7 + i} for i in range(2)]
+    tasks = [Task('stack', 0.05, {'eval.seed': 7 + i}) for i in range(2)]
 
-    def reset(context):
-        seeds.append(context.get('eval.seed'))
+    def reset(scene):
+        seeds.append(scene.get('eval.seed'))
         p['meta_em'].emit({})  # the producer publishes fresh scene meta, recorded into the episode at finalize
 
-    task = Task(instruction='stack', timeout=0.05, reset=reset)
-    harness = Harness(policy, make_embodiment(), task=task, trials=trials)
+    harness = Harness(policy, make_embodiment(), tasks=tasks, reset=reset)
     p = _pair_all(world, harness)
 
     scheduler = world.start([harness])
@@ -911,10 +906,10 @@ def test_trial_seed_reaches_task_reset_and_meta(world):
 
 @pytest.mark.timeout(3.0)
 def test_trial_plan_self_drives(world):
-    """With a trial plan the harness runs unattended: no driver, one episode per entry."""
+    """With a trial plan the harness runs unattended: no driver, one episode per entry, each stamped with
+    its place in the plan."""
     policy = StubPolicy()
-    trials = [{'eval.trial_index': i} for i in range(2)]
-    harness = Harness(policy, make_embodiment(), task=Task(instruction='stack', timeout=0.05), trials=trials)
+    harness = Harness(policy, make_embodiment(), tasks=[Task('stack', 0.05) for _ in range(2)])
     p = _pair_all(world, harness)
 
     scheduler = world.start([harness])
@@ -923,9 +918,36 @@ def test_trial_plan_self_drives(world):
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert [s.static_data['eval.trial_index'] for s in stops] == [0, 1]
     assert all(s.static_data[keys.TASK] == 'stack' for s in stops)
+    assert all(s.static_data['eval.trial_count'] == 2 for s in stops)
     assert len(stops) == 2
     assert all(s.static_data[keys.EVAL_TERMINATED] is False for s in stops)
     assert policy.reset_calls == 2
+
+
+@pytest.mark.timeout(3.0)
+def test_scene_is_recorded_but_withheld_from_the_policy(world):
+    """Of the rollout, only the instruction crosses to the policy. The scene is the ground truth the rollout
+    is scored against, so it reaches the reset and the recording but never the observation dict."""
+    policy = StubPolicy()
+    scene = {'eval.seed': 7, 'eval.task_id': 3}
+    harness = Harness(policy, make_embodiment(), tasks=[Task('stack', 0.05, scene)])
+    p = _pair_all(world, harness)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.0),
+        (None, 0.1),
+    ])
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=200)
+
+    assert policy.observations, 'policy was never called'
+    assert all(obs[keys.TASK] == 'stack' for obs in policy.observations)
+    assert all(scene.keys().isdisjoint(obs) for obs in policy.observations)
+
+    (stop,) = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert stop.static_data['eval.seed'] == 7
+    assert stop.static_data['eval.task_id'] == 3
 
 
 @pytest.mark.timeout(3.0)
@@ -933,9 +955,7 @@ def test_timeout_crossed_during_latency_sleep_drops_chunk(world):
     """A chunk whose latency sleep crosses the deadline is dropped, never emitted."""
     policy = StubPolicy()
     # The 0.2s latency sleep crosses the 0.05s deadline before the chunk is emitted.
-    harness = Harness(
-        policy, make_embodiment(), task=Task(instruction='test', timeout=0.05), trials=[{'inference_latency': 0.2}]
-    )
+    harness = Harness(policy, make_embodiment(), tasks=[Task('test', 0.05)], inference_latency=0.2)
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
     ds_recorder = RecordingEmitter()
@@ -1033,11 +1053,11 @@ def test_task_instruction_reaches_session_context_after_reset(world):
     policy = StubPolicy()
     scene = {}
 
-    def reset(_context):
+    def reset(_scene):
         scene['task'] = 'resolved-on-reset'  # the env reports its task only here
 
-    task = Task(instruction=lambda: scene['task'], timeout=0.05, reset=reset)
-    harness = Harness(policy, make_embodiment(), task=task, trials=[{}])
+    tasks = [Task(lambda: scene['task'], 0.05)]
+    harness = Harness(policy, make_embodiment(), tasks=tasks, reset=reset)
     _pair_all(world, harness)
 
     scheduler = world.start([harness])
@@ -1425,8 +1445,7 @@ def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(tmp_path):
     shutdown-flush ``record.io`` span parents to the episode, not the pass. Driven straight through the
     generator protocol: the yield after the queued STOP is the recorder's flush slot."""
     policy = StubPolicy()
-    task = Task(instruction='stack', timeout=10.0, reset=lambda context: None)  # never ends within the drive
-    harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
+    harness = Harness(policy, make_embodiment(), tasks=[Task('stack', 10.0)], reset=lambda scene: None)
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
     stop = SimpleNamespace(value=False)
@@ -1469,8 +1488,7 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     ``policy.infer`` span is recorded at the remote inference boundary, so the terminal is a ``RemoteStubPolicy``
     (a real ``RemoteSession`` over a fake inference session)."""
     policy = ChunkedSchedule().wrap(RemoteStubPolicy())
-    task = Task(instruction='stack', timeout=0.05, reset=lambda context: None)
-    harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
+    harness = Harness(policy, make_embodiment(), tasks=[Task('stack', 0.05)], reset=lambda scene: None)
     p = _pair_all(world, harness)
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     # A latched observation set makes every step's inference fire (the harness reads the latest value).
@@ -1540,8 +1558,7 @@ def test_failed_pass_seals_open_episode_span(tmp_path):
         raise RuntimeError('reset boom')
 
     policy = StubPolicy()
-    task = Task(instruction='stack', timeout=10.0, reset=boom)
-    harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
+    harness = Harness(policy, make_embodiment(), tasks=[Task('stack', 10.0)], reset=boom)
     harness.ds_command._bind(RecordingEmitter())
     stop = SimpleNamespace(value=False)
     clock = _ManualClock()

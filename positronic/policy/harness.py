@@ -1,5 +1,5 @@
 import time
-from collections.abc import Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -59,6 +59,22 @@ class Directive:
     def ABORT(cls) -> 'Directive':
         """Discard the live recording and home the devices."""
         return cls(DirectiveType.ABORT)
+
+
+# ``Directive.RUN`` names the rollout's budget with this key and its instruction with ``keys.TASK``; every
+# other payload key describes the scene the operator staged.
+RUN_TIMEOUT = 'timeout'
+
+
+def _directive_task(payload: dict[str, Any]) -> Task:
+    """A RUN payload read as one rollout.
+
+    An operator names the goal and, where the rollout is to end on its own, a budget; the rest of what they
+    report describes the scene they staged, so it is recorded and withheld from the policy like any other
+    scene. Without a budget the episode is unbounded and ends on FINISH or ABORT.
+    """
+    scene = {k: v for k, v in payload.items() if k not in (keys.TASK, RUN_TIMEOUT)}
+    return Task(instruction=payload.get(keys.TASK), timeout=payload.get(RUN_TIMEOUT), scene=scene)
 
 
 class _EpisodeTelemetry:
@@ -141,15 +157,19 @@ class Harness(pimm.ControlSystem):
 
     Handles directives (RUN/FINISH/ABORT) and dataset recording. Inference intelligence — scheduling,
     error recovery, blending, absolute time stamping — lives in the policy/session layer; the harness
-    calls the session, demuxes the action dicts into per-channel trajectories, and emits. The RUN context
-    is handed whole to the task's scene reset, which reads the per-trial keys it needs (e.g. ``eval.seed``).
+    calls the session, demuxes the action dicts into per-channel trajectories, and emits.
 
-    A ``trials`` plan (a sequence of RUN contexts) makes the harness self-driving: it starts the next trial
-    whenever idle and returns once the plan is exhausted, so the unattended path needs no driver. A task's
-    ``timeout`` bounds every trial, self-driven or operator-driven, so an attended episode still terminates
-    at the deadline if the operator never sends FINISH. A bounded trial also ends early on a truthy
-    privileged ``done``, recording ``eval.terminated`` True and the delivered payload in its static data; a
-    timeout records False. A task-less session has neither deadline nor budget and ends only on directives.
+    Every episode runs one ``Task``. A ``tasks`` plan makes the harness self-driving: it starts the next task
+    whenever idle and returns once the plan is exhausted, so the unattended path needs no driver. Without a
+    plan a RUN directive carries the rollout instead, and the two are the same episode to everything
+    downstream. Only the task's ``instruction`` crosses to the policy — its scene goes to ``reset`` and into
+    the recording, so a policy cannot condition on the ground truth it is scored against.
+
+    A task's ``timeout`` bounds the rollout, self-driven or operator-driven, so an attended episode given a
+    budget still terminates at the deadline if the operator never sends FINISH. A bounded rollout also ends
+    early on a truthy privileged ``done``, recording ``eval.terminated`` True and the delivered payload in
+    its static data; a timeout records False. A task without a budget has no deadline, so ``done`` does not
+    terminate it and only directives end it. ``inference_latency`` applies to every episode of the run.
 
     The ``Embodiment`` supplies the observation serializers (which own the canonical key names), the command
     channels and the home action. The policy owns its wrapper stack; the harness runs what it is given,
@@ -161,26 +181,33 @@ class Harness(pimm.ControlSystem):
         policy: Policy,
         embodiment: Embodiment,
         *,
-        task: Task | None = None,
-        trials: Iterable[dict[str, Any]] | None = None,
+        tasks: list[Task] | None = None,
+        reset: Callable[[dict[str, Any]], None] | None = None,
         static_meta: dict[str, Any] | None = None,
+        inference_latency: bool | float = False,
     ):
-        assert trials is None or task is not None, 'A trial plan needs a task: its timeout bounds each trial'
         self._embodiment = embodiment
-        self._task = task
-        # Each entry is a RUN context; when None, directives are the only lifecycle source.
-        self._trials = iter(trials) if trials is not None else None
+        # The unattended rollout plan; when None, directives are the only lifecycle source.
+        self._plan = iter(tasks) if tasks is not None else None
+        self._trial_count = len(tasks) if tasks is not None else None
+        self._trial_index = -1
+        self._reset = reset
         self.policy: Policy = policy
         self.context: dict[str, Any] = {}
+        # What crosses to the policy, assembled per episode: the instruction and nothing else about the
+        # rollout. The rest — scene, seed, plan position — is recorded but withheld.
+        self._policy_inputs: dict[str, Any] = {}
         self._static_meta = static_meta or {}
         self._policy_session: Session | None = None
         # True between RUN and FINISH/ABORT: the trial is live — stepping and recording happen together.
         self._running = False
-        # Sim-only, delivered on the RUN context: ``True`` advances the sim clock by the measured wall cost
-        # of the inference call, a float by a fixed deterministic amount (the reproducible golden). The chunk
-        # is anchored before the sleep, so ``_step`` post-shifts it.
-        self._inference_latency: bool | float = False
-        # ``task.timeout``, set per episode; a task-less session has no deadline and ends on directives.
+        # Sim-only: ``True`` advances the sim clock by the measured wall cost of the inference call, a float
+        # by a fixed deterministic amount (the reproducible golden). The chunk is anchored before the sleep,
+        # so ``_step`` post-shifts it.
+        self._inference_latency: bool | float = inference_latency
+        # The live task's ``timeout`` and the deadline it arms; both ``None`` for an unbounded episode, which
+        # ends on directives.
+        self._timeout: float | None = None
         self._deadline: float | None = None
         # Whether this episode's first observation has landed. Until it does the deadline stands where the
         # reset put it, which bounds an episode whose first observation never arrives.
@@ -210,20 +237,19 @@ class Harness(pimm.ControlSystem):
         """What is known about the rig before the episode runs, live values winning."""
         return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value
 
-    def _build_episode_meta(self, context: dict[str, Any]) -> dict[str, Any]:
+    def _build_episode_meta(self) -> dict[str, Any]:
         meta = self._statics()
-        if self._task is not None:
-            # TODO: also stamp the eval's catalog name and its resolved config — both need configuronic
-            # introspection that does not exist yet.
-            meta['eval.universe'] = 'sim' if self._embodiment.simulated else 'real'
-            meta['eval.embodiment'] = self._embodiment.descriptor
-            meta['eval.timeout'] = self._task.timeout
+        # TODO: also stamp the eval's catalog name and its resolved config — both need configuronic
+        # introspection that does not exist yet.
+        meta[keys.EVAL_UNIVERSE] = 'sim' if self._embodiment.simulated else 'real'
+        meta[keys.EVAL_EMBODIMENT] = self._embodiment.descriptor
+        meta[keys.INFERENCE_LATENCY] = self._inference_latency
         # ``policy.meta`` is the static baseline; the session overlays per-episode specifics (e.g. the
         # sampled sub-policy) and wins on conflict.
         session_meta = self.policy.meta | (self._policy_session.meta if self._policy_session else {})
         for k, v in flatten_dict(session_meta).items():
             meta[f'{keys.POLICY_META}.{k}'] = v
-        meta.update(context)
+        meta.update(self.context)
         return meta
 
     def _emit_now(self, action: dict[str, Any], clock: pimm.Clock) -> None:
@@ -272,7 +298,7 @@ class Harness(pimm.ControlSystem):
         """Commit the live episode: cancel the in-flight chunk, stop the recorder — stamping the
         episode's full static meta (plus any terminal payload) — then close its span."""
         self._cancel_trajectories()
-        self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(self.context), **(payload or {})}))
+        self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(), **(payload or {})}))
         virtual_now = clock.now()  # before the round below, whose sim-clock advance belongs to no rollout
         # Give the recorder a round to commit the STOP before the next START (they share ``ds_command``, where
         # last-value-wins would drop one) and before the home command, so homing stays out of the recording.
@@ -282,31 +308,40 @@ class Harness(pimm.ControlSystem):
         # period) to the closing episode — the cooperative scheduler cannot give the recorder a turn alone.
         self._telemetry.end(virtual_now)
 
-    def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> None:
-        """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
+    def _plan_position(self) -> dict[str, Any]:
+        """Where the live episode sits in the rollout plan; empty for a directive-driven one, which has none."""
+        if self._trial_count is None:
+            return {}
+        return {keys.EVAL_TRIAL_INDEX: self._trial_index, keys.EVAL_TRIAL_COUNT: self._trial_count}
 
-        A resettable task's ``reset`` only arms the producer, which publishes the first observation on a later
-        round. The recorder drains its channels the turn it opens, so the pre-reset frame and the
-        inter-episode home command drop out and its first sample is the post-reset scene. The deadline is
-        armed here and moved to that first observation once it lands, so an episode that never gets one is
-        still bounded.
+    def _begin_episode(self, task: Task, clock: pimm.Clock) -> None:
+        """Open a fresh episode: stage the scene, fix the episode context and session, open the recording.
+
+        ``reset`` only arms the producer, which publishes the first observation on a later round. The
+        recorder drains its channels the turn it opens, so the pre-reset frame and the inter-episode home
+        command drop out and its first sample is the post-reset scene. The deadline is armed here and moved
+        to that first observation once it lands, so an episode that never gets one is still bounded.
         """
-        self.context = context
-        self._inference_latency = self.context.get('inference_latency', False)
         self._awaiting_obs = set(self._embodiment.observations)
         self._rollout_started = False
+        self._timeout = task.timeout
+        context: dict[str, Any] = {**task.scene, **self._plan_position()}
+        if task.timeout is not None:
+            context[keys.EVAL_TIMEOUT] = task.timeout
         # Before the reset, so the reset and the rollout's other phase spans parent to the episode span.
         self._telemetry.begin(context)
-        # Reset before opening the session: a resettable task only learns its instruction on reset (a remote
-        # env reports it then), so the session context — and the sampling it drives — must read it here.
-        if self._task is not None and self._task.reset is not None:
+        # Reset before opening the session: an embodiment that only learns its goal on reset (a remote env
+        # reports it then) resolves its instruction here, so the session context — and the sampling it
+        # drives — reads the instruction once it is known.
+        if self._reset is not None:
             with telemetry.span(telemetry_keys.SPAN_RESET):
-                self._task.reset(self.context)
-        if self._task is not None:
-            self.context = {**self.context, keys.TASK: self._task.instruction}
+                self._reset(task.scene)
+        instruction = task.instruction
+        self._policy_inputs = {keys.TASK: instruction} if instruction is not None else {}
+        self.context = context | self._policy_inputs
         self._policy_session = self.policy.new_session(self.context, clock.now)
         self._running = True
-        self._deadline = clock.now() + self._task.timeout if self._task is not None else None
+        self._deadline = clock.now() + task.timeout if task.timeout is not None else None
         self.ds_command.emit(DsWriterCommand.START())
 
     def _end_episode(
@@ -336,7 +371,7 @@ class Harness(pimm.ControlSystem):
         match directive.type:
             case DirectiveType.RUN:
                 if not self._running:  # a RUN mid-trial is ignored — the operator finishes before starting anew
-                    self._begin_episode(directive.payload or {}, clock)
+                    self._begin_episode(_directive_task(directive.payload or {}), clock)
             case DirectiveType.FINISH:
                 if self._running:  # a FINISH while idle is ignored — nothing to finalize
                     yield from self._end_episode(clock, directive.payload)
@@ -374,8 +409,8 @@ class Harness(pimm.ControlSystem):
             return None
         inputs[keys.WALL_TIME_NS] = time.time_ns()
         inputs[keys.OBS_TIME_NS] = clock.now_ns()
-        inputs.update(self.context)
-        inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
+        inputs.update(self._policy_inputs)
+        inputs['descriptor'] = self._descriptor
         return inputs
 
     def _emit_commands(self, actions: list[dict[str, Any]]) -> None:
@@ -411,8 +446,8 @@ class Harness(pimm.ControlSystem):
             # duration.
             self._rollout_started = True
             self._telemetry.start_rollout(clock.now())
-            if self._task is not None:
-                self._deadline = clock.now() + self._task.timeout
+            if self._timeout is not None:
+                self._deadline = clock.now() + self._timeout
 
         # Advance the sim clock by the inference cost so rollouts feel the model's latency, but only on
         # cycles where inference ran — sleeping on blocked cycles would slow directive handling. The chunk
@@ -484,12 +519,13 @@ class Harness(pimm.ControlSystem):
             elif not self._running:
                 if manual_msg.updated and manual_msg.data is not None:
                     self._emit_now(manual_msg.data, clock)
-                elif self._trials is not None:
-                    trial = next(self._trials, None)
-                    if trial is None:  # plan exhausted — let the recorder commit the final episode, then exit
+                elif self._plan is not None:
+                    task = next(self._plan, None)
+                    if task is None:  # plan exhausted — let the recorder commit the final episode, then exit
                         yield pimm.Sleep(0.5)
                         break
-                    self._begin_episode(trial, clock)
+                    self._trial_index += 1
+                    self._begin_episode(task, clock)
             elif self._deadline is not None and (terminal := self._trial_terminal(clock)) is not None:
                 yield from self._end_episode(clock, terminal)
             else:

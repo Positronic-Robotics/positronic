@@ -187,17 +187,16 @@ class StackCubesAdapter(WireCommandAdapter):
         return None  # native stack_cubes scores downstream — it reports no live terminal
 
 
-def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]) -> Eval:
-    """Build the remote ``stack_cubes`` eval (embodiment + task) wired to a running env server."""
+def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str], timeout: float) -> Eval:
+    """Build the remote ``stack_cubes`` eval — one seeded rollout — wired to a running env server."""
     # The server is already up (the test fixture owns it), so the proxy just receives its address.
     proxy = RemoteEnvControlSystem(StackCubesAdapter(camera_dict), nullcontext((host, port)))
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.mujoco.franka')
-    privileged = {'sim_state': Observation(proxy.privileged['sim_state'], None)}
-    task = Task(
-        instruction='Pick up the green cube and place it on the red cube.',
-        timeout=15.0,
-        privileged=privileged,
+    task = Task('Pick up the green cube and place it on the red cube.', timeout, {'eval.seed': 100})
+    return Eval(
+        embodiment,
+        [task],
         reset=proxy.reset,
+        privileged={'sim_state': Observation(proxy.privileged['sim_state'], None)},
         done=proxy.done,
     )
-    return Eval(embodiment, task)

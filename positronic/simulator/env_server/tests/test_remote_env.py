@@ -1,5 +1,4 @@
 from contextlib import nullcontext
-from dataclasses import replace
 
 import numpy as np
 import pos3
@@ -253,7 +252,7 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
     cached value holds across the steps that follow."""
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
-        task = Task(instruction=lambda: proxy.meta['task'], timeout=1.0, reset=proxy.reset)
+        task = Task(lambda: proxy.meta['task'], 1.0)
         scheduler = world.start([proxy])
 
         proxy.reset({'eval.seed': 0})
@@ -269,14 +268,9 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     camera key."""
     host, port = env_server
     with pos3.mirror():
-        ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        ev.task.timeout = 0.1
+        ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS, timeout=0.1)
         policy = StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
-        main(
-            policy=ChunkedSchedule().wrap(policy),
-            evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
-            output_dir=str(tmp_path),
-        )
+        main(policy=ChunkedSchedule().wrap(policy), evals=[ev], output_dir=str(tmp_path))
 
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
@@ -299,8 +293,8 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
 def test_every_sim_eval_publishes_the_shared_camera_keys(eval_cfg):
     """A codec names the camera it wants, so a sim spelling its cameras its own way can be scored only by a codec
     written for it. Every sim publishes the shared pair, whatever the benchmark calls those cameras."""
-    observations = eval_cfg.instantiate().embodiment.observations
-    assert {keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE} <= set(observations)
+    (ev,) = eval_cfg.instantiate()
+    assert {keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE} <= set(ev.embodiment.observations)
 
 
 class _JointposChunks(Policy):
@@ -343,13 +337,8 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     raw = _JointposChunks(roboarm_command.JointPosition(np.zeros(7)), chunk_len)
     policy = (ChunkedSchedule() | ActionTimestamp(fps=1.0 / control_dt)).wrap(raw)
     with pos3.mirror():
-        ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        ev.task.timeout = 20 * control_dt
-        main(
-            policy=policy,
-            evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
-            output_dir=str(tmp_path),
-        )
+        ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS, timeout=20 * control_dt)
+        main(policy=policy, evals=[ev], output_dir=str(tmp_path))
 
     grip = LocalDataset(tmp_path)[0].signals['target_grip']
     executed = [(float(v), int(ts)) for v, ts in (grip[i] for i in range(len(grip)))]

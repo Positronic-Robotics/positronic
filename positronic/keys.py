@@ -88,3 +88,16 @@ SERVER_META = f'{POLICY_META}.{SERVER}'
 # leaves it absent on failure — a reader defaults it rather than assuming a False.
 EVAL_SUCCESS = 'eval.success'
 EVAL_TERMINATED = 'eval.terminated'
+
+# The scene draw a rollout is staged from. Every seeded reset actuator reads it — the native sim, the LIBERO
+# env server — and a reader that misses it draws its own scene instead of the one the plan asked for.
+EVAL_SEED = 'eval.seed'
+
+# The rest of what the harness stamps into every episode it records: which eval produced it, the rollout's
+# budget and its place in the trial plan, and the sim inference-cost simulation the run was driven under.
+EVAL_UNIVERSE = 'eval.universe'
+EVAL_EMBODIMENT = 'eval.embodiment'
+EVAL_TIMEOUT = 'eval.timeout'
+EVAL_TRIAL_INDEX = 'eval.trial_index'
+EVAL_TRIAL_COUNT = 'eval.trial_count'
+INFERENCE_LATENCY = 'inference_latency'

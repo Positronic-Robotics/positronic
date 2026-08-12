@@ -1,6 +1,5 @@
 import os
 import xml.etree.ElementTree as ET
-from dataclasses import replace
 
 import mujoco as mj
 import numpy as np
@@ -69,19 +68,17 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     camera_dict = {keys.WRIST_IMAGE: 'handcam_left_ph'}
 
     with pos3.mirror():
-        ev = stack_cubes(
+        evals = stack_cubes(
             mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
             loaders=positronic.cfg.simulator.stack_cubes_loaders(),
             camera_fps=10,
             camera_dict=camera_dict,
             instruction='integration-test',
             timeout=0.4,
+            seed=100,
+            trial_count=2,
         )
-        main(
-            policy=ChunkedSchedule().wrap(policy),
-            evals=[replace(ev, trials=[{'eval.trial_index': i, 'eval.seed': 100 + i} for i in range(2)])],
-            output_dir=str(tmp_path),
-        )
+        main(policy=ChunkedSchedule().wrap(policy), evals=evals, output_dir=str(tmp_path))
 
     ds = LocalDataset(tmp_path)
     # Two trials: the harness runs the plan itself, self-terminating each trial at the task's timeout.
@@ -192,7 +189,7 @@ class _CountdownProducer(pimm.ControlSystem):
                     self._active = False
 
 
-def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
+def _countdown_eval(producer: _CountdownProducer, timeout: float, trial_count: int = 1) -> Eval:
     embodiment = Embodiment(
         descriptor='test.countdown',
         observations={'value': Observation(producer.observations['value'], None)},
@@ -206,8 +203,8 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
         control_systems=(producer,),
         simulated=True,
     )
-    task = Task(instruction='count', timeout=timeout, privileged={}, reset=producer.reset, done=producer.done)
-    return Eval(embodiment, task)
+    tasks = [Task('count', timeout, {'eval.seed': i}) for i in range(trial_count)]
+    return Eval(embodiment, tasks, reset=producer.reset, done=producer.done)
 
 
 @pytest.mark.timeout(30.0)
@@ -217,11 +214,11 @@ def test_countdown_records_frame0_every_trial(tmp_path):
     drops the pre-reset frame and the producer publishes frame-0 in sequence. The small ``control_dt`` wakes
     the producer quickly between trials, so a stray step would overwrite frame-0 if it weren't published in
     the producer's own turn."""
-    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.35)
+    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.35, trial_count=2)
     with pos3.mirror():
         main(
             policy=StubPolicy(command=ev.embodiment.commands[keys.ROBOT_COMMAND].home, target_grip=0.0),
-            evals=[replace(ev, trials=[{'eval.trial_index': i, 'eval.seed': i} for i in range(2)])],
+            evals=[ev],
             # the degenerate obs is not Franka-shaped, so run the policy unwrapped
             output_dir=str(tmp_path),
         )
@@ -239,13 +236,13 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     span taxonomy nests (episode under pass; reset, policy.infer and the recorder's record.io under episode),
     and the machine-load stats stream records at least one sample. record.io parenting proves the episode span
     stays in flight while the recorder commits STOP."""
-    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2)
+    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2, trial_count=2)
     with pos3.mirror():
         main(
             policy=ChunkedSchedule().wrap(
                 RemoteStubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0)
             ),
-            evals=[replace(ev, trials=[{'eval.trial_index': i} for i in range(2)])],
+            evals=[ev],
             output_dir=str(tmp_path),
             timing=True,
         )
@@ -290,7 +287,7 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     with pos3.mirror():
         main(
             policy=StubPolicy(command=ev.embodiment.commands[keys.ROBOT_COMMAND].home, target_grip=0.0),
-            evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
+            evals=[ev],
             output_dir=str(tmp_path),
         )
 
