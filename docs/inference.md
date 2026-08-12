@@ -105,18 +105,17 @@ from contextlib import nullcontext
 
 import pimm
 from positronic import wire
-from positronic.cli.eval.run import prepare_output_dir, warm_up
+from positronic.cli.eval.run import completion_sink, prepare_output_dir
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.policy.harness import Harness
 
-# Warming up opens a session, so the policy is yours to close from here on — and the setup
-# under the `try` can raise: `prepare_output_dir` syncs a directory and snapshots sources
-# into it, and `LocalDatasetWriter` scans the one it is given.
-warm_up(policy)
+# The setup under the `try` can raise — `prepare_output_dir` syncs a directory and snapshots
+# sources into it, `LocalDatasetWriter` scans the one it is given — and the policy is yours to
+# close from the moment you first touch it.
 try:
     # `None` where the run records nothing, which is why the writer is a nullcontext below.
     output_dir = prepare_output_dir(policy, output_dir)
-    harness = Harness(policy, embodiment)
+    harness = Harness(policy, embodiment, on_episode_complete=completion_sink(policy))
     console = MyConsole()  # emits positronic.policy.harness.Directive
 
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)

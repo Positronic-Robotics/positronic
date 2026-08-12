@@ -27,12 +27,16 @@ logger = logging.getLogger(__name__)
 _ENV_TELEMETRY_VARS = (ENV_TELEMETRY_DIR, ENV_RUN_ID)
 
 
-def warm_up(policy) -> None:
+def _warm_up(policy) -> None:
     """Drive the policy's remote endpoints through their cold start, before hardware comes up.
 
     Opening a session blocks on the server handshake, which returns only once the model is loaded, and a
     ``SampledPolicy`` reaches every sub-policy this way. The first episode then begins warm instead of
     stalling on an on-request endpoint's model load while the robot waits.
+
+    PRIVATE, and imitating a session is not a contract: warming belongs to the handshake or to an
+    endpoint's own call. A caller that skips it loses steps off its first episode and scores worse
+    for it, which is a result rather than a failure.
     """
     # TODO: a policy with recording taps (recording_dir set) records this throwaway warmup session — an
     # empty .rrd plus a bump to the recorder's episode counter — but warmup is not a real episode.
@@ -202,7 +206,7 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     if timing:
         _validate_timing([ev.embodiment for ev in evals], output_dir)
 
-    warm_up(policy)
+    _warm_up(policy)
     output_dir = prepare_output_dir(policy, output_dir)
 
     # One completion sink — so one ``SampledPolicy`` counter — across every eval, keeping sampling balanced

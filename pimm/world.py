@@ -561,8 +561,8 @@ class World:
 
         When a loop finishes (``StopIteration``) the stop event is set so the others can
         observe ``should_stop`` and exit. The iterator ends once no loop is left. A BACKGROUND
-        control system finishing sets the same event (``_bg_wrapper``), so any control system
-        ending — in either group, by returning, raising or being interrupted — stops the world.
+        control system finishing sets the same event (``_bg_wrapper``), so any control system —
+        background or foreground — ending by returning, raising or being interrupted stops the world.
 
         A ``Yield`` is only legitimate when another loop in the same instant sleeps to pace it.
         A round where every due loop yields and none sleeps cannot move the clock; finite yield-only
@@ -698,8 +698,7 @@ class World:
 
         ``main_process`` control systems are scheduled cooperatively in the
         current process, while ``background`` systems are spawned in separate
-        processes. The split decides only where a loop runs: a control system
-        finishing stops the world from either group. Based on the connection map registered via ``connect`` the
+        processes. Based on the connection map registered via ``connect`` the
         world wires control system emitters and receivers together using local
         queues or multiprocessing queues. Returns an iterator produced by
         ``interleave`` so callers can drive the cooperative scheduler.

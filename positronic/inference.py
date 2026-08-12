@@ -12,7 +12,7 @@ import positronic.cfg.embodiment
 import positronic.cfg.policy as policy_cfg
 from positronic import wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
-from positronic.cli.eval.run import completion_sink, prepare_output_dir, run, warm_up
+from positronic.cli.eval.run import _warm_up, completion_sink, prepare_output_dir, run
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment
@@ -51,7 +51,7 @@ def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
     # Warming up opens a session, so the policy is this function's to close from here on — and
     # everything the helper does can raise: `prepare_output_dir` syncs a directory and snapshots
     # sources into it, and `LocalDatasetWriter` scans the one it is given.
-    warm_up(policy)
+    _warm_up(policy)
     try:
         _run_attended(policy, embodiment, task, output_dir)
     finally:
