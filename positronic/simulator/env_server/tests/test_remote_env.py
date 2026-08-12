@@ -1,9 +1,12 @@
-from contextlib import nullcontext
+import threading
+import time
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 
 import numpy as np
 import pos3
 import pytest
+from websockets.sync.server import serve as websocket_serve
 
 import pimm
 from positronic import geom, keys
@@ -20,7 +23,8 @@ from positronic.policy.codec import ActionTimestamp
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.simulator.env_server.adapter import EnvAdapter, _in_env_control_frame, _wire_command
-from positronic.simulator.env_server.client import EnvConnection
+from positronic.simulator.env_server.client import _CLOSE_ACK_TIMEOUT, EnvConnection
+from positronic.simulator.env_server.launcher import free_port
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.env_server.tests.conftest import serve_env
@@ -93,6 +97,41 @@ def test_transport_is_transparent(env_server):
         _assert_obs_equal(direct_step['obs'], socket_step['obs'])
         assert direct_step['done'] == socket_step['done']
         assert direct_step['control_dt'] == socket_step['control_dt']
+
+
+@contextmanager
+def _mute_server():
+    """A peer that accepts the connection and then answers nothing, holding the socket open.
+
+    What a simulator looks like once it is wedged in its own teardown: the process is past serving but the
+    socket outlives it, so nothing ever closes the connection from that end.
+    """
+    host, port = 'localhost', free_port()
+    release = threading.Event()
+
+    def handler(connection):
+        for _ in connection:
+            release.wait(timeout=60.0)
+
+    server = websocket_serve(handler, host, port)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield host, port
+    finally:
+        release.set()
+        server.shutdown()
+        thread.join(timeout=5.0)
+
+
+@pytest.mark.timeout(60.0)
+def test_close_gives_up_on_a_peer_that_never_answers():
+    """Teardown ends the run: an unanswered goodbye is as good as a closed socket, and is not waited out."""
+    with _mute_server() as (host, port):
+        conn = EnvConnection(host, port)
+        started = time.monotonic()
+        conn.close()
+        assert time.monotonic() - started < _CLOSE_ACK_TIMEOUT + 10.0
 
 
 _HOLD = {'command': {'type': 'hold'}, 'grip': 0.0}
