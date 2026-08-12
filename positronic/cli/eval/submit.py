@@ -8,6 +8,7 @@ from platform_client.evals import EvalRef
 from platform_client.ids import TransactionKey
 from platform_client.images import ImageRef
 from platform_client.requests import SubmissionCreateRequest
+from platform_client.responses import SubmissionCreateResponse
 
 from positronic.cli.account.gateway import gateway
 
@@ -19,8 +20,8 @@ def submit(
     alias: str | None = None,
     transaction_key: str | None = None,
     platform_url: str | None = None,
-) -> None:
-    """Submit one policy image against one eval, and print what came back.
+) -> SubmissionCreateResponse:
+    """Submit one policy image against one eval, print what came back, and return it.
 
     The eval names the embodiment it runs on, so it is the whole of the choice; naming one the
     platform does not offer answers with the ones it does. An image pinned by digest runs the bytes
@@ -43,3 +44,4 @@ def submit(
     if created.status is SubmissionStatus.errored:
         reason = created.reason_code.name if created.reason_code is not None else 'unknown'
         raise SystemExit(f'rejected: {reason}')
+    return created

@@ -131,6 +131,19 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 @pytest.fixture(scope='module')
+def uv() -> str:
+    """The `uv` every documented command runs through — a dependency, never a skip.
+
+    Skipping on a missing one would report a first-run experience as checked on a box where nothing
+    ran, and say so in the same words whether the commands passed or never executed. This repo is a
+    uv project, so an absent `uv` is a broken environment and fails like one.
+    """
+    found = shutil.which('uv')
+    assert found is not None, 'uv is not on PATH, and these are its commands — install it to run this suite'
+    return found
+
+
+@pytest.fixture(scope='module')
 def platform_url() -> Iterator[str]:
     server = ThreadingHTTPServer(('127.0.0.1', 0), _Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -179,10 +192,11 @@ DOCUMENTED_COMMANDS = {
 }
 
 
-@pytest.mark.skipif(shutil.which('uv') is None, reason='the documented commands are uv commands')
 @pytest.mark.parametrize('command', DOCUMENTED_COMMANDS.values(), ids=DOCUMENTED_COMMANDS.keys())
-def test_a_documented_command_runs_with_nothing_installed(command: list[str], platform_url: str):
-    result = run_from_a_clean_environment(command, platform_url=platform_url)
+def test_a_documented_command_runs_with_nothing_installed(command: list[str], platform_url: str, uv: str):
+    # Through the resolved `uv`, so what ran is the one the fixture found rather than whatever a
+    # subprocess PATH would have picked.
+    result = run_from_a_clean_environment([uv, *command[1:]], platform_url=platform_url)
     assert result.returncode == 0, f'{" ".join(command)} failed:\n{result.stdout}\n{result.stderr}'
 
 

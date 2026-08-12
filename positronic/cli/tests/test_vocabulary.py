@@ -34,6 +34,7 @@ SCANNED_ROOTS = (
     REPO_ROOT / 'client',
     CLI_ROOT / 'account',
     CLI_ROOT / 'examples',
+    CLI_ROOT / 'eval' / 'run.py',
     CLI_ROOT / 'eval' / 'submit.py',
     CLI_ROOT / 'eval' / 'submissions.py',
 )

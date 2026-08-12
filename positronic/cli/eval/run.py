@@ -8,6 +8,7 @@ from pathlib import Path
 
 import configuronic as cfn
 import pos3
+from platform_client.responses import SubmissionCreateResponse
 
 import pimm
 import positronic.cfg.policy as policy_cfg
@@ -233,7 +234,7 @@ def run(
     alias: str | None = None,
     transaction_key: str | None = None,
     platform_url: str | None = None,
-):
+) -> SubmissionCreateResponse | None:
     """Run a selected eval (embodiment + task + its trial sweep) through the shared inference harness.
 
     Here by default: ``--eval`` is an eval config and ``--policy`` the policy that drives it.
@@ -244,6 +245,9 @@ def run(
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
     simulated eval; reduce them with ``positronic eval timing-report``.
+
+    A platform run returns what the platform created, so a caller holding this function has the
+    submission id without parsing what was printed. A local run's result is the dataset it wrote.
     """
     if policy_image is None:
         if policy is None:
@@ -255,17 +259,12 @@ def run(
         # (sim inference-cost simulation). Overlay it onto every trial context, then self-drive the eval.
         eval = replace(eval, trials=[{**trial, 'inference_latency': inference_latency} for trial in eval.trials])
         main(policy=policy, evals=[eval], output_dir=output_dir, timing=timing)
-        return
+        return None
 
     if policy is not None:
         raise SystemExit('--policy runs the eval here and --policy-image runs it on the platform; pass one')
     if not isinstance(eval, str):
         raise SystemExit('the platform names its own evals: pass --eval=<name>, e.g. --eval=robolab.public_subset')
-    # The platform owns its own trial sweep, its own output and its own telemetry, so these mean
-    # nothing there; dropping them silently would hand back a run the caller believes they shaped.
-    # Every "not asked for" value is falsy, which is what makes the test the value itself.
-    local_only = {'--output-dir': output_dir, '--inference-latency': inference_latency, '--timing': timing}
-    asked = sorted(flag for flag, value in local_only.items() if value)
-    if asked:
-        raise SystemExit(f'a platform run has no {", ".join(asked)}')
-    submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)
+    # The platform owns its own trial sweep, its own output and its own telemetry.
+    _refuse({'--output-dir': output_dir, '--inference-latency': inference_latency, '--timing': timing}, 'platform')
+    return submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)

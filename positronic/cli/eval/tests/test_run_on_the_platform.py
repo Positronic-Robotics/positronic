@@ -5,6 +5,7 @@ import sys
 import configuronic as cfn
 import pytest
 from platform_client import routes
+from platform_client.ids import SubmissionId
 
 from positronic.cli.conftest import ID, KEY
 from positronic.cli.eval.run import run
@@ -13,8 +14,10 @@ from positronic.cli.eval.run import run
 def test_a_policy_image_sends_the_run_to_the_platform(platform, run_command, capsys):
     platform.answer({'submission_id': ID, 'status': 'pending', 'policy_image_digest': 'sha256:abc'})
 
-    run_command(run, eval='fake.smoke', policy_image='org/p:v1', transaction_key='retry-1')
+    created = run_command(run, eval='fake.smoke', policy_image='org/p:v1', transaction_key='retry-1')
 
+    # Returned as well as printed, so a caller holding the function has the id without scraping stdout.
+    assert created.submission_id == SubmissionId.parse(ID)
     assert platform.request.url.path == routes.SUBMISSIONS_CREATE
     assert platform.request.headers['authorization'] == f'Bearer {KEY}'
     assert platform.body == {
