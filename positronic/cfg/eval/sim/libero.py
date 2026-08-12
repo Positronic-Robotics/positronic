@@ -1,7 +1,7 @@
 import configuronic as cfn
 
 from positronic import keys
-from positronic.cfg.eval import build_tasks
+from positronic.cfg.eval import build_rollouts
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import Eval, Observation
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
@@ -20,11 +20,11 @@ _SUITE_NUM_TASKS = {'libero_spatial': 10, 'libero_object': 10, 'libero_goal': 10
     timeout=20.0,
     seed=None,
     task_id=None,
-    trial_count=1,
+    rollout_count=1,
     settle_steps=10,
 )
 def _libero_eval(
-    suite, task_id, trial_count, timeout, camera_dict, camera_resolution, control_mode, seed, settle_steps
+    suite, task_id, rollout_count, timeout, camera_dict, camera_resolution, control_mode, seed, settle_steps
 ):
     """A LIBERO eval: the embodiment proxies a remote LIBERO env, each rollout carries one scene of it.
 
@@ -73,7 +73,7 @@ def _libero_eval(
     return [
         Eval(
             embodiment,
-            build_tasks(lambda: proxy.meta['task'], timeout, seed, trial_count, scenes),
+            build_rollouts(lambda: proxy.meta['task'], timeout, seed, rollout_count, scenes),
             reset=proxy.reset,
             privileged={'sim_state': Observation(proxy.privileged['sim_state'], None)},
             done=proxy.done,

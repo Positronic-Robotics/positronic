@@ -13,7 +13,7 @@ from positronic.cli.eval.run import main
 from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.eval import Task
+from positronic.eval import Rollout
 from positronic.policy import Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.tests.test_harness import StubPolicy
@@ -247,12 +247,12 @@ def test_proxy_publishes_frame0_then_free_runs():
 
 @pytest.mark.timeout(60.0)
 def test_proxy_caches_reset_meta_as_live_instruction_source():
-    """The env reports scene meta only at ``reset`` (``step`` omits it); the proxy caches it so a ``Task``
+    """The env reports scene meta only at ``reset`` (``step`` omits it); the proxy caches it so a ``Rollout``
     reads its language live off ``proxy.meta`` — the callable-instruction path LIBERO relies on — and the
     cached value holds across the steps that follow."""
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
-        task = Task(lambda: proxy.meta['task'], 1.0)
+        task = Rollout(lambda: proxy.meta['task'], 1.0)
         scheduler = world.start([proxy])
 
         proxy.reset({keys.EVAL_SEED: 0})
@@ -263,7 +263,7 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
 
 @pytest.mark.timeout(60.0)
 def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
-    """The real ``stack_cubes`` wrapper, end to end: no terminal, so the trial runs to the task timeout
+    """The real ``stack_cubes`` wrapper, end to end: no terminal, so the trial runs to the rollout timeout
     (``eval.terminated`` False, ``eval.success`` absent) and records the canonical signals under the shared
     camera key."""
     host, port = env_server

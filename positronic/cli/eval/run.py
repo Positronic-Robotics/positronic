@@ -46,10 +46,10 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
 def _run_world(policy, ev: Eval, output_dir: Path | None, inference_latency: bool | float):
     """Wire one eval's embodiment under a fresh Harness + World and run it to completion.
 
-    The harness self-drives ``ev.tasks``; the shared ``policy``'s lifetime stays with ``main``.
+    The harness self-drives ``ev.rollouts``; the shared ``policy``'s lifetime stays with ``main``.
     """
     embodiment = ev.embodiment
-    harness = Harness(policy, embodiment, tasks=ev.tasks, reset=ev.reset, inference_latency=inference_latency)
+    harness = Harness(policy, embodiment, rollouts=ev.rollouts, reset=ev.reset, inference_latency=inference_latency)
 
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)

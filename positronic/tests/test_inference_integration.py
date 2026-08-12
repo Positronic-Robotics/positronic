@@ -16,7 +16,7 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.models import bundled_panda_model
-from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
+from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Rollout
 from positronic.policy.tests.test_harness import RemoteStubPolicy, StubPolicy
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.simulator.env_server import telemetry as env_telemetry
@@ -76,17 +76,17 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
             instruction='integration-test',
             timeout=0.4,
             seed=100,
-            trial_count=2,
+            rollout_count=2,
         )
         main(policy=ChunkedSchedule().wrap(policy), evals=evals, output_dir=str(tmp_path))
 
     ds = LocalDataset(tmp_path)
-    # Two trials: the harness runs the plan itself, self-terminating each trial at the task's timeout.
+    # Two trials: the harness runs the plan itself, self-terminating each trial at the rollout's timeout.
     assert len(ds) == 2
 
     episode = ds[0]
     assert episode.static[keys.EVAL_TERMINATED] is False
-    assert episode.static['eval.trial_index'] == 0
+    assert episode.static['eval.rollout_index'] == 0
     assert episode.static['eval.seed'] == 100
     assert episode.static['eval.universe'] == 'sim'
     assert episode.static['eval.embodiment'] == 'mujoco.franka'
@@ -139,7 +139,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     last_obs = policy.observations[-1]
     assert isinstance(last_obs[keys.WRIST_IMAGE], np.ndarray)
     assert keys.EE_POSE in last_obs
-    # The task's instruction is injected by the harness.
+    # The rollout instruction is injected by the harness.
     assert last_obs[keys.TASK] == 'integration-test'
     assert last_obs['descriptor'] == 'mujoco.franka'
 
@@ -189,7 +189,7 @@ class _CountdownProducer(pimm.ControlSystem):
                     self._active = False
 
 
-def _countdown_eval(producer: _CountdownProducer, timeout: float, trial_count: int = 1) -> Eval:
+def _countdown_eval(producer: _CountdownProducer, timeout: float, rollout_count: int = 1) -> Eval:
     embodiment = Embodiment(
         descriptor='test.countdown',
         observations={'value': Observation(producer.observations['value'], None)},
@@ -203,8 +203,8 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float, trial_count: i
         control_systems=(producer,),
         simulated=True,
     )
-    tasks = [Task('count', timeout, {keys.EVAL_SEED: i}) for i in range(trial_count)]
-    return Eval(embodiment, tasks, reset=producer.reset, done=producer.done)
+    rollouts = [Rollout('count', timeout, {keys.EVAL_SEED: i}) for i in range(rollout_count)]
+    return Eval(embodiment, rollouts, reset=producer.reset, done=producer.done)
 
 
 @pytest.mark.timeout(30.0)
@@ -214,7 +214,7 @@ def test_countdown_records_frame0_every_trial(tmp_path):
     drops the pre-reset frame and the producer publishes frame-0 in sequence. The small ``control_dt`` wakes
     the producer quickly between trials, so a stray step would overwrite frame-0 if it weren't published in
     the producer's own turn."""
-    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.35, trial_count=2)
+    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.35, rollout_count=2)
     with pos3.mirror():
         main(
             policy=StubPolicy(command=ev.embodiment.commands[keys.ROBOT_COMMAND].home, target_grip=0.0),
@@ -236,7 +236,7 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     span taxonomy nests (episode under pass; reset, policy.infer and the recorder's record.io under episode),
     and the machine-load stats stream records at least one sample. record.io parenting proves the episode span
     stays in flight while the recorder commits STOP."""
-    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2, trial_count=2)
+    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2, rollout_count=2)
     with pos3.mirror():
         main(
             policy=ChunkedSchedule().wrap(

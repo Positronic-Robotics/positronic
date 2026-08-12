@@ -93,10 +93,10 @@ EVAL_TERMINATED = 'eval.terminated'
 EVAL_SEED = 'eval.seed'
 
 # The rest of what the harness stamps into every episode it records: which eval produced it, the rollout's
-# budget and its place in the trial plan, and the sim inference-cost simulation the run was driven under.
+# budget and its place in the plan, and the sim inference-cost simulation the run was driven under.
 EVAL_UNIVERSE = 'eval.universe'
 EVAL_EMBODIMENT = 'eval.embodiment'
 EVAL_TIMEOUT = 'eval.timeout'
-EVAL_TRIAL_INDEX = 'eval.trial_index'
-EVAL_TRIAL_COUNT = 'eval.trial_count'
+EVAL_ROLLOUT_INDEX = 'eval.rollout_index'
+EVAL_ROLLOUT_COUNT = 'eval.rollout_count'
 INFERENCE_LATENCY = 'inference_latency'

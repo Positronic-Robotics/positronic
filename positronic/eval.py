@@ -67,7 +67,7 @@ class Embodiment:
         return {name: cmd.home for name, cmd in self.commands.items()}
 
 
-class Task:
+class Rollout:
     """One rollout: the goal the policy is told, the budget it runs under, and the scene it runs in.
 
     ``instruction`` is the language goal the policy conditions on, resolved live on every read: an embodiment
@@ -101,11 +101,11 @@ class Eval:
     """One embodiment, the rollouts to run on it, and the scene wiring they share.
 
     An eval config returns a list of these — one per embodiment — so a benchmark spanning several sims is a
-    single selection. ``tasks`` is the rollout plan the self-driving Harness works through; ``None`` leaves
+    single selection. ``rollouts`` is the plan the self-driving Harness works through; ``None`` leaves
     the lifecycle to an operator's directives.
 
     For a sim eval the config holds the shared ``MujocoSim`` the embodiment and the wiring below are both
-    built from, so the embodiment stays pure robot. ``reset`` stages a task's scene from its ``scene``
+    built from, so the embodiment stays pure robot. ``reset`` stages a rollout's scene from its ``scene``
     payload; ``None`` on a real embodiment, where a human stages it. ``privileged`` maps a record key to the
     ground-truth source to capture (the sim's full ``save_state``, a real scale) — recorded but never fed to
     the policy. ``done`` is the terminating signal: a source delivering a dict payload when a rollout ends,
@@ -113,7 +113,7 @@ class Eval:
     """
 
     embodiment: Embodiment
-    tasks: list[Task] | None = None
+    rollouts: list[Rollout] | None = None
     reset: Callable[[dict[str, Any]], None] | None = None
     privileged: dict[str, Observation] = field(default_factory=dict)
     done: pimm.SignalEmitter | None = None

@@ -417,7 +417,7 @@ bash workflows/nebius/serve.sh openpi pi05-jointpos droid_jointpos
 
 bash workflows/nebius/eval.sh \
   --eval=@positronic.cfg.eval.sim.robolab.banana_in_bowl \
-  --eval.trial_count=10 \
+  --eval.rollout_count=10 \
   --policy=@positronic.cfg.policy.authed_remote \
   --policy.url=https://<endpoint-managed-url> \
   --output_dir=s3://<your-bucket>/evals/robolab_banana/

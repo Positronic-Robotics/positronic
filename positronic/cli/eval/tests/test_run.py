@@ -37,7 +37,7 @@ def test_an_exhausted_trial_plan_ends_the_sweep():
     embodiment = Embodiment(
         descriptor='stub', observations={}, commands={}, static_meta={}, meta_source=None, simulated=True
     )
-    main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=[])])
+    main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, rollouts=[])])
 
 
 def test_timed_sweep_needs_an_output_dir():

@@ -1,7 +1,7 @@
 import configuronic as cfn
 
 from positronic import keys
-from positronic.eval import Eval, Observation, Task
+from positronic.eval import Eval, Observation, Rollout
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.robolab import adapter
 from positronic.simulator.robolab.launcher import serve_robolab
@@ -150,10 +150,10 @@ def _resolve_tasks(task) -> list[str]:
 @cfn.config(
     camera_dict={keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera', keys.WRIST_IMAGE: 'wrist_cam'},
     instruction_type='default',
-    trial_count=1,
+    rollout_count=1,
     timeout=None,
 )
-def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
+def _robolab_eval(task, instruction_type, rollout_count, timeout, camera_dict):
     """A RoboLab eval: the embodiment proxies a remote RoboLab env, each rollout carries one task of it.
 
     RoboLab (https://github.com/NVLabs/RoboLab) is NVIDIA's Isaac Lab benchmark: 120 tabletop manipulation
@@ -183,15 +183,15 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
     # The DROID rig's model (Franka arm + Robotiq 2F-85) rides the env's ``robot_meta`` — the launcher
     # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')
-    tasks = [
-        Task(lambda: proxy.meta['task'], timeout, {adapter.TASK: name, adapter.INSTRUCTION_TYPE: instruction_type})
+    rollouts = [
+        Rollout(lambda: proxy.meta['task'], timeout, {adapter.TASK: name, adapter.INSTRUCTION_TYPE: instruction_type})
         for name in names
-        for _ in range(trial_count)
+        for _ in range(rollout_count)
     ]
     return [
         Eval(
             embodiment,
-            tasks,
+            rollouts,
             reset=proxy.reset,
             privileged={'subtask': Observation(proxy.privileged['subtask'], None)},
             done=proxy.done,
