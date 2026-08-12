@@ -166,7 +166,8 @@ class PassReport:
     wall_s: float
     # ``real_time_factor`` is sim-s per wall-s and exists only under a virtual clock.
     # An attended pass runs on the wall clock, where the ratio is the share of window wall spent in rollouts.
-    virtual_clock: bool
+    # ``None`` where no pass span survived to name the clock, so neither reading may be claimed.
+    virtual_clock: bool | None
     real_time_factor: float | None
     rollout_wall_share: float
     infer_calls: int
@@ -469,10 +470,13 @@ def _episode_windows(episodes: list[SpanRec]) -> dict[str | None, tuple[int, int
     }
 
 
-def _passes_virtual_clock(passes: list[SpanRec]) -> bool:
+def _passes_virtual_clock(passes: list[SpanRec]) -> bool | None:
     """Which clock the passes were measured on, refusing a directory that holds both.
 
-    Absent on a sidecar written before the pass carried its clock; every one of those is a sim sweep.
+    ``None`` where no pass span survives to say: the clock is stamped on the pass alone, so a run killed
+    before its pass closed carries no marker, and either answer would be an assertion about a run nobody
+    measured. The default within a present pass is different and stays — a sidecar written before the pass
+    carried its clock is a sim sweep.
     """
     clocks = {bool(p.attrs.get(ATTR_PASS_VIRTUAL_CLOCK, True)) for p in passes}
     if len(clocks) > 1:
@@ -480,7 +484,7 @@ def _passes_virtual_clock(passes: list[SpanRec]) -> bool:
             'Telemetry holds passes measured on different clocks: sim seconds and wall seconds cannot be '
             'summed into one ratio, so no label on the result would be true. Reduce each run separately.'
         )
-    return clocks.pop() if clocks else True
+    return clocks.pop() if clocks else None
 
 
 def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummary | None) -> PassReport:
@@ -589,6 +593,11 @@ def _share_row(name: str, fraction: float) -> str:
 
 def _render_ratio(report: PassReport) -> str:
     """The rollout-over-pass ratio, named for the clock it was measured on."""
+    if report.virtual_clock is None:
+        return (
+            f'rollout share:       {report.rollout_wall_share * 100:>6.1f}% (clock unknown: no pass span '
+            'named it, so this is neither a real-time factor nor a wall share)'
+        )
     if report.virtual_clock:
         assert report.real_time_factor is not None  # populated together with the flag
         return f'real-time factor:    {report.real_time_factor * 100:>6.1f}% (sim-s per wall-s)'

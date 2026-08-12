@@ -400,7 +400,12 @@ def test_run_whose_pass_span_never_closed_reduces_over_its_episodes(tmp_path):
     assert report.episodes == 2
     assert report.window is WallWindow.W_EPISODES
     assert report.wall_s == pytest.approx(90.0)
-    assert report.real_time_factor == pytest.approx(40 / 90)
+    # The clock is stamped on the pass alone, and no pass survived, so the ratio is reported without a
+    # reading: a wall-clock attended run killed mid-flight looks identical here to a sim sweep.
+    assert report.virtual_clock is None
+    assert report.real_time_factor is None
+    assert report.rollout_wall_share == pytest.approx(40 / 90)
+    assert 'clock unknown' in _render(report)
     assert report.wall_split.reset == pytest.approx(5 / 90)
     # The 10 s between the two episodes is inside the window and attributes; the 10 s before the first is not.
     assert report.wall_split.between_episodes == pytest.approx(10 / 90)
