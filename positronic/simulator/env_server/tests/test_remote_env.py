@@ -278,8 +278,8 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     assert isinstance(episode, Episode)
     assert episode.static[keys.EVAL_TERMINATED] is False
     assert keys.EVAL_SUCCESS not in episode.static
-    assert episode.static['eval.universe'] == 'sim'
-    assert episode.static['eval.embodiment'] == 'remote.mujoco.franka'
+    assert episode.static[keys.EVAL_UNIVERSE] == 'sim'
+    assert episode.static[keys.EVAL_EMBODIMENT] == 'remote.mujoco.franka'
     assert episode.static['scene_xml'].startswith('<mujoco')
     signals = episode.signals
     assert keys.EXTERIOR_IMAGE in signals

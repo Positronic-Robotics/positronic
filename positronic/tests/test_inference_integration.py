@@ -86,11 +86,11 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
 
     episode = ds[0]
     assert episode.static[keys.EVAL_TERMINATED] is False
-    assert episode.static['eval.rollout_index'] == 0
-    assert episode.static['eval.seed'] == 100
-    assert episode.static['eval.universe'] == 'sim'
-    assert episode.static['eval.embodiment'] == 'mujoco.franka'
-    assert episode.static['eval.timeout'] == 0.4
+    assert episode.static[keys.EVAL_ROLLOUT_INDEX] == 0
+    assert episode.static[keys.EVAL_SEED] == 100
+    assert episode.static[keys.EVAL_UNIVERSE] == 'sim'
+    assert episode.static[keys.EVAL_EMBODIMENT] == 'mujoco.franka'
+    assert episode.static[keys.EVAL_TIMEOUT] == 0.4
     # The post-loader scene description rides robot_meta into static: with eval.seed it makes
     # the episode self-contained for downstream scoring and faithful replay.
     assert episode.static['scene_xml'].startswith('<mujoco')
@@ -296,7 +296,7 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     episode = ds[0]
     assert episode.static[keys.EVAL_TERMINATED] is True
     assert episode.static[keys.EVAL_SUCCESS] is True  # the delivered ``done`` payload lands in static data
-    assert episode.static['eval.embodiment'] == 'test.countdown'
+    assert episode.static[keys.EVAL_EMBODIMENT] == 'test.countdown'
     # The terminal frame (the step where ``done`` fired) is recorded, not dropped by STOP closing the writer.
     values = [v for v, _ in episode.signals['value']]
     assert values[-1][0] == 4.0
