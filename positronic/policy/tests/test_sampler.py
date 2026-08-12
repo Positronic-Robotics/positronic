@@ -1,5 +1,7 @@
 from typing import Any
 
+import pytest
+
 from positronic.policy.base import Policy, SampledPolicy, Session
 from positronic.policy.sampler import BalancedSampler, EpisodeCounter, UniformSampler
 
@@ -125,6 +127,24 @@ def test_balanced_sampler_all_zero_counts_is_uniform():
     for _ in range(100):
         picks[sampler.sample(keys, {}, {'new_a': 0, 'new_b': 0})] += 1
     assert abs(picks['new_a'] - picks['new_b']) < 40
+
+
+def test_balanced_sampler_draws_uniformly_when_no_member_is_behind():
+    """`balance=0` weights the leader at zero, so a level set weights everyone at zero — which
+    `random.choices` refuses. A run configured that way used to reach its first draw and raise
+    there, with the World already up."""
+    sampler = BalancedSampler(balance=0)
+    keys = ('a', 'b')
+    counts = {'a': 3, 'b': 3}
+
+    drawn = {sampler.sample(keys, {}, counts) for _ in range(40)}
+
+    assert drawn == {'a', 'b'}
+
+
+def test_balanced_sampler_refuses_a_negative_balance():
+    with pytest.raises(ValueError, match='balance'):
+        BalancedSampler(balance=-1)
 
 
 def test_balanced_sampler_reads_counts_through_counter():

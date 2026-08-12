@@ -95,12 +95,19 @@ class BalancedSampler(Sampler):
     """
 
     def __init__(self, *, balance: int = 5):
+        if balance < 0:
+            raise ValueError(f'balance is how far ahead a policy may run before it stops being drawn; {balance} < 0')
         self._balance = balance
 
     def sample(self, keys: Sequence[str], context: dict[str, Any], counts: dict[str, int]) -> str:
         c = [counts[k] for k in keys]
         max_count = max(c) if c else 0
         weights = [max_count + self._balance - x for x in c]
+        # `balance=0` weights the leader at zero, so a set that is level — every start, and every
+        # time the others catch up — weights every member at zero, which `random.choices` refuses.
+        # Level is exactly when they are equally eligible, so draw uniformly.
+        if not any(weights):
+            weights = [1] * len(weights)
         chosen = random.choices(list(keys), weights)[0]
         lines = ['BalancedSampler']
         for k, x, w in zip(keys, c, weights, strict=True):
