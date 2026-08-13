@@ -35,12 +35,12 @@ def submit(
         transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,
     )
     with gateway(platform_url) as client:
-        created = client.create_submission(request)
-    print(f'submission {created.submission_id} ({created.status.name})')
-    if created.policy_image_digest is not None:
-        print(f'digest {created.policy_image_digest}')
+        submission = client.create_submission(request)
+    print(f'submission {submission.submission_id} ({submission.status.name})')
+    if submission.policy_image_digest is not None:
+        print(f'digest {submission.policy_image_digest}')
     # These terminal statuses can never carry a result, so the submission fails rather than returns.
-    if created.status in NO_RESULT_STATUSES:
-        reason = created.reason_code.name if created.reason_code is not None else created.status.name
+    if submission.status in NO_RESULT_STATUSES:
+        reason = submission.reason_code.name if submission.reason_code is not None else submission.status.name
         raise SystemExit(f'rejected: {reason}')
-    return created
+    return submission

@@ -37,12 +37,12 @@ def submit(
     client: PlatformClient, *, policy_image: PolicyImage, alias: str | None, transaction_key: TransactionKey | None
 ) -> SubmissionCreateResponse:
     """Create the submission, and report the exact image and eval version it was pinned to."""
-    created = client.create_submission(
+    submission = client.create_submission(
         SubmissionCreateRequest(policy_image=policy_image, eval=EVAL, alias=alias, transaction_key=transaction_key)
     )
-    print(f'submission {created.submission_id} — {created.status.name}')
-    print(f'pinned image {created.policy_image_digest} against eval {created.eval_version}')
-    return created
+    print(f'submission {submission.submission_id} — {submission.status.name}')
+    print(f'pinned image {submission.policy_image_digest} against eval {submission.eval_version}')
+    return submission
 
 
 def poll_until_terminal(
@@ -73,18 +73,18 @@ def main() -> None:
 
     with PlatformClient(args.platform_url, api_key=ApiKey(key)) as client:
         try:
-            created = submit(
+            submission = submit(
                 client,
                 policy_image=PolicyImage(args.policy_image),
                 alias=args.alias,
                 transaction_key=TransactionKey(args.transaction_key) if args.transaction_key else None,
             )
-            if created.status in NO_RESULT_STATUSES:
-                reason = created.reason_code.name if created.reason_code else created.status.name
-                if created.reason_code is ReasonCode.image_unpullable:
+            if submission.status in NO_RESULT_STATUSES:
+                reason = submission.reason_code.name if submission.reason_code else submission.status.name
+                if submission.reason_code is ReasonCode.image_unpullable:
                     reason += ' — check the reference and its visibility'
                 raise SystemExit(f'terminal at the door: {reason}')
-            view = poll_until_terminal(client, created.submission_id, timeout_s=args.timeout)
+            view = poll_until_terminal(client, submission.submission_id, timeout_s=args.timeout)
             # A terminal view that is not finished carries no result, so there is no score to report.
             if not isinstance(view, FinishedSubmissionView):
                 raise SystemExit(f'finished as {view.status.name}, with no result to read')
