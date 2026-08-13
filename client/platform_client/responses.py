@@ -1,10 +1,8 @@
-"""Response models for every gateway endpoint — the typed shape both sides bind to.
+"""What every gateway endpoint answers with — the typed shape both sides bind to.
 
-- Timestamps are aware UTC datetimes; the wire form is ISO 8601.
-- Ids are hex strings on the wire (`platform_client.ids`), closed sets are slugs
-  (`platform_client.slug`).
-- Locations stay plain strings: to a caller they are opaque locators.
-- `submissions.get` answers one of five variants, discriminated on the status slug.
+Timestamps are aware UTC, ids are hex strings (`platform_client.ids`), closed sets are slugs
+(`platform_client.slug`), and locations are opaque. `submissions.get` answers one of five variants,
+discriminated on the status slug.
 """
 
 from __future__ import annotations

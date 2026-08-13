@@ -1,11 +1,7 @@
 """What a caller sends: the POST bodies, and the query models the GET endpoints take.
 
-Both halves are models so that pydantic owns the field names on both sides of the wire, and a GET's
-parameters are built by dumping one rather than by assembling a dict beside the path. A parameter
-left unset is dumped away (`exclude_none`) and is absent from the URL, never an empty value.
-
-Every model rejects unknown fields: a typo'd field is a 422, not a silently dropped input that would
-change what the submission means without the caller knowing.
+Unknown fields are rejected, so a typo'd field is a 422 rather than a silently dropped input that
+would change what the submission means. A parameter left unset is absent from the URL, never empty.
 """
 
 from __future__ import annotations

@@ -1,8 +1,7 @@
 """`Slugged[E]` — an `IntEnum` stored as an int and carried as its slug on the wire.
 
-Validation maps slug -> member and REJECTS an unknown slug, so the API boundary answers 422 rather
-than silently landing on the `INVALID` sentinel. Serialization maps member -> slug in both dump
-modes, so a JSON payload never leaks the stored integer.
+An unknown slug is REFUSED at the boundary (422) rather than landing on the `INVALID` sentinel, and
+neither dump mode leaks the stored integer.
 """
 
 from __future__ import annotations

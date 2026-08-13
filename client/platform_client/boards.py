@@ -1,7 +1,6 @@
-"""Board references — the slug a ranking board is read by.
+"""The slug a ranking board is read by: `BoardRef('nebius-2026/robolab.smoke')`.
 
-The platform owns the set of slugs. This type refuses only what could never be one, so a board
-this client has never heard of still reaches the server, which answers with what it can see.
+The platform owns the set, so a board this client has never heard of still reaches the server.
 """
 
 from __future__ import annotations

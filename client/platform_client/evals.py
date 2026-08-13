@@ -1,11 +1,7 @@
-"""Eval references — the one name a caller picks a run by.
+"""The one name a caller picks a run by: `EvalRef('franka.spoons')`.
 
-An eval names a task suite AND the embodiment that runs it: `franka.spoons` is the wooden-spoon
-task on a real Franka, and nothing else can run it. So the caller chooses one name and the platform
-resolves everything behind it; there is no second axis to get wrong.
-
-The platform owns the set of names. This type refuses only what could never be one, so a name this
-client has never heard of still reaches the server, which answers with the ones it offers.
+A name is a task suite AND the embodiment that runs it, so there is no second axis to get wrong.
+The platform owns the set, so a name this client has never heard of still reaches the server.
 """
 
 from __future__ import annotations

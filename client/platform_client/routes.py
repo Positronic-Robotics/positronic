@@ -1,8 +1,7 @@
 """The gateway's paths — one definition the client and the server both bind to.
 
-Every write is a POST, every read a GET, all under `/v1`. Only the paths live here: a POST body and
-a GET's query parameters are both models in `requests`, so pydantic owns every field name on both
-sides of the wire and no parameter is spelled out a second time as a string.
+Every write is a POST, every read a GET, all under `/v1`. Field names live in `requests`, so no
+parameter is spelled out here a second time as a string.
 """
 
 from __future__ import annotations

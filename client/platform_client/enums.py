@@ -1,8 +1,7 @@
 """The closed sets a caller sees: error codes, terminal reason codes, submission and key status.
 
-Every member carries an explicit value and `INVALID = 0` is the unset/parse-failure sentinel. The
-values are stored durably, so they are append-only forever: add members, never renumber or reuse.
-Caller-visible surfaces carry the slug (`name.lower()`) — see `platform_client.slug`.
+The values are stored durably, so members are append-only forever: add, never renumber or reuse.
+`INVALID = 0` is the unset/parse-failure sentinel; the wire form is the slug (`platform_client.slug`).
 """
 
 from __future__ import annotations

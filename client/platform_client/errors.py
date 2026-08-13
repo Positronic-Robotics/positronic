@@ -1,9 +1,8 @@
-"""The error envelope every endpoint fails with, and the exception a client raises for it.
+"""The envelope every endpoint fails with, and the exception a client raises for it.
 
-Agents parse `code`; humans read `message`. `details` is open-ended per error — three keys have a
-fixed meaning: `reason_code`, carrying the terminal `ReasonCode` behind a caller-fault rejection;
-`quota`, carrying the `QuotaLimit` that refused a `quota_exceeded`; and `evals`, carrying the eval
-names this platform offers when the one asked for is not among them.
+Agents parse `code`, humans read `message`. `details` is open-ended per error, with three fixed
+keys: `reason_code` behind a caller-fault rejection, `quota` behind `quota_exceeded`, and `evals`
+carrying the names on offer when the one asked for is not among them.
 """
 
 from __future__ import annotations
