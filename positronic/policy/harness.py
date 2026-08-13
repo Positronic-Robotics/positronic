@@ -227,6 +227,7 @@ class Harness(pimm.ControlSystem):
         # worker belongs to the episode: ending one abandons the call in flight rather than waiting for it,
         # so the next episode must not queue behind it.
         self._executor: ThreadPoolExecutor | None = None
+        self._retiring: ThreadPoolExecutor | None = None
         self._future: Future[list[dict[str, Any]] | None] | None = None
         # The in-flight call's start: the world instant its observation was built, and the wall instant it
         # was submitted.
@@ -321,13 +322,27 @@ class Harness(pimm.ControlSystem):
 
     def _retire_worker(self) -> None:
         """Let go of this episode's worker and the call it is running: the answer lands nowhere and the
-        failure only reaches the log."""
+        failure only reaches the log. The worker is kept for ``_reap_worker`` to join at the next episode's
+        start, since ending an episode must not wait for a model that hangs."""
         if self._future is not None:
             self._future.add_done_callback(self._report_abandoned)
             self._future = None
         if self._executor is not None:
             self._executor.shutdown(wait=False, cancel_futures=True)
-            self._executor = None
+            self._retiring, self._executor = self._executor, None
+
+    def _reap_worker(self) -> None:
+        """Wait out the previous episode's abandoned call before this one opens a session.
+
+        An in-process policy is a single model across episodes, so ``new_session`` resets the very object an
+        abandoned call may still be inside — a running thread survives ``shutdown(cancel_futures=True)``,
+        which cancels only what is still queued. Waiting here rather than at the end of the episode it
+        belongs to keeps a hung model from holding up that episode's recording and home, and the task reset
+        this follows usually covers the wait.
+        """
+        if self._retiring is not None:
+            self._retiring.shutdown(wait=True)
+            self._retiring = None
 
     def _finalize_recording(
         self, clock: pimm.Clock, payload: dict[str, Any] | None = None
@@ -375,6 +390,7 @@ class Harness(pimm.ControlSystem):
                 self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
+        self._reap_worker()
         # Arm the clock before handing it out: a session reading it before its first call must see this
         # episode's start, not the release time of the last episode's final call.
         self._t0_ns = clock.now_ns()

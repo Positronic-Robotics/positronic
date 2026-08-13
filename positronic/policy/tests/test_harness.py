@@ -1014,6 +1014,53 @@ def test_run_while_running_is_ignored(world):
     assert policy.reset_calls == 1
 
 
+class _AbandonedCallPolicy(Policy):
+    """Records the order of session openings and call completions, with a call that outlives its episode."""
+
+    def __init__(self, wall_sec: float):
+        self._wall_sec = wall_sec
+        self.events: list[str] = []
+
+    def new_session(self, context=None, now=None):
+        self.events.append('open')
+        return _AbandonedCallPolicy._Session(self)
+
+    class _Session(Session):
+        def __init__(self, policy: '_AbandonedCallPolicy'):
+            self._policy = policy
+
+        def __call__(self, obs):
+            time.sleep(self._policy._wall_sec)
+            self._policy.events.append('answered')
+            return None
+
+
+@pytest.mark.timeout(10.0)
+def test_a_new_episode_waits_out_the_call_the_last_one_abandoned(world):
+    """An in-process policy is one model across episodes, so opening a session must not overtake a call
+    still inside the previous one — ``new_session`` resets the object that call is using."""
+    policy = _AbandonedCallPolicy(wall_sec=0.4)
+    harness = Harness(policy, make_embodiment())
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    emit_obs = partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
+
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='ep1')), 0.0),
+        (emit_obs, 0.01),  # the observation that puts a call on the worker
+        (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),  # while that call is still running
+        (partial(p['directive_em'].emit, Directive.RUN(task='ep2')), 0.02),
+        (None, 0.02),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=40)
+
+    assert policy.events[:3] == ['open', 'answered', 'open'], (
+        f'the second session opened before the abandoned call answered: {policy.events}'
+    )
+
+
 @pytest.mark.timeout(3.0)
 def test_run_calls_policy_reset_with_context(world):
     policy = StubPolicy()
