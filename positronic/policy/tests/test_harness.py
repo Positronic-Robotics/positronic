@@ -925,6 +925,27 @@ def test_trial_plan_self_drives(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_a_directive_episode_carries_no_plan_position(world):
+    """A RUN directive sits in no plan, so its episode is stamped with no place in one — even on a harness
+    that also holds a plan, whose next index it must not borrow."""
+    harness = Harness(StubPolicy(), make_embodiment(), rollouts=[Rollout('stack', 0.05)])
+    p = _pair_all(world, harness)
+    # Ahead of the harness in the round, so its RUN lands before the plan claims the first idle round.
+    run = partial(p['directive_em'].emit, Directive.RUN(task='attended', timeout=0.05))
+    driver = ManualDriver([(run, 0.0), (None, 0.5)])
+
+    scheduler = world.start([driver, harness])
+    drive_scheduler(scheduler, steps=1200)
+
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert stops[0].static_data[keys.TASK] == 'attended'
+    assert keys.EVAL_ROLLOUT_INDEX not in stops[0].static_data
+    assert keys.EVAL_ROLLOUT_COUNT not in stops[0].static_data
+    # The plan is untouched by the directive episode, so its own rollout still runs as entry 0.
+    assert [s.static_data.get(keys.EVAL_ROLLOUT_INDEX) for s in stops] == [None, 0]
+
+
+@pytest.mark.timeout(3.0)
 def test_scene_is_recorded_but_withheld_from_the_policy(world):
     """Of the rollout, only the instruction crosses to the policy. The scene is the ground truth the rollout
     is scored against, so it reaches the reset and the recording but never the observation dict."""
