@@ -25,8 +25,9 @@ Fails open (exit 0, note on stderr) where it cannot judge — an unresolvable ba
 CI, which always has the base sha, is where the gate holds. A manifest that is present and
 unreadable fails closed: that is a corrupt guarded file, not an absence.
 
-It runs under `uv run` rather than a bare interpreter, because it compares versions by PEP 440 and
-that ordering is `packaging`'s to own, not this file's to approximate.
+It runs under `uv run` rather than a bare interpreter, because it reads the root's pin as a
+requirement and compares versions by PEP 440 — both `packaging`'s to own, not this file's to
+approximate.
 
 The git plumbing below is this module's own rather than shared with the other `utilities/check_*`
 scripts: they run as `python3 utilities/<script>.py`, where the repository root is not on `sys.path`
@@ -40,8 +41,11 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -59,7 +63,6 @@ DISTRIBUTION = 'positronic-platform-client'
 EXEMPT_SUFFIXES = ('.md',)
 
 _VERSION_LINE = re.compile(r'^version\s*=\s*["\']([^"\']+)["\']', re.M)
-_PIN = re.compile(rf'{re.escape(DISTRIBUTION)}\s*==\s*([0-9][^"\',\s]*)')
 
 
 def run_git(*args: str) -> str | None:
@@ -84,7 +87,7 @@ def resolve_merge_base(ref: str) -> str | None:
     return run_git('rev-parse', ref) or None
 
 
-def increases(was: str, is_now: str) -> bool:
+def is_later_version(was: str, is_now: str) -> bool:
     """Whether `is_now` is a LATER version than `was`, by the ordering the index will use.
 
     PEP 440 through `packaging`, not a hand-rolled tuple: the index resolves these versions by that
@@ -107,9 +110,35 @@ def declared_version(text: str) -> str | None:
 
 
 def pinned_version(text: str) -> str | None:
-    """The version the root manifest pins the client at, or None where it pins none."""
-    match = _PIN.search(text)
-    return match.group(1) if match else None
+    """The version the root manifest pins the client at, or None where it pins none.
+
+    Read as a requirement out of parsed TOML rather than scanned for as text: to a scan a
+    commented-out line reads as a live pin, so a dependency deleted the way one usually is — its
+    line left behind under a `#` — passes the missing-dependency case this gate exists to refuse.
+    """
+    try:
+        manifest = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        # A guarded file that is present and unparseable is corrupt, not absent.
+        raise SystemExit(f'ERROR - {ROOT_MANIFEST} is not readable TOML: {exc}') from exc
+    project = manifest.get('project')
+    dependencies = project.get('dependencies') if isinstance(project, dict) else None
+    if not isinstance(dependencies, list):
+        return None
+    for entry in dependencies:
+        if not isinstance(entry, str):
+            continue
+        try:
+            requirement = Requirement(entry)
+        except InvalidRequirement:
+            continue
+        if canonicalize_name(requirement.name) != canonicalize_name(DISTRIBUTION):
+            continue
+        # Only `==<version>` alone is a pin: anything else resolves to whatever the index offers.
+        specifiers = list(requirement.specifier)
+        if len(specifiers) == 1 and specifiers[0].operator == '==':
+            return specifiers[0].version
+    return None
 
 
 def changed_paths(base: str) -> list[str] | None:
@@ -175,7 +204,7 @@ def check(base: str) -> list[str]:
     if was is None:
         print(f'NOTE - {base}:{CLIENT_MANIFEST} declares no readable `version`; skipping.', file=sys.stderr)
         return failures
-    if not increases(was, now):
+    if not is_later_version(was, now):
         moved = 'still' if was == now else f'moved BACKWARDS from {was} to'
         failures.append(
             f'{len(edited)} file(s) changed under {CLIENT_DIR}/ with `version` {moved} {now}. '

@@ -5,14 +5,14 @@ and response models, id and enum types, the error envelope, and one `PlatformCli
 endpoint.
 
 > **Alpha, under rapid development.** Names, fields, endpoints and behaviour change without notice,
-> and nothing here is covered by a backwards-compatibility guarantee. Pin the exact revision you
+> and nothing here is covered by a backwards-compatibility guarantee. Pin the exact version you
 > tested against, and expect to edit your code when you move off it.
 
 The library depends on `pydantic` and `httpx` and nothing else, so a service that only speaks to the
-platform installs this subdirectory on its own:
+platform installs it on its own, at the exact version it was written against:
 
 ```bash
-uv add "git+https://github.com/Positronic-Robotics/positronic@main#subdirectory=client"
+uv add "positronic-platform-client==0.2.0"
 ```
 
 `platform_client` never imports `positronic`. The commands a user drives it with — `positronic eval
