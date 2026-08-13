@@ -599,7 +599,7 @@ def test_finish_emits_ds_stop_with_data_and_homes(world):
 
 @pytest.mark.timeout(3.0)
 def test_trial_timeout_self_terminates(world):
-    """A self-driven trial ends at ``task.timeout``: terminated=False, robot homed."""
+    """A self-driven rollout ends at ``rollout.timeout``: terminated=False, robot homed."""
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment(), rollouts=[Rollout('test', 0.05)])
     p = _pair_all(world, harness)
@@ -1069,8 +1069,8 @@ def test_run_calls_policy_reset_with_context(world):
 
 @pytest.mark.timeout(3.0)
 def test_task_instruction_reaches_session_context_after_reset(world):
-    """A task eval resets the scene before opening the session, so an instruction resolvable only on reset
-    (as a remote env reports its task) still reaches ``new_session`` — task-grouped sampling/counting needs it."""
+    """An eval with a scene reset stages it before opening the session, so an instruction resolvable only on
+    reset (as a remote env reports its task) still reaches ``new_session`` — the sampler groups by it."""
     policy = StubPolicy()
     scene = {}
 
@@ -1568,7 +1568,7 @@ def test_aborted_episode_span_marked_aborted(world, tmp_path):
 
 @pytest.mark.timeout(3.0)
 def test_failed_pass_seals_open_episode_span(tmp_path):
-    """A ``task.reset`` raising after the episode span was opened must seal that span before the
+    """An eval's ``reset`` raising after the episode span was opened must seal that span before the
     provider flushes on exit. Ending it is what exports it at all: an unended span never leaves the batch
     processor, so its finished ``reset`` child orphans (unknown parent) and the report loses that phase and
     charges the episode's whole wall to ``between_episodes``. Sealed and marked ``episode.partial`` — with its

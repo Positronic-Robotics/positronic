@@ -252,13 +252,13 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
     cached value holds across the steps that follow."""
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
-        task = Rollout(lambda: proxy.meta['task'], 1.0)
+        rollout = Rollout(lambda: proxy.meta['task'], 1.0)
         scheduler = world.start([proxy])
 
         proxy.reset({keys.EVAL_SEED: 0})
-        assert task.instruction == 'countdown'  # resolved live off the cached reset meta
+        assert rollout.instruction == 'countdown'  # resolved live off the cached reset meta
         drive_scheduler(scheduler, steps=4)  # the env steps, each ``step`` omitting meta ...
-        assert task.instruction == 'countdown'  # ... yet the reset-scoped cache holds
+        assert rollout.instruction == 'countdown'  # ... yet the reset-scoped cache holds
 
 
 @pytest.mark.timeout(60.0)

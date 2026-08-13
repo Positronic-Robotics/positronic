@@ -192,10 +192,10 @@ def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]
     # The server is already up (the test fixture owns it), so the proxy just receives its address.
     proxy = RemoteEnvControlSystem(StackCubesAdapter(camera_dict), nullcontext((host, port)))
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.mujoco.franka')
-    task = Rollout('Pick up the green cube and place it on the red cube.', timeout, {keys.EVAL_SEED: 100})
+    rollout = Rollout('Pick up the green cube and place it on the red cube.', timeout, {keys.EVAL_SEED: 100})
     return Eval(
         embodiment,
-        [task],
+        [rollout],
         reset=proxy.reset,
         privileged={'sim_state': Observation(proxy.privileged['sim_state'], None)},
         done=proxy.done,
