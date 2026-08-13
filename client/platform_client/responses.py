@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Self
 
+from platform_client.boards import BoardRef
 from platform_client.enums import BoardVisibility, KeyStatus, OnExhausted, QuotaSubject, ReasonCode, SubmissionStatus
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, UserId
@@ -115,7 +116,26 @@ class MeResponse(BaseModel):
         return next((limit for limit in self.quota if limit.key == key), None)
 
 
-class SubmissionCreateResponse(BaseModel):
+class _ReasonBearing(BaseModel):
+    """A flat submission row carrying the terminal-failure taxonomy.
+
+    `ReasonCode` says why a run FAILED, so it belongs to `errored` and to no other status. Holding
+    the two fields together here is what refuses a `pending` payload carrying `image_unpullable` —
+    which would otherwise validate and be reported as an accepted submission. The `submissions.get`
+    variants state the same rule by giving `reason_code` only to `ErroredSubmissionView`.
+    """
+
+    status: PublicStatus
+    reason_code: Slugged[ReasonCode] | None = None
+
+    @model_validator(mode='after')
+    def _a_reason_means_it_errored(self) -> Self:
+        if self.reason_code is not None and self.status is not SubmissionStatus.errored:
+            raise ValueError(f'reason_code {self.reason_code.name} on a {self.status.name} submission')
+        return self
+
+
+class SubmissionCreateResponse(_ReasonBearing):
     """`submissions.create` — covers a fresh create, an idempotent replay, and an unpullable image.
 
     An unpullable image is a caller fault: the submission is terminal and charged, so it comes
@@ -123,22 +143,18 @@ class SubmissionCreateResponse(BaseModel):
     """
 
     submission_id: SubmissionId
-    status: PublicStatus
     policy_image_digest: str | None = None
     eval_version: str | None = None
-    reason_code: Slugged[ReasonCode] | None = None
 
 
-class SubmissionListRow(BaseModel):
+class SubmissionListRow(_ReasonBearing):
     """One row of `submissions.list`. `user_id` attributes it — an admin listing spans users."""
 
     id: SubmissionId
     user_id: UserId
     alias: str | None = None
-    status: PublicStatus
     eval: EvalRef
     received_at: AwareDatetime
-    reason_code: Slugged[ReasonCode] | None = None
 
 
 class SubmissionListResponse(BaseModel):
@@ -264,7 +280,7 @@ class RankingRow(BaseModel):
 class BoardSummary(BaseModel):
     """One board of `rankings.list`. `board` is the slug `rankings.get` takes."""
 
-    board: str
+    board: BoardRef
     title: str
     eval: EvalRef
     eval_version: str
@@ -286,7 +302,7 @@ class RankingsResponse(BaseModel):
     guaranteed to name a field of `Scores`.
     """
 
-    board: str
+    board: BoardRef
     eval: EvalRef
     eval_version: str
     primary_metric: str

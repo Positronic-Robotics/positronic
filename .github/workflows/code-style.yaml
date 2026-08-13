@@ -61,6 +61,13 @@ jobs:
       # .basedpyright/baseline.json. The fresh dev-only venv above is the canonical
       # env the baseline is generated against, so no `--exact` is needed here.
       run: uv run --locked basedpyright
+    - name: Check the client version and the root's pin on it
+      # The release publishes the client with `skip-existing`, so a change to `client/` that reuses
+      # its version silently keeps the old wheel and the root then ships depending on it. Judged
+      # against the PR base sha for the same reason as the ratchet below.
+      env:
+        RATCHET_BASE: ${{ env.BASE_SHA }}
+      run: python3 utilities/check_client_version_bump.py
     - name: Check basedpyright baseline ratchet
       # Runs unconditionally: cheap, and fast-passes when no baseline file grew. RATCHET_BASE is the
       # PR base sha ($BASE_SHA); the script diffs against its merge-base with HEAD, since origin/main

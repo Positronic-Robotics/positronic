@@ -10,6 +10,7 @@ change what the submission means without the caller knowing.
 
 from __future__ import annotations
 
+from platform_client.boards import BoardRef
 from platform_client.evals import EvalRef
 from platform_client.ids import SubmissionId, TransactionKey
 from platform_client.images import ImageRef
@@ -67,5 +68,5 @@ class RankingsQuery(BaseModel):
 
     model_config = _FORBID_EXTRA
 
-    board: str
+    board: BoardRef
     eval_version: str | None = None

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from platform_client.boards import BoardRef
 from platform_client.enums import (
     BoardVisibility,
     ErrorCode,
@@ -100,7 +101,7 @@ MODELS: list[BaseModel] = [
     ),
     CancelRequest(id=SUB),
     SubmissionGetQuery(id=SUB),
-    RankingsQuery(board='smoke', eval_version='smoke@0123456789ab'),
+    RankingsQuery(board=BoardRef('smoke'), eval_version='smoke@0123456789ab'),
     RegisterResponse(
         user_id=USER,
         artifact_location='s3://pp-artifacts/users/a0/',
@@ -138,7 +139,7 @@ MODELS: list[BaseModel] = [
     CancelledSubmissionView(id=SUB, cancelled_at=AT),
     CancelResponse(status=SubmissionStatus.cancelled, refunded=True),
     RankingsResponse(
-        board='smoke',
+        board=BoardRef('smoke'),
         eval=EvalRef('fake.smoke'),
         eval_version='smoke@0123456789ab',
         primary_metric='success_rate',
@@ -150,7 +151,7 @@ MODELS: list[BaseModel] = [
     BoardListResponse(
         boards=[
             BoardSummary(
-                board='smoke',
+                board=BoardRef('smoke'),
                 title='Smoke',
                 eval=EvalRef('fake.smoke'),
                 eval_version='smoke@0123456789ab',
@@ -218,12 +219,72 @@ def test_a_digest_pinned_image_is_taken_whole_and_parsed():
     assert request.policy_image.digest == 'sha256:abc'
 
 
+def test_a_reason_code_is_refused_on_a_status_that_did_not_fail():
+    # `ReasonCode` says why a run FAILED. A pending payload carrying one is a malformed response,
+    # and validating it would report a submission as accepted while naming the reason it was not.
+    with pytest.raises(ValidationError):
+        SubmissionCreateResponse.model_validate({
+            'submission_id': '1f',
+            'status': 'pending',
+            'reason_code': 'image_unpullable',
+        })
+
+
+def test_a_listed_row_refuses_the_same_pairing():
+    with pytest.raises(ValidationError):
+        SubmissionListRow.model_validate({
+            'id': '1f',
+            'user_id': 'a0',
+            'status': 'finished',
+            'eval': 'fake.smoke',
+            'received_at': '2026-08-13T10:00:00Z',
+            'reason_code': 'policy_oom',
+        })
+
+
+def test_an_errored_row_keeps_its_reason_and_a_clean_one_needs_none():
+    # The boundary of the rule above: it constrains the PAIRING, not either field on its own.
+    errored = SubmissionCreateResponse.model_validate({
+        'submission_id': '1f',
+        'status': 'errored',
+        'reason_code': 'image_unpullable',
+    })
+    assert errored.reason_code is ReasonCode.image_unpullable
+    assert SubmissionCreateResponse.model_validate({'submission_id': '1f', 'status': 'pending'}).reason_code is None
+    # An errored submission need not say why — the taxonomy is optional, the pairing is not.
+    assert SubmissionCreateResponse.model_validate({'submission_id': '1f', 'status': 'errored'}).reason_code is None
+
+
+def test_a_board_slug_that_could_never_be_one_is_refused():
+    with pytest.raises(ValidationError):
+        RankingsQuery.model_validate({'board': '   '})
+    with pytest.raises(ValidationError):
+        RankingsQuery.model_validate({'board': ''})
+
+
+def test_a_board_slug_arrives_as_its_own_type_on_both_sides():
+    assert isinstance(RankingsQuery(board=BoardRef('smoke')).board, BoardRef)
+    listed = BoardListResponse.model_validate({
+        'boards': [
+            {
+                'board': 'smoke',
+                'title': 'Smoke',
+                'eval': 'fake.smoke',
+                'eval_version': 'smoke@0123456789ab',
+                'primary_metric': 'success_rate',
+                'visibility': 'public',
+            }
+        ]
+    })
+    assert isinstance(listed.boards[0].board, BoardRef)
+
+
 def test_an_unset_query_parameter_is_absent_from_the_url_rather_than_empty():
-    assert RankingsQuery(board='smoke').model_dump(mode='json', exclude_none=True) == {'board': 'smoke'}
+    assert RankingsQuery(board=BoardRef('smoke')).model_dump(mode='json', exclude_none=True) == {'board': 'smoke'}
 
 
 def test_a_pinned_query_carries_its_version():
-    query = RankingsQuery(board='smoke', eval_version='smoke@old')
+    query = RankingsQuery(board=BoardRef('smoke'), eval_version='smoke@old')
     assert query.model_dump(mode='json', exclude_none=True) == {'board': 'smoke', 'eval_version': 'smoke@old'}
 
 

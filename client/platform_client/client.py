@@ -16,6 +16,7 @@ from typing import Any, Self, TypeVar
 
 import httpx
 from platform_client import routes
+from platform_client.boards import BoardRef
 from platform_client.errors import PlatformError
 from platform_client.ids import ApiKey, SubmissionId
 from platform_client.requests import (
@@ -129,7 +130,7 @@ class PlatformClient:
     def cancel_submission(self, request: CancelRequest) -> CancelResponse:
         return self._post(routes.SUBMISSIONS_CANCEL, request, CancelResponse)
 
-    def rankings(self, *, board: str, eval_version: str | None = None) -> RankingsResponse:
+    def rankings(self, *, board: BoardRef, eval_version: str | None = None) -> RankingsResponse:
         """One board by slug. An explicit `eval_version` pins a past board; otherwise the current one."""
         query = RankingsQuery(board=board, eval_version=eval_version)
         return self._get(routes.RANKINGS_GET, RankingsResponse, query=query, auth=Auth.OPTIONAL)

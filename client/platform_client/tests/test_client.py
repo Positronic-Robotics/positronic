@@ -7,6 +7,7 @@ import json
 import httpx
 import pytest
 from platform_client import routes
+from platform_client.boards import BoardRef
 from platform_client.client import API_URL_ENV, DEFAULT_PLATFORM_URL, PlatformClient, resolve_base_url
 from platform_client.enums import (
     BoardVisibility,
@@ -243,7 +244,7 @@ def rankings_gateway(eval_version: str = 'smoke@0123456789ab') -> Gateway:
 def test_rankings_names_the_board_and_omits_an_unset_version():
     gateway = rankings_gateway()
 
-    response = make_client(gateway, api_key=None).rankings(board='smoke')
+    response = make_client(gateway, api_key=None).rankings(board=BoardRef('smoke'))
 
     assert isinstance(response, RankingsResponse)
     assert response.board == 'smoke'
@@ -254,13 +255,13 @@ def test_rankings_names_the_board_and_omits_an_unset_version():
 
 def test_rankings_pins_a_past_board_when_a_version_is_given():
     gateway = rankings_gateway('smoke@old')
-    make_client(gateway, api_key=None).rankings(board='smoke', eval_version='smoke@old')
+    make_client(gateway, api_key=None).rankings(board=BoardRef('smoke'), eval_version='smoke@old')
     assert dict(gateway.request().url.params)['eval_version'] == 'smoke@old'
 
 
 def test_a_board_read_sends_the_key_when_one_is_set():
     gateway = rankings_gateway()
-    make_client(gateway).rankings(board='nebius-2026/robolab/public_subset')
+    make_client(gateway).rankings(board=BoardRef('nebius-2026/robolab/public_subset'))
     assert gateway.request().headers['authorization'] == f'Bearer {KEY}'
 
 

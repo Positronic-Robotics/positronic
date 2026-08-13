@@ -48,9 +48,9 @@ Calls go to `https://platform.positronic.ro` with nothing set. The environment c
 | `POSITRONIC_PLATFORM_API_KEY` | the key `register` mints — read from the environment only, so it never reaches a process listing |
 | `POSITRONIC_PLATFORM_CREDENTIAL` | the identity `register` registers with — read the same way, for the same reason |
 
-Boards have no command yet — `PlatformClient.list_boards` and `.rankings` read them from Python.
-Both take the key when one is set and work without: a public board is readable by anyone, a tenant's
-board only by its members.
+Boards have no command yet — `PlatformClient.list_boards` and `.rankings` read them from Python, the
+latter taking a `BoardRef` (`platform_client.boards`). Both take the key when one is set and work
+without: a public board is readable by anyone, a tenant's board only by its members.
 
 A board row reads `<display name>#<tag>`. The name is an alias and is not unique — a board may hide
 it altogether — so the tag is what tells two rows apart, and it is how you find your own: it is the
