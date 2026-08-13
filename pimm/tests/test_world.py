@@ -32,18 +32,6 @@ def dummy_process(stop_reader, clock):
         yield Sleep(0.01)
 
 
-class HeartbeatProcess:
-    """Background process announcing every iteration of its control loop."""
-
-    def __init__(self, emitter: SignalEmitter):
-        self.emitter = emitter
-
-    def run(self, stop_reader, clock):
-        while not stop_reader.read().data:
-            self.emitter.emit('beat')
-            yield Sleep(0.01)
-
-
 class DummyControlSystem(ControlSystem):
     """Minimal control system used for integration-style tests."""
 
@@ -240,6 +228,20 @@ class TestVirtualClock:
             assert isinstance(world.clock, SystemClock)
 
 
+# Module scope: `start_in_subprocess` pickles the loop to reach a spawned child, and a class defined
+# inside the test would not pickle.
+class HeartbeatLoop:
+    """Control loop announcing every iteration of its body."""
+
+    def __init__(self, emitter: SignalEmitter):
+        self.emitter = emitter
+
+    def run(self, stop_reader, clock):
+        while not stop_reader.read().data:
+            self.emitter.emit('beat')
+            yield Sleep(0.01)
+
+
 class TestWorld:
     """Test the World class."""
 
@@ -258,7 +260,7 @@ class TestWorld:
         with world:
             emitter, receiver = world.mp_pipes()
             assert isinstance(receiver, SignalReceiver)
-            world.start_in_subprocess(HeartbeatProcess(emitter).run)
+            world.start_in_subprocess(HeartbeatLoop(emitter).run)
 
             assert len(world.background_processes) == 1
 
