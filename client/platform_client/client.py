@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 from enum import Enum, auto
 from types import TracebackType
-from typing import Any, Self, TypeVar
+from typing import Any, ClassVar, Self, TypeVar
 
 import httpx
 from platform_client import routes
@@ -40,8 +40,6 @@ from pydantic import BaseModel, TypeAdapter
 
 M = TypeVar('M', bound=BaseModel)
 
-_SUBMISSION_VIEW: TypeAdapter[SubmissionView] = TypeAdapter(SubmissionView)
-
 DEFAULT_TIMEOUT_S = 30.0
 
 # The platform a caller reaches with no configuration at all. A user should never have to know a
@@ -60,12 +58,16 @@ CREDENTIAL_ENV = 'POSITRONIC_PLATFORM_CREDENTIAL'
 
 
 def resolve_base_url(base_url: str | None = None) -> str:
-    """The platform to talk to: what the caller passed, else the environment, else the default.
-
-    One owner for the precedence, so a command and a script that skip different steps of it cannot
-    end up talking to different platforms.
-    """
-    return base_url or os.environ.get(API_URL_ENV) or DEFAULT_PLATFORM_URL
+    """The platform to talk to: what the caller passed, else the environment, else the default."""
+    for value, source in ((base_url, 'base_url'), (os.environ.get(API_URL_ENV), API_URL_ENV)):
+        if value is None:
+            continue
+        # Empty is a misconfiguration, not a request for the default: `--platform-url=` reads as a
+        # platform the caller named, and falling through would send that run to the production one.
+        if not value.strip():
+            raise ValueError(f'{source} is empty; name a platform, or leave it unset for {DEFAULT_PLATFORM_URL}')
+        return value
+    return DEFAULT_PLATFORM_URL
 
 
 class Auth(Enum):
@@ -99,6 +101,10 @@ class PlatformClient:
             client = httpx.Client(base_url=resolve_base_url(base_url), timeout=timeout)
         elif base_url is not None:
             raise ValueError('a client of your own already carries its base URL; pass one or the other')
+        elif not str(client.base_url):
+            # Every endpoint below sends a path relative to the client's own base URL, so one
+            # without it resolves against nothing and the request never leaves for a host.
+            raise ValueError('the supplied client carries no base_url; set httpx.Client(base_url=...) to the platform')
         elif AUTH_HEADER in client.headers:
             # httpx MERGES client-level headers into every request, so a default here would reach
             # `users.register`, which this module declares unauthenticated and the gateway reads as
@@ -123,9 +129,13 @@ class PlatformClient:
         """The caller's own submissions — or every user's, for an admin or service principal."""
         return self._get(routes.SUBMISSIONS_LIST, SubmissionListResponse)
 
+    # The view is a discriminated union rather than a model, so it validates through an adapter.
+    # Built once, because building one costs more than the validation it then does.
+    _SUBMISSION_VIEW: ClassVar[TypeAdapter[SubmissionView]] = TypeAdapter(SubmissionView)
+
     def get_submission(self, submission_id: SubmissionId) -> SubmissionView:
         query = SubmissionGetQuery(id=submission_id)
-        return _SUBMISSION_VIEW.validate_json(self._send('GET', routes.SUBMISSIONS_GET, query=query).content)
+        return self._SUBMISSION_VIEW.validate_json(self._send('GET', routes.SUBMISSIONS_GET, query=query).content)
 
     def cancel_submission(self, request: CancelRequest) -> CancelResponse:
         return self._post(routes.SUBMISSIONS_CANCEL, request, CancelResponse)

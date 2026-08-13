@@ -332,9 +332,30 @@ def test_the_url_precedence_is_argument_then_environment_then_the_default(monkey
     assert resolve_base_url() == DEFAULT_PLATFORM_URL
 
 
+@pytest.mark.parametrize('empty', ['', '   '])
+def test_a_url_supplied_but_empty_is_refused_rather_than_read_as_unset(monkeypatch, empty):
+    # `--platform-url=` names a platform, so falling through would send that run to the default —
+    # the production platform — which is the one place it was least meant to go.
+    monkeypatch.setenv(API_URL_ENV, 'http://from.env')
+    with pytest.raises(ValueError, match='base_url is empty'):
+        resolve_base_url(empty)
+    with pytest.raises(ValueError, match='base_url is empty'):
+        PlatformClient(empty)
+
+    monkeypatch.setenv(API_URL_ENV, empty)
+    with pytest.raises(ValueError, match=f'{API_URL_ENV} is empty'):
+        resolve_base_url()
+
+
 def test_a_client_of_your_own_carries_its_own_base_url():
     with pytest.raises(ValueError, match='one or the other'):
         PlatformClient(BASE, client=httpx.Client())
+
+
+def test_a_supplied_client_with_no_base_url_is_refused():
+    # Every endpoint sends a path relative to it, so without one the request reaches no host at all.
+    with pytest.raises(ValueError, match='no base_url'):
+        PlatformClient(client=httpx.Client())
 
 
 def test_closing_leaves_a_caller_supplied_client_open():

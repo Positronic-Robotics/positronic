@@ -8,7 +8,7 @@ names this platform offers when the one asked for is not among them.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from platform_client.enums import ErrorCode, ReasonCode
 from platform_client.evals import EvalRef
@@ -20,8 +20,6 @@ from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 REASON_CODE_DETAIL = 'reason_code'
 QUOTA_DETAIL = 'quota'
 EVALS_DETAIL = 'evals'
-
-_EVAL_LIST: TypeAdapter[list[EvalRef]] = TypeAdapter(list[EvalRef])
 
 
 class ApiErrorBody(BaseModel):
@@ -78,6 +76,10 @@ class PlatformError(Exception):
             return None
         return QuotaLimit.model_validate(self.details[QUOTA_DETAIL])
 
+    # A list is not a model, so it validates through an adapter. Built once, because building one
+    # costs more than the validation it then does.
+    _EVAL_LIST: ClassVar[TypeAdapter[list[EvalRef]]] = TypeAdapter(list[EvalRef])
+
     @property
     def evals(self) -> list[EvalRef] | None:
         """The evals this platform offers, when the failure is that the one asked for is not one.
@@ -89,7 +91,7 @@ class PlatformError(Exception):
         """
         if EVALS_DETAIL not in self.details:
             return None
-        return _EVAL_LIST.validate_python(self.details[EVALS_DETAIL])
+        return self._EVAL_LIST.validate_python(self.details[EVALS_DETAIL])
 
     @classmethod
     def from_payload(cls, http_status: int, payload: object) -> PlatformError:
