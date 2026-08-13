@@ -22,7 +22,13 @@ def gateway(platform_url: str | None = None, *, key_required: bool = True) -> It
     key = os.environ.get(API_KEY_ENV)
     if key_required and not key:
         raise SystemExit(f'no API key: set {API_KEY_ENV} to the one `positronic account register` printed')
-    with PlatformClient(platform_url, api_key=ApiKey(key) if key else None) as client:
+    try:
+        client_ = PlatformClient(platform_url, api_key=ApiKey(key) if key else None)
+    except ValueError as exc:
+        # A misconfigured platform — an empty `--platform-url` or `POSITRONIC_PLATFORM_URL`. To a
+        # user that is a refusal to read, not a traceback out of the constructor.
+        raise SystemExit(str(exc)) from exc
+    with client_ as client:
         try:
             yield client
         except PlatformError as exc:

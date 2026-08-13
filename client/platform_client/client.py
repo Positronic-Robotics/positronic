@@ -1,10 +1,12 @@
 """`PlatformClient` — one method per gateway endpoint, request model in, response model out.
 
-A response is validated from its raw bytes rather than from a decoded object: an id is hex text on
-the wire, and only the JSON schema enforces that — decoding first would take a number as well.
+    with PlatformClient() as client:
+        client.register(RegisterRequest(credential=..., alias=...))  # keeps the key it returns
+        client.create_submission(SubmissionCreateRequest(policy_image=..., eval=...))
 
-A non-2xx response raises `PlatformError` carrying the parsed error envelope. `api_key` is a plain
-attribute: `users.register` returns one, and every authenticated call sends whatever is set.
+The platform is `base_url`, else `POSITRONIC_PLATFORM_URL`, else production; the key is `api_key`,
+else `POSITRONIC_PLATFORM_API_KEY`, else whatever `register` came back with. A non-2xx raises
+`PlatformError` carrying the error envelope.
 """
 
 from __future__ import annotations
@@ -57,6 +59,14 @@ API_KEY_ENV = 'POSITRONIC_PLATFORM_API_KEY'
 CREDENTIAL_ENV = 'POSITRONIC_PLATFORM_CREDENTIAL'
 
 
+def resolve_api_key(api_key: ApiKey | None = None) -> ApiKey | None:
+    """The key to authenticate with: what the caller passed, else the environment, else none."""
+    if api_key is not None:
+        return api_key
+    from_env = os.environ.get(API_KEY_ENV)
+    return ApiKey(from_env) if from_env else None
+
+
 def resolve_base_url(base_url: str | None = None) -> str:
     """The platform to talk to: what the caller passed, else the environment, else the default."""
     for value, source in ((base_url, 'base_url'), (os.environ.get(API_URL_ENV), API_URL_ENV)):
@@ -82,10 +92,8 @@ class Auth(Enum):
 class PlatformClient:
     """A caller's handle on one platform.
 
-    With no `base_url` it reads `API_URL_ENV`, and falls back to `DEFAULT_PLATFORM_URL` — so a user
-    configures nothing, a developer exports one variable, and a caller with a URL of its own passes
-    it. Pass an `httpx.Client` instead when the transport matters (an in-process ASGI transport, a
-    custom retry or proxy configuration); it carries its own base URL.
+    Pass an `httpx.Client` instead of a `base_url` when the transport matters (an in-process ASGI
+    transport, a proxy, a retry policy); it carries its own base URL, so the two are exclusive.
     """
 
     def __init__(
@@ -111,13 +119,20 @@ class PlatformClient:
             # a registration by whoever that credential names.
             raise ValueError(f'the supplied client carries a default {AUTH_HEADER} header; pass the key as api_key')
         self._client = client
-        self.api_key = api_key
+        self.api_key = resolve_api_key(api_key)
 
     # --- endpoints ---------------------------------------------------------------------------
 
     def register(self, request: RegisterRequest) -> RegisterResponse:
-        """Create-or-return a user. A key comes back only on a first registration or a `rotate`."""
-        return self._post(routes.USERS_REGISTER, request, RegisterResponse, auth=Auth.NONE)
+        """Create-or-return a user, KEEPING any key it returns — the next call is authenticated.
+
+        A key comes back only on a first registration or a `rotate`; a repeat registration answers
+        `existing` with none, and the client goes on holding whatever it already had.
+        """
+        response = self._post(routes.USERS_REGISTER, request, RegisterResponse, auth=Auth.NONE)
+        if response.api_key is not None:
+            self.api_key = response.api_key
+        return response
 
     def me(self) -> MeResponse:
         return self._get(routes.USERS_ME, MeResponse)
@@ -151,6 +166,8 @@ class PlatformClient:
 
     # --- plumbing ----------------------------------------------------------------------------
 
+    # Validated from the raw bytes, never from a decoded object: an id is hex text on the wire and
+    # only the JSON schema enforces that, so decoding first would take a number as well.
     def _get(self, path: str, model: type[M], *, query: BaseModel | None = None, auth: Auth = Auth.REQUIRED) -> M:
         return model.model_validate_json(self._send('GET', path, query=query, auth=auth).content)
 
@@ -167,7 +184,7 @@ class PlatformClient:
             kwargs['params'] = query.model_dump(mode='json', exclude_none=True)
         headers: dict[str, str] = {}
         if auth is Auth.REQUIRED and self.api_key is None:
-            raise ValueError(f'{path} needs an API key; set .api_key from a users.register response')
+            raise ValueError(f'{path} needs an API key: pass api_key=, set {API_KEY_ENV}, or call register() first')
         if auth is not Auth.NONE and self.api_key is not None:
             headers[AUTH_HEADER] = f'Bearer {self.api_key}'
         response = self._client.request(method, path, headers=headers, **kwargs)

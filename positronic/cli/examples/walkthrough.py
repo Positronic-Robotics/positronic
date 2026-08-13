@@ -21,26 +21,25 @@ from platform_client.client import CREDENTIAL_ENV, PlatformClient
 from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, KeyStatus
 from platform_client.errors import PlatformError
 from platform_client.evals import EvalRef
-from platform_client.ids import ApiKey, SubmissionId
+from platform_client.ids import SubmissionId
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import RegisterRequest, SubmissionCreateRequest
 from platform_client.responses import ErroredSubmissionView, FinishedSubmissionView, SubmissionView
 
 
-def mint_api_key(client: PlatformClient, *, credential: str, alias: str) -> ApiKey:
-    """Register this identity and come back with a usable key, rotating if it is already registered.
+def authenticate(client: PlatformClient, *, credential: str, alias: str) -> None:
+    """Leave the client holding a usable key, rotating if this identity is already registered.
 
-    Registration is create-or-return, and a key's plaintext is stored only as a hash, so a second
-    registration reports `existing` and carries no key. Rotating issues a fresh one and retires the
-    old one.
+    `register` keeps whatever key it is given. A key's plaintext is stored only as a hash, so a
+    second registration reports `existing` and carries none; rotating issues a fresh one and
+    retires the old.
     """
     registration = client.register(RegisterRequest(credential=credential, alias=alias))
     print(f'   user {registration.user_id} ({registration.key_status.name})')
     if registration.api_key is None:
         registration = client.register(RegisterRequest(credential=credential, alias=alias, rotate=True))
         print(f'   rotated ({registration.key_status.name})')
-    assert registration.api_key is not None, f'expected a key after {KeyStatus.rotated.name}'
-    return registration.api_key
+    assert client.api_key is not None, f'expected a key after {KeyStatus.rotated.name}'
 
 
 def poll_until_terminal(
@@ -79,22 +78,22 @@ def walkthrough(
     timeout_s: float,
 ) -> None:
     print('1. register')
-    client.api_key = mint_api_key(client, credential=credential, alias=alias)
+    authenticate(client, credential=credential, alias=alias)
 
     print('2. submit')
     # The eval is the whole of the choice: it names the embodiment its tasks run on, and asking for
     # one the platform does not offer comes back with the names it does, under `PlatformError.evals`.
-    created = client.create_submission(SubmissionCreateRequest(policy_image=policy_image, eval=eval_ref))
-    print(f'   submission {created.submission_id} ({created.status.name})')
-    if created.status in NO_RESULT_STATUSES:
-        reason = created.reason_code.name if created.reason_code else created.status.name
+    submission = client.create_submission(SubmissionCreateRequest(policy_image=policy_image, eval=eval_ref))
+    print(f'   submission {submission.submission_id} ({submission.status.name})')
+    if submission.status in NO_RESULT_STATUSES:
+        reason = submission.reason_code.name if submission.reason_code else submission.status.name
         raise SystemExit(f'   terminal at the door: {reason}')
 
     print('3. quota')
     print_quota(client)
 
     print('4. poll until terminal')
-    view = poll_until_terminal(client, created.submission_id, timeout_s=timeout_s)
+    view = poll_until_terminal(client, submission.submission_id, timeout_s=timeout_s)
     if isinstance(view, ErroredSubmissionView):
         raise SystemExit(f'   failed: {view.reason_code.name if view.reason_code else "unknown"} — {view.reason}')
     # A terminal view that is not finished carries no result, so there is no score to report.

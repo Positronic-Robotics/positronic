@@ -8,7 +8,14 @@ import httpx
 import pytest
 from platform_client import routes
 from platform_client.boards import BoardRef
-from platform_client.client import API_URL_ENV, DEFAULT_PLATFORM_URL, PlatformClient, resolve_base_url
+from platform_client.client import (
+    API_KEY_ENV,
+    API_URL_ENV,
+    DEFAULT_PLATFORM_URL,
+    PlatformClient,
+    resolve_api_key,
+    resolve_base_url,
+)
 from platform_client.enums import (
     BoardVisibility,
     ErrorCode,
@@ -96,6 +103,29 @@ def test_register_carries_back_a_minted_key():
     response = make_client(gateway, api_key=None).register(RegisterRequest(credential='token'))
     assert response.api_key == 'pk_live_new'
     assert response.key_status is KeyStatus.created
+
+
+def test_register_keeps_the_key_it_is_given_so_the_next_call_is_authenticated():
+    gateway = Gateway(
+        200,
+        {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'api_key': 'pk_live_new', 'key_status': 'created'},
+    )
+    client = make_client(gateway, api_key=None)
+
+    client.register(RegisterRequest(credential='token'))
+
+    assert client.api_key == 'pk_live_new'
+
+
+def test_a_registration_that_carries_no_key_leaves_the_one_already_held():
+    # A repeat registration answers `existing` with no key: the caller's working key is not a thing
+    # to clear, and clearing it would break the very next authenticated call.
+    gateway = Gateway(200, {'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'})
+    client = make_client(gateway)
+
+    client.register(RegisterRequest(credential='token'))
+
+    assert client.api_key == KEY
 
 
 def test_me_sends_the_bearer_token_and_parses_every_limit():
@@ -330,6 +360,16 @@ def test_the_url_precedence_is_argument_then_environment_then_the_default(monkey
     assert resolve_base_url() == 'http://from.env'
     monkeypatch.delenv(API_URL_ENV)
     assert resolve_base_url() == DEFAULT_PLATFORM_URL
+
+
+def test_the_key_precedence_is_argument_then_environment_then_none(monkeypatch):
+    # Same shape as the URL above: a caller that exported the key its registration printed is
+    # configured, and passing it a second time through every construction site is not the contract.
+    monkeypatch.setenv(API_KEY_ENV, 'pk_live_env')
+    assert resolve_api_key(ApiKey('pk_live_argument')) == 'pk_live_argument'
+    assert resolve_api_key() == 'pk_live_env'
+    monkeypatch.delenv(API_KEY_ENV)
+    assert resolve_api_key() is None
 
 
 @pytest.mark.parametrize('empty', ['', '   '])
