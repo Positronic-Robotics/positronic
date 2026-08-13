@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import configuronic as cfn
 import mujoco
 import numpy as np
@@ -38,7 +40,7 @@ trajectory = [[i * 5000.0, random_6dof_on_sphere()] for i in range(100)]
 
 def debug_kinematics(urdf_path: str, mujoco_model_path: str, rerun: str, trajectory: list[list[float]]):
     rr.init('debug_kinematics')
-    rr.save(rerun)
+    rr.save(str(Path(rerun).expanduser()))
 
     taus = []
 

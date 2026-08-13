@@ -31,7 +31,7 @@ def droid(robot_arm, gripper, cameras):
     }
     commands = {
         keys.ROBOT_COMMAND: Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
-        'target_grip': Command(gripper.target_grip, 0.0, None),
+        keys.TARGET_GRIP: Command(gripper.target_grip, 0.0, None),
     }
     return Embodiment(
         descriptor='',
@@ -54,7 +54,7 @@ def yam(robot_arm, cameras):
     }
     commands = {
         keys.ROBOT_COMMAND: Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
-        'target_grip': Command(robot_arm.target_grip, 0.0, None),
+        keys.TARGET_GRIP: Command(robot_arm.target_grip, 0.0, None),
     }
     return Embodiment(
         descriptor='yam',
@@ -142,7 +142,7 @@ def mujoco_franka(sim, camera_dict):
     home = roboarm_command.JointPosition(np.array(sim.initial_ctrl[:7]))
     commands = {
         keys.ROBOT_COMMAND: Command(sim.commands, home, Serializers.robot_command),
-        'target_grip': Command(sim.target_grip, 0.0, None),
+        keys.TARGET_GRIP: Command(sim.target_grip, 0.0, None),
     }
     return Embodiment(
         descriptor='mujoco.franka',

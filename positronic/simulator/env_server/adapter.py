@@ -162,8 +162,8 @@ class WireCommandAdapter(EnvAdapter):
                 cmd = None
             case roboarm_command.CartesianDelta() | roboarm_command.JointDelta():
                 self._held.pop(keys.ROBOT_COMMAND)
-        if 'target_grip' in self._held:
-            self._grip = float(self._held['target_grip'])
+        if keys.TARGET_GRIP in self._held:
+            self._grip = float(self._held[keys.TARGET_GRIP])
         return {
             protocol.ACTION_COMMAND: _wire_command(_in_env_control_frame(cmd, self.env_control_frame)),
             protocol.ACTION_GRIP: self._grip,

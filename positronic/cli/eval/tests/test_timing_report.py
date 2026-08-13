@@ -1,8 +1,17 @@
 import json
 
+import pos3
 import pytest
 
-from positronic.cli.eval.timing_report import _build_report, _parse_dmon, _read_spans_dir, _read_stats_dir, _render
+from positronic.cli.eval.timing_report import (
+    WallWindow,
+    _build_report,
+    _parse_dmon,
+    _read_spans_dir,
+    _read_stats_dir,
+    _render,
+    timing_report,
+)
 from positronic.simulator.env_server.telemetry import ENV_PROCESS
 from positronic.telemetry import (
     ATTR_PROCESS_NAME,
@@ -107,7 +116,8 @@ def test_report_aggregates(tmp_path):
     report = _build_report(spans, _read_stats_dir(tmp_path / TELEMETRY_SUBDIR), policy_gpu=None)
 
     assert report.episodes == 2
-    assert report.wall_pass_s == pytest.approx(100.0)
+    assert report.window is WallWindow.W_PASS
+    assert report.wall_s == pytest.approx(100.0)
     assert report.real_time_factor == pytest.approx(0.40)  # 40 virtual-s / 100 wall-s
     assert report.infer_calls == 4
     assert report.infer_p50_ms == pytest.approx(2000.0)
@@ -216,7 +226,7 @@ def test_aborted_episode_wall_excluded_from_between_episodes(tmp_path):
     report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
 
     assert report.episodes == 1
-    assert report.wall_pass_s == pytest.approx(60.0)  # 100 s pass minus the 40 s aborted episode
+    assert report.wall_s == pytest.approx(60.0)  # 100 s pass minus the 40 s aborted episode
     split = report.wall_split
     # between_episodes is the completed episode's real inter-episode idle only (60 - 40), NOT (100 - 40)/100
     # with the aborted wall folded in.
@@ -288,8 +298,87 @@ def test_orphan_episode_from_killed_run_excluded(tmp_path):
     )
     report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
     assert report.episodes == 1
+    assert report.window is WallWindow.W_PASS
     assert report.real_time_factor == pytest.approx(0.20)  # 20 virtual-s / 100 wall-s; the orphan's 15 don't count
     assert report.wall_split.between_episodes == pytest.approx(0.60)
+
+
+def test_run_whose_pass_span_never_closed_reduces_over_its_episodes(tmp_path):
+    """A killed or preempted run writes no ``eval.pass`` span, but its finished episodes are complete recorded
+    data. They reduce against the wall they span — 10 s to 100 s here — which the report names W_episodes
+    because it excludes whatever ran either side of them and is therefore not a pass window."""
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    telemetry_dir.mkdir()
+    _write_lines(
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
+        [
+            _span(SPAN_EPISODE, 10, 50, 'ep0', 'unwritten-pass', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+            _span(SPAN_RESET, 10, 15, 'reset0', 'ep0'),
+            _span(SPAN_EPISODE, 60, 100, 'ep1', 'unwritten-pass', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+        ],
+    )
+
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+
+    assert report.episodes == 2
+    assert report.window is WallWindow.W_EPISODES
+    assert report.wall_s == pytest.approx(90.0)
+    assert report.real_time_factor == pytest.approx(40 / 90)
+    assert report.wall_split.reset == pytest.approx(5 / 90)
+    # The 10 s between the two episodes is inside the window and attributes; the 10 s before the first is not.
+    assert report.wall_split.between_episodes == pytest.approx(10 / 90)
+
+
+def test_two_killed_runs_in_one_directory_get_a_window_each(tmp_path):
+    """Grouping episodes by the pass span they name keeps two killed runs appended to one directory apart. The
+    idle wall between them belongs to neither run, exactly as the gap between two pass spans does — one window
+    spanning both would report 1040 s of wall for 80 s of work."""
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    telemetry_dir.mkdir()
+    _write_lines(
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
+        [
+            _span(SPAN_EPISODE, 0, 40, 'ep0', 'unwritten-pass-a', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+            _span(SPAN_EPISODE, 1000, 1040, 'ep1', 'unwritten-pass-b', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
+        ],
+    )
+
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+
+    assert report.episodes == 2
+    assert report.wall_s == pytest.approx(80.0)
+    assert report.wall_split.between_episodes == pytest.approx(0.0)
+
+
+def test_telemetry_with_neither_a_pass_nor_an_episode_names_what_is_missing(tmp_path):
+    """Spans that carry no closed pass and no episode leave nothing to reduce. The refusal must say so: a run
+    killed before its first episode finished did record telemetry, so blaming a missing ``--timing`` sends the
+    reader after a flag they set."""
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    telemetry_dir.mkdir()
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', [_span(SPAN_RESET, 0, 5, 'reset0')])
+
+    with pytest.raises(ValueError, match=f'no closed `{SPAN_EVAL_PASS}` span and no `{SPAN_EPISODE}` span') as exc:
+        _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+    assert '--timing' not in str(exc.value)
+
+
+def test_render_names_the_episode_window_it_reduced_over(tmp_path):
+    """The console warning is lost once the report is pasted elsewhere, so the rendered body itself must say
+    the shares are of the episode window rather than of a pass."""
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    telemetry_dir.mkdir()
+    _write_lines(
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
+        [_span(SPAN_EPISODE, 0, 90, 'ep0', 'unwritten-pass', {ATTR_EPISODE_VIRTUAL_S: 20.0})],
+    )
+
+    rendered = _render(_build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)).splitlines()
+
+    assert f'no {SPAN_EVAL_PASS} span closed' in rendered[0]
+    assert f'{WallWindow.W_EPISODES} (wall):   90.0 s (0.03 h)' in rendered
+    assert f'wall split (share of {WallWindow.W_EPISODES}):' in rendered
+    assert not any(WallWindow.W_PASS in line for line in rendered)
 
 
 def test_multi_gpu_peak_vram_sums_devices_per_sample(tmp_path):
@@ -657,3 +746,43 @@ def test_parse_dmon_fails_loudly_without_fb(tmp_path):
     log.write_text('# gpu    sm\n#  Idx     %\n    0    50\n')
     with pytest.raises(ValueError, match='fb'):
         _parse_dmon(log)
+
+
+def test_a_tilde_run_dir_and_dmon_log_resolve_against_home(tmp_path, monkeypatch):
+    """The documented eval quickstart writes to a `~`-relative directory, so the reduce reads one back."""
+    (tmp_path / 'run').mkdir()
+    _fixture(tmp_path / 'run' / TELEMETRY_SUBDIR)
+    (tmp_path / 'dmon.log').write_text('# gpu    sm    fb\n#  Idx     %    MB\n    0    50  1024\n')
+    monkeypatch.setenv('HOME', str(tmp_path))
+
+    timing_report(run_dir='~/run', gpu_policy_log='~/dmon.log')
+
+    summary = json.loads((tmp_path / 'run' / 'timing_summary.json').read_text())
+    assert summary['episodes'] == 2
+    assert summary['gpu']['policy']['peak_vram_gb'] == pytest.approx(1.0)
+
+
+def test_a_remote_run_dir_reaches_pos3_verbatim(tmp_path, monkeypatch):
+    """Expansion is the local branch's alone: an `s3://` URI is the remote store's to parse, `~` and all."""
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    downloaded, uploaded = [], []
+    monkeypatch.setattr(pos3, 'download', lambda uri: downloaded.append(uri) or tmp_path)
+    monkeypatch.setattr(pos3, 'upload', lambda key, path, delete=True: uploaded.append(key))
+
+    timing_report(run_dir='s3://bucket/~run')
+
+    assert downloaded == ['s3://bucket/~run']
+    assert uploaded == ['s3://bucket/~run.timing_summary.json']
+
+
+def test_a_run_dir_holding_no_telemetry_directory_names_it(tmp_path):
+    with pytest.raises(ValueError, match='no telemetry directory') as excinfo:
+        timing_report(run_dir=str(tmp_path))
+    assert str(tmp_path / TELEMETRY_SUBDIR) in str(excinfo.value)
+
+
+def test_a_telemetry_directory_holding_no_spans_is_not_reported_as_untimed(tmp_path):
+    """The sidecar directory exists, so the run was timed — what is missing is its flushed spans."""
+    (tmp_path / TELEMETRY_SUBDIR).mkdir()
+    with pytest.raises(ValueError, match='carries no spans'):
+        timing_report(run_dir=str(tmp_path))

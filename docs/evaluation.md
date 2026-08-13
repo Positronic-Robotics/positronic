@@ -38,9 +38,9 @@ uv run positronic-server --dataset.path=~/evals/libero \
   --ep_table_cfg=@positronic.cfg.server.eval_table
 ```
 
-**One server, many targets.** A DROID policy served once is scored on RoboLab, on MolmoSpaces and on our real rig without a restart — the target is a parameter, not an integration. RoboLab renders in Isaac Sim, so it wants an RTX-class host; the rig is ours. Your own model is served the same way — [Connect your model](connect-your-model.md).
+**One server, many targets.** Every target publishes the same observation keys (see [the wire format](connect-your-model.md#the-wire-format)), so a DROID policy served once is scored on LIBERO, RoboLab, MolmoSpaces and our rig without a restart. Running everywhere is not the same as being comparable everywhere: each benchmark points `image.exterior` at its own camera, so a checkpoint scored on a target it was never trained for measures the viewpoint gap as much as the policy. Your own model is served the same way — [Connect your model](connect-your-model.md).
 
-`--eval` takes any target the catalog exposes: a whole benchmark (`.sim.libero.all`), a suite or category (`.sim.robolab.visual`), or one task (`.sim.robolab.banana_in_bowl`). Add `--inference_latency=True` to charge the model's inference time in sim. Every trial is recorded as a Positronic dataset under `--output_dir`.
+`--eval` takes any target the catalog exposes: a whole benchmark (`.sim.libero.all`), a suite or category (`.sim.robolab.visual`), or one task (`.sim.robolab.banana_in_bowl`). Add `--inference_latency=True` to charge the model's inference time in sim. Every trial is recorded as a Positronic dataset under `--output_dir`, carrying whatever verdict its benchmark reported.
 
 Real-hardware DROID evals take the same model endpoint, but we run them for you — operated and operator-scored on our fleet, not self-driven in sim. Write to hi@phail.ai for those.
 

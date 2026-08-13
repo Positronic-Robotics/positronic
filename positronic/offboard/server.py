@@ -1,8 +1,10 @@
 """The inference server: serves a policy pipeline (see ``positronic.policy.spec``) over the offboard protocol."""
 
 import asyncio
+import hmac
 import json
 import logging
+import os
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -12,16 +14,25 @@ from typing import Any
 import configuronic as cfn
 import pos3
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, WebSocketException, status
 from starlette.datastructures import QueryParams
 
 from positronic import keys
-from positronic.policy import Codec, Policy, Recorder
+from positronic.policy import Policy, Recorder
 from positronic.policy.base import PolicyWrapper
 from positronic.policy.spec import ModelSource, Pipeline, split
 from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
+
+AUTH_TOKEN_ENV = 'AUTH_TOKEN'
+
+AUTH_HEADER = 'Authorization'
+
+
+def bearer(token: str) -> str:
+    """The ``AUTH_HEADER`` value carrying ``token``."""
+    return f'Bearer {token}'
 
 
 async def _acquire_with_keepalives(lock: asyncio.Lock, websocket: WebSocket | None, message: str):
@@ -173,7 +184,7 @@ class PolicyServer:
     The WebSocket session flow is:
         accept → session params → resolve → load via manager → remote-half wrap → reset → inference loop
 
-    On startup (before accepting connections): resolve(None) → load → warmup.
+    On startup (before accepting connections): resolve(None) → load.
 
     The default checkpoint is resolved once, at startup, and pinned for every request that names no
     explicit one — a running server never switches to a newer checkpoint that lands later. A request
@@ -187,13 +198,14 @@ class PolicyServer:
         port: int = 8000,
         recording_dir: str | None = None,
         idle_timeout_min: float | None = None,
+        auth_token: str | None = None,
     ):
         self._pipeline_cfg = pipeline if isinstance(pipeline, cfn.Config) else None
         self._pipeline = pipeline.instantiate() if isinstance(pipeline, cfn.Config) else pipeline
         assert isinstance(self._pipeline, Pipeline), (
             f'PolicyServer serves a policy pipeline closed by a model source, got {type(self._pipeline).__name__}'
         )
-        local, _, self._remote = split(self._pipeline)
+        local, _, _ = split(self._pipeline)
         # A local half that is missing or cannot be rendered fails at startup, not at a client's connect.
         # The spec itself is built per session, which params may have changed.
         _declared_stack(local)
@@ -214,12 +226,38 @@ class PolicyServer:
 
         self._default_id: str | None = None
 
+        # ``None`` serves open, so a broken secret must not reach that path by accident. Empty would read
+        # as open; anything an ``Authorization`` header cannot carry — a newline off the end of a file, a
+        # non-ASCII byte — gates the server against everybody, because no client can send the value back.
+        if auth_token is not None and not (auth_token and all('!' <= c <= '~' for c in auth_token)):
+            raise ValueError('auth_token must be non-empty printable ASCII without spaces; pass None to serve open')
+        self._auth_token = auth_token
+
         self.app = FastAPI()
-        self.app.get('/api/v1/models')(self.get_models)
-        self.app.websocket('/api/v1/session')(self.default_session)
+        http_auth, ws_auth = [Depends(self._require_http_auth)], [Depends(self._require_ws_auth)]
+        self.app.get('/api/v1/models', dependencies=http_auth)(self.get_models)
+        self.app.websocket('/api/v1/session', dependencies=ws_auth)(self.default_session)
         # ``:path`` so an id that is itself a path (a HuggingFace repo, say) opens under the name
         # ``/api/v1/models`` advertises.
-        self.app.websocket('/api/v1/session/{model_id:path}')(self.model_session)
+        self.app.websocket('/api/v1/session/{model_id:path}', dependencies=ws_auth)(self.model_session)
+
+    def _authorized(self, authorization: str | None) -> bool:
+        if self._auth_token is None:
+            return True
+        if authorization is None:
+            return False
+        # Compared as bytes because a header carries any byte the peer sends: ``compare_digest`` raises on
+        # a non-ASCII ``str``, which would answer a malformed header with a 500 instead of a refusal.
+        return hmac.compare_digest(authorization.encode(), bearer(self._auth_token).encode())
+
+    def _require_http_auth(self, authorization: str | None = Header(default=None, alias=AUTH_HEADER)) -> None:
+        if not self._authorized(authorization):
+            raise HTTPException(status_code=401, detail='Invalid or missing bearer token')
+
+    async def _require_ws_auth(self, websocket: WebSocket) -> None:
+        """Rejects before ``accept()``, so an unauthorized peer never reaches the session handshake."""
+        if not self._authorized(websocket.headers.get(AUTH_HEADER)):
+            raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
 
     async def get_models(self) -> dict:
         return {'models': self._source.get_models()}
@@ -332,27 +370,10 @@ class PolicyServer:
                 if policy is not None:
                     await self._manager.release_session()
 
-    async def _warmup(self, policy: Policy):
-        """Run one warmup inference through the launch codec's ``dummy_encoded()``. Non-fatal on failure."""
-        if not isinstance(self._remote, Codec):
-            return
-        session = None
-        try:
-            logger.info('Running warmup inference...')
-            session = policy.new_session()
-            await asyncio.to_thread(session, self._remote.dummy_encoded())
-            logger.info('Warmup inference complete')
-        except Exception:
-            logger.warning('Warmup inference failed (non-fatal)', exc_info=True)
-        finally:
-            if session is not None:
-                session.close()
-
     async def _startup(self):
         self._default_id = self._source.resolve(None)
         logger.info(f'Pinned default checkpoint at startup: {self._default_id}')
-        policy = await self._manager.get_policy(self._default_id)
-        await self._warmup(policy)
+        await self._manager.get_policy(self._default_id)
 
     async def _idle_watchdog(self, server: uvicorn.Server):
         assert self.idle_timeout_min is not None
@@ -398,5 +419,15 @@ def serve(pipeline: cfn.Config, host: str, port: int, recording_dir: str | None,
     Only the socket and the recording taps are flags of their own; everything the served model is —
     codec, source, checkpoint directory — is reached through the pipeline itself
     (``--pipeline.source.checkpoints_dir=...``), so each of those values has exactly one name.
+
+    The bearer token gating the server comes from ``AUTH_TOKEN_ENV`` rather than a flag, which would put
+    a secret in the process arguments; unset serves open.
     """
-    PolicyServer(pipeline, host=host, port=port, recording_dir=recording_dir, idle_timeout_min=idle_timeout_min).serve()
+    PolicyServer(
+        pipeline,
+        host=host,
+        port=port,
+        recording_dir=recording_dir,
+        idle_timeout_min=idle_timeout_min,
+        auth_token=os.environ.get(AUTH_TOKEN_ENV),
+    ).serve()

@@ -126,7 +126,7 @@ class Eval:
     For a sim eval that config holds the shared ``MujocoSim`` both are built from, so the
     embodiment stays pure robot while the task carries the scene's privileged signals. ``trials`` is the
     sequence of RUN contexts the self-driving Harness runs — one per (task variant, seed) the config sweeps;
-    empty for an attended/real eval, driven by an operator rather than a trial plan.
+    empty for an attended/real eval, whose episodes begin on a directive rather than on a trial plan.
     """
 
     embodiment: Embodiment

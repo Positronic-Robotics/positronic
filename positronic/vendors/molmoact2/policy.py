@@ -6,6 +6,22 @@ from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from positronic import keys
 from positronic.policy import Policy, Session
+from positronic.vendors import molmoact2
+
+# The three views and the 8-D ``[joint_positions(7), grip(1)]`` state of the DROID action space this vendor
+# serves, at the 378x378 the model tiles every image to.
+_NUM_VIEWS = 3
+_IMAGE_SIZE = (378, 378)
+_STATE_DIM = 8
+
+
+def warm_observation() -> dict[str, Any]:
+    """Zero-filled inputs one inference can run on, so the model's first-call cost is paid before it serves."""
+    return {
+        molmoact2.IMAGES: [np.zeros((*_IMAGE_SIZE, 3), dtype=np.uint8) for _ in range(_NUM_VIEWS)],
+        molmoact2.STATE: np.zeros(_STATE_DIM, dtype=np.float32),
+        molmoact2.TASK: '',
+    }
 
 
 class _MolmoAct2Session(Session):
@@ -22,9 +38,9 @@ class _MolmoAct2Session(Session):
         # external torch.inference_mode() / torch.autocast wrap or a detach() would all be redundant.
         out = self._model.predict_action(
             processor=self._processor,
-            images=obs['images'],
-            task=obs.get('task', ''),
-            state=np.asarray(obs['state'], dtype=np.float32),
+            images=obs[molmoact2.IMAGES],
+            task=obs.get(molmoact2.TASK, ''),
+            state=np.asarray(obs[molmoact2.STATE], dtype=np.float32),
             norm_tag=self._norm_tag,
             inference_action_mode='continuous',
             enable_depth_reasoning=False,

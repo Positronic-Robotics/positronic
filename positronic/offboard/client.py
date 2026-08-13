@@ -13,9 +13,9 @@ from positronic.utils.serialization import deserialise, serialise
 
 logger = logging.getLogger(__name__)
 
-# Only the checkpoint pinned at server startup is pre-warmed; a session that requests any other model loads it
-# cold, so its first ``infer`` can include the backend's JAX compilation. Bound each ``recv`` generously enough to
-# outlast that compile (still surfacing a stalled/half-open connection), and let callers override per use.
+# A first ``infer`` can include the backend's own startup cost, such as a JAX compilation. Bound each ``recv``
+# generously enough to outlast that (still surfacing a stalled/half-open connection), and let callers override
+# per use.
 DEFAULT_INFER_TIMEOUT = 180.0
 
 
@@ -118,8 +118,8 @@ class InferenceClient:
     session — the model id it names and the query it carries as session params — reaches the server exactly
     as written, so every session opened here serves that model with those params.
 
-    ``headers`` carry auth for an endpoint behind a reverse proxy — credentials stay out of the URL, which
-    is meant to be safe to hand around.
+    ``headers`` carry auth, whether the server checks it or a proxy in front of it does — credentials stay
+    out of the URL, which is meant to be safe to hand around.
 
     The timeouts describe this connection, not any one session: ``open_timeout`` bounds the TCP/TLS
     handshake alone, ``connect_deadline`` how long a cold backend may take to answer across retries, and
@@ -165,7 +165,15 @@ class InferenceClient:
         while True:
             ws = None
             try:
-                ws = connect(self.session_url, open_timeout=self.open_timeout, additional_headers=self.headers)
+                # A proxy between here and the server closes a connection it has read nothing from, often
+                # after 60s — well inside one ``infer_timeout`` inference, which sends nothing until it
+                # answers. The pings keep it open.
+                ws = connect(
+                    self.session_url,
+                    open_timeout=self.open_timeout,
+                    additional_headers=self.headers,
+                    ping_interval=20.0,
+                )
                 return InferenceSession(ws, infer_timeout=self.infer_timeout)
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
             # misconfiguration, not a cold start — surface it immediately instead of retrying to the deadline.

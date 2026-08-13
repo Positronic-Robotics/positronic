@@ -170,7 +170,7 @@ def remote_franka_embodiment(
         keys.ROBOT_COMMAND: Command(
             proxy.commands[keys.ROBOT_COMMAND], roboarm_command.Reset(), Serializers.robot_command
         ),
-        'target_grip': Command(proxy.commands['target_grip'], 0.0, None),
+        keys.TARGET_GRIP: Command(proxy.commands[keys.TARGET_GRIP], 0.0, None),
     }
     return Embodiment(
         descriptor=descriptor,

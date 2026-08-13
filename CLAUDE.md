@@ -1,4 +1,7 @@
 # Contributor behavior
+- Read [`pimm/README.md`](pimm/README.md) before writing or reviewing a control system, a world or
+  anything wired into one — it is the runtime everything here runs on, and `ARCHITECTURE.md` states
+  what this repository builds on top of it
 - Read `CODE_RULES.md` before writing code here — the named rules it carries govern authoring, not only
   review, and `check-rules` is how you check a change against them
 - Don't restore code that you wrote and I deleted

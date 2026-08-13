@@ -218,7 +218,7 @@ class TestActionHorizonWrapping:
         wrapped = ActionHorizon(0.5).wrap(endpoint)
 
         session = wrapped.new_session()
-        actions = session({'obs_time_ns': 0})
+        actions = session({keys.OBS_TIME_NS: 0})
         assert actions is not None
         assert len(actions) == 3  # 2 within-horizon actions + horizon sentinel
         assert actions[0]['timestamp'] == 0.0
@@ -257,7 +257,7 @@ def test_records_infer_span_without_scheduling_wrapper(tmp_path):
     endpoint, _ = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
     session = endpoint.new_session()
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-span'):
-        assert session({'obs_time_ns': 0}) is not None
+        assert session({keys.OBS_TIME_NS: 0}) is not None
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     assert [s.name for s in spans] == [telemetry_keys.SPAN_POLICY_INFER]
 
@@ -276,7 +276,7 @@ def test_infer_span_excludes_client_side_image_preparation(tmp_path):
 
     with patch('positronic.policy.remote.encode_jpeg', side_effect=_stamp_encode):
         with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-prep'):
-            session({'cam': _make_image(48, 64), 'obs_time_ns': 0})
+            session({'cam': _make_image(48, 64), keys.OBS_TIME_NS: 0})
 
     (span,) = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
     assert span.name == telemetry_keys.SPAN_POLICY_INFER
@@ -292,7 +292,7 @@ def test_records_infer_span_when_inference_raises(tmp_path):
     session = endpoint.new_session()
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-raise'):
         with pytest.raises(TimeoutError):
-            session({'obs_time_ns': 0})
+            session({keys.OBS_TIME_NS: 0})
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     assert [s.name for s in spans] == [telemetry_keys.SPAN_POLICY_INFER]
 
@@ -327,12 +327,12 @@ def test_declared_stack_built_at_session_open():
     clock = [1.0]
     policy, mock_ws = _mock_remote_policy(CHUNKED_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}])
     session = policy.new_session(now=lambda: clock[0])
-    actions = session({'obs_time_ns': 0})
+    actions = session({keys.OBS_TIME_NS: 0})
     assert actions == [{'a': 1, 'timestamp': 1.0}]
 
 
 def test_unknown_declared_entry_fails_before_motion():
-    policy, _ = _mock_remote_policy({'local_stack': {'name': 'run_arbitrary_code'}, 'positronic_version': '9.9.9'})
+    policy, _ = _mock_remote_policy({'local_stack': {'name': 'run_arbitrary_code'}, keys.POSITRONIC_VERSION: '9.9.9'})
     with pytest.raises(ValueError, match='9.9.9'):
         policy.new_session()
 
@@ -422,7 +422,7 @@ class TestServedCommandDecode:
         wire_action = [{keys.ROBOT_COMMAND: self._wire_command(), 'timestamp': 0.0}]
         policy, _ = _mock_remote_policy(CHUNKED_STACK, infer_return=wire_action)
 
-        actions = policy.new_session(now=lambda: 0.0)({'obs_time_ns': 0})
+        actions = policy.new_session(now=lambda: 0.0)({keys.OBS_TIME_NS: 0})
 
         assert actions is not None, 'the chunk was swallowed before any command reached a driver'
         assert isinstance(actions[0][keys.ROBOT_COMMAND], command.CartesianPosition)
@@ -433,7 +433,7 @@ class TestServedCommandDecode:
         served = make_mock_policy([{keys.ROBOT_COMMAND: self._wire_command(), 'timestamp': 0.0}], {'model_name': 'm'})
         host, port, _ = start_server(ChunkedSchedule() | remote | PolicySource(served))
 
-        actions = RemotePolicy(f'{host}:{port}').new_session(now=lambda: 0.0)({'obs_time_ns': 0})
+        actions = RemotePolicy(f'{host}:{port}').new_session(now=lambda: 0.0)({keys.OBS_TIME_NS: 0})
 
         assert actions is not None, 'the chunk was swallowed before any command reached a driver'
         decoded = actions[0][keys.ROBOT_COMMAND]

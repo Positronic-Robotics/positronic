@@ -1,7 +1,7 @@
 ---
 name: address-review
 description: Respond to GitHub PR review comments in one pass — fetch, triage (agree or disagree), fix the valid ones, commit, push, reply to all, and resolve only the threads you fixed (declines, defers, and discussion questions stay open for the human). Use when a PR has reviewer or bot (e.g. Codex) comments to address.
-allowed-tools: Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git diff:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(awk:*), Bash(gh api:*), Bash(gh pr:*), Bash(gh repo:*), Bash(gh run:*), Bash(uv run:*), Bash(bash .claude/skills/address-review/watch.sh:*), Edit, Write
+allowed-tools: Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git diff:*), Bash(git rev-parse:*), Bash(git remote:*), Bash(awk:*), Bash(gh api:*), Bash(gh pr:*), Bash(gh repo:*), Bash(gh run:*), Bash(uv run:*), Bash(bash .claude/skills/address-review/watch.sh:*), Edit, Write, Skill(check-rules), Task
 ---
 
 # Address Review Comments
@@ -27,6 +27,14 @@ needs their call. A red build is never "done", no matter what the reviewer says.
   especially a bot — can be wrong, stale, or missing project context. Check intent before
   deciding: `git show <sha>`, the surrounding code, and any design docs. The code may be
   intentional.
+- **Do the research before you decide, not after.** Most findings rest on a claim about how
+  something behaves — "a valid backend leaves this field unset", "a custom config could name
+  different cameras". That is a fact, not a matter of taste, and deciding it from what happens
+  to be in front of you is the most common way this skill goes wrong. Go and establish it:
+  read the dependency's own source (vendor forks and third-party packages are usually checked
+  out beside this repo), grep every construction of the type in question, run the thing. A
+  premise you could have checked and did not is not grounds for either a decline or a
+  question — it is unfinished work. Verdicts carry the evidence that settled them.
 - **Fix → push → reply → resolve, in that order.** Reply text references the commit that
   fixed it, so the fix must land first.
 - **Every thread you fixed MUST be resolved — and only those.** Once a bot comment's fix is
@@ -111,8 +119,17 @@ For each open comment, decide and note severity if the bot tagged one (e.g. Code
 Present the triage as a short numbered list: comment → verdict → planned fix.
 
 **Autonomy:** invoking this skill authorizes the cycle. Act on clear-cut fixes and clear
-declines without prompting. Pause and confirm only when a fix is risky, large, or whether
-to agree is unclear. The user may drop or override any item.
+declines without prompting. "Unclear" is a verdict you reach after the research above, never
+before it — a question you could have answered by reading the code costs the user a round trip
+and comes back as *go and find out*, which is the same work plus a delay. Pause and confirm
+only for what research cannot settle: a preference, a cost, a scope call, or a change whose
+blast radius is genuinely the user's to accept. The user may drop or override any item.
+
+When you do bring something back, explain it in full and in plain words: what the thing is and
+how it works, what the reviewer asked for, what you did or did not do and why, and what each
+option costs. No jargon the explanation itself does not define, short sentences, and enough
+context that the decision can be made without opening the diff. One point at a time unless
+asked otherwise.
 
 ## Step 3: Fix
 
@@ -127,6 +144,16 @@ fixes, re-read each touched file in its entirety and run the design-integrity an
 comments checks from the `polish` skill (Steps 2 and 4 there) over it — explicitly
 including the structural-twins check. Fix what emerges before committing; fold those
 changes into the same commit and mention them in the relevant replies.
+
+**Then run `check-rules`, once.** After the polish pass above has settled, run the
+`check-rules` skill a single time over this pass's changes; skip it when the pass changed
+no code (a decline/defer/discuss-only round has nothing to check). One run, at this point:
+run it earlier and the polish fixes land behind it unchecked; run it every iteration and
+each round pays its one-agent-per-rule fan-out. Fix the violations it reports and fold the
+fixes into the same commit — without re-running it on them. Those fixes, like any late
+arrivals folded in at Step 4, land behind the check: the single run bounds the pass's cost,
+and the reviewer's re-review of the pushed commit backstops what slips through. A finding
+you judge wrong is a note in the Step 6 report, not a new waiver.
 
 ## Step 4: Verify, commit, push
 
@@ -222,6 +249,9 @@ and the human resolves when satisfied.
 
 Summarize:
 - a table of comment → verdict → fix (with commit SHA),
+- what `check-rules` found and you fixed (by rule id), the waivers it honoured (with their
+  reasons — a rule silenced by a waiver must not read as one that passed), and any finding
+  you judged wrong,
 - what was pushed,
 - which threads you resolved (fixes only) vs left open (declines / defers / discussion),
 - any follow-ups the user should track.
@@ -286,7 +316,11 @@ When the watcher exits and you are re-invoked:
   **Stop-guard:** if the round only re-flags comments you already declined (Codex re-posts
   declined items as fresh threads), that is **not** convergence — reply once more pointing at
   your prior reasoning, then **stop and surface it for the user**; never loop into forcing a
-  fix you disagree with.
+  fix you disagree with. The guard is for refusing a fix you disagree with, not for skipping
+  the work: before invoking it, check whether the disagreement rests on a claim about how
+  something behaves, and if it does, go and settle it. A reviewer re-flagging an item — or
+  contradicting its own earlier round — usually means one side's premise is wrong, and which
+  side is a question the source answers.
 - **exit 20** — converged: CI is green on the pushed commit, a reviewer signed off (Codex 👍
   newer than your push, or a human approval), and every comment carries your reply (open
   declines / defers / discussions are fine). Give the final report and **notify the user** (a

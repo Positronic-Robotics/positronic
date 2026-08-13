@@ -58,4 +58,5 @@ class LiberoAdapter(WireCommandAdapter):
         return {'sim_state': raw_obs['sim_state']}
 
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
+        # ``done`` is LIBERO's success check rather than a step limit, so reaching it is the success.
         return {keys.EVAL_SUCCESS: True} if result[protocol.FRAME_DONE] else None

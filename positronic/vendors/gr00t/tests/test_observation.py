@@ -1,28 +1,33 @@
 """Tests for GrootObservationCodec."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from positronic import geom, keys
+from positronic.vendors.gr00t import GRIP, JOINT_POSITION, LANGUAGE, MODALITY_CONFIGS, VIDEO, ModalityConfig, codecs
 from positronic.vendors.gr00t.codecs import GrootObservationCodec
+from positronic.vendors.gr00t.server import _warm_observation
 
 RotRep = geom.Rotation.Representation
 
 
+@pytest.fixture
+def sample_inputs():
+    """Sample raw inputs for inference encoding."""
+    return {
+        keys.EE_POSE: np.array([0.1, 0.2, 0.3, 0.0, 0.0, 0.0, 1.0]),  # xyz + quat (w,x,y,z)
+        keys.GRIP: np.array([0.5]),
+        keys.JOINTS: np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]),
+        keys.WRIST_IMAGE: np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8),
+        keys.EXTERIOR_IMAGE: np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8),
+        keys.TASK: 'pick up the cube',
+    }
+
+
 class TestGrootObservationCodec:
     """Tests for GrootObservationCodec training and inference modes."""
-
-    @pytest.fixture
-    def sample_inputs(self):
-        """Sample raw inputs for inference encoding."""
-        return {
-            keys.EE_POSE: np.array([0.1, 0.2, 0.3, 0.0, 0.0, 0.0, 1.0]),  # xyz + quat (w,x,y,z)
-            keys.GRIP: np.array([0.5]),
-            keys.JOINTS: np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]),
-            keys.WRIST_IMAGE: np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8),
-            keys.EXTERIOR_IMAGE: np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8),
-            keys.TASK: 'pick up the cube',
-        }
 
     # --- Inference encoding tests ---
 
@@ -166,17 +171,6 @@ class TestGrootObservationCodec:
         assert result['video']['wrist_image'].shape == (1, 1, 128, 128, 3)
         assert result['video']['exterior_image_1'].shape == (1, 1, 128, 128, 3)
 
-    @pytest.mark.parametrize(
-        'rotation_rep, include_joints', [(None, False), (RotRep.ROT6D, False), (None, True), (RotRep.ROT6D, True)]
-    )
-    def test_dummy_encoded_shape(self, rotation_rep, include_joints):
-        """Test that dummy_encoded() produces valid encoded observations for all variants."""
-        codec = GrootObservationCodec(rotation_rep=rotation_rep, include_joints=include_joints)
-        result = codec.dummy_encoded()
-        assert 'video' in result
-        assert 'state' in result
-        assert 'language' in result
-
     def test_custom_camera_keys(self, sample_inputs):
         """Test custom camera key mapping."""
         sample_inputs['cam1'] = sample_inputs.pop(keys.WRIST_IMAGE)
@@ -187,3 +181,48 @@ class TestGrootObservationCodec:
 
         assert result['video']['wrist_image'].shape == (1, 1, 224, 224, 3)
         assert result['video']['exterior_image_1'].shape == (1, 1, 224, 224, 3)
+
+
+def _shapes(observation: dict) -> dict:
+    """The nested observation reduced to the shape of every leaf, which is what a backend accepts or rejects."""
+    return {name: {key: np.asarray(v).shape for key, v in block.items()} for name, block in observation.items()}
+
+
+# Each pair is one deployment's codec and the GR00T modality config it was trained under. They must describe the
+# same observation, and until the fork's own config module can be read from here, this is what says so.
+# rules-allow: hardcoded-keys — the pairing is the assertion; reading it from the code under test would pass
+# whatever that code held.
+@pytest.mark.parametrize(
+    'codec_name, modality_config',
+    [
+        ('ee_quat', 'ee'),
+        ('ee_quat_joints', 'ee_q'),
+        ('ee_rot6d', 'ee_rot6d'),
+        ('ee_rot6d_joints', 'ee_rot6d_q'),
+        ('ee_rot6d', 'ee_rot6d_rel'),
+        ('ee_rot6d_joints', 'ee_rot6d_q_rel'),
+        ('joints_traj', 'joints'),
+    ],
+)
+def test_warmup_observation_matches_what_the_paired_codec_encodes(codec_name, modality_config, sample_inputs):
+    encoded = getattr(codecs, codec_name).instantiate().encode(sample_inputs)
+
+    warm = _warm_observation(MODALITY_CONFIGS[modality_config])
+
+    assert _shapes(warm) == _shapes(encoded)
+
+
+def test_a_custom_config_warms_at_the_cameras_and_language_field_it_declares():
+    # Names GR00T's other embodiments use, which none of the configs shipped here declare.
+    camera, task_key = 'ego_view', 'annotation.human.coarse_action'
+    custom = ModalityConfig(
+        path=Path('gr00t/configs/data/my_own.py'),
+        state={GRIP: 1, JOINT_POSITION: 7},
+        cameras=(camera,),
+        task_key=task_key,
+    )
+
+    warm = _warm_observation(custom)
+
+    assert set(warm[VIDEO]) == {camera}
+    assert set(warm[LANGUAGE]) == {task_key}

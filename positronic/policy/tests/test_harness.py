@@ -334,7 +334,7 @@ def test_harness_emits_cartesian_move(world):
     assert obs['descriptor'] == ''  # no descriptor passed -> empty string reaches the policy
     # Recording == canonical policy I/O: the policy sees the same ``robot_state`` serializer
     # the dataset records. wall/obs timestamps carry volatile values, so lock the stable key set.
-    assert set(obs) - {'wall_time_ns', 'obs_time_ns'} == {
+    assert set(obs) - {keys.WALL_TIME_NS, keys.OBS_TIME_NS} == {
         CAM,
         keys.JOINTS,
         keys.JOINT_VEL,
@@ -610,6 +610,7 @@ def test_trial_timeout_self_terminates(world):
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
     assert stops[0].static_data[keys.EVAL_TERMINATED] is False
+    assert keys.EVAL_SUCCESS not in stops[0].static_data
     assert isinstance(_last_command(p), Reset)
 
 

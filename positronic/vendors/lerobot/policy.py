@@ -3,10 +3,12 @@ from typing import Any
 import numpy as np
 import torch
 from lerobot.configs.policies import PreTrainedConfig
+from lerobot.configs.types import FeatureType
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 
 from positronic import keys
 from positronic.policy import Policy, Session
+from positronic.policy.observation import TASK_FIELD
 
 
 def _detect_device() -> str:
@@ -39,7 +41,7 @@ class _LerobotSession(Session):
     def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
         obs_int = {}
         for key, val in obs.items():
-            if key == 'task':
+            if key == TASK_FIELD:
                 obs_int[key] = val
             elif isinstance(val, np.ndarray):
                 if key.startswith('observation.images.'):
@@ -68,6 +70,24 @@ class _LerobotSession(Session):
         return self._meta
 
 
+def warm_observation(config: PreTrainedConfig) -> dict[str, Any]:
+    """Zero-filled inputs matching the features ``config`` declares.
+
+    Taken from the policy that was built rather than read from the checkpoint a second time. Visual features
+    are declared channels-first and arrive here channels-last, the way a session takes them.
+    """
+    if not config.input_features:
+        raise ValueError('The policy declares no input features, so there is nothing to warm it with')
+    obs: dict[str, Any] = {TASK_FIELD: ''}
+    for name, feature in config.input_features.items():
+        if feature.type is FeatureType.VISUAL:
+            channels, height, width = feature.shape
+            obs[name] = np.zeros((height, width, channels), dtype=np.uint8)
+        else:
+            obs[name] = np.zeros(feature.shape, dtype=np.float32)
+    return obs
+
+
 class LerobotPolicy(Policy):
     def __init__(self, checkpoint_path: str, device: str | None = None, extra_meta: dict[str, Any] | None = None):
         self._device = device or _detect_device()
@@ -76,6 +96,11 @@ class LerobotPolicy(Policy):
         self._policy = policy_cls.from_pretrained(checkpoint_path).to(self._device)
         self._preprocessor, self._postprocessor = make_pre_post_processors(config, pretrained_path=checkpoint_path)
         self._meta = {**(extra_meta or {}), keys.TYPE: config.type}
+
+    @property
+    def config(self) -> PreTrainedConfig:
+        """The checkpoint's own declaration of what this policy takes."""
+        return self._policy.config
 
     def new_session(self, context=None, now=None):
         self._policy.reset()

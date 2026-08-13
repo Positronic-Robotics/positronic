@@ -57,7 +57,9 @@ def update_v0_1_0(path: str):
                 keys.WRIST_IMAGE: 'image.handcam_left',
                 keys.EXTERIOR_IMAGE: 'image.back_view',
             }),
-            Identity(select=['grip', 'target_grip', 'mjSTATE_FULLPHYSICS', 'mjSTATE_INTEGRATION', 'mjSTATE_WARMSTART']),
+            Identity(
+                select=[keys.GRIP, keys.TARGET_GRIP, 'mjSTATE_FULLPHYSICS', 'mjSTATE_INTEGRATION', 'mjSTATE_WARMSTART']
+            ),
         ),
     )
 

@@ -17,6 +17,7 @@ from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import DLSIKSolver, DLSIKSolverWithLimits, LMIKSolver
 from positronic.policy.action import IKJointsAction
 from positronic.policy.codec import Codec, lerobot_action, lerobot_image, lerobot_state
+from positronic.vendors.dreamzero import roboarena
 
 IMAGE_WIDTH = 320
 IMAGE_HEIGHT = 176
@@ -108,28 +109,17 @@ class DreamZeroObservationCodec(Codec):
         grip = np.asarray(inputs[keys.GRIP], dtype=np.float32).reshape(-1)
 
         obs = {
-            'observation/joint_position': joint_pos,
-            'observation/gripper_position': grip,
-            'observation/wrist_image_left': self._encode_image(self._wrist_camera, inputs),
-            'observation/exterior_image_0_left': self._encode_image(self._exterior_camera_1, inputs),
-            'observation/exterior_image_1_left': self._encode_image(self._exterior_camera_2, inputs),
+            roboarena.JOINT_POSITION: joint_pos,
+            roboarena.GRIPPER_POSITION: grip,
+            roboarena.WRIST_IMAGE: self._encode_image(self._wrist_camera, inputs),
+            roboarena.exterior_image(0): self._encode_image(self._exterior_camera_1, inputs),
+            roboarena.exterior_image(1): self._encode_image(self._exterior_camera_2, inputs),
         }
 
         if keys.TASK in inputs:
-            obs['prompt'] = inputs[keys.TASK]
+            obs[roboarena.PROMPT] = inputs[keys.TASK]
 
         return obs
-
-    def dummy_encoded(self, data=None) -> dict[str, Any]:
-        w, h = self._image_size
-        return {
-            'observation/joint_position': np.zeros(7, dtype=np.float32),
-            'observation/gripper_position': np.zeros(1, dtype=np.float32),
-            'observation/wrist_image_left': np.zeros((h, w, 3), dtype=np.uint8),
-            'observation/exterior_image_0_left': np.zeros((h, w, 3), dtype=np.uint8),
-            'observation/exterior_image_1_left': np.zeros((h, w, 3), dtype=np.uint8),
-            'prompt': 'warmup',
-        }
 
     @property
     def meta(self):
@@ -182,7 +172,7 @@ class DreamZeroActionCodec(Codec):
         action = data['action']
         joints = action[: self._num_joints]
         grip = action[self._num_joints].item()
-        return {keys.ROBOT_COMMAND: command.JointPosition(positions=joints), 'target_grip': grip}
+        return {keys.ROBOT_COMMAND: command.JointPosition(positions=joints), keys.TARGET_GRIP: grip}
 
     @property
     def training_encoder(self):
@@ -223,7 +213,7 @@ def dreamzero_action(tgt_joints_key: str, tgt_grip_key: str, num_joints: int):
 # Composed codec: DreamZero observation + action + timing. compose defaults to the full chunk
 # (horizon=None), so all 24 actions DreamZero returns execute and the re-query aligns with the
 # frame-stack window.
-_action = dreamzero_action.override(tgt_joints_key=keys.TARGET_JOINTS, tgt_grip_key='target_grip')
+_action = dreamzero_action.override(tgt_joints_key=keys.TARGET_JOINTS, tgt_grip_key=keys.TARGET_GRIP)
 joints = codecs.compose.override(obs=dreamzero_obs, action=_action, fps=15.0)
 
 # The pretrained DROID model (wan2.1) asserts exactly 320x180 frames; the wan2.2 fine-tunes resize the
@@ -234,7 +224,7 @@ _traj_action = dreamzero_action.override(tgt_joints_key=keys.JOINTS, tgt_grip_ke
 joints_traj = codecs.compose.override(obs=dreamzero_obs, action=_traj_action, fps=15.0)
 
 # IK variants: reconstruct joint targets from recorded EE targets via IK
-_ik_action = codecs.ik_joints_action.override(tgt_joints_key=keys.TARGET_JOINTS, tgt_grip_key='target_grip')
+_ik_action = codecs.ik_joints_action.override(tgt_joints_key=keys.TARGET_JOINTS, tgt_grip_key=keys.TARGET_GRIP)
 
 
 @cfn.config(solver='dls_limits')
@@ -242,7 +232,7 @@ def _ik_dreamzero_action(solver: str):
     """IK signal derivation composed with DreamZero action codec."""
     solver_map = {'lm': LMIKSolver, 'dls': DLSIKSolver, 'dls_limits': DLSIKSolverWithLimits}
     ik = IKJointsAction(solver_cls=solver_map[solver])
-    return ik | DreamZeroActionCodec(tgt_joints_key=keys.TARGET_JOINTS, tgt_grip_key='target_grip')
+    return ik | DreamZeroActionCodec(tgt_joints_key=keys.TARGET_JOINTS, tgt_grip_key=keys.TARGET_GRIP)
 
 
 joints_ik = codecs.compose.override(obs=dreamzero_obs, action=_ik_dreamzero_action, fps=15.0)

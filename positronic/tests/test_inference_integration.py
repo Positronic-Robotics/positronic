@@ -12,12 +12,12 @@ import pimm
 import positronic.cfg.simulator
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg.eval.sim.positronic import stack_cubes
+from positronic.cli.eval.run import main
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
-from positronic.inference import main
 from positronic.policy.tests.test_harness import RemoteStubPolicy, StubPolicy
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.simulator.env_server import telemetry as env_telemetry

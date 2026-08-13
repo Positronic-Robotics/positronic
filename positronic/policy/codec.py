@@ -80,16 +80,6 @@ class Codec(PolicyWrapper):
     def meta(self) -> dict:
         return {}
 
-    def dummy_encoded(self, data: dict | None = None) -> dict:
-        """Return a dummy version of what ``encode()`` would produce.
-
-        Each codec contributes its part of the encoded output. The default
-        pass-through returns the input unchanged — codecs that don't transform
-        observations (action decoders, timing) inherit this behavior.
-        Composed codecs pipeline left-to-right, mirroring ``encode()``.
-        """
-        return data or {}
-
     def wrap_session(self, inner: Session, context, now):
         return _CodecSession(inner, self)
 
@@ -193,9 +183,6 @@ class _ComposedCodec(Codec):
     def to_spec(self):
         return {SEQ: [self._left.to_spec(), self._right.to_spec()]}
 
-    def dummy_encoded(self, data=None):
-        return self._right.dummy_encoded(self._left.dummy_encoded(data))
-
 
 class _ParallelCodec(Codec):
     """Two codecs composed via ``&``. Both see the same input, outputs merged."""
@@ -225,9 +212,6 @@ class _ParallelCodec(Codec):
     def to_spec(self):
         return {PAR: [self._left.to_spec(), self._right.to_spec()]}
 
-    def dummy_encoded(self, data=None):
-        return {**self._left.dummy_encoded(data), **self._right.dummy_encoded(data)}
-
 
 def is_action(entry: dict) -> bool:
     """True for a real command entry, False for a keyless validity sentinel.
@@ -236,7 +220,7 @@ def is_action(entry: dict) -> bool:
     (see ``ActionTimestamp``). Consumers that classify or plot per-command fields skip the
     sentinel through this predicate rather than hard-coding its shape.
     """
-    return bool(entry.keys() - {'timestamp'})
+    return bool(entry.keys() - {obs_keys.ACTION_TIMESTAMP})
 
 
 class ActionTimestamp(Codec):
@@ -267,11 +251,11 @@ class ActionTimestamp(Codec):
         # Build fresh entries rather than stamping in place: a session may hand back a cached template
         # list, and appending the sentinel to it would regrow the chunk on every re-inference.
         if isinstance(data, list):
-            stamped = [{**d, 'timestamp': i * self._dt} for i, d in enumerate(data)]
+            stamped = [{**d, obs_keys.ACTION_TIMESTAMP: i * self._dt} for i, d in enumerate(data)]
             if stamped:
-                stamped.append({'timestamp': len(stamped) * self._dt})
+                stamped.append({obs_keys.ACTION_TIMESTAMP: len(stamped) * self._dt})
             return stamped
-        return {**data, 'timestamp': 0}
+        return {**data, obs_keys.ACTION_TIMESTAMP: 0}
 
     @property
     def training_encoder(self) -> EpisodeTransform:
@@ -311,9 +295,9 @@ class ActionHorizon(Codec):
         if isinstance(data, list):
             # Treat untimestamped actions as t=0 so they always pass the horizon
             # (servers may apply horizon truncation before stamping).
-            kept = [d for d in data if d.get('timestamp', 0.0) < self._horizon_sec]
+            kept = [d for d in data if d.get(obs_keys.ACTION_TIMESTAMP, 0.0) < self._horizon_sec]
             if len(kept) < len(data):
-                kept.append({'timestamp': self._horizon_sec})
+                kept.append({obs_keys.ACTION_TIMESTAMP: self._horizon_sec})
             return kept
         return data
 
@@ -388,7 +372,7 @@ class BinarizeGripInference(Codec):
         timing | BinarizeGripInference() | obs & action
     """
 
-    def __init__(self, threshold: float = 0.5, key: str = 'target_grip'):
+    def __init__(self, threshold: float = 0.5, key: str = obs_keys.TARGET_GRIP):
         self._threshold = threshold
         self._key = key
 
@@ -431,8 +415,8 @@ class FlipGrip(Codec):
         return Identity()
 
     def _decode_single(self, data: dict, context: dict | None) -> dict:
-        if 'target_grip' in data:
-            data['target_grip'] = 1.0 - data['target_grip']
+        if obs_keys.TARGET_GRIP in data:
+            data[obs_keys.TARGET_GRIP] = 1.0 - data[obs_keys.TARGET_GRIP]
         return data
 
     def to_spec(self):

@@ -30,7 +30,7 @@ from positronic.utils import package_assets_path
 _ROTMAT = geom.Rotation.Representation.ROTATION_MATRIX
 
 # Logical observation name -> the model camera the sim renders.
-CAMERAS = {'image.agentview': 'agentview'}
+CAMERAS = {keys.EXTERIOR_IMAGE: 'agentview'}
 
 
 class _NeverStop(pimm.SignalReceiver):

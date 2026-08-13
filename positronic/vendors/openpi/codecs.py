@@ -31,6 +31,7 @@ from positronic.dataset.transforms.episode import Derive, Get
 from positronic.drivers.roboarm import command
 from positronic.policy.codec import Codec, lerobot_image, lerobot_state
 from positronic.policy.observation import ObservationCodec as GenericObservationCodec
+from positronic.vendors import openpi
 
 
 class ObservationCodec(Codec):
@@ -83,12 +84,12 @@ class ObservationCodec(Codec):
             state_parts.append(np.asarray(inputs[feature_key], dtype=np.float32).reshape(-1))
 
         obs: dict[str, Any] = {
-            'observation/state': np.concatenate(state_parts) if state_parts else np.empty((0,), dtype=np.float32),
-            'observation/wrist_image': self._encode_image(self._wrist_camera, inputs),
-            'observation/image': self._encode_image(self._exterior_camera, inputs),
+            openpi.STATE: np.concatenate(state_parts) if state_parts else np.empty((0,), dtype=np.float32),
+            openpi.WRIST_IMAGE: self._encode_image(self._wrist_camera, inputs),
+            openpi.IMAGE: self._encode_image(self._exterior_camera, inputs),
         }
         if keys.TASK in inputs:
-            obs['prompt'] = inputs[keys.TASK]
+            obs[openpi.PROMPT] = inputs[keys.TASK]
         return obs
 
     def _encode_image(self, input_key: str, inputs: dict[str, Any]) -> np.ndarray:
@@ -99,17 +100,6 @@ class ObservationCodec(Codec):
             frame = np.asarray(frame)
         w, h = self._image_size
         return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
-
-    def dummy_encoded(self, data=None) -> dict[str, Any]:
-        """Return a zero-filled encoded observation in OpenPI's slash-separated format."""
-        state_dim = sum(self._state_features.values())
-        w, h = self._image_size
-        return {
-            'observation/state': np.zeros(state_dim, dtype=np.float32),
-            'observation/wrist_image': np.zeros((h, w, 3), dtype=np.uint8),
-            'observation/image': np.zeros((h, w, 3), dtype=np.uint8),
-            'prompt': 'warmup',
-        }
 
     @property
     def meta(self):
@@ -142,12 +132,12 @@ ee_joints_obs = observation.override(state_features={keys.EE_POSE: 7, keys.GRIP:
 # trained on lowercased language and MolmoSpaces' Pi baseline normalizes the same way.
 droid_obs = cfn.Config(
     GenericObservationCodec,
-    state={'observation/joint_position': {keys.JOINTS: 7}, 'observation/gripper_position': {keys.GRIP: 1}},
+    state={openpi.JOINT_POSITION: {keys.JOINTS: 7}, openpi.GRIPPER_POSITION: {keys.GRIP: 1}},
     images={
-        'observation/wrist_image_left': (keys.WRIST_IMAGE, (224, 224)),
-        'observation/exterior_image_1_left': (keys.EXTERIOR_IMAGE, (224, 224)),
+        openpi.WRIST_IMAGE_LEFT: (keys.WRIST_IMAGE, (224, 224)),
+        openpi.EXTERIOR_IMAGE_LEFT: (keys.EXTERIOR_IMAGE, (224, 224)),
     },
-    task_field='prompt',
+    task_field=openpi.PROMPT,
     lowercase_task=True,
 )
 
@@ -205,7 +195,7 @@ class PoseDeltaAction(Codec):
         physical = action[:6] * self.OUTPUT_MAX
         delta = geom.Transform3D(translation=physical[:3], rotation=geom.Rotation.from_rotvec(physical[3:6]))
         grip = (float(action[6]) + 1.0) / 2.0
-        return {keys.ROBOT_COMMAND: command.CartesianDelta(delta=delta), 'target_grip': grip}
+        return {keys.ROBOT_COMMAND: command.CartesianDelta(delta=delta), keys.TARGET_GRIP: grip}
 
 
 # Constants pi05_libero's training distribution requires that the env's wire observation does not carry
@@ -232,7 +222,7 @@ class LiberoObservationCodec(Codec):
 
     def __init__(
         self,
-        exterior_camera: str = 'image.agentview',
+        exterior_camera: str = keys.EXTERIOR_IMAGE,
         wrist_camera: str = keys.WRIST_IMAGE,
         image_size: tuple[int, int] = (224, 224),
     ):
@@ -242,12 +232,12 @@ class LiberoObservationCodec(Codec):
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         obs = {
-            'observation/state': self._libero_state(inputs),
-            'observation/wrist_image': self._encode_image(self._wrist_camera, inputs),
-            'observation/image': self._encode_image(self._exterior_camera, inputs),
+            openpi.STATE: self._libero_state(inputs),
+            openpi.WRIST_IMAGE: self._encode_image(self._wrist_camera, inputs),
+            openpi.IMAGE: self._encode_image(self._exterior_camera, inputs),
         }
         if keys.TASK in inputs:
-            obs['prompt'] = inputs[keys.TASK]
+            obs[openpi.PROMPT] = inputs[keys.TASK]
         return obs
 
     def _libero_state(self, inputs: dict[str, Any]) -> np.ndarray:
@@ -268,15 +258,6 @@ class LiberoObservationCodec(Codec):
         frame = np.ascontiguousarray(np.asarray(inputs[input_key])[:, ::-1])
         w, h = self._image_size
         return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
-
-    def dummy_encoded(self, data: dict | None = None) -> dict[str, Any]:
-        w, h = self._image_size
-        return {
-            'observation/state': np.zeros(8, dtype=np.float32),
-            'observation/wrist_image': np.zeros((h, w, 3), dtype=np.uint8),
-            'observation/image': np.zeros((h, w, 3), dtype=np.uint8),
-            'prompt': 'warmup',
-        }
 
     @property
     def meta(self) -> dict[str, Any]:

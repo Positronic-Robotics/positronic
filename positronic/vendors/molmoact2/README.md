@@ -49,7 +49,7 @@ Point the unified `.remote` client at the server (same client as every other ven
 ```bash
 uv run --locked positronic-inference sim \
   --policy=.remote --policy.url=localhost:8000 \
-  --show_gui=True --output_dir=~/datasets/molmoact2_run
+  --output_dir=~/datasets/molmoact2_run
 ```
 
 The model is DROID-pretrained, so its native target is a real franka_droid-style robot. **Sim eval grips

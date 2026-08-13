@@ -25,7 +25,7 @@ from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialize, serialize
-from positronic.vendors.dreamzero import codecs
+from positronic.vendors.dreamzero import codecs, roboarena
 
 logger = logging.getLogger(__name__)
 
@@ -85,15 +85,23 @@ class RoboarenaClient:
         self._host = host
         self._port = port
         self._ws = None
-        self._server_metadata: dict | None = None
+        self._server_config: dict | None = None
 
     def connect(self):
         self._ws = websockets.sync.client.connect(
             f'ws://{self._host}:{self._port}', compression=None, max_size=None, ping_interval=60, ping_timeout=600
         )
         # First message from server is PolicyServerConfig metadata
-        self._server_metadata = deserialize(self._ws.recv())
-        logger.info(f'Connected to roboarena server, metadata: {self._server_metadata}')
+        self._server_config = deserialize(self._ws.recv())
+        logger.info(f'Connected to roboarena server, metadata: {self._server_config}')
+
+    @property
+    def server_config(self) -> dict:
+        """The ``PolicyServerConfig`` this backend announced on connect: which cameras it wants, at what
+        resolution, and whether it tracks sessions."""
+        if self._server_config is None:
+            raise RuntimeError('Not connected: the server announces its config on connect')
+        return self._server_config
 
     def ping(self) -> bool:
         """Check if the roboarena server port is accepting connections.
@@ -130,6 +138,31 @@ class RoboarenaClient:
         if self._ws is not None:
             self._ws.close()
             self._ws = None
+
+
+def _warm_observation(server_config: dict, session_id: str) -> dict[str, Any]:
+    """Zero-filled inputs at the geometry and camera count ``server_config`` announced on connect."""
+    if server_config[roboarena.NEEDS_STEREO_CAMERA]:
+        raise ValueError('roboarena server asks for stereo cameras, which this source does not send')
+    resolution = server_config[roboarena.RESOLUTION]
+    if resolution is None:
+        # Both backbone scripts announce one — wan2.1 pins 320x180, wan2.2 reports whatever it was configured
+        # with — so an absent resolution is the protocol's optional field going unset, not a size to infer.
+        # The codec's geometry is a rig-side setting this source cannot see, and the backbones disagree on it.
+        raise ValueError('roboarena server announced no image resolution, so there is no geometry to warm it at')
+    height, width = resolution
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+    obs: dict[str, Any] = {
+        roboarena.JOINT_POSITION: np.zeros(7, dtype=np.float32),
+        roboarena.GRIPPER_POSITION: np.zeros(1, dtype=np.float32),
+        roboarena.PROMPT: '',
+        roboarena.SESSION_ID: session_id,
+    }
+    if server_config[roboarena.NEEDS_WRIST_CAMERA]:
+        obs[roboarena.WRIST_IMAGE] = frame
+    for i in range(server_config[roboarena.NUM_EXTERIOR_CAMERAS]):
+        obs[roboarena.exterior_image(i)] = frame
+    return obs
 
 
 class DreamZeroSubprocess:
@@ -197,6 +230,22 @@ class DreamZeroSubprocess:
             max_wait=1200.0,
         )
 
+    def warmup(self, on_progress: Callable[[str], None] | None = None):
+        """Run one inference so the backbone's first-call cost is paid before a rig connects.
+
+        On its own connection, because the observation is built from what the server announces there. The
+        backbone keeps per-session frame history, so this resets the session it opened rather than leaving it.
+        """
+        client = RoboarenaClient(port=self.roboarena_port)
+        client.connect()
+        session_id = str(uuid.uuid4())
+        try:
+            obs = _warm_observation(client.server_config, session_id)
+            run_with_progress(lambda: client.infer(obs), 'Running warmup inference', on_progress)
+            client.reset(session_id=session_id)
+        finally:
+            client.close()
+
     def stop(self):
         if self.process is not None:
             self.process.terminate()
@@ -214,7 +263,7 @@ class _DreamZeroSession(Session):
 
     def __call__(self, obs):
         obs = dict(obs)
-        obs['session_id'] = self._session_id
+        obs[roboarena.SESSION_ID] = self._session_id
         action_array = np.asarray(self._client.infer(obs))
 
         # Response is (N, 8) — 7 joints + 1 gripper
@@ -301,6 +350,7 @@ class DreamZeroSource(ModelSource):
         )
         try:
             sp.start(on_progress)
+            sp.warmup(on_progress)
         except Exception:
             sp.stop()
             raise

@@ -56,11 +56,20 @@ uv run positronic-inference sim \
 
 Accepted forms: `host`, `host:port`, and `https://host[:port][/api/v1/session[/<model_id>]]` (`http`, `ws` and `wss` work too), each with an optional query. `https`/`wss` enable TLS. An omitted port is the scheme's own — 443 for TLS and 80 otherwise — so name the port a server listens on (`:8000` for every vendor server's default). Naming no model id serves the checkpoint the server pinned at startup.
 
+**Credentials stay out of the URL**, which is meant to be safe to paste around: they ride headers instead. A server gated on a bearer token — whether it checks the token itself, as every endpoint [`workflows/nebius/serve.sh`](../workflows/nebius/README.md) creates does, or sits behind a proxy that checks it — is reached with `.authed_remote`, which reads the token from `AUTH_TOKEN` and raises if it is unset. For any other scheme, name the headers yourself: `--policy.headers='{"Modal-Key": "..."}'`.
+
+```bash
+uv run positronic-inference sim \
+  --policy=.authed_remote \
+  --policy.url=https://<endpoint-managed-url> \
+  --output_dir=~/datasets/inference_logs/exp_v1
+```
+
 **Session parameters** are the URL's query string: the server applies them as overrides to its pipeline config, so you can tune the served pipeline without restarting the server. Keys are dotted paths into that config and values are JSON literals, forwarded verbatim so they arrive exactly as written (`fps=10`, `pad=false`, `name="s3"`).
 
 The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server launch — `source.*` params are rejected; name a checkpoint in the URL path instead. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).
 
-**Credentials stay out of the URL.** `--policy.headers='{"Modal-Key": "..."}'` passes auth headers for a fronted endpoint, so the URL itself is safe to paste around.
+**Credentials stay out of the URL.** `--policy.headers='{"Modal-Key": "..."}'` passes auth headers for a fronted endpoint, so the URL itself is safe to paste around. Against a Nebius endpoint use `.authed_remote` or `.nebius_remote`, which build the bearer header for you (see [the Nebius workflow README](../workflows/nebius/README.md#authenticated-inference)).
 
 **What crosses the wire is the server's call, not the client's.** A server that wants smaller frames declares `RestrictImageSize` in its rig-side stack (640x640 by default); one behind a proxy with a message-size cap declares `remote(compress_images=True)` and the rig JPEG-encodes frames before sending. A server whose checkpoint speaks a different end-effector frame declares `ChangeEEFrame` with the transform placing that frame relative to the rig's `default`, and the rig converts poses (see [End-effector frames](codecs.md#end-effector-frames)). The client builds whatever the handshake declares, and only that — connecting to a server that declares no stack fails with an error naming the version it runs. What the declared stack must achieve is checked where it matters: the harness refuses to emit an action scheduled further than `MAX_ACTION_SKEW_SEC` from now, which is what a stack that never anchored its chunk to the rig's clock produces.
 
@@ -72,22 +81,57 @@ Load model directly on robot/simulator machine. Only ACT is supported locally (G
 
 ```bash
 uv run positronic-inference sim \
-  --policy=@positronic.cfg.policy.act_absolute \
+  --policy=@positronic.vendors.lerobot_0_3_3.policy.act_absolute \
   --policy.base.checkpoints_dir=~/checkpoints/lerobot/experiment_v1/ \
   --policy.base.checkpoint=10000
 ```
 
 Use local when latency is critical (<50ms), robot has built-in GPU, or offline operation required. Use remote when GPU server is separate, models are heavy, or multiple robots share one server.
 
-## Inference Drivers
+## Who Decides Episode Boundaries
 
-Positronic provides two interactive drivers for managing inference episodes (see [`positronic/inference.py`](../positronic/inference.py)), plus an unattended mode:
+Something has to say when an episode starts, finishes or is abandoned. `positronic-inference` ships two commands, one per answer (see [`positronic/inference.py`](../positronic/inference.py)):
 
-**Unattended (automatic):** The default for `sim` — runs `--eval.trial_count=10` episodes back-to-back, each ending when the task's `timeout` expires (override with `--eval.timeout=60`, seconds per episode); optionally `--show_gui=True` for DearPyGui visualization. Useful for batch evaluation without manual intervention.
+**Unattended (`sim`):** the harness self-drives the eval's trial plan — `--eval.trial_count=10` episodes back-to-back, each ending when the task's `timeout` expires (override with `--eval.timeout=60`, seconds per episode). Batch evaluation with nobody in the loop.
 
-**Keyboard driver (manual):** Control inference with keyboard. Press `s` to start episode, `p` to stop and save, `r` to home the robot, `q` to quit. The default for `real`; optionally pass `--driver.show_gui=True` for DearPyGui visualization. Useful for manual evaluation and debugging.
+**Keyboard (`real`):** press `s` to start an episode, `p` to stop and save, `r` to home the robot, `q` to quit. Headless — it renders nothing — and it takes `--task`, `--embodiment`, `--policy` and `--output_dir`. Manual evaluation and debugging on hardware.
 
-**Eval UI driver:** Dedicated evaluation interface for policy assessment. The default for `phail` — graphical controls and metrics visualization. Useful for systematic policy evaluation with visual feedback.
+### A console of your own
+
+Anything richer — a web console, a foot pedal, a rig UI — is a binary of its own rather than a plug-in: it composes its own `pimm.World` out of the public pieces, and nothing in the library needs to know which surface is driving. The shape, for a **hardware** embodiment:
+
+```python
+from contextlib import nullcontext
+
+import pimm
+from positronic import wire
+from positronic.cli.eval.run import completion_sink, prepare_output_dir
+from positronic.dataset.local_dataset import LocalDatasetWriter
+from positronic.policy.harness import Harness
+
+# The setup under the `try` can raise — `prepare_output_dir` syncs a directory and snapshots
+# sources into it, `LocalDatasetWriter` scans the one it is given — and the policy is yours to
+# close from the moment you first touch it.
+try:
+    # `None` where the run records nothing, which is why the writer is a nullcontext below.
+    output_dir = prepare_output_dir(policy, output_dir)
+    harness = Harness(policy, embodiment, on_episode_complete=completion_sink(policy))
+    console = MyConsole()  # emits positronic.policy.harness.Directive
+
+    writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
+    with writer_cm as writer, pimm.World() as world:
+        ds_agent = wire.wire_embodiment(world, harness, embodiment, writer)
+        world.connect(console.directives, harness.directive)
+        if ds_agent is not None:
+            world.connect(harness.ds_command, ds_agent.command)
+        world.run([harness, console], [*embodiment.control_systems, ds_agent])
+finally:
+    policy.close()
+```
+
+**A simulated embodiment is not this.** Three things change together, and a copy of the shape above records a sim run against the wall clock: the world takes `virtual_time=True`, `wire_embodiment` takes `TimeMode.MESSAGE`, and the producers are scheduled in the foreground beside the harness rather than as background processes, so one scheduler round is one control period. `_run_world` in [`positronic/cli/eval/run.py`](../positronic/cli/eval/run.py) is the worked version, including why the ordering within a round is what it is.
+
+The world stops when any of its control systems returns, so the console ends the run by returning from its loop. To show the cameras, connect every observation whose name starts with `positronic.keys.IMAGE_PREFIX` into a viewer's `cameras` — `positronic.gui.dpg_ui()` is one, and the naming convention is what identifies a camera on the wire. To let the operator jog the arm between episodes, emit robot commands into `harness.manual_command`, which the harness applies only while idle.
 
 ## Recording and Replay
 
