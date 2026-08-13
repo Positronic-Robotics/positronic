@@ -10,6 +10,13 @@ from positronic.utils import nebius
 
 
 @cfn.config()
+def unset():
+    """No policy. It lives in this package so a relative `--policy=.act` still resolves against it,
+    and instantiates to None rather than raising, so the absence is a value a caller can act on."""
+    return None
+
+
+@cfn.config()
 def placeholder():
     raise RuntimeError(
         'This config is not supposed to be instantiated, '

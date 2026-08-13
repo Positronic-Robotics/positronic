@@ -8,11 +8,13 @@ from pathlib import Path
 
 import configuronic as cfn
 import pos3
+from platform_client.responses import SubmissionCreateResponse
 
 import pimm
 import positronic.cfg.policy as policy_cfg
 from positronic import telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import placeholder
+from positronic.cli.eval.submit import submit
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.eval import Embodiment, Eval, Task
@@ -210,14 +212,59 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
         policy.close()
 
 
-@cfn.config(eval=placeholder, policy=policy_cfg.placeholder)
-def run(eval: Eval, policy, output_dir=None, inference_latency=False, timing=False):
+def _refuse(inapplicable: dict[str, object], where: str) -> None:
+    """Stop on an argument the chosen half of `run` cannot honour.
+
+    Dropping one silently hands back a run the caller believes they shaped. Every "not asked for"
+    value is falsy, which is what makes the test the value itself.
+    """
+    asked = sorted(flag for flag, value in inapplicable.items() if value)
+    if asked:
+        raise SystemExit(f'a {where} run has no {", ".join(asked)}')
+
+
+@cfn.config(eval=placeholder, policy=policy_cfg.unset)
+def run(
+    eval: Eval | str,
+    policy,
+    output_dir=None,
+    inference_latency=False,
+    timing=False,
+    policy_image: str | None = None,
+    alias: str | None = None,
+    transaction_key: str | None = None,
+    platform_url: str | None = None,
+) -> SubmissionCreateResponse | None:
     """Run a selected eval (embodiment + task + its trial sweep) through the shared inference harness.
+
+    Here by default: ``--eval`` is an eval config and ``--policy`` the policy that drives it.
+    ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the
+    eval of that NAME on the embodiment the eval names — ``--eval=robolab.public_subset``, not a
+    config, since the platform owns the evals it offers. What comes back is a submission id, which
+    ``positronic eval status`` reads.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
     simulated eval; reduce them with ``positronic eval timing-report``.
+
+    A platform run returns what the platform created, so a caller holding this function has the
+    submission id without parsing what was printed. A local run's result is the dataset it wrote.
     """
-    # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob
-    # (sim inference-cost simulation). Overlay it onto every trial context, then self-drive the eval.
-    eval = replace(eval, trials=[{**trial, 'inference_latency': inference_latency} for trial in eval.trials])
-    main(policy=policy, evals=[eval], output_dir=output_dir, timing=timing)
+    if policy_image is None:
+        if policy is None:
+            raise SystemExit('--policy is required to run here; --policy-image runs it on the platform instead')
+        _refuse({'--alias': alias, '--transaction-key': transaction_key, '--platform-url': platform_url}, 'local')
+        if not isinstance(eval, Eval):
+            raise SystemExit(f'--eval={eval!r} is a name, not a config: pass --policy-image to run it on the platform')
+        # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob
+        # (sim inference-cost simulation). Overlay it onto every trial context, then self-drive the eval.
+        eval = replace(eval, trials=[{**trial, 'inference_latency': inference_latency} for trial in eval.trials])
+        main(policy=policy, evals=[eval], output_dir=output_dir, timing=timing)
+        return None
+
+    if policy is not None:
+        raise SystemExit('--policy runs the eval here and --policy-image runs it on the platform; pass one')
+    if not isinstance(eval, str):
+        raise SystemExit('the platform names its own evals: pass --eval=<name>, e.g. --eval=robolab.public_subset')
+    # The platform owns its own trial sweep, its own output and its own telemetry.
+    _refuse({'--output-dir': output_dir, '--inference-latency': inference_latency, '--timing': timing}, 'platform')
+    return submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)

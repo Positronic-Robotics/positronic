@@ -46,6 +46,15 @@ repos:
         files: '^(uv\.lock|stubs/mujoco/.*|utilities/generate_mujoco_stubs\.py)$'
         pass_filenames: false
         stages: [pre-commit]
+      - id: client-version-bump
+        name: a changed client declares a new version, and the root pins it
+        # Reads git and both manifests, so takes no filenames. Scoped to the paths that can put the
+        # three out of step: the shipped client, its manifest, and the root's pin.
+        entry: uv run --locked python3 utilities/check_client_version_bump.py
+        language: system
+        files: '^(client/.*|pyproject\.toml)$'
+        pass_filenames: false
+        stages: [pre-commit]
       - id: basedpyright-baseline-ratchet
         name: basedpyright baseline is a one-way ratchet
         # Reads the baseline and git directly, so takes no filenames; scoped to fire only when
