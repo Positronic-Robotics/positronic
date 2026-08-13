@@ -20,9 +20,7 @@ from pydantic import AfterValidator, AwareDatetime, BaseModel, Discriminator, Fi
 
 
 def _public(status: SubmissionStatus) -> SubmissionStatus:
-    """A status as a CALLER may see it. `submitting` is the gateway's internal claim state, which it
-    reports as `pending`; a payload carrying it is a gateway that forgot, and is refused here rather
-    than left for every consumer to normalise."""
+    """A status as a CALLER may see it: `submitting` is an internal claim state, reported as `pending`."""
     if status is SubmissionStatus.submitting:
         raise ValueError(f'{status.name} is an internal state and never reaches a caller')
     return status
@@ -117,13 +115,7 @@ class MeResponse(BaseModel):
 
 
 class _ReasonBearing(BaseModel):
-    """A flat submission row carrying the terminal-failure taxonomy.
-
-    `ReasonCode` says why a run FAILED, so it belongs to `errored` and to no other status. Holding
-    the two fields together here is what refuses a `pending` payload carrying `image_unpullable` —
-    which would otherwise validate and be reported as an accepted submission. The `submissions.get`
-    variants state the same rule by giving `reason_code` only to `ErroredSubmissionView`.
-    """
+    """A flat submission row whose `reason_code` is absent unless `status` is `errored`."""
 
     status: PublicStatus
     reason_code: Slugged[ReasonCode] | None = None
@@ -227,6 +219,10 @@ class CancelledSubmissionView(_TaggedView):
 
 # The field the view union discriminates on, named so a rename moves the discriminator with it.
 STATUS_FIELD = 'status'
+
+# The field every view identifies a submission by, named for the same reason: a renderer that
+# excludes it by a stale literal prints it twice.
+ID_FIELD = 'id'
 
 
 def _status_tag(value: Any) -> str | None:

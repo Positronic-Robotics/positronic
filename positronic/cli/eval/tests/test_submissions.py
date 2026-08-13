@@ -22,6 +22,8 @@ def test_status_prints_the_fields_of_the_variant_it_got(platform, run_command, c
     out = capsys.readouterr().out.splitlines()
     assert out[0] == f'{ID} pending'
     assert '  queue_position: 3' in out
+    # The header carries the id and the status, so the body below it repeats neither.
+    assert [line for line in out[1:] if line.startswith(('  id:', '  status:'))] == []
 
 
 def test_list_prints_a_line_per_submission(platform, run_command, capsys):

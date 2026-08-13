@@ -85,8 +85,7 @@ def main() -> None:
                     reason += ' — check the reference and its visibility'
                 raise SystemExit(f'terminal at the door: {reason}')
             view = poll_until_terminal(client, created.submission_id, timeout_s=args.timeout)
-            # A qualifier that failed reports the same way whenever it failed — at the door or an
-            # hour in — so a script cannot read one as a run that produced something.
+            # A terminal view that is not finished carries no result, so there is no score to report.
             if not isinstance(view, FinishedSubmissionView):
                 raise SystemExit(f'finished as {view.status.name}, with no result to read')
             print(f'finished as {view.status.name}')

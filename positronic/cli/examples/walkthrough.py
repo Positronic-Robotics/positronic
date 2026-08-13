@@ -97,8 +97,7 @@ def walkthrough(
     view = poll_until_terminal(client, created.submission_id, timeout_s=timeout_s)
     if isinstance(view, ErroredSubmissionView):
         raise SystemExit(f'   failed: {view.reason_code.name if view.reason_code else "unknown"} — {view.reason}')
-    # Run as a command, and a test reads the exit code, so a run that produced nothing must not
-    # leave one saying it did.
+    # A terminal view that is not finished carries no result, so there is no score to report.
     if not isinstance(view, FinishedSubmissionView):
         raise SystemExit(f'   {view.status.name}, with no result to read')
     print(f'   primary {view.scores.primary} over {view.scores.episodes} episodes')

@@ -39,8 +39,7 @@ def submit(
     print(f'submission {created.submission_id} ({created.status.name})')
     if created.policy_image_digest is not None:
         print(f'digest {created.policy_image_digest}')
-    # Terminal with no result coming — rejected at the door, or a replay of a submission since
-    # cancelled. A zero exit would let a script treat a run that never happened as one that did.
+    # These terminal statuses can never carry a result, so the submission fails rather than returns.
     if created.status in NO_RESULT_STATUSES:
         reason = created.reason_code.name if created.reason_code is not None else created.status.name
         raise SystemExit(f'rejected: {reason}')

@@ -2,13 +2,13 @@
 
 import configuronic as cfn
 from platform_client.requests import CancelRequest
-from platform_client.responses import STATUS_FIELD
+from platform_client.responses import ID_FIELD, STATUS_FIELD
 
 from positronic.cli.account.gateway import gateway, parse_submission_id
 
 # What `status` prints on its header line, so the body below it does not repeat them. Field names
 # rather than literals, so a model rename cannot leave this excluding a field that no longer exists.
-_HEADER_FIELDS = frozenset({'id', STATUS_FIELD})
+_HEADER_FIELDS = frozenset({ID_FIELD, STATUS_FIELD})
 
 
 @cfn.config()
