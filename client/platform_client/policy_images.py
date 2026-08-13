@@ -7,9 +7,18 @@ import re
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import core_schema
 
-# `<algorithm>:<hex>`, matched whole. The length is the registry's business — what is checked here
-# is the shape a typo breaks: a missing half, or an encoding that is not hex.
-_DIGEST = re.compile(r'[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9a-fA-F]+')
+# The reference grammar a registry parses, in one expression, split up only for reading: an
+# optional host with an optional port, a lowercase repository path, an optional tag, an optional
+# digest. Piecemeal checks kept admitting the next typo — `org/policy:bad:tag` reads as a tag to a
+# rule that only rejects an empty one, and an unpullable image is a CHARGED terminal submission.
+_HOST = r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?'
+_DOMAIN = rf'{_HOST}(?:\.{_HOST})*(?::[0-9]+)?'
+_PATH = r'[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*'
+_TAG = r'[A-Za-z0-9_][A-Za-z0-9._-]{0,127}'
+# `<algorithm>:<hex>`. The length is the registry's business — what is checked is the shape a typo
+# breaks: a missing half, or an encoding that is not hex.
+_DIGEST = r'[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9a-fA-F]+'
+_REFERENCE = re.compile(rf'(?:{_DOMAIN}/)?{_PATH}(?:/{_PATH})*(?::{_TAG})?(?:@{_DIGEST})?')
 
 
 class PolicyImage(str):
@@ -21,16 +30,8 @@ class PolicyImage(str):
     __slots__ = ()
 
     def __new__(cls, value: str) -> PolicyImage:
-        name, sep, digest = value.partition('@')
-        if not name or any(c.isspace() for c in value) or (sep and not digest) or '@' in digest:
+        if not _REFERENCE.fullmatch(value):
             raise ValueError(f'not an image reference: {value!r}')
-        # A digest, where present, matches the supported grammar.
-        if sep and not _DIGEST.fullmatch(digest):
-            raise ValueError(f'not a digest: {digest!r}')
-        # A trailing colon is an empty tag. A registry port (`reg.io:5000/org/policy`) is not one:
-        # what follows its colon is the rest of the path, so only an EMPTY remainder is the typo.
-        if name.rpartition(':')[1] and not name.rpartition(':')[2]:
-            raise ValueError(f'image reference has an empty tag: {value!r}')
         return super().__new__(cls, value)
 
     @classmethod
