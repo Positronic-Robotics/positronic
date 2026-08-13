@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar, cast, final
+from typing import Generic, TypeVar, cast, final
 
 T = TypeVar('T')
 U = TypeVar('U')
@@ -11,7 +11,11 @@ class NoValueException(Exception):
     pass
 
 
-NODEFAULT: Any = object()
+class _NoDefault:
+    """No default at all, which `T | None` cannot express: `None` is itself a value a receiver may default to."""
+
+
+NODEFAULT = _NoDefault()
 
 
 @dataclass
@@ -164,7 +168,7 @@ class ControlSystemEmitter(SignalEmitter[T]):
 class ControlSystemReceiver(SignalReceiver[T]):
     """Receiver adaptor bound to a single upstream signal on behalf of a system."""
 
-    def __init__(self, owner: ControlSystem, default: T | None = NODEFAULT, maxsize: int | None = None):
+    def __init__(self, owner: ControlSystem, default: T | None | _NoDefault = NODEFAULT, maxsize: int | None = None):
         self._owner = owner
         self._default = default
         self._internal: SignalReceiver[T] | None = None
@@ -187,8 +191,8 @@ class ControlSystemReceiver(SignalReceiver[T]):
             value = self._internal.read()
             if value is not None:
                 return value
-        if self._default is not NODEFAULT:
-            # Always not-updated; the check above excludes the sentinel, which `T | None` cannot express.
+        if not isinstance(self._default, _NoDefault):
+            # Always not-updated; `None` reaches here as the value it was given, not as an absent default.
             return Message(cast(T, self._default), -1, False)
         return None
 
@@ -227,7 +231,9 @@ class ReceiverDict(dict[str, ControlSystemReceiver[U]]):
     Pass fake=True for all fake receivers, or fake={'key1', 'key2'} for specific keys.
     """
 
-    def __init__(self, owner: ControlSystem, *, default: U | None = NODEFAULT, fake: bool | Iterable[str] = False):
+    def __init__(
+        self, owner: ControlSystem, *, default: U | None | _NoDefault = NODEFAULT, fake: bool | Iterable[str] = False
+    ):
         super().__init__()
         self._owner = owner
         self._default = default
