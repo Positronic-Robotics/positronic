@@ -30,9 +30,7 @@ class InferenceSession:
     def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
 
-        Args:
-            timeout_per_message: Timeout for each individual message (default: 30s).
-                               Server must send updates at least this frequently.
+        The server must send an update at least every ``timeout_per_message`` seconds.
         """
         try:
             while True:
@@ -63,13 +61,11 @@ class InferenceSession:
         return self._metadata
 
     def infer(self, obs: dict[str, Any]) -> Any:
-        """
-        Send an observation and get the served session's result — canonically a list of action
-        dicts, but whatever the server's session returned (a bare dict or ``None`` included), with
-        every robot-command channel carrying a typed command (see ``protocol.typed_commands``).
+        """Send an observation and get the served session's result, with every robot-command channel typed.
 
-        Both `obs` and the returned action must be wire-serializable: plain-data containers and
-        scalars, plus numeric numpy arrays/scalars. Do not pass arbitrary Python objects.
+        ``obs`` must be wire-serializable: plain-data containers and scalars, plus numeric numpy
+        arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
+        returned — canonically a list of action dicts, but a bare dict or ``None`` too.
         """
         serialised = serialise(obs)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)

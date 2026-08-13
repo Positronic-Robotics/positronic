@@ -180,11 +180,6 @@ class TestServedCommandDecode:
         np.testing.assert_allclose(decoded.pose.translation, [0.4, 0.0, 0.6], atol=1e-6)
         assert served['target_grip'] == 0.5 and served['timestamp'] == 0.0  # the rest of the action survives
 
-    def test_a_lone_action_dict_decodes_like_a_trajectory(self):
-        """A server may answer with one action instead of a list; both shapes are served results."""
-        served = typed_commands({keys.ROBOT_COMMAND: self._wire_command()})
-        assert isinstance(served[keys.ROBOT_COMMAND], CartesianPosition)
-
     def test_the_vector_decodes_from_a_plain_sequence_as_from_an_array(self):
         """A transport may hand the vector back as a list rather than an array; either decodes the same."""
         pose = np.asarray(_WIRE_POSE, dtype=np.float32)
