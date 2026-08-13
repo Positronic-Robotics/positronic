@@ -39,8 +39,23 @@ def test_a_version_the_index_could_not_read_fails_closed():
 
 def test_the_declared_version_is_read_from_a_manifest():
     assert gate.declared_version('[project]\nname = "x"\nversion = "0.3.1"\n') == '0.3.1'
-    assert gate.declared_version("version = '0.3.1'") == '0.3.1'
     assert gate.declared_version('[project]\nname = "x"\n') is None
+    # Parsed, so only `[project].version` is the project's own: a version under a tool's section is
+    # that tool's, and to a text scan both read the same.
+    assert gate.declared_version('[project]\nname = "x"\n\n[tool.bumper]\nversion = "9.9.9"\n') is None
+
+
+def test_a_base_side_manifest_that_does_not_parse_abstains():
+    # The base's copy is one this gate cannot judge, and an unjudgeable base has never blocked a
+    # commit: `check` prints a NOTE and skips, so an offline or shallow checkout stays workable.
+    assert gate.declared_version('[project\nname = "x"\n') is None
+
+
+def test_this_repositorys_own_manifest_that_does_not_parse_fails_closed():
+    # Named as guarded, it is the file the gate protects: present and unreadable is corrupt, not
+    # absent, and reading it as "no version declared" would skip the bump check on a broken client.
+    with pytest.raises(SystemExit):
+        gate.declared_version('[project\nname = "x"\n', guarded=gate.CLIENT_MANIFEST)
 
 
 def manifest(*dependencies: str, trailing: str = '') -> str:

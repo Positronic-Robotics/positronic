@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import get_args
 
 import pytest
 from platform_client.boards import BoardRef
@@ -51,7 +52,8 @@ from platform_client.responses import (
     SubmissionListRow,
     SubmissionView,
 )
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from platform_client.slug import slug_of
+from pydantic import BaseModel, Tag, TypeAdapter, ValidationError
 
 AT = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
 SUB = SubmissionId(0x1F)
@@ -348,6 +350,17 @@ def test_a_view_refuses_a_status_that_is_not_its_own_tag():
 def test_a_view_keeps_its_own_tag():
     view = PendingSubmissionView(id=SUB, received_at=AT, queued_at=AT, queue_position=1)
     assert view.status is SubmissionStatus.pending
+
+
+def test_every_variant_is_tagged_with_the_slug_of_the_status_it_declares():
+    # The discriminator computes a tag from the payload's slug, so a tag spelled any other way names
+    # a wire value nothing produces and the variant becomes unreachable.
+    variants = get_args(get_args(SubmissionView)[0])
+    assert len(variants) == 5
+    for variant in variants:
+        model, tag = get_args(variant)
+        assert isinstance(tag, Tag)
+        assert tag.tag == slug_of(model.model_fields[STATUS_FIELD].default)
 
 
 def test_a_minted_outcome_without_its_key_is_refused():

@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import subprocess
 import sys
 import tomllib
@@ -61,8 +60,6 @@ DISTRIBUTION = 'positronic-platform-client'
 # Changes that cannot reach the installed wheel. A test is NOT here: it ships inside the package
 # directory, and a reader comparing two revisions may expect the same code behind the same version.
 EXEMPT_SUFFIXES = ('.md',)
-
-_VERSION_LINE = re.compile(r'^version\s*=\s*["\']([^"\']+)["\']', re.M)
 
 
 def run_git(*args: str) -> str | None:
@@ -103,10 +100,25 @@ def is_later_version(was: str, is_now: str) -> bool:
         raise SystemExit(f'ERROR - {CLIENT_MANIFEST} version is not PEP 440: {exc}') from exc
 
 
-def declared_version(text: str) -> str | None:
-    """The `version` a pyproject declares, or None where it declares none this can read."""
-    match = _VERSION_LINE.search(text)
-    return match.group(1) if match else None
+def declared_version(text: str, *, guarded: str | None = None) -> str | None:
+    """The `version` a pyproject declares under `[project]`, or None where it declares none.
+
+    Parsed out of TOML rather than scanned for as text, like the pin below: to a scan a `version`
+    line under any other table — a tool's own section — reads as the project's own.
+
+    `guarded` names the file where this repository's own copy is being read, whose corruption is a
+    misconfiguration to fail on; a base-side manifest is one the gate merely cannot judge, so it
+    abstains and the caller skips.
+    """
+    try:
+        manifest = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        if guarded is None:
+            return None
+        raise SystemExit(f'ERROR - {guarded} is not readable TOML: {exc}') from exc
+    project = manifest.get('project')
+    version = project.get('version') if isinstance(project, dict) else None
+    return version if isinstance(version, str) else None
 
 
 def pinned_version(text: str) -> str | None:
@@ -164,7 +176,7 @@ def shipped_changes(paths: list[str]) -> list[str]:
 def check(base: str) -> list[str]:
     """Every way this change leaves the client, its version and the root's pin out of step."""
     failures: list[str] = []
-    now = declared_version((REPO_ROOT / CLIENT_MANIFEST).read_text())
+    now = declared_version((REPO_ROOT / CLIENT_MANIFEST).read_text(), guarded=CLIENT_MANIFEST)
     if now is None:
         raise SystemExit(f'ERROR - {CLIENT_MANIFEST} declares no readable `version`, so the gate cannot judge it.')
 

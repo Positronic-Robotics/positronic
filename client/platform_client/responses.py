@@ -13,7 +13,7 @@ from platform_client.boards import BoardRef
 from platform_client.enums import BoardVisibility, KeyStatus, OnExhausted, QuotaSubject, ReasonCode, SubmissionStatus
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, UserId
-from platform_client.slug import Slugged
+from platform_client.slug import Slugged, slug_of
 from pydantic import AfterValidator, AwareDatetime, BaseModel, Discriminator, Field, Tag, model_validator
 
 
@@ -231,16 +231,18 @@ def _status_tag(value: Any) -> str | None:
     """
     raw = value.get(STATUS_FIELD) if isinstance(value, dict) else getattr(value, STATUS_FIELD, None)
     if isinstance(raw, SubmissionStatus):
-        return raw.name.lower()
+        return slug_of(raw)
     return raw if isinstance(raw, str) else None
 
 
+# Each tag is the slug of the status its variant declares, taken from the enum rather than spelled:
+# the wire vocabulary is the enum's, so a member renamed there renames the discriminator with it.
 SubmissionView = Annotated[
-    Annotated[PendingSubmissionView, Tag('pending')]
-    | Annotated[RunningSubmissionView, Tag('running')]
-    | Annotated[ErroredSubmissionView, Tag('errored')]
-    | Annotated[FinishedSubmissionView, Tag('finished')]
-    | Annotated[CancelledSubmissionView, Tag('cancelled')],
+    Annotated[PendingSubmissionView, Tag(slug_of(SubmissionStatus.pending))]
+    | Annotated[RunningSubmissionView, Tag(slug_of(SubmissionStatus.running))]
+    | Annotated[ErroredSubmissionView, Tag(slug_of(SubmissionStatus.errored))]
+    | Annotated[FinishedSubmissionView, Tag(slug_of(SubmissionStatus.finished))]
+    | Annotated[CancelledSubmissionView, Tag(slug_of(SubmissionStatus.cancelled))],
     Discriminator(_status_tag),
 ]
 

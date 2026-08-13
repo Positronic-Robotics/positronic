@@ -7,10 +7,8 @@ import re
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import core_schema
 
-# The reference grammar a registry parses, in one expression, split up only for reading: an
-# optional host with an optional port, a lowercase repository path, an optional tag, an optional
-# digest. Piecemeal checks kept admitting the next typo — `org/policy:bad:tag` reads as a tag to a
-# rule that only rejects an empty one, and an unpullable image is a CHARGED terminal submission.
+# The reference grammar a registry parses: an optional host and port, a lowercase repository path,
+# an optional tag, an optional digest. A typo it admits is an unpullable image — terminal, and CHARGED.
 _HOST = r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?'
 _DOMAIN = rf'{_HOST}(?:\.{_HOST})*(?::[0-9]+)?'
 _PATH = r'[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*'
