@@ -109,15 +109,26 @@ class PlatformClient:
             client = httpx.Client(base_url=resolve_base_url(base_url), timeout=timeout)
         elif base_url is not None:
             raise ValueError('a client of your own already carries its base URL; pass one or the other')
-        elif not str(client.base_url):
-            # Every endpoint below sends a path relative to the client's own base URL, so one
-            # without it resolves against nothing and the request never leaves for a host.
-            raise ValueError('the supplied client carries no base_url; set httpx.Client(base_url=...) to the platform')
+        elif not client.base_url.is_absolute_url:
+            # Every endpoint below sends a path relative to the client's own base URL, so one that
+            # names no host — empty, or a bare path — resolves against nothing and the request never
+            # leaves for a platform.
+            raise ValueError(
+                f'the supplied client carries base_url {str(client.base_url)!r}; set '
+                f'httpx.Client(base_url=...) to an absolute URL, scheme and host, naming the platform'
+            )
         elif AUTH_HEADER in client.headers:
             # httpx MERGES client-level headers into every request, so a default here would reach
             # `users.register`, which this module declares unauthenticated and the gateway reads as
             # a registration by whoever that credential names.
             raise ValueError(f'the supplied client carries a default {AUTH_HEADER} header; pass the key as api_key')
+        elif client.auth is not None:
+            # An auth flow reaches the same requests by another route: httpx runs it on every one,
+            # so it would sign `users.register` too.
+            raise ValueError(
+                f'the supplied client carries an auth flow, which sets {AUTH_HEADER} on every '
+                f'request including `users.register`; pass the key as api_key'
+            )
         self._client = client
         self.api_key = resolve_api_key(api_key)
 

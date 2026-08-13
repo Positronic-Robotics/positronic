@@ -392,10 +392,12 @@ def test_a_client_of_your_own_carries_its_own_base_url():
         PlatformClient(BASE, client=httpx.Client())
 
 
-def test_a_supplied_client_with_no_base_url_is_refused():
-    # Every endpoint sends a path relative to it, so without one the request reaches no host at all.
-    with pytest.raises(ValueError, match='no base_url'):
-        PlatformClient(client=httpx.Client())
+@pytest.mark.parametrize('base_url', ['', '/gateway', '//gateway/api'])
+def test_a_supplied_client_whose_base_url_names_no_host_is_refused(base_url: str):
+    # Every endpoint sends a path relative to it, so a base URL that names no host — unset, or a
+    # bare path — resolves against nothing and the request reaches no platform at all.
+    with pytest.raises(ValueError, match='absolute URL'):
+        PlatformClient(client=httpx.Client(base_url=base_url))
 
 
 def test_closing_leaves_a_caller_supplied_client_open():
@@ -461,6 +463,13 @@ def test_a_supplied_client_carrying_an_authorization_default_is_refused():
     # `users.register` — which this module declares unauthenticated.
     with pytest.raises(ValueError, match='Authorization'):
         PlatformClient(client=httpx.Client(base_url=BASE, headers={'Authorization': 'Bearer leaked'}))
+
+
+def test_a_supplied_client_carrying_an_auth_flow_is_refused():
+    # The same header by another route: httpx runs a client-level `auth` on every request, so an
+    # unauthenticated `users.register` would go out signed by whoever that flow names.
+    with pytest.raises(ValueError, match='auth flow'):
+        PlatformClient(client=httpx.Client(base_url=BASE, auth=('user', 'password')))
 
 
 def test_a_malformed_eval_list_raises_rather_than_reading_as_no_list():
