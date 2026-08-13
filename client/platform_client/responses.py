@@ -39,10 +39,8 @@ class Scores(BaseModel):
     unscored: int = 0
 
 
-# The rule keys this platform's plans declare. Published because a caller matches on them: a 429
-# names one in its `details`, and `MeResponse.quota_for` takes one. Renaming a key is a contract
-# change; a plan declaring a NEW rule is not, so a key absent from this list is not an error.
-# An engagement's own rules are not published here — its words are its own (test_vocabulary).
+# The rule keys a caller matches on: a 429 names one in its `details`, and `quota_for` takes one.
+# A key absent from this list is a plan declaring its own rule, not an error.
 QUOTA_SUBMISSIONS_DAY = 'submissions.day'
 QUOTA_SUBMISSIONS_CONCURRENT = 'submissions.concurrent'
 

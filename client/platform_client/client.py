@@ -44,14 +44,11 @@ M = TypeVar('M', bound=BaseModel)
 
 DEFAULT_TIMEOUT_S = 30.0
 
-# The platform a caller reaches with no configuration at all. A user should never have to know a
-# URL; the environment variable below is for a developer pointing at a gateway of their own.
+# The platform a caller reaches with no configuration at all.
 DEFAULT_PLATFORM_URL = 'https://platform.positronic.ro'
 
-# How a caller is configured. Both secrets are read from the environment and never taken as an
-# argument: a command line is readable by every process on the box and lands in shell history.
-# Named because three places agree on it: what an authenticated call sends, what an unauthenticated
-# one must not, and what a caller's own client may therefore not default.
+# What an authenticated call sends, what `users.register` must not, and what a caller's own client
+# may therefore not default — three places that have to agree.
 AUTH_HEADER = 'Authorization'
 
 API_URL_ENV = 'POSITRONIC_PLATFORM_URL'
