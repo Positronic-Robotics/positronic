@@ -354,6 +354,7 @@ Each line of `edits.jsonl` is one JSON record carrying its op. `{"op": "set_stat
 Key ideas
 - Inputs are registered explicitly through `DsWriterAgent.add_signal(name, serializer=None)`.
 - The agent polls inputs at a configurable rate and appends only on updates.
+- Recording is best effort, and this is a deliberate trade rather than an oversight. Each input arrives over a one-slot `pimm` signal where a new value overwrites one still unread, so a recorder that stalls for longer than the gap between two samples loses the older one — commands exactly as much as camera frames or arm state. An episode is what the recorder managed to observe, not a guaranteed-complete log of what happened; treat a missing sample as possible in any analysis that counts them.
 - A separate `command` channel controls episode lifecycle.
 - `time_mode` selects how timestamps are recorded: `CLOCK` (default) stamps samples when the agent ingests them (useful during live data collection so every signal reflects when the recorder could act on it), while `MESSAGE` preserves the timestamp attached by the emitting control system (ideal for analysing inference latency by keeping original emission times).
 
