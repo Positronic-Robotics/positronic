@@ -6,7 +6,8 @@ from positronic import keys
 from positronic.drivers.roboarm.command import CartesianPosition, JointDelta, JointPosition, Reset
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceClient
-from positronic.utils.serialization import deserialise, encode_jpeg, serialise
+from positronic.offboard.protocol import deserialise, serialise, typed_commands
+from positronic.utils.serialization import encode_jpeg
 
 
 def test_inference_client_connect_and_infer(inference_server, mock_policy):
@@ -105,8 +106,9 @@ def test_jpeg_round_trips_single_image_and_stack():
     np.testing.assert_allclose(restored_stack, stack, atol=4)
 
 
-class TestCommandRoundtrip:
-    """msgpack-level (de)serialization reconstructs Command instances transparently."""
+class TestCommandEnvelope:
+    """A ``CommandType`` sitting anywhere in the payload crosses as the ``__cmd__`` envelope and comes back
+    typed, without the receiver having to know which channel carries it."""
 
     def test_reset(self):
         assert isinstance(deserialise(serialise(Reset())), Reset)
@@ -153,3 +155,82 @@ class TestCommandRoundtrip:
         """Dicts without Commands round-trip unchanged."""
         payload = {'action_data': [1, 2, 3], 'meta': {'k': 'v'}}
         assert deserialise(serialise(payload)) == payload
+
+
+_WIRE_POSE = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
+
+
+# rules-allow: hardcoded-keys — every wire name below is spelled the way a server sends it: the command
+# mapping, and the `target_grip` / `timestamp` fields an action carries. Reading the decoder's own constants
+# would make test and decoder agree whatever those names became, leaving the wire itself unpinned.
+class TestServedCommandDecode:
+    """An endpoint that does not speak the ``__cmd__`` envelope answers with the command as a bare mapping;
+    ``typed_commands`` types it off the channel it sits at."""
+
+    @staticmethod
+    def _wire_command(pose=_WIRE_POSE) -> dict:
+        """One served ``cartesian_pos`` command, in the wire's own layout."""
+        return {'type': 'cartesian_pos', 'pose': pose}
+
+    def test_a_served_command_arrives_typed(self):
+        served = typed_commands([{keys.ROBOT_COMMAND: self._wire_command(), 'target_grip': 0.5, 'timestamp': 0.0}])[0]
+
+        decoded = served[keys.ROBOT_COMMAND]
+        assert isinstance(decoded, CartesianPosition), f'the driver would be handed {decoded!r}'
+        np.testing.assert_allclose(decoded.pose.translation, [0.4, 0.0, 0.6], atol=1e-6)
+        assert served['target_grip'] == 0.5 and served['timestamp'] == 0.0  # the rest of the action survives
+
+    def test_a_lone_action_dict_decodes_like_a_trajectory(self):
+        """A server may answer with one action instead of a list; both shapes are served results."""
+        served = typed_commands({keys.ROBOT_COMMAND: self._wire_command()})
+        assert isinstance(served[keys.ROBOT_COMMAND], CartesianPosition)
+
+    def test_the_vector_decodes_from_a_plain_sequence_as_from_an_array(self):
+        """A transport may hand the vector back as a list rather than an array; either decodes the same."""
+        pose = np.asarray(_WIRE_POSE, dtype=np.float32)
+
+        from_array = typed_commands({keys.ROBOT_COMMAND: self._wire_command(pose)})
+        from_list = typed_commands({keys.ROBOT_COMMAND: self._wire_command(pose.tolist())})
+
+        np.testing.assert_allclose(
+            from_list[keys.ROBOT_COMMAND].pose.translation, from_array[keys.ROBOT_COMMAND].pose.translation, atol=1e-6
+        )
+
+    def test_every_arm_of_a_multi_arm_action_decodes(self):
+        """A bimanual embodiment names its channels ``robot_command.{side}``; every one of them decodes."""
+        wire = self._wire_command()
+        served = typed_commands({f'{keys.ROBOT_COMMAND}.left': wire, f'{keys.ROBOT_COMMAND}.right': wire})
+
+        for side in ('left', 'right'):
+            got = served[f'{keys.ROBOT_COMMAND}.{side}']
+            assert isinstance(got, CartesianPosition), f'the {side} driver would be handed {got!r}'
+
+    def test_a_command_channel_carrying_a_vector_is_left_alone(self):
+        """``robot_command.pose`` / ``.joints`` share the prefix but carry a vector, so a prefix match alone
+        would hand them to ``from_wire``; reading the value is what tells them apart."""
+        pose = np.zeros(7, dtype=np.float32)
+
+        served = typed_commands({keys.TARGET_EE_POSE: pose, keys.TARGET_JOINTS: pose})
+
+        np.testing.assert_array_equal(served[keys.TARGET_EE_POSE], pose)
+        np.testing.assert_array_equal(served[keys.TARGET_JOINTS], pose)
+
+    def test_a_typed_command_and_a_sentinel_are_left_alone(self):
+        """A command the ``__cmd__`` envelope already typed, and a result carrying no command channel at
+        all, both come back unchanged."""
+        assert isinstance(typed_commands({keys.ROBOT_COMMAND: Reset()})[keys.ROBOT_COMMAND], Reset)
+        assert typed_commands({'timestamp': 1.6}) == {'timestamp': 1.6}
+        assert typed_commands(None) is None
+
+    def test_a_command_crossing_the_wire_arrives_typed_from_either_shape(self):
+        """The two shapes converge: the envelope a positronic server writes, and the bare mapping a partner
+        endpoint sends, reach the rig as the same typed command."""
+        pose = Transform3D(translation=np.array([0.4, 0.0, 0.6], dtype=np.float32), rotation=Rotation.identity)
+        enveloped = {keys.ROBOT_COMMAND: CartesianPosition(pose=pose)}
+        bare = {keys.ROBOT_COMMAND: self._wire_command()}
+
+        from_envelope = typed_commands(deserialise(serialise(enveloped)))[keys.ROBOT_COMMAND]
+        from_bare = typed_commands(deserialise(serialise(bare)))[keys.ROBOT_COMMAND]
+
+        assert isinstance(from_envelope, CartesianPosition) and isinstance(from_bare, CartesianPosition)
+        np.testing.assert_allclose(from_bare.pose.translation, from_envelope.pose.translation, atol=1e-6)

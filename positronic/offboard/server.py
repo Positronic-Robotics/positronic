@@ -21,7 +21,8 @@ from positronic import keys
 from positronic.policy import Policy, Recorder
 from positronic.policy.base import PolicyWrapper
 from positronic.policy.spec import ModelSource, Pipeline, split
-from positronic.utils.serialization import deserialise, serialise
+
+from .protocol import deserialise, serialise
 
 logger = logging.getLogger(__name__)
 

@@ -11,7 +11,7 @@ from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidSta
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
-from positronic.utils.serialization import deserialise, serialise
+from .protocol import deserialise, serialise, typed_commands
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,8 @@ class InferenceSession:
     def infer(self, obs: dict[str, Any]) -> Any:
         """
         Send an observation and get the served session's result — canonically a list of action
-        dicts, but whatever the server's session returned (a bare dict or ``None`` included).
+        dicts, but whatever the server's session returned (a bare dict or ``None`` included), with
+        every robot-command channel carrying a typed command (see ``protocol.typed_commands``).
 
         Both `obs` and the returned action must be wire-serializable: plain-data containers and
         scalars, plus numeric numpy arrays/scalars. Do not pass arbitrary Python objects.
@@ -89,7 +90,7 @@ class InferenceSession:
         if isinstance(response, dict) and 'error' in response:
             raise RuntimeError(f'Server error: {response["error"]}')
 
-        return response['result']
+        return typed_commands(response['result'])
 
     def close(self):
         self._websocket.close()

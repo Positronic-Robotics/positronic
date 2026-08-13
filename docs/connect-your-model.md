@@ -244,11 +244,11 @@ Every message is msgpack. Numpy arrays use a custom extension:
 }
 ```
 
-`positronic.utils.serialization` provides `serialise()` / `deserialise()`, which handle this and the
+`positronic.offboard.protocol` provides `serialise()` / `deserialise()`, which handle this and the
 robot commands:
 
 ```python
-from positronic.utils.serialization import serialise, deserialise
+from positronic.offboard.protocol import serialise, deserialise
 
 session = policy.new_session()           # one Session per episode/connection
 async for message in websocket.iter_bytes():
@@ -256,6 +256,10 @@ async for message in websocket.iter_bytes():
     actions = session(obs)               # list of action dicts (or None)
     await websocket.send_bytes(serialise({"result": actions}))
 ```
+
+A server written against another stack cannot import that module. Answer with the command as the plain
+mapping `positronic.drivers.roboarm.command.to_wire` produces — `{"type": "cartesian_pos", "pose": [...]}`
+— under the `robot_command` key, and the client types it on arrival.
 
 ## See Also
 
