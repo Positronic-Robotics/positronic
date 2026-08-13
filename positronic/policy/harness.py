@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, TypeAlias
 
+import numpy as np
 from opentelemetry.trace import Span
 
 import pimm
@@ -64,6 +65,16 @@ class TrajectoryPlayer:
         while self._pending and self._pending[0][0] <= current_time:
             value = self._pending.popleft()[1]
         return value
+
+
+def _owned(obs: dict[str, Any]) -> dict[str, Any]:
+    """The observation with its arrays copied, so nothing rewrites what the worker is still reading.
+
+    A producer may reuse one buffer for every sample it emits — a camera renders into the array behind the
+    adapter it re-emits each frame — and the loop thread yields while a call charged in wall time runs, so
+    that producer advances alongside the worker. Copying at dispatch pays once per call rather than per round.
+    """
+    return {name: value.copy() if isinstance(value, np.ndarray) else value for name, value in obs.items()}
 
 
 def _assert_anchored(actions: list[dict[str, Any]], now: float) -> None:
@@ -520,7 +531,7 @@ class Harness(pimm.ControlSystem):
         self._t0_ns = clock.now_ns()
         self._wall_t0 = time.monotonic()
         # Sessions declare ``dict`` but must not mutate the obs, so they get a read-only view.
-        self._future = executor.submit(session, frozen_view(obs))  # pyright: ignore[reportArgumentType]
+        self._future = executor.submit(session, frozen_view(_owned(obs)))  # pyright: ignore[reportArgumentType]
         if self._charge is None:
             # Sleeping zero hands the worker the GIL without adding a wake-up granularity to the handshake.
             while not self._future.done() and time.monotonic() - self._wall_t0 < SKIP_REPLY_SEC:

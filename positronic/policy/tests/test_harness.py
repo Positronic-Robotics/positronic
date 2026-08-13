@@ -1014,6 +1014,58 @@ def test_run_while_running_is_ignored(world):
     assert policy.reset_calls == 1
 
 
+class _FrameWatchingPolicy(Policy):
+    """Reads its camera frame at both ends of a slow call, so a rewrite underneath it shows up as a difference."""
+
+    def __init__(self, wall_sec: float):
+        self._wall_sec = wall_sec
+        self.seen: list[tuple[np.ndarray, np.ndarray]] = []
+
+    def new_session(self, context=None, now=None):
+        return _FrameWatchingPolicy._Session(self)
+
+    class _Session(Session):
+        def __init__(self, policy: '_FrameWatchingPolicy'):
+            self._policy = policy
+
+        def __call__(self, obs):
+            entry = np.array(obs[CAM])
+            time.sleep(self._policy._wall_sec)
+            self._policy.seen.append((entry, np.array(obs[CAM])))
+            return None
+
+
+@pytest.mark.timeout(10.0)
+def test_a_producer_reusing_its_buffer_cannot_rewrite_a_pending_observation(world):
+    """A camera renders into the array behind the adapter it re-emits, and a wall-charged call runs while the
+    loop yields — so the observation handed to the worker has to be its own copy."""
+    policy = _FrameWatchingPolicy(wall_sec=0.3)
+    harness = Harness(policy, make_embodiment())
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    frame = pimm.shared_memory.NumpySMAdapter((2, 2, 3), np.dtype(np.uint8))
+
+    def emit_frame(fill: int):
+        frame.array[:] = np.full((2, 2, 3), fill, dtype=np.uint8)
+        p['frame_em'].emit(frame)  # the same adapter every time, as a camera does
+        p['robot_em'].emit(robot_state)
+        p['grip_em'].emit(0.25)
+
+    driver = ManualDriver([
+        (partial(p['directive_em'].emit, Directive.RUN(task='t', **{keys.INFERENCE_LATENCY: True})), 0.0),
+        (partial(emit_frame, 1), 0.01),
+        (partial(emit_frame, 9), 0.05),  # rewrites the buffer while the first call is still running
+        (None, 0.4),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=60)
+
+    assert policy.seen, 'the policy was never called'
+    entry, exit_ = policy.seen[0]
+    np.testing.assert_array_equal(entry, exit_, 'the observation was rewritten while the call was in flight')
+
+
 class _AbandonedCallPolicy(Policy):
     """Records the order of session openings and call completions, with a call that outlives its episode."""
 
@@ -1703,7 +1755,7 @@ def _run_episode(
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='t', inference_latency=latency)), 0.0),
+        (partial(directive_em.emit, Directive.RUN(task='t', **{keys.INFERENCE_LATENCY: latency})), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
         (None, run_sec),
     ])
@@ -1882,7 +1934,7 @@ def test_a_stop_lands_without_waiting_out_the_charge(world):
 
     pose, joints = [0.1, 0.2, 0.3], [0.4, 0.5, 0.6]
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='t', inference_latency=charge)), 0.0),
+        (partial(directive_em.emit, Directive.RUN(task='t', **{keys.INFERENCE_LATENCY: charge})), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, make_robot_state(pose, joints)), fault_at),
         (partial(robot_em.emit, make_robot_state(pose, joints, status=RobotStatus.ERROR)), charge + 0.2),
     ])
@@ -2028,7 +2080,7 @@ def test_abort_discards_a_call_that_is_still_in_flight(world):
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='t', inference_latency=1.0)), 0.0),
+        (partial(directive_em.emit, Directive.RUN(task='t', **{keys.INFERENCE_LATENCY: 1.0})), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
         (None, 0.05),  # well inside the 1.0s the gate owes the call
         (partial(directive_em.emit, Directive.ABORT()), 0.0),

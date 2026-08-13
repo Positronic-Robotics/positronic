@@ -476,12 +476,12 @@ def test_pickles_with_every_constructor_argument_filled():
         virtual_time=True,
         telemetry_span=partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
     )
-    agent.add_signal('robot_command', Serializers.robot_command)
+    agent.add_signal(keys.ROBOT_COMMAND, Serializers.robot_command)
     agent.add_signal('robot_state', Serializers.robot_state)
 
     loaded = pickle.loads(pickle.dumps(agent))
 
-    assert set(loaded.inputs) == {'robot_command', 'robot_state'}
+    assert set(loaded.inputs) == {keys.ROBOT_COMMAND, 'robot_state'}
     with loaded._telemetry_span():
         pass
 
