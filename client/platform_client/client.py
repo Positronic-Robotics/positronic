@@ -163,9 +163,9 @@ class PlatformClient:
     def cancel_submission(self, request: CancelRequest) -> CancelResponse:
         return self._post(routes.SUBMISSIONS_CANCEL, request, CancelResponse)
 
-    def rankings(self, *, board: BoardRef, eval_version: str | None = None) -> RankingsResponse:
-        """One board by slug. An explicit `eval_version` pins a past board; otherwise the current one."""
-        query = RankingsQuery(board=board, eval_version=eval_version)
+    def rankings(self, *, board: BoardRef) -> RankingsResponse:
+        """One board by slug."""
+        query = RankingsQuery(board=board)
         return self._get(routes.RANKINGS_GET, RankingsResponse, query=query, auth=Auth.OPTIONAL)
 
     def list_boards(self) -> BoardListResponse:

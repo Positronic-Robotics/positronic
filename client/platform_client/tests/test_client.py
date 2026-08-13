@@ -250,13 +250,12 @@ def test_cancel_submission_posts_the_id():
     assert gateway.body() == {'id': '1f'}
 
 
-def rankings_gateway(eval_version: str = 'smoke@0123456789ab') -> Gateway:
+def rankings_gateway() -> Gateway:
     return Gateway(
         200,
         {
             'board': 'smoke',
             'eval': 'fake.smoke',
-            'eval_version': eval_version,
             'primary_metric': 'success_rate',
             'rankings': [
                 {
@@ -272,7 +271,7 @@ def rankings_gateway(eval_version: str = 'smoke@0123456789ab') -> Gateway:
     )
 
 
-def test_rankings_names_the_board_and_omits_an_unset_version():
+def test_rankings_names_the_board_in_the_query_string():
     gateway = rankings_gateway()
 
     response = make_client(gateway, api_key=None).rankings(board=BoardRef('smoke'))
@@ -282,12 +281,6 @@ def test_rankings_names_the_board_and_omits_an_unset_version():
     assert response.rankings[0].scores.primary == 0.75
     assert dict(gateway.request().url.params) == {'board': 'smoke'}
     assert 'authorization' not in gateway.request().headers
-
-
-def test_rankings_pins_a_past_board_when_a_version_is_given():
-    gateway = rankings_gateway('smoke@old')
-    make_client(gateway, api_key=None).rankings(board=BoardRef('smoke'), eval_version='smoke@old')
-    assert dict(gateway.request().url.params)['eval_version'] == 'smoke@old'
 
 
 def test_a_board_read_sends_the_key_when_one_is_set():
@@ -305,7 +298,6 @@ def test_list_boards_asks_without_a_key_and_parses_every_board():
                     'board': 'smoke',
                     'title': 'Smoke',
                     'eval': 'fake.smoke',
-                    'eval_version': 'smoke@0123456789ab',
                     'primary_metric': 'success_rate',
                     'visibility': 'public',
                 }

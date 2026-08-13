@@ -1,7 +1,7 @@
 """What a caller sends: the POST bodies, and the query models the GET endpoints take.
 
 Unknown fields are rejected, so a typo'd field is a 422 rather than a silently dropped input that
-would change what the submission means. A parameter left unset is absent from the URL, never empty.
+would change what the submission means.
 """
 
 from __future__ import annotations
@@ -59,10 +59,8 @@ class SubmissionGetQuery(BaseModel):
 
 
 class RankingsQuery(BaseModel):
-    """`rankings.get` — one board by slug. An `eval_version` pins a past board; omitting it asks for
-    the board as it stands."""
+    """`rankings.get` — one board by slug."""
 
     model_config = _FORBID_EXTRA
 
     board: BoardRef
-    eval_version: str | None = None

@@ -105,7 +105,7 @@ MODELS: list[BaseModel] = [
     ),
     CancelRequest(id=SUB),
     SubmissionGetQuery(id=SUB),
-    RankingsQuery(board=BoardRef('smoke'), eval_version='smoke@0123456789ab'),
+    RankingsQuery(board=BoardRef('smoke')),
     RegisterResponse(
         user_id=USER,
         artifact_location='s3://pp-artifacts/users/a0/',
@@ -114,12 +114,7 @@ MODELS: list[BaseModel] = [
     ),
     RegisterResponse(user_id=USER, artifact_location='s3://pp-artifacts/users/a0/', key_status=KeyStatus.existing),
     MeResponse(user_id=USER, alias='demo', tenant='nebius-2026', plan='nebius_competition_2026', quota=[DAILY]),
-    SubmissionCreateResponse(
-        submission_id=SUB,
-        status=SubmissionStatus.pending,
-        policy_image_digest='sha256:abc',
-        eval_version='smoke@0123456789ab',
-    ),
+    SubmissionCreateResponse(submission_id=SUB, status=SubmissionStatus.pending, policy_image_digest='sha256:abc'),
     SubmissionCreateResponse(
         submission_id=SUB, status=SubmissionStatus.errored, reason_code=ReasonCode.image_unpullable
     ),
@@ -145,7 +140,6 @@ MODELS: list[BaseModel] = [
     RankingsResponse(
         board=BoardRef('smoke'),
         eval=EvalRef('fake.smoke'),
-        eval_version='smoke@0123456789ab',
         primary_metric='success_rate',
         rankings=[
             RankingRow(rank=1, display_name='demo', tag='0ddba7', scores=SCORES, submission_id=SUB, submitted_at=AT)
@@ -158,7 +152,6 @@ MODELS: list[BaseModel] = [
                 board=BoardRef('smoke'),
                 title='Smoke',
                 eval=EvalRef('fake.smoke'),
-                eval_version='smoke@0123456789ab',
                 primary_metric='success_rate',
                 visibility=BoardVisibility.public,
             )
@@ -274,22 +267,12 @@ def test_a_board_slug_arrives_as_its_own_type_on_both_sides():
                 'board': 'smoke',
                 'title': 'Smoke',
                 'eval': 'fake.smoke',
-                'eval_version': 'smoke@0123456789ab',
                 'primary_metric': 'success_rate',
                 'visibility': 'public',
             }
         ]
     })
     assert isinstance(listed.boards[0].board, BoardRef)
-
-
-def test_an_unset_query_parameter_is_absent_from_the_url_rather_than_empty():
-    assert RankingsQuery(board=BoardRef('smoke')).model_dump(mode='json', exclude_none=True) == {'board': 'smoke'}
-
-
-def test_a_pinned_query_carries_its_version():
-    query = RankingsQuery(board=BoardRef('smoke'), eval_version='smoke@old')
-    assert query.model_dump(mode='json', exclude_none=True) == {'board': 'smoke', 'eval_version': 'smoke@old'}
 
 
 def test_an_id_reaches_the_query_string_in_its_hex_wire_form():

@@ -60,12 +60,7 @@ ANSWERS: dict[str, object] = {
             }
         ],
     },
-    routes.SUBMISSIONS_CREATE: {
-        'submission_id': SUBMISSION,
-        'status': 'pending',
-        'policy_image_digest': 'sha256:abc',
-        'eval_version': 'fake.smoke@0123456789ab',
-    },
+    routes.SUBMISSIONS_CREATE: {'submission_id': SUBMISSION, 'status': 'pending', 'policy_image_digest': 'sha256:abc'},
     routes.SUBMISSIONS_GET: {
         'id': SUBMISSION,
         'status': 'finished',
@@ -81,7 +76,6 @@ ANSWERS: dict[str, object] = {
     routes.RANKINGS_GET: {
         'board': 'fake.smoke',
         'eval': 'fake.smoke',
-        'eval_version': 'fake.smoke@0123456789ab',
         'primary_metric': 'success_rate',
         'rankings': [
             {
@@ -100,7 +94,6 @@ ANSWERS: dict[str, object] = {
                 'board': 'fake.smoke',
                 'title': 'Fake smoke',
                 'eval': 'fake.smoke',
-                'eval_version': 'fake.smoke@0123456789ab',
                 'primary_metric': 'success_rate',
                 'visibility': 'public',
             }

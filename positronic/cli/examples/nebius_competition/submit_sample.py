@@ -36,12 +36,12 @@ EVAL = EvalRef('robolab.public_subset')
 def submit(
     client: PlatformClient, *, policy_image: PolicyImage, alias: str | None, transaction_key: TransactionKey | None
 ) -> SubmissionCreateResponse:
-    """Create the submission, and report the exact image and eval version it was pinned to."""
+    """Create the submission, and report the exact image it was pinned to."""
     submission = client.create_submission(
         SubmissionCreateRequest(policy_image=policy_image, eval=EVAL, alias=alias, transaction_key=transaction_key)
     )
     print(f'submission {submission.submission_id} — {submission.status.name}')
-    print(f'pinned image {submission.policy_image_digest} against eval {submission.eval_version}')
+    print(f'pinned image {submission.policy_image_digest} against eval {EVAL}')
     return submission
 
 

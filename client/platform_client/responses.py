@@ -132,7 +132,6 @@ class SubmissionCreateResponse(_ReasonBearing):
 
     submission_id: SubmissionId
     policy_image_digest: str | None = None
-    eval_version: str | None = None
 
 
 class SubmissionListRow(_ReasonBearing):
@@ -277,7 +276,6 @@ class BoardSummary(BaseModel):
     board: BoardRef
     title: str
     eval: EvalRef
-    eval_version: str
     primary_metric: str
     visibility: Slugged[BoardVisibility]
 
@@ -298,6 +296,5 @@ class RankingsResponse(BaseModel):
 
     board: BoardRef
     eval: EvalRef
-    eval_version: str
     primary_metric: str
     rankings: list[RankingRow] = Field(default_factory=list)
