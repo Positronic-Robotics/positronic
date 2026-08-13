@@ -22,6 +22,7 @@ from positronic.policy import Policy, Recorder
 from positronic.policy.base import PolicyWrapper
 from positronic.policy.spec import ModelSource, Pipeline, split
 
+from . import protocol
 from .protocol import deserialise, serialise
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,9 @@ async def _acquire_with_keepalives(lock: asyncio.Lock, websocket: WebSocket | No
             return
         except TimeoutError:
             if websocket is not None:
-                await websocket.send_bytes(serialise({'status': 'waiting', 'message': message}))
+                await websocket.send_bytes(
+                    serialise({protocol.STATUS: protocol.Status.WAITING, protocol.MESSAGE: message})
+                )
 
 
 class PolicyManager:
@@ -76,7 +79,9 @@ class PolicyManager:
                     message = f'Waiting for {self.active_sessions} active session(s) to finish...'
                     logger.info(message)
                     if websocket:
-                        await websocket.send_bytes(serialise({'status': 'waiting', 'message': message}))
+                        await websocket.send_bytes(
+                            serialise({protocol.STATUS: protocol.Status.WAITING, protocol.MESSAGE: message})
+                        )
 
                     try:
                         await asyncio.wait_for(self._condition.wait(), timeout=5.0)
@@ -92,7 +97,10 @@ class PolicyManager:
 
                 if websocket:
                     await websocket.send_bytes(
-                        serialise({'status': 'loading', 'message': f'Loading checkpoint {checkpoint_id}...'})
+                        serialise({
+                            protocol.STATUS: protocol.Status.LOADING,
+                            protocol.MESSAGE: f'Loading checkpoint {checkpoint_id}...',
+                        })
                     )
 
                 logger.info(f'Loading policy {checkpoint_id}')
@@ -120,7 +128,7 @@ class PolicyManager:
 
         def on_progress(msg: str) -> None:
             asyncio.run_coroutine_threadsafe(
-                websocket.send_bytes(serialise({'status': 'loading', 'message': msg})), loop
+                websocket.send_bytes(serialise({protocol.STATUS: protocol.Status.LOADING, protocol.MESSAGE: msg})), loop
             ).result()
 
         return on_progress
@@ -331,7 +339,7 @@ class PolicyServer:
                 keys.COMPRESS_IMAGES: border.compress_images,
                 keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
-            await websocket.send_bytes(serialise({'status': 'ready', 'meta': meta}))
+            await websocket.send_bytes(serialise({protocol.STATUS: protocol.Status.READY, protocol.META: meta}))
 
             try:
                 while True:
@@ -343,17 +351,17 @@ class PolicyServer:
                         # would mis-parse a ``waiting`` frame. Its ``infer_timeout`` bounds the wait.
                         async with self._infer_lock:
                             actions = await asyncio.to_thread(session, raw_obs)
-                        await websocket.send_bytes(serialise({'result': actions}))
+                        await websocket.send_bytes(serialise({protocol.RESULT: actions}))
                     except Exception as e:
                         logger.error(f'Error processing message: {e}', exc_info=True)
-                        await websocket.send_bytes(serialise({'error': str(e)}))
+                        await websocket.send_bytes(serialise({protocol.ERROR: str(e)}))
             except WebSocketDisconnect:
                 logger.info('Client disconnected')
 
         except Exception as e:
             logger.error(f'Failed session: {e}', exc_info=True)
             try:
-                await websocket.send_bytes(serialise({'status': 'error', 'error': str(e)}))
+                await websocket.send_bytes(serialise({protocol.STATUS: protocol.Status.ERROR, protocol.ERROR: str(e)}))
                 await websocket.close(code=1008, reason=str(e)[:100])
             except Exception:
                 logger.debug('Failed to send error to client', exc_info=True)

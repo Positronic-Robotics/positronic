@@ -19,6 +19,16 @@ import msgpack
 import numpy as np
 from PIL import Image as PilImage
 
+# The envelope each encoded value travels in: a marker naming the type, and the fields carrying it.
+_NDARRAY = b'__ndarray__'
+_NPGENERIC = b'__npgeneric__'
+_JPEG = b'__jpeg__'
+_DATA = b'data'
+_DTYPE = b'dtype'
+_SHAPE = b'shape'
+_FRAMES = b'frames'
+_NDIM = b'ndim'
+
 # JPEG quality for images on the wire. A single HD frame — and especially a (T, H, W, 3) stack — is many
 # MB raw, over the ~2 MB websocket message cap of a Modal-fronted endpoint. Per-frame JPEG keeps a
 # 25-frame two-camera stack around 1-2 MB and cuts upload latency; q=90 is visually lossless here.
@@ -36,13 +46,13 @@ def encode_jpeg(image: np.ndarray) -> dict[bytes, Any]:
         buf = io.BytesIO()
         PilImage.fromarray(np.ascontiguousarray(frame, dtype=np.uint8)).save(buf, format='JPEG', quality=_JPEG_QUALITY)
         bufs.append(buf.getvalue())
-    return {b'__jpeg__': True, b'frames': bufs, b'ndim': int(image.ndim)}
+    return {_JPEG: True, _FRAMES: bufs, _NDIM: int(image.ndim)}
 
 
 def _decode_jpeg(marker: dict) -> np.ndarray:
     """Inverse of ``encode_jpeg``: decode per-frame JPEGs and restore the original shape."""
-    frames = np.stack([np.asarray(PilImage.open(io.BytesIO(buf))) for buf in marker[b'frames']])
-    return frames if marker[b'ndim'] == 4 else frames[0]
+    frames = np.stack([np.asarray(PilImage.open(io.BytesIO(buf))) for buf in marker[_FRAMES]])
+    return frames if marker[_NDIM] == 4 else frames[0]
 
 
 def pack(obj):
@@ -52,19 +62,19 @@ def pack(obj):
     if isinstance(obj, np.ndarray | np.generic) and obj.dtype.kind in ('V', 'O', 'c'):
         raise ValueError(f'Unsupported dtype: {obj.dtype}')
     if isinstance(obj, np.ndarray):
-        return {b'__ndarray__': True, b'data': obj.tobytes(), b'dtype': obj.dtype.str, b'shape': obj.shape}
+        return {_NDARRAY: True, _DATA: obj.tobytes(), _DTYPE: obj.dtype.str, _SHAPE: obj.shape}
     if isinstance(obj, np.generic):
-        return {b'__npgeneric__': True, b'data': obj.item(), b'dtype': obj.dtype.str}
+        return {_NPGENERIC: True, _DATA: obj.item(), _DTYPE: obj.dtype.str}
     return obj
 
 
 def unpack(obj):
     """msgpack's ``object_hook``: one decoded mapping restored to the value it encodes."""
-    if b'__ndarray__' in obj:
-        return np.ndarray(buffer=obj[b'data'], dtype=np.dtype(obj[b'dtype']), shape=obj[b'shape'])
-    if b'__npgeneric__' in obj:
-        return np.dtype(obj[b'dtype']).type(obj[b'data'])
-    if b'__jpeg__' in obj:
+    if _NDARRAY in obj:
+        return np.ndarray(buffer=obj[_DATA], dtype=np.dtype(obj[_DTYPE]), shape=obj[_SHAPE])
+    if _NPGENERIC in obj:
+        return np.dtype(obj[_DTYPE]).type(obj[_DATA])
+    if _JPEG in obj:
         return _decode_jpeg(obj)
     return obj
 

@@ -1,4 +1,5 @@
-"""The offboard wire's codec: the shared msgpack encoding, plus the robot command this boundary carries.
+"""The offboard wire's contract: the frame envelope both ends spell, the shared msgpack encoding, and the
+robot command this boundary carries.
 
 A served command reaches the rig in one of two shapes, and both arrive typed:
 - ``serialise`` writes a ``CommandType`` sitting anywhere in the payload as the ``__cmd__`` envelope, and
@@ -12,6 +13,7 @@ and its far end must not import positronic, so it cannot share this.
 
 import collections.abc as cabc
 import functools
+from enum import StrEnum
 from typing import Any
 
 import msgpack
@@ -21,16 +23,38 @@ from positronic import keys
 from positronic.drivers.roboarm import command
 from positronic.utils import serialization
 
+# The frame envelope every message travels in: ``STATUS`` frames until the server reports itself ready and
+# hands over its ``META``, then one ``RESULT`` or ``ERROR`` per inference. The server writes these and the
+# client reads them, so both import them from here.
+STATUS = 'status'
+MESSAGE = 'message'
+META = 'meta'
+RESULT = 'result'
+ERROR = 'error'
+
+
+class Status(StrEnum):
+    """What a frame reports about the session, in its ``STATUS`` field."""
+
+    READY = 'ready'
+    WAITING = 'waiting'
+    LOADING = 'loading'
+    ERROR = 'error'
+
+
+# The command envelope, written and read by the two hooks below and nowhere else.
+_CMD = b'__cmd__'
+
 
 def _pack(obj):
     if isinstance(obj, command.CommandType):
-        return {b'__cmd__': command.to_wire(obj)}
+        return {_CMD: command.to_wire(obj)}
     return serialization.pack(obj)
 
 
 def _unpack(obj):
-    if b'__cmd__' in obj:
-        return command.from_wire(obj[b'__cmd__'])
+    if _CMD in obj:
+        return command.from_wire(obj[_CMD])
     return serialization.unpack(obj)
 
 
