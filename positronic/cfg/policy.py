@@ -52,10 +52,11 @@ def balanced(balance: int):
     return BalancedSampler(balance=balance)
 
 
-@cfn.config(endpoints={}, weights={}, recording_dir=None, sampler=None, group_fields=None)
+@cfn.config(endpoints={}, weights={}, headers=None, recording_dir=None, sampler=None, group_fields=None)
 def production(
     endpoints: dict[str, str],
     weights: dict[str, float],
+    headers: dict[str, str] | None,
     recording_dir: str | None,
     sampler: Sampler | None,
     group_fields: list[str] | None,
@@ -65,6 +66,10 @@ def production(
     An endpoint is one URL, so `--policy.endpoints.groot=ws://desktop:8000` adds or repoints one without
     restating the others. `weights` name the same endpoints and set their sampling odds; endpoints left
     out of it weigh 1.0.
+
+    `headers` go to every endpoint, which is what a set of endpoints behind one authenticating proxy
+    needs: a sampled run reaches each of them with the same credential. Endpoints wanting different
+    credentials are separate policies, sampled through `sample`.
     """
     if not endpoints:
         raise ValueError('At least one endpoint must be given, e.g. --policy.endpoints.groot=ws://desktop:8000')
@@ -73,7 +78,7 @@ def production(
     # Every Sampler but the default uniform one picks by episode counts alone, so weights would be dropped.
     if weights and sampler is not None:
         raise ValueError(f'weights cannot be combined with {type(sampler).__name__}, which samples by count')
-    policies = [RemotePolicy(url, recording_dir=recording_dir) for url in endpoints.values()]
+    policies = [RemotePolicy(url, headers=headers, recording_dir=recording_dir) for url in endpoints.values()]
     w = [weights.get(name, 1.0) for name in endpoints] if weights else None
     return SampledPolicy(*policies, weights=w, sampler=sampler, group_fields=group_fields)
 
