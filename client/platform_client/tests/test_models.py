@@ -18,7 +18,7 @@ from platform_client.enums import (
 from platform_client.errors import QUOTA_DETAIL, REASON_CODE_DETAIL, ApiErrorBody, ErrorEnvelope, PlatformError
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, TransactionKey, UserId
-from platform_client.images import ImageRef
+from platform_client.policy_images import PolicyImage
 from platform_client.requests import (
     CancelRequest,
     RankingsQuery,
@@ -94,7 +94,7 @@ MODELS: list[BaseModel] = [
     ArtifactRefs(result='s3://pp-artifacts/users/a0/submissions/1f/result.json'),
     RegisterRequest(credential='token', alias='demo', rotate=True),
     SubmissionCreateRequest(
-        policy_image=ImageRef('org/policy:v1'),
+        policy_image=PolicyImage('org/policy:v1'),
         eval=EvalRef('fake.smoke'),
         alias='demo',
         transaction_key=TransactionKey('key-1'),
@@ -213,8 +213,8 @@ def test_a_policy_image_the_registry_could_never_resolve_is_refused_here():
 
 
 def test_a_digest_pinned_image_is_taken_whole_and_parsed():
-    request = SubmissionCreateRequest(policy_image=ImageRef('org/policy@sha256:abc'), eval=EvalRef('fake.smoke'))
-    assert isinstance(request.policy_image, ImageRef)
+    request = SubmissionCreateRequest(policy_image=PolicyImage('org/policy@sha256:abc'), eval=EvalRef('fake.smoke'))
+    assert isinstance(request.policy_image, PolicyImage)
     assert request.policy_image.name == 'org/policy'
     assert request.policy_image.digest == 'sha256:abc'
 

@@ -22,7 +22,7 @@ from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, KeyStat
 from platform_client.errors import PlatformError
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId
-from platform_client.images import ImageRef
+from platform_client.policy_images import PolicyImage
 from platform_client.requests import RegisterRequest, SubmissionCreateRequest
 from platform_client.responses import ErroredSubmissionView, FinishedSubmissionView, SubmissionView
 
@@ -70,7 +70,13 @@ def print_quota(client: PlatformClient) -> None:
 
 
 def walkthrough(
-    client: PlatformClient, *, credential: str, alias: str, eval_ref: EvalRef, policy_image: ImageRef, timeout_s: float
+    client: PlatformClient,
+    *,
+    credential: str,
+    alias: str,
+    eval_ref: EvalRef,
+    policy_image: PolicyImage,
+    timeout_s: float,
 ) -> None:
     print('1. register')
     client.api_key = mint_api_key(client, credential=credential, alias=alias)
@@ -119,7 +125,7 @@ def main() -> None:
                 credential=credential,
                 alias=args.alias,
                 eval_ref=EvalRef(args.eval),
-                policy_image=ImageRef(args.policy_image),
+                policy_image=PolicyImage(args.policy_image),
                 timeout_s=args.timeout,
             )
         except PlatformError as exc:

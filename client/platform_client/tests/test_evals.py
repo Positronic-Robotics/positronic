@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from platform_client.evals import EvalRef
-from platform_client.images import ImageRef
+from platform_client.policy_images import PolicyImage
 from platform_client.requests import SubmissionCreateRequest
 from pydantic import ValidationError
 
@@ -37,9 +37,9 @@ def test_the_boundary_refuses_an_empty_eval():
 def test_an_image_reference_a_registry_could_never_resolve_is_refused_here(value: str):
     # An unpullable image is a CHARGED terminal submission, so a typo caught locally is quota saved.
     with pytest.raises(ValueError):
-        ImageRef(value)
+        PolicyImage(value)
 
 
 @pytest.mark.parametrize('value', ['org/policy', 'org/policy:v1', 'org/policy@sha256:abc', 'reg.io:5000/org/p:v1'])
 def test_a_reference_a_registry_can_resolve_is_kept(value: str):
-    assert ImageRef(value) == value
+    assert PolicyImage(value) == value

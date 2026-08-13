@@ -1,4 +1,4 @@
-"""Container-image references — the one type a caller and the platform pin a policy image with."""
+"""Policy images — the container image a submission's policy is run from."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pydantic_core import core_schema
 _DIGEST = re.compile(r'[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9a-fA-F]+')
 
 
-class ImageRef(str):
+class PolicyImage(str):
     """A registry reference, `name[@digest]`, as a validated `str` — no serializer, no DB adapter.
 
     `name` is everything before the digest (repository plus any tag); `digest` is what pins the bytes.
@@ -20,7 +20,7 @@ class ImageRef(str):
 
     __slots__ = ()
 
-    def __new__(cls, value: str) -> ImageRef:
+    def __new__(cls, value: str) -> PolicyImage:
         name, sep, digest = value.partition('@')
         if not name or any(c.isspace() for c in value) or (sep and not digest) or '@' in digest:
             raise ValueError(f'not an image reference: {value!r}')
@@ -45,7 +45,7 @@ class ImageRef(str):
     def digest(self) -> str | None:
         return self.partition('@')[2] or None
 
-    def pinned(self, digest: str) -> ImageRef:
+    def pinned(self, digest: str) -> PolicyImage:
         """This reference bound to `digest`, REPLACING any digest it already carries — appending
         instead would turn an already-pinned `repo@sha256:…` into an unpullable double digest."""
-        return ImageRef(f'{self.name}@{digest}')
+        return PolicyImage(f'{self.name}@{digest}')

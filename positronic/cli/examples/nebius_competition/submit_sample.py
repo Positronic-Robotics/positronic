@@ -25,7 +25,7 @@ from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, ReasonC
 from platform_client.errors import PlatformError
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, TransactionKey
-from platform_client.images import ImageRef
+from platform_client.policy_images import PolicyImage
 from platform_client.requests import SubmissionCreateRequest
 from platform_client.responses import FinishedSubmissionView, SubmissionCreateResponse, SubmissionView
 
@@ -34,7 +34,7 @@ EVAL = EvalRef('robolab.public_subset')
 
 
 def submit(
-    client: PlatformClient, *, policy_image: ImageRef, alias: str | None, transaction_key: TransactionKey | None
+    client: PlatformClient, *, policy_image: PolicyImage, alias: str | None, transaction_key: TransactionKey | None
 ) -> SubmissionCreateResponse:
     """Create the submission, and report the exact image and eval version it was pinned to."""
     created = client.create_submission(
@@ -75,7 +75,7 @@ def main() -> None:
         try:
             created = submit(
                 client,
-                policy_image=ImageRef(args.policy_image),
+                policy_image=PolicyImage(args.policy_image),
                 alias=args.alias,
                 transaction_key=TransactionKey(args.transaction_key) if args.transaction_key else None,
             )

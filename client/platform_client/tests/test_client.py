@@ -21,7 +21,7 @@ from platform_client.enums import (
 from platform_client.errors import EVALS_DETAIL, REASON_CODE_DETAIL, PlatformError
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId
-from platform_client.images import ImageRef
+from platform_client.policy_images import PolicyImage
 from platform_client.requests import CancelRequest, RegisterRequest, SubmissionCreateRequest
 from platform_client.responses import (
     QUOTA_SUBMISSIONS_DAY,
@@ -139,7 +139,7 @@ def test_create_submission_sends_the_run_defining_fields():
     client = make_client(gateway)
 
     response = client.create_submission(
-        SubmissionCreateRequest(policy_image=ImageRef('org/policy:v1'), eval=EvalRef('fake.smoke'))
+        SubmissionCreateRequest(policy_image=PolicyImage('org/policy:v1'), eval=EvalRef('fake.smoke'))
     )
 
     assert isinstance(response, SubmissionCreateResponse)
@@ -153,7 +153,7 @@ def test_create_submission_sends_the_run_defining_fields():
 def test_create_submission_reports_a_terminal_unpullable_image_as_a_response():
     gateway = Gateway(200, {'submission_id': '1f', 'status': 'errored', 'reason_code': 'image_unpullable'})
     response = make_client(gateway).create_submission(
-        SubmissionCreateRequest(policy_image=ImageRef('nope'), eval=EvalRef('fake.smoke'))
+        SubmissionCreateRequest(policy_image=PolicyImage('nope'), eval=EvalRef('fake.smoke'))
     )
     assert response.status is SubmissionStatus.errored
     assert response.reason_code is ReasonCode.image_unpullable
@@ -206,7 +206,7 @@ def test_a_numeric_id_is_refused_at_the_boundary():
     gateway = Gateway(200, {'submission_id': 31, 'status': 'pending'})
     with pytest.raises(ValidationError):
         make_client(gateway).create_submission(
-            SubmissionCreateRequest(policy_image=ImageRef('org/policy:v1'), eval=EvalRef('fake.smoke'))
+            SubmissionCreateRequest(policy_image=PolicyImage('org/policy:v1'), eval=EvalRef('fake.smoke'))
         )
 
 
@@ -303,7 +303,7 @@ def test_an_error_envelope_becomes_the_typed_exception():
     )
     with pytest.raises(PlatformError) as raised:
         make_client(gateway).create_submission(
-            SubmissionCreateRequest(policy_image=ImageRef('nope'), eval=EvalRef('fake.smoke'))
+            SubmissionCreateRequest(policy_image=PolicyImage('nope'), eval=EvalRef('fake.smoke'))
         )
 
     assert raised.value.code is ErrorCode.bad_request
@@ -383,7 +383,7 @@ def test_an_unknown_eval_comes_back_carrying_the_ones_on_offer():
     )
     with pytest.raises(PlatformError) as caught:
         make_client(gateway).create_submission(
-            SubmissionCreateRequest(policy_image=ImageRef('org/policy:v1'), eval=EvalRef('fake.smokey'))
+            SubmissionCreateRequest(policy_image=PolicyImage('org/policy:v1'), eval=EvalRef('fake.smokey'))
         )
     assert caught.value.evals == ['fake.smoke', 'robolab.public_subset']
 

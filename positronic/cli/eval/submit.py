@@ -6,7 +6,7 @@ Not a command of its own: running an eval is one act, and where it runs is an ar
 from platform_client.enums import NO_RESULT_STATUSES
 from platform_client.evals import EvalRef
 from platform_client.ids import TransactionKey
-from platform_client.images import ImageRef
+from platform_client.policy_images import PolicyImage
 from platform_client.requests import SubmissionCreateRequest
 from platform_client.responses import SubmissionCreateResponse
 
@@ -29,7 +29,7 @@ def submit(
     `transaction_key` returns the original instead of spending another day's quota.
     """
     request = SubmissionCreateRequest(
-        policy_image=ImageRef(policy_image),
+        policy_image=PolicyImage(policy_image),
         eval=EvalRef(eval_name),
         alias=alias,
         transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,

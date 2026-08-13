@@ -13,7 +13,7 @@ from __future__ import annotations
 from platform_client.boards import BoardRef
 from platform_client.evals import EvalRef
 from platform_client.ids import SubmissionId, TransactionKey
-from platform_client.images import ImageRef
+from platform_client.policy_images import PolicyImage
 from pydantic import BaseModel, ConfigDict, Field
 
 _FORBID_EXTRA = ConfigDict(extra='forbid')
@@ -34,9 +34,9 @@ class SubmissionCreateRequest(BaseModel):
 
     model_config = _FORBID_EXTRA
 
-    # An `ImageRef`, so a reference the registry could never resolve is refused in the caller's own
+    # A `PolicyImage`, so a reference the registry could never resolve is refused in the caller's own
     # process instead of spending a round trip to learn it.
-    policy_image: ImageRef
+    policy_image: PolicyImage
     # The whole of what the caller chooses: the eval names its own embodiment, and the platform
     # answers an unknown name with the ones it offers.
     eval: EvalRef

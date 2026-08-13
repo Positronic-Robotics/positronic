@@ -61,12 +61,12 @@ same on every board you appear on.
 ```python
 from platform_client.client import PlatformClient
 from platform_client.evals import EvalRef
-from platform_client.images import ImageRef
+from platform_client.policy_images import PolicyImage
 from platform_client.requests import SubmissionCreateRequest
 
 with PlatformClient(api_key=key) as client:
     created = client.create_submission(
-        SubmissionCreateRequest(policy_image=ImageRef('org/policy:v1'), eval=EvalRef('robolab.public_subset'))
+        SubmissionCreateRequest(policy_image=PolicyImage('org/policy:v1'), eval=EvalRef('robolab.public_subset'))
     )
     view = client.get_submission(created.submission_id)
 ```
