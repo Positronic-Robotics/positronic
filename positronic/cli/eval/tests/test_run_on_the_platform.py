@@ -78,9 +78,23 @@ def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(p
     assert 'evals on offer: fake.smoke, robolab.public_subset' in str(exit_info.value)
 
 
-def test_an_image_reference_the_registry_could_never_resolve_is_refused_here(platform, run_command):
-    with pytest.raises(ValueError):
-        run_command(run, eval='fake.smoke', policy_image='org/policy@')
+@pytest.mark.parametrize(
+    ('typo', 'named'),
+    [
+        ({'policy_image': 'org/policy@'}, 'org/policy@'),
+        ({'eval': 'fake smoke'}, 'fake smoke'),
+        ({'transaction_key': ''}, 'transaction_key'),
+    ],
+    ids=['image', 'eval', 'transaction-key'],
+)
+def test_a_value_the_wire_types_refuse_is_a_refusal_naming_it_rather_than_a_traceback(
+    platform, run_command, typo: dict, named: str
+):
+    # These are refused in the caller's own process, before anything is sent, so the user learns
+    # which value they typed wrong instead of reading a stack trace out of a constructor.
+    with pytest.raises(SystemExit) as exit_info:
+        run_command(run, **{'eval': 'fake.smoke', 'policy_image': 'org/p:v1', **typo})
+    assert named in str(exit_info.value)
     assert platform.seen is None
 
 

@@ -5,7 +5,7 @@ import shlex
 import configuronic as cfn
 from platform_client.requests import RegisterRequest
 
-from positronic.cli.account.gateway import API_KEY_ENV, credential, gateway
+from positronic.cli.account.gateway import API_KEY_ENV, credential, gateway, refusing_bad_input
 
 
 @cfn.config()
@@ -14,7 +14,8 @@ def register(alias: str | None = None, rotate: bool = False, platform_url: str |
 
     Reads the credential from the environment, never an argument.
     """
-    request = RegisterRequest(credential=credential(), alias=alias, rotate=rotate)
+    with refusing_bad_input():
+        request = RegisterRequest(credential=credential(), alias=alias, rotate=rotate)
     with gateway(platform_url, key_required=False) as client:
         response = client.register(request)
     print(f'user {response.user_id} ({response.key_status.name})')

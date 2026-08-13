@@ -4,7 +4,7 @@ import configuronic as cfn
 from platform_client.requests import CancelRequest
 from platform_client.responses import ID_FIELD, STATUS_FIELD
 
-from positronic.cli.account.gateway import gateway, parse_submission_id
+from positronic.cli.account.gateway import gateway, parse_submission_id, refusing_bad_input
 
 # What `status` prints on its header line, so the body below it does not repeat them. Field names
 # rather than literals, so a model rename cannot leave this excluding a field that no longer exists.
@@ -35,7 +35,8 @@ def list_submissions(platform_url: str | None = None):
 @cfn.config()
 def cancel(submission_id: str, platform_url: str | None = None):
     """Cancel a submission that has not reached a terminal status."""
-    request = CancelRequest(id=parse_submission_id(submission_id))
+    with refusing_bad_input():
+        request = CancelRequest(id=parse_submission_id(submission_id))
     with gateway(platform_url) as client:
         result = client.cancel_submission(request)
     print(f'{result.status.name}, quota {"refunded" if result.refunded else "charged"}')

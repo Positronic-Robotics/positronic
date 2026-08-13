@@ -10,7 +10,7 @@ from platform_client.policy_images import PolicyImage
 from platform_client.requests import SubmissionCreateRequest
 from platform_client.responses import SubmissionCreateResponse
 
-from positronic.cli.account.gateway import gateway
+from positronic.cli.account.gateway import gateway, refusing_bad_input
 
 
 def submit(
@@ -28,12 +28,13 @@ def submit(
     you tested, while a mutable tag is resolved at submission time. Repeating a submission under one
     `transaction_key` returns the original instead of spending another day's quota.
     """
-    request = SubmissionCreateRequest(
-        policy_image=PolicyImage(policy_image),
-        eval=EvalRef(eval_name),
-        alias=alias,
-        transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,
-    )
+    with refusing_bad_input():
+        request = SubmissionCreateRequest(
+            policy_image=PolicyImage(policy_image),
+            eval=EvalRef(eval_name),
+            alias=alias,
+            transaction_key=TransactionKey(transaction_key) if transaction_key is not None else None,
+        )
     with gateway(platform_url) as client:
         submission = client.create_submission(request)
     print(f'submission {submission.submission_id} ({submission.status.name})')

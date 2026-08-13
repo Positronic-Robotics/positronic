@@ -49,6 +49,15 @@ def test_register_refuses_when_no_credential_is_in_the_environment(platform, run
     assert gateway_module.CREDENTIAL_ENV in str(raised.value)
 
 
+def test_an_alias_the_request_model_refuses_is_a_refusal_naming_the_field(platform, run_command):
+    # configuronic literal-evaluates a CLI value, so `--alias=5` arrives as an int, which the model
+    # refuses — a refusal to read rather than a traceback out of the constructor.
+    with pytest.raises(SystemExit) as raised:
+        run_command(register, alias=5)
+    assert 'alias' in str(raised.value)
+    assert platform.seen is None
+
+
 def test_register_says_no_key_came_back_for_an_existing_registration(platform, run_command, capsys):
     platform.answer({'user_id': 'a0', 'artifact_location': 's3://b/users/a0/', 'key_status': 'existing'})
 

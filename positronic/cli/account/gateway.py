@@ -13,7 +13,28 @@ from platform_client.client import API_KEY_ENV, API_URL_ENV, CREDENTIAL_ENV, Pla
 from platform_client.errors import PlatformError
 from platform_client.ids import ApiKey, SubmissionId
 
-__all__ = ['API_KEY_ENV', 'API_URL_ENV', 'CREDENTIAL_ENV', 'credential', 'gateway', 'parse_submission_id']
+__all__ = [
+    'API_KEY_ENV',
+    'API_URL_ENV',
+    'CREDENTIAL_ENV',
+    'credential',
+    'gateway',
+    'parse_submission_id',
+    'refusing_bad_input',
+]
+
+
+@contextmanager
+def refusing_bad_input() -> Iterator[None]:
+    """Report a value the wire types refuse as a CLI refusal, not a traceback.
+
+    Every one of them — a platform URL, an image reference, an eval name, a request model — raises
+    `ValueError` naming the value it would not take, which is already the sentence a user needs.
+    """
+    try:
+        yield
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 @contextmanager
@@ -22,12 +43,9 @@ def gateway(platform_url: str | None = None, *, key_required: bool = True) -> It
     key = os.environ.get(API_KEY_ENV)
     if key_required and not key:
         raise SystemExit(f'no API key: set {API_KEY_ENV} to the one `positronic account register` printed')
-    try:
+    # A misconfigured platform — an empty `--platform-url`, or one the client cannot reach.
+    with refusing_bad_input():
         client_ = PlatformClient(platform_url, api_key=ApiKey(key) if key else None)
-    except ValueError as exc:
-        # A misconfigured platform — an empty `--platform-url` or `POSITRONIC_PLATFORM_URL`. To a
-        # user that is a refusal to read, not a traceback out of the constructor.
-        raise SystemExit(str(exc)) from exc
     with client_ as client:
         try:
             yield client
