@@ -2,9 +2,13 @@
 
 import configuronic as cfn
 from platform_client.requests import CancelRequest
-from platform_client.responses import VIEW_HEADER_FIELDS
+from platform_client.responses import STATUS_FIELD
 
 from positronic.cli.account.gateway import gateway, parse_submission_id
+
+# What `status` prints on its header line, so the body below it does not repeat them. Field names
+# rather than literals, so a model rename cannot leave this excluding a field that no longer exists.
+_HEADER_FIELDS = frozenset({'id', STATUS_FIELD})
 
 
 @cfn.config()
@@ -14,7 +18,7 @@ def status(submission_id: str, platform_url: str | None = None):
     with gateway(platform_url) as client:
         view = client.get_submission(wanted)
     print(f'{view.id} {view.status.name}')
-    for name, value in view.model_dump(mode='json', exclude=set(VIEW_HEADER_FIELDS)).items():
+    for name, value in view.model_dump(mode='json', exclude=set(_HEADER_FIELDS)).items():
         print(f'  {name}: {value}')
 
 

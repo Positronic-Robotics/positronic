@@ -56,9 +56,7 @@ class QuotaLimit(BaseModel):
     key: str  # the rule's identity, one of the published keys above — what a 429 names
     meter: str  # open set: a plan may declare one. 'submissions' | 'credits'
     unit: str  # the display unit, open for the same reason
-    # Meter units per display unit (credits: 6, submissions: 1). Consumers divide by it, so a
-    # zero would validate here and raise ZeroDivisionError in the caller instead.
-    scale: int = Field(gt=0)
+    scale: int = Field(gt=0)  # meter units per display unit (credits: 6, submissions: 1), always positive
     window: str  # a display label: 'day', '24 Jul – 23 Aug', 'concurrent'
     subject: Slugged[QuotaSubject]
     scope: list[str] = Field(default_factory=list)  # tags this rule counts; empty counts the whole meter
@@ -211,11 +209,8 @@ class CancelledSubmissionView(_TaggedView):
     status: Slugged[SubmissionStatus] = SubmissionStatus.cancelled
 
 
-# The discriminator's field name, and the fields a consumer rendering a view puts in its own header
-# line rather than in the body — named here so a model rename cannot leave a consumer excluding a
-# field that no longer exists.
+# The field the view union discriminates on, named so a rename moves the discriminator with it.
 STATUS_FIELD = 'status'
-VIEW_HEADER_FIELDS = frozenset({'id', STATUS_FIELD})
 
 
 def _status_tag(value: Any) -> str | None:

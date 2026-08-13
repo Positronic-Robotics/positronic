@@ -21,7 +21,7 @@ import os
 import time
 
 from platform_client.client import API_KEY_ENV, PlatformClient
-from platform_client.enums import TERMINAL_STATUSES, ReasonCode, SubmissionStatus
+from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, ReasonCode
 from platform_client.errors import PlatformError
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId, TransactionKey
@@ -79,15 +79,18 @@ def main() -> None:
                 alias=args.alias,
                 transaction_key=TransactionKey(args.transaction_key) if args.transaction_key else None,
             )
-            if created.status is SubmissionStatus.errored:
-                reason = created.reason_code.name if created.reason_code else 'unknown'
+            if created.status in NO_RESULT_STATUSES:
+                reason = created.reason_code.name if created.reason_code else created.status.name
                 if created.reason_code is ReasonCode.image_unpullable:
                     reason += ' — check the reference and its visibility'
                 raise SystemExit(f'terminal at the door: {reason}')
             view = poll_until_terminal(client, created.submission_id, timeout_s=args.timeout)
+            # A qualifier that failed reports the same way whenever it failed — at the door or an
+            # hour in — so a script cannot read one as a run that produced something.
+            if not isinstance(view, FinishedSubmissionView):
+                raise SystemExit(f'finished as {view.status.name}, with no result to read')
             print(f'finished as {view.status.name}')
-            if isinstance(view, FinishedSubmissionView):
-                print(f'primary {view.scores.primary} over {view.scores.episodes} episodes')
+            print(f'primary {view.scores.primary} over {view.scores.episodes} episodes')
         except PlatformError as exc:
             offered = f'\nevals on offer: {", ".join(exc.evals)}' if exc.evals is not None else ''
             raise SystemExit(f'{exc.code.name}: {exc.message}{offered}') from exc

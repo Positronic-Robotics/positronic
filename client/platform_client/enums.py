@@ -131,3 +131,7 @@ TERMINAL_STATUSES: frozenset[SubmissionStatus] = frozenset({
     SubmissionStatus.errored,
     SubmissionStatus.cancelled,
 })
+
+# Decided, and there will never be a result to read. Derived, so a fourth terminal status joins it
+# by being terminal rather than by every caller remembering to name it.
+NO_RESULT_STATUSES: frozenset[SubmissionStatus] = TERMINAL_STATUSES - {SubmissionStatus.finished}

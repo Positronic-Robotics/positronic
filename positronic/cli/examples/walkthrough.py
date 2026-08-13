@@ -18,7 +18,7 @@ import os
 import time
 
 from platform_client.client import CREDENTIAL_ENV, PlatformClient
-from platform_client.enums import TERMINAL_STATUSES, KeyStatus, SubmissionStatus
+from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES, KeyStatus
 from platform_client.errors import PlatformError
 from platform_client.evals import EvalRef
 from platform_client.ids import ApiKey, SubmissionId
@@ -80,20 +80,23 @@ def walkthrough(
     # one the platform does not offer comes back with the names it does, under `PlatformError.evals`.
     created = client.create_submission(SubmissionCreateRequest(policy_image=policy_image, eval=eval_ref))
     print(f'   submission {created.submission_id} ({created.status.name})')
-    if created.status is SubmissionStatus.errored:
-        print(f'   terminal at the door: {created.reason_code.name if created.reason_code else "unknown"}')
-        return
+    if created.status in NO_RESULT_STATUSES:
+        reason = created.reason_code.name if created.reason_code else created.status.name
+        raise SystemExit(f'   terminal at the door: {reason}')
 
     print('3. quota')
     print_quota(client)
 
     print('4. poll until terminal')
     view = poll_until_terminal(client, created.submission_id, timeout_s=timeout_s)
-    if isinstance(view, FinishedSubmissionView):
-        print(f'   primary {view.scores.primary} over {view.scores.episodes} episodes')
-        print(f'   result  {view.artifacts.result}')
-    elif isinstance(view, ErroredSubmissionView):
-        print(f'   failed: {view.reason_code.name if view.reason_code else "unknown"} — {view.reason}')
+    if isinstance(view, ErroredSubmissionView):
+        raise SystemExit(f'   failed: {view.reason_code.name if view.reason_code else "unknown"} — {view.reason}')
+    # Run as a command, and a test reads the exit code, so a run that produced nothing must not
+    # leave one saying it did.
+    if not isinstance(view, FinishedSubmissionView):
+        raise SystemExit(f'   {view.status.name}, with no result to read')
+    print(f'   primary {view.scores.primary} over {view.scores.episodes} episodes')
+    print(f'   result  {view.artifacts.result}')
 
 
 def main() -> None:

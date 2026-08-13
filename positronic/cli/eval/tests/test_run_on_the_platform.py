@@ -41,6 +41,24 @@ def test_an_image_rejected_at_the_door_fails_the_command(platform, run_command, 
     assert f'submission {ID} (errored)' in capsys.readouterr().out
 
 
+def test_a_replay_of_a_cancelled_submission_fails_the_command(platform, run_command):
+    # An idempotent replay returns the original, which may since have been cancelled. It will never
+    # produce a result, so it exits like any other terminal-without-a-result.
+    platform.answer({'submission_id': ID, 'status': 'cancelled'})
+
+    with pytest.raises(SystemExit, match='rejected: cancelled'):
+        run_command(run, eval='fake.smoke', policy_image='org/p:v1', transaction_key='retry-1')
+
+
+def test_a_replay_of_a_finished_submission_succeeds(platform, run_command, capsys):
+    # The boundary of the rule above: terminal is not the test, a missing result is.
+    platform.answer({'submission_id': ID, 'status': 'finished'})
+
+    run_command(run, eval='fake.smoke', policy_image='org/p:v1', transaction_key='retry-1')
+
+    assert f'submission {ID} (finished)' in capsys.readouterr().out
+
+
 def test_an_eval_the_platform_does_not_offer_is_answered_with_the_ones_it_does(platform, run_command):
     # The set lives on the server, so the refusal is where a caller learns the real names.
     platform.answer(

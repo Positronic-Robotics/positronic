@@ -24,8 +24,7 @@ class ImageRef(str):
         name, sep, digest = value.partition('@')
         if not name or any(c.isspace() for c in value) or (sep and not digest) or '@' in digest:
             raise ValueError(f'not an image reference: {value!r}')
-        # A tag or a digest with nothing behind it is a typo, and one the registry only refuses at
-        # submission time — where an unpullable image is a charged terminal submission.
+        # A digest, where present, matches the supported grammar.
         if sep and not _DIGEST.fullmatch(digest):
             raise ValueError(f'not a digest: {digest!r}')
         # A trailing colon is an empty tag. A registry port (`reg.io:5000/org/policy`) is not one:
