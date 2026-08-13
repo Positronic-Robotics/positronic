@@ -64,6 +64,19 @@ def resolve_api_key(api_key: ApiKey | None = None) -> ApiKey | None:
     return ApiKey(from_env) if from_env else None
 
 
+def require_absolute_url(url: str | httpx.URL, source: str) -> None:
+    """Refuse a base URL that names no host, naming the value and what it has to be.
+
+    Every endpoint sends a path relative to the client's base URL, so one that names no host — empty,
+    or a bare path — resolves against nothing and the request never leaves for a platform.
+    """
+    if httpx.URL(url).is_absolute_url:
+        return
+    raise ValueError(
+        f'{source} is {str(url)!r}, which names no host: give an absolute URL, scheme and host, naming the platform'
+    )
+
+
 def resolve_base_url(base_url: str | None = None) -> str:
     """The platform to talk to: what the caller passed, else the environment, else the default."""
     for value, source in ((base_url, 'base_url'), (os.environ.get(API_URL_ENV), API_URL_ENV)):
@@ -73,6 +86,7 @@ def resolve_base_url(base_url: str | None = None) -> str:
         # platform the caller named, and falling through would send that run to the production one.
         if not value.strip():
             raise ValueError(f'{source} is empty; name a platform, or leave it unset for {DEFAULT_PLATFORM_URL}')
+        require_absolute_url(value, source)
         return value
     return DEFAULT_PLATFORM_URL
 
@@ -104,28 +118,22 @@ class PlatformClient:
         self._owns_client = client is None
         if client is None:
             client = httpx.Client(base_url=resolve_base_url(base_url), timeout=timeout)
-        elif base_url is not None:
-            raise ValueError('a client of your own already carries its base URL; pass one or the other')
-        elif not client.base_url.is_absolute_url:
-            # Every endpoint below sends a path relative to the client's own base URL, so one that
-            # names no host — empty, or a bare path — resolves against nothing and the request never
-            # leaves for a platform.
-            raise ValueError(
-                f'the supplied client carries base_url {str(client.base_url)!r}; set '
-                f'httpx.Client(base_url=...) to an absolute URL, scheme and host, naming the platform'
-            )
-        elif AUTH_HEADER in client.headers:
-            # httpx MERGES client-level headers into every request, so a default here would reach
-            # `users.register`, which this module declares unauthenticated and the gateway reads as
-            # a registration by whoever that credential names.
-            raise ValueError(f'the supplied client carries a default {AUTH_HEADER} header; pass the key as api_key')
-        elif client.auth is not None:
-            # An auth flow reaches the same requests by another route: httpx runs it on every one,
-            # so it would sign `users.register` too.
-            raise ValueError(
-                f'the supplied client carries an auth flow, which sets {AUTH_HEADER} on every '
-                f'request including `users.register`; pass the key as api_key'
-            )
+        else:
+            if base_url is not None:
+                raise ValueError('a client of your own already carries its base URL; pass one or the other')
+            require_absolute_url(client.base_url, "the supplied client's base_url")
+            if AUTH_HEADER in client.headers:
+                # httpx MERGES client-level headers into every request, so a default here would reach
+                # `users.register`, which this module declares unauthenticated and the gateway reads
+                # as a registration by whoever that credential names.
+                raise ValueError(f'the supplied client carries a default {AUTH_HEADER} header; pass the key as api_key')
+            if client.auth is not None:
+                # An auth flow reaches the same requests by another route: httpx runs it on every
+                # one, so it would sign `users.register` too.
+                raise ValueError(
+                    f'the supplied client carries an auth flow, which sets {AUTH_HEADER} on every '
+                    f'request including `users.register`; pass the key as api_key'
+                )
         self._client = client
         self.api_key = resolve_api_key(api_key)
 
@@ -199,7 +207,12 @@ class PlatformClient:
         # Not `>= 400`: httpx follows no redirect by default, so a 3xx arrives here with a body that
         # is not an envelope and would surface as a parse error instead of the promised PlatformError.
         if not 200 <= response.status_code < 300:
-            raise PlatformError.from_payload(response.status_code, _decode(response))
+            try:
+                payload: object = response.json()
+            except ValueError:
+                # A failure need not carry an envelope at all: a proxy's HTML 502 arrives here too.
+                payload = response.text
+            raise PlatformError.from_payload(response.status_code, payload)
         return response
 
     def close(self) -> None:
@@ -214,10 +227,3 @@ class PlatformClient:
         self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
     ) -> None:
         self.close()
-
-
-def _decode(response: httpx.Response) -> object:
-    try:
-        return response.json()
-    except ValueError:
-        return response.text

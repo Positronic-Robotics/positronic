@@ -393,6 +393,19 @@ def test_a_supplied_client_whose_base_url_names_no_host_is_refused(base_url: str
         PlatformClient(client=httpx.Client(base_url=base_url))
 
 
+@pytest.mark.parametrize('base_url', ['/gateway', '//gateway/api'])
+def test_a_base_url_that_names_no_host_is_refused_however_it_arrives(monkeypatch, base_url: str):
+    # httpx takes a relative base URL, so the client the caller does not supply is built from one
+    # just as happily — the same dead request, reached through the argument or the environment.
+    monkeypatch.delenv(API_URL_ENV, raising=False)
+    with pytest.raises(ValueError, match='absolute URL'):
+        PlatformClient(base_url)
+
+    monkeypatch.setenv(API_URL_ENV, base_url)
+    with pytest.raises(ValueError, match='absolute URL'):
+        PlatformClient()
+
+
 def test_closing_leaves_a_caller_supplied_client_open():
     supplied = httpx.Client(base_url=BASE, transport=httpx.MockTransport(Gateway(200, {})))
     PlatformClient(client=supplied).close()
