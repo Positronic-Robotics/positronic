@@ -80,6 +80,14 @@ def test_a_relaxed_or_absent_pin_reads_as_no_pin():
     assert gate.pinned_version(manifest('positronic-platform-client>=0.1.0,==0.1.0')) is None
 
 
+def test_a_conditional_pin_is_no_pin():
+    # A marker that is false on every supported interpreter installs the client nowhere, while the
+    # CLI imports `platform_client` unconditionally — so a fresh install fails at startup.
+    assert gate.pinned_version(manifest("positronic-platform-client==0.2.0; python_version < '3'")) is None
+    assert gate.pinned_version(manifest("positronic-platform-client==0.2.0; python_version >= '3'")) is None
+    assert gate.pinned_version(manifest('positronic-platform-client==0.2.0')) == '0.2.0'
+
+
 def test_a_deleted_dependency_left_behind_as_a_comment_is_no_pin():
     # The shape a deletion actually leaves: the line commented out rather than removed. Scanned as
     # text it reads as a live pin, which passes the missing-dependency case this gate exists to

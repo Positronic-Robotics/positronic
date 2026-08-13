@@ -146,9 +146,11 @@ def pinned_version(text: str) -> str | None:
             continue
         if canonicalize_name(requirement.name) != canonicalize_name(DISTRIBUTION):
             continue
-        # Only `==<version>` alone is a pin: anything else resolves to whatever the index offers.
+        # Only `==<version>` alone, and unconditionally, is a pin: anything else resolves to whatever
+        # the index offers, and a marker (`; python_version < '3'`) leaves the client uninstalled on
+        # every interpreter this project supports, where the CLI imports `platform_client` regardless.
         specifiers = list(requirement.specifier)
-        if len(specifiers) == 1 and specifiers[0].operator == '==':
+        if requirement.marker is None and len(specifiers) == 1 and specifiers[0].operator == '==':
             return specifiers[0].version
     return None
 
