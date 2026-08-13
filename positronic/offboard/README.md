@@ -137,29 +137,36 @@ The client should display these status updates to the user. Once loading complet
 After handshake, the client streams observations and receives actions:
 
 **Client → Server (Observation):**
+
+Keys are flat strings — the dots are literal, not nesting. Arrays travel as numpy, not base64; a rig behind a message-size cap JPEG-encodes its frames instead (see `compress_images` above). `docs/connect-your-model.md` carries the full key table.
+
 ```json
 {
-  "ee_pose": [0.5, 0.2, 0.3, 0.0, 0.0, 0.0, 1.0],
-  "grip": [0.04],
-  "wrist_image": "<base64_encoded_image>",
-  "exterior_image": "<base64_encoded_image>"
+  "robot_state.ee_pose": [0.5, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0],
+  "robot_state.q": [0.0, -0.3, 0.0, -2.2, 0.0, 2.0, 0.8],
+  "grip": 0.04,
+  "image.wrist": "<uint8 (H, W, 3)>",
+  "image.exterior": "<uint8 (H, W, 3)>",
+  "obs_time_ns": 1737000000000000000,
+  "task": "pick up the red cube"
 }
 ```
 
 **Server → Client (Actions):**
 
-`result` is a **list** of action dicts — one per action in the predicted chunk (or `null` if the model produced no actions):
+`result` is a **list** of action dicts — one per action in the predicted chunk (or `null` if the model produced no actions). `timestamp` is seconds from the start of the chunk; `robot_command` carries the control command, and a rig with more than one arm names the channel per arm (`robot_command.left`):
 
 ```json
 {
   "result": [{
-    "action": {
-      "target_pose": [0.51, 0.21, 0.31, 0.0, 0.0, 0.0, 1.0],
-      "target_grip": [0.02]
-    }
+    "robot_command": {"type": "cartesian_pos", "pose": [0.51, 0.21, 0.31, 1, 0, 0, 0, 1, 0, 0, 0, 1]},
+    "target_grip": 0.02,
+    "timestamp": 0.0
   }]
 }
 ```
+
+A command's `type` selects the control mode and the fields beside it: `cartesian_pos` (`pose`), `joint_pos` (`positions`), `joint_delta` (`velocities`), `cartesian_delta` (`delta`, `frame`), and `reset` (no fields). A pose is translation followed by a row-major 3x3 rotation. `positronic.offboard.protocol` reads that mapping into the typed command the drivers dispatch on, so a server written against another stack sends it as plain data; one built on positronic may instead put a `positronic.drivers.roboarm.command` instance here and let `serialise` encode it.
 
 **Server → Client (Error):**
 ```json
