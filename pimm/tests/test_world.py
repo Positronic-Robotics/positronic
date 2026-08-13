@@ -1,6 +1,7 @@
 import logging
 import multiprocessing as mp
 import struct
+import time
 from queue import Empty, Full
 from unittest.mock import Mock, patch
 
@@ -29,6 +30,18 @@ def dummy_process(stop_reader, clock):
     """A simple background process that runs until stopped."""
     while not stop_reader.read().data:
         yield Sleep(0.01)
+
+
+class HeartbeatProcess:
+    """Background process announcing every iteration of its control loop."""
+
+    def __init__(self, emitter: SignalEmitter):
+        self.emitter = emitter
+
+    def run(self, stop_reader, clock):
+        while not stop_reader.read().data:
+            self.emitter.emit('beat')
+            yield Sleep(0.01)
 
 
 class DummyControlSystem(ControlSystem):
@@ -243,16 +256,22 @@ class TestWorld:
         """Test that background processes will run simple control loop."""
         world = World()
         with world:
-            world.start_in_subprocess(dummy_process)
+            emitter, receiver = world.mp_pipes()
+            assert isinstance(receiver, SignalReceiver)
+            world.start_in_subprocess(HeartbeatProcess(emitter).run)
 
             assert len(world.background_processes) == 1
+
+            # Stopping before the child reaches its loop body would leave the loop untested: the generator
+            # sees a set event on its first condition and returns without ever running the body.
+            deadline = time.monotonic() + 30
+            while receiver.read() is None:
+                assert time.monotonic() < deadline, 'background process never entered its control loop'
+                time.sleep(0.01)
 
             # We have to set the private event manually, because out of the scope of the context manager
             # we can't access exit code of the process
             world._stop_event.set()
-            # The child is spawned, so it boots a fresh interpreter and imports this module before it can
-            # observe the stop event — on a slow runner that outlasts any tight deadline. `join` returns the
-            # moment it exits, so a generous ceiling costs a passing run nothing.
             world.background_processes[0].join(timeout=30)
             assert not world.background_processes[0].is_alive()
             assert world.background_processes[0].exitcode == 0
