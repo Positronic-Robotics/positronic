@@ -1,7 +1,6 @@
 import logging
 import multiprocessing as mp
 import struct
-import time
 from queue import Empty, Full
 from unittest.mock import Mock, patch
 
@@ -246,7 +245,6 @@ class TestWorld:
         with world:
             world.start_in_subprocess(dummy_process)
 
-            time.sleep(0.2)  # Some time to let the process run
             assert len(world.background_processes) == 1
 
             # We have to set the private event manually, because out of the scope of the context manager
