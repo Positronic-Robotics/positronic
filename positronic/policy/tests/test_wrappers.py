@@ -69,14 +69,14 @@ def _obs(now_sec=0.0, fault=False):
 
 class TestStopOnFault:
     def test_a_faulted_arm_stops_what_is_executing(self):
-        inner = _ConstSession([{'v': 1, 'timestamp': 0.0}])
+        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().wrap_session(inner, None, None)
 
         assert session(_obs(0.0, fault=True)) == []
         assert inner.call_count == 0, 'the model was asked about an arm that is not tracking it'
 
     def test_a_sound_arm_reaches_the_model(self):
-        inner = _ConstSession([{'v': 1, 'timestamp': 0.0}])
+        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().wrap_session(inner, None, None)
 
         assert session(_obs(0.0)) is not None
@@ -84,7 +84,7 @@ class TestStopOnFault:
 
     def test_an_observation_with_no_flag_is_not_a_fault(self):
         """Only the harness stamps the flag; a probe replaying a recording has no arm to fault."""
-        inner = _ConstSession([{'v': 1, 'timestamp': 0.0}])
+        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().wrap_session(inner, None, None)
 
         assert session({keys.OBS_TIME_NS: 0}) is not None
@@ -93,7 +93,7 @@ class TestStopOnFault:
     def test_recovery_plans_afresh_instead_of_resuming(self):
         """The fault resets the scheduler below it, so the first sound observation infers again rather than
         waiting out the chunk stamped before the fault."""
-        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 1.0}])
+        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 1.0}])
         session = (StopOnFault() | ChunkedSchedule()).wrap(inner).new_session(now=_FakeClock(t=0.0).now)
 
         assert session(_obs(0.0)) is not None  # a chunk that runs until 1.0
@@ -105,20 +105,20 @@ class TestChunkedSchedule:
     def test_first_call_runs_inference(self):
         # Relative timestamps: trajectory of duration 0.5s
         clock = _FakeClock(t=1.0)
-        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
+        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
         policy = ChunkedSchedule().wrap(inner)
         session = policy.new_session(now=clock.now)
         result = session(_obs())
         assert result is not None
         assert len(result) == 2
         # Timestamps stamped to absolute by ChunkedSchedule.
-        assert result[0]['timestamp'] == 1.0
-        assert result[1]['timestamp'] == 1.5
+        assert result[0][keys.ACTION_TIMESTAMP] == 1.0
+        assert result[1][keys.ACTION_TIMESTAMP] == 1.5
 
     def test_returns_none_while_trajectory_active(self):
         # Trajectory starts at clock=1.0, ends at 1.0+0.5=1.5.
         clock = _FakeClock(t=1.0)
-        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
+        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
         policy = ChunkedSchedule().wrap(inner)
         session = policy.new_session(now=clock.now)
         session(_obs())
@@ -129,7 +129,7 @@ class TestChunkedSchedule:
 
     def test_re_infers_after_trajectory_consumed(self):
         clock = _FakeClock(t=1.0)
-        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
+        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
         session = ChunkedSchedule().wrap(inner).new_session(now=clock.now)
         session(_obs(1.0))  # trajectory ends at clock=1.5
         assert session(_obs(1.3)) is None
@@ -141,7 +141,7 @@ class TestChunkedSchedule:
     def test_single_action_refires_immediately_after(self):
         """Single action at ts=0 → trajectory_end = now → next tick re-infers."""
         clock = _FakeClock(t=1.0)
-        policy = ChunkedSchedule().wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}]))
+        policy = ChunkedSchedule().wrap(_ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]))
         session = policy.new_session(now=clock.now)
         session(_obs(1.0))
         clock.t = 1.01
@@ -150,7 +150,7 @@ class TestChunkedSchedule:
 
     def test_expiry_is_judged_at_the_observation_instant(self):
         """Whether the trajectory has run out is a question about the observation, not about ``now``."""
-        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
+        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
         session = ChunkedSchedule().wrap(inner).new_session(now=_FakeClock(t=2.0).now)
         session(_obs(1.0))  # anchored at now()=2.0, so the trajectory ends at 2.5
         assert session(_obs(2.4)) is None
@@ -164,7 +164,7 @@ class TestPipelineComposition:
         clock = _FakeClock(t=1.0)
         pipeline = TemporalStack(keys=('v',), offsets_sec=(0.0,)) | ChunkedSchedule()
         assert isinstance(pipeline, PolicyWrapper)
-        policy = pipeline.wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}]))
+        policy = pipeline.wrap(_ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]))
         session = policy.new_session(now=clock.now)
         result = session({keys.OBS_TIME_NS: int(1e9), 'v': np.array([5.0])})
         assert result is not None
@@ -175,7 +175,7 @@ class TestPipelineComposition:
         codec = ActionTimestamp(fps=10.0)
         pipeline = codec | ChunkedSchedule()
         assert isinstance(pipeline, PolicyWrapper)
-        policy = pipeline.wrap(_ConstPolicy([{'action': 'test', 'timestamp': 0.0}]))
+        policy = pipeline.wrap(_ConstPolicy([{'action': 'test', keys.ACTION_TIMESTAMP: 0.0}]))
         session = policy.new_session(now=clock.now)
         result = session(_obs())
         assert result is not None
@@ -191,7 +191,7 @@ class TestPipelineComposition:
         session = policy.new_session(now=clock.now)
         result = session(_obs())
         assert result is not None
-        assert result[0]['timestamp'] == 1.0
+        assert result[0][keys.ACTION_TIMESTAMP] == 1.0
         # Second call within trajectory window returns None (ChunkedSchedule).
         clock.t = 1.2
         assert session(_obs()) is None
@@ -504,17 +504,17 @@ class TestPipe:
         session = policy.new_session(now=clock.now)
         result = session(_obs())
         assert result is not None
-        assert result[0]['timestamp'] == 1.0
+        assert result[0][keys.ACTION_TIMESTAMP] == 1.0
         clock.t = 1.2
         assert session(_obs()) is None
 
     def test_inline_tolerates_marker_less_pipe(self):
         clock = _FakeClock(t=1.0)
-        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}])
+        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         policy = spec.inline(ChunkedSchedule() | spec.PolicySource(inner))
         session = policy.new_session(now=clock.now)
         result = session(_obs())
-        assert result is not None and result[0]['timestamp'] == 1.0
+        assert result is not None and result[0][keys.ACTION_TIMESTAMP] == 1.0
 
     def test_inline_bare_source_pipe_is_the_loaded_policy(self):
         inner = _ConstPolicy([])
