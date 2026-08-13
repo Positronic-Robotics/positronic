@@ -1,5 +1,7 @@
 """The gate that keeps the client's code, its version, and the root's pin on it in step."""
 
+import pytest
+
 from utilities import check_client_version_bump as gate
 
 
@@ -21,6 +23,20 @@ def test_a_padded_zero_is_the_same_version():
     assert not gate.increases('1.0.0', '1.0')
 
 
+def test_pre_releases_order_the_way_the_index_orders_them():
+    # PEP 440, which a hand-rolled tuple gets backwards in both directions: a release candidate
+    # PRECEDES its release, and rc10 FOLLOWS rc2.
+    assert gate.increases('1.0rc1', '1.0')
+    assert not gate.increases('1.0', '1.0rc1')
+    assert gate.increases('1.0rc2', '1.0rc10')
+    assert not gate.increases('1.0rc10', '1.0rc2')
+
+
+def test_a_version_the_index_could_not_read_fails_closed():
+    with pytest.raises(SystemExit):
+        gate.increases('0.1.0', 'not-a-version')
+
+
 def test_the_declared_version_is_read_from_a_manifest():
     assert gate.declared_version('[project]\nname = "x"\nversion = "0.3.1"\n') == '0.3.1'
     assert gate.declared_version("version = '0.3.1'") == '0.3.1'
@@ -32,10 +48,12 @@ def test_the_root_pin_is_read_from_a_dependency_list():
     assert gate.pinned_version('    "positronic-platform-client==2.10.3",\n') == '2.10.3'
 
 
-def test_a_root_that_pins_no_client_reads_as_no_pin():
-    # Not a failure: the gate says so on stderr and leaves the pin check alone.
+def test_a_relaxed_or_absent_pin_reads_as_no_pin():
+    # Read as absent, and `check` treats that as a FAILURE rather than a reason to skip: deleting
+    # the pin reaches the same stale-or-incompatible install as letting it lag.
     assert gate.pinned_version('dependencies = ["httpx", "pydantic>=2"]') is None
     assert gate.pinned_version('dependencies = ["positronic-platform-client"]') is None
+    assert gate.pinned_version('dependencies = ["positronic-platform-client>=0.1.0"]') is None
 
 
 def test_only_shipped_paths_under_the_client_demand_a_bump():

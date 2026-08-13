@@ -25,6 +25,9 @@ Fails open (exit 0, note on stderr) where it cannot judge — an unresolvable ba
 CI, which always has the base sha, is where the gate holds. A manifest that is present and
 unreadable fails closed: that is a corrupt guarded file, not an absence.
 
+It runs under `uv run` rather than a bare interpreter, because it compares versions by PEP 440 and
+that ordering is `packaging`'s to own, not this file's to approximate.
+
 The git plumbing below is this module's own rather than shared with the other `utilities/check_*`
 scripts: they run as `python3 utilities/<script>.py`, where the repository root is not on `sys.path`
 and a `utilities.` import cannot resolve.
@@ -38,6 +41,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+from packaging.version import InvalidVersion, Version
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -79,23 +84,20 @@ def resolve_merge_base(ref: str) -> str | None:
     return run_git('rev-parse', ref) or None
 
 
-def _ordered(version: str, parts: int) -> tuple:
-    """`version` as something two of them compare by, padded to `parts` components.
-
-    Numeric parts compare as numbers, so `0.10.0` does not read as older than `0.9.0`. Both sides
-    pad to the same width, so `1.0` and `1.0.0` compare EQUAL — packaging treats them as one
-    version, and reading the extra zero as a bump would accept a release that ships as its
-    predecessor. A non-numeric part sorts after the numbers, so a pre-release suffix orders
-    consistently instead of crashing the gate.
-    """
-    read = [(0, int(p)) if p.isdigit() else (1, p) for p in version.replace('-', '.').split('.')]
-    return tuple(read + [(0, 0)] * (parts - len(read)))
-
-
 def increases(was: str, is_now: str) -> bool:
-    """Whether `is_now` is a LATER version than `was`, both read to the same number of parts."""
-    width = max(len(was.replace('-', '.').split('.')), len(is_now.replace('-', '.').split('.')))
-    return _ordered(is_now, width) > _ordered(was, width)
+    """Whether `is_now` is a LATER version than `was`, by the ordering the index will use.
+
+    PEP 440 through `packaging`, not a hand-rolled tuple: the index resolves these versions by that
+    ordering, so a gate that ranks them any other way guards something other than what ships. It is
+    the pre-releases a hand-rolled comparison gets backwards — `1.0rc1` precedes `1.0`, and `1.0rc10`
+    follows `1.0rc2` — and it is also what makes `1.0` and `1.0.0` compare EQUAL, so a padded zero is
+    not read as a bump and cannot pass off a re-release as its successor.
+    """
+    try:
+        return Version(is_now) > Version(was)
+    except InvalidVersion as exc:
+        # Fails closed, and says which value the index would have refused too.
+        raise SystemExit(f'ERROR - {CLIENT_MANIFEST} version is not PEP 440: {exc}') from exc
 
 
 def declared_version(text: str) -> str | None:
@@ -141,7 +143,14 @@ def check(base: str) -> list[str]:
     #    checked first and unconditionally: a bump that forgets the pin is the same stale install.
     pinned = pinned_version((REPO_ROOT / ROOT_MANIFEST).read_text())
     if pinned is None:
-        print(f'NOTE - {ROOT_MANIFEST} pins no {DISTRIBUTION}=={{version}}; skipping the pin check.', file=sys.stderr)
+        # Not an absence to skip past: the CLI imports `platform_client`, so a root that no longer
+        # names an exact version resolves whatever the index offers — the same stale-or-incompatible
+        # install this gate exists to refuse, reached by deleting the pin instead of by lagging it.
+        failures.append(
+            f'{ROOT_MANIFEST} declares no `{DISTRIBUTION}=={{version}}`, yet the CLI imports '
+            f'`platform_client`. A release would resolve whatever the index offers. Pin it at {now}, '
+            f'or drop this gate along with the dependency.'
+        )
     elif pinned != now:
         failures.append(
             f'{ROOT_MANIFEST} pins {DISTRIBUTION}=={pinned} while {CLIENT_MANIFEST} declares {now}. '

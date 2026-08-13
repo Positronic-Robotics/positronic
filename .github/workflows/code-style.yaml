@@ -67,7 +67,7 @@ jobs:
       # against the PR base sha for the same reason as the ratchet below.
       env:
         RATCHET_BASE: ${{ env.BASE_SHA }}
-      run: python3 utilities/check_client_version_bump.py
+      run: uv run --locked python3 utilities/check_client_version_bump.py
     - name: Check basedpyright baseline ratchet
       # Runs unconditionally: cheap, and fast-passes when no baseline file grew. RATCHET_BASE is the
       # PR base sha ($BASE_SHA); the script diffs against its merge-base with HEAD, since origin/main
