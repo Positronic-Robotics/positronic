@@ -77,8 +77,8 @@ class Rollout:
     rollout unbounded, so only a directive ends it.
 
     ``scene`` is what the eval's ``reset`` reads to stage this rollout — a seed, a benchmark suite and task
-    id, whatever the reset actuator needs. It is recorded with the episode and never fed to the policy, so a
-    policy cannot condition on the ground truth its rollout is scored against.
+    id, whatever the reset actuator needs — and is recorded with the episode. Which of it a policy may see
+    is the Harness's to state, since the Harness is what assembles the observations.
     """
 
     def __init__(

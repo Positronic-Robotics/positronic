@@ -357,7 +357,7 @@ class Harness(pimm.ControlSystem):
         """A RUN payload read as one rollout.
 
         An operator names the goal and, where the rollout is to end on its own, a budget; every other key
-        describes the scene they staged, and is recorded and withheld from the policy like any other scene.
+        describes the scene they staged, and is recorded like any other scene.
         """
         scene = {k: v for k, v in payload.items() if k not in (keys.TASK, RUN_TIMEOUT)}
         return Rollout(instruction=payload.get(keys.TASK), timeout=payload.get(RUN_TIMEOUT), scene=scene)
