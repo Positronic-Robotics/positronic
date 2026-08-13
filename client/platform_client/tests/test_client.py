@@ -11,6 +11,7 @@ from platform_client.boards import BoardRef
 from platform_client.client import (
     API_KEY_ENV,
     API_URL_ENV,
+    AUTH_HEADER,
     DEFAULT_PLATFORM_URL,
     PlatformClient,
     resolve_api_key,
@@ -461,8 +462,8 @@ def test_a_failure_that_names_no_evals_is_told_apart_from_one_that_names_none():
 def test_a_supplied_client_carrying_an_authorization_default_is_refused():
     # httpx merges client-level headers into every request, so a default here would reach
     # `users.register` — which this module declares unauthenticated.
-    with pytest.raises(ValueError, match='Authorization'):
-        PlatformClient(client=httpx.Client(base_url=BASE, headers={'Authorization': 'Bearer leaked'}))
+    with pytest.raises(ValueError, match=AUTH_HEADER):
+        PlatformClient(client=httpx.Client(base_url=BASE, headers={AUTH_HEADER: 'Bearer leaked'}))
 
 
 def test_a_supplied_client_carrying_an_auth_flow_is_refused():
