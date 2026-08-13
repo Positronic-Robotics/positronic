@@ -151,6 +151,14 @@ class SubmissionListResponse(BaseModel):
     submissions: list[SubmissionListRow] = Field(default_factory=list)
 
 
+# The field the view union discriminates on, named so a rename moves the discriminator with it.
+STATUS_FIELD = 'status'
+
+# The field every view identifies a submission by, named for the same reason: a renderer that
+# excludes it by a stale literal prints it twice.
+ID_FIELD = 'id'
+
+
 class _TaggedView(BaseModel):
     """One `submissions.get` variant. Its `status` default IS the tag the union selects it by, so a
     payload carrying any other status belongs to a different variant and is refused rather than
@@ -162,7 +170,7 @@ class _TaggedView(BaseModel):
 
     @model_validator(mode='after')
     def _the_status_is_this_variants_tag(self) -> Self:
-        tag = type(self).model_fields['status'].default
+        tag = type(self).model_fields[STATUS_FIELD].default
         if self.status is not tag:
             raise ValueError(f'{type(self).__name__} carries status {self.status.name}, not {tag.name}')
         return self
@@ -213,14 +221,6 @@ class CancelledSubmissionView(_TaggedView):
     id: SubmissionId
     cancelled_at: AwareDatetime | None = None
     status: Slugged[SubmissionStatus] = SubmissionStatus.cancelled
-
-
-# The field the view union discriminates on, named so a rename moves the discriminator with it.
-STATUS_FIELD = 'status'
-
-# The field every view identifies a submission by, named for the same reason: a renderer that
-# excludes it by a stale literal prints it twice.
-ID_FIELD = 'id'
 
 
 def _status_tag(value: Any) -> str | None:
