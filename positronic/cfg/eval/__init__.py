@@ -24,7 +24,7 @@ def build_rollouts(
     rollout_count: int,
     scenes: list[dict[str, Any]] | None = None,
 ) -> list[Rollout]:
-    """The rollout plan a self-driving eval sweeps: one task per (scene, seed) pair.
+    """The rollout plan a self-driving eval sweeps: one rollout per (scene, seed) pair.
 
     Each ``scenes`` entry is a scene-spec base (e.g. ``{'eval.suite': ..., 'eval.task_id': ...}``) swept over
     the seed set; ``None`` sweeps the seed alone, for an eval with no scene axis. ``seed`` ``None`` draws an

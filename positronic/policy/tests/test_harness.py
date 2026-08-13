@@ -653,7 +653,7 @@ def test_trial_budget_starts_at_the_first_usable_observation(world):
 
 @pytest.mark.timeout(3.0)
 def test_attended_task_run_respects_timeout(world):
-    """A budget on the RUN directive bounds an attended run too: RUN arrives but no FINISH, yet the trial
+    """A budget on the RUN directive bounds an attended run too: RUN arrives but no FINISH, yet the rollout
     still self-terminates at the deadline. The deadline is armed for whichever rollout the episode runs, not
     only for one the plan authored."""
     policy = StubPolicy()
@@ -906,7 +906,7 @@ def test_trial_seed_reaches_task_reset_and_meta(world):
 
 @pytest.mark.timeout(3.0)
 def test_trial_plan_self_drives(world):
-    """With a trial plan the harness runs unattended: no driver, one episode per entry, each stamped with
+    """With a rollout plan the harness runs unattended: no driver, one episode per entry, each stamped with
     its place in the plan."""
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment(), rollouts=[Rollout('stack', 0.05) for _ in range(2)])

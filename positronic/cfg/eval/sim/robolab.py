@@ -2,6 +2,7 @@ import configuronic as cfn
 
 from positronic import keys
 from positronic.eval import Eval, Observation, Rollout
+from positronic.simulator.env_server.protocol import META_INSTRUCTION
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.robolab import adapter
 from positronic.simulator.robolab.launcher import serve_robolab
@@ -184,7 +185,11 @@ def _robolab_eval(task, instruction_type, rollout_count, timeout, camera_dict):
     # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')
     rollouts = [
-        Rollout(lambda: proxy.meta['task'], timeout, {adapter.TASK: name, adapter.INSTRUCTION_TYPE: instruction_type})
+        Rollout(
+            lambda: proxy.meta[META_INSTRUCTION],
+            timeout,
+            {adapter.TASK: name, adapter.INSTRUCTION_TYPE: instruction_type},
+        )
         for name in names
         for _ in range(rollout_count)
     ]

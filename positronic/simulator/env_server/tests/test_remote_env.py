@@ -20,6 +20,7 @@ from positronic.policy.tests.test_harness import StubPolicy
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.simulator.env_server.adapter import EnvAdapter, _in_env_control_frame, _wire_command
 from positronic.simulator.env_server.client import EnvConnection
+from positronic.simulator.env_server.protocol import META_INSTRUCTION
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.env_server.tests.conftest import serve_env
@@ -189,7 +190,7 @@ class _CountdownEnv(EnvProtocol):
 
     def reset(self, token):
         self._steps = 0
-        meta = {'task': 'countdown'}  # scene meta the env reports only at reset; ``step`` omits it
+        meta = {META_INSTRUCTION: 'countdown'}  # scene meta the env reports only at reset; ``step`` omits it
         return {
             'obs': {'q': np.full(7, self._steps, dtype=np.float64)},
             'meta': meta,
@@ -252,7 +253,7 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
     cached value holds across the steps that follow."""
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
-        rollout = Rollout(lambda: proxy.meta['task'], 1.0)
+        rollout = Rollout(lambda: proxy.meta[META_INSTRUCTION], 1.0)
         scheduler = world.start([proxy])
 
         proxy.reset({keys.EVAL_SEED: 0})
@@ -263,7 +264,7 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
 
 @pytest.mark.timeout(60.0)
 def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
-    """The real ``stack_cubes`` wrapper, end to end: no terminal, so the trial runs to the rollout timeout
+    """The real ``stack_cubes`` wrapper, end to end: no terminal, so the rollout runs to its timeout
     (``eval.terminated`` False, ``eval.success`` absent) and records the canonical signals under the shared
     camera key."""
     host, port = env_server

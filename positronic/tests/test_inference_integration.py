@@ -81,7 +81,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
         main(policy=ChunkedSchedule().wrap(policy), evals=evals, output_dir=str(tmp_path))
 
     ds = LocalDataset(tmp_path)
-    # Two trials: the harness runs the plan itself, self-terminating each trial at the rollout's timeout.
+    # Two rollouts: the harness runs the plan itself, self-terminating each at its own timeout.
     assert len(ds) == 2
 
     episode = ds[0]

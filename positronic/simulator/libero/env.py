@@ -48,6 +48,7 @@ from typing import Any
 
 import mujoco
 import numpy as np
+from protocol import META_INSTRUCTION
 from robosuite.utils.transform_utils import get_pose_error, make_pose, mat2quat, quat2axisangle
 from server import EnvProtocol, EnvServer
 
@@ -131,7 +132,7 @@ class LiberoEnv(EnvProtocol):
             camera_heights=camera_resolution,
             camera_widths=camera_resolution,
         )
-        self._meta = {'suite': suite_name, 'task_id': task_id, 'task': task.language}
+        self._meta = {'suite': suite_name, 'task_id': task_id, META_INSTRUCTION: task.language}
         self._control_dt = 1.0 / self._env.env.control_freq
         robot = self._env.env.robots[0]
         self._qpos_idx = np.asarray(robot._ref_joint_pos_indexes)

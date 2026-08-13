@@ -14,6 +14,10 @@ import functools
 import msgpack
 import numpy as np
 
+# The meta field an env reports its language goal in. The two sides run in different interpreters — the
+# server cannot import positronic — so this is the one name they can both spell from the same place.
+META_INSTRUCTION = 'task'
+
 
 def _pack(obj):
     if isinstance(obj, np.ndarray):

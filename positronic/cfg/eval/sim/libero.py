@@ -4,6 +4,7 @@ from positronic import keys
 from positronic.cfg.eval import build_rollouts
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import Eval, Observation
+from positronic.simulator.env_server.protocol import META_INSTRUCTION
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.libero import adapter
 from positronic.simulator.libero.launcher import serve_libero
@@ -73,7 +74,7 @@ def _libero_eval(
     return [
         Eval(
             embodiment,
-            build_rollouts(lambda: proxy.meta['task'], timeout, seed, rollout_count, scenes),
+            build_rollouts(lambda: proxy.meta[META_INSTRUCTION], timeout, seed, rollout_count, scenes),
             reset=proxy.reset,
             privileged={'sim_state': Observation(proxy.privileged['sim_state'], None)},
             done=proxy.done,

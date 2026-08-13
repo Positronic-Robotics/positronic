@@ -469,12 +469,12 @@ class Harness(pimm.ControlSystem):
         self._emit_commands(actions)
 
     def _rollout_terminal(self, clock: pimm.Clock) -> dict[str, Any] | None:
-        """The terminal static payload if a self-driven trial has ended this round, else ``None``.
+        """The terminal static payload if a self-driven rollout has ended this round, else ``None``.
 
         The deadline is hard: a truthy ``done`` delivered within budget records ``eval.terminated`` True plus
         its payload, the budget passing records False, and a terminal past the deadline is a timeout rather
         than a late success. Only a freshly delivered ``done`` counts — the receiver latches its last value,
-        so a prior trial's terminal would otherwise re-fire; gating on delivery clears it without asking the
+        so a prior rollout's terminal would otherwise re-fire; gating on delivery clears it without asking the
         producer to republish. Reached only for a rollout with a deadline.
         """
         done_msg = self.done.read()
