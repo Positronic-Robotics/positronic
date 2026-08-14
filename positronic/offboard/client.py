@@ -114,19 +114,6 @@ def _session_path(path: str, url: str) -> str:
     return path
 
 
-def _may_still_come_up(status: int | None, forbidden: int) -> bool:
-    """Whether a refused connect leaves the backend a chance of answering a later attempt.
-
-    ``status`` is a non-101 upgrade response's status, ``None`` where the connect failed before one arrived;
-    ``forbidden`` counts the 403s seen so far, this one included.
-    """
-    if status is None:
-        return True
-    if status == 403:
-        return forbidden < MAX_FORBIDDEN_ATTEMPTS
-    return status >= 500 or status == 429
-
-
 class InferenceClient:
     """The wire connection to one inference server, addressed by one URL.
 
@@ -176,6 +163,19 @@ class InferenceClient:
         self.connect_deadline = connect_deadline
         self.infer_timeout = infer_timeout
 
+    @staticmethod
+    def _may_still_come_up(status: int | None, forbidden: int) -> bool:
+        """Whether a refused connect leaves the backend a chance of answering a later attempt.
+
+        ``status`` is a non-101 upgrade response's status, ``None`` where the connect failed before one
+        arrived; ``forbidden`` counts the 403s seen so far, this one included.
+        """
+        if status is None:
+            return True
+        if status == 403:
+            return forbidden < MAX_FORBIDDEN_ATTEMPTS
+        return status >= 500 or status == 429
+
     def new_session(self) -> InferenceSession:
         """Creates a new inference session on the model the URL names."""
         deadline = time.monotonic() + self.connect_deadline
@@ -209,7 +209,7 @@ class InferenceClient:
                 status = e.response.status_code if isinstance(e, InvalidStatus) else None
                 if status == 403:
                     forbidden += 1
-                if not _may_still_come_up(status, forbidden):
+                if not self._may_still_come_up(status, forbidden):
                     raise
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'{e} (connecting to {self.session_url})') from e
