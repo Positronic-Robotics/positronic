@@ -1154,16 +1154,6 @@
                 }
             }
         ],
-        "./positronic/cfg/policy.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 26,
-                    "endColumn": 33,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./positronic/cfg/simulator.py": [
             {
                 "code": "reportArgumentType",
@@ -5810,16 +5800,6 @@
                 }
             }
         ],
-        "./positronic/policy/base.py": [
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 27,
-                    "endColumn": 33,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./positronic/policy/codec.py": [
             {
                 "code": "reportIncompatibleMethodOverride",
@@ -6490,24 +6470,6 @@
                 "range": {
                     "startColumn": 30,
                     "endColumn": 50,
-                    "lineCount": 1
-                }
-            }
-        ],
-        "./positronic/policy/tests/test_sampler.py": [
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 24,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 24,
                     "lineCount": 1
                 }
             }
