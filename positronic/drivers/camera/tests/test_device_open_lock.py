@@ -7,7 +7,7 @@ from pathlib import Path
 
 from positronic.drivers.camera import device_open_lock
 
-# `World` spawns each control system, so the openers share no parent state.
+# Spawn, not fork: a forked child inherits the parent's open fds, and with them the lock.
 CTX = mp.get_context('spawn')
 
 SUCCESS = 'SUCCESS'
