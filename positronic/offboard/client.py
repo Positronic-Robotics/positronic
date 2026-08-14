@@ -2,6 +2,8 @@ import logging
 import ssl
 import time
 import urllib.parse
+from enum import Enum
+from http import HTTPStatus
 from typing import Any
 
 import httpx
@@ -109,6 +111,36 @@ def _session_path(path: str, url: str) -> str:
     return path
 
 
+class _ConnectOutcome(Enum):
+    RETRY = 'retry'
+    SURFACE = 'surface'
+
+
+class _ConnectRetries:
+    """The retry policy over one ``new_session``'s connect attempts.
+
+    403 is both a cold backend and a refused credential, so it gets a few attempts rather than the whole
+    ``connect_deadline``.
+    """
+
+    MAX_FORBIDDEN_ATTEMPTS = 3
+
+    def __init__(self) -> None:
+        self._forbidden_attempts = 0
+
+    def take(self, e: Exception) -> _ConnectOutcome:
+        """Spend a refused connect against the budget."""
+        if not isinstance(e, InvalidStatus):
+            return _ConnectOutcome.RETRY
+        status = e.response.status_code
+        if status == HTTPStatus.FORBIDDEN:
+            self._forbidden_attempts += 1
+            again = self._forbidden_attempts < self.MAX_FORBIDDEN_ATTEMPTS
+        else:
+            again = status >= HTTPStatus.INTERNAL_SERVER_ERROR or status == HTTPStatus.TOO_MANY_REQUESTS
+        return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
+
+
 class InferenceClient:
     """The wire connection to one inference server, addressed by one URL.
 
@@ -162,6 +194,7 @@ class InferenceClient:
         """Creates a new inference session on the model the URL names."""
         deadline = time.monotonic() + self.connect_deadline
         backoff = 1.0
+        retries = _ConnectRetries()
         while True:
             ws = None
             try:
@@ -187,11 +220,7 @@ class InferenceClient:
             except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
                 if ws is not None:
                     ws.close()
-                # A non-101 upgrade response only means "not ready" when it's a 5xx or 429; any other status
-                # (401/403/404, …) is permanent misconfiguration and surfaces immediately.
-                if isinstance(e, InvalidStatus) and not (
-                    e.response.status_code >= 500 or e.response.status_code == 429
-                ):
+                if retries.take(e) is _ConnectOutcome.SURFACE:
                     raise
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'{e} (connecting to {self.session_url})') from e
