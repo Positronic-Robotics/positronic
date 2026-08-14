@@ -163,9 +163,7 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     if timing:
         _validate_timing([ev.embodiment for ev in evals], output_dir)
 
-    # A session's handshake returns only once the model is loaded, so opening one drives an on-request
-    # endpoint through its cold start. The first episode then begins warm instead of stalling on a
-    # model load while the robot waits.
+    # A handshake returns only once the model is loaded, so this pays the cold start here, not in episode 1.
     # TODO: a policy with recording taps (recording_dir set) records this throwaway warmup session — an
     # empty .rrd plus a bump to the recorder's episode counter — but warmup is not a real episode.
     logger.info('Warming up policy endpoints')

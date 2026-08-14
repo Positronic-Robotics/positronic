@@ -298,9 +298,7 @@ def test_records_infer_span_when_inference_raises(tmp_path):
 
 
 def test_remote_policy_meta_exposes_server_fields():
-    """RemotePolicy.meta must carry the server's own fields, prefixed, and must do so before any
-    session exists: the harness reads it as the static baseline under each episode's metadata, so a
-    field missing here is a field missing from every episode the run records."""
+    """RemotePolicy.meta prefixes the server's own fields with ``server.``, before any session exists."""
     policy, _ = _mock_remote_policy({'checkpoint_path': '/ckpts/abc', 'model_name': 'foo', **CHUNKED_STACK})
 
     meta = policy.meta
