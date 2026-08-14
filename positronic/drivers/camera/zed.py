@@ -72,6 +72,24 @@ class SLCamera(pimm.ControlSystem):
         self.depth_mask: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self._depth_mask_adapter = None  # Lazy init
 
+    @staticmethod
+    def _open_under_device_lock(zed, init_params) -> Iterator[pimm.Sleep]:
+        """Open the camera, retrying an open that lost the bus anyway. Drive with ``yield from``.
+
+        `device_open_lock` binds only openers that take it, so an open can still land on a busy bus.
+        """
+        OPEN_ATTEMPTS = 3
+        OPEN_RETRY_SEC = 1.0
+        for attempt in range(1, OPEN_ATTEMPTS + 1):
+            with device_open_lock():
+                error_code = zed.open(init_params)
+            if error_code == sl.ERROR_CODE.SUCCESS:
+                return
+            if attempt == OPEN_ATTEMPTS:
+                raise RuntimeError(f'Failed to open camera after {OPEN_ATTEMPTS} attempts: {error_code}')
+            logging.error(f'Failed to open camera (attempt {attempt} of {OPEN_ATTEMPTS}): {error_code}')
+            yield pimm.Sleep(OPEN_RETRY_SEC)
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         SUCCESS = sl.ERROR_CODE.SUCCESS
         TIME_REF_IMAGE = sl.TIME_REFERENCE.IMAGE
@@ -112,18 +130,7 @@ class SLCamera(pimm.ControlSystem):
             )
 
         zed = sl.CameraOne() if self._mono else sl.Camera()
-        # `device_open_lock` binds only openers that take it, so an open can still land on a busy bus.
-        OPEN_ATTEMPTS = 3
-        OPEN_RETRY_SEC = 1.0
-        for attempt in range(1, OPEN_ATTEMPTS + 1):
-            with device_open_lock():
-                error_code = zed.open(init_params)
-            if error_code == SUCCESS:
-                break
-            if attempt == OPEN_ATTEMPTS:
-                raise RuntimeError(f'Failed to open camera after {OPEN_ATTEMPTS} attempts: {error_code}')
-            logging.error(f'Failed to open camera (attempt {attempt} of {OPEN_ATTEMPTS}): {error_code}')
-            yield pimm.Sleep(OPEN_RETRY_SEC)
+        yield from self._open_under_device_lock(zed, init_params)
 
         self.recovery_start_time = None
 
