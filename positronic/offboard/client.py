@@ -2,6 +2,7 @@ import logging
 import ssl
 import time
 import urllib.parse
+from http import HTTPStatus
 from typing import Any
 
 import httpx
@@ -164,23 +165,23 @@ class InferenceClient:
         self.infer_timeout = infer_timeout
 
     @staticmethod
-    def _may_still_come_up(status: int | None, forbidden: int) -> bool:
+    def _may_still_come_up(status: int | None, forbidden_attempts: int) -> bool:
         """Whether a refused connect leaves the backend a chance of answering a later attempt.
 
         ``status`` is a non-101 upgrade response's status, ``None`` where the connect failed before one
-        arrived; ``forbidden`` counts the 403s seen so far, this one included.
+        arrived; ``forbidden_attempts`` includes the attempt being judged.
         """
         if status is None:
             return True
-        if status == 403:
-            return forbidden < MAX_FORBIDDEN_ATTEMPTS
-        return status >= 500 or status == 429
+        if status == HTTPStatus.FORBIDDEN:
+            return forbidden_attempts < MAX_FORBIDDEN_ATTEMPTS
+        return status >= HTTPStatus.INTERNAL_SERVER_ERROR or status == HTTPStatus.TOO_MANY_REQUESTS
 
     def new_session(self) -> InferenceSession:
         """Creates a new inference session on the model the URL names."""
         deadline = time.monotonic() + self.connect_deadline
         backoff = 1.0
-        forbidden = 0
+        forbidden_attempts = 0
         while True:
             ws = None
             try:
@@ -207,9 +208,9 @@ class InferenceClient:
                 if ws is not None:
                     ws.close()
                 status = e.response.status_code if isinstance(e, InvalidStatus) else None
-                if status == 403:
-                    forbidden += 1
-                if not self._may_still_come_up(status, forbidden):
+                if status == HTTPStatus.FORBIDDEN:
+                    forbidden_attempts += 1
+                if not self._may_still_come_up(status, forbidden_attempts):
                     raise
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'{e} (connecting to {self.session_url})') from e
