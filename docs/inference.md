@@ -105,7 +105,7 @@ from contextlib import nullcontext
 
 import pimm
 from positronic import wire
-from positronic.cli.eval.run import completion_sink, prepare_output_dir
+from positronic.cli.eval.run import prepare_output_dir
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.policy.harness import Harness
 
@@ -114,8 +114,8 @@ from positronic.policy.harness import Harness
 # close from the moment you first touch it.
 try:
     # `None` where the run records nothing, which is why the writer is a nullcontext below.
-    output_dir = prepare_output_dir(policy, output_dir)
-    harness = Harness(policy, embodiment, on_episode_complete=completion_sink(policy))
+    output_dir = prepare_output_dir(output_dir)
+    harness = Harness(policy, embodiment)
     console = MyConsole()  # emits positronic.policy.harness.Directive
 
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)

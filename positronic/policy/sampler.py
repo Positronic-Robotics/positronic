@@ -13,11 +13,12 @@ logger = logging.getLogger(__name__)
 class EpisodeCounter:
     """Per-key tally of completed episodes, grouped by context fields.
 
-    Owns the counting state that a balancing ``Sampler`` reads. The harness
-    bumps it on each successful episode completion via :meth:`record`; a sampler
-    queries the current tallies via :meth:`counts` when choosing the next
-    sub-policy. :meth:`seed_from` rebuilds the tallies from already-recorded
-    episodes so balancing survives a process restart.
+    Owns the counting state that a balancing ``Sampler`` reads. A sampler queries the
+    current tallies via :meth:`counts` when choosing the next sub-policy;
+    :meth:`seed_from` rebuilds them from already-recorded episodes.
+
+    The owner calls :meth:`record` on each completed episode. An unfed tally stays at zero
+    rather than raising, and a balancing sampler reads zeros as a fair draw.
 
     Keys are read from ``session.meta[key_field]`` (the identifier of the
     sub-policy that ran, e.g. a checkpoint path). Episodes are grouped by
@@ -90,8 +91,8 @@ class BalancedSampler(Sampler):
     Sampling probability for policy i is proportional to:
         max(counts) + balance - count_i
 
-    Counts are supplied per call (the harness maintains them in an
-    ``EpisodeCounter``), so this strategy is stateless.
+    Counts are supplied per call, so this strategy is stateless — and it cannot tell an
+    all-zero tally nobody is feeding from a run that has genuinely just started.
     """
 
     def __init__(self, *, balance: int = 5):

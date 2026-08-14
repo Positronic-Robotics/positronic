@@ -245,8 +245,8 @@ class SampledPolicy(Policy):
         self._weights = weights
         self._key_field = key_field
         self._keys: tuple[str, ...] | None = None
-        # The harness bumps this on each completed episode (via ``counter.record``);
-        # the sampler reads it to balance. Seeded from prior recordings by the caller.
+        # Read by a balancing sampler; whoever drives the episodes calls ``counter.record``. Left
+        # unfed it stays at zero, which balances uniformly rather than raising.
         self.counter = EpisodeCounter(key_field, group_fields)
 
     @property

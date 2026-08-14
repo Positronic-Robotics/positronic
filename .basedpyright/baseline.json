@@ -6494,16 +6494,6 @@
                 }
             }
         ],
-        "./positronic/policy/tests/test_sampled_e2e.py": [
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 65,
-                    "endColumn": 73,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./positronic/policy/tests/test_sampler.py": [
             {
                 "code": "reportOptionalSubscript",

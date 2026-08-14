@@ -16,9 +16,8 @@ from positronic import telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import placeholder
 from positronic.cli.eval.submit import submit
 from positronic.dataset.ds_writer_agent import TimeMode
-from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
+from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.eval import Embodiment, Eval, Task
-from positronic.policy.base import SampledPolicy
 from positronic.policy.harness import Harness
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 
@@ -29,8 +28,8 @@ logger = logging.getLogger(__name__)
 _ENV_TELEMETRY_VARS = (ENV_TELEMETRY_DIR, ENV_RUN_ID)
 
 
-def prepare_output_dir(policy, output_dir: str | Path | None) -> Path | None:
-    """Resolve where a run records: sync the directory, snapshot the sources into it, seed the counter.
+def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
+    """Resolve where a run records: sync the directory and snapshot the sources into it.
 
     Returns the local path a ``LocalDatasetWriter`` opens, or ``None`` when the run records nothing.
 
@@ -42,42 +41,15 @@ def prepare_output_dir(policy, output_dir: str | Path | None) -> Path | None:
         return None
     local_dir = pos3.sync(str(output_dir), sync_on_error=True)
     utils.save_run_metadata(local_dir, patterns=['*.py', '*.toml'])
-    _seed_counter(policy, local_dir)
     return local_dir
 
 
-def _seed_counter(policy, output_dir: Path):
-    """If policy is a SampledPolicy, seed its episode counter from existing episodes in output_dir."""
-    if not isinstance(policy, SampledPolicy):
-        return
-    try:
-        dataset = load_all_datasets(output_dir)
-    except ValueError:
-        return
-    if len(dataset) == 0:
-        return
-    seeded = policy.counter.seed_from(dataset)
-    logger.info(f'Seeded counter from {seeded} existing episodes')
-
-
-def completion_sink(policy):
-    """Harness ``on_episode_complete`` callback that tallies completed episodes.
-
-    Returns the ``SampledPolicy``'s counter ``record`` (which reads the sampled
-    key from the session and bumps its tally), or ``None`` for non-sampled
-    policies. The harness fires it on each clean episode completion.
-    """
-    return policy.counter.record if isinstance(policy, SampledPolicy) else None
-
-
-def _run_world(
-    policy, embodiment: Embodiment, task: Task | None, trials: list[dict] | None, output_dir: Path | None, on_complete
-):
+def _run_world(policy, embodiment: Embodiment, task: Task | None, trials: list[dict] | None, output_dir: Path | None):
     """Wire one embodiment under a fresh Harness + World and run it to completion.
 
     The harness self-drives ``trials``; the shared ``policy``'s lifetime stays with ``main``.
     """
-    harness = Harness(policy, embodiment, task=task, trials=trials, on_episode_complete=on_complete)
+    harness = Harness(policy, embodiment, task=task, trials=trials)
 
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
@@ -198,16 +170,12 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     # empty .rrd plus a bump to the recorder's episode counter — but warmup is not a real episode.
     logger.info('Warming up policy endpoints')
     policy.new_session().close()
-    output_dir = prepare_output_dir(policy, output_dir)
-
-    # One completion sink — so one ``SampledPolicy`` counter — across every eval, keeping sampling balanced
-    # over the whole sweep.
-    on_complete = completion_sink(policy)
+    output_dir = prepare_output_dir(output_dir)
 
     try:
         with timed_pass(output_dir, timing, policy):
             for ev in evals:
-                _run_world(policy, ev.embodiment, ev.task, ev.trials, output_dir, on_complete)
+                _run_world(policy, ev.embodiment, ev.task, ev.trials, output_dir)
     finally:
         policy.close()
 
