@@ -244,6 +244,20 @@ class TestNewSessionRetriesRefusedUpgrades:
 
         assert mock_connect.call_count == 1
 
+    def test_each_session_opens_on_a_full_budget(self):
+        """A client that spent 403s opening one session still gets all of them for the next."""
+        one_session = [_refused(403)] * (MAX_FORBIDDEN_ATTEMPTS - 1) + [MagicMock()]
+        with (
+            patch('positronic.offboard.client.connect', side_effect=one_session * 2) as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.sleep'),
+        ):
+            client = InferenceClient('localhost:8000')
+            client.new_session()
+            client.new_session()
+
+            assert mock_connect.call_count == 2 * len(one_session)
+
 
 def test_remote_policy_hands_the_url_and_headers_to_the_client():
     headers = {'Modal-Key': 'k'}

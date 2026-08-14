@@ -113,6 +113,27 @@ def _session_path(path: str, url: str) -> str:
     return path
 
 
+class _ConnectRetries:
+    """The retry policy over one ``new_session``'s connect attempts.
+
+    A 403 gets ``MAX_FORBIDDEN_ATTEMPTS`` of them, so the count belongs to one connect rather than to a
+    client that goes on to open further sessions.
+    """
+
+    def __init__(self) -> None:
+        self._forbidden_attempts = 0
+
+    def should_retry(self, e: Exception) -> bool:
+        """Whether the backend that refused this attempt may still answer a later one."""
+        if not isinstance(e, InvalidStatus):
+            return True
+        status = e.response.status_code
+        if status == HTTPStatus.FORBIDDEN:
+            self._forbidden_attempts += 1
+            return self._forbidden_attempts < MAX_FORBIDDEN_ATTEMPTS
+        return status >= HTTPStatus.INTERNAL_SERVER_ERROR or status == HTTPStatus.TOO_MANY_REQUESTS
+
+
 class InferenceClient:
     """The wire connection to one inference server, addressed by one URL.
 
@@ -162,24 +183,11 @@ class InferenceClient:
         self.connect_deadline = connect_deadline
         self.infer_timeout = infer_timeout
 
-    @staticmethod
-    def _may_still_come_up(status: int | None, forbidden_attempts: int) -> bool:
-        """Whether a refused connect leaves the backend a chance of answering a later attempt.
-
-        ``status`` is a non-101 upgrade response's status, ``None`` where the connect failed before one
-        arrived; ``forbidden_attempts`` includes the attempt being judged.
-        """
-        if status is None:
-            return True
-        if status == HTTPStatus.FORBIDDEN:
-            return forbidden_attempts < MAX_FORBIDDEN_ATTEMPTS
-        return status >= HTTPStatus.INTERNAL_SERVER_ERROR or status == HTTPStatus.TOO_MANY_REQUESTS
-
     def new_session(self) -> InferenceSession:
         """Creates a new inference session on the model the URL names."""
         deadline = time.monotonic() + self.connect_deadline
         backoff = 1.0
-        forbidden_attempts = 0
+        retries = _ConnectRetries()
         while True:
             ws = None
             try:
@@ -205,10 +213,7 @@ class InferenceClient:
             except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
                 if ws is not None:
                     ws.close()
-                status = e.response.status_code if isinstance(e, InvalidStatus) else None
-                if status == HTTPStatus.FORBIDDEN:
-                    forbidden_attempts += 1
-                if not self._may_still_come_up(status, forbidden_attempts):
+                if not retries.should_retry(e):
                     raise
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'{e} (connecting to {self.session_url})') from e
