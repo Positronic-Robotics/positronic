@@ -120,10 +120,10 @@ class SLCamera(pimm.ControlSystem):
                 error_code = zed.open(init_params)
             if error_code == SUCCESS:
                 break
+            if attempt == OPEN_ATTEMPTS:
+                raise RuntimeError(f'Failed to open camera after {OPEN_ATTEMPTS} attempts: {error_code}')
             logging.error(f'Failed to open camera (attempt {attempt} of {OPEN_ATTEMPTS}): {error_code}')
             yield pimm.Sleep(OPEN_RETRY_SEC)
-        else:
-            return
 
         self.recovery_start_time = None
 

@@ -2,6 +2,7 @@
 
 import multiprocessing as mp
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -10,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from positronic.drivers.camera import device_open_lock
+from positronic.drivers.camera import _LOCK_FILE_MODE, device_open_lock
 
 # Spawn, not fork: a forked child inherits the parent's open fds, and with them the lock.
 CTX = mp.get_context('spawn')
@@ -134,6 +135,27 @@ def test_a_created_lock_file_is_readable_by_every_account(tmp_path: Path):
         os.umask(previous_umask)
 
     assert lock_path.stat().st_mode & 0o444 == 0o444
+
+
+def test_the_lock_file_is_readable_before_it_appears(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A create killed part-way must not leave a `umask`-restricted file that outlives the process."""
+    lock_path = tmp_path / 'open.lock'
+    real_link, modes_when_linked = os.link, []
+
+    def recording_link(src, dst, **kwargs):
+        modes_when_linked.append(stat.S_IMODE(os.stat(src).st_mode))
+        return real_link(src, dst, **kwargs)
+
+    monkeypatch.setattr(os, 'link', recording_link)
+    previous_umask = os.umask(0o077)
+    try:
+        with device_open_lock(lock_path):
+            pass
+    finally:
+        os.umask(previous_umask)
+
+    assert modes_when_linked == [_LOCK_FILE_MODE]
+    assert [entry.name for entry in tmp_path.iterdir()] == [lock_path.name]
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason='root bypasses the permission bits this asserts on')
