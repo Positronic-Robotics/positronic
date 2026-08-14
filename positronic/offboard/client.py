@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 # per use.
 DEFAULT_INFER_TIMEOUT = 180.0
 
+# A cold backend behind Modal's proxy refuses the upgrade with 403 and accepts the next attempt. A server
+# refusing the credential answers 403 too — ``PolicyServer`` does — so a 403 buys this many attempts rather
+# than the whole ``connect_deadline``.
+MAX_FORBIDDEN_ATTEMPTS = 3
+
 
 class InferenceSession:
     def __init__(self, websocket: Connection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
@@ -109,6 +114,19 @@ def _session_path(path: str, url: str) -> str:
     return path
 
 
+def _may_still_come_up(status: int | None, forbidden: int) -> bool:
+    """Whether a refused connect leaves the backend a chance of answering a later attempt.
+
+    ``status`` is a non-101 upgrade response's status, ``None`` where the connect failed before one arrived;
+    ``forbidden`` counts the 403s seen so far, this one included.
+    """
+    if status is None:
+        return True
+    if status == 403:
+        return forbidden < MAX_FORBIDDEN_ATTEMPTS
+    return status >= 500 or status == 429
+
+
 class InferenceClient:
     """The wire connection to one inference server, addressed by one URL.
 
@@ -162,6 +180,7 @@ class InferenceClient:
         """Creates a new inference session on the model the URL names."""
         deadline = time.monotonic() + self.connect_deadline
         backoff = 1.0
+        forbidden = 0
         while True:
             ws = None
             try:
@@ -187,11 +206,10 @@ class InferenceClient:
             except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
                 if ws is not None:
                     ws.close()
-                # A non-101 upgrade response only means "not ready" when it's a 5xx or 429; any other status
-                # (401/403/404, …) is permanent misconfiguration and surfaces immediately.
-                if isinstance(e, InvalidStatus) and not (
-                    e.response.status_code >= 500 or e.response.status_code == 429
-                ):
+                status = e.response.status_code if isinstance(e, InvalidStatus) else None
+                if status == 403:
+                    forbidden += 1
+                if not _may_still_come_up(status, forbidden):
                     raise
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'{e} (connecting to {self.session_url})') from e

@@ -3,10 +3,13 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+from websockets.datastructures import Headers
+from websockets.exceptions import InvalidStatus
+from websockets.http11 import Response
 
 from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import command
-from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient
+from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, MAX_FORBIDDEN_ATTEMPTS, InferenceClient
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.remote import RemoteSession
@@ -196,6 +199,50 @@ class TestInferenceClientUrl:
             assert mock_connect.call_count == 2
             for call in mock_connect.call_args_list:
                 assert call.args[0] == client.session_url == 'ws://localhost:8000/api/v1/session/10000?fps=10'
+
+
+def _refused(status_code: int) -> InvalidStatus:
+    return InvalidStatus(Response(status_code, 'refused', Headers()))
+
+
+class TestNewSessionRetriesRefusedUpgrades:
+    """Which non-101 upgrade responses are a backend still coming up, and which are the endpoint saying no."""
+
+    def test_a_403_retries_and_the_session_that_follows_is_returned(self):
+        with (
+            patch('positronic.offboard.client.connect', side_effect=[_refused(403), MagicMock()]) as mock_connect,
+            patch('positronic.offboard.client.InferenceSession') as mock_session_cls,
+            patch('positronic.offboard.client.time.sleep'),
+        ):
+            session = InferenceClient('localhost:8000').new_session()
+
+            assert mock_connect.call_count == 2
+            assert session is mock_session_cls.return_value
+
+    def test_a_403_gives_up_once_its_attempts_are_spent(self):
+        with (
+            patch(
+                'positronic.offboard.client.connect', side_effect=[_refused(403)] * (MAX_FORBIDDEN_ATTEMPTS + 5)
+            ) as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.sleep'),
+            pytest.raises(InvalidStatus),
+        ):
+            InferenceClient('localhost:8000').new_session()
+
+        assert mock_connect.call_count == MAX_FORBIDDEN_ATTEMPTS
+
+    @pytest.mark.parametrize('status_code', [401, 404])
+    def test_a_refusal_that_no_warm_up_clears_is_raised_at_once(self, status_code):
+        with (
+            patch('positronic.offboard.client.connect', side_effect=_refused(status_code)) as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.sleep'),
+            pytest.raises(InvalidStatus),
+        ):
+            InferenceClient('localhost:8000').new_session()
+
+        assert mock_connect.call_count == 1
 
 
 def test_remote_policy_hands_the_url_and_headers_to_the_client():
