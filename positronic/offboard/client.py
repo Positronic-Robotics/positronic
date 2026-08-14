@@ -114,7 +114,7 @@ class _ConnectRetries:
     """The retry policy over one ``new_session``'s connect attempts.
 
     403 is both a cold backend and a refused credential, so it gets a few attempts rather than the whole
-    ``connect_deadline``, and that count belongs to one connect rather than to a client that opens many.
+    ``connect_deadline``.
     """
 
     MAX_FORBIDDEN_ATTEMPTS = 3
