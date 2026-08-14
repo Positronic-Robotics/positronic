@@ -112,8 +112,7 @@ class SLCamera(pimm.ControlSystem):
             )
 
         zed = sl.CameraOne() if self._mono else sl.Camera()
-        # The lock keeps this world's cameras apart; the retry covers an opener outside it — a smoke
-        # test, a leftover process — enumerating the bus at the same moment.
+        # `device_open_lock` binds only openers that take it, so an open can still land on a busy bus.
         OPEN_ATTEMPTS = 3
         OPEN_RETRY_SEC = 1.0
         for attempt in range(1, OPEN_ATTEMPTS + 1):
