@@ -9,7 +9,7 @@ from websockets.http11 import Response
 
 from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import command
-from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, MAX_FORBIDDEN_ATTEMPTS, InferenceClient
+from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, _ConnectRetries
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.remote import RemoteSession
@@ -222,7 +222,8 @@ class TestNewSessionRetriesRefusedUpgrades:
     def test_a_403_gives_up_once_its_attempts_are_spent(self):
         with (
             patch(
-                'positronic.offboard.client.connect', side_effect=[_refused(403)] * (MAX_FORBIDDEN_ATTEMPTS + 5)
+                'positronic.offboard.client.connect',
+                side_effect=[_refused(403)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS + 5),
             ) as mock_connect,
             patch('positronic.offboard.client.InferenceSession'),
             patch('positronic.offboard.client.time.sleep'),
@@ -230,7 +231,7 @@ class TestNewSessionRetriesRefusedUpgrades:
         ):
             InferenceClient('localhost:8000').new_session()
 
-        assert mock_connect.call_count == MAX_FORBIDDEN_ATTEMPTS
+        assert mock_connect.call_count == _ConnectRetries.MAX_FORBIDDEN_ATTEMPTS
 
     @pytest.mark.parametrize('status_code', [401, 404])
     def test_a_refusal_that_no_warm_up_clears_is_raised_at_once(self, status_code):
@@ -246,7 +247,7 @@ class TestNewSessionRetriesRefusedUpgrades:
 
     def test_each_session_opens_on_a_full_budget(self):
         """A client that spent 403s opening one session still gets all of them for the next."""
-        one_session = [_refused(403)] * (MAX_FORBIDDEN_ATTEMPTS - 1) + [MagicMock()]
+        one_session = [_refused(403)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS - 1) + [MagicMock()]
         with (
             patch('positronic.offboard.client.connect', side_effect=one_session * 2) as mock_connect,
             patch('positronic.offboard.client.InferenceSession'),

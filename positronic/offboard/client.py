@@ -19,9 +19,6 @@ logger = logging.getLogger(__name__)
 # per use.
 DEFAULT_INFER_TIMEOUT = 180.0
 
-# 403 is both a cold backend and a refused credential, so it gets a few attempts, not the whole ``connect_deadline``.
-MAX_FORBIDDEN_ATTEMPTS = 3
-
 
 class InferenceSession:
     def __init__(self, websocket: Connection, infer_timeout: float = DEFAULT_INFER_TIMEOUT):
@@ -116,9 +113,11 @@ def _session_path(path: str, url: str) -> str:
 class _ConnectRetries:
     """The retry policy over one ``new_session``'s connect attempts.
 
-    A 403 gets ``MAX_FORBIDDEN_ATTEMPTS`` of them, so the count belongs to one connect rather than to a
-    client that goes on to open further sessions.
+    403 is both a cold backend and a refused credential, so it gets a few attempts rather than the whole
+    ``connect_deadline``, and that count belongs to one connect rather than to a client that opens many.
     """
+
+    MAX_FORBIDDEN_ATTEMPTS = 3
 
     def __init__(self) -> None:
         self._forbidden_attempts = 0
@@ -130,7 +129,7 @@ class _ConnectRetries:
         status = e.response.status_code
         if status == HTTPStatus.FORBIDDEN:
             self._forbidden_attempts += 1
-            return self._forbidden_attempts < MAX_FORBIDDEN_ATTEMPTS
+            return self._forbidden_attempts < self.MAX_FORBIDDEN_ATTEMPTS
         return status >= HTTPStatus.INTERNAL_SERVER_ERROR or status == HTTPStatus.TOO_MANY_REQUESTS
 
 
