@@ -1,4 +1,5 @@
 import time
+from http import HTTPStatus
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -201,8 +202,8 @@ class TestInferenceClientUrl:
                 assert call.args[0] == client.session_url == 'ws://localhost:8000/api/v1/session/10000?fps=10'
 
 
-def _refused(status_code: int) -> InvalidStatus:
-    return InvalidStatus(Response(status_code, 'refused', Headers()))
+def _refused(status: HTTPStatus) -> InvalidStatus:
+    return InvalidStatus(Response(status, 'refused', Headers()))
 
 
 class TestNewSessionRetriesRefusedUpgrades:
@@ -210,7 +211,9 @@ class TestNewSessionRetriesRefusedUpgrades:
 
     def test_a_403_retries_and_the_session_that_follows_is_returned(self):
         with (
-            patch('positronic.offboard.client.connect', side_effect=[_refused(403), MagicMock()]) as mock_connect,
+            patch(
+                'positronic.offboard.client.connect', side_effect=[_refused(HTTPStatus.FORBIDDEN), MagicMock()]
+            ) as mock_connect,
             patch('positronic.offboard.client.InferenceSession') as mock_session_cls,
             patch('positronic.offboard.client.time.sleep'),
         ):
@@ -223,7 +226,7 @@ class TestNewSessionRetriesRefusedUpgrades:
         with (
             patch(
                 'positronic.offboard.client.connect',
-                side_effect=[_refused(403)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS + 5),
+                side_effect=[_refused(HTTPStatus.FORBIDDEN)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS + 5),
             ) as mock_connect,
             patch('positronic.offboard.client.InferenceSession'),
             patch('positronic.offboard.client.time.sleep'),
@@ -233,10 +236,10 @@ class TestNewSessionRetriesRefusedUpgrades:
 
         assert mock_connect.call_count == _ConnectRetries.MAX_FORBIDDEN_ATTEMPTS
 
-    @pytest.mark.parametrize('status_code', [401, 404])
-    def test_a_refusal_that_no_warm_up_clears_is_raised_at_once(self, status_code):
+    @pytest.mark.parametrize('status', [HTTPStatus.UNAUTHORIZED, HTTPStatus.NOT_FOUND])
+    def test_a_refusal_that_no_warm_up_clears_is_raised_at_once(self, status):
         with (
-            patch('positronic.offboard.client.connect', side_effect=_refused(status_code)) as mock_connect,
+            patch('positronic.offboard.client.connect', side_effect=_refused(status)) as mock_connect,
             patch('positronic.offboard.client.InferenceSession'),
             patch('positronic.offboard.client.time.sleep'),
             pytest.raises(InvalidStatus),
@@ -247,7 +250,7 @@ class TestNewSessionRetriesRefusedUpgrades:
 
     def test_each_session_opens_on_a_full_budget(self):
         """A client that spent 403s opening one session still gets all of them for the next."""
-        one_session = [_refused(403)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS - 1) + [MagicMock()]
+        one_session = [_refused(HTTPStatus.FORBIDDEN)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS - 1) + [MagicMock()]
         with (
             patch('positronic.offboard.client.connect', side_effect=one_session * 2) as mock_connect,
             patch('positronic.offboard.client.InferenceSession'),
