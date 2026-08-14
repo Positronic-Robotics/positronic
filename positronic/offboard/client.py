@@ -19,9 +19,7 @@ logger = logging.getLogger(__name__)
 # per use.
 DEFAULT_INFER_TIMEOUT = 180.0
 
-# A cold backend behind Modal's proxy refuses the upgrade with 403 and accepts the next attempt. A server
-# refusing the credential answers 403 too — ``PolicyServer`` does — so a 403 buys this many attempts rather
-# than the whole ``connect_deadline``.
+# 403 is both a cold backend and a refused credential, so it gets a few attempts, not the whole ``connect_deadline``.
 MAX_FORBIDDEN_ATTEMPTS = 3
 
 
