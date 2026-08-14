@@ -2,6 +2,7 @@ import logging
 import ssl
 import time
 import urllib.parse
+from enum import Enum
 from http import HTTPStatus
 from typing import Any
 
@@ -110,6 +111,11 @@ def _session_path(path: str, url: str) -> str:
     return path
 
 
+class _ConnectOutcome(Enum):
+    RETRY = 'retry'
+    SURFACE = 'surface'
+
+
 class _ConnectRetries:
     """The retry policy over one ``new_session``'s connect attempts.
 
@@ -122,15 +128,17 @@ class _ConnectRetries:
     def __init__(self) -> None:
         self._forbidden_attempts = 0
 
-    def should_retry(self, e: Exception) -> bool:
-        """Whether the backend that refused this attempt may still answer a later one."""
+    def take(self, e: Exception) -> _ConnectOutcome:
+        """Spend a refused connect against the budget."""
         if not isinstance(e, InvalidStatus):
-            return True
+            return _ConnectOutcome.RETRY
         status = e.response.status_code
         if status == HTTPStatus.FORBIDDEN:
             self._forbidden_attempts += 1
-            return self._forbidden_attempts < self.MAX_FORBIDDEN_ATTEMPTS
-        return status >= HTTPStatus.INTERNAL_SERVER_ERROR or status == HTTPStatus.TOO_MANY_REQUESTS
+            again = self._forbidden_attempts < self.MAX_FORBIDDEN_ATTEMPTS
+        else:
+            again = status >= HTTPStatus.INTERNAL_SERVER_ERROR or status == HTTPStatus.TOO_MANY_REQUESTS
+        return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
 
 
 class InferenceClient:
@@ -212,7 +220,7 @@ class InferenceClient:
             except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
                 if ws is not None:
                     ws.close()
-                if not retries.should_retry(e):
+                if retries.take(e) is _ConnectOutcome.SURFACE:
                     raise
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'{e} (connecting to {self.session_url})') from e
