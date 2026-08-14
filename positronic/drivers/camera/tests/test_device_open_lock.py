@@ -1,9 +1,14 @@
 """Camera opens are serialized across processes, because a vendor SDK loses the device when two overlap."""
 
 import multiprocessing as mp
+import os
+import subprocess
+import sys
 import time
 from contextlib import nullcontext
 from pathlib import Path
+
+import pytest
 
 from positronic.drivers.camera import device_open_lock
 
@@ -97,3 +102,59 @@ def test_a_killed_holder_does_not_strand_the_lock(tmp_path: Path):
     holder.join(timeout=PATIENCE_SECONDS)
 
     assert _another_process_acquires_within(lock_path, seconds=PATIENCE_SECONDS)
+
+
+def test_an_existing_lock_file_is_opened_without_o_creat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """`fs.protected_regular` refuses an `O_CREAT` open of a file another account owns in a sticky directory."""
+    lock_path = tmp_path / 'open.lock'
+    lock_path.touch()
+    real_open, flags = os.open, []
+
+    def recording_open(path, flag, *args, **kwargs):
+        if Path(path) == lock_path:
+            flags.append(flag)
+        return real_open(path, flag, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'open', recording_open)
+    with device_open_lock(lock_path):
+        pass
+
+    assert flags, 'the lock never opened its file'
+    assert not any(flag & os.O_CREAT for flag in flags)
+
+
+def test_a_created_lock_file_is_readable_by_every_account(tmp_path: Path):
+    """`umask` masks the create mode, and a lock file the next account cannot open excludes nobody."""
+    lock_path = tmp_path / 'open.lock'
+    previous_umask = os.umask(0o077)
+    try:
+        with device_open_lock(lock_path):
+            pass
+    finally:
+        os.umask(previous_umask)
+
+    assert lock_path.stat().st_mode & 0o444 == 0o444
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason='root bypasses the permission bits this asserts on')
+def test_an_unopenable_lock_file_raises_rather_than_opening_unserialized(tmp_path: Path):
+    """A lock that cannot be taken must fail the open, not let two SDKs onto the bus with nothing said."""
+    lock_path = tmp_path / 'open.lock'
+    lock_path.touch(mode=0o000)
+
+    with pytest.raises(PermissionError), device_open_lock(lock_path):
+        pass
+
+
+def test_the_default_lock_path_does_not_move_with_the_environment(tmp_path: Path):
+    """Two openers under different `TMPDIR`s, or a unit with `PrivateTmp=`, would take different locks."""
+    read_the_path = [sys.executable, '-c', 'import positronic.drivers.camera as c; print(c.DEVICE_OPEN_LOCK_PATH)']
+    seen = set()
+    for name in ('a', 'b'):
+        tmpdir = tmp_path / name
+        tmpdir.mkdir()
+        env = {**os.environ, 'TMPDIR': str(tmpdir)}
+        seen.add(subprocess.run(read_the_path, env=env, capture_output=True, text=True, check=True).stdout.strip())
+
+    assert len(seen) == 1
+    assert Path(seen.pop()).is_absolute()
