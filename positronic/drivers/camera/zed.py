@@ -7,9 +7,15 @@ import numpy as np
 import pimm
 from pimm.shared_memory import NumpySMAdapter
 from positronic.drivers import vendor_import
+from positronic.drivers.camera import device_open_lock
 
 with vendor_import('pyzed', 'ZED camera support', platforms=('linux',)):
     import pyzed.sl as sl
+
+# The lock keeps this world's cameras apart; these cover an opener outside it — a smoke test, a
+# leftover process — enumerating the bus at the same moment.
+OPEN_ATTEMPTS = 3
+OPEN_RETRY_SEC = 1.0
 
 
 class SLCamera(pimm.ControlSystem):
@@ -111,9 +117,14 @@ class SLCamera(pimm.ControlSystem):
             )
 
         zed = sl.CameraOne() if self._mono else sl.Camera()
-        error_code = zed.open(init_params)
-        if error_code != SUCCESS:
-            logging.error(f'Failed to open camera: {error_code}')
+        for attempt in range(1, OPEN_ATTEMPTS + 1):
+            with device_open_lock():
+                error_code = zed.open(init_params)
+            if error_code == SUCCESS:
+                break
+            logging.error(f'Failed to open camera (attempt {attempt} of {OPEN_ATTEMPTS}): {error_code}')
+            yield pimm.Sleep(OPEN_RETRY_SEC)
+        else:
             return
 
         self.recovery_start_time = None
