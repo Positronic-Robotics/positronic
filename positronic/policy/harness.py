@@ -531,7 +531,7 @@ class Harness(pimm.ControlSystem):
         self._t0_ns = clock.now_ns()
         self._wall_t0 = time.monotonic()
         # Sessions declare ``dict`` but must not mutate the obs, so they get a read-only view.
-        self._future = executor.submit(session, frozen_view(_owned(obs)))  # pyright: ignore[reportArgumentType]
+        self._future = executor.submit(session, frozen_view(_owned(obs)))
         if self._charge is None:
             # Sleeping zero hands the worker the GIL without adding a wake-up granularity to the handshake.
             while not self._future.done() and time.monotonic() - self._wall_t0 < SKIP_REPLY_SEC:

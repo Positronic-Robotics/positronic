@@ -26,9 +26,9 @@ class RemoteSession(Session):
         self._session = ws_session
         self._compress_images = compress_images
 
-    def _prepare_obs(self, obs: dict[str, Any]) -> dict[str, Any]:
+    def _prepare_obs(self, obs: cabc.Mapping[str, Any]) -> dict[str, Any]:
         if not self._compress_images:
-            return obs
+            return dict(obs)
         return {key: self._prepare_value(key, value) for key, value in obs.items()}
 
     def _prepare_value(self, key: str, value: Any) -> Any:
@@ -42,7 +42,7 @@ class RemoteSession(Session):
             return type(value)(self._prepare_value(key, v) for v in value)
         return value
 
-    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+    def __call__(self, obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | None:
         """Forwards the observation to the remote server and returns the action trajectory.
 
         Single-action server responses are wrapped into a 1-element list to honor

@@ -57,7 +57,9 @@ class TestPrepareObs:
     def test_images_pass_through_untouched_by_default(self):
         session = RemoteSession(_mock_ws_session())
         obs = {'cam': _make_image(480, 640), 'state': np.array([1.0])}
-        assert session._prepare_obs(obs) is obs
+        prepared = session._prepare_obs(obs)
+        assert prepared.keys() == obs.keys()
+        assert all(prepared[key] is value for key, value in obs.items())
 
     def test_compression_reaches_nested_images(self):
         session = RemoteSession(_mock_ws_session(), compress_images=True)

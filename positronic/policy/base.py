@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 Now = Callable[[], float]
@@ -33,7 +33,7 @@ class Session(ABC):
     """
 
     @abstractmethod
-    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+    def __call__(self, obs: Mapping[str, Any]) -> list[dict[str, Any]] | None:
         """Predict actions for the given observation."""
 
     @property
