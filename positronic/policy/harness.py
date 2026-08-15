@@ -234,7 +234,9 @@ class Harness(pimm.ControlSystem):
         # worker belongs to the episode: ending one abandons the call in flight rather than waiting for it,
         # so the next episode must not queue behind it.
         self._executor: ThreadPoolExecutor | None = None
-        self._retiring: ThreadPoolExecutor | None = None
+        # The retired worker and the session its abandoned call is still inside, held as one because closing
+        # the session is what the join makes safe.
+        self._retiring: tuple[ThreadPoolExecutor, Session] | None = None
         self._future: Future[list[dict[str, Any]] | None] | None = None
         # The in-flight call's start: the world instant its observation was built, and the wall instant it
         # was submitted.
@@ -332,36 +334,42 @@ class Harness(pimm.ControlSystem):
             logging.error(f'Inference failed after the episode that asked for it ended: {exc}')
 
     def _retire_worker(self) -> None:
-        """Let go of this episode's worker and the call it is running: the answer lands nowhere and the
-        failure only reaches the log. The worker is kept for ``_reap_worker`` to join at the next episode's
-        start, since ending an episode must not wait for a model that hangs."""
+        """Let go of this episode's worker, the call it is running and the session that call is inside: the
+        answer lands nowhere and the failure only reaches the log. All three are kept for ``_reap_worker``,
+        since ending an episode must not wait for a model that hangs."""
         if self._future is not None:
             self._future.add_done_callback(self._report_abandoned)
             self._future = None
-        if self._executor is not None:
+        if self._executor is not None and self._policy_session is not None:
             self._executor.shutdown(wait=False, cancel_futures=True)
-            self._retiring, self._executor = self._executor, None
+            self._retiring = (self._executor, self._policy_session)
+            self._executor, self._policy_session = None, None
 
     def _reap_worker(self) -> None:
-        """Wait out an abandoned call before anything else touches the policy.
+        """Wait out an abandoned call, then close the session it was inside.
 
-        An in-process policy is a single model across episodes and across runs, so ``new_session`` and
-        ``close`` reach the very object an abandoned call may still be inside — a running thread survives
-        ``shutdown(cancel_futures=True)``, which cancels only what is still queued. The wait sits at the next
-        episode's start and at the harness's own shutdown, never at the end of the episode the call belongs
-        to, so a hung model cannot hold up that episode's recording and home.
+        A running thread survives ``shutdown(cancel_futures=True)``, which cancels only what is still queued,
+        so until the join returns the call still holds the session's resources — a ``RemoteSession``'s
+        websocket is the one ``close`` would pull out from under it — and, for an in-process policy, the one
+        model that every session across episodes and runs shares. The wait sits at the next episode's start
+        and at the harness's own shutdown, never at the end of the episode the call belongs to, so a hung
+        model cannot hold up that episode's recording and home.
         """
         if self._retiring is not None:
-            self._retiring.shutdown(wait=True)
+            executor, session = self._retiring
             self._retiring = None
+            executor.shutdown(wait=True)
+            session.close()
 
     def _finalize_recording(
         self, clock: pimm.Clock, payload: dict[str, Any] | None = None
     ) -> Generator[pimm.Command, None, None]:
         """Commit the live episode: cancel the in-flight chunk, stop the recorder — stamping the
         episode's full static meta (plus any terminal payload) — then close its span."""
+        # Stamped before the session is retired with the worker: the meta overlays what the session reports.
+        stop = DsWriterCommand.STOP({**self._build_episode_meta(self.context), **(payload or {})})
         self._cancel_session()
-        self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(self.context), **(payload or {})}))
+        self.ds_command.emit(stop)
         virtual_now = clock.now()  # before the round below, whose sim-clock advance belongs to no rollout
         # Give the recorder a round to commit the STOP before the next START (they share ``ds_command``, where
         # last-value-wins would drop one) and before the home command, so homing stays out of the recording.
@@ -423,10 +431,12 @@ class Harness(pimm.ControlSystem):
     def _end_episode(
         self, clock: pimm.Clock, payload: dict[str, Any] | None = None, *, abort: bool = False
     ) -> Generator[pimm.Command, None, None]:
-        """Close the live episode: finalize (or abort) the recording, release the session, home devices.
+        """Close the live episode: finalize (or abort) the recording, retire the session, home devices.
 
-        Releasing the session here, not only at shutdown, closes a ``RemoteSession``'s websocket promptly, so
-        the offboard server's per-session cleanup (active-session decrement, idle watchdog) runs now.
+        The session is retired with the worker rather than closed here, so a ``RemoteSession``'s websocket
+        outlives the call still using it; ``_reap_worker`` closes it at the next episode's start or at
+        shutdown, and the offboard server's per-session cleanup (active-session decrement, idle watchdog)
+        runs then.
         """
         if self._running:
             if abort:
@@ -436,9 +446,6 @@ class Harness(pimm.ControlSystem):
                 self._telemetry.abort()
             else:
                 yield from self._finalize_recording(clock, payload)
-        if self._policy_session:
-            self._policy_session.close()
-            self._policy_session = None
         self._home()
         self._running = False
 
@@ -659,9 +666,6 @@ class Harness(pimm.ControlSystem):
         """
         self._retire_worker()
         self._reap_worker()
-        if self._policy_session is not None:
-            self._policy_session.close()
-            self._policy_session = None
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         while not should_stop.value:

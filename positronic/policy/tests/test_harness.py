@@ -2099,6 +2099,54 @@ def test_the_run_ends_only_once_the_call_it_abandoned_is_out_of_the_policy():
     assert left_the_model.is_set(), 'the run returned with a call still inside the shared policy'
 
 
+@pytest.mark.timeout(20.0)
+def test_the_session_is_closed_only_once_its_call_has_left_it():
+    """``RemoteSession.close`` shuts the websocket the call in flight is talking over, and ``Session`` asks
+    for no thread safety, so the session is retired with its worker and closed once that worker is joined."""
+    inside_at_close = []
+
+    class _HangingSession(Session):
+        def __init__(self):
+            self.inside = False
+
+        def __call__(self, obs):
+            self.inside = True
+            try:
+                time.sleep(1.0)
+                return None
+            finally:
+                self.inside = False
+
+        def close(self):
+            inside_at_close.append(self.inside)
+
+    class _HangingPolicy(Policy):
+        def new_session(self, context=None, now=None):
+            return _HangingSession()
+
+    with pimm.World() as world:
+        harness = Harness(_HangingPolicy(), make_embodiment())
+        harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
+        harness.commands[keys.TARGET_GRIP]._bind(RecordingEmitter())
+        harness.ds_command._bind(RecordingEmitter())
+
+        frame_em = world.pair(harness.observations[CAM])
+        robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
+        grip_em = world.pair(harness.observations[keys.GRIP])
+        directive_em = cast(pimm.SignalEmitter, world.pair(harness.directive))
+
+        robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+        driver = ManualDriver([
+            (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+            (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+            (partial(directive_em.emit, Directive.FINISH()), 0.05),
+            (None, 0.05),
+        ])
+        drive_scheduler(world.start([harness, driver]), steps=40)
+
+    assert inside_at_close == [False], 'the session was closed while its own call was still inside it'
+
+
 @pytest.mark.timeout(3.0)
 def test_installed_trajectory_clears_the_channels_it_omits(world):
     """A trajectory naming only one channel replaces the whole schedule: the omitted channel stops being
