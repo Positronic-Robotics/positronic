@@ -256,9 +256,52 @@ Summarize:
 - which threads you resolved (fixes only) vs left open (declines / defers / discussion),
 - any follow-ups the user should track.
 
+Then **offer** the walk below, in one line, and go to Step 7 without waiting:
+
+> 3 threads are open on my call: <title>, <title>, <title>. Want to go through them?
+
 A bot will re-review on push and may add comments. **Don't hand the watch back to the
 user** — go to Step 7, which watches for that re-review in the background and loops you
 through another pass automatically until the reviewer converges.
+
+## Walking your declines — only on an explicit go
+
+Every thread you declined or deferred is a decision the human has not seen. They are entitled to
+review each one, during the cycle or after it converges. **Offer it; never start it uninvited.** A
+proposal is one line (above). Presenting a thread before they say go is the failure this section
+exists to prevent — as is presenting all of them at once.
+
+On their go, **one thread per message, four sentences, no headings, no code blocks**:
+
+1. what the thing is,
+2. what the reviewer wanted,
+3. why you declined it,
+4. the decision you need — bolded, on its own line, with the options named.
+
+Then **stop**. Do not append the next thread, a summary, or what you plan to do after.
+
+Everything beyond those four sentences is available on request and withheld until then — the diff, the
+evidence, the options table, the code. `git show`, measurements, a longer argument: all fine to *have*,
+none of it goes in unless asked.
+
+- **"too long" / "too complicated" means cut it in half** — not rewrite it at the same length. If they
+  say it twice, you are still writing for yourself.
+- **A follow-up question gets that answer alone.** "why declined?" is not an invitation to re-present
+  the thread; "which three?" wants three names and nothing else.
+- Assume they have not read the code and will not. No "see the call site".
+
+Their verdicts are terse. What each one means:
+
+| They say | You do |
+|---|---|
+| "next" / "resolve, next" | reply, resolve, present the next thread — same shape, no re-asking |
+| "leave it" | reply that it is accepted as a known limit, resolve |
+| "fix it" | fix, run the gates, commit, push, reply with the SHA, resolve |
+| "file it" / "open a bug" | file the issue, reply linking it, resolve |
+| "why declined?" | the reasoning only |
+
+This is the one path on which a declined thread gets resolved: the human closed it, thread by thread.
+Absent that, Step 5 stands and it stays open.
 
 ## Step 7: Watch for convergence in the background (so the user doesn't have to)
 
