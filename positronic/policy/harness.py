@@ -83,14 +83,6 @@ def _assert_anchored(actions: list[dict[str, Any]], now: float) -> None:
         )
 
 
-class _Answer(Enum):
-    """What became of the call ``_take`` was handed: its trajectory is installed and the future spent, or the
-    world has not yet paid the charge and the same future comes back next round."""
-
-    CONSUMED = 'consumed'
-    PENDING = 'pending'
-
-
 class DirectiveType(Enum):
     RUN = 'run'
     FINISH = 'finish'
@@ -536,6 +528,13 @@ class Harness(pimm.ControlSystem):
         """
         return {name: value.copy() if isinstance(value, np.ndarray) else value for name, value in obs.items()}
 
+    class _Answer(Enum):
+        """What became of the call ``_take`` was handed: its trajectory is installed and the future spent, or
+        the world has not yet paid the charge and the same future comes back next round."""
+
+        CONSUMED = 'consumed'
+        PENDING = 'pending'
+
     def _step(self, clock: pimm.Clock) -> None:
         """Keep one session call in flight and install the trajectory it returns.
 
@@ -544,7 +543,7 @@ class Harness(pimm.ControlSystem):
         """
         session, executor = self._policy_session, self._executor
         assert session is not None and executor is not None  # only a live episode steps
-        if self._future is not None and self._take(self._future, clock) is _Answer.PENDING:
+        if self._future is not None and self._take(self._future, clock) is Harness._Answer.PENDING:
             return
         obs = self._build_obs(clock)
         if obs is None:
@@ -583,20 +582,20 @@ class Harness(pimm.ControlSystem):
         elif not future.done():
             ahead = clock.now() - (self._t0_ns / 1e9 + time.monotonic() - self._wall_t0)
             if ahead <= 0.0:
-                return _Answer.PENDING
+                return Harness._Answer.PENDING
             concurrent.futures.wait([future], timeout=ahead)
             if not future.done():
-                return _Answer.PENDING
+                return Harness._Answer.PENDING
         actions = future.result()  # taken on the loop thread, so a failing call still seals the episode
         if actions and self._charge is not None:
             # Integer ns, the world's own timeline: a float compare misses the release instant by one ULP
             # and slips the install a full round.
             if clock.now_ns() < self._t0_ns + round(self._charge * 1e9):
-                return _Answer.PENDING  # the schedule already playing carries the world to the release instant
+                return Harness._Answer.PENDING  # the schedule already playing carries the world to the release instant
         self._future = None
         if actions is not None:
             self._install(actions, clock)
-        return _Answer.CONSUMED
+        return Harness._Answer.CONSUMED
 
     def _install(self, actions: list[dict[str, Any]], clock: pimm.Clock) -> None:
         """Replace the schedule being played with the session's trajectory. Every channel it names gets that
