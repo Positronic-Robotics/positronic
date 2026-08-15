@@ -271,21 +271,30 @@ review each one, during the cycle or after it converges. **Offer it; never start
 proposal is one line (above). Presenting a thread before they say go is the failure this section
 exists to prevent — as is presenting all of them at once.
 
-On their go, **one thread per message, four sentences, no headings, no code blocks**:
+On their go, **one thread per message, no section headings**, covering four things:
 
 1. what the thing is,
 2. what the reviewer wanted,
 3. why you declined it,
 4. the decision you need — bolded, on its own line, with the options named.
 
+**Simple beats short.** The failure mode is density, not length: four sentences carrying three ideas
+each are worse than twelve carrying one each. Unpack — one idea per sentence, plain words, and
+describe the thing before arguing about it. Length is the budget for being understood; spend it on
+unpacking and on nothing else.
+
+**A short code snippet is welcome** where code says it faster than prose — the branch that decides,
+the line that was removed. A few lines, and say what it shows. Long listings, file tours and full
+diffs are not.
+
 Then **stop**. Do not append the next thread, a summary, or what you plan to do after.
 
-Everything beyond those four sentences is available on request and withheld until then — the diff, the
-evidence, the options table, the code. `git show`, measurements, a longer argument: all fine to *have*,
-none of it goes in unless asked.
+Withheld until asked: the measurements, the alternative designs, the options table, the wider diff.
+Fine to *have* — `git show`, instrumentation, a longer argument — none of it goes in unasked.
 
-- **"too long" / "too complicated" means cut it in half** — not rewrite it at the same length. If they
-  say it twice, you are still writing for yourself.
+- **"too long" means cut it in half** — not rewrite it at the same length.
+- **"too complicated" / "I don't understand" means unpack it** — more sentences, fewer ideas per
+  sentence, and a snippet if one exists. Cutting further is the wrong reflex and makes it worse.
 - **A follow-up question gets that answer alone.** "why declined?" is not an invitation to re-present
   the thread; "which three?" wants three names and nothing else.
 - Assume they have not read the code and will not. No "see the call site".
