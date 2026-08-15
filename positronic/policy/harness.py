@@ -240,9 +240,10 @@ class Harness(pimm.ControlSystem):
         # was submitted.
         self._t0_ns = 0
         self._wall_t0 = 0.0
-        # Seconds each model call costs the world clock this episode, or ``None`` to charge the call's own
-        # wall duration (hardware pace, and the sim's ``inference_latency=True``).
-        self._charge: float | None = None
+        # Seconds each model call costs the world clock this episode, the same figure for every call.
+        # ``None`` when no figure is fixed and the world is charged the call's own wall duration (hardware
+        # pace, and the sim's ``inference_latency=True``).
+        self._fixed_latency: float | None = None
         # ``task.timeout``, set per episode; a task-less session has no deadline and ends on directives.
         self._deadline: float | None = None
         # Whether this episode's first observation has landed. Until it does the deadline stands where the
@@ -385,10 +386,10 @@ class Harness(pimm.ControlSystem):
             # every model call.
             latency = self.context.setdefault(keys.INFERENCE_LATENCY, False)
         else:
-            # The charge is a device for simulating a trial, so a real rig ignores it and pays the wall time
-            # its calls really take.
+            # A fixed latency is a device for simulating a trial, so a real rig ignores it and pays the wall
+            # time its calls really take.
             latency = True
-        self._charge = None if latency is True else float(latency)
+        self._fixed_latency = None if latency is True else float(latency)
         self._awaiting_obs = set(self._embodiment.observations)
         self._rollout_started = False
         # Before the reset, so the reset and the rollout's other phase spans parent to the episode span.
@@ -514,7 +515,7 @@ class Harness(pimm.ControlSystem):
         charge — the declared constant whole, or the wall time elapsed so far. Read on the worker thread;
         the loop thread writes the call's start fields before submitting it.
         """
-        charge = time.monotonic() - self._wall_t0 if self._charge is None else self._charge
+        charge = time.monotonic() - self._wall_t0 if self._fixed_latency is None else self._fixed_latency
         return self._t0_ns / 1e9 + charge
 
     @staticmethod
@@ -559,10 +560,8 @@ class Harness(pimm.ControlSystem):
         self._t0_ns = clock.now_ns()
         self._wall_t0 = time.monotonic()
         self._future = executor.submit(session, frozen_view(self._owned(obs)))
-        if self._charge is None:
-            # Sleeping zero hands the worker the GIL without adding a wake-up granularity to the handshake.
-            while not self._future.done() and time.monotonic() - self._wall_t0 < SKIP_REPLY_SEC:
-                time.sleep(0)
+        if self._fixed_latency is None:
+            concurrent.futures.wait([self._future], timeout=SKIP_REPLY_SEC)
         self._take(self._future, clock)
 
     def _take(self, future: Future[list[dict[str, Any]] | None], clock: pimm.Clock) -> _Answer:
@@ -577,7 +576,7 @@ class Harness(pimm.ControlSystem):
         stops what is executing — has no such instant and lands at once. A charge measured in wall time can
         hold nothing still, so there the world runs no further ahead of the call's start than wall time has.
         """
-        if self._charge is not None:
+        if self._fixed_latency is not None:
             concurrent.futures.wait([future])
         elif not future.done():
             ahead = clock.now() - (self._t0_ns / 1e9 + time.monotonic() - self._wall_t0)
@@ -587,10 +586,10 @@ class Harness(pimm.ControlSystem):
             if not future.done():
                 return Harness._Answer.PENDING
         actions = future.result()  # taken on the loop thread, so a failing call still seals the episode
-        if actions and self._charge is not None:
+        if actions and self._fixed_latency is not None:
             # Integer ns, the world's own timeline: a float compare misses the release instant by one ULP
             # and slips the install a full round.
-            if clock.now_ns() < self._t0_ns + round(self._charge * 1e9):
+            if clock.now_ns() < self._t0_ns + round(self._fixed_latency * 1e9):
                 return Harness._Answer.PENDING  # the schedule already playing carries the world to the release instant
         self._future = None
         if actions is not None:
