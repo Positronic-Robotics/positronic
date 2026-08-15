@@ -1,3 +1,4 @@
+import threading
 import time
 from contextlib import contextmanager
 from functools import partial
@@ -2056,6 +2057,46 @@ def test_finish_does_not_wait_for_the_call_in_flight():
     assert len(stops) == 1
     assert stops[0][0] - started < hang_sec, 'the stop waited for the call to answer'
     assert isinstance(cmd_recorder.emitted[-1][1], Reset)
+
+
+@pytest.mark.timeout(20.0)
+def test_the_run_ends_only_once_the_call_it_abandoned_is_out_of_the_policy():
+    """A sweep runs a harness per eval over one shared policy, so a call still inside the model when a run
+    ends would meet the next run's ``new_session`` — or ``policy.close()``. The run outlives its own call."""
+    hang_sec = 1.0
+    left_the_model = threading.Event()
+
+    class _HangingSession(Session):
+        def __call__(self, obs):
+            time.sleep(hang_sec)
+            left_the_model.set()
+            return None
+
+    class _HangingPolicy(Policy):
+        def new_session(self, context=None, now=None):
+            return _HangingSession()
+
+    with pimm.World() as world:
+        harness = Harness(_HangingPolicy(), make_embodiment())
+        harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
+        harness.commands[keys.TARGET_GRIP]._bind(RecordingEmitter())
+        harness.ds_command._bind(RecordingEmitter())
+
+        frame_em = world.pair(harness.observations[CAM])
+        robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
+        grip_em = world.pair(harness.observations[keys.GRIP])
+        directive_em = cast(pimm.SignalEmitter, world.pair(harness.directive))
+
+        robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+        driver = ManualDriver([
+            (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+            (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
+            (partial(directive_em.emit, Directive.FINISH()), 0.05),
+            (None, 0.05),
+        ])
+        drive_scheduler(world.start([harness, driver]), steps=40)
+
+    assert left_the_model.is_set(), 'the run returned with a call still inside the shared policy'
 
 
 @pytest.mark.timeout(3.0)

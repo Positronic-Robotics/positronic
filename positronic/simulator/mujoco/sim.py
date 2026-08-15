@@ -156,12 +156,14 @@ class MujocoSim(pimm.ControlSystem):
         # replays these states through it (``mj_setState`` + ``mj_forward``).
         self.sim_state: pimm.SignalEmitter[dict[str, np.ndarray]] = pimm.ControlSystemEmitter(self)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self._emit_robot_meta()
-        state_due = _Cadence(self._state_fps)
-        grip_due = _Cadence(self._grip_fps)
-        sim_state_due = _Cadence(self._sim_state_fps)
-        cameras_due = _Cadence(self._camera_fps)
+        streams = [
+            (_Cadence(self._state_fps), self._emit_state),
+            (_Cadence(self._grip_fps), self._emit_grip),
+            (_Cadence(self._sim_state_fps), self._emit_sim_state),
+            (_Cadence(self._camera_fps), self._emit_cameras),
+        ]
 
         while not should_stop.value:
             yield pimm.Sleep(self.model.opt.timestep)
@@ -192,14 +194,9 @@ class MujocoSim(pimm.ControlSystem):
             with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
                 self.step()
                 self.fps_counter.tick()
-                if state_due(now):
-                    self._emit_state()
-                if grip_due(now):
-                    self._emit_grip()
-                if sim_state_due(now):
-                    self._emit_sim_state()
-                if cameras_due(now):
-                    self._emit_cameras()
+                for due, emit in streams:
+                    if due(now):
+                        emit()
 
         if self._renderer is not None:
             self._renderer.close()

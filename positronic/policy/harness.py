@@ -343,13 +343,13 @@ class Harness(pimm.ControlSystem):
             self._retiring, self._executor = self._executor, None
 
     def _reap_worker(self) -> None:
-        """Wait out the previous episode's abandoned call before this one opens a session.
+        """Wait out an abandoned call before anything else touches the policy.
 
-        An in-process policy is a single model across episodes, so ``new_session`` resets the very object an
-        abandoned call may still be inside — a running thread survives ``shutdown(cancel_futures=True)``,
-        which cancels only what is still queued. Waiting here rather than at the end of the episode it
-        belongs to keeps a hung model from holding up that episode's recording and home, and the task reset
-        this follows usually covers the wait.
+        An in-process policy is a single model across episodes and across runs, so ``new_session`` and
+        ``close`` reach the very object an abandoned call may still be inside — a running thread survives
+        ``shutdown(cancel_futures=True)``, which cancels only what is still queued. The wait sits at the next
+        episode's start and at the harness's own shutdown, never at the end of the episode the call belongs
+        to, so a hung model cannot hold up that episode's recording and home.
         """
         if self._retiring is not None:
             self._retiring.shutdown(wait=True)
@@ -370,6 +370,14 @@ class Harness(pimm.ControlSystem):
         # episode. Accepted skew: a producer stepping in that shared round charges one span (≤ one control
         # period) to the closing episode — the cooperative scheduler cannot give the recorder a turn alone.
         self._telemetry.end(virtual_now)
+
+    def _effect_time(self) -> float:
+        """The trial instant the in-flight call's output takes effect: its observation instant plus the
+        charge — the declared constant whole, or the wall time elapsed so far. Read on the worker thread;
+        the loop thread writes the call's start fields before submitting it.
+        """
+        charge = time.monotonic() - self._wall_t0 if self._fixed_latency is None else self._fixed_latency
+        return self._t0_ns / 1e9 + charge
 
     def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> None:
         """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
@@ -510,14 +518,6 @@ class Harness(pimm.ControlSystem):
         inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
         return inputs
 
-    def _effect_time(self) -> float:
-        """The trial instant the in-flight call's output takes effect: its observation instant plus the
-        charge — the declared constant whole, or the wall time elapsed so far. Read on the worker thread;
-        the loop thread writes the call's start fields before submitting it.
-        """
-        charge = time.monotonic() - self._wall_t0 if self._fixed_latency is None else self._fixed_latency
-        return self._t0_ns / 1e9 + charge
-
     @staticmethod
     def _owned(obs: dict[str, Any]) -> dict[str, Any]:
         """The observation with its arrays copied, so nothing rewrites what the worker is still reading.
@@ -653,9 +653,12 @@ class Harness(pimm.ControlSystem):
         dropped: the run is over and nothing is left to install it.
 
         The harness does not own the policy's lifetime: the caller may run several harnesses over one policy
-        (a multi-eval sweep), so it closes the policy once, after the last run.
+        (a multi-eval sweep), so it closes the policy once, after the last run. That leaves no later
+        ``_begin_episode`` to reap on, and the next harness reaches the shared policy through a session of
+        its own, so the call is waited out here.
         """
         self._retire_worker()
+        self._reap_worker()
         if self._policy_session is not None:
             self._policy_session.close()
             self._policy_session = None

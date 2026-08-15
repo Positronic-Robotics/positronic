@@ -131,7 +131,24 @@ class DsWriterAgent(pimm.ControlSystem):
     def inputs(self) -> dict[str, pimm.ControlSystemReceiver[Any]]:
         return frozen_keys_dict(self._inputs)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):  # noqa: C901
+    def _record(self, ep_writer: EpisodeWriter, name: str, msg: pimm.Message, clock: pimm.Clock) -> None:
+        """Append one input's sample, stamped as ``time_mode`` selects and carrying every clock beside it."""
+        world_time_ns, message_time_ns = clock.now_ns(), msg.ts
+        primary_ts = world_time_ns if self._time_mode == TimeMode.CLOCK else message_time_ns
+
+        extra_ts = {'message': message_time_ns, 'system': pimm.world.SystemClock().now_ns()}
+        # Only add 'world' if clock is not system clock
+        if not isinstance(clock, pimm.world.SystemClock):
+            extra_ts['world'] = world_time_ns
+
+        with self._telemetry_span():
+            serializer = self._serializers.get(name)
+            value = msg.data
+            if serializer is not None:
+                value = serializer(value)
+            _append(ep_writer, name, value, primary_ts, extra_ts)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         """Main loop: process commands and append updated inputs to the episode."""
         limiter = pimm.utils.RateLimiter(clock, hz=self._poll_hz)
         pace = (lambda: pimm.Yield()) if self._virtual_time else limiter.wait
@@ -155,6 +172,8 @@ class DsWriterAgent(pimm.ControlSystem):
                 if ep_writer is not None:
                     for name, reader in self._inputs.items():
                         msg = reader.read()
+                        if msg is None:
+                            continue
                         # Scope a command turn's drain to the episode window: the open turn keeps only
                         # samples after START (dropping the inter-episode home command and any pre-reset
                         # frame), the closing turn keeps only samples at or before STOP (dropping post-STOP
@@ -163,21 +182,8 @@ class DsWriterAgent(pimm.ControlSystem):
                         # normally.
                         after_start = not opened or msg.ts > cmd_msg.ts
                         before_stop = not closing or msg.ts <= cmd_msg.ts
-                        if msg is not None and msg.updated and after_start and before_stop:
-                            world_time_ns, message_time_ns = clock.now_ns(), msg.ts
-                            primary_ts = world_time_ns if self._time_mode == TimeMode.CLOCK else message_time_ns
-
-                            extra_ts = {'message': message_time_ns, 'system': pimm.world.SystemClock().now_ns()}
-                            # Only add 'world' if clock is not system clock
-                            if not isinstance(clock, pimm.world.SystemClock):
-                                extra_ts['world'] = world_time_ns
-
-                            with self._telemetry_span():
-                                serializer = self._serializers.get(name)
-                                value = msg.data
-                                if serializer is not None:
-                                    value = serializer(value)
-                                _append(ep_writer, name, value, primary_ts, extra_ts)
+                        if msg.updated and after_start and before_stop:
+                            self._record(ep_writer, name, msg, clock)
 
                 if closing:
                     ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter)
