@@ -12,7 +12,7 @@ import positronic.cfg.embodiment
 import positronic.cfg.policy as policy_cfg
 from positronic import wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
-from positronic.cli.eval.run import completion_sink, prepare_output_dir, run
+from positronic.cli.eval.run import prepare_output_dir, run
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment
@@ -59,8 +59,8 @@ def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
 
 def _run_attended(policy, embodiment: Embodiment, task: str | None, output_dir) -> None:
     """Record from a warmed policy until the keyboard returns. The caller owns the policy."""
-    output_dir = prepare_output_dir(policy, output_dir)
-    harness = Harness(policy, embodiment, on_episode_complete=completion_sink(policy))
+    output_dir = prepare_output_dir(output_dir)
+    harness = Harness(policy, embodiment)
     keyboard = KeyboardControl(quit_key='q')
     handler = KeyboardHandler(task=task)
     print('Keyboard controls: [s]tart, sto[p], abo[r]t, [q]uit')

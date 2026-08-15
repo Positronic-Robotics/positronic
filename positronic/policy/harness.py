@@ -1,5 +1,5 @@
 import time
-from collections.abc import Callable, Generator, Iterable, Iterator
+from collections.abc import Generator, Iterable, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -164,16 +164,12 @@ class Harness(pimm.ControlSystem):
         task: Task | None = None,
         trials: Iterable[dict[str, Any]] | None = None,
         static_meta: dict[str, Any] | None = None,
-        on_episode_complete: Callable[[Session, dict[str, Any]], None] | None = None,
     ):
         assert trials is None or task is not None, 'A trial plan needs a task: its timeout bounds each trial'
         self._embodiment = embodiment
         self._task = task
         # Each entry is a RUN context; when None, directives are the only lifecycle source.
         self._trials = iter(trials) if trials is not None else None
-        # Called with (session, context) on a clean finish, never on abort — completion bookkeeping such as
-        # a ``SampledPolicy``'s episode counter, without putting sampling knowledge in the harness.
-        self._on_complete = on_episode_complete or (lambda session, context: None)
         self.policy: Policy = policy
         self.context: dict[str, Any] = {}
         self._static_meta = static_meta or {}
@@ -273,10 +269,8 @@ class Harness(pimm.ControlSystem):
     def _finalize_recording(
         self, clock: pimm.Clock, payload: dict[str, Any] | None = None
     ) -> Generator[pimm.Command, None, None]:
-        """Commit the live episode: tally completion, cancel the in-flight chunk, stop the recorder —
-        stamping the episode's full static meta (plus any terminal payload) — then close its span."""
-        if self._policy_session:
-            self._on_complete(self._policy_session, self.context)
+        """Commit the live episode: cancel the in-flight chunk, stop the recorder — stamping the
+        episode's full static meta (plus any terminal payload) — then close its span."""
         self._cancel_trajectories()
         self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(self.context), **(payload or {})}))
         virtual_now = clock.now()  # before the round below, whose sim-clock advance belongs to no rollout

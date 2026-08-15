@@ -363,8 +363,7 @@ def test_records_infer_span_when_inference_raises(tmp_path):
 
 
 def test_remote_policy_meta_exposes_server_fields():
-    """RemotePolicy.meta must expose server metadata so SampledPolicy._get_keys
-    can read e.g. 'server.checkpoint_path' before a session is created."""
+    """RemotePolicy.meta prefixes the server's own fields with ``server.``, before any session exists."""
     policy, _ = _mock_remote_policy({'checkpoint_path': '/ckpts/abc', 'model_name': 'foo', **CHUNKED_STACK})
 
     meta = policy.meta
