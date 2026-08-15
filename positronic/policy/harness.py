@@ -2,7 +2,7 @@ import concurrent.futures
 import logging
 import time
 from collections import deque
-from collections.abc import Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
@@ -39,12 +39,23 @@ SKIP_REPLY_SEC = 0.001
 Trajectory: TypeAlias = list[tuple[int, Any]]
 
 
+def _last(due: Sequence[Any]) -> Any:
+    """The trailing value wins — the right collapse for absolute setpoints and gripper targets."""
+    return due[-1]
+
+
 class TrajectoryPlayer:
     """Plays one channel's schedule: ``set()`` a trajectory, then ``advance(now)`` each round for the value
-    to emit."""
+    to emit.
 
-    def __init__(self):
+    ``reduce`` collapses the waypoints that came due together in one round. Keeping the last is right for a
+    value that states where to be; a channel carrying deltas passes ``roboarm.command.reduce`` so their
+    motion is summed rather than dropped.
+    """
+
+    def __init__(self, reduce: Callable[[Sequence[Any]], Any] = _last):
         self._pending: deque[tuple[int, Any]] = deque()
+        self._reduce = reduce
 
     def set(self, trajectory: Trajectory):
         self._pending = deque(trajectory)
@@ -54,17 +65,12 @@ class TrajectoryPlayer:
         return self._pending[0][0] if self._pending else None
 
     def advance(self, current_time: int):
-        """The single value due at ``current_time`` — the last, when several came due since the previous
-        call — or ``None`` when none did.
-
-        Collapsing to the last is exact for an absolute setpoint and lossy for a relative one: a run of
-        deltas due together arrives as its final step alone. Pacing keeps one waypoint due per round
-        wherever a round is shorter than the spacing between waypoints.
-        """
-        value = None
+        """The single value due at ``current_time``, collapsed by ``reduce`` when several came due since the
+        previous call, or ``None`` when none did."""
+        due = []
         while self._pending and self._pending[0][0] <= current_time:
-            value = self._pending.popleft()[1]
-        return value
+            due.append(self._pending.popleft()[1])
+        return self._reduce(due) if due else None
 
 
 def _assert_anchored(actions: list[dict[str, Any]], now: float) -> None:
@@ -255,7 +261,10 @@ class Harness(pimm.ControlSystem):
             self.observations[name]  # touch to allocate the port
         for name in embodiment.commands:
             self.commands[name]
-        self._players = {name: TrajectoryPlayer() for name in embodiment.commands}
+        self._players = {
+            name: TrajectoryPlayer(roboarm.command.reduce if keys.is_robot_command(name) else _last)
+            for name in embodiment.commands
+        }
 
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.manual_command = pimm.ControlSystemReceiver(self, default=None)

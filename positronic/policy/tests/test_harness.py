@@ -13,7 +13,7 @@ from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandT
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, Reset, from_wire, to_wire
+from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, JointDelta, Reset, from_wire, to_wire
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, bundled_franka_model
 from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
@@ -1360,6 +1360,29 @@ def test_trajectory_player_collapses_several_due_waypoints_to_the_last():
     assert player.advance(30) == 'c'
     assert player.next_due() is None
     assert player.advance(40) is None
+
+
+def test_trajectory_player_sums_the_deltas_a_late_round_overtook():
+    """A delta states how far to move, so the ones a round overtook are motion still owed. Keeping only the
+    last would silently shorten the trajectory."""
+    player = TrajectoryPlayer(roboarm.command.reduce)
+    player.set([(10, JointDelta(np.array([0.1, 0.0]))), (20, JointDelta(np.array([0.2, 0.5])))])
+
+    caught_up = player.advance(25)
+
+    assert isinstance(caught_up, JointDelta)
+    np.testing.assert_allclose(caught_up.velocities, [0.3, 0.5])
+
+
+def test_trajectory_player_refuses_to_collapse_a_delta_onto_an_absolute():
+    """No single command carries both: a delta binds to the pose measured when it is consumed, which an
+    absolute target cannot supply."""
+    player = TrajectoryPlayer(roboarm.command.reduce)
+    pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+    player.set([(10, CartesianPosition(pose=pose)), (20, JointDelta(np.array([0.1, 0.0])))])
+
+    with pytest.raises(ValueError, match='Cannot reduce'):
+        player.advance(25)
 
 
 def test_cartesian_delta_applies_in_world_frame():
