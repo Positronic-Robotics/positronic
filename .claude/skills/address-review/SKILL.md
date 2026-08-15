@@ -111,8 +111,8 @@ For each open comment, decide and note severity if the bot tagged one (e.g. Code
   resolve only if you land a concrete change, else leave open.
 - **Decline** — wrong, not applicable, or contradicts a deliberate decision → reasoned
   reply, **leave open**.
-- **Defer** — valid but out of scope for this PR → reply (note where it's tracked),
-  **leave open**.
+- **Defer** — valid but out of scope for this PR → file the tracking issue unless something
+  already tracks it, reply naming it, **leave open**.
 - **Discuss** — the reviewer is asking a question or opening a design discussion, not
   requesting a change → answer it, **leave open** for them to respond.
 
@@ -122,8 +122,15 @@ Present the triage as a short numbered list: comment → verdict → planned fix
 declines without prompting. "Unclear" is a verdict you reach after the research above, never
 before it — a question you could have answered by reading the code costs the user a round trip
 and comes back as *go and find out*, which is the same work plus a delay. Pause and confirm
-only for what research cannot settle: a preference, a cost, a scope call, or a change whose
-blast radius is genuinely the user's to accept. The user may drop or override any item.
+only for what research cannot settle: a preference, a cost, or a change whose blast radius is
+genuinely the user's to accept. The user may drop or override any item.
+
+**Whether a finding belongs in this PR is your call.** "Fix it here or track it for later" is
+the verdict this skill exists to reach, and by the time you can pose it the research is done,
+so the human has nothing to add that you don't already have. Reach it, file the issue, reply,
+and put it in the Step 6 report where they can overrule it. Bring a deferral back only when
+leaving it undone changes what the PR ships — a gap in the behaviour the user asked for, not a
+follow-up carrying an issue number.
 
 When you do bring something back, explain it in full and in plain words: what the thing is and
 how it works, what the reviewer asked for, what you did or did not do and why, and what each
