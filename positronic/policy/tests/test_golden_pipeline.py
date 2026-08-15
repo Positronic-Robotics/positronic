@@ -185,7 +185,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
         embodiment = Embodiment(
             descriptor='',
             observations={
-                'robot_state': Observation(robot.state, Serializers.robot_state),
+                keys.ROBOT_STATE: Observation(robot.state, Serializers.robot_state),
                 keys.GRIP: Observation(gripper.grip, None),
             },
             commands={

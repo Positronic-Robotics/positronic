@@ -45,7 +45,7 @@ def wire(  # noqa: C901
             ds_agent.add_signal(signal_name, Serializers.camera_images)
         if robot_arm is not None:
             ds_agent.add_signal(keys.ROBOT_COMMAND, Serializers.robot_command)
-            ds_agent.add_signal('robot_state', Serializers.robot_state)
+            ds_agent.add_signal(keys.ROBOT_STATE, Serializers.robot_state)
         if gripper is not None:
             ds_agent.add_signal(keys.TARGET_GRIP)
             ds_agent.add_signal(keys.GRIP)
@@ -54,7 +54,7 @@ def wire(  # noqa: C901
             world.connect(emitter, ds_agent.inputs[signal_name])
         if robot_arm is not None:
             world.connect(harness.robot_commands, ds_agent.inputs[keys.ROBOT_COMMAND])
-            world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
+            world.connect(robot_arm.state, ds_agent.inputs[keys.ROBOT_STATE])
         if gripper is not None:
             world.connect(harness.target_grip, ds_agent.inputs[keys.TARGET_GRIP])
             world.connect(gripper.grip, ds_agent.inputs[keys.GRIP])

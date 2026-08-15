@@ -160,11 +160,11 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
         agent.add_signal(keys.TARGET_GRIP)
         agent.add_signal(keys.ROBOT_COMMAND, Serializers.robot_command)
         agent.add_signal('controller_positions', controller_positions_serializer)
-        agent.add_signal('robot_state', Serializers.robot_state)
+        agent.add_signal(keys.ROBOT_STATE, Serializers.robot_state)
         agent.add_signal(keys.GRIP)
 
         world.connect(sim.state, dc.robot_state)
-        world.connect(sim.state, agent.inputs['robot_state'])
+        world.connect(sim.state, agent.inputs[keys.ROBOT_STATE])
         world.connect(dc.robot_commands, sim.commands)
         world.connect(dc.robot_commands, agent.inputs[keys.ROBOT_COMMAND])
         world.connect(dc.target_grip, sim.target_grip)

@@ -153,7 +153,7 @@ def remote_franka_embodiment(
     server cannot import positronic to emit it via ``robot_meta``).
     """
     observations = {
-        'robot_state': Observation(proxy.observations['robot_state'], Serializers.robot_state),
+        keys.ROBOT_STATE: Observation(proxy.observations[keys.ROBOT_STATE], Serializers.robot_state),
         keys.GRIP: Observation(proxy.observations[keys.GRIP], None),
         **{logical: Observation(proxy.observations[logical], Serializers.camera_images) for logical in camera_dict},
     }

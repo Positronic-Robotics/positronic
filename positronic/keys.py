@@ -26,13 +26,16 @@ def is_robot_command(name: str) -> bool:
     return name == ROBOT_COMMAND or name.startswith(f'{ROBOT_COMMAND}.')
 
 
-JOINTS = 'robot_state.q'
-JOINT_VEL = 'robot_state.dq'
-EE_POSE = 'robot_state.ee_pose'
+# The arm's state channel, and the signals a recorded state unfolds into. As on the command side, the
+# suffixes are ``Serializers.robot_state``'s, so the names derive from the channel rather than restating it.
+ROBOT_STATE = 'robot_state'
+JOINTS = f'{ROBOT_STATE}.q'
+JOINT_VEL = f'{ROBOT_STATE}.dq'
+EE_POSE = f'{ROBOT_STATE}.ee_pose'
 # Whether the arm is faulted, in every observation the harness builds. A faulted arm has no sample to give
 # and is not tracking the plan it was handed, so the policy stack — not the harness — decides what happens
-# next: the rest of ``robot_state`` is absent from that observation.
-ROBOT_FAULT = 'robot_state.fault'
+# next: the rest of ``ROBOT_STATE`` is absent from that observation.
+ROBOT_FAULT = f'{ROBOT_STATE}.fault'
 GRIP = 'grip'
 TASK = 'task'
 # The prefix that identifies a camera on the wire: an embodiment declares its cameras by naming

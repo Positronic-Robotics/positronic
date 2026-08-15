@@ -50,7 +50,7 @@ def make_embodiment(descriptor: str = '', cameras=(CAM,), static_meta=None, simu
     home values, descriptor — is read by the Harness.
     """
     observations = {
-        'robot_state': Observation(pimm.NoOpEmitter(), Serializers.robot_state),
+        keys.ROBOT_STATE: Observation(pimm.NoOpEmitter(), Serializers.robot_state),
         keys.GRIP: Observation(pimm.NoOpEmitter(), None),
     }
     for cam in cameras:
@@ -257,7 +257,7 @@ def _pair_all(world, harness):
     harness.ds_command._bind(ds_recorder)
     return {
         'frame_em': world.pair(harness.observations[CAM]),
-        'robot_em': world.pair(harness.observations['robot_state']),
+        'robot_em': world.pair(harness.observations[keys.ROBOT_STATE]),
         'grip_em': world.pair(harness.observations[keys.GRIP]),
         'directive_em': world.pair(harness.directive),
         'command_rx': world.pair(harness.commands[keys.ROBOT_COMMAND]),
@@ -311,7 +311,7 @@ def test_harness_emits_cartesian_move(world):
     harness.ds_command._bind(RecordingEmitter())
 
     frame_em = world.pair(harness.observations[CAM])
-    robot_em = world.pair(harness.observations['robot_state'])
+    robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
@@ -370,7 +370,7 @@ def test_harness_passes_descriptor_to_policy(world):
     harness.ds_command._bind(RecordingEmitter())
 
     frame_em = world.pair(harness.observations[CAM])
-    robot_em = world.pair(harness.observations['robot_state'])
+    robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
@@ -400,7 +400,7 @@ def test_robot_model_stays_out_of_the_observation(world):
     harness.ds_command._bind(RecordingEmitter())
 
     frame_em = world.pair(harness.observations[CAM])
-    robot_em = world.pair(harness.observations['robot_state'])
+    robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations['grip'])
     directive_em = world.pair(harness.directive)
 
@@ -471,7 +471,7 @@ def test_harness_waits_for_complete_inputs(world):
     harness.ds_command._bind(RecordingEmitter())
 
     frame_em = world.pair(harness.observations[CAM])
-    robot_em = world.pair(harness.observations['robot_state'])
+    robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
@@ -948,7 +948,7 @@ def test_timeout_during_inference_drops_the_chunk(world):
     harness.ds_command._bind(ds_recorder)
 
     frame_em = world.pair(harness.observations[CAM])
-    robot_em = world.pair(harness.observations['robot_state'])
+    robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -1172,7 +1172,7 @@ def test_finish_stops_playing_the_live_chunk(world):
     harness.ds_command._bind(_LabeledRecorder('ds_command', events))
 
     frame_em = world.pair(harness.observations[CAM])
-    robot_em = world.pair(harness.observations['robot_state'])
+    robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
@@ -1214,7 +1214,7 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
     harness.ds_command._bind(RecordingEmitter())
 
     frame_em = world.pair(harness.observations[CAM])
-    robot_em = world.pair(harness.observations['robot_state'])
+    robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
@@ -1396,7 +1396,7 @@ def test_shutdown_stops_playing_the_live_chunk(world):
     harness.ds_command._bind(_LabeledRecorder('ds_command', events))
 
     frame_em = world.pair(harness.observations[CAM])
-    robot_em = world.pair(harness.observations['robot_state'])
+    robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
@@ -1749,7 +1749,7 @@ def _run_episode(
     harness.ds_command._bind(RecordingEmitter())
 
     frame_em = world.pair(harness.observations[CAM])
-    robot_em = world.pair(harness.observations['robot_state'])
+    robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
@@ -1928,7 +1928,7 @@ def test_a_stop_lands_without_waiting_out_the_charge(world):
     harness.ds_command._bind(RecordingEmitter())
 
     frame_em = world.pair(harness.observations[CAM])
-    robot_em = world.pair(harness.observations['robot_state'])
+    robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
@@ -1973,7 +1973,7 @@ def test_finish_does_not_wait_for_the_call_in_flight():
         harness.ds_command._bind(ds_recorder)
 
         frame_em = world.pair(harness.observations[CAM])
-        robot_em = world.pair(harness.observations['robot_state'])
+        robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
         grip_em = world.pair(harness.observations[keys.GRIP])
         directive_em = cast(pimm.SignalEmitter, world.pair(harness.directive))
 
@@ -2026,7 +2026,7 @@ def test_installed_trajectory_clears_the_channels_it_omits(world):
     harness.ds_command._bind(RecordingEmitter())
 
     frame_em = world.pair(harness.observations[CAM])
-    robot_em = world.pair(harness.observations['robot_state'])
+    robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 
@@ -2074,7 +2074,7 @@ def test_abort_discards_a_call_that_is_still_in_flight(world):
     harness.ds_command._bind(RecordingEmitter())
 
     frame_em = world.pair(harness.observations[CAM])
-    robot_em = world.pair(harness.observations['robot_state'])
+    robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
     directive_em = world.pair(harness.directive)
 

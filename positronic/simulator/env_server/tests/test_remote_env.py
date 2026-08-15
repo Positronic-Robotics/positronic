@@ -183,7 +183,7 @@ class TestEnvControlFrame:
             'joint_vel': np.zeros(7),
             'grip': 0.0,
         }
-        reported = adapter.observations(raw)['robot_state'].ee_pose
+        reported = adapter.observations(raw)[keys.ROBOT_STATE].ee_pose
         commanded = _in_env_control_frame(roboarm_command.CartesianPosition(reported), adapter.env_control_frame).pose
         np.testing.assert_allclose(commanded.as_vector(self.rotmat), eef.as_vector(self.rotmat), atol=1e-6)
 

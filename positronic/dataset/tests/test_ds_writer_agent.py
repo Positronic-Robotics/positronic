@@ -376,7 +376,7 @@ class _FakeState(State):
 
 def test_robot_state_serializer_drops_reset_and_emits_components(world):
     ds = FakeDatasetWriter()
-    agent, cmd_em, emitters = build_agent_with_pipes({'robot_state': Serializers.robot_state}, ds, world)
+    agent, cmd_em, emitters = build_agent_with_pipes({keys.ROBOT_STATE: Serializers.robot_state}, ds, world)
 
     q = np.arange(7, dtype=np.float32)
     dq = np.arange(7, dtype=np.float32) + 10
@@ -385,8 +385,8 @@ def test_robot_state_serializer_drops_reset_and_emits_components(world):
 
     script = [
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: emitters['robot_state'].emit(_FakeState(q, dq, pose, RobotStatus.RESETTING)), 0.001),
-        (lambda: emitters['robot_state'].emit(_FakeState(q, dq, pose, RobotStatus.AVAILABLE)), 0.001),
+        (lambda: emitters[keys.ROBOT_STATE].emit(_FakeState(q, dq, pose, RobotStatus.RESETTING)), 0.001),
+        (lambda: emitters[keys.ROBOT_STATE].emit(_FakeState(q, dq, pose, RobotStatus.AVAILABLE)), 0.001),
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
@@ -477,11 +477,11 @@ def test_pickles_with_every_constructor_argument_filled():
         telemetry_span=partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
     )
     agent.add_signal(keys.ROBOT_COMMAND, Serializers.robot_command)
-    agent.add_signal('robot_state', Serializers.robot_state)
+    agent.add_signal(keys.ROBOT_STATE, Serializers.robot_state)
 
     loaded = pickle.loads(pickle.dumps(agent))
 
-    assert set(loaded.inputs) == {keys.ROBOT_COMMAND, 'robot_state'}
+    assert set(loaded.inputs) == {keys.ROBOT_COMMAND, keys.ROBOT_STATE}
     with loaded._telemetry_span():
         pass
 
