@@ -1915,6 +1915,48 @@ def test_a_faulted_arm_reaches_the_policy_without_its_state(world):
     assert keys.EE_POSE not in policy.last_obs
 
 
+@pytest.mark.timeout(3.0)
+def test_one_arm_resetting_does_not_hide_another_arms_fault(world):
+    """A resetting arm and a faulted one both serialize to nothing. The fault wins whichever channel the
+    embodiment happens to list first, so a bimanual rig cannot carry on driving a faulted arm."""
+    left, right = f'{keys.ROBOT_STATE}.left', f'{keys.ROBOT_STATE}.right'
+    embodiment = Embodiment(
+        '',
+        {
+            left: Observation(pimm.NoOpEmitter(), Serializers.robot_state),
+            right: Observation(pimm.NoOpEmitter(), Serializers.robot_state),
+            keys.GRIP: Observation(pimm.NoOpEmitter(), None),
+        },
+        {keys.ROBOT_COMMAND: Command(pimm.NoOpReceiver(), Reset(), Serializers.robot_command)},
+        {},
+        pimm.NoOpEmitter(),
+    )
+    policy = SpyPolicy()
+    harness = Harness(policy, embodiment)
+    harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
+    harness.ds_command._bind(RecordingEmitter())
+    left_em = world.pair(harness.observations[left])
+    right_em = world.pair(harness.observations[right])
+    grip_em = world.pair(harness.observations[keys.GRIP])
+    directive_em = world.pair(harness.directive)
+
+    def emit_states():
+        left_em.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.RESETTING))
+        right_em.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR))
+        grip_em.emit(0.0)
+
+    driver = ManualDriver([
+        (partial(directive_em.emit, Directive.RUN(task='test')), 0.0),
+        (emit_states, 0.01),
+        (None, 0.02),
+    ])
+
+    drive_scheduler(world.start([harness, driver]), steps=40)
+
+    assert policy.last_obs is not None, 'the resetting arm swallowed the other arm’s fault'
+    assert policy.last_obs[keys.ROBOT_FAULT] is True
+
+
 @pytest.mark.timeout(20.0)
 def test_a_stop_lands_without_waiting_out_the_charge(world):
     """A charge places a trajectory's waypoints, and a stop has none: an arm that faults mid-chunk stops in

@@ -17,7 +17,7 @@ from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm.ik import assert_default_frame
-from positronic.eval import Embodiment, Task
+from positronic.eval import Embodiment, Observation, Task
 from positronic.policy.base import Policy, Session
 from positronic.utils import flatten_dict, frozen_view
 
@@ -65,16 +65,6 @@ class TrajectoryPlayer:
         while self._pending and self._pending[0][0] <= current_time:
             value = self._pending.popleft()[1]
         return value
-
-
-def _owned(obs: dict[str, Any]) -> dict[str, Any]:
-    """The observation with its arrays copied, so nothing rewrites what the worker is still reading.
-
-    A producer may reuse one buffer for every sample it emits — a camera renders into the array behind the
-    adapter it re-emits each frame — and the loop thread yields while a call charged in wall time runs, so
-    that producer advances alongside the worker. Copying at dispatch pays once per call rather than per round.
-    """
-    return {name: value.copy() if isinstance(value, np.ndarray) else value for name, value in obs.items()}
 
 
 def _assert_anchored(actions: list[dict[str, Any]], now: float) -> None:
@@ -453,6 +443,28 @@ class Harness(pimm.ControlSystem):
         """Whether a raw observation is an arm reporting a fault. Every other not-ready sample is simply absent."""
         return isinstance(value, roboarm.State) and value.status is roboarm.RobotStatus.ERROR
 
+    def _read_channel(self, name: str, obs: Observation) -> tuple[dict[str, Any] | None, bool]:
+        """This channel's entries under their full names, and whether the arm behind it is faulted.
+
+        The entries are ``None`` when the channel has no sample to give — a resetting or faulted arm alike.
+        Raises ``NoValueException`` before the channel has produced anything at all.
+        """
+        message = self.observations[name].read()
+        if message is None:
+            raise pimm.NoValueException
+        if message.updated:
+            self._awaiting_obs.discard(name)
+        value = message.data
+        if obs.serializer is not None:
+            value = obs.serializer(value)
+            if value is None:
+                # HACK(#619): a serializer answers `None` for a resetting arm and a faulted one alike, so the
+                # fault is recovered from the raw sample and stapled on by the caller as `keys.ROBOT_FAULT` — a
+                # name already claiming to be part of `robot_state`. Emit it from the serializer and this
+                # branch, the raw-type check and the flag all go, and the fault reaches the recording as well.
+                return None, self._is_faulted(message.data)
+        return {full: v for full, v in expand_suffixed(name, value) if v is not None}, False
+
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any] | None:
         """Read every observation channel and assemble the policy input dict.
 
@@ -469,27 +481,16 @@ class Harness(pimm.ControlSystem):
         assert_default_frame(self._statics())
         inputs: dict[str, Any] = {}
         faulted = False
+        not_ready = False
         for name, obs in self._embodiment.observations.items():
-            message = self.observations[name].read()
-            if message is None:
-                raise pimm.NoValueException
-            if message.updated:
-                self._awaiting_obs.discard(name)
-            value = message.data
-            if obs.serializer is not None:
-                value = obs.serializer(value)
-                if value is None:
-                    # HACK(#619): a serializer answers `None` for a resetting arm and a faulted one alike, so the
-                    # fault is recovered from the raw sample and stapled on below as `keys.ROBOT_FAULT` — a name
-                    # already claiming to be part of `robot_state`. Emit it from the serializer and this branch,
-                    # the raw-type check and the flag all go, and the fault reaches the recording as well.
-                    if not self._is_faulted(message.data):
-                        return None
-                    faulted = True
-                    continue
-            for full_name, v in expand_suffixed(name, value):
-                if v is not None:
-                    inputs[full_name] = v
+            entries, channel_faulted = self._read_channel(name, obs)
+            faulted = faulted or channel_faulted
+            not_ready = not_ready or entries is None
+            inputs.update(entries or {})
+        # Every channel is read before this decision, so a bimanual rig cannot hide one arm's fault behind
+        # another arm's not-ready sample: whichever channel comes first, the fault still reaches the stack.
+        if not_ready and not faulted:
+            return None
         if self._awaiting_obs:
             return None
         inputs[keys.ROBOT_FAULT] = faulted
@@ -506,6 +507,17 @@ class Harness(pimm.ControlSystem):
         """
         charge = time.monotonic() - self._wall_t0 if self._charge is None else self._charge
         return self._t0_ns / 1e9 + charge
+
+    @staticmethod
+    def _owned(obs: dict[str, Any]) -> dict[str, Any]:
+        """The observation with its arrays copied, so nothing rewrites what the worker is still reading.
+
+        A producer may reuse one buffer for every sample it emits — a camera renders into the array behind
+        the adapter it re-emits each frame — and the loop thread yields while a call charged in wall time
+        runs, so that producer advances alongside the worker. Copying at dispatch pays once per call rather
+        than per round.
+        """
+        return {name: value.copy() if isinstance(value, np.ndarray) else value for name, value in obs.items()}
 
     def _step(self, clock: pimm.Clock) -> None:
         """Keep one session call in flight and install the trajectory it returns.
@@ -531,7 +543,7 @@ class Harness(pimm.ControlSystem):
         self._t0_ns = clock.now_ns()
         self._wall_t0 = time.monotonic()
         # Sessions declare ``dict`` but must not mutate the obs, so they get a read-only view.
-        self._future = executor.submit(session, frozen_view(_owned(obs)))
+        self._future = executor.submit(session, frozen_view(self._owned(obs)))
         if self._charge is None:
             # Sleeping zero hands the worker the GIL without adding a wake-up granularity to the handshake.
             while not self._future.done() and time.monotonic() - self._wall_t0 < SKIP_REPLY_SEC:
