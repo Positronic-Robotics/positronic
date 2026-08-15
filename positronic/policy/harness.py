@@ -83,6 +83,14 @@ def _assert_anchored(actions: list[dict[str, Any]], now: float) -> None:
         )
 
 
+class _Answer(Enum):
+    """What became of the call ``_take`` was handed: its trajectory is installed and the future spent, or the
+    world has not yet paid the charge and the same future comes back next round."""
+
+    CONSUMED = 'consumed'
+    PENDING = 'pending'
+
+
 class DirectiveType(Enum):
     RUN = 'run'
     FINISH = 'finish'
@@ -536,7 +544,7 @@ class Harness(pimm.ControlSystem):
         """
         session, executor = self._policy_session, self._executor
         assert session is not None and executor is not None  # only a live episode steps
-        if self._future is not None and not self._take(self._future, clock):
+        if self._future is not None and self._take(self._future, clock) is _Answer.PENDING:
             return
         obs = self._build_obs(clock)
         if obs is None:
@@ -551,7 +559,6 @@ class Harness(pimm.ControlSystem):
                 self._deadline = clock.now() + self._task.timeout
         self._t0_ns = clock.now_ns()
         self._wall_t0 = time.monotonic()
-        # Sessions declare ``dict`` but must not mutate the obs, so they get a read-only view.
         self._future = executor.submit(session, frozen_view(self._owned(obs)))
         if self._charge is None:
             # Sleeping zero hands the worker the GIL without adding a wake-up granularity to the handshake.
@@ -559,8 +566,8 @@ class Harness(pimm.ControlSystem):
                 time.sleep(0)
         self._take(self._future, clock)
 
-    def _take(self, future: Future[list[dict[str, Any]] | None], clock: pimm.Clock) -> bool:
-        """Install the call's trajectory once the world has paid for it; True once the future is consumed.
+    def _take(self, future: Future[list[dict[str, Any]] | None], clock: pimm.Clock) -> _Answer:
+        """Install the call's trajectory once the world has paid for it.
 
         Under a constant charge the world holds still until the call answers — blocking here blocks the loop
         thread, which is what advances a virtual clock. Until a call answers there is no telling a skip from
@@ -576,20 +583,20 @@ class Harness(pimm.ControlSystem):
         elif not future.done():
             ahead = clock.now() - (self._t0_ns / 1e9 + time.monotonic() - self._wall_t0)
             if ahead <= 0.0:
-                return False
+                return _Answer.PENDING
             concurrent.futures.wait([future], timeout=ahead)
             if not future.done():
-                return False
+                return _Answer.PENDING
         actions = future.result()  # taken on the loop thread, so a failing call still seals the episode
         if actions and self._charge is not None:
             # Integer ns, the world's own timeline: a float compare misses the release instant by one ULP
             # and slips the install a full round.
             if clock.now_ns() < self._t0_ns + round(self._charge * 1e9):
-                return False  # the schedule already playing carries the world to the release instant
+                return _Answer.PENDING  # the schedule already playing carries the world to the release instant
         self._future = None
         if actions is not None:
             self._install(actions, clock)
-        return True
+        return _Answer.CONSUMED
 
     def _install(self, actions: list[dict[str, Any]], clock: pimm.Clock) -> None:
         """Replace the schedule being played with the session's trajectory. Every channel it names gets that
