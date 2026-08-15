@@ -25,7 +25,7 @@ class PolicyImage(str):
     `name` is everything before the digest (repository plus any tag); `digest` is what pins the bytes.
 
     The platform pulls this reference as given, when the run starts, and evaluates what it finds.
-    Keeping it pullable, and holding what you want evaluated, is the submitter's until the run
+    The submitter keeps it pullable, and keeps it holding what they want evaluated, until the run
     finishes; a tag resolves at pull time, so pin a digest for a fixed image.
     """
 
