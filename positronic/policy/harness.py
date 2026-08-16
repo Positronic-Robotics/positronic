@@ -385,6 +385,9 @@ class Harness(pimm.ControlSystem):
         armed here and moved to that first observation once it lands, so an episode that never gets one is
         still bounded.
         """
+        # Before the span opens, so the wait for a call the last episode abandoned is inter-episode wall
+        # rather than overhead the timing reducer attributes to this one.
+        self._reap_worker()
         self.context = dict(context)
         if self._embodiment.simulated:
             # A sim trial that doesn't ask for latency simulation runs free of it: the world holds still for
@@ -406,7 +409,6 @@ class Harness(pimm.ControlSystem):
                 self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
-        self._reap_worker()
         # Arm the clock before handing it out: a session reading it before its first call must see this
         # episode's start, not the release time of the last episode's final call.
         self._t0_ns = clock.now_ns()
@@ -423,9 +425,7 @@ class Harness(pimm.ControlSystem):
         """Close the live episode: finalize (or abort) the recording, retire the session, home devices.
 
         The session is retired with the worker rather than closed here, so a ``RemoteSession``'s websocket
-        outlives the call still using it; ``_reap_worker`` closes it at the next episode's start or at
-        shutdown, and the offboard server's per-session cleanup (active-session decrement, idle watchdog)
-        runs then.
+        outlives the call still using it.
         """
         if self._running:
             if abort:
@@ -654,10 +654,8 @@ class Harness(pimm.ControlSystem):
         """Release the worker and the session. A call still in flight runs to completion and its result is
         dropped: the run is over and nothing is left to install it.
 
-        The harness does not own the policy's lifetime: the caller may run several harnesses over one policy
-        (a multi-eval sweep), so it closes the policy once, after the last run. That leaves no later
-        ``_begin_episode`` to reap on, and the next harness reaches the shared policy through a session of
-        its own, so the call is waited out here.
+        The join happens here rather than being deferred, since no later episode will do it and the policy
+        the call holds outlives this harness.
         """
         self._retire_worker()
         self._reap_worker()
