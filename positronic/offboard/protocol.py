@@ -1,14 +1,8 @@
 """The offboard wire's contract: the frame envelope both ends spell, the shared msgpack encoding, and the
 robot command this boundary carries.
 
-A served command reaches the rig in one of two shapes, and both arrive typed:
-- ``serialise`` writes a ``CommandType`` sitting anywhere in the payload as the ``__cmd__`` envelope, and
-  ``deserialise`` reads it back
-- an endpoint that does not speak that envelope answers with the bare ``to_wire`` mapping at its command
-  channel; nothing but the channel tells that from any other dict, so ``typed_commands`` reads it instead
-
-The env-server boundary (``positronic.simulator.env_server.protocol``) names the same commands differently
-and its far end must not import positronic, so it cannot share this.
+A served command arrives either inside the ``__cmd__`` envelope or as the bare ``to_wire`` mapping at a
+command channel, and nothing but the channel tells that mapping from any other dict.
 """
 
 import collections.abc as cabc
@@ -24,8 +18,7 @@ from positronic.drivers.roboarm import command
 from positronic.utils import serialization
 
 # The frame envelope every message travels in: ``STATUS`` frames until the server reports itself ready and
-# hands over its ``META``, then one ``RESULT`` or ``ERROR`` per inference. The server writes these and the
-# client reads them, so both import them from here.
+# hands over its ``META``, then one ``RESULT`` or ``ERROR`` per inference.
 STATUS = 'status'
 MESSAGE = 'message'
 META = 'meta'
@@ -42,7 +35,6 @@ class Status(StrEnum):
     ERROR = 'error'
 
 
-# The command envelope, written and read by the two hooks below and nowhere else.
 _CMD = b'__cmd__'
 
 
@@ -68,8 +60,7 @@ deserialise = functools.partial(msgpack.unpackb, object_hook=_unpack)
 
 
 def _typed(value: Any) -> Any:
-    """One command channel's value, typed. A non-mapping — a decoded command, a ``.pose`` vector — is
-    returned as it came."""
+    """One command channel's value, typed."""
     if not isinstance(value, cabc.Mapping):
         return value
     # ``from_wire`` reads the vectors as arrays; the wire carries sequences, and ``type`` is its one string.
