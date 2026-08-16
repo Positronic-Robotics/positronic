@@ -59,13 +59,6 @@ class DsWriterCommand:
         return DsWriterCommand(DsWriterCommandType.ABORT_EPISODE)
 
 
-def _append(ep_writer: EpisodeWriter, name: str, value: Any, ts_ns: int, extra_ts: dict[str, int]):
-    for full_name, v in expand_suffixed(name, value):
-        if v is None:
-            continue
-        ep_writer.append(full_name, v, ts_ns, extra_ts)
-
-
 class TimeMode(IntEnum):
     """Mode of timestamping for the dataset writer."""
 
@@ -146,7 +139,9 @@ class DsWriterAgent(pimm.ControlSystem):
             value = msg.data
             if serializer is not None:
                 value = serializer(value)
-            _append(ep_writer, name, value, primary_ts, extra_ts)
+            for full_name, v in expand_suffixed(name, value):
+                if v is not None:
+                    ep_writer.append(full_name, v, primary_ts, extra_ts)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         """Main loop: process commands and append updated inputs to the episode."""

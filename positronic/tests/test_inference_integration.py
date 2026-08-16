@@ -144,7 +144,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     assert keys.EE_POSE in last_obs
     # The task's instruction is injected by the harness.
     assert last_obs[keys.TASK] == 'integration-test'
-    assert last_obs['descriptor'] == 'mujoco.franka'
+    assert last_obs[keys.DESCRIPTOR] == 'mujoco.franka'
 
 
 class _CountdownProducer(pimm.ControlSystem):

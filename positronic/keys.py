@@ -38,6 +38,8 @@ EE_POSE = f'{ROBOT_STATE}.ee_pose'
 ROBOT_FAULT = f'{ROBOT_STATE}.fault'
 GRIP = 'grip'
 TASK = 'task'
+# The embodiment an observation came from, so a multi-embodiment policy can tell which robot it is driving.
+DESCRIPTOR = 'descriptor'
 # The prefix that identifies a camera on the wire: an embodiment declares its cameras by naming
 # them this way, and every consumer picks them out of the observations by it.
 IMAGE_PREFIX = 'image.'
@@ -96,7 +98,7 @@ SERVER_META = f'{POLICY_META}.{SERVER}'
 EVAL_SUCCESS = 'eval.success'
 EVAL_TERMINATED = 'eval.terminated'
 
-# The inference cost each model call charges the world clock: a constant number of seconds (reproducible),
-# or ``True`` for the call's own wall duration. A sim trial without the key charges nothing (the world holds
-# still per call); hardware always pays wall.
+# Whether a model call charges the world clock its own wall duration. A flag: any other type is rejected
+# when the episode starts. A sim trial without it charges nothing (the world holds still per call);
+# hardware always pays wall whatever the trial asks.
 INFERENCE_LATENCY = 'inference_latency'

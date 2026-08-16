@@ -336,7 +336,7 @@ def test_harness_emits_cartesian_move(world):
     np.testing.assert_allclose(obs[keys.JOINT_VEL], np.zeros_like(robot_state.q))
     assert obs[keys.GRIP] == pytest.approx(0.25)
     assert obs[keys.TASK] == 'stack-blocks'
-    assert obs['descriptor'] == ''  # no descriptor passed -> empty string reaches the policy
+    assert obs[keys.DESCRIPTOR] == ''  # no descriptor passed -> empty string reaches the policy
     # Recording == canonical policy I/O: the policy sees the same ``robot_state`` serializer
     # the dataset records. wall/obs timestamps carry volatile values, so lock the stable key set.
     assert set(obs) - {keys.WALL_TIME_NS, keys.OBS_TIME_NS} == {
@@ -347,7 +347,7 @@ def test_harness_emits_cartesian_move(world):
         keys.GRIP,
         keys.ROBOT_FAULT,
         keys.TASK,
-        'descriptor',
+        keys.DESCRIPTOR,
     }
 
     cmds = _emitted_commands(cmd_recorder)
@@ -386,7 +386,7 @@ def test_harness_passes_descriptor_to_policy(world):
     drive_scheduler(scheduler, steps=20)
 
     assert policy.last_obs is not None
-    assert policy.last_obs['descriptor'] == 'mujoco.franka'
+    assert policy.last_obs[keys.DESCRIPTOR] == 'mujoco.franka'
 
 
 @pytest.mark.timeout(3.0)
@@ -1664,8 +1664,8 @@ def test_a_reply_is_scheduled_only_while_the_trial_still_has_budget(world, expir
     harness = Harness(policy, make_embodiment())
     now = world.clock.now()
     harness._deadline = now - 1.0 if expired else now + 1.0
-    harness._worker = _InferenceWorker(policy, {}, charge_wall=True)
-    harness._worker.submit({}, world.clock)
+    harness._worker = _InferenceWorker(policy, {}, charge_wall=True, clock=world.clock)
+    harness._worker.submit({})
 
     harness._throttle_and_reschedule(harness._worker, world.clock)
 

@@ -130,10 +130,11 @@ genuinely the user's to accept. The user may drop or override any item.
 
 **Whether a finding belongs in this PR is your call.** "Fix it here or track it for later" is
 the verdict this skill exists to reach, and by the time you can pose it the research is done,
-so the human has nothing to add that you don't already have. Reach it, file the issue, reply,
-and put it in the Step 6 report where they can overrule it. Bring a deferral back only when
-leaving it undone changes what the PR ships — a gap in the behaviour the user asked for, not a
-follow-up carrying an issue number.
+so the human has nothing to add that you don't already have. Reach it, reply, and propose the
+tracking issue in the Step 6 report, where they can approve or overrule it — filing it is
+theirs to authorize, never yours. Bring a deferral back for a decision only when leaving it
+undone changes what the PR ships — a gap in the behaviour the user asked for, not a follow-up
+the report already names.
 
 When you do bring something back, explain it in full and in plain words: what the thing is and
 how it works, what the reviewer asked for, what you did or did not do and why, and what each
