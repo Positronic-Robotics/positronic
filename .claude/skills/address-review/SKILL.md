@@ -111,8 +111,11 @@ For each open comment, decide and note severity if the bot tagged one (e.g. Code
   resolve only if you land a concrete change, else leave open.
 - **Decline** — wrong, not applicable, or contradicts a deliberate decision → reasoned
   reply, **leave open**.
-- **Defer** — valid but out of scope for this PR → file the tracking issue unless something
-  already tracks it, reply naming it, **leave open**.
+- **Defer** — valid but out of scope for this PR → reply saying so, **leave open**, and name it in
+  the Step 6 report as wanting a tracking issue. **Never open an issue without asking first.** An
+  issue is filed under the user's own account, so it reads to their team as their judgement about
+  what matters; that call is theirs. Propose the title and the substance and wait for a yes. If an
+  existing issue already covers it, cite that instead — citing is not filing.
 - **Discuss** — the reviewer is asking a question or opening a design discussion, not
   requesting a change → answer it, **leave open** for them to respond.
 
@@ -313,7 +316,7 @@ Their verdicts are terse. What each one means:
 | "next" / "resolve, next" | reply, resolve, present the next thread — same shape, no re-asking |
 | "leave it" | reply that it is accepted as a known limit, resolve |
 | "fix it" | fix, run the gates, commit, push, reply with the SHA, resolve |
-| "file it" / "open a bug" | file the issue, reply linking it, resolve |
+| "file it" / "open a bug" | file the issue, reply linking it, resolve — this verdict is the only thing that authorizes filing one |
 | "why declined?" | the reasoning only |
 
 This is the one path on which a declined thread gets resolved: the human closed it, thread by thread.

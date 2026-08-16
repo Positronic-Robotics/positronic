@@ -39,6 +39,7 @@ SKIP_REPLY_SEC = 0.001
 Trajectory: TypeAlias = list[tuple[int, Any]]
 
 
+# TODO(624): This class is likely to go away when this issue is resolved.
 class TrajectoryPlayer:
     """Plays one channel's schedule: ``set()`` a trajectory, then ``advance(now)`` each round for the value
     to emit."""
@@ -184,24 +185,14 @@ class _EpisodeTelemetry:
 class Harness(pimm.ControlSystem):
     """Control system that runs the episode lifecycle and plays the policy's trajectory to the drivers.
 
-    Handles directives (RUN/FINISH/ABORT) and dataset recording. Inference intelligence — scheduling,
-    error recovery, blending, absolute time stamping — lives in the policy/session layer: the wrapper owns
-    the plan, the harness plays it, one command per channel per round. The session call runs on a worker
-    thread so playing continues while the model does; the harness withholds the trajectory, and the world
-    clock, until the trial's inference charge (``inference_latency``) is paid, and the ``now`` it hands
-    ``new_session`` reads time the same way — so wrappers stamp chunks for the paid instant without
-    knowing the mode. The RUN context is handed whole to the task's scene reset, which reads the
-    per-trial keys it needs (e.g. ``eval.seed``).
+    The wrapper owns the plan, the harness plays it, one command per channel per round. The session call
+    runs on a worker so playing continues while the model does, and its trajectory — with the world clock —
+    is withheld until the trial's ``inference_latency`` is paid; the ``now`` handed to ``new_session`` reads
+    time the same way, so wrappers stamp for the paid instant without knowing the mode.
 
-    A ``trials`` plan (a sequence of RUN contexts) makes the harness self-driving: it starts the next trial
-    whenever idle and returns once the plan is exhausted, so the unattended path needs no driver. A task's
-    ``timeout`` bounds every trial, self-driven or operator-driven, so an attended episode still terminates
-    at the deadline if the operator never sends FINISH. A bounded trial also ends early on a truthy
-    privileged ``done``, recording ``eval.terminated`` True and the delivered payload in its static data; a
-    timeout records False. A task-less session has neither deadline nor budget and ends only on directives.
-
-    The ``Embodiment`` supplies the observation serializers (which own the canonical key names), the command
-    channels and the home action. The policy owns its wrapper stack; the harness runs what it is given.
+    A ``trials`` plan makes the harness self-driving: it starts the next trial whenever idle and returns
+    once the plan is exhausted. A task's ``timeout`` bounds every trial either way, and a truthy privileged
+    ``done`` ends one early — ``eval.terminated`` records which. A task-less session ends only on directives.
     """
 
     def __init__(

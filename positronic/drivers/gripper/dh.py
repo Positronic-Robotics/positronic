@@ -34,7 +34,7 @@ class DHGripper(pimm.ControlSystem):
 
         last_grip = 0.0
 
-        # TODO: We must translate these to physical units (N and m/s)
+        # TODO: Should we translate these to physical units (N and m/s)?
         while not should_stop.value:
             try:
                 grip_msg = self.target_grip.read()
