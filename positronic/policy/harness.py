@@ -21,18 +21,16 @@ from positronic.eval import Embodiment, Observation, Task
 from positronic.policy.base import Policy, Session
 from positronic.utils import flatten_dict, frozen_view
 
-# How far from now an action may be scheduled. A chunk spans seconds, so this is loose enough that no real
-# trajectory approaches it, and tight enough to catch a rig-side stack that left timestamps relative to the
-# chunk (decades behind) or anchored them twice (decades ahead).
+# How far from now an action may be scheduled: past any real chunk, short of the decades a rig-side stack is
+# off by when it leaves timestamps chunk-relative or anchors them twice.
 MAX_ACTION_SKEW_SEC = 60.0
 
 # How long a real-time round may last when no waypoint is due sooner. It bounds how late a directive is
 # noticed, and with it the granularity every command timestamp is quantized to.
 POLL_PERIOD_SEC = 0.01
 
-# How long a submitted session call may take to answer and still resolve within its round. A wrapper that
-# skips inference answers in microseconds; a real model call runs far past this and is then paced by
-# ``_take`` across rounds.
+# How long a submitted call may take and still resolve within its round: a wrapper that skips inference
+# answers in microseconds, a real model call runs far past this and is paced across rounds by ``_take``.
 SKIP_REPLY_SEC = 0.001
 
 # One channel's schedule: waypoints stamped with absolute clock ns, ascending.
@@ -55,12 +53,11 @@ class TrajectoryPlayer:
         return self._pending[0][0] if self._pending else None
 
     def advance(self, current_time: int):
-        """The single value due at ``current_time`` — the last, when several came due since the previous
-        call — or ``None`` when none did.
+        """The value due at ``current_time`` — the last, when several came due since the previous call — or
+        ``None`` when none did.
 
-        Collapsing to the last is exact for an absolute setpoint and lossy for a relative one: a run of
-        deltas due together arrives as its final step alone. Pacing keeps one waypoint due per round
-        wherever a round is shorter than the spacing between waypoints.
+        Collapsing to the last is exact for an absolute setpoint and lossy for a relative one. Pacing keeps
+        one waypoint due per round wherever a round is shorter than the spacing between waypoints.
         """
         value = None
         while self._pending and self._pending[0][0] <= current_time:
@@ -108,12 +105,9 @@ class Directive:
 
 
 class _EpisodeTelemetry:
-    """The live rollout's wall-clock telemetry: the episode span, its index, its step count and the virtual
-    instant it began. Inert while telemetry is unbound, so the harness calls it unconditionally.
-
-    The span stays anchored while open, so the rollout's phase spans (reset, env.step, policy.infer,
-    record.io) parent to it rather than to the pass.
-    """
+    """The live rollout's episode span, with the index, step count and virtual start it is stamped with.
+    Inert while telemetry is unbound, so the harness calls it unconditionally. The span stays anchored while
+    open, so the rollout's phase spans parent to it rather than to the pass."""
 
     def __init__(self) -> None:
         self._span: Span | None = None
@@ -141,8 +135,8 @@ class _EpisodeTelemetry:
         self._steps += 1
 
     def end(self, virtual_now: float) -> None:
-        """Close a finished rollout, stamped with its step count and its virtual duration up to
-        ``virtual_now`` — captured when the rollout ended, before the flush round advances the sim clock."""
+        """Close the rollout, stamped with its step count and its virtual duration up to ``virtual_now`` —
+        captured when the rollout ended, before the flush round advances the sim clock."""
         if self._span is None:
             return
         self._close(virtual_now)
@@ -156,15 +150,13 @@ class _EpisodeTelemetry:
         self._end_span()
 
     def seal(self, virtual_now: float) -> None:
-        """Close a rollout abandoned mid-flight by a raising ``reset`` / ``new_session`` / session call, stamped
-        like a clean end and marked ``episode.partial``. Ending it is what exports it — the batch processor drops
-        an unended span, orphaning the finished children and losing their phases. Partial rather than aborted so
-        the reduce keeps it. Inert when no span is open."""
+        """Close a rollout abandoned mid-flight by a raising ``reset`` / ``new_session`` / session call, marked
+        ``episode.partial`` so the reduce keeps it. Ending it is what exports it: the batch processor drops an
+        unended span, orphaning the finished children and losing their phases."""
         if self._span is None:
             return
         telemetry.set_attrs(self._span, **{telemetry_keys.ATTR_EPISODE_PARTIAL: True})
-        self._close(virtual_now)
-        telemetry.force_flush()
+        self.end(virtual_now)
 
     def _close(self, virtual_now: float) -> None:
         # A rollout whose first observation never landed — a reset that raised, or a task already done before
@@ -215,16 +207,13 @@ class Harness(pimm.ControlSystem):
         self._policy_session: Session | None = None
         # True between RUN and FINISH/ABORT: the trial is live — stepping and recording happen together.
         self._running = False
-        # One session call at a time, on a worker so the harness keeps playing while the model runs. The
-        # worker belongs to the episode: ending one abandons the call in flight rather than waiting for it,
-        # so the next episode must not queue behind it.
+        # One call at a time, on a worker so the harness keeps playing while the model runs. The worker
+        # belongs to the episode: ending one abandons the call in flight, so the next must not queue behind it.
         self._executor: ThreadPoolExecutor | None = None
-        # The retired worker and the session its abandoned call is still inside, held as one because closing
-        # the session is what the join makes safe.
+        # A retired worker and the session its abandoned call is inside: the join is what makes closing safe.
         self._retiring: tuple[ThreadPoolExecutor, Session] | None = None
         self._future: Future[list[dict[str, Any]] | None] | None = None
-        # The in-flight call's start: the world instant its observation was built, and the wall instant it
-        # was submitted.
+        # The in-flight call's start: the world instant of its observation, the wall instant of its submit.
         self._t0_ns = 0
         self._wall_t0 = 0.0
         # Seconds of world clock a model call costs. A number: world frozen for the call, chunk released that
@@ -232,8 +221,8 @@ class Harness(pimm.ControlSystem):
         self._fixed_latency: float | None = None
         # ``task.timeout``, set per episode; a task-less session has no deadline and ends on directives.
         self._deadline: float | None = None
-        # Whether this episode's first observation has landed. Until it does the deadline stands where the
-        # reset put it, which bounds an episode whose first observation never arrives.
+        # False until this episode's first observation lands; until then the deadline stands where the reset
+        # put it, which bounds an episode that never gets one.
         self._rollout_started = False
         # Wall-clock telemetry for the live rollout, opened under ``--timing`` and inert otherwise.
         self._telemetry = _EpisodeTelemetry()
@@ -241,7 +230,6 @@ class Harness(pimm.ControlSystem):
         # emptying this set is what keeps the first inference off the previous episode's final frame.
         self._awaiting_obs: set[str] = set()
 
-        self._descriptor = embodiment.descriptor
         self.observations = pimm.ReceiverDict(self)
         self.commands = pimm.EmitterDict(self)
         for name in embodiment.observations:
@@ -290,17 +278,16 @@ class Harness(pimm.ControlSystem):
         waypoint is emitted at its own time and a round rarely finds more than one due."""
         if self._embodiment.simulated:
             return pimm.Yield()
-        due = [ts for player in self._players.values() if (ts := player.next_due()) is not None]
-        if not due:
+        due = min((ts for player in self._players.values() if (ts := player.next_due()) is not None), default=None)
+        if due is None:
             return pimm.Sleep(POLL_PERIOD_SEC)
-        return pimm.Sleep(min(POLL_PERIOD_SEC, max(min(due) - clock.now_ns(), 1) / 1e9))
+        return pimm.Sleep(min(POLL_PERIOD_SEC, max(due - clock.now_ns(), 1) / 1e9))
 
     def _cancel_session(self) -> None:
         """Drop everything the episode has going: the schedule being played, and the call on the worker.
 
-        The call is let go of rather than waited for — a model that hangs must not hold up the recording's
-        stop or the home — so its worker is retired with it and whatever it eventually answers, or raises,
-        lands nowhere. Devices hold their last commanded position; nothing is buffered downstream to clear.
+        The call is let go of rather than waited for, so a model that hangs cannot hold up the recording's
+        stop or the home. Devices hold their last commanded position; nothing downstream is buffered.
         """
         for player in self._players.values():
             player.set([])
@@ -329,9 +316,8 @@ class Harness(pimm.ControlSystem):
     def _reap_worker(self) -> None:
         """Wait out an abandoned call, then close the session it was inside.
 
-        A running thread survives ``shutdown(cancel_futures=True)``, which cancels only what is still queued,
-        so until the join returns the call still holds the session's resources — a ``RemoteSession``'s
-        websocket is the one ``close`` would pull out from under it — and, for an in-process policy, the one
+        ``shutdown(cancel_futures=True)`` cancels only what is still queued, so until the join returns the
+        call still holds the session's resources: a ``RemoteSession``'s websocket, or the one in-process
         model that every session across episodes and runs shares.
         """
         if self._retiring is not None:
@@ -353,15 +339,14 @@ class Harness(pimm.ControlSystem):
         # Give the recorder a round to commit the STOP before the next START (they share ``ds_command``, where
         # last-value-wins would drop one) and before the home command, so homing stays out of the recording.
         yield self._pace(clock)
-        # After that round, so the recorder's STOP-time record.io span is still in flight and parents to the
-        # episode. Accepted skew: a producer stepping in that shared round charges one span (≤ one control
-        # period) to the closing episode — the cooperative scheduler cannot give the recorder a turn alone.
+        # After that round, so the recorder's STOP-time record.io span still parents to the episode. Skew: a
+        # producer stepping in that shared round charges ≤ one control period to the closing episode.
         self._telemetry.end(virtual_now)
 
     def _effect_time(self) -> float:
         """The trial instant the in-flight call's output takes effect: its observation instant plus the
-        charge — the declared constant whole, or the wall time elapsed so far. Read on the worker thread;
-        the loop thread writes the call's start fields before submitting it.
+        charge — the declared constant whole, or the wall time elapsed so far. The loop thread writes the
+        call's start fields before the submit, so a worker reading this sees its own call's.
         """
         charge = time.monotonic() - self._wall_t0 if self._fixed_latency is None else self._fixed_latency
         return self._t0_ns / 1e9 + charge
@@ -369,11 +354,9 @@ class Harness(pimm.ControlSystem):
     def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> None:
         """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
 
-        A resettable task's ``reset`` only arms the producer, which publishes the first observation on a later
-        round. The recorder drains its channels the turn it opens, so the pre-reset frame and the
-        inter-episode home command drop out and its first sample is the post-reset scene. The deadline is
-        armed here and moved to that first observation once it lands, so an episode that never gets one is
-        still bounded.
+        A resettable task's ``reset`` only arms the producer; the first observation lands a later round. The
+        recorder drains its channels the turn it opens, so the pre-reset frame and the inter-episode home
+        command drop out. The deadline is armed here and moved to that first observation once it lands.
         """
         # Before the span opens, so the wait for a call the last episode abandoned is inter-episode wall
         # rather than overhead the timing reducer attributes to this one.
@@ -462,13 +445,11 @@ class Harness(pimm.ControlSystem):
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any] | None:
         """Read every observation channel and assemble the policy input dict.
 
-        Raises ``NoValueException`` if any channel has no value yet. Returns ``None`` while a serializer
-        reports a sample is not ready (``robot_state`` during a ``RESETTING`` arm) or a channel still holds a
-        pre-reset value — either way the harness skips inference rather than feed a partial or stale obs.
-
-        A faulted arm is the exception: it has no sample either, but the plan being played was made for an
-        arm that is now somewhere else, so the observation goes to the policy stack carrying
-        ``keys.ROBOT_FAULT`` and without the arm's own entries.
+        Raises ``NoValueException`` if any channel has no value yet. Returns ``None`` while a sample is not
+        ready (``robot_state`` during a ``RESETTING`` arm) or a channel still holds a pre-reset value, rather
+        than feed a partial or stale obs. A faulted arm is the exception: the plan being played was made for
+        an arm that is now somewhere else, so its observation reaches the stack carrying ``keys.ROBOT_FAULT``
+        and without the arm's own entries.
         """
         # Against the live model, not the one known at episode start: a remote env publishes its ``robot_meta``
         # a turn after the reset that produced it, so at episode start there is no model to check.
@@ -483,18 +464,16 @@ class Harness(pimm.ControlSystem):
             inputs.update(entries or {})
         # Every channel is read before this decision, so a bimanual rig cannot hide one arm's fault behind
         # another arm's not-ready sample: whichever channel comes first, the fault still reaches the stack.
-        if not_ready and not faulted:
+        if (not_ready and not faulted) or self._awaiting_obs:
             return None
-        if self._awaiting_obs:
-            return None
-        # The trial's context goes under what the harness read and stamped this round, never over it. A
-        # context carries whatever keys the RUN directive or the trial plan puts in it, so overlaying it last
-        # would let a ``robot_state.fault`` in an eval config tell ``StopOnFault`` that a faulted arm is sound.
+        # The trial's context goes under what the harness read this round, never over it: a context carries
+        # whatever keys the RUN directive puts in it, and a ``robot_state.fault`` among them must not tell
+        # ``StopOnFault`` that a faulted arm is sound.
         inputs = {**self.context, **inputs}
         inputs[keys.ROBOT_FAULT] = faulted
         inputs[keys.WALL_TIME_NS] = time.time_ns()
         inputs[keys.OBS_TIME_NS] = clock.now_ns()
-        inputs['descriptor'] = self._descriptor
+        inputs['descriptor'] = self._embodiment.descriptor
         return inputs
 
     @staticmethod
@@ -502,9 +481,8 @@ class Harness(pimm.ControlSystem):
         """The observation with its arrays copied, so nothing rewrites what the worker is still reading.
 
         A producer may reuse one buffer for every sample it emits — a camera renders into the array behind
-        the adapter it re-emits each frame — and the loop thread yields while a call charged in wall time
-        runs, so that producer advances alongside the worker. Copying at dispatch pays once per call rather
-        than per round.
+        the adapter it re-emits each frame — and it keeps stepping while a call charged in wall time runs.
+        Copying at dispatch pays once per call rather than per round.
         """
         return {name: value.copy() if isinstance(value, np.ndarray) else value for name, value in obs.items()}
 
@@ -529,9 +507,8 @@ class Harness(pimm.ControlSystem):
         if obs is None:
             return
         if not self._rollout_started:
-            # The rollout begins at its first observation, not when the reset returned: a reset only asks
-            # the producer for a scene, and the turns spent delivering it are neither the trial's budget
-            # nor its duration.
+            # The rollout begins at its first observation, not when the reset returned: the turns spent
+            # delivering the scene are neither the trial's budget nor its duration.
             self._rollout_started = True
             self._telemetry.start_rollout(clock.now())
             if self._task is not None:
@@ -546,19 +523,18 @@ class Harness(pimm.ControlSystem):
     def _take(self, future: Future[list[dict[str, Any]] | None], clock: pimm.Clock) -> _Answer:
         """Install the call's trajectory once the world has paid for it.
 
-        Under a constant charge the world holds still until the call answers — blocking here blocks the loop
-        thread, which is what advances a virtual clock. Until a call answers there is no telling a skip from
-        a model call, so letting the world run meanwhile would spend trial time on whichever the machine
-        turned out to be slow at. What the charge then buys is the instant a trajectory takes effect: it is
-        stamped for ``t0`` plus the charge and withheld until the world reaches it, playing what is already
-        scheduled on the way. An answer with no waypoints to place — a skip, or the empty trajectory that
-        stops what is executing — has no such instant and lands at once. A charge measured in wall time can
-        hold nothing still, so there the world runs no further ahead of the call's start than wall time has.
+        Constant charge: blocking here holds the virtual clock still, so the trial is billed the declared
+        charge and not what the machine took — until a call answers, a skip and a model call look alike. The
+        trajectory is withheld until the world reaches ``t0`` plus the charge, playing what is already
+        scheduled on the way; an answer with no waypoints — a skip, or the empty trajectory that stops what
+        is executing — lands at once.
+
+        Wall charge: nothing can be held still, so the world runs no further ahead of ``t0`` than wall time.
         """
         if self._fixed_latency is not None:
             concurrent.futures.wait([future])
         elif not future.done():
-            ahead = clock.now() - (self._t0_ns / 1e9 + time.monotonic() - self._wall_t0)
+            ahead = clock.now() - self._effect_time()
             if ahead <= 0.0:
                 return Harness._Answer.PENDING
             concurrent.futures.wait([future], timeout=ahead)
@@ -586,8 +562,8 @@ class Harness(pimm.ControlSystem):
         _assert_anchored(actions, clock.now())
         self._telemetry.step()
         for name, player in self._players.items():
-            # Wrappers do action-timing math in float seconds; the schedule and every pimm channel are in ns.
-            # This is the single explicit seconds->ns seam.
+            # The single explicit seconds->ns seam: wrappers time actions in float seconds, the schedule and
+            # every pimm channel are in ns.
             player.set([(int(a[keys.ACTION_TIMESTAMP] * 1e9), a[name]) for a in actions if name in a])
 
     def _play(self, clock: pimm.Clock) -> None:
@@ -601,11 +577,10 @@ class Harness(pimm.ControlSystem):
     def _trial_terminal(self, clock: pimm.Clock) -> dict[str, Any] | None:
         """The terminal static payload if a self-driven trial has ended this round, else ``None``.
 
-        The deadline is hard: a truthy ``done`` delivered within budget records ``eval.terminated`` True plus
-        its payload, the budget passing records False, and a terminal past the deadline is a timeout rather
-        than a late success. Only a freshly delivered ``done`` counts — the receiver latches its last value,
-        so a prior trial's terminal would otherwise re-fire; gating on delivery clears it without asking the
-        producer to republish. Reached only for a task with a deadline.
+        The deadline is hard: a truthy ``done`` within budget records ``eval.terminated`` True plus its
+        payload, the budget passing records False, and a terminal past the deadline is a timeout rather than
+        a late success. Only a freshly delivered ``done`` counts, or the receiver's latched value would
+        re-fire a prior trial's terminal. Reached only for a task with a deadline.
         """
         done_msg = self.done.read()
         if done_msg.updated and done_msg.data and done_msg.ts <= self._deadline * 1e9:
@@ -622,31 +597,25 @@ class Harness(pimm.ControlSystem):
         try:
             yield from self._run(should_stop, clock)
         except BaseException:
-            # A failure mid-rollout unwinds past the normal span close. Seal the open span before the
-            # exception reaches ``bind``'s exit flush, or it never exports and its finished children orphan,
-            # losing their phases and charging the episode's wall to between_episodes.
+            # Seal the open span before the exception reaches ``bind``'s exit flush: an unended span never
+            # exports, orphaning its finished children and charging the episode's wall to between_episodes.
             self._telemetry.seal(clock.now())
             raise
         finally:
             self._shutdown()
 
     def _shutdown(self) -> None:
-        """Release the worker and the session. A call still in flight runs to completion and its result is
-        dropped: the run is over and nothing is left to install it.
-
-        The join happens here rather than being deferred, since no later episode will do it and the policy
-        the call holds outlives this harness.
-        """
+        """Release the worker and the session: a call still in flight runs to completion and its result is
+        dropped. The join happens here rather than being deferred, since no later episode will do it and the
+        policy the call holds outlives this harness."""
         self._retire_worker()
         self._reap_worker()
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         while not should_stop.value:
             # One action per round, mutually exclusive: handle a directive, start the next trial (or exit
-            # when the plan is done), finish a self-driven trial that is out of budget or done, or step the
-            # policy. Starting takes its own round so a begin never shares one with a step — inference waits
-            # for the producer's post-reset observation, which the recorder logs once its open-turn drain has
-            # cleared the channels.
+            # when the plan is done), finish one that is out of budget or done, or step the policy. Starting
+            # takes its own round, so inference waits for the producer's post-reset observation.
             directive_msg = self.directive.read()
             # Read every round so the flag clears mid-episode; a press during a trial is consumed, not replayed.
             manual_msg = self.manual_command.read()
