@@ -1,6 +1,5 @@
 """Collection of commands that can be sent to the robot."""
 
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -120,32 +119,3 @@ def from_wire(wire: dict[str, Any]) -> CommandType:
             )
         case _:
             raise ValueError(f'Unknown command type: {wire["type"]}')
-
-
-def _combine(acc: CommandType, cmd: CommandType) -> CommandType:
-    match (acc, cmd):
-        case (CartesianDelta(a, frame_a), CartesianDelta(b, frame_b)):
-            if not np.allclose(frame_a.as_matrix, frame_b.as_matrix):
-                raise ValueError('Cannot accumulate cartesian deltas expressed in different frames')
-            return CartesianDelta(_compose_delta(a, b), frame_a)
-        case (JointDelta(a), JointDelta(b)):
-            return JointDelta(a + b)
-        case (CartesianDelta() | JointDelta(), _) | (_, CartesianDelta() | JointDelta()):
-            raise ValueError(f'Cannot reduce {type(acc).__name__} then {type(cmd).__name__} in one tick')
-        case _:
-            return cmd
-
-
-def reduce(due: Sequence[CommandType]) -> CommandType:
-    """Collapse the commands due in one round into the single command to execute.
-
-    Folds the batch in timestamp order. A run of same-space deltas accumulates (their motion is summed, so a
-    round spanning several waypoints catches up rather than dropping them); a run of absolute commands keeps
-    the last. Mixing an absolute with a delta, or two delta spaces, has no faithful single-command form — a
-    delta binds to the pose measured when it is consumed, which an absolute target or a foreign space cannot
-    supply — and raises.
-    """
-    result = due[0]
-    for cmd in due[1:]:
-        result = _combine(result, cmd)
-    return result

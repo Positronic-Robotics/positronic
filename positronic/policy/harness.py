@@ -2,7 +2,7 @@ import concurrent.futures
 import logging
 import time
 from collections import deque
-from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
+from collections.abc import Generator, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
@@ -41,12 +41,10 @@ Trajectory: TypeAlias = list[tuple[int, Any]]
 
 class TrajectoryPlayer:
     """Plays one channel's schedule: ``set()`` a trajectory, then ``advance(now)`` each round for the value
-    to emit. ``reduce`` is the channel's own collapse for the waypoints one round finds due together.
-    """
+    to emit."""
 
-    def __init__(self, reduce: Callable[[Sequence[Any]], Any]):
+    def __init__(self):
         self._pending: deque[tuple[int, Any]] = deque()
-        self._reduce = reduce
 
     def set(self, trajectory: Trajectory):
         self._pending = deque(trajectory)
@@ -56,12 +54,17 @@ class TrajectoryPlayer:
         return self._pending[0][0] if self._pending else None
 
     def advance(self, current_time: int):
-        """The single value due at ``current_time``, collapsed by ``reduce`` when several came due since the
-        previous call, or ``None`` when none did."""
-        due = []
+        """The single value due at ``current_time`` — the last, when several came due since the previous
+        call — or ``None`` when none did.
+
+        Collapsing to the last is exact for an absolute setpoint and lossy for a relative one: a run of
+        deltas due together arrives as its final step alone. Pacing keeps one waypoint due per round
+        wherever a round is shorter than the spacing between waypoints.
+        """
+        value = None
         while self._pending and self._pending[0][0] <= current_time:
-            due.append(self._pending.popleft()[1])
-        return self._reduce(due) if due else None
+            value = self._pending.popleft()[1]
+        return value
 
 
 def _assert_anchored(actions: list[dict[str, Any]], now: float) -> None:
@@ -255,7 +258,7 @@ class Harness(pimm.ControlSystem):
             self.observations[name]  # touch to allocate the port
         for name in embodiment.commands:
             self.commands[name]
-        self._players = {name: TrajectoryPlayer(cmd.reduce) for name, cmd in embodiment.commands.items()}
+        self._players = {name: TrajectoryPlayer() for name in embodiment.commands}
 
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.manual_command = pimm.ControlSystemReceiver(self, default=None)
@@ -420,7 +423,9 @@ class Harness(pimm.ControlSystem):
         """Close the live episode: finalize (or abort) the recording, retire the session, home devices.
 
         The session is retired with the worker rather than closed here, so a ``RemoteSession``'s websocket
-        outlives the call still using it.
+        outlives the call still using it; ``_reap_worker`` closes it at the next episode's start or at
+        shutdown, and the offboard server's per-session cleanup (active-session decrement, idle watchdog)
+        runs then.
         """
         if self._running:
             if abort:
@@ -649,8 +654,10 @@ class Harness(pimm.ControlSystem):
         """Release the worker and the session. A call still in flight runs to completion and its result is
         dropped: the run is over and nothing is left to install it.
 
-        The join happens here rather than being deferred, since no later episode will do it and the policy
-        the call holds outlives this harness.
+        The harness does not own the policy's lifetime: the caller may run several harnesses over one policy
+        (a multi-eval sweep), so it closes the policy once, after the last run. That leaves no later
+        ``_begin_episode`` to reap on, and the next harness reaches the shared policy through a session of
+        its own, so the call is waited out here.
         """
         self._retire_worker()
         self._reap_worker()
