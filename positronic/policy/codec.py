@@ -240,6 +240,8 @@ class ActionTimestamp(Codec):
     At training time, surfaces ``action_fps`` as transform metadata.
     """
 
+    WIRE_NAME = 'action_timestamp'
+
     def __init__(self, *, fps: float):
         self._fps = fps
         self._dt = 1.0 / fps
@@ -266,7 +268,7 @@ class ActionTimestamp(Codec):
         return {'action_fps': self._fps}
 
     def to_spec(self):
-        return {'name': 'action_timestamp', 'args': {'fps': self._fps}}
+        return {'name': self.WIRE_NAME, 'args': {'fps': self._fps}}
 
 
 class ActionHorizon(Codec):
@@ -284,6 +286,8 @@ class ActionHorizon(Codec):
 
     At training time, surfaces ``action_horizon_sec`` as transform metadata.
     """
+
+    WIRE_NAME = 'action_horizon'
 
     def __init__(self, horizon_sec: float):
         self._horizon_sec = horizon_sec
@@ -310,7 +314,7 @@ class ActionHorizon(Codec):
         return {'action_horizon_sec': self._horizon_sec}
 
     def to_spec(self):
-        return {'name': 'action_horizon', 'args': {'horizon_sec': self._horizon_sec}}
+        return {'name': self.WIRE_NAME, 'args': {'horizon_sec': self._horizon_sec}}
 
 
 def ActionTiming(*, fps: float, horizon_sec: float | None = None) -> Codec:
@@ -334,6 +338,8 @@ class BinarizeGripTraining(Codec):
 
         timing | BinarizeGripTraining(('grip', 'target_grip')) | BinarizeGripInference() | obs & action
     """
+
+    WIRE_NAME = 'binarize_grip_training'
 
     def __init__(self, keys: tuple[str, ...], threshold: float = 0.5):
         self._keys = keys
@@ -361,7 +367,7 @@ class BinarizeGripTraining(Codec):
         return Group(Derive(**transforms), Identity())
 
     def to_spec(self):
-        return {'name': 'binarize_grip_training', 'args': {'keys': list(self._keys), 'threshold': self._threshold}}
+        return {'name': self.WIRE_NAME, 'args': {'keys': list(self._keys), 'threshold': self._threshold}}
 
 
 class BinarizeGripInference(Codec):
@@ -371,6 +377,8 @@ class BinarizeGripInference(Codec):
 
         timing | BinarizeGripInference() | obs & action
     """
+
+    WIRE_NAME = 'binarize_grip_inference'
 
     def __init__(self, threshold: float = 0.5, key: str = obs_keys.TARGET_GRIP):
         self._threshold = threshold
@@ -389,7 +397,7 @@ class BinarizeGripInference(Codec):
         return data
 
     def to_spec(self):
-        return {'name': 'binarize_grip_inference', 'args': {'threshold': self._threshold, 'key': self._key}}
+        return {'name': self.WIRE_NAME, 'args': {'threshold': self._threshold, 'key': self._key}}
 
 
 class FlipGrip(Codec):
@@ -403,6 +411,8 @@ class FlipGrip(Codec):
 
         timing | FlipGrip() | obs & action
     """
+
+    WIRE_NAME = 'flip_grip'
 
     def encode(self, data):
         # Copy: the original dict is also the decode ``context`` and the raw recording tap's input.
@@ -420,7 +430,7 @@ class FlipGrip(Codec):
         return data
 
     def to_spec(self):
-        return {'name': 'flip_grip'}
+        return {'name': self.WIRE_NAME}
 
 
 def _scaled(image: np.ndarray, width: int, height: int) -> np.ndarray:
@@ -443,6 +453,8 @@ class RestrictImageSize(Codec):
 
         ChunkedSchedule() | RestrictImageSize() | remote | codec | source
     """
+
+    WIRE_NAME = 'restrict_image_size'
 
     def __init__(self, width: int = 640, height: int = 640):
         self._width = width
@@ -475,7 +487,7 @@ class RestrictImageSize(Codec):
         )
 
     def to_spec(self):
-        return {'name': 'restrict_image_size', 'args': {'width': self._width, 'height': self._height}}
+        return {'name': self.WIRE_NAME, 'args': {'width': self._width, 'height': self._height}}
 
 
 class ChangeEEFrame(Codec):
@@ -490,6 +502,8 @@ class ChangeEEFrame(Codec):
     Which side of the ``remote`` marker it sits on decides who converts, the rig or the server. Compose it left
     of the observation/action codecs.
     """
+
+    WIRE_NAME = 'change_ee_frame'
 
     @staticmethod
     def _move(value: Any, transform: geom.Transform3D) -> Any:
@@ -565,6 +579,6 @@ class ChangeEEFrame(Codec):
     def to_spec(self):
         # Lists, not tuples, so the spec is identical before and after a wire round-trip.
         return {
-            'name': 'change_ee_frame',
+            'name': self.WIRE_NAME,
             'args': {'transform': self._transform.as_vector(_QUAT).tolist(), 'keys': list(self._keys)},
         }

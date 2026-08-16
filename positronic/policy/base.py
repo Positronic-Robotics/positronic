@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, ClassVar
 
 Now = Callable[[], float]
 
@@ -148,11 +148,15 @@ class PolicyWrapper:
         """Wrap a single session. Subclasses override this for per-session wrapping."""
         raise NotImplementedError('Override wrap_session or wrap')
 
+    # The name this wrapper travels under, set by every deliverable subclass. ``WIRE_WRAPPERS`` is keyed by
+    # it, so the name is written once and both sides of the wire read the same attribute.
+    WIRE_NAME: ClassVar[str]
+
     def to_spec(self) -> dict[str, Any]:
         """Plain-data wire spec of this wrapper, for a server's local-stack declaration.
 
         Only wrappers registered in ``positronic.policy.spec.WIRE_WRAPPERS`` are deliverable to a rig.
-        The spec is ``{'name': <wire name>}`` plus ``{'args': {...}}`` when the wrapper takes any;
+        The spec is ``{'name': WIRE_NAME}`` plus ``{'args': {...}}`` when the wrapper takes any;
         ``args`` are constructor keywords, since the rig rebuilds by calling the constructor with them.
         """
         raise NotImplementedError(f'{type(self).__name__} is not deliverable to a rig (no wire spec)')

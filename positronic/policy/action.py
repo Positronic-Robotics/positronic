@@ -26,6 +26,8 @@ def _relative_rot_vec(q_current: np.ndarray, q_target: np.ndarray, representatio
 
 
 class AbsolutePositionAction(Codec):
+    WIRE_NAME = 'absolute_position_action'
+
     def __init__(self, tgt_ee_pose_key: str, tgt_grip_key: str, rotation_rep: RotRep | str = RotRep.QUAT):
         self.rot_rep = RotRep(rotation_rep)
         self.tgt_ee_pose_key = tgt_ee_pose_key
@@ -54,7 +56,7 @@ class AbsolutePositionAction(Codec):
 
     def to_spec(self):
         return {
-            'name': 'absolute_position_action',
+            'name': self.WIRE_NAME,
             'args': {
                 'tgt_ee_pose_key': self.tgt_ee_pose_key,
                 'tgt_grip_key': self.tgt_grip_key,
@@ -64,6 +66,8 @@ class AbsolutePositionAction(Codec):
 
 
 class AbsoluteJointsAction(Codec):
+    WIRE_NAME = 'absolute_joints_action'
+
     def __init__(self, tgt_joints_key: str, tgt_grip_key: str, num_joints: int = 7):
         self.tgt_joints_key = tgt_joints_key
         self.tgt_grip_key = tgt_grip_key
@@ -92,7 +96,7 @@ class AbsoluteJointsAction(Codec):
 
     def to_spec(self):
         return {
-            'name': 'absolute_joints_action',
+            'name': self.WIRE_NAME,
             'args': {
                 'tgt_joints_key': self.tgt_joints_key,
                 'tgt_grip_key': self.tgt_grip_key,
@@ -137,6 +141,8 @@ class IKJointsAction(Codec):
 
 
 class RelativePositionAction(Codec):
+    WIRE_NAME = 'relative_position_action'
+
     def __init__(
         self,
         rotation_rep: RotRep | str = RotRep.QUAT,
@@ -194,7 +200,7 @@ class RelativePositionAction(Codec):
 
     def to_spec(self):
         return {
-            'name': 'relative_position_action',
+            'name': self.WIRE_NAME,
             'args': {
                 'rotation_rep': self.rot_rep.value,
                 'robot_pose_key': self.robot_pose_key,
@@ -210,6 +216,8 @@ class JointDeltaAction(Codec):
     Scales the model's per-step joint velocities (clipped to ``[-1, 1]``) by ``MAX_JOINT_DELTA``
     into a ``JointDelta`` command; the driver integrates each delta onto the live measured joints.
     """
+
+    WIRE_NAME = 'joint_delta_action'
 
     # General DROID form scales each normalized velocity by its own per-joint delta limit, then
     # renorms the velocity vector so no joint exceeds its limit:
@@ -241,4 +249,4 @@ class JointDeltaAction(Codec):
         return {keys.ROBOT_COMMAND: command.JointDelta(velocities=velocities), keys.TARGET_GRIP: grip}
 
     def to_spec(self):
-        return {'name': 'joint_delta_action', 'args': {'num_joints': self.num_joints}}
+        return {'name': self.WIRE_NAME, 'args': {'num_joints': self.num_joints}}

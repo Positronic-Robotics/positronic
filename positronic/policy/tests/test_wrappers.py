@@ -409,7 +409,9 @@ class TestPipelineSpec:
         with pytest.raises(NotImplementedError, match='not deliverable'):
             IKJointsAction(solver_cls=None).to_spec()
 
-    def test_wire_names_match_table(self):
+    def test_the_table_publishes_these_exact_wire_names(self):
+        """The strings a deployed server already declares its local stack with. Spelled out here rather than
+        read off ``WIRE_NAME``, so renaming an attribute cannot quietly rename the wire."""
         instances = {
             'chunked_schedule': ChunkedSchedule(),
             'stop_on_fault': StopOnFault(),

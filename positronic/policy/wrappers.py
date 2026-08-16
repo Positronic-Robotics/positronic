@@ -32,6 +32,8 @@ class StopOnFault(PolicyWrapper):
     observation from anywhere else — a probe replaying a recording — carries no arm to fault.
     """
 
+    WIRE_NAME = 'stop_on_fault'
+
     class _Session(DelegatingSession):
         def __call__(self, obs):
             if not obs.get(keys.ROBOT_FAULT, False):
@@ -43,7 +45,7 @@ class StopOnFault(PolicyWrapper):
         return StopOnFault._Session(inner)
 
     def to_spec(self):
-        return {'name': 'stop_on_fault'}
+        return {'name': self.WIRE_NAME}
 
 
 class ChunkedSchedule(PolicyWrapper):
@@ -54,6 +56,8 @@ class ChunkedSchedule(PolicyWrapper):
     inference-finish (not inference-start). Returns ``None`` ("keep executing the current trajectory")
     until the last action's timestamp is reached, then calls the inner policy.
     """
+
+    WIRE_NAME = 'chunked_schedule'
 
     class _Session(DelegatingSession):
         """Skips inner calls while the current trajectory plays; stamps absolute on emit."""
@@ -94,7 +98,7 @@ class ChunkedSchedule(PolicyWrapper):
         return ChunkedSchedule._Session(inner, now)
 
     def to_spec(self):
-        return {'name': 'chunked_schedule'}
+        return {'name': self.WIRE_NAME}
 
 
 class _StackBuffer:
@@ -160,6 +164,8 @@ class TemporalStack(PolicyWrapper):
     chunk-0 empty prefix) never engage it on a padded full-length stack.
     """
 
+    WIRE_NAME = 'temporal_stack'
+
     class _Session(DelegatingSession):
         def __init__(self, inner: Session, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool):
             super().__init__(inner)
@@ -189,6 +195,6 @@ class TemporalStack(PolicyWrapper):
 
     def to_spec(self):
         return {
-            'name': 'temporal_stack',
+            'name': self.WIRE_NAME,
             'args': {'keys': list(self._keys), 'offsets_sec': list(self._offsets_sec), 'pad_start': self._pad_start},
         }
