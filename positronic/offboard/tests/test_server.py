@@ -13,7 +13,7 @@ from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
 
 from positronic import keys
-from positronic.offboard.client import InferenceClient, InferenceSession
+from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.policy import Codec, Policy, RemotePolicy, Session
@@ -426,7 +426,10 @@ def authed_endpoint(start_server, make_mock_policy) -> tuple[str, str]:
         pytest.param(lambda token: token, id='no-bearer-prefix'),
     ],
 )
-def test_auth_rejects_requests_without_the_token(authed_endpoint, make_header):
+def test_auth_rejects_requests_without_the_token(authed_endpoint, make_header, monkeypatch):
+    # A 403 buys retries in case the backend is merely cold; here it never clears, so those attempts and the
+    # waits between them are dead time. `TestNewSessionRetriesRefusedUpgrades` is where the budget is tested.
+    monkeypatch.setattr(_ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
     url, token = authed_endpoint
     header = make_header(token)
     client = InferenceClient(url, headers=None if header is None else {AUTH_HEADER: header})
