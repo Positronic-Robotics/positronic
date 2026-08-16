@@ -1,4 +1,4 @@
-"""The offboard wire's contract: the frame envelope both ends spell, the shared msgpack encoding, and the
+"""The offboard wire's contract: the message keys both ends spell, the shared msgpack encoding, and the
 robot command this boundary carries.
 
 A served command arrives either inside the ``__cmd__`` envelope or as the bare ``to_wire`` mapping at a
@@ -17,8 +17,8 @@ from positronic import keys
 from positronic.drivers.roboarm import command
 from positronic.utils import serialization
 
-# The frame envelope every message travels in: ``STATUS`` frames until the server reports itself ready and
-# hands over its ``META``, then one ``RESULT`` or ``ERROR`` per inference.
+# The top-level keys of every server-to-client message: ``STATUS`` until the server reports itself ready
+# and hands over its ``META``, then one ``RESULT`` or ``ERROR`` per inference.
 STATUS = 'status'
 MESSAGE = 'message'
 META = 'meta'
