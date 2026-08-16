@@ -21,7 +21,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import Directive, DirectiveType, Harness, _InferenceWorker, _WallCharge
+from positronic.policy.harness import Directive, DirectiveType, Harness, _InferenceWorker
 from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -932,14 +932,13 @@ def test_trial_plan_self_drives(world):
 
 @pytest.mark.timeout(3.0)
 def test_timeout_during_inference_drops_the_chunk(world):
-    """A trial whose deadline lapses while the model is still owed its latency ends with the call in flight:
+    """A trial whose deadline lapses while the model is still inside its call ends with the call in flight:
     the trajectory it eventually returns is discarded, never emitted past the advertised termination point."""
-    policy = StubPolicy()
     harness = Harness(
-        ChunkedSchedule().wrap(policy),
+        ChunkedSchedule().wrap(SlowPolicy(wall_sec=0.3)),  # the call runs well past the deadline
         make_embodiment(simulated=True),
         task=Task(instruction='test', timeout=0.05),
-        trials=[{keys.INFERENCE_LATENCY: 0.2}],  # the charge holds the answer well past the deadline
+        trials=[{keys.INFERENCE_LATENCY: True}],
     )
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
@@ -1657,20 +1656,20 @@ def test_anchored_chunk_passes():
     Harness._assert_anchored([{'timestamp': 1.7e9 - 0.2}, {'timestamp': 1.7e9 + 1.5}], now=1.7e9)
 
 
-@pytest.mark.parametrize(('expired', 'installed'), [(True, False), (False, True)])
-def test_a_reply_is_installed_only_while_the_trial_still_has_budget(world, expired, installed):
+@pytest.mark.parametrize(('expired', 'scheduled'), [(True, False), (False, True)])
+def test_a_reply_is_scheduled_only_while_the_trial_still_has_budget(world, expired, scheduled):
     """A trial advertises the instant it stops at. A call whose rounds in flight carried the world past that
     instant has its chunk dropped instead of placed, and ``_run`` finishes the trial on the next round."""
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment())
     now = world.clock.now()
     harness._deadline = now - 1.0 if expired else now + 1.0
-    harness._worker = _InferenceWorker(policy.new_session(), _WallCharge())
+    harness._worker = _InferenceWorker(policy, {}, charge_wall=True)
     harness._worker.submit({}, world.clock)
 
-    harness._take(world.clock)
+    harness._throttle_and_reschedule(harness._worker, world.clock)
 
-    assert bool(harness._schedules[keys.ROBOT_COMMAND]) is installed
+    assert bool(harness._schedules[keys.ROBOT_COMMAND]) is scheduled
 
 
 class _SlowSession(Session):
@@ -1783,17 +1782,6 @@ def test_default_latency_pauses_the_world_for_the_call(world):
 
 
 @pytest.mark.timeout(20.0)
-@pytest.mark.parametrize('wall_sec', [0.0, 0.05])
-def test_constant_latency_ignores_what_the_call_really_took(world, wall_sec):
-    """The reproducible mode: the wrapper is released a constant delay after the call started, so the played
-    trace is the same against a fast server and a slow one."""
-    played = _run_episode(world, SlowPolicy(wall_sec=wall_sec), ChunkedSchedule(), latency=0.3)
-
-    assert played, 'no command was played'
-    assert played[0][0] == pytest.approx(0.3, abs=0.02), f'first command at {played[0][0]}s, expected the 0.3s delay'
-
-
-@pytest.mark.timeout(20.0)
 def test_measured_latency_charges_the_calls_own_wall_duration(world):
     """``inference_latency=True`` charges the world what the model really took, so a slow server is scored
     as slow — at the cost of a trace that inherits the machine's noise."""
@@ -1804,33 +1792,13 @@ def test_measured_latency_charges_the_calls_own_wall_duration(world):
 
 
 @pytest.mark.timeout(20.0)
-def test_a_real_rig_ignores_the_latency_a_trial_asks_for(world):
-    """The charge simulates a trial; a real rig pays what its calls take, so a context carrying a constant
-    (the eval CLI writes one into every trial) does not hold the chunk back for it."""
-    played = _run_episode(world, SlowPolicy(), ChunkedSchedule(), latency=5.0, simulated=False)
+def test_a_real_rig_pays_wall_time_whatever_the_trial_asks_for(world):
+    """The knob simulates a trial; a real rig pays what its calls take, so a context asking for the world to
+    be held (the eval CLI writes the flag into every trial) does not hold it."""
+    played = _run_episode(world, SlowPolicy(wall_sec=0.2), ChunkedSchedule(), latency=False, simulated=False)
 
     assert played, 'no command was played'
-    assert played[0][0] < 1.0, f"first command at {played[0][0]}s: the trial's 5s charge was honoured"
-
-
-class _WallCost(PolicyWrapper):
-    """Burns real time on every call it passes down, answering or skipping — a stand-in for a stack that
-    copies buffers before the model ever sees the observation."""
-
-    def __init__(self, sec: float):
-        self._sec = sec
-
-    class _Session(DelegatingSession):
-        def __init__(self, inner: Session, sec: float):
-            super().__init__(inner)
-            self._sec = sec
-
-        def __call__(self, obs):
-            time.sleep(self._sec)
-            return self._inner(obs)
-
-    def wrap_session(self, inner: Session, context, now):
-        return _WallCost._Session(inner, self._sec)
+    assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the call took'
 
 
 class _ObservedTicks(PolicyWrapper):
@@ -1852,43 +1820,29 @@ class _ObservedTicks(PolicyWrapper):
         return _ObservedTicks._Session(inner, self.seen)
 
 
-@pytest.mark.timeout(60.0)
-def test_a_constant_charge_keeps_the_trace_off_the_machine_clock():
-    """The reproducible mode's promise: what the machine spends — inside the model call, or above it in a
-    wrapper that ends up skipping — must not reach the trial. Two worlds, one slow, one not."""
-
-    def played(wall_sec: float) -> list[tuple[float, Any]]:
-        with pimm.World(virtual_time=True) as w:
-            policy = SlowPolicy(wall_sec=wall_sec, span_sec=0.3, steps=15)
-            return _run_episode(w, policy, _WallCost(wall_sec) | ChunkedSchedule(), latency=0.2, run_sec=0.8)
-
-    assert played(0.0) == played(0.003)
-
-
 @pytest.mark.timeout(30.0)
-def test_the_wrappers_see_every_tick_outside_the_charge(world):
-    """What a temporal stack records: the charge is the only thing that keeps an observation from the
-    wrappers above the scheduler — never the machine, and never the rounds in between."""
+def test_the_wrappers_see_every_tick(world):
+    """What a temporal stack records: nothing keeps an observation from the wrappers above the scheduler —
+    not the machine inside the model call, and not the rounds in between."""
     ticks = _ObservedTicks()
     _run_episode(
-        world, SlowPolicy(wall_sec=0.01, span_sec=0.3, steps=15), ticks | ChunkedSchedule(), latency=0.2, run_sec=1.0
+        world, SlowPolicy(wall_sec=0.01, span_sec=0.3, steps=15), ticks | ChunkedSchedule(), latency=False, run_sec=1.0
     )
 
-    period, charge = 0.005, 0.2  # the pacer's control period, and the trial's charge
+    period = 0.005  # the pacer's control period
     gaps = [round(b - a, 4) for a, b in zip(ticks.seen, ticks.seen[1:], strict=False)]
-    assert all(gap <= period or charge <= gap <= charge + 2 * period for gap in gaps), gaps
-    assert len([gap for gap in gaps if gap > period]) >= 2, f'the trial inferred too few times: {gaps}'
+    assert gaps and all(gap <= period for gap in gaps), gaps
 
 
 @pytest.mark.timeout(20.0)
 def test_harness_keeps_playing_while_a_call_is_in_flight(world):
     """A wrapper that replans before its chunk is exhausted leaves waypoints due during inference, and the
     harness emits them on time instead of standing still until the model answers."""
-    played = _run_episode(world, SlowPolicy(span_sec=0.4, steps=20), _ReplanEarly(), latency=0.15)
+    played = _run_episode(world, SlowPolicy(wall_sec=0.15, span_sec=0.4, steps=20), _ReplanEarly(), latency=True)
 
-    # The second call starts halfway through the first chunk (0.2s in) and is owed 0.15s; the waypoints due
-    # in that window have to keep going out.
-    during = [t for t, _ in played if 0.2 <= t < 0.35]
+    # The first chunk lands at ~0.15s and spans 0.4s; the second call starts halfway through it (~0.28s) and
+    # runs for 0.15s the world runs through; the waypoints due in that window have to keep going out.
+    during = [t for t, _ in played if 0.29 <= t < 0.4]
     assert len(during) >= 3, f'the harness stopped playing during inference: {[t for t, _ in played]}'
 
 
@@ -1994,10 +1948,9 @@ def test_the_trial_context_cannot_stand_in_for_what_the_harness_read(world):
 
 
 @pytest.mark.timeout(20.0)
-def test_a_stop_lands_without_waiting_out_the_charge(world):
-    """A charge places a trajectory's waypoints, and a stop has none: an arm that faults mid-chunk stops in
-    the round its fault is seen, not a charge later."""
-    charge, fault_at, period = 0.3, 0.5, 0.005
+def test_a_stop_clears_the_chunk_in_the_round_the_fault_is_seen(world):
+    """A stop has no waypoints to place: an arm that faults mid-chunk stops in the round its fault is seen."""
+    fault_at, period = 0.5, 0.005
     stack = StopOnFault() | ChunkedSchedule()
     harness = Harness(stack.wrap(SlowPolicy(span_sec=1.0, steps=50)), make_embodiment(simulated=True))
     grip_recorder = _TimedRecorder(world.clock)
@@ -2012,9 +1965,9 @@ def test_a_stop_lands_without_waiting_out_the_charge(world):
 
     pose, joints = [0.1, 0.2, 0.3], [0.4, 0.5, 0.6]
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='t', **{keys.INFERENCE_LATENCY: charge})), 0.0),
+        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, make_robot_state(pose, joints)), fault_at),
-        (partial(robot_em.emit, make_robot_state(pose, joints, status=RobotStatus.ERROR)), charge + 0.2),
+        (partial(robot_em.emit, make_robot_state(pose, joints, status=RobotStatus.ERROR)), 0.5),
     ])
     drive_scheduler(world.start([harness, driver, _Pacer(period)]), steps=4000)
 
@@ -2160,7 +2113,7 @@ def test_the_session_is_closed_only_once_its_call_has_left_it():
 
 
 @pytest.mark.timeout(3.0)
-def test_installed_trajectory_clears_the_channels_it_omits(world):
+def test_a_rescheduled_trajectory_clears_the_channels_it_omits(world):
     """A trajectory naming only one channel replaces the whole schedule: the omitted channel stops being
     played rather than draining the previous trajectory's tail."""
 
@@ -2231,9 +2184,9 @@ def test_home_and_manual_commands_are_emitted_as_plain_values(world):
 
 @pytest.mark.timeout(20.0)
 def test_abort_discards_a_call_that_is_still_in_flight(world):
-    """An ABORT while the gate is still holding the model's answer throws that answer away: the trajectory
-    it carries never reaches the devices."""
-    harness = Harness(ChunkedSchedule().wrap(SlowPolicy()), make_embodiment(simulated=True))
+    """An ABORT while the model is still inside its call throws that answer away: the trajectory it carries
+    never reaches the devices."""
+    harness = Harness(ChunkedSchedule().wrap(SlowPolicy(wall_sec=1.0)), make_embodiment(simulated=True))
     cmd_recorder = RecordingEmitter()
     harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
     harness.commands[keys.TARGET_GRIP]._bind(RecordingEmitter())
@@ -2246,9 +2199,9 @@ def test_abort_discards_a_call_that_is_still_in_flight(world):
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='t', **{keys.INFERENCE_LATENCY: 1.0})), 0.0),
+        (partial(directive_em.emit, Directive.RUN(task='t', **{keys.INFERENCE_LATENCY: True})), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
-        (None, 0.05),  # well inside the 1.0s the gate owes the call
+        (None, 0.05),  # well inside the 1.0s the call takes
         (partial(directive_em.emit, Directive.ABORT()), 0.0),
         (None, 0.05),
     ])

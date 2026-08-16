@@ -13,8 +13,8 @@ robot changes state only when a command is *applied*, so
   * horizon/gating regression   -> the state trajectory diverges
 
 Everything runs on CPU in a virtual-time world only: no GL/GPU/MuJoCo, no wall
-clock in the asserted path (a fixed-float ``inference_latency`` is used so
-inference latency is deterministic).
+clock in the asserted path (``_SimulatedLatency`` charges a fixed world-time
+latency, so inference latency is deterministic).
 
 Regenerate the golden after an intentional behavior change:
 
@@ -41,7 +41,7 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, CommandType, Reset
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.geom import Rotation, Transform3D
-from positronic.policy.base import Policy, Session
+from positronic.policy.base import DelegatingPolicy, DelegatingSession, Now, Policy, Session
 from positronic.policy.codec import ActionTiming
 from positronic.policy.harness import Directive, Harness
 from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
@@ -53,7 +53,7 @@ INITIAL_POS = np.array([0.30, 0.00, 0.40], dtype=np.float32)
 INITIAL_Q = np.array([0.10, -0.20, 0.30, -0.40, 0.50, -0.60, 0.70], dtype=np.float32)
 TARGET_POS = np.array([0.50, 0.00, 0.45], dtype=np.float32)
 
-# Fixed deterministic inference latency. Spans >1 control tick (harness loop is
+# Fixed deterministic inference latency in world time. Spans >1 control tick (harness loop is
 # 0.01 s) so the post-inference anchoring effect is observable in recorded ts.
 INFERENCE_LATENCY_S = 0.05
 ACTION_FPS = 15.0
@@ -85,6 +85,49 @@ class ScriptedProportionalPolicy(Policy):
 
     def new_session(self, context=None, now=None):
         return _ScriptedSession()
+
+
+class _SimulatedLatency(DelegatingPolicy):
+    """A fixed inference latency in world time: every chunk is stamped for, and reaches the harness at,
+    ``latency_sec`` after the call that produced it, whatever the machine took. Sits outermost, so nothing
+    below sees an observation while a chunk is held. A skip or a stop passes through at once."""
+
+    def __init__(self, inner: Policy, latency_sec: float):
+        super().__init__(inner)
+        self._latency_ns = round(latency_sec * 1e9)
+
+    class _Session(DelegatingSession):
+        def __init__(self, inner: Session, now: Now, latency_ns: int):
+            super().__init__(inner)
+            self._now = now
+            self._latency_ns = latency_ns
+            self._held: list | None = None
+            self._release_at_ns = 0
+
+        def __call__(self, obs):
+            # Integer ns, the world's own timeline: a float compare can miss the release instant by one ULP.
+            now_ns = round(self._now() * 1e9)
+            if self._held is not None:
+                if now_ns < self._release_at_ns:
+                    return None
+                held, self._held = self._held, None
+                return held
+            result = self._inner(obs)
+            if not result:
+                return result
+            self._held, self._release_at_ns = result, now_ns + self._latency_ns
+            return None
+
+        def cancel(self):
+            self._held = None
+            super().cancel()
+
+    def new_session(self, context=None, now=None):
+        assert now is not None, 'the harness supplies the clock'
+        latency_ns = self._latency_ns
+        return _SimulatedLatency._Session(
+            self._inner.new_session(context, lambda: now() + latency_ns / 1e9), now, latency_ns
+        )
 
 
 class _FakeRobotState(roboarm.State):
@@ -194,11 +237,13 @@ def _run_pipeline(tmp_path: Path) -> dict:
             },
             static_meta=dict(ROBOT_STATIC_META),
             meta_source=robot.robot_meta,
-            # ``inference_latency`` is a sim-only knob, and the fake robot's control-period sleep is this
-            # world's sole time-master — the shape a sim eval runs in.
+            # The fake robot's control-period sleep is this world's sole time-master — the shape a sim eval
+            # runs in.
             simulated=True,
         )
-        harness = Harness((StopOnFault() | ChunkedSchedule()).wrap(policy), embodiment)
+        harness = Harness(
+            _SimulatedLatency((StopOnFault() | ChunkedSchedule()).wrap(policy), INFERENCE_LATENCY_S), embodiment
+        )
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
         directive_em = world.pair(harness.directive)
@@ -206,7 +251,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
         # Robot/gripper emit state every tick, so the script only drives the
         # episode lifecycle and the one-shot error injection.
         script = [
-            (partial(directive_em.emit, Directive.RUN(task='golden', inference_latency=INFERENCE_LATENCY_S)), 0.0),
+            (partial(directive_em.emit, Directive.RUN(task='golden')), 0.0),
             (None, 1.5),  # several reactive inference + chunk/horizon cycles
             (robot.inject_error, 0.0),  # one-shot error: that frame is dropped, then inference resumes
             (None, 0.5),

@@ -194,7 +194,7 @@ def run(
     eval: Eval | str,
     policy,
     output_dir=None,
-    inference_latency=False,
+    inference_latency: bool = False,
     timing=False,
     policy_image: str | None = None,
     alias: str | None = None,
@@ -222,7 +222,8 @@ def run(
         if not isinstance(eval, Eval):
             raise SystemExit(f'--eval={eval!r} is a name, not a config: pass --policy-image to run it on the platform')
         # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob
-        # (sim inference-cost simulation). Overlay it onto every trial context, then self-drive the eval.
+        # (whether a sim charges each call its wall time). Overlay it onto every trial context, then self-drive
+        # the eval.
         eval = replace(eval, trials=[{**trial, keys.INFERENCE_LATENCY: inference_latency} for trial in eval.trials])
         main(policy=policy, evals=[eval], output_dir=output_dir, timing=timing)
         return None
