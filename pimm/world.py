@@ -487,12 +487,6 @@ class World:
         self.entered = False
         self._connections = []
 
-    @functools.cached_property
-    def _manager(self):
-        """A spawn-context manager, so queues and values behave synchronously even within a single process."""
-        # It runs as a process of its own, so a world that never opens an mp pipe never starts one.
-        return self._mp_ctx.Manager()
-
     def __enter__(self):
         self.entered = True
         return self
@@ -843,6 +837,12 @@ class World:
         """
         q = deque(maxlen=maxsize)
         return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q)
+
+    @functools.cached_property
+    def _manager(self):
+        """A spawn-context manager, so queues and values behave synchronously even within a single process."""
+        # It runs as a process of its own, so a world that opens no mp pipe never starts one.
+        return self._mp_ctx.Manager()
 
     def mp_pipes(
         self,

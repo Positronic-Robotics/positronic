@@ -200,8 +200,8 @@ i2rt = { git = "https://github.com/i2rt-robotics/i2rt.git", rev = "5d47b358bafb3
 testpaths = ["client", "pimm", "positronic", "utilities"]
 python_files = ["test_*.py", "*_test.py"]
 addopts = [
-    # Half of a serial run is spent waiting on spawned processes and sockets, so the suite is bound by cores
-    # rather than by CPU. `-n0` puts it back in one process, which live logs and `--pdb` need.
+    # The suite waits on spawned processes and sockets about as much as it computes, so it scales with cores.
+    # `-n0` puts it back in one process, which live logs and `--pdb` need.
     "-n", "auto",
     "--cov=pimm",
     "--cov=platform_client",

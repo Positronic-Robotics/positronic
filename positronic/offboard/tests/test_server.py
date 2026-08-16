@@ -427,8 +427,8 @@ def authed_endpoint(start_server, make_mock_policy) -> tuple[str, str]:
     ],
 )
 def test_auth_rejects_requests_without_the_token(authed_endpoint, make_header, monkeypatch):
-    # A 403 buys retries in case the backend is merely cold; here it never clears, so those attempts and the
-    # waits between them are dead time. `TestNewSessionRetriesRefusedUpgrades` is where the budget is tested.
+    # A 403 buys retries for a backend that may be merely cold. This one is refusing, so those attempts and
+    # the waits between them are dead time; `TestNewSessionRetriesRefusedUpgrades` is what tests the budget.
     monkeypatch.setattr(_ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
     url, token = authed_endpoint
     header = make_header(token)
