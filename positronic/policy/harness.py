@@ -643,14 +643,10 @@ class Harness(pimm.ControlSystem):
             self._telemetry.seal(clock.now())
             raise
         finally:
-            self._shutdown()
-
-    def _shutdown(self) -> None:
-        """Release the worker and the session: a call still in flight runs to completion and its result is
-        dropped. The join happens here rather than being deferred, since no later episode will do it and the
-        policy the call holds outlives this harness."""
-        self._retire_worker()
-        self._reap_worker()
+            # A call still in flight runs to completion and its result is dropped. The join is not deferred:
+            # no later episode will do it, and the policy the call holds outlives this harness.
+            self._retire_worker()
+            self._reap_worker()
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         while not should_stop.value:
