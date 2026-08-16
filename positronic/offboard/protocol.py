@@ -26,9 +26,7 @@ RESULT = 'result'
 ERROR = 'error'
 
 
-class Status(StrEnum):
-    """What a frame reports about the session, in its ``STATUS`` field."""
-
+class ServerStatus(StrEnum):
     READY = 'ready'
     WAITING = 'waiting'
     LOADING = 'loading'

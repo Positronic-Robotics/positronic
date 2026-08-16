@@ -39,13 +39,13 @@ class InferenceSession:
                 if protocol.ERROR in response:
                     raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
                 try:
-                    status = protocol.Status(response.get(protocol.STATUS))
+                    status = protocol.ServerStatus(response.get(protocol.STATUS))
                 except ValueError:
                     raise RuntimeError(f'Unexpected server response: {response}') from None
 
-                if status is protocol.Status.READY:
+                if status is protocol.ServerStatus.READY:
                     return response[protocol.META]
-                if status is protocol.Status.ERROR:
+                if status is protocol.ServerStatus.ERROR:
                     raise RuntimeError('Server error: Unknown error')
 
                 message = response.get(protocol.MESSAGE, status)

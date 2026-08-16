@@ -50,7 +50,7 @@ async def _acquire_with_keepalives(lock: asyncio.Lock, websocket: WebSocket | No
         except TimeoutError:
             if websocket is not None:
                 await websocket.send_bytes(
-                    serialise({protocol.STATUS: protocol.Status.WAITING, protocol.MESSAGE: message})
+                    serialise({protocol.STATUS: protocol.ServerStatus.WAITING, protocol.MESSAGE: message})
                 )
 
 
@@ -80,7 +80,7 @@ class PolicyManager:
                     logger.info(message)
                     if websocket:
                         await websocket.send_bytes(
-                            serialise({protocol.STATUS: protocol.Status.WAITING, protocol.MESSAGE: message})
+                            serialise({protocol.STATUS: protocol.ServerStatus.WAITING, protocol.MESSAGE: message})
                         )
 
                     try:
@@ -98,7 +98,7 @@ class PolicyManager:
                 if websocket:
                     await websocket.send_bytes(
                         serialise({
-                            protocol.STATUS: protocol.Status.LOADING,
+                            protocol.STATUS: protocol.ServerStatus.LOADING,
                             protocol.MESSAGE: f'Loading checkpoint {checkpoint_id}...',
                         })
                     )
@@ -128,7 +128,10 @@ class PolicyManager:
 
         def on_progress(msg: str) -> None:
             asyncio.run_coroutine_threadsafe(
-                websocket.send_bytes(serialise({protocol.STATUS: protocol.Status.LOADING, protocol.MESSAGE: msg})), loop
+                websocket.send_bytes(
+                    serialise({protocol.STATUS: protocol.ServerStatus.LOADING, protocol.MESSAGE: msg})
+                ),
+                loop,
             ).result()
 
         return on_progress
@@ -339,7 +342,7 @@ class PolicyServer:
                 keys.COMPRESS_IMAGES: border.compress_images,
                 keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
-            await websocket.send_bytes(serialise({protocol.STATUS: protocol.Status.READY, protocol.META: meta}))
+            await websocket.send_bytes(serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: meta}))
 
             try:
                 while True:
@@ -361,7 +364,9 @@ class PolicyServer:
         except Exception as e:
             logger.error(f'Failed session: {e}', exc_info=True)
             try:
-                await websocket.send_bytes(serialise({protocol.STATUS: protocol.Status.ERROR, protocol.ERROR: str(e)}))
+                await websocket.send_bytes(
+                    serialise({protocol.STATUS: protocol.ServerStatus.ERROR, protocol.ERROR: str(e)})
+                )
                 await websocket.close(code=1008, reason=str(e)[:100])
             except Exception:
                 logger.debug('Failed to send error to client', exc_info=True)
