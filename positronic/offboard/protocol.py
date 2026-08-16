@@ -1,5 +1,5 @@
-"""The offboard wire's contract: the message keys both ends spell, the shared msgpack encoding, and the
-robot command this boundary carries.
+"""The offboard wire's contract: its message keys, the shared msgpack encoding, and the robot command
+this boundary carries.
 
 A served command arrives either inside the ``__cmd__`` envelope or as the bare ``to_wire`` mapping at a
 command channel, and nothing but the channel tells that mapping from any other dict.

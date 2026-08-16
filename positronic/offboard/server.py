@@ -117,10 +117,10 @@ class PolicyManager:
 
     @staticmethod
     def _progress_callback(websocket: WebSocket | None) -> Callable[[str], None] | None:
-        """Sync callback for the loader thread, marshaling ``loading`` frames onto the event loop.
+        """Sync callback for the loader thread, marshaling ``loading`` messages onto the event loop.
 
-        Blocks the loader until each frame is on the wire, so a message emitted at the very end of a
-        load cannot overtake the ``ready`` that follows it and be read as the first inference result.
+        Blocks the loader until each message is on the wire, so one emitted at the very end of a load
+        cannot overtake the ``ready`` that follows it and be read as the first inference result.
         """
         if websocket is None:
             return None
@@ -351,7 +351,7 @@ class PolicyServer:
                     try:
                         raw_obs = deserialise(message)
                         # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
-                        # would mis-parse a ``waiting`` frame. Its ``infer_timeout`` bounds the wait.
+                        # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
                         async with self._infer_lock:
                             actions = await asyncio.to_thread(session, raw_obs)
                         await websocket.send_bytes(serialise({protocol.RESULT: actions}))
