@@ -351,9 +351,7 @@ class Harness(pimm.ControlSystem):
         A running thread survives ``shutdown(cancel_futures=True)``, which cancels only what is still queued,
         so until the join returns the call still holds the session's resources — a ``RemoteSession``'s
         websocket is the one ``close`` would pull out from under it — and, for an in-process policy, the one
-        model that every session across episodes and runs shares. The wait sits at the next episode's start
-        and at the harness's own shutdown, never at the end of the episode the call belongs to, so a hung
-        model cannot hold up that episode's recording and home.
+        model that every session across episodes and runs shares.
         """
         if self._retiring is not None:
             executor, session = self._retiring
