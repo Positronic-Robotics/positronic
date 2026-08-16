@@ -617,12 +617,16 @@ class Harness(pimm.ControlSystem):
         The deadline is hard: a truthy ``done`` within budget records ``eval.terminated`` True plus its
         payload, the budget passing records False, and a terminal past the deadline is a timeout rather than
         a late success. Only a freshly delivered ``done`` counts, or the receiver's latched value would
-        re-fire a prior trial's terminal. Reached only for a task with a deadline.
+        re-fire a prior trial's terminal.
         """
+        deadline = self._deadline
+        if deadline is None:  # a task-less session has no budget and ends on directives alone
+            return None
         done_msg = self.done.read()
-        if done_msg.updated and done_msg.data and done_msg.ts <= self._deadline * 1e9:
+        assert done_msg is not None  # the receiver carries a default, so ``read`` always yields a message
+        if done_msg.updated and done_msg.data and done_msg.ts <= deadline * 1e9:
             return {**done_msg.data, keys.EVAL_TERMINATED: True}
-        if clock.now() >= self._deadline:
+        if clock.now() >= deadline:
             return {keys.EVAL_TERMINATED: False}
         return None
 
@@ -669,7 +673,7 @@ class Harness(pimm.ControlSystem):
                         yield pimm.Sleep(0.5)
                         break
                     self._begin_episode(trial, clock)
-            elif self._deadline is not None and (terminal := self._trial_terminal(clock)) is not None:
+            elif (terminal := self._trial_terminal(clock)) is not None:
                 yield from self._end_episode(clock, terminal)
             else:
                 try:

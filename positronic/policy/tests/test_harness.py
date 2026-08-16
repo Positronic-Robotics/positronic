@@ -119,16 +119,16 @@ class StubPolicy(Policy):
         self.command = command
         self.target_grip = float(target_grip)
         self.last_obs: dict[str, Any] | None = None
-        self.observations: list[dict[str, object]] = []
+        self.observations: list[dict[str, Any]] = []
         self.reset_calls = 0
-        self.last_reset_context = None
+        self.last_reset_context: dict[str, Any] | None = None
         self._meta: dict[str, object] = meta or {}
 
     @property
     def meta(self) -> dict[str, object]:
         return self._meta
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None) -> Session:
         self.reset_calls += 1
         self.last_reset_context = context
         return _StubSession(self)
@@ -234,7 +234,7 @@ def make_robot_state(translation, joints, status=RobotStatus.AVAILABLE) -> FakeR
 
 
 def emit_ready_payload(frame_emitter, robot_emitter, grip_emitter, robot_state):
-    frame_adapter = pimm.shared_memory.NumpySMAdapter((2, 2, 3), np.uint8)
+    frame_adapter = pimm.shared_memory.NumpySMAdapter((2, 2, 3), np.dtype(np.uint8))
     frame_adapter.array[:] = np.zeros((2, 2, 3), dtype=np.uint8)
     frame_emitter.emit(frame_adapter)
     robot_emitter.emit(robot_state)
@@ -1146,6 +1146,7 @@ def test_task_instruction_reaches_session_context_after_reset(world):
     scheduler = world.start([harness])
     drive_scheduler(scheduler, steps=200)
 
+    assert policy.last_reset_context is not None
     assert policy.last_reset_context[keys.TASK] == 'resolved-on-reset'
 
 
@@ -1370,7 +1371,9 @@ def test_robot_state_serializer_drops_not_ready(status):
 
 def test_robot_state_serializer_available_has_no_error_key():
     state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
-    assert set(Serializers.robot_state(state)) == {'.q', '.dq', '.ee_pose'}
+    serialized = Serializers.robot_state(state)
+    assert serialized is not None
+    assert set(serialized) == {'.q', '.dq', '.ee_pose'}
 
 
 @pytest.mark.timeout(3.0)
