@@ -24,14 +24,6 @@ from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path
 from positronic.utils.logging import init_logging
 
-# The port ``Replay`` plays the arm's commands from. A player matches a column to a port by name, so
-# ``RestoreCommand`` must derive its column under this same name.
-# TODO(#632): it spells the name a third time as a literal instead of reading it here, because ``Derive``
-# takes its columns as ``**kwargs`` and unpacking a dict into them cannot type-check.
-# The name reaches no dataset: ``wire`` connects the port through the property below, and the recorder keys
-# it ``keys.ROBOT_COMMAND``.
-_COMMANDS_CHANNEL = 'robot_commands'
-
 
 class Replay(DsPlayerAgent):
     """Adapts `DsPlayerAgent` to be used as a policy control system."""
@@ -43,12 +35,12 @@ class Replay(DsPlayerAgent):
         self.gripper_state = pimm.FakeReceiver(self)
         self.robot_meta_in = pimm.FakeReceiver(self)
         self.frames = pimm.ReceiverDict(self, fake=True)
-        self.outputs[_COMMANDS_CHANNEL] = pimm.ControlSystemEmitter(self)
+        self.outputs[keys.ROBOT_COMMAND] = pimm.ControlSystemEmitter(self)
         self.outputs[keys.TARGET_GRIP] = pimm.ControlSystemEmitter(self)
 
     @property
     def robot_commands(self) -> pimm.ControlSystemEmitter:
-        return self.outputs[_COMMANDS_CHANNEL]
+        return self.outputs[keys.ROBOT_COMMAND]
 
     @property
     def target_grip(self) -> pimm.ControlSystemEmitter:
@@ -56,8 +48,13 @@ class Replay(DsPlayerAgent):
 
 
 class RestoreCommand(Derive):
+    """Derives the column ``Replay`` plays the arm's commands from: a player matches a column to a port by
+    name, so this must carry the name that port is registered under."""
+
     def __init__(self):
-        super().__init__(robot_commands=self._commands_from_episode)  # TODO(#632): _COMMANDS_CHANNEL
+        # ``Derive`` takes its columns as ``**kwargs`` beside a keyword-only ``meta``, so a checker reading an
+        # unpacked dict cannot rule out ``meta`` and matches the transform against its type.
+        super().__init__(**{keys.ROBOT_COMMAND: self._commands_from_episode})  # pyright: ignore[reportArgumentType]
 
     @staticmethod
     def _commands_from_episode(episode: Episode) -> Any:
