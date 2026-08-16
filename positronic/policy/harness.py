@@ -1,8 +1,9 @@
 import concurrent.futures
 import logging
 import time
+from abc import ABC, abstractmethod
 from collections import deque
-from collections.abc import Generator, Iterable, Iterator
+from collections.abc import Generator, Iterable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
@@ -34,16 +35,6 @@ POLL_PERIOD_SEC = 0.01
 SKIP_REPLY_SEC = 0.001
 
 
-def _assert_anchored(actions: list[dict[str, Any]], now: float) -> None:
-    """Reject a chunk whose timestamps are not times on the harness clock."""
-    skew = max((abs(action[keys.ACTION_TIMESTAMP] - now) for action in actions), default=0.0)
-    if skew > MAX_ACTION_SKEW_SEC:
-        raise ValueError(
-            f'Action scheduled {skew:.0f}s from now, over the {MAX_ACTION_SKEW_SEC:.0f}s bound: the rig-side '
-            f'stack is not anchoring chunks to the harness clock'
-        )
-
-
 class DirectiveType(Enum):
     RUN = 'run'
     FINISH = 'finish'
@@ -71,6 +62,140 @@ class Directive:
     def ABORT(cls) -> 'Directive':
         """Discard the live recording and home the devices."""
         return cls(DirectiveType.ABORT)
+
+
+class _Answer(Enum):
+    """Whether the in-flight call's answer is the harness's to act on this round."""
+
+    READY = 'ready'
+    PENDING = 'pending'
+
+
+class _Charge(ABC):
+    """What one session call costs the trial, in world-clock seconds."""
+
+    def __init__(self) -> None:
+        self._t0_ns = 0
+
+    def begin(self, t0_ns: int) -> None:
+        """Stamp the start of the call about to be submitted."""
+        self._t0_ns = t0_ns
+
+    @abstractmethod
+    def effect_time(self) -> float:
+        """The trial instant the in-flight call's output takes effect."""
+
+    @abstractmethod
+    def wait(self, future: Future[list[dict[str, Any]] | None], clock: pimm.Clock) -> _Answer:
+        """Block the loop for the call as far as this charge allows, then say where its answer stands."""
+
+
+class _DeclaredCharge(_Charge):
+    """A sim trial's ``inference_latency``: the call costs this, whatever the machine took."""
+
+    def __init__(self, seconds: float) -> None:
+        super().__init__()
+        self._ns = round(seconds * 1e9)
+
+    def effect_time(self) -> float:
+        return (self._t0_ns + self._ns) / 1e9
+
+    def wait(self, future: Future[list[dict[str, Any]] | None], clock: pimm.Clock) -> _Answer:
+        # Blocking the loop thread holds a virtual clock still, which is what bills the trial the declared
+        # charge and not what the machine took.
+        concurrent.futures.wait([future])
+        # An answer with nothing to place — a skip, or the empty trajectory that stops what is executing —
+        # has no effect instant to wait for. Integer ns, the world's own timeline: a float compare misses
+        # the instant by one ULP and slips the install a full round.
+        due = not future.result() or clock.now_ns() >= self._t0_ns + self._ns
+        return _Answer.READY if due else _Answer.PENDING
+
+
+class _WallCharge(_Charge):
+    """A call costs the wall time it took: a real rig, and a sim asked for real latency."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._wall_t0 = 0.0
+
+    def begin(self, t0_ns: int) -> None:
+        super().begin(t0_ns)
+        self._wall_t0 = time.monotonic()
+
+    def effect_time(self) -> float:
+        return self._t0_ns / 1e9 + time.monotonic() - self._wall_t0
+
+    def wait(self, future: Future[list[dict[str, Any]] | None], clock: pimm.Clock) -> _Answer:
+        # The timeout is the sim's overrun over wall time, handed back: wall time cannot be held still, so
+        # the world runs no further ahead of the call's start than wall time has. An answer that is in has
+        # nothing left to wait for.
+        concurrent.futures.wait([future], timeout=max(clock.now() - self.effect_time(), 0.0))
+        return _Answer.READY if future.done() else _Answer.PENDING
+
+
+def _report_abandoned(future: Future[list[dict[str, Any]] | None]) -> None:
+    """Report the failure of a call nobody is waiting for any more."""
+    # rules-allow: swallowed-error — the call outlived the episode that asked for it, so there is no
+    # caller left to raise to; the log is the only place its failure can go.
+    if not future.cancelled() and (exc := future.exception()) is not None:
+        logging.error(f'Inference failed after the episode that asked for it ended: {exc}')
+
+
+class _InferenceWorker:
+    """One episode's policy session, called one at a time on a thread of its own so the harness keeps
+    playing while the model runs. Ending an episode ``abandon``s the call in flight rather than waiting for
+    it, so the next episode never queues behind a model that hangs."""
+
+    def __init__(self, session: Session, charge: _Charge) -> None:
+        self._session = session
+        self._charge = charge
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='harness-session')
+        self._future: Future[list[dict[str, Any]] | None] | None = None
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self._session.meta
+
+    @property
+    def idle(self) -> bool:
+        """Whether a call could be submitted: none is in flight."""
+        return self._future is None
+
+    def submit(self, obs: Mapping[str, Any], clock: pimm.Clock) -> None:
+        """Start a call on ``obs``, charged from this instant. The moment's wait lets a wrapper that skips
+        inference resolve in the round it was asked."""
+        self._charge.begin(clock.now_ns())
+        self._future = self._executor.submit(self._session, obs)
+        concurrent.futures.wait([self._future], timeout=SKIP_REPLY_SEC)
+
+    def wait(self, clock: pimm.Clock) -> _Answer:
+        """Block for the in-flight call as far as its charge allows, then say where its answer stands."""
+        assert self._future is not None
+        return self._charge.wait(self._future, clock)
+
+    def collect(self) -> list[dict[str, Any]] | None:
+        """The ready call's trajectory — ``None`` when it had nothing to place — leaving the worker idle."""
+        assert self._future is not None
+        # Read on the loop thread, so a failing call still seals the episode.
+        actions, self._future = self._future.result(), None
+        return actions
+
+    def abandon(self) -> None:
+        """Let go of the call in flight: its answer lands nowhere and its failure only reaches the log."""
+        if self._future is not None:
+            self._future.add_done_callback(_report_abandoned)
+            self._future = None
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def join(self) -> None:
+        """Wait out an abandoned call, then close the session it was inside.
+
+        ``shutdown(cancel_futures=True)`` cancels only what is still queued, so until this returns the call
+        still holds the session's resources: a ``RemoteSession``'s websocket, or the in-process model every
+        session shares.
+        """
+        self._executor.shutdown(wait=True)
+        self._session.close()
 
 
 class _EpisodeTelemetry:
@@ -173,21 +298,12 @@ class Harness(pimm.ControlSystem):
         self.policy: Policy = policy
         self.context: dict[str, Any] = {}
         self._static_meta = static_meta or {}
-        self._policy_session: Session | None = None
         # True between RUN and FINISH/ABORT: the trial is live — stepping and recording happen together.
         self._running = False
-        # One call at a time, on a worker so the harness keeps playing while the model runs. The worker
-        # belongs to the episode: ending one abandons the call in flight, so the next must not queue behind it.
-        self._executor: ThreadPoolExecutor | None = None
-        # A retired worker and the session its abandoned call is inside: the join is what makes closing safe.
-        self._retiring: tuple[ThreadPoolExecutor, Session] | None = None
-        self._future: Future[list[dict[str, Any]] | None] | None = None
-        # The in-flight call's start: the world instant of its observation, the wall instant of its submit.
-        self._t0_ns = 0
-        self._wall_t0 = 0.0
-        # Seconds of world clock a model call costs. A number: world frozen for the call, chunk released that
-        # long after it began. ``None``: charged the call's real wall time (hardware; ``inference_latency=True``).
-        self._fixed_latency: float | None = None
+        # This episode's session and the thread it runs on; ``None`` while no episode is live.
+        self._worker: _InferenceWorker | None = None
+        # A worker let go of mid-call, kept until the join that makes closing its session safe.
+        self._retiring: _InferenceWorker | None = None
         # ``task.timeout``, set per episode; a task-less session has no deadline and ends on directives.
         self._deadline: float | None = None
         # False until this episode's first observation lands; until then the deadline stands where the reset
@@ -229,7 +345,7 @@ class Harness(pimm.ControlSystem):
             meta['eval.timeout'] = self._task.timeout
         # ``policy.meta`` is the static baseline; the session overlays per-episode specifics (e.g. the
         # sampled sub-policy) and wins on conflict.
-        session_meta = self.policy.meta | (self._policy_session.meta if self._policy_session else {})
+        session_meta = self.policy.meta | (self._worker.meta if self._worker else {})
         for k, v in flatten_dict(session_meta).items():
             meta[f'{keys.POLICY_META}.{k}'] = v
         meta.update(context)
@@ -263,45 +379,25 @@ class Harness(pimm.ControlSystem):
             schedule.clear()
         self._retire_worker()
 
-    @staticmethod
-    def _report_abandoned(future: Future[list[dict[str, Any]] | None]) -> None:
-        """Report the failure of a call nobody is waiting for any more."""
-        # rules-allow: swallowed-error — the call outlived the episode that asked for it, so there is no
-        # caller left to raise to; the log is the only place its failure can go.
-        if not future.cancelled() and (exc := future.exception()) is not None:
-            logging.error(f'Inference failed after the episode that asked for it ended: {exc}')
-
     def _retire_worker(self) -> None:
-        """Let go of this episode's worker, the call it is running and the session that call is inside: the
-        answer lands nowhere and the failure only reaches the log. All three are kept for ``_reap_worker``,
-        since ending an episode must not wait for a model that hangs."""
-        if self._future is not None:
-            self._future.add_done_callback(self._report_abandoned)
-            self._future = None
-        if self._executor is not None and self._policy_session is not None:
-            self._executor.shutdown(wait=False, cancel_futures=True)
-            self._retiring = (self._executor, self._policy_session)
-            self._executor, self._policy_session = None, None
+        """Let go of this episode's worker and the call it is running, keeping it for ``_reap_worker``:
+        ending an episode must not wait for a model that hangs."""
+        if self._worker is not None:
+            self._worker.abandon()
+            self._retiring, self._worker = self._worker, None
 
     def _reap_worker(self) -> None:
-        """Wait out an abandoned call, then close the session it was inside.
-
-        ``shutdown(cancel_futures=True)`` cancels only what is still queued, so until the join returns the
-        call still holds the session's resources: a ``RemoteSession``'s websocket, or the one in-process
-        model that every session across episodes and runs shares.
-        """
+        """Join the retired worker and close the session its abandoned call was inside."""
         if self._retiring is not None:
-            executor, session = self._retiring
+            self._retiring.join()
             self._retiring = None
-            executor.shutdown(wait=True)
-            session.close()
 
     def _finalize_recording(
         self, clock: pimm.Clock, payload: dict[str, Any] | None = None
     ) -> Generator[pimm.Command, None, None]:
         """Commit the live episode: cancel the in-flight chunk, stop the recorder — stamping the
         episode's full static meta (plus any terminal payload) — then close its span."""
-        # Stamped before the session is retired with the worker: the meta overlays what the session reports.
+        # Stamped before the worker is retired: the meta overlays what its session reports.
         stop = DsWriterCommand.STOP({**self._build_episode_meta(self.context), **(payload or {})})
         self._cancel_session()
         self.ds_command.emit(stop)
@@ -312,14 +408,6 @@ class Harness(pimm.ControlSystem):
         # After that round, so the recorder's STOP-time record.io span still parents to the episode. Skew: a
         # producer stepping in that shared round charges ≤ one control period to the closing episode.
         self._telemetry.end(virtual_now)
-
-    def _effect_time(self) -> float:
-        """The trial instant the in-flight call's output takes effect: its observation instant plus the
-        charge — the declared constant whole, or the wall time elapsed so far. The loop thread writes the
-        call's start fields before the submit, so a worker reading this sees its own call's.
-        """
-        charge = time.monotonic() - self._wall_t0 if self._fixed_latency is None else self._fixed_latency
-        return self._t0_ns / 1e9 + charge
 
     def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> None:
         """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
@@ -334,7 +422,7 @@ class Harness(pimm.ControlSystem):
         self.context = context
         # A sim trial without the key runs free; a real rig ignores this sim-only knob and pays wall time.
         latency = self.context.get(keys.INFERENCE_LATENCY, False) if self._embodiment.simulated else True
-        self._fixed_latency = None if latency is True else float(latency)
+        charge = _WallCharge() if latency is True else _DeclaredCharge(float(latency))
         self._awaiting_obs = set(self._embodiment.observations)
         self._rollout_started = False
         # Before the reset, so the reset and the rollout's other phase spans parent to the episode span.
@@ -346,8 +434,7 @@ class Harness(pimm.ControlSystem):
                 self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='harness-session')
-        self._policy_session = self.policy.new_session(self.context, self._effect_time)
+        self._worker = _InferenceWorker(self.policy.new_session(self.context, charge.effect_time), charge)
         self._running = True
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
         self.ds_command.emit(DsWriterCommand.START())
@@ -357,8 +444,8 @@ class Harness(pimm.ControlSystem):
     ) -> Generator[pimm.Command, None, None]:
         """Close the live episode: finalize (or abort) the recording, retire the session, home devices.
 
-        The session is retired with the worker rather than closed here, so a ``RemoteSession``'s websocket
-        outlives the call still using it.
+        The worker is retired rather than joined here, so a ``RemoteSession``'s websocket outlives the call
+        still using it.
         """
         if self._running:
             if abort:
@@ -456,22 +543,10 @@ class Harness(pimm.ControlSystem):
         """
         return {name: value.copy() if isinstance(value, np.ndarray) else value for name, value in obs.items()}
 
-    class _Answer(Enum):
-        """What became of the call ``_take`` was handed: its trajectory is installed and the future spent, or
-        the world has not yet paid the charge and the same future comes back next round."""
-
-        CONSUMED = 'consumed'
-        PENDING = 'pending'
-
     def _step(self, clock: pimm.Clock) -> None:
-        """Keep one session call in flight and install the trajectory it returns.
-
-        The call goes to the worker so the harness keeps playing while the model runs; a wrapper that
-        answers without inference still resolves in the round it was asked.
-        """
-        session, executor = self._policy_session, self._executor
-        assert session is not None and executor is not None  # only a live episode steps
-        if self._future is not None and self._take(self._future, clock) is Harness._Answer.PENDING:
+        """Keep one session call in flight and install the trajectory it returns."""
+        assert self._worker is not None  # only a live episode steps
+        if not self._worker.idle and self._take(clock) is _Answer.PENDING:
             return
         obs = self._build_obs(clock)
         if obs is None:
@@ -483,53 +558,38 @@ class Harness(pimm.ControlSystem):
             self._telemetry.start_rollout(clock.now())
             if self._task is not None:
                 self._deadline = clock.now() + self._task.timeout
-        self._t0_ns = clock.now_ns()
-        self._wall_t0 = time.monotonic()
-        self._future = executor.submit(session, frozen_view(self._owned(obs)))
-        if self._fixed_latency is None:
-            concurrent.futures.wait([self._future], timeout=SKIP_REPLY_SEC)
-        self._take(self._future, clock)
+        self._worker.submit(frozen_view(self._owned(obs)), clock)
+        self._take(clock)
 
-    def _take(self, future: Future[list[dict[str, Any]] | None], clock: pimm.Clock) -> _Answer:
-        """Install the call's trajectory once the world has paid for it.
-
-        Constant charge: blocking here holds the virtual clock still, so the trial is billed the declared
-        charge and not what the machine took — until a call answers, a skip and a model call look alike. The
-        trajectory is withheld until the world reaches ``t0`` plus the charge, playing what is already
-        scheduled on the way; an answer with no waypoints — a skip, or the empty trajectory that stops what
-        is executing — lands at once.
-
-        Wall charge: nothing can be held still, so the world runs no further ahead of ``t0`` than wall time.
-        """
-        if self._fixed_latency is not None:
-            concurrent.futures.wait([future])
-        elif not future.done():
-            ahead = clock.now() - self._effect_time()
-            if ahead <= 0.0:
-                return Harness._Answer.PENDING
-            concurrent.futures.wait([future], timeout=ahead)
-            if not future.done():
-                return Harness._Answer.PENDING
-        actions = future.result()  # taken on the loop thread, so a failing call still seals the episode
-        if actions and self._fixed_latency is not None:
-            # Integer ns, the world's own timeline: a float compare misses the release instant by one ULP
-            # and slips the install a full round.
-            if clock.now_ns() < self._t0_ns + round(self._fixed_latency * 1e9):
-                return Harness._Answer.PENDING  # the schedule already playing carries the world to the release instant
-        self._future = None
+    def _take(self, clock: pimm.Clock) -> _Answer:
+        """Install the in-flight call's trajectory once the world has paid its charge."""
+        assert self._worker is not None
+        if self._worker.wait(clock) is _Answer.PENDING:
+            return _Answer.PENDING  # the schedule already playing carries the world to the effect instant
+        actions = self._worker.collect()
         # The world reached the deadline while the call was in flight, so its chunk is dropped rather than
         # placed past the point the trial advertises it stops at; ``_run`` finishes the trial next round.
         expired = self._deadline is not None and clock.now() >= self._deadline
         if actions is not None and not expired:
             self._install(actions, clock)
-        return Harness._Answer.CONSUMED
+        return _Answer.READY
+
+    @staticmethod
+    def _assert_anchored(actions: list[dict[str, Any]], now: float) -> None:
+        """Reject a chunk whose timestamps are not times on the harness clock."""
+        skew = max((abs(action[keys.ACTION_TIMESTAMP] - now) for action in actions), default=0.0)
+        if skew > MAX_ACTION_SKEW_SEC:
+            raise ValueError(
+                f'Action scheduled {skew:.0f}s from now, over the {MAX_ACTION_SKEW_SEC:.0f}s bound: the '
+                f'rig-side stack is not anchoring chunks to the harness clock'
+            )
 
     def _install(self, actions: list[dict[str, Any]], clock: pimm.Clock) -> None:
         """Replace the schedule being played with the session's trajectory. Every channel it names gets that
         channel's waypoints; one it omits is cleared and holds. The timestamps are already absolute, stamped
         by the scheduling wrapper for the instant its charge is paid.
         """
-        _assert_anchored(actions, clock.now())
+        self._assert_anchored(actions, clock.now())
         self._telemetry.step()
         # The single explicit seconds->ns seam: wrappers time actions in float seconds, the schedules and
         # every pimm channel are in ns.

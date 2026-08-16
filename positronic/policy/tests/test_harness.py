@@ -1,6 +1,5 @@
 import threading
 import time
-from concurrent.futures import Future
 from contextlib import contextmanager
 from functools import partial
 from types import SimpleNamespace
@@ -22,7 +21,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import Directive, DirectiveType, Harness, _assert_anchored
+from positronic.policy.harness import Directive, DirectiveType, Harness, _InferenceWorker, _WallCharge
 from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -1641,32 +1640,32 @@ def test_a_later_episode_waits_for_its_own_first_observation(world, tmp_path):
 def test_unanchored_chunk_is_refused():
     """A stack that never anchored leaves chunk-relative stamps, which read as decades before now."""
     with pytest.raises(ValueError, match='not anchoring'):
-        _assert_anchored([{'timestamp': 0.0}], now=1.7e9)
+        Harness._assert_anchored([{'timestamp': 0.0}], now=1.7e9)
 
 
 def test_doubly_anchored_chunk_is_refused():
     """Two schedulers each add the clock, putting the chunk a lifetime ahead."""
     with pytest.raises(ValueError, match='not anchoring'):
-        _assert_anchored([{'timestamp': 3.4e9}], now=1.7e9)
+        Harness._assert_anchored([{'timestamp': 3.4e9}], now=1.7e9)
 
 
 def test_anchored_chunk_passes():
     """A real chunk spans seconds around now, and a late action sits just behind it."""
-    _assert_anchored([{'timestamp': 1.7e9 - 0.2}, {'timestamp': 1.7e9 + 1.5}], now=1.7e9)
+    Harness._assert_anchored([{'timestamp': 1.7e9 - 0.2}, {'timestamp': 1.7e9 + 1.5}], now=1.7e9)
 
 
 @pytest.mark.parametrize(('expired', 'installed'), [(True, False), (False, True)])
 def test_a_reply_is_installed_only_while_the_trial_still_has_budget(world, expired, installed):
     """A trial advertises the instant it stops at. A call whose rounds in flight carried the world past that
     instant has its chunk dropped instead of placed, and ``_run`` finishes the trial on the next round."""
-    harness = Harness(StubPolicy(), make_embodiment())
+    policy = StubPolicy()
+    harness = Harness(policy, make_embodiment())
     now = world.clock.now()
     harness._deadline = now - 1.0 if expired else now + 1.0
-    pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
-    future = Future()
-    future.set_result([{keys.ROBOT_COMMAND: CartesianPosition(pose=pose), keys.ACTION_TIMESTAMP: now}])
+    harness._worker = _InferenceWorker(policy.new_session(), _WallCharge())
+    harness._worker.submit({}, world.clock)
 
-    harness._take(future, world.clock)
+    harness._take(world.clock)
 
     assert bool(harness._schedules[keys.ROBOT_COMMAND]) is installed
 
