@@ -1,5 +1,6 @@
 import threading
 import time
+from concurrent.futures import Future
 from contextlib import contextmanager
 from functools import partial
 from types import SimpleNamespace
@@ -1687,6 +1688,23 @@ def test_doubly_anchored_chunk_is_refused():
 def test_anchored_chunk_passes():
     """A real chunk spans seconds around now, and a late action sits just behind it."""
     _assert_anchored([{'timestamp': 1.7e9 - 0.2}, {'timestamp': 1.7e9 + 1.5}], now=1.7e9)
+
+
+@pytest.mark.parametrize(('expired', 'installed'), [(True, False), (False, True)])
+def test_a_reply_is_installed_only_while_the_trial_still_has_budget(world, expired, installed):
+    """A trial advertises the instant it stops at. A call whose rounds in flight carried the world past that
+    instant has its chunk dropped instead of placed, and ``_run`` finishes the trial on the next round."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    now = world.clock.now()
+    harness._deadline = now - 1.0 if expired else now + 1.0
+    pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+    future = Future()
+    future.set_result([{keys.ROBOT_COMMAND: CartesianPosition(pose=pose), keys.ACTION_TIMESTAMP: now}])
+
+    harness._take(future, world.clock)
+
+    played = harness._players[keys.ROBOT_COMMAND].advance(world.clock.now_ns())
+    assert (played is not None) is installed
 
 
 class _SlowSession(Session):

@@ -599,7 +599,10 @@ class Harness(pimm.ControlSystem):
             if clock.now_ns() < self._t0_ns + round(self._fixed_latency * 1e9):
                 return Harness._Answer.PENDING  # the schedule already playing carries the world to the release instant
         self._future = None
-        if actions is not None:
+        # The world reached the deadline while the call was in flight, so its chunk is dropped rather than
+        # placed past the point the trial advertises it stops at; ``_run`` finishes the trial next round.
+        expired = self._deadline is not None and clock.now() >= self._deadline
+        if actions is not None and not expired:
             self._install(actions, clock)
         return Harness._Answer.CONSUMED
 
