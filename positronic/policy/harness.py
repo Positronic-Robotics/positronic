@@ -378,15 +378,9 @@ class Harness(pimm.ControlSystem):
         # Before the span opens, so the wait for a call the last episode abandoned is inter-episode wall
         # rather than overhead the timing reducer attributes to this one.
         self._reap_worker()
-        self.context = dict(context)
-        if self._embodiment.simulated:
-            # A sim trial that doesn't ask for latency simulation runs free of it: the world holds still for
-            # every model call.
-            latency = self.context.setdefault(keys.INFERENCE_LATENCY, False)
-        else:
-            # A fixed latency is a device for simulating a trial, so a real rig ignores it and pays the wall
-            # time its calls really take.
-            latency = True
+        self.context = context
+        # A sim trial without the key runs free; a real rig ignores this sim-only knob and pays wall time.
+        latency = self.context.get(keys.INFERENCE_LATENCY, False) if self._embodiment.simulated else True
         self._fixed_latency = None if latency is True else float(latency)
         self._awaiting_obs = set(self._embodiment.observations)
         self._rollout_started = False
