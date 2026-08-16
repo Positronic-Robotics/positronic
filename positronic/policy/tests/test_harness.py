@@ -22,7 +22,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import Directive, DirectiveType, Harness, TrajectoryPlayer, _assert_anchored
+from positronic.policy.harness import Directive, DirectiveType, Harness, _assert_anchored
 from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -1352,18 +1352,6 @@ def test_cartesian_delta_without_a_frame_is_rejected():
         from_wire(wire)
 
 
-def test_trajectory_player_collapses_several_due_waypoints_to_the_last():
-    player = TrajectoryPlayer()
-    player.set([(10, 'a'), (20, 'b'), (30, 'c')])
-    assert player.next_due() == 10
-    assert player.advance(5) is None
-    assert player.advance(25) == 'b'  # a late round overtakes 'a'; the trailing setpoint is the live one
-    assert player.next_due() == 30
-    assert player.advance(30) == 'c'
-    assert player.next_due() is None
-    assert player.advance(40) is None
-
-
 def test_cartesian_delta_applies_in_world_frame():
     current = Transform3D(np.array([0.5, 0.1, 0.3]), Rotation.from_rotvec(np.array([0.2, 0.1, 0.4])))
     delta = Transform3D(np.array([0.02, -0.01, 0.05]), Rotation.from_rotvec(np.array([0.1, 0.0, 0.0])))
@@ -1680,8 +1668,7 @@ def test_a_reply_is_installed_only_while_the_trial_still_has_budget(world, expir
 
     harness._take(future, world.clock)
 
-    played = harness._players[keys.ROBOT_COMMAND].advance(world.clock.now_ns())
-    assert (played is not None) is installed
+    assert bool(harness._schedules[keys.ROBOT_COMMAND]) is installed
 
 
 class _SlowSession(Session):

@@ -6,7 +6,7 @@ from collections.abc import Generator, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, TypeAlias
+from typing import Any
 
 import numpy as np
 from opentelemetry.trace import Span
@@ -32,37 +32,6 @@ POLL_PERIOD_SEC = 0.01
 # How long a submitted call may take and still resolve within its round: a wrapper that skips inference
 # answers in microseconds, a real model call runs far past this and is paced across rounds by ``_take``.
 SKIP_REPLY_SEC = 0.001
-
-# One channel's schedule: waypoints stamped with absolute clock ns, ascending.
-Trajectory: TypeAlias = list[tuple[int, Any]]
-
-
-# TODO(624): This class is likely to go away when this issue is resolved.
-class TrajectoryPlayer:
-    """Plays one channel's schedule: ``set()`` a trajectory, then ``advance(now)`` each round for the value
-    to emit."""
-
-    def __init__(self):
-        self._pending: deque[tuple[int, Any]] = deque()
-
-    def set(self, trajectory: Trajectory):
-        self._pending = deque(trajectory)
-
-    def next_due(self) -> int | None:
-        """Timestamp of the earliest waypoint not yet played, or ``None`` once the schedule is exhausted."""
-        return self._pending[0][0] if self._pending else None
-
-    def advance(self, current_time: int):
-        """The value due at ``current_time`` — the last, when several came due since the previous call — or
-        ``None`` when none did.
-
-        Collapsing to the last is exact for an absolute setpoint and lossy for a relative one. Pacing keeps
-        one waypoint due per round wherever a round is shorter than the spacing between waypoints.
-        """
-        value = None
-        while self._pending and self._pending[0][0] <= current_time:
-            value = self._pending.popleft()[1]
-        return value
 
 
 def _assert_anchored(actions: list[dict[str, Any]], now: float) -> None:
@@ -236,7 +205,8 @@ class Harness(pimm.ControlSystem):
             self.observations[name]  # touch to allocate the port
         for name in embodiment.commands:
             self.commands[name]
-        self._players = {name: TrajectoryPlayer() for name in embodiment.commands}
+        # Each channel's waypoints not yet played, stamped with absolute clock ns and ascending.
+        self._schedules: dict[str, deque[tuple[int, Any]]] = {name: deque() for name in embodiment.commands}
 
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.manual_command = pimm.ControlSystemReceiver(self, default=None)
@@ -278,7 +248,7 @@ class Harness(pimm.ControlSystem):
         waypoint is emitted at its own time and a round rarely finds more than one due."""
         if self._embodiment.simulated:
             return pimm.Yield()
-        due = min((ts for player in self._players.values() if (ts := player.next_due()) is not None), default=None)
+        due = min((sched[0][0] for sched in self._schedules.values() if sched), default=None)
         if due is None:
             return pimm.Sleep(POLL_PERIOD_SEC)
         return pimm.Sleep(min(POLL_PERIOD_SEC, max(due - clock.now_ns(), 1) / 1e9))
@@ -289,8 +259,8 @@ class Harness(pimm.ControlSystem):
         The call is let go of rather than waited for, so a model that hangs cannot hold up the recording's
         stop or the home. Devices hold their last commanded position; nothing downstream is buffered.
         """
-        for player in self._players.values():
-            player.set([])
+        for schedule in self._schedules.values():
+            schedule.clear()
         self._retire_worker()
 
     @staticmethod
@@ -561,16 +531,23 @@ class Harness(pimm.ControlSystem):
         """
         _assert_anchored(actions, clock.now())
         self._telemetry.step()
-        for name, player in self._players.items():
-            # The single explicit seconds->ns seam: wrappers time actions in float seconds, the schedule and
-            # every pimm channel are in ns.
-            player.set([(int(a[keys.ACTION_TIMESTAMP] * 1e9), a[name]) for a in actions if name in a])
+        # The single explicit seconds->ns seam: wrappers time actions in float seconds, the schedules and
+        # every pimm channel are in ns.
+        for name, schedule in self._schedules.items():
+            schedule.clear()
+            schedule.extend((int(a[keys.ACTION_TIMESTAMP] * 1e9), a[name]) for a in actions if name in a)
 
     def _play(self, clock: pimm.Clock) -> None:
-        """Emit each channel's command due this round, and nothing on a channel with none."""
+        """Emit each channel's command due this round, and nothing on a channel with none.
+
+        A channel with several waypoints due emits the last: exact for an absolute setpoint, lossy for a
+        relative one. Pacing keeps one due per round wherever a round is shorter than the waypoint spacing.
+        """
         now_ns = clock.now_ns()
-        for name, player in self._players.items():
-            value = player.advance(now_ns)
+        for name, schedule in self._schedules.items():
+            value = None
+            while schedule and schedule[0][0] <= now_ns:
+                value = schedule.popleft()[1]
             if value is not None:
                 self.commands[name].emit(value)
 
