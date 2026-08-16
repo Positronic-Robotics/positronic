@@ -1999,6 +1999,34 @@ def test_one_arm_resetting_does_not_hide_another_arms_fault(world):
     assert policy.last_obs[keys.ROBOT_FAULT] is True
 
 
+def test_the_trial_context_cannot_stand_in_for_what_the_harness_read(world):
+    """A context carries whatever the trial plan puts in it. What the harness read and stamped this round
+    outranks it, so a config key can neither report the arm sound nor supply its state."""
+    policy = SpyPolicy()
+    harness = Harness(policy, make_embodiment())
+    harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
+    harness.commands[keys.TARGET_GRIP]._bind(RecordingEmitter())
+    harness.ds_command._bind(RecordingEmitter())
+    frame_em = world.pair(harness.observations[CAM])
+    robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
+    grip_em = world.pair(harness.observations[keys.GRIP])
+    directive_em = cast(pimm.SignalEmitter, world.pair(harness.directive))
+
+    faulted = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR)
+    context = {'task': 'test', keys.ROBOT_FAULT: False, keys.GRIP: 'from the config'}
+    driver = ManualDriver([
+        (partial(directive_em.emit, Directive.RUN(**context)), 0.0),
+        (partial(emit_ready_payload, frame_em, robot_em, grip_em, faulted), 0.01),
+        (None, 0.02),
+    ])
+
+    drive_scheduler(world.start([harness, driver]), steps=40)
+
+    assert policy.last_obs is not None
+    assert policy.last_obs[keys.ROBOT_FAULT] is True, 'a context key reported the faulted arm sound'
+    assert policy.last_obs[keys.GRIP] != 'from the config', 'a context key stood in for a channel'
+
+
 @pytest.mark.timeout(20.0)
 def test_a_stop_lands_without_waiting_out_the_charge(world):
     """A charge places a trajectory's waypoints, and a stop has none: an arm that faults mid-chunk stops in

@@ -516,11 +516,14 @@ class Harness(pimm.ControlSystem):
             return None
         if self._awaiting_obs:
             return None
+        # The trial's context goes under what the harness read and stamped this round, never over it. A
+        # context carries whatever keys the RUN directive or the trial plan puts in it, so overlaying it last
+        # would let a ``robot_state.fault`` in an eval config tell ``StopOnFault`` that a faulted arm is sound.
+        inputs = {**self.context, **inputs}
         inputs[keys.ROBOT_FAULT] = faulted
         inputs[keys.WALL_TIME_NS] = time.time_ns()
         inputs[keys.OBS_TIME_NS] = clock.now_ns()
-        inputs.update(self.context)
-        inputs['descriptor'] = self._descriptor  # last, so a context key can't shadow it
+        inputs['descriptor'] = self._descriptor
         return inputs
 
     @staticmethod
