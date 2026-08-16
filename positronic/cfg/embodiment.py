@@ -30,7 +30,9 @@ def droid(robot_arm, gripper, cameras):
         **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
     }
     commands = {
-        keys.ROBOT_COMMAND: Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
+        keys.ROBOT_COMMAND: Command(
+            robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command, roboarm_command.reduce
+        ),
         keys.TARGET_GRIP: Command(gripper.target_grip, 0.0, None),
     }
     return Embodiment(
@@ -53,7 +55,9 @@ def yam(robot_arm, cameras):
         **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
     }
     commands = {
-        keys.ROBOT_COMMAND: Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
+        keys.ROBOT_COMMAND: Command(
+            robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command, roboarm_command.reduce
+        ),
         keys.TARGET_GRIP: Command(robot_arm.target_grip, 0.0, None),
     }
     return Embodiment(
@@ -102,7 +106,9 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
     }
     commands = {
         **{
-            f'{keys.ROBOT_COMMAND}.{s}': Command(arm.commands, roboarm_command.Reset(), Serializers.robot_command)
+            f'{keys.ROBOT_COMMAND}.{s}': Command(
+                arm.commands, roboarm_command.Reset(), Serializers.robot_command, roboarm_command.reduce
+            )
             for s, arm in arms.items()
         },
         **{f'{keys.TARGET_GRIP}.{s}': Command(arm.target_grip, 0.0, None) for s, arm in arms.items()},
@@ -142,7 +148,7 @@ def mujoco_franka(sim, camera_dict):
     # trial's end state right when the operator reviews it.
     home = roboarm_command.JointPosition(np.array(sim.initial_ctrl[:7]))
     commands = {
-        keys.ROBOT_COMMAND: Command(sim.commands, home, Serializers.robot_command),
+        keys.ROBOT_COMMAND: Command(sim.commands, home, Serializers.robot_command, roboarm_command.reduce),
         keys.TARGET_GRIP: Command(sim.target_grip, 0.0, None),
     }
     return Embodiment(

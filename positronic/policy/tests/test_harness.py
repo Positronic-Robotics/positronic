@@ -17,7 +17,7 @@ from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, JointDelta, Reset, from_wire, to_wire
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, bundled_franka_model
-from positronic.eval import Command, Embodiment, Observation, Task
+from positronic.eval import Command, Embodiment, Observation, Task, keep_last
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Session
@@ -58,7 +58,7 @@ def make_embodiment(descriptor: str = '', cameras=(CAM,), static_meta=None, simu
     for cam in cameras:
         observations[cam] = Observation(pimm.NoOpEmitter(), Serializers.camera_images)
     commands = {
-        keys.ROBOT_COMMAND: Command(pimm.NoOpReceiver(), Reset(), Serializers.robot_command),
+        keys.ROBOT_COMMAND: Command(pimm.NoOpReceiver(), Reset(), Serializers.robot_command, roboarm.command.reduce),
         'target_grip': Command(pimm.NoOpReceiver(), 0.0, None),
     }
     return Embodiment(descriptor, observations, commands, static_meta or {}, pimm.NoOpEmitter(), simulated=simulated)
@@ -1353,7 +1353,7 @@ def test_cartesian_delta_without_a_frame_is_rejected():
 
 
 def test_trajectory_player_collapses_several_due_waypoints_to_the_last():
-    player = TrajectoryPlayer()
+    player = TrajectoryPlayer(keep_last)
     player.set([(10, 'a'), (20, 'b'), (30, 'c')])
     assert player.next_due() == 10
     assert player.advance(5) is None
@@ -1385,6 +1385,37 @@ def test_trajectory_player_refuses_to_collapse_a_delta_onto_an_absolute():
 
     with pytest.raises(ValueError, match='Cannot reduce'):
         player.advance(25)
+
+
+def test_a_channel_collapses_by_what_it_declares_not_by_what_it_is_named(world):
+    """An embodiment is free to name its channels, so the collapse travels on the channel rather than on its
+    spelling: an arm reached through a name of its own still sums the deltas a round overtook, and a channel
+    declaring nothing keeps the last."""
+    embodiment = Embodiment(
+        descriptor='',
+        observations={'x': Observation(pimm.NoOpEmitter(), None)},
+        commands={
+            'arm': Command(pimm.NoOpReceiver(), Reset(), None, roboarm.command.reduce),
+            'grip': Command(pimm.NoOpReceiver(), 0.0, None),
+        },
+        static_meta={},
+        meta_source=pimm.NoOpEmitter(),
+    )
+    harness = Harness(StubPolicy(), embodiment)
+    now = world.clock.now()
+    harness._install(
+        [
+            {'arm': JointDelta(np.array([0.1, 0.0])), 'grip': 0.2, keys.ACTION_TIMESTAMP: now},
+            {'arm': JointDelta(np.array([0.2, 0.5])), 'grip': 0.7, keys.ACTION_TIMESTAMP: now},
+        ],
+        world.clock,
+    )
+    now_ns = world.clock.now_ns()
+
+    arm = harness._players['arm'].advance(now_ns)
+    assert isinstance(arm, JointDelta)
+    np.testing.assert_allclose(arm.velocities, [0.3, 0.5])
+    assert harness._players['grip'].advance(now_ns) == 0.7
 
 
 def test_cartesian_delta_applies_in_world_frame():

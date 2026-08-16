@@ -39,21 +39,12 @@ SKIP_REPLY_SEC = 0.001
 Trajectory: TypeAlias = list[tuple[int, Any]]
 
 
-def _last(due: Sequence[Any]) -> Any:
-    """The trailing value wins — the right collapse for absolute setpoints and gripper targets."""
-    return due[-1]
-
-
 class TrajectoryPlayer:
     """Plays one channel's schedule: ``set()`` a trajectory, then ``advance(now)`` each round for the value
-    to emit.
-
-    ``reduce`` collapses the waypoints that came due together in one round. Keeping the last is right for a
-    value that states where to be; a channel carrying deltas passes ``roboarm.command.reduce`` so their
-    motion is summed rather than dropped.
+    to emit. ``reduce`` is the channel's own collapse for the waypoints one round finds due together.
     """
 
-    def __init__(self, reduce: Callable[[Sequence[Any]], Any] = _last):
+    def __init__(self, reduce: Callable[[Sequence[Any]], Any]):
         self._pending: deque[tuple[int, Any]] = deque()
         self._reduce = reduce
 
@@ -264,10 +255,7 @@ class Harness(pimm.ControlSystem):
             self.observations[name]  # touch to allocate the port
         for name in embodiment.commands:
             self.commands[name]
-        self._players = {
-            name: TrajectoryPlayer(roboarm.command.reduce if keys.is_robot_command(name) else _last)
-            for name in embodiment.commands
-        }
+        self._players = {name: TrajectoryPlayer(cmd.reduce) for name, cmd in embodiment.commands.items()}
 
         self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
         self.manual_command = pimm.ControlSystemReceiver(self, default=None)
@@ -432,9 +420,7 @@ class Harness(pimm.ControlSystem):
         """Close the live episode: finalize (or abort) the recording, retire the session, home devices.
 
         The session is retired with the worker rather than closed here, so a ``RemoteSession``'s websocket
-        outlives the call still using it; ``_reap_worker`` closes it at the next episode's start or at
-        shutdown, and the offboard server's per-session cleanup (active-session decrement, idle watchdog)
-        runs then.
+        outlives the call still using it.
         """
         if self._running:
             if abort:
@@ -663,10 +649,8 @@ class Harness(pimm.ControlSystem):
         """Release the worker and the session. A call still in flight runs to completion and its result is
         dropped: the run is over and nothing is left to install it.
 
-        The harness does not own the policy's lifetime: the caller may run several harnesses over one policy
-        (a multi-eval sweep), so it closes the policy once, after the last run. That leaves no later
-        ``_begin_episode`` to reap on, and the next harness reaches the shared policy through a session of
-        its own, so the call is waited out here.
+        The join happens here rather than being deferred, since no later episode will do it and the policy
+        the call holds outlives this harness.
         """
         self._retire_worker()
         self._reap_worker()

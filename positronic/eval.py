@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,17 +29,25 @@ class Observation:
     serializer: Serializer | None
 
 
+def keep_last(due: Sequence[Any]) -> Any:
+    """The trailing value wins — the collapse for a channel whose values state where to be."""
+    return due[-1]
+
+
 @dataclass
 class Command:
-    """A policy action channel: where its waypoints go and how it homes/records.
+    """A policy action channel: where its waypoints go, how it homes/records, and how the waypoints one
+    round finds due collapse into the single value to emit.
 
     ``home`` is the value emitted to send this channel to its safe state; ``serializer``
-    serializes the channel's values, recorded under the channel's own key.
+    serializes the channel's values, recorded under the channel's own key. A channel carrying deltas
+    declares a ``reduce`` that sums their motion, since keeping the last would drop it.
     """
 
     dest: pimm.SignalReceiver
     home: Any
     serializer: Serializer | None
+    reduce: Callable[[Sequence[Any]], Any] = keep_last
 
 
 @dataclass
