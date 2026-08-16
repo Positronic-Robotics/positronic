@@ -24,6 +24,14 @@ from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path
 from positronic.utils.logging import init_logging
 
+# The port ``Replay`` plays the arm's commands from. A player matches a column to a port by name, so
+# ``RestoreCommand`` must derive its column under this same name.
+# TODO(#632): it spells the name a third time as a literal instead of reading it here, because ``Derive``
+# takes its columns as ``**kwargs`` and unpacking a dict into them cannot type-check.
+# The name reaches no dataset: ``wire`` connects the port through the property below, and the recorder keys
+# it ``keys.ROBOT_COMMAND``.
+_COMMANDS_CHANNEL = 'robot_commands'
+
 
 class Replay(DsPlayerAgent):
     """Adapts `DsPlayerAgent` to be used as a policy control system."""
@@ -35,12 +43,12 @@ class Replay(DsPlayerAgent):
         self.gripper_state = pimm.FakeReceiver(self)
         self.robot_meta_in = pimm.FakeReceiver(self)
         self.frames = pimm.ReceiverDict(self, fake=True)
-        self.outputs['robot_commands'] = pimm.ControlSystemEmitter(self)
+        self.outputs[_COMMANDS_CHANNEL] = pimm.ControlSystemEmitter(self)
         self.outputs[keys.TARGET_GRIP] = pimm.ControlSystemEmitter(self)
 
     @property
     def robot_commands(self) -> pimm.ControlSystemEmitter:
-        return self.outputs['robot_commands']
+        return self.outputs[_COMMANDS_CHANNEL]
 
     @property
     def target_grip(self) -> pimm.ControlSystemEmitter:
@@ -49,7 +57,7 @@ class Replay(DsPlayerAgent):
 
 class RestoreCommand(Derive):
     def __init__(self):
-        super().__init__(robot_commands=self._commands_from_episode)
+        super().__init__(robot_commands=self._commands_from_episode)  # TODO(#632): _COMMANDS_CHANNEL
 
     @staticmethod
     def _commands_from_episode(episode: Episode) -> Any:
