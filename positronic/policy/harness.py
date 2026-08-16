@@ -393,10 +393,6 @@ class Harness(pimm.ControlSystem):
                 self._task.reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
-        # Arm the clock before handing it out: a session reading it before its first call must see this
-        # episode's start, not the release time of the last episode's final call.
-        self._t0_ns = clock.now_ns()
-        self._wall_t0 = time.monotonic()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='harness-session')
         self._policy_session = self.policy.new_session(self.context, self._effect_time)
         self._running = True
