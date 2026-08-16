@@ -109,7 +109,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `task` | str | — | Language instruction for the episode |
 | `descriptor` | str | — | Embodiment the observation came from (e.g. `mujoco.franka`); empty string when unset. Lets a multi-embodiment policy adapt to the current robot |
 
-Your server receives every key each step. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm.
+Your server receives every key each step, except that an arm with no sound sample to give — faulted, or mid-reset — omits its `robot_state.*` measurements and sends only `robot_state.fault`. The standard stack puts `StopOnFault` ahead of the model, which answers such a step itself and never forwards it; a stack without it reaches the model with those keys missing. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm.
 
 ### Actions (server → client)
 
