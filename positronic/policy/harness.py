@@ -269,8 +269,10 @@ class Harness(pimm.ControlSystem):
         self._rollout_started = False
         # Wall-clock telemetry for the live rollout, opened under ``--timing`` and inert otherwise.
         self._telemetry = _EpisodeTelemetry()
-        # Channels that have not delivered since this episode's reset. A receiver latches its last value, so
-        # emptying this set is what keeps the first inference off the previous episode's final frame.
+        # Channels that have not delivered since this episode's RUN; the first inference waits until every one
+        # has. A receiver latches its last value, so a producer silent between episodes — a remote env emits
+        # only when stepped — would otherwise feed the previous episode's final frame. Delivery is judged by
+        # ``updated``, not ``ts``: some producers stamp ``ts`` on their own clock.
         self._awaiting_obs: set[str] = set()
 
         self.observations = pimm.ReceiverDict(self)
