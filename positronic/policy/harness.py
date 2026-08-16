@@ -503,17 +503,15 @@ class Harness(pimm.ControlSystem):
         """One round of inference: throttle the loop for the call in flight as the trial's mode requires and
         reschedule on what it returns; with no call in flight, submit one on a fresh observation and give it
         the rest of the round to return."""
-        self._throttle_and_reschedule(worker, clock)
-        if not worker.idle:  # the schedule already playing carries the world on
-            return
-        obs = self._build_obs(clock)
-        if obs is not None:
-            worker.submit(obs, clock)
+        if not worker.idle:
             self._throttle_and_reschedule(worker, clock)
+        if worker.idle:
+            obs = self._build_obs(clock)
+            if obs is not None:
+                worker.submit(obs, clock)
+                self._throttle_and_reschedule(worker, clock)
 
     def _throttle_and_reschedule(self, worker: _InferenceWorker, clock: pimm.Clock) -> None:
-        if worker.idle:
-            return
         worker.throttle(clock)
         if worker.done and (trajectory := worker.result()) is not None:
             self._reschedule(trajectory, clock)
