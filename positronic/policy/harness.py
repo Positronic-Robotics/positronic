@@ -227,9 +227,10 @@ class Harness(pimm.ControlSystem):
         # was submitted.
         self._t0_ns = 0
         self._wall_t0 = 0.0
-        # Seconds each model call costs the world clock this episode, the same figure for every call.
-        # ``None`` when no figure is fixed and the world is charged the call's own wall duration (hardware
-        # pace, and the sim's ``inference_latency=True``).
+        # What one model call costs this episode's world clock, in seconds. A fixed figure — ``0.0`` or more —
+        # holds the world still until the call answers, then releases its chunk that many seconds after the
+        # call began, so the trial runs the same however fast the machine is. ``None`` charges the call's own
+        # wall duration instead: what hardware pays, and what the sim asks for with ``inference_latency=True``.
         self._fixed_latency: float | None = None
         # ``task.timeout``, set per episode; a task-less session has no deadline and ends on directives.
         self._deadline: float | None = None
