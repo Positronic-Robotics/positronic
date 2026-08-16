@@ -17,7 +17,7 @@ from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm.ik import assert_default_frame
-from positronic.eval import Embodiment, Observation, Task
+from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy
 from positronic.utils import flatten_dict, frozen_view
 
@@ -436,28 +436,6 @@ class Harness(pimm.ControlSystem):
         """Whether a raw observation is an arm reporting a fault. Every other not-ready sample is simply absent."""
         return isinstance(value, roboarm.State) and value.status is roboarm.RobotStatus.ERROR
 
-    def _read_channel(self, name: str, obs: Observation) -> tuple[dict[str, Any] | None, bool]:
-        """This channel's entries under their full names, and whether the arm behind it is faulted.
-
-        The entries are ``None`` when the channel has no sample to give — a resetting or faulted arm alike.
-        Raises ``NoValueException`` before the channel has produced anything at all.
-        """
-        message = self.observations[name].read()
-        if message is None:
-            raise pimm.NoValueException
-        if message.updated:
-            self._awaiting_obs.discard(name)
-        value = message.data
-        if obs.serializer is not None:
-            value = obs.serializer(value)
-            if value is None:
-                # HACK(#619): a serializer answers `None` for a resetting arm and a faulted one alike, so the
-                # fault is recovered from the raw sample and stapled on by the caller as `keys.ROBOT_FAULT` — a
-                # name already claiming to be part of `robot_state`. Emit it from the serializer and this
-                # branch, the raw-type check and the flag all go, and the fault reaches the recording as well.
-                return None, self._is_faulted(message.data)
-        return {full: v for full, v in expand_suffixed(name, value) if v is not None}, False
-
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any] | None:
         """Read every observation channel and assemble the policy input dict.
 
@@ -474,10 +452,23 @@ class Harness(pimm.ControlSystem):
         faulted = False
         not_ready = False
         for name, obs in self._embodiment.observations.items():
-            entries, channel_faulted = self._read_channel(name, obs)
-            faulted = faulted or channel_faulted
-            not_ready = not_ready or entries is None
-            inputs.update(entries or {})
+            message = self.observations[name].read()
+            if message is None:
+                raise pimm.NoValueException
+            if message.updated:
+                self._awaiting_obs.discard(name)
+            value = message.data
+            if obs.serializer is not None:
+                value = obs.serializer(value)
+                if value is None:  # no sample to give: a resetting or faulted arm alike
+                    # HACK(#619): a serializer answers `None` for a resetting arm and a faulted one alike, so
+                    # the fault is recovered from the raw sample and stapled on as `keys.ROBOT_FAULT` — a name
+                    # already claiming to be part of `robot_state`. Emit it from the serializer and this
+                    # branch, the raw-type check and the flag all go, and the fault reaches the recording too.
+                    faulted = faulted or self._is_faulted(message.data)
+                    not_ready = True
+                    continue
+            inputs.update({full: v for full, v in expand_suffixed(name, value) if v is not None})
         # Every channel is read before this decision, so a bimanual rig cannot hide one arm's fault behind
         # another arm's not-ready sample: whichever channel comes first, the fault still reaches the stack.
         if (not_ready and not faulted) or self._awaiting_obs:
