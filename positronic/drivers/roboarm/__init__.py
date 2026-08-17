@@ -31,9 +31,8 @@ class RobotStatus(IntEnum):
     ERROR = 3
 
 
-def is_sound(status: int) -> bool:
-    """Whether the arm is tracking the commands it was given and its pose is worth reading. Takes the
-    status's number as readily as the member, that being what a dataset and the offboard wire give back."""
+def is_sound(status: RobotStatus) -> bool:
+    """Whether the arm is tracking the commands it was given and its pose is worth reading."""
     return status in (RobotStatus.AVAILABLE, RobotStatus.MOVING)
 
 

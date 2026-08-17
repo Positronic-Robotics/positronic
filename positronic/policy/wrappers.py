@@ -12,7 +12,7 @@ from collections import deque
 import numpy as np
 
 from positronic import keys
-from positronic.drivers.roboarm import is_sound
+from positronic.drivers.roboarm import RobotStatus, is_sound
 from positronic.policy.base import DelegatingSession, Now, PolicyWrapper, Session
 
 
@@ -25,13 +25,17 @@ def _obs_time(obs) -> float:
 # domain types reach the border, this reads the status off the value.
 def _is_robot_status(name: str) -> bool:
     """Whether ``name`` is an arm's status: ``robot_state.status``, or an arm's ``robot_state.{side}.status``."""
-    return name.startswith(f'{keys.ROBOT_STATE}.') and name.endswith('.status')
+    return name.startswith(f'{keys.ROBOT_STATE}.') and name.endswith(keys.STATUS_SUFFIX)
 
 
 def _arms_sound(obs) -> bool:
     """Whether every arm in the observation is sound. An observation naming no arm status — a probe
-    replaying a recording — has no arm to be unsound."""
-    return all(is_sound(v) for name, v in obs.items() if _is_robot_status(name))
+    replaying a recording — has no arm to be unsound.
+
+    The wire carries a status as its number, so this is where one becomes a ``RobotStatus`` again — and a
+    number no status answers to raises, the rig and the server disagreeing about the protocol.
+    """
+    return all(is_sound(RobotStatus(v)) for name, v in obs.items() if _is_robot_status(name))
 
 
 class StopOnFault(PolicyWrapper):

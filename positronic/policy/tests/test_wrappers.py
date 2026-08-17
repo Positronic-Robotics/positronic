@@ -107,6 +107,14 @@ class TestStopOnFault:
         assert session(obs) == []
         assert inner.call_count == 0
 
+    def test_a_status_no_arm_answers_to_raises(self):
+        """A number outside ``RobotStatus`` is the rig and the server disagreeing about the protocol, which
+        is not something to drive an arm through."""
+        session = StopOnFault().wrap_session(_ConstSession([]), None, None)
+
+        with pytest.raises(ValueError):
+            session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 99})
+
     def test_recovery_plans_afresh_instead_of_resuming(self):
         """The stop resets the scheduler below it, so the first sound observation infers again rather than
         waiting out the chunk stamped before."""

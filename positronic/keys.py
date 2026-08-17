@@ -33,8 +33,11 @@ JOINTS = f'{ROBOT_STATE}.q'
 JOINT_VEL = f'{ROBOT_STATE}.dq'
 EE_POSE = f'{ROBOT_STATE}.ee_pose'
 # The arm's ``RobotStatus``, on every sample it produces. An arm that is faulted or resetting has no pose to
-# give, so the rest of ``ROBOT_STATE`` is absent from that sample and the status is all of it there is.
-ROBOT_STATUS = f'{ROBOT_STATE}.status'
+# give, so the rest of ``ROBOT_STATE`` is absent from that sample and the status is all of it there is. The
+# suffix is named on its own because a consumer picks the entry out by it on a rig whose arms are
+# ``robot_state.{side}``.
+STATUS_SUFFIX = '.status'
+ROBOT_STATUS = f'{ROBOT_STATE}{STATUS_SUFFIX}'
 GRIP = 'grip'
 TASK = 'task'
 # The embodiment an observation came from, so a multi-embodiment policy can tell which robot it is driving.
