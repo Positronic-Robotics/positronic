@@ -15,8 +15,8 @@
 
 # Commands
 - Every Python execution goes through `uv run --locked` — bare `python`/`pytest` bypasses the locked venv
-- Run tests: `uv run --locked pytest --no-cov`
-- Run single test file: `uv run --locked pytest path/to/test_file.py --no-cov`
+- Run tests: `uv run --locked pytest`
+- Run single test file: `uv run --locked pytest path/to/test_file.py`
 - Lint: `uv run --locked ruff check --fix .`
 - Format: `uv run --locked ruff format .`
 - Run any Python: `uv run --locked python script.py`

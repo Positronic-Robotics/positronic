@@ -151,7 +151,7 @@ uv run pytest
 With coverage report:
 
 ```bash
-uv run pytest --cov=positronic --cov=pimm --cov-report=term-missing
+uv run pytest --cov --cov-report=term-missing
 ```
 
 ## Pull Request Guidelines
