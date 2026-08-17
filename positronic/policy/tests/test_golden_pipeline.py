@@ -36,9 +36,9 @@ from positronic import keys, wire
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
-from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, CommandType, Reset
+from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import DelegatingPolicy, DelegatingSession, Now, Policy, Session
@@ -130,31 +130,6 @@ class _SimulatedLatency(DelegatingPolicy):
         )
 
 
-class _FakeRobotState(roboarm.State):
-    """Lossless re-expression of the last applied command over sim-time."""
-
-    def __init__(self, pos: np.ndarray, q: np.ndarray, status: RobotStatus):
-        self._pos = pos
-        self._q = q
-        self._status = status
-
-    @property
-    def status(self) -> RobotStatus:
-        return self._status
-
-    @property
-    def q(self) -> np.ndarray:
-        return self._q.copy()
-
-    @property
-    def dq(self) -> np.ndarray:
-        return np.zeros(7, dtype=np.float32)
-
-    @property
-    def ee_pose(self) -> Transform3D:
-        return Transform3D(translation=self._pos.copy(), rotation=Rotation.identity)
-
-
 class FakeRobot(pimm.ControlSystem):
     """Deterministic closed-loop arm: applies each command as it arrives.
 
@@ -197,7 +172,7 @@ class FakeRobot(pimm.ControlSystem):
             if self._error_pending:
                 self._status = RobotStatus.ERROR
                 self._error_pending = False
-            self.state.emit(_FakeRobotState(self._pos, self._q, self._status))
+            self.state.emit(make_robot_state(self._pos, self._q, self._status))
             yield pimm.Sleep(CONTROL_PERIOD_S)
 
 

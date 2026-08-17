@@ -12,8 +12,9 @@ from positronic.dataset import DatasetWriter, EpisodeWriter
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType, TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
-from positronic.drivers.roboarm import RobotStatus, State
+from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import command as rcmd
+from positronic.drivers.roboarm.tests.fakes import FakeRobotState
 from positronic.tests.testing_coutils import run_scripted_agent
 
 
@@ -350,30 +351,6 @@ def test_transform_3d_serializer(world):
     np.testing.assert_allclose(names_vals[0][1][3:], q.as_quat)
 
 
-class _FakeState(State):
-    def __init__(self, q, dq, ee_pose, status):
-        self._q = q
-        self._dq = dq
-        self._ee = ee_pose
-        self._status = status
-
-    @property
-    def q(self):
-        return self._q
-
-    @property
-    def dq(self):
-        return self._dq
-
-    @property
-    def ee_pose(self):
-        return self._ee
-
-    @property
-    def status(self):
-        return self._status
-
-
 def test_robot_state_serializer_drops_reset_and_emits_components(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({keys.ROBOT_STATE: Serializers.robot_state}, ds, world)
@@ -385,8 +362,8 @@ def test_robot_state_serializer_drops_reset_and_emits_components(world):
 
     script = [
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: emitters[keys.ROBOT_STATE].emit(_FakeState(q, dq, pose, RobotStatus.RESETTING)), 0.001),
-        (lambda: emitters[keys.ROBOT_STATE].emit(_FakeState(q, dq, pose, RobotStatus.AVAILABLE)), 0.001),
+        (lambda: emitters[keys.ROBOT_STATE].emit(FakeRobotState(q, dq, pose, RobotStatus.RESETTING)), 0.001),
+        (lambda: emitters[keys.ROBOT_STATE].emit(FakeRobotState(q, dq, pose, RobotStatus.AVAILABLE)), 0.001),
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 

@@ -16,6 +16,7 @@ from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, Reset, from_wire, to_wire
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, bundled_franka_model
+from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
@@ -198,39 +199,10 @@ class RemoteStubPolicy(Policy):
         return RemoteSession(_FakeInferenceSession(action))
 
 
-class FakeRobotState(roboarm.State):
-    def __init__(self, translation: np.ndarray, joints: np.ndarray, status: RobotStatus) -> None:
-        self._ee_pose = Transform3D(translation=translation, rotation=Rotation.identity)
-        self._q = joints
-        self._status = status
-
-    @property
-    def q(self) -> np.ndarray:
-        return self._q
-
-    @property
-    def dq(self) -> np.ndarray:
-        return np.zeros_like(self._q)
-
-    @property
-    def ee_pose(self) -> Transform3D:
-        return self._ee_pose
-
-    @property
-    def status(self) -> RobotStatus:
-        return self._status
-
-
 @pytest.fixture
 def world():
     with pimm.World(virtual_time=True) as w:
         yield w
-
-
-def make_robot_state(translation, joints, status=RobotStatus.AVAILABLE) -> FakeRobotState:
-    translation = np.asarray(translation, dtype=np.float32)
-    joints = np.asarray(joints, dtype=np.float32)
-    return FakeRobotState(translation, joints, status)
 
 
 def emit_ready_payload(frame_emitter, robot_emitter, grip_emitter, robot_state):
