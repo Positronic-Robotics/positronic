@@ -1,11 +1,11 @@
 import multiprocessing as mp
-from concurrent.futures import Future, InvalidStateError
+from concurrent.futures import InvalidStateError
 from itertools import islice
 
 import pytest
 
-from pimm.calls import ControlSystemCaller, ControlSystemHandler
-from pimm.core import ControlSystem, Sleep
+from pimm.calls import Answer, ControlSystemCaller, ControlSystemHandler
+from pimm.core import ControlSystem, NoValueException, Sleep
 from pimm.world import World
 
 
@@ -51,10 +51,14 @@ class Client(ControlSystem):
         self.results = []
 
     def run(self, should_stop, clock):
-        futures = [self.add(pair) for pair in self._calls]
-        while not all(f.done() for f in futures):
+        answers = [self.add(pair) for pair in self._calls]
+        while not all(a.done() for a in answers):
             yield Sleep(0.001)
-        self.results = [f.exception() or f.result() for f in futures]
+        for answer in answers:
+            try:
+                self.results.append(answer.result())
+            except ValueError as e:
+                self.results.append(e)
         if self._total is not None:
             self._total.value = sum(r for r in self.results if isinstance(r, int))
 
@@ -78,17 +82,17 @@ def bound():
 
 
 class TestCallAndAnswer:
-    def test_call_returns_a_future_completed_by_the_answer(self, bound):
+    def test_call_returns_an_answer_completed_by_the_handler(self, bound):
         caller, handler = bound
-        future = caller((1, 2))
-        assert isinstance(future, Future)
-        assert not future.done()
+        answer = caller((1, 2))
+        assert isinstance(answer, Answer)
+        assert not answer.done()
 
         (call,) = handler.incoming()
         assert call.request == (1, 2)
         call.set_result(3)
-        assert future.done()
-        assert future.result() == 3
+        assert answer.done()
+        assert answer.result() == 3
 
     def test_calls_arrive_in_order_and_unreached_ones_wait_for_the_next_incoming(self, bound):
         caller, handler = bound
@@ -110,12 +114,12 @@ class TestCallAndAnswer:
 
     def test_exception_set_by_handler_is_raised_by_result(self, bound):
         caller, handler = bound
-        future = caller(None)
+        answer = caller(None)
         (call,) = handler.incoming()
         call.set_exception(ValueError('boom'))
-        assert isinstance(future.exception(), ValueError)
+        assert answer.done()
         with pytest.raises(ValueError, match='boom'):
-            future.result()
+            answer.result()
 
     def test_answering_twice_raises(self, bound):
         caller, handler = bound
@@ -127,28 +131,10 @@ class TestCallAndAnswer:
         with pytest.raises(InvalidStateError):
             call.set_exception(ValueError())
 
-    def test_unanswered_future_does_not_wait(self, bound):
+    def test_result_of_an_unanswered_call_raises(self, bound):
         caller, handler = bound
-        future = caller(None)
-        with pytest.raises(TimeoutError):
-            future.result()
-        with pytest.raises(TimeoutError):
-            future.exception()
-        with pytest.raises(NotImplementedError):
-            future.result(timeout=0.01)
-        with pytest.raises(NotImplementedError):
-            future.exception(timeout=0.01)
-
-    def test_only_the_answer_completes_the_future(self, bound):
-        caller, handler = bound
-        future = caller(None)
-        with pytest.raises(NotImplementedError):
-            future.set_result(1)
-        with pytest.raises(NotImplementedError):
-            future.set_exception(ValueError())
-        with pytest.raises(NotImplementedError):
-            future.cancel()
-        assert not future.done()
+        with pytest.raises(NoValueException):
+            caller(None).result()
 
     def test_unbound_caller_raises(self):
         with pytest.raises(RuntimeError):

@@ -12,24 +12,29 @@ invocations. `World.connect` binds a caller to a handler wherever the two run.
 - `incoming()` yields calls one at a time as it is advanced; each call is yielded once, and one it has not
   reached is yielded by a later `incoming()`.
 - Each `Call` is answered once, with `set_result` or `set_exception`; answering again raises in the handler.
-- `__call__` returns a `concurrent.futures.Future` completed by the handler's answer and by nothing else.
-- The future never waits: `done()`, `result()` and `exception()` return at once. On an unanswered future
-  `result()` and `exception()` raise `TimeoutError`; a positive `timeout` raises `NotImplementedError`;
-  `concurrent.futures.wait()` and `as_completed()` never return for it.
-- `cancel()` on the future raises.
+- `__call__` returns an `Answer` completed by the handler's answer and by nothing else.
+- An `Answer` never waits: `done()` and `result()` return at once; `result()` on an unanswered call raises
+  `NoValueException`.
 - An exception set by the handler is what `result()` raises at the caller; its traceback does not survive a
   process boundary.
-- All of the above holds when a caller and its futures are used from one thread, and a handler and its calls
+- All of the above holds when a caller and its answers are used from one thread, and a handler and its calls
   from one thread.
 """
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
-from concurrent.futures import Future, InvalidStateError
+from concurrent.futures import InvalidStateError
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-from .core import ControlSystem, ControlSystemEmitter, ControlSystemReceiver, SignalEmitter, SignalReceiver
+from .core import (
+    ControlSystem,
+    ControlSystemEmitter,
+    ControlSystemReceiver,
+    NoValueException,
+    SignalEmitter,
+    SignalReceiver,
+)
 
 Req = TypeVar('Req')
 Res = TypeVar('Res')
@@ -37,7 +42,7 @@ T = TypeVar('T')
 
 
 class Call(ABC, Generic[Req, Res]):
-    """One invocation awaiting its answer: the request, and the reply slot the caller's `Future` is bound to."""
+    """One invocation awaiting its answer: the request, and the reply slot the caller's `Answer` is bound to."""
 
     @property
     @abstractmethod
@@ -50,9 +55,19 @@ class Call(ABC, Generic[Req, Res]):
     def set_exception(self, exc: BaseException) -> None: ...
 
 
+class Answer(ABC, Generic[Res]):
+    """The caller's handle on one call: `done()` once the handler has answered, then `result()`."""
+
+    @abstractmethod
+    def done(self) -> bool: ...
+
+    @abstractmethod
+    def result(self) -> Res: ...
+
+
 class Caller(ABC, Generic[Req, Res]):
     @abstractmethod
-    def __call__(self, request: Req) -> Future[Res]: ...
+    def __call__(self, request: Req) -> Answer[Res]: ...
 
 
 class Handler(ABC, Generic[Req, Res]):
@@ -120,46 +135,29 @@ class ControlSystemHandler(Handler[Req, Res]):
             yield _ControlSystemCall(request, self.replies)
 
 
-class _ReplyFuture(Future[Res]):
-    """The caller's view of one call: a `Future` that pulls its answer from the caller's replies on inspection."""
+class _ControlSystemAnswer(Answer[Res]):
+    """Pulls its reply from the caller's replies on inspection."""
 
     def __init__(self, deliver_replies: Callable[[], None]):
-        super().__init__()
         self._deliver_replies = deliver_replies
+        self._reply: _Result[Res] | _Failure | None = None
 
     def done(self) -> bool:
-        self._deliver_replies()
-        return super().done()
+        return self._pull() is not None
 
-    def result(self, timeout: float | None = None) -> Res:
-        self._reject_waiting(timeout)
-        self._deliver_replies()
-        return super().result(timeout=0)
+    def result(self) -> Res:
+        match self._pull():
+            case None:
+                raise NoValueException('The call is not answered yet')
+            case _Failure(exc=exc):
+                raise exc
+            case _Result(value=value):
+                return value
 
-    def exception(self, timeout: float | None = None) -> BaseException | None:
-        self._reject_waiting(timeout)
-        self._deliver_replies()
-        return super().exception(timeout=0)
-
-    def cancel(self) -> bool:
-        raise NotImplementedError('A call cannot be cancelled')
-
-    def set_result(self, result: Res) -> None:
-        raise NotImplementedError("Only the handler's answer completes a call")
-
-    def set_exception(self, exception: BaseException | None) -> None:
-        raise NotImplementedError("Only the handler's answer completes a call")
-
-    def _complete(self, reply: _Result[Res] | _Failure) -> None:
-        if isinstance(reply, _Result):
-            super().set_result(reply.value)
-        else:
-            super().set_exception(reply.exc)
-
-    @staticmethod
-    def _reject_waiting(timeout: float | None) -> None:
-        if timeout:
-            raise NotImplementedError("A call's future cannot wait; poll `done()` between yields")
+    def _pull(self) -> _Result[Res] | _Failure | None:
+        if self._reply is None:
+            self._deliver_replies()
+        return self._reply
 
 
 class ControlSystemCaller(Caller[Req, Res]):
@@ -168,19 +166,19 @@ class ControlSystemCaller(Caller[Req, Res]):
     def __init__(self, owner: ControlSystem):
         self.requests = ControlSystemEmitter[_Request[Req]](owner)
         self.replies = ControlSystemReceiver[_Result[Res] | _Failure](owner, maxsize=0)
-        self._pending: dict[int, _ReplyFuture[Res]] = {}
+        self._pending: dict[int, _ControlSystemAnswer[Res]] = {}
         self._next_id = 0
 
-    def __call__(self, request: Req) -> Future[Res]:
+    def __call__(self, request: Req) -> Answer[Res]:
         if self.requests.num_bound == 0:
             raise RuntimeError('Caller is not connected to a handler')
         envelope = _Request(self._next_id, request)
         self._next_id += 1
-        future = _ReplyFuture(self._deliver_replies)
-        self._pending[envelope.id] = future
+        answer = _ControlSystemAnswer(self._deliver_replies)
+        self._pending[envelope.id] = answer
         self.requests.emit(envelope)
-        return future
+        return answer
 
     def _deliver_replies(self) -> None:
         for reply in _drain(self.replies):
-            self._pending.pop(reply.id)._complete(reply)
+            self._pending.pop(reply.id)._reply = reply

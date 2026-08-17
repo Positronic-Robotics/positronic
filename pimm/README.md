@@ -182,7 +182,7 @@ class MultiCameraSystem(pimm.ControlSystem):
 
 A signal carries the latest state; a call carries a request that expects a reply. One control
 system declares a `pimm.calls.ControlSystemHandler` and serves calls inside its own loop; another
-declares a `pimm.calls.ControlSystemCaller` and gets a `concurrent.futures.Future` per call. The
+declares a `pimm.calls.ControlSystemCaller` and gets an `Answer` per call. The
 type parameters are the request type and the result type; a call carrying several values takes one
 dataclass.
 
@@ -203,10 +203,10 @@ class Policy(pimm.ControlSystem):
         self.reset = pimm.calls.ControlSystemCaller[bool, None](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        done = self.reset(True)
-        while not done.done():
+        answer = self.reset(True)
+        while not answer.done():
             yield pimm.Sleep(0.01)
-        done.result()                                # re-raises what the handler set
+        answer.result()                              # re-raises what the handler set
         ...
 
 
@@ -214,9 +214,9 @@ world.connect(policy.reset, robot.reset)
 ```
 
 `incoming()` hands out calls one at a time; a call may be answered right away or kept and answered
-on a later tick, and one the handler has not reached waits for the next `incoming()`. No call and no reply is dropped, whether the two systems share a process or not. A
-future is completed only by the handler's answer and never waits for it: a caller polls `done()`
-between sleeps, and `result()` on an unanswered future raises. The full contract is the docstring of
+on a later tick, and one the handler has not reached waits for the next `incoming()`. No call and no reply is dropped, whether the two systems share a process or not. An
+`Answer` is completed only by the handler and never waits for it: a caller polls `done()` between
+sleeps, and `result()` on an unanswered call raises. The full contract is the docstring of
 [`pimm/calls.py`](calls.py).
 
 ## Control Systems and the World
