@@ -222,7 +222,7 @@ def _log_action_series(path: str, arr: np.ndarray, horizon: np.ndarray, base_ns:
     Each action is stamped at ``base_ns + horizon_i``, where ``base_ns`` is the
     inference-request time; successive chunks lay out along one clock so a ``TimeSeriesView``
     has real axes. This precedes true execution by the inference latency: the harness's
-    ``ChunkedSchedule`` anchors commands at ``clock.now()`` *after* inference, which a recorder
+    ``ChunkedSchedule`` anchors commands at ``now()`` *after* inference, which a recorder
     tap sitting inside it cannot observe.
     """
     arr = np.asarray(arr, dtype=np.float64)

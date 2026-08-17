@@ -1,4 +1,5 @@
 import configuronic as cfn
+import numpy as np
 
 import pimm
 import positronic.cfg.hardware.roboarm
@@ -18,15 +19,15 @@ def main(robot):
 
             match text_command.split(' '):
                 case ['reset']:
-                    command_emmiter.emit([(world.clock.now_ns(), command.Reset())])
+                    command_emmiter.emit(command.Reset())
                 case ['move', x, y, z, qw, qx, qy, qz]:
                     pos = [float(x) for x in [x, y, z]]
                     quat = geom.Rotation.from_quat([float(qw), float(qx), float(qy), float(qz)])
                     move = command.CartesianPosition(geom.Transform3D(translation=pos, rotation=quat))
-                    command_emmiter.emit([(world.clock.now_ns(), move)])
+                    command_emmiter.emit(move)
                 case ['joint_move', *args]:
                     args = [float(x) for x in args]
-                    command_emmiter.emit([(world.clock.now_ns(), command.JointPosition(positions=args))])
+                    command_emmiter.emit(command.JointPosition(positions=np.asarray(args)))
                 case ['info']:
                     print('Q', state_receiver.value.q)
                     print('DQ', state_receiver.value.dq)

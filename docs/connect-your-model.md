@@ -101,6 +101,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `robot_state.ee_pose` | float32 | (7,) | End-effector pose: `x, y, z, qw, qx, qy, qz` (quaternion is **wxyz**, scalar first) |
 | `robot_state.q` | float32 | (7,) | Joint positions (radians) |
 | `robot_state.dq` | float32 | (7,) | Joint velocities (radians/s) |
+| `robot_state.fault` | bool | scalar | Whether the arm is faulted. A faulted arm sends no `robot_state.ee_pose`/`q`/`dq` at all — it has no sample to give — so a stack that reads them needs `StopOnFault` ahead of it |
 | `grip` | float32 | scalar | Gripper closure in `[0, 1]`: 0 = open, 1 = closed |
 | `image.<name>` | uint8 | (H, W, 3) | Camera RGB. Every eval target — PhAIL and each sim — sends `image.exterior` and `image.wrist`, whatever the underlying benchmark calls those cameras, so one codec reads them all; a target with more views adds its own names beside them (the MuJoCo sim adds `image.agent_view`) |
 | `obs_time_ns` | int | scalar | Harness-clock timestamp of this observation (ns) |
@@ -108,7 +109,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `task` | str | — | Language instruction for the episode |
 | `descriptor` | str | — | Embodiment the observation came from (e.g. `mujoco.franka`); empty string when unset. Lets a multi-embodiment policy adapt to the current robot |
 
-Your server receives every key each step. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm.
+Your server receives every key each step, except that a faulted arm omits its `robot_state.*` measurements and sends only `robot_state.fault`. The standard stack puts `StopOnFault` ahead of the model, which answers such a step itself and never forwards it; a stack without it reaches the model with those keys missing. A mid-reset arm is not that case: it produces no step at all, so the client skips the round rather than sending a partial observation. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm.
 
 ### Actions (server → client)
 
@@ -169,7 +170,7 @@ from positronic.drivers.roboarm import command
 from positronic.offboard import PolicyServer
 from positronic.policy import Policy, Session
 from positronic.policy.spec import PolicySource, remote
-from positronic.policy.wrappers import ChunkedSchedule
+from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 
 
 class MySession(Session):
@@ -200,20 +201,20 @@ class MyPolicy(Policy):
         return {'type': 'my_model'}
 
 
-pipeline = ChunkedSchedule() | remote | PolicySource(MyPolicy(load_my_model()))
+pipeline = StopOnFault() | ChunkedSchedule() | remote | PolicySource(MyPolicy(load_my_model()))
 PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()
 ```
 
-The pipeline reads left to right: everything left of the `remote` marker is the client-side stack the server declares in its handshake (here the standard `ChunkedSchedule`); everything right of it runs on the server. `PolicySource` is the pipeline's terminal — a model source that serves one already-built policy.
+The pipeline reads left to right: everything left of the `remote` marker is the client-side stack the server declares in its handshake (here the standard `StopOnFault` and `ChunkedSchedule`); everything right of it runs on the server. `PolicySource` is the pipeline's terminal — a model source that serves one already-built policy.
 
-The left side is not optional: a pipeline with nothing there is refused when the server starts, and a rig refuses a handshake that declares nothing. It needs a scheduler in particular. Actions come back timestamped relative to their chunk, and `ChunkedSchedule` is what turns those into times on the rig's clock; a stack that leaves them relative — or anchors them twice — makes the harness reject the chunk at the first inference, since it schedules nothing more than `MAX_ACTION_SKEW_SEC` from now.
+The left side is not optional: a pipeline with nothing there is refused when the server starts, and a rig refuses a handshake that declares nothing. It needs a scheduler in particular, and `StopOnFault` outside that scheduler — a faulted arm is not tracking the plan it was given, so the wrapper answers the empty trajectory and the rig stops rather than resuming a chunk stamped before the fault. It is what makes the session above safe to write: a faulted observation arrives without `robot_state.ee_pose`/`q`/`dq`, so a session reading them by name needs the wrapper ahead of it. Actions come back timestamped relative to their chunk, and `ChunkedSchedule` is what turns those into times on the rig's clock; a stack that leaves them relative — or anchors them twice — makes the harness reject the chunk at the first inference, since it schedules nothing more than `MAX_ACTION_SKEW_SEC` from now.
 
 `new_session`'s `now` argument is the runtime clock that wrappers scheduling against live time read; a policy that does no scheduling of its own just accepts and ignores it (server-side it is `None`).
 
 If you put a `Codec` right of the marker (`ChunkedSchedule() | remote | codec | PolicySource(...)`), your session works entirely in *model space* — it receives encoded observations and returns model-native actions, and the codec handles the wire format. A codec that encodes images should also bound them on the rig, so full-resolution frames never cross the wire — that is what the built-in vendor pipelines do:
 
 ```python
-ChunkedSchedule() | RestrictImageSize() | remote | codec | source
+StopOnFault() | ChunkedSchedule() | RestrictImageSize() | remote | codec | source
 ```
 
 Give it the geometry your codec encodes to — `RestrictImageSize(224, 224)` for a 224x224 model — so a frame is shrunk once, on the rig. The default is a loose 640x640, for a codec that resizes to nothing in particular. Leaving it out costs bandwidth, not correctness.
@@ -228,7 +229,7 @@ uv run positronic-inference sim --policy=.remote --policy.url=localhost:8000
 
 ### Slow-loading or subprocess models
 
-The built-in OpenPI and GR00T servers can't hand over a ready policy — checkpoints take minutes to download or run as a separate process. Instead of `PolicySource` they implement their own `ModelSource` (`positronic/policy/spec.py`), the terminal that turns checkpoint ids into policies: `get_models()` lists the ids, `resolve()` maps a request (or the default) to one of them, and `load(model_id, on_progress)` downloads and boots the model, calling `on_progress` along the way. `PolicyServer` runs `load` off the event loop and forwards every `on_progress` message to the connecting client as a `{"status": "loading", ...}` frame, so the handshake survives a multi-minute boot. The returned `Policy` owns whatever `load` started; its `close()` tears it down when the server switches checkpoints or shuts down. Model switching, the `recording_dir` taps above, and idle shutdown are all `PolicyServer`'s job — a vendor ships only its source and its named pipelines; see `positronic/vendors/openpi/server.py` and `positronic/vendors/gr00t/server.py`.
+The built-in OpenPI and GR00T servers can't hand over a ready policy — checkpoints take minutes to download or run as a separate process. Instead of `PolicySource` they implement their own `ModelSource` (`positronic/policy/spec.py`), the terminal that turns checkpoint ids into policies: `get_models()` lists the ids, `resolve()` maps a request (or the default) to one of them, and `load(model_id, on_progress)` downloads and boots the model, calling `on_progress` along the way. `PolicyServer` runs `load` off the event loop and forwards every `on_progress` message to the connecting client as a `{"status": "loading", ...}` message, so the handshake survives a multi-minute boot. The returned `Policy` owns whatever `load` started; its `close()` tears it down when the server switches checkpoints or shuts down. Model switching, the `recording_dir` taps above, and idle shutdown are all `PolicyServer`'s job — a vendor ships only its source and its named pipelines; see `positronic/vendors/openpi/server.py` and `positronic/vendors/gr00t/server.py`.
 
 ### Serialization
 
@@ -244,11 +245,11 @@ Every message is msgpack. Numpy arrays use a custom extension:
 }
 ```
 
-`positronic.utils.serialization` provides `serialise()` / `deserialise()`, which handle this and the
+`positronic.offboard.protocol` provides `serialise()` / `deserialise()`, which handle this and the
 robot commands:
 
 ```python
-from positronic.utils.serialization import serialise, deserialise
+from positronic.offboard.protocol import serialise, deserialise
 
 session = policy.new_session()           # one Session per episode/connection
 async for message in websocket.iter_bytes():
@@ -256,6 +257,10 @@ async for message in websocket.iter_bytes():
     actions = session(obs)               # list of action dicts (or None)
     await websocket.send_bytes(serialise({"result": actions}))
 ```
+
+A server written against another stack cannot import that module. Answer with the command as the plain
+mapping `positronic.drivers.roboarm.command.to_wire` produces — `{"type": "cartesian_pos", "pose": [...]}`
+— under the `robot_command` key, and the client types it on arrival.
 
 ## See Also
 

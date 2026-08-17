@@ -28,6 +28,8 @@ class ObservationCodec(Codec):
             (the pretrained DROID models; MolmoSpaces' Pi baseline applies the same normalization).
     """
 
+    WIRE_NAME = 'observation_codec'
+
     def __init__(
         self,
         state: dict[str, dict[str, int]],
@@ -113,7 +115,7 @@ class ObservationCodec(Codec):
         # Normalized to lists so the spec is identical before and after a wire round-trip.
         images = {name: [key, list(size)] for name, (key, size) in self._image_configs.items()}
         return {
-            'name': 'observation_codec',
+            'name': self.WIRE_NAME,
             'args': {
                 'state': self._state,
                 'images': images,

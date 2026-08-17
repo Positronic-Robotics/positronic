@@ -3,7 +3,7 @@ import functools
 import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset import DatasetWriter
-from positronic.dataset.ds_writer_agent import DsWriterAgent, TimeMode, TrajectoryOverrideSerializer
+from positronic.dataset.ds_writer_agent import DsWriterAgent, TimeMode
 from positronic.dataset.serializers import Serializers, StatefulSerializer
 from positronic.eval import ROBOT_STATIC_META, Embodiment, Observation
 
@@ -44,19 +44,17 @@ def wire(  # noqa: C901
         for signal_name in cameras.keys():
             ds_agent.add_signal(signal_name, Serializers.camera_images)
         if robot_arm is not None:
-            # Command channels carry whole trajectories; flatten with last-writer-wins so the
-            # recording is a dense per-command stream. See TrajectoryOverrideSerializer.
-            ds_agent.add_signal(keys.ROBOT_COMMAND, TrajectoryOverrideSerializer(Serializers.robot_command))
-            ds_agent.add_signal('robot_state', Serializers.robot_state)
+            ds_agent.add_signal(keys.ROBOT_COMMAND, Serializers.robot_command)
+            ds_agent.add_signal(keys.ROBOT_STATE, Serializers.robot_state)
         if gripper is not None:
-            ds_agent.add_signal(keys.TARGET_GRIP, TrajectoryOverrideSerializer(None))
+            ds_agent.add_signal(keys.TARGET_GRIP)
             ds_agent.add_signal(keys.GRIP)
 
         for signal_name, emitter in cameras.items():
             world.connect(emitter, ds_agent.inputs[signal_name])
         if robot_arm is not None:
             world.connect(harness.robot_commands, ds_agent.inputs[keys.ROBOT_COMMAND])
-            world.connect(robot_arm.state, ds_agent.inputs['robot_state'])
+            world.connect(robot_arm.state, ds_agent.inputs[keys.ROBOT_STATE])
         if gripper is not None:
             world.connect(harness.target_grip, ds_agent.inputs[keys.TARGET_GRIP])
             world.connect(gripper.grip, ds_agent.inputs[keys.GRIP])
@@ -109,9 +107,7 @@ def wire_embodiment(
             ds_agent.add_signal(name, obs.serializer)
             world.connect(obs.source, ds_agent.inputs[name])
         for name, cmd in embodiment.commands.items():
-            # Command channels carry whole trajectories; flatten with last-writer-wins so the
-            # recording is a dense per-command stream. See TrajectoryOverrideSerializer.
-            ds_agent.add_signal(name, TrajectoryOverrideSerializer(cmd.serializer))
+            ds_agent.add_signal(name, cmd.serializer)
             world.connect(harness.commands[name], ds_agent.inputs[name])
         for name, priv in privileged.items():
             ds_agent.add_signal(name, priv.serializer)

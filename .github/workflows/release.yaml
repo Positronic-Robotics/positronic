@@ -9,8 +9,69 @@ permissions:
   contents: read
 
 jobs:
+  # Every publish gate that does not need a build, run once and BEFORE anything is published: a
+  # release to PyPI cannot be withdrawn, so a release this workflow would go on to reject must not
+  # put a distribution on the index first.
+  verify-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify the tag matches the version
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          if [ -z "$TAG" ]; then
+            echo "Error: no release tag — this workflow publishes a published release, not a dispatch" >&2
+            exit 1
+          fi
+          TAG="${TAG#v}"
+          FILE_VER=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "Tag: $TAG | pyproject.toml: $FILE_VER"
+          if [ "$TAG" != "$FILE_VER" ]; then
+            echo "Error: tag ($TAG) does not match project.version ($FILE_VER)" >&2
+            exit 1
+          fi
+
+  # `positronic` requires `positronic-platform-client`, so the client is on the index before the
+  # release that depends on it. It carries its own version and usually has not moved, which is what
+  # `skip-existing` is for: republishing an unchanged client is a no-op, not a failed release.
+  publish-client-pypi:
+    runs-on: ubuntu-latest
+    needs: verify-release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable uv (with cache)
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Build sdist and wheel
+        working-directory: client
+        run: |
+          rm -rf dist/
+          uvx --from build pyproject-build --sdist --wheel
+
+      - name: Twine check
+        run: uvx twine check client/dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          packages-dir: client/dist
+          skip-existing: true
+
   publish-pypi:
     runs-on: ubuntu-latest
+    needs: [verify-release, publish-client-pypi]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,17 +93,6 @@ jobs:
 
       - name: Twine check
         run: uvx twine check dist/*
-
-      - name: Verify version matches tag
-        run: |
-          TAG="${{ github.event.release.tag_name }}"
-          TAG="${TAG#v}"
-          FILE_VER=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          echo "Tag: $TAG | pyproject.toml: $FILE_VER"
-          if [ "$TAG" != "$FILE_VER" ]; then
-            echo "Error: tag ($TAG) does not match project.version ($FILE_VER)" >&2
-            exit 1
-          fi
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

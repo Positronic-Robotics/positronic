@@ -4,6 +4,7 @@ Positronic-free (``websockets`` + the wire codec). ``RemoteEnvControlSystem`` wr
 control system; tests use it directly to compare a socket rollout against an in-process one.
 """
 
+import logging
 import time
 from typing import Any
 
@@ -12,6 +13,13 @@ from websockets.sync.client import connect
 
 from . import protocol
 from .protocol import decode, encode
+
+logger = logging.getLogger(__name__)
+
+# How long ``close`` waits to be acknowledged. Teardown often runs while the peer is on its way out, and a
+# simulator wedged in its own destructor holds the socket open without ever answering — an unbounded wait there
+# hangs the run in place of ending it.
+_CLOSE_ACK_TIMEOUT = 5.0
 
 
 class EnvConnection:
@@ -53,12 +61,14 @@ class EnvConnection:
         return result
 
     def close(self) -> None:
-        # Best-effort: ask the server to release, but a peer that is already gone (a crashed or killed server) is
-        # success too — the socket is closed regardless.
         try:
             self._ws.send(encode({protocol.REQUEST_CMD: protocol.CMD_CLOSE}))
-            self._ws.recv()
+            self._ws.recv(timeout=_CLOSE_ACK_TIMEOUT)
         except ConnectionClosed:
-            pass
+            pass  # a peer already gone has released whatever the acknowledgement would have reported
+        except TimeoutError:
+            # Abandoning it is still better than hanging the run here, but a server that took the request and
+            # never answered is wedged rather than finished, and its resources are nobody's to reclaim now.
+            logger.error('Env server did not acknowledge close within %.1fs; abandoning it', _CLOSE_ACK_TIMEOUT)
         finally:
             self._ws.close()

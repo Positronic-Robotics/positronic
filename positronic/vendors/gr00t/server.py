@@ -19,7 +19,7 @@ from positronic.offboard.server_utils import run_with_progress, wait_for_subproc
 from positronic.policy import Policy, Session
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
-from positronic.policy.wrappers import ChunkedSchedule
+from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.utils.checkpoints import list_checkpoints
 from positronic.utils.logging import init_logging
 from positronic.vendors import gr00t
@@ -354,7 +354,7 @@ gr00t_source = cfn.Config(Gr00tSource)
 # so none has a transform to declare.
 @cfn.config(codec=codecs.ee_quat, source=gr00t_source)
 def pipeline(codec, source):
-    return ChunkedSchedule() | RestrictImageSize(*gr00t.IMAGE_SIZE) | remote | codec | source
+    return StopOnFault() | ChunkedSchedule() | RestrictImageSize(*gr00t.IMAGE_SIZE) | remote | codec | source
 
 
 # Each entry pairs the codec with the matching GR00T modality config; they must agree with training.

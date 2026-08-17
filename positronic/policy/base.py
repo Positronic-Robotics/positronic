@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections import Counter
-from collections.abc import Callable
-from typing import Any
-
-from positronic.policy.sampler import EpisodeCounter, Sampler, UniformSampler
+from collections.abc import Callable, Mapping
+from typing import Any, ClassVar
 
 Now = Callable[[], float]
+
 
 # Structural keys of the wire spec: ``|`` serializes as ``{SEQ: [...]}``, ``&`` as ``{PAR: [...]}``.
 SEQ = 'seq'
@@ -35,7 +33,7 @@ class Session(ABC):
     """
 
     @abstractmethod
-    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+    def __call__(self, obs: Mapping[str, Any]) -> list[dict[str, Any]] | None:
         """Predict actions for the given observation."""
 
     @property
@@ -150,11 +148,15 @@ class PolicyWrapper:
         """Wrap a single session. Subclasses override this for per-session wrapping."""
         raise NotImplementedError('Override wrap_session or wrap')
 
+    # The name this wrapper travels under, set by every deliverable subclass. ``WIRE_WRAPPERS`` is keyed by
+    # it, so the name is written once and both sides of the wire read the same attribute.
+    WIRE_NAME: ClassVar[str]
+
     def to_spec(self) -> dict[str, Any]:
         """Plain-data wire spec of this wrapper, for a server's local-stack declaration.
 
         Only wrappers registered in ``positronic.policy.spec.WIRE_WRAPPERS`` are deliverable to a rig.
-        The spec is ``{'name': <wire name>}`` plus ``{'args': {...}}`` when the wrapper takes any;
+        The spec is ``{'name': WIRE_NAME}`` plus ``{'args': {...}}`` when the wrapper takes any;
         ``args`` are constructor keywords, since the rig rebuilds by calling the constructor with them.
         """
         raise NotImplementedError(f'{type(self).__name__} is not deliverable to a rig (no wire spec)')
@@ -208,74 +210,3 @@ class _ComposedWrapper(PolicyWrapper):
 
     def _wrappers(self) -> tuple:
         return self._components
-
-
-class _KeyedSession(DelegatingSession):
-    """Wraps the selected sub-policy's session so sampled episodes keep the selected policy's
-    metadata. ``SampledPolicy.meta`` is ``{}``, so without this the selected policy's static
-    fields (type, checkpoint, codec) would vanish from episode/handshake metadata when a
-    sub-policy exposes them only via ``Policy.meta`` (with an empty ``Session.meta``). The
-    sampler's chosen key is merged last so completion counting always records the exact key
-    that was sampled, even if it differs from a per-session ``key_field``."""
-
-    def __init__(self, inner: Session, policy_meta: dict[str, Any], key_field: str, key: str):
-        super().__init__(inner)
-        self._policy_meta = policy_meta
-        self._key_field = key_field
-        self._key = key
-
-    @property
-    def meta(self):
-        return {**self._policy_meta, **self._inner.meta, self._key_field: self._key}
-
-
-class SampledPolicy(Policy):
-    """Selects a sub-policy on each new_session using a pluggable sampling strategy."""
-
-    def __init__(
-        self,
-        *policies: Policy,
-        sampler: Sampler | None = None,
-        weights: list[float] | None = None,
-        key_field: str = 'server.checkpoint_path',
-        group_fields: list[str] | None = None,
-    ):
-        self._policies = policies
-        self._sampler = sampler
-        self._weights = weights
-        self._key_field = key_field
-        self._keys: tuple[str, ...] | None = None
-        # The harness bumps this on each completed episode (via ``counter.record``);
-        # the sampler reads it to balance. Seeded from prior recordings by the caller.
-        self.counter = EpisodeCounter(key_field, group_fields)
-
-    @property
-    def sampler(self) -> Sampler | None:
-        if self._sampler is None and self._keys is not None:
-            weight_map = dict(zip(self._keys, self._weights, strict=True)) if self._weights else None
-            self._sampler = UniformSampler(weight_map)
-        return self._sampler
-
-    def _get_keys(self) -> tuple[str, ...]:
-        if self._keys is None:
-            keys = tuple(p.meta.get(self._key_field, str(i)) for i, p in enumerate(self._policies))
-            duplicates = sorted(k for k, n in Counter(keys).items() if n > 1)
-            if duplicates:
-                raise ValueError(
-                    f'Sampled policies must be distinguishable by {self._key_field!r}, but {duplicates} name more '
-                    f'than one of them: sampling would pick the first every time and never run the others'
-                )
-            self._keys = keys
-        return self._keys
-
-    def new_session(self, context=None, now=None):
-        keys = self._get_keys()
-        ctx = context or {}
-        key = self.sampler.sample(keys, ctx, self.counter.counts(keys, ctx))
-        policy = self._policies[keys.index(key)]
-        session = policy.new_session(context, now)
-        return _KeyedSession(session, policy.meta, self._key_field, key)
-
-    @property
-    def meta(self):
-        return {}

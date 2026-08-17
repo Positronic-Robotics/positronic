@@ -8,15 +8,16 @@ from pathlib import Path
 
 import configuronic as cfn
 import pos3
+from platform_client.responses import SubmissionCreateResponse
 
 import pimm
 import positronic.cfg.policy as policy_cfg
-from positronic import telemetry, telemetry_keys, utils, wire
+from positronic import keys, telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import placeholder
+from positronic.cli.eval.submit import submit
 from positronic.dataset.ds_writer_agent import TimeMode
-from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
+from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.eval import Embodiment, Eval, Task
-from positronic.policy.base import SampledPolicy
 from positronic.policy.harness import Harness
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 
@@ -27,8 +28,8 @@ logger = logging.getLogger(__name__)
 _ENV_TELEMETRY_VARS = (ENV_TELEMETRY_DIR, ENV_RUN_ID)
 
 
-def prepare_output_dir(policy, output_dir: str | Path | None) -> Path | None:
-    """Resolve where a run records: sync the directory, snapshot the sources into it, seed the counter.
+def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
+    """Resolve where a run records: sync the directory and snapshot the sources into it.
 
     Returns the local path a ``LocalDatasetWriter`` opens, or ``None`` when the run records nothing.
 
@@ -40,42 +41,15 @@ def prepare_output_dir(policy, output_dir: str | Path | None) -> Path | None:
         return None
     local_dir = pos3.sync(str(output_dir), sync_on_error=True)
     utils.save_run_metadata(local_dir, patterns=['*.py', '*.toml'])
-    _seed_counter(policy, local_dir)
     return local_dir
 
 
-def _seed_counter(policy, output_dir: Path):
-    """If policy is a SampledPolicy, seed its episode counter from existing episodes in output_dir."""
-    if not isinstance(policy, SampledPolicy):
-        return
-    try:
-        dataset = load_all_datasets(output_dir)
-    except ValueError:
-        return
-    if len(dataset) == 0:
-        return
-    seeded = policy.counter.seed_from(dataset)
-    logger.info(f'Seeded counter from {seeded} existing episodes')
-
-
-def completion_sink(policy):
-    """Harness ``on_episode_complete`` callback that tallies completed episodes.
-
-    Returns the ``SampledPolicy``'s counter ``record`` (which reads the sampled
-    key from the session and bumps its tally), or ``None`` for non-sampled
-    policies. The harness fires it on each clean episode completion.
-    """
-    return policy.counter.record if isinstance(policy, SampledPolicy) else None
-
-
-def _run_world(
-    policy, embodiment: Embodiment, task: Task | None, trials: list[dict] | None, output_dir: Path | None, on_complete
-):
+def _run_world(policy, embodiment: Embodiment, task: Task | None, trials: list[dict] | None, output_dir: Path | None):
     """Wire one embodiment under a fresh Harness + World and run it to completion.
 
     The harness self-drives ``trials``; the shared ``policy``'s lifetime stays with ``main``.
     """
-    harness = Harness(policy, embodiment, task=task, trials=trials, on_episode_complete=on_complete)
+    harness = Harness(policy, embodiment, task=task, trials=trials)
 
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
@@ -189,35 +163,75 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     if timing:
         _validate_timing([ev.embodiment for ev in evals], output_dir)
 
-    # A session's handshake returns only once the model is loaded, so opening one drives an on-request
-    # endpoint through its cold start — and a ``SampledPolicy`` reaches every sub-policy this way. The
-    # first episode then begins warm instead of stalling on a model load while the robot waits.
+    # A handshake returns only once the model is loaded, so this pays the cold start here, not in episode 1.
     # TODO: a policy with recording taps (recording_dir set) records this throwaway warmup session — an
     # empty .rrd plus a bump to the recorder's episode counter — but warmup is not a real episode.
     logger.info('Warming up policy endpoints')
     policy.new_session().close()
-    output_dir = prepare_output_dir(policy, output_dir)
-
-    # One completion sink — so one ``SampledPolicy`` counter — across every eval, keeping sampling balanced
-    # over the whole sweep.
-    on_complete = completion_sink(policy)
+    output_dir = prepare_output_dir(output_dir)
 
     try:
         with timed_pass(output_dir, timing, policy):
             for ev in evals:
-                _run_world(policy, ev.embodiment, ev.task, ev.trials, output_dir, on_complete)
+                _run_world(policy, ev.embodiment, ev.task, ev.trials, output_dir)
     finally:
         policy.close()
 
 
-@cfn.config(eval=placeholder, policy=policy_cfg.placeholder)
-def run(eval: Eval, policy, output_dir=None, inference_latency=False, timing=False):
+def _refuse(inapplicable: dict[str, object], where: str) -> None:
+    """Stop on an argument the chosen half of `run` cannot honour.
+
+    Dropping one silently hands back a run the caller believes they shaped. Every "not asked for"
+    value is falsy, which is what makes the test the value itself.
+    """
+    asked = sorted(flag for flag, value in inapplicable.items() if value)
+    if asked:
+        raise SystemExit(f'a {where} run has no {", ".join(asked)}')
+
+
+@cfn.config(eval=placeholder, policy=policy_cfg.unset)
+def run(
+    eval: Eval | str,
+    policy,
+    output_dir=None,
+    inference_latency: bool = False,
+    timing=False,
+    policy_image: str | None = None,
+    alias: str | None = None,
+    transaction_key: str | None = None,
+    platform_url: str | None = None,
+) -> SubmissionCreateResponse | None:
     """Run a selected eval (embodiment + task + its trial sweep) through the shared inference harness.
+
+    Here by default: ``--eval`` is an eval config and ``--policy`` the policy that drives it.
+    ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the
+    eval of that NAME on the embodiment the eval names — ``--eval=robolab.public_subset``, not a
+    config, since the platform owns the evals it offers. What comes back is a submission id, which
+    ``positronic eval status`` reads.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
     simulated eval; reduce them with ``positronic eval timing-report``.
+
+    A platform run returns what the platform created, so a caller holding this function has the
+    submission id without parsing what was printed. A local run's result is the dataset it wrote.
     """
-    # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob
-    # (sim inference-cost simulation). Overlay it onto every trial context, then self-drive the eval.
-    eval = replace(eval, trials=[{**trial, 'inference_latency': inference_latency} for trial in eval.trials])
-    main(policy=policy, evals=[eval], output_dir=output_dir, timing=timing)
+    if policy_image is None:
+        if policy is None:
+            raise SystemExit('--policy is required to run here; --policy-image runs it on the platform instead')
+        _refuse({'--alias': alias, '--transaction-key': transaction_key, '--platform-url': platform_url}, 'local')
+        if not isinstance(eval, Eval):
+            raise SystemExit(f'--eval={eval!r} is a name, not a config: pass --policy-image to run it on the platform')
+        # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob
+        # (whether a sim charges each call its wall time). Overlay it onto every trial context, then self-drive
+        # the eval.
+        eval = replace(eval, trials=[{**trial, keys.INFERENCE_LATENCY: inference_latency} for trial in eval.trials])
+        main(policy=policy, evals=[eval], output_dir=output_dir, timing=timing)
+        return None
+
+    if policy is not None:
+        raise SystemExit('--policy runs the eval here and --policy-image runs it on the platform; pass one')
+    if not isinstance(eval, str):
+        raise SystemExit('the platform names its own evals: pass --eval=<name>, e.g. --eval=robolab.public_subset')
+    # The platform owns its own trial sweep, its own output and its own telemetry.
+    _refuse({'--output-dir': output_dir, '--inference-latency': inference_latency, '--timing': timing}, 'platform')
+    return submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)

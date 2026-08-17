@@ -166,29 +166,36 @@ The client should display these status updates to the user. Once loading complet
 After handshake, the client streams observations and receives actions:
 
 **Client → Server (Observation):**
+
+Keys are flat strings — the dots are literal, not nesting. Arrays travel as numpy, not base64; a rig behind a message-size cap JPEG-encodes its frames instead (see `compress_images` above). `docs/connect-your-model.md` carries the full key table.
+
 ```json
 {
-  "ee_pose": [0.5, 0.2, 0.3, 0.0, 0.0, 0.0, 1.0],
-  "grip": [0.04],
-  "wrist_image": "<base64_encoded_image>",
-  "exterior_image": "<base64_encoded_image>"
+  "robot_state.ee_pose": [0.5, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0],
+  "robot_state.q": [0.0, -0.3, 0.0, -2.2, 0.0, 2.0, 0.8],
+  "grip": 0.04,
+  "image.wrist": "<uint8 (H, W, 3)>",
+  "image.exterior": "<uint8 (H, W, 3)>",
+  "obs_time_ns": 1737000000000000000,
+  "task": "pick up the red cube"
 }
 ```
 
 **Server → Client (Actions):**
 
-`result` is a **list** of action dicts — one per action in the predicted chunk (or `null` if the model produced no actions):
+`result` is a **list** of action dicts — one per action in the predicted chunk (or `null` if the model produced no actions). `timestamp` is seconds from the start of the chunk; `robot_command` carries the control command, and a rig with more than one arm names the channel per arm (`robot_command.left`):
 
 ```json
 {
   "result": [{
-    "action": {
-      "target_pose": [0.51, 0.21, 0.31, 0.0, 0.0, 0.0, 1.0],
-      "target_grip": [0.02]
-    }
+    "robot_command": {"type": "cartesian_pos", "pose": [0.51, 0.21, 0.31, 1, 0, 0, 0, 1, 0, 0, 0, 1]},
+    "target_grip": 0.02,
+    "timestamp": 0.0
   }]
 }
 ```
+
+A command's `type` selects the control mode and the fields beside it: `cartesian_pos` (`pose`), `joint_pos` (`positions`), `joint_delta` (`velocities`), `cartesian_delta` (`delta`, `frame`), and `reset` (no fields). A pose is translation followed by a row-major 3x3 rotation. `positronic.offboard.protocol` reads that mapping into the typed command the drivers dispatch on, so a server written against another stack sends it as plain data; one built on positronic may instead put a `positronic.drivers.roboarm.command` instance here and let `serialise` encode it.
 
 **Server → Client (Error):**
 ```json
@@ -229,7 +236,7 @@ uv run positronic-inference sim \
 ## Classes
 
 ### `server.PolicyServer`
-The one server implementation behind every vendor. It serves a **policy pipeline** (see `positronic.policy.spec`): a wrapper chain with a `remote` marker, closed by a `ModelSource` terminal. The half right of the marker wraps the model on the server; the half left of it is declared as `local_stack` in the ready handshake for the client to build. The source is the only model loader: `get_models()` backs `/api/v1/models`, `resolve()` maps a requested id (or the default), and `load(model_id, on_progress)` produces the `Policy` — with `on_progress` messages streamed to the connecting client as `loading` status frames.
+The one server implementation behind every vendor. It serves a **policy pipeline** (see `positronic.policy.spec`): a wrapper chain with a `remote` marker, closed by a `ModelSource` terminal. The half right of the marker wraps the model on the server; the half left of it is declared as `local_stack` in the ready handshake for the client to build. The source is the only model loader: `get_models()` backs `/api/v1/models`, `resolve()` maps a requested id (or the default), and `load(model_id, on_progress)` produces the `Policy` — with `on_progress` messages streamed to the connecting client as `loading` status messages.
 
 ```python
 from positronic.offboard import PolicyServer

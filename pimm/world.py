@@ -1,5 +1,6 @@
 """Implementation of multiprocessing channels."""
 
+import functools
 import heapq
 import logging
 import multiprocessing as mp
@@ -482,9 +483,6 @@ class World:
 
         self._stop_event = self._mp_ctx.Event()
         self.background_processes = []
-        # Use a spawn-context manager so queues/values behave synchronously even
-        # when used in a single process (tests rely on immediate read after emit).
-        self._manager = self._mp_ctx.Manager()
         self._cleanup_emitters_readers = []
         self.entered = False
         self._connections = []
@@ -497,7 +495,6 @@ class World:
         self.entered = False
         logging.info('Stopping background processes...')
         self.request_stop()
-        time.sleep(0.1)
 
         logging.info(f'Waiting for {len(self.background_processes)} background processes to terminate...')
         for process in self.background_processes:
@@ -840,6 +837,12 @@ class World:
         """
         q = deque(maxlen=maxsize)
         return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q)
+
+    @functools.cached_property
+    def _manager(self):
+        """A spawn-context manager, so queues and values behave synchronously even within a single process."""
+        # It runs as a process of its own, so a world that opens no mp pipe never starts one.
+        return self._mp_ctx.Manager()
 
     def mp_pipes(
         self,

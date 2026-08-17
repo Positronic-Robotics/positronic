@@ -6,7 +6,6 @@ import numpy as np
 import pos3
 
 from positronic import keys, telemetry, telemetry_keys
-from positronic.drivers.roboarm import command
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
@@ -26,9 +25,9 @@ class RemoteSession(Session):
         self._session = ws_session
         self._compress_images = compress_images
 
-    def _prepare_obs(self, obs: dict[str, Any]) -> dict[str, Any]:
+    def _prepare_obs(self, obs: cabc.Mapping[str, Any]) -> dict[str, Any]:
         if not self._compress_images:
-            return obs
+            return dict(obs)
         return {key: self._prepare_value(key, value) for key, value in obs.items()}
 
     def _prepare_value(self, key: str, value: Any) -> Any:
@@ -42,7 +41,7 @@ class RemoteSession(Session):
             return type(value)(self._prepare_value(key, v) for v in value)
         return value
 
-    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+    def __call__(self, obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | None:
         """Forwards the observation to the remote server and returns the action trajectory.
 
         Single-action server responses are wrapped into a 1-element list to honor
@@ -56,23 +55,9 @@ class RemoteSession(Session):
             result = self._session.infer(prepared)
         finally:
             telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns())
-        if result is None:
-            return None
-        actions = [result] if isinstance(result, dict) else result
-        return [self._decode_commands(action) for action in actions]
-
-    def _decode_commands(self, action: dict[str, Any]) -> dict[str, Any]:
-        """One action with every ``keys.is_robot_command`` channel typed."""
-        decoded = {k: self._as_command(v) for k, v in action.items() if keys.is_robot_command(k)}
-        return {**action, **decoded} if decoded else action
-
-    @staticmethod
-    def _as_command(value: Any) -> Any:
-        """One channel's value, typed. A non-mapping — a typed command, a ``.pose`` vector — returns as it came."""
-        if not isinstance(value, cabc.Mapping):
-            return value
-        # `from_wire` reads vectors as arrays; the wire carries sequences, and `type` is its one string.
-        return command.from_wire({k: v if isinstance(v, str) else np.asarray(v) for k, v in value.items()})
+        if isinstance(result, dict):
+            return [result]
+        return result
 
     @property
     def meta(self) -> dict[str, Any]:

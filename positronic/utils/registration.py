@@ -186,7 +186,7 @@ def perform_registration(webxr, robot_arm):
         while not w.should_stop:
             if move_throttler.wait_time() <= 0:
                 waypoint = roboarm_command.CartesianPosition(WAYPOINTS[current_point])
-                commands.emit([(w.clock.now_ns(), waypoint)])
+                commands.emit(waypoint)
                 current_point += 1
                 if current_point >= len(WAYPOINTS):
                     break

@@ -39,6 +39,14 @@ of one cleanly checked. Each needs its rule and a way to tell which code changed
 not know how that code came to be: a cold-headed reviewer answering one question, not a colleague who
 sat through the reasoning.
 
+Every prompt is the same four parts: the rule pasted whole and verbatim, the scope Step 1 settled, the
+return format below, and the instructions that follow it. Nothing else goes in.
+
+Whatever you would add comes from knowing the change, and that knowledge is what kept you from seeing
+the violation yourself. Emphasis, an example, a "pay attention to", a scope trimmed to the lines you
+touched — each hands the agent your reading of the rule in place of the rule, and the reading you did
+not have is the one you spawned it for.
+
 **Spawn them on Sonnet** — `model: 'sonnet'`, on every agent. Each one answers a narrow question: one
 rule against one diff. A fan-out of that width spends most of what it costs on being that wide rather
 than on the judging. The parameter is not optional: omitted, an agent inherits whatever model the

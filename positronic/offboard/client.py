@@ -2,6 +2,8 @@ import logging
 import ssl
 import time
 import urllib.parse
+from enum import Enum
+from http import HTTPStatus
 from typing import Any
 
 import httpx
@@ -9,7 +11,8 @@ from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidSta
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
-from positronic.utils.serialization import deserialise, serialise
+from . import protocol
+from .protocol import deserialise, serialise, typed_commands
 
 logger = logging.getLogger(__name__)
 
@@ -28,27 +31,25 @@ class InferenceSession:
     def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
 
-        Args:
-            timeout_per_message: Timeout for each individual message (default: 30s).
-                               Server must send updates at least this frequently.
+        The server must send an update at least every ``timeout_per_message`` seconds.
         """
         try:
             while True:
                 response = deserialise(self._websocket.recv(timeout=timeout_per_message))
-                status = response.get('status')
+                if protocol.ERROR in response:
+                    raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
+                try:
+                    status = protocol.ServerStatus(response.get(protocol.STATUS))
+                except ValueError:
+                    raise RuntimeError(f'Unexpected server response: {response}') from None
 
-                if status == 'ready':
-                    return response['meta']
+                if status is protocol.ServerStatus.READY:
+                    return response[protocol.META]
+                if status is protocol.ServerStatus.ERROR:
+                    raise RuntimeError('Server error: Unknown error')
 
-                if status in ('waiting', 'loading'):
-                    message = response.get('message', status)
-                    logger.info(f'Server status: [{status}] {message}')
-                    continue
-
-                if status == 'error' or 'error' in response:
-                    raise RuntimeError(f'Server error: {response.get("error", "Unknown error")}')
-
-                raise RuntimeError(f'Unexpected server response: {response}')
+                message = response.get(protocol.MESSAGE, status)
+                logger.info(f'Server status: [{status}] {message}')
 
         except TimeoutError:
             raise TimeoutError(
@@ -61,12 +62,11 @@ class InferenceSession:
         return self._metadata
 
     def infer(self, obs: dict[str, Any]) -> Any:
-        """
-        Send an observation and get the served session's result — canonically a list of action
-        dicts, but whatever the server's session returned (a bare dict or ``None`` included).
+        """Send an observation and get the served session's result, with every robot-command channel typed.
 
-        Both `obs` and the returned action must be wire-serializable: plain-data containers and
-        scalars, plus numeric numpy arrays/scalars. Do not pass arbitrary Python objects.
+        ``obs`` must be wire-serializable: plain-data containers and scalars, plus numeric numpy
+        arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
+        returned — canonically a list of action dicts, but a bare dict or ``None`` too.
         """
         serialised = serialise(obs)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
@@ -84,10 +84,10 @@ class InferenceSession:
             ) from None
         logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
 
-        if isinstance(response, dict) and 'error' in response:
-            raise RuntimeError(f'Server error: {response["error"]}')
+        if isinstance(response, dict) and protocol.ERROR in response:
+            raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
 
-        return response['result']
+        return typed_commands(response[protocol.RESULT])
 
     def close(self):
         self._websocket.close()
@@ -107,6 +107,36 @@ def _session_path(path: str, url: str) -> str:
     # the URL meant: a trailing slash is part of that id, and an id may itself be a path (a HuggingFace
     # repo, say), whose own slashes stay separators.
     return path
+
+
+class _ConnectOutcome(Enum):
+    RETRY = 'retry'
+    SURFACE = 'surface'
+
+
+class _ConnectRetries:
+    """The retry policy over one ``new_session``'s connect attempts.
+
+    403 is both a cold backend and a refused credential, so it gets a few attempts rather than the whole
+    ``connect_deadline``.
+    """
+
+    MAX_FORBIDDEN_ATTEMPTS = 3
+
+    def __init__(self) -> None:
+        self._forbidden_attempts = 0
+
+    def take(self, e: Exception) -> _ConnectOutcome:
+        """Spend a refused connect against the budget."""
+        if not isinstance(e, InvalidStatus):
+            return _ConnectOutcome.RETRY
+        status = e.response.status_code
+        if status == HTTPStatus.FORBIDDEN:
+            self._forbidden_attempts += 1
+            again = self._forbidden_attempts < self.MAX_FORBIDDEN_ATTEMPTS
+        else:
+            again = status >= HTTPStatus.INTERNAL_SERVER_ERROR or status == HTTPStatus.TOO_MANY_REQUESTS
+        return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
 
 
 class InferenceClient:
@@ -162,6 +192,7 @@ class InferenceClient:
         """Creates a new inference session on the model the URL names."""
         deadline = time.monotonic() + self.connect_deadline
         backoff = 1.0
+        retries = _ConnectRetries()
         while True:
             ws = None
             try:
@@ -187,11 +218,7 @@ class InferenceClient:
             except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
                 if ws is not None:
                     ws.close()
-                # A non-101 upgrade response only means "not ready" when it's a 5xx or 429; any other status
-                # (401/403/404, …) is permanent misconfiguration and surfaces immediately.
-                if isinstance(e, InvalidStatus) and not (
-                    e.response.status_code >= 500 or e.response.status_code == 429
-                ):
+                if retries.take(e) is _ConnectOutcome.SURFACE:
                     raise
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'{e} (connecting to {self.session_url})') from e

@@ -184,13 +184,13 @@ class Robot(pimm.ControlSystem):
         self._sim = sim
         self._connect = connect
 
-        self.commands = pimm.ControlSystemReceiver[command.Trajectory[command.CommandType]](self, default=[])
-        self.target_grip = pimm.ControlSystemReceiver[command.Trajectory[float]](self, default=[])
+        self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
+        self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:  # noqa: C901
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         arm = self._connect(self._channel, self._sim)
         try:
             kin = _Kinematics()
@@ -199,33 +199,21 @@ class Robot(pimm.ControlSystem):
 
             robot_state = YamState()
             limiter = pimm.RateLimiter(clock, hz=100)
-            player = command.TrajectoryPlayer(reduce=command.reduce)
-            grip_player = command.TrajectoryPlayer()
 
             q_target = self._reset(arm, kin, robot_state)
             grip_target = 0.0
 
             while not should_stop.value:
-                if (cmd_msg := self.commands.read()) is not None and cmd_msg.updated:
-                    player.set(cmd_msg.data)
+                cmd_msg = self.commands.read()
                 if (grip_msg := self.target_grip.read()) is not None and grip_msg.updated:
-                    grip_player.set(grip_msg.data)
-
-                grip = grip_player.advance(clock.now_ns())
-                if grip is not None:
-                    grip_target = float(grip)
+                    grip_target = float(grip_msg.data)
 
                 obs = arm.get_observations()
                 q = obs['joint_pos']
 
-                cmd = player.advance(clock.now_ns())
-                if cmd is not None:
-                    match cmd:
+                if cmd_msg is not None and cmd_msg.updated:
+                    match cmd_msg.data:
                         case command.Reset():
-                            # Drop the in-flight trajectories so the homed arm holds position rather than
-                            # resuming stale waypoints on the next tick.
-                            player.set([])
-                            grip_player.set([])
                             q_target = self._reset(arm, kin, robot_state)
                             grip_target = 0.0
                             obs = arm.get_observations()
@@ -239,8 +227,8 @@ class Robot(pimm.ControlSystem):
                         case command.CartesianDelta() as delta_cmd:
                             target = delta_cmd.apply(self._base_pose * kin.fk(q))
                             q_target = self._ik_or_hold(kin, target, q, q_target)
-                        case _:
-                            raise NotImplementedError(f'Unsupported command {cmd}')
+                        case other:
+                            raise NotImplementedError(f'Unsupported command {other}')
 
                 arm.command_joint_pos(np.append(q_target, 1.0 - grip_target))
 
@@ -329,8 +317,8 @@ if __name__ == '__main__':
     with pimm.World() as world:
         # `World.pair` cannot express that it returns the counterpart of the port it is given, so the four
         # payload types are named here.
-        commands = cast(pimm.SignalEmitter[command.Trajectory[command.CommandType]], world.pair(robot.commands))
-        target_grip = cast(pimm.SignalEmitter[command.Trajectory[float]], world.pair(robot.target_grip))
+        commands = cast(pimm.SignalEmitter[command.CommandType], world.pair(robot.commands))
+        target_grip = cast(pimm.SignalEmitter[float], world.pair(robot.target_grip))
         state = cast(pimm.SignalReceiver[YamState], world.pair(robot.state))
         grip = cast(pimm.SignalReceiver[float], world.pair(robot.grip))
 
@@ -356,12 +344,12 @@ if __name__ == '__main__':
             assert home_err < 1e-4, home_err
 
             # Grip round-trip: polarity inverted on the way out (command) and on the way back (observation).
-            target_grip.emit([(world.clock.now_ns(), 0.8)])
+            target_grip.emit(0.8)
             pump(0.5)
             assert fake.last_command is not None
             assert abs(fake.last_command[6] - 0.2) < 1e-6, fake.last_command  # positronic 0.8 closed -> chain 0.2
             assert abs(grip.value - 0.8) < 0.02, grip.value
-            target_grip.emit([(world.clock.now_ns(), 0.0)])
+            target_grip.emit(0.0)
             pump(0.5)
             assert abs(fake.last_command[6] - 1.0) < 1e-6, fake.last_command
             assert abs(grip.value) < 0.02, grip.value
@@ -369,7 +357,7 @@ if __name__ == '__main__':
         # Unfold toward the workspace, then drive a Cartesian square through the driver's IK. The square
         # sits well inside the reach envelope, at the unfolded posture's wrist orientation.
         reach_q = np.array([0.0, 1.2, 1.2, 0.0, 0.6, 0.0])
-        commands.emit([(world.clock.now_ns(), command.JointPosition(reach_q))])
+        commands.emit(command.JointPosition(reach_q))
         pump(0.5)
         if fake is not None:
             assert np.allclose(state.value.q, reach_q, atol=0.02), state.value.q
@@ -383,7 +371,7 @@ if __name__ == '__main__':
             assert solution is not None, f'IK failed for {target}'
             ik_err = np.linalg.norm(kin.fk(solution).translation - target.translation)
             assert ik_err < 5e-3, ik_err  # FK↔IK consistency
-            commands.emit([(world.clock.now_ns(), command.CartesianPosition(target))])
+            commands.emit(command.CartesianPosition(target))
             pump(0.7)
             reached = np.linalg.norm(state.value.ee_pose.translation - target.translation)
             print(f'Moved to {target.translation}, error {reached * 1000:.2f} mm')

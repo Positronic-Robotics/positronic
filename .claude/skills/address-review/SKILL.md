@@ -111,8 +111,11 @@ For each open comment, decide and note severity if the bot tagged one (e.g. Code
   resolve only if you land a concrete change, else leave open.
 - **Decline** — wrong, not applicable, or contradicts a deliberate decision → reasoned
   reply, **leave open**.
-- **Defer** — valid but out of scope for this PR → reply (note where it's tracked),
-  **leave open**.
+- **Defer** — valid but out of scope for this PR → reply saying so, **leave open**, and name it in
+  the Step 6 report as wanting a tracking issue. **Never open an issue without asking first.** An
+  issue is filed under the user's own account, so it reads to their team as their judgement about
+  what matters; that call is theirs. Propose the title and the substance and wait for a yes. If an
+  existing issue already covers it, cite that instead — citing is not filing.
 - **Discuss** — the reviewer is asking a question or opening a design discussion, not
   requesting a change → answer it, **leave open** for them to respond.
 
@@ -122,8 +125,16 @@ Present the triage as a short numbered list: comment → verdict → planned fix
 declines without prompting. "Unclear" is a verdict you reach after the research above, never
 before it — a question you could have answered by reading the code costs the user a round trip
 and comes back as *go and find out*, which is the same work plus a delay. Pause and confirm
-only for what research cannot settle: a preference, a cost, a scope call, or a change whose
-blast radius is genuinely the user's to accept. The user may drop or override any item.
+only for what research cannot settle: a preference, a cost, or a change whose blast radius is
+genuinely the user's to accept. The user may drop or override any item.
+
+**Whether a finding belongs in this PR is your call.** "Fix it here or track it for later" is
+the verdict this skill exists to reach, and by the time you can pose it the research is done,
+so the human has nothing to add that you don't already have. Reach it, reply, and propose the
+tracking issue in the Step 6 report, where they can approve or overrule it — filing it is
+theirs to authorize, never yours. Bring a deferral back for a decision only when leaving it
+undone changes what the PR ships — a gap in the behaviour the user asked for, not a follow-up
+the report already names.
 
 When you do bring something back, explain it in full and in plain words: what the thing is and
 how it works, what the reviewer asked for, what you did or did not do and why, and what each
@@ -256,9 +267,61 @@ Summarize:
 - which threads you resolved (fixes only) vs left open (declines / defers / discussion),
 - any follow-ups the user should track.
 
+Then **offer** the walk below, in one line, and go to Step 7 without waiting:
+
+> 3 threads are open on my call: <title>, <title>, <title>. Want to go through them?
+
 A bot will re-review on push and may add comments. **Don't hand the watch back to the
 user** — go to Step 7, which watches for that re-review in the background and loops you
 through another pass automatically until the reviewer converges.
+
+## Walking your declines — only on an explicit go
+
+Every thread you declined or deferred is a decision the human has not seen. They are entitled to
+review each one, during the cycle or after it converges. **Offer it; never start it uninvited.** A
+proposal is one line (above). Presenting a thread before they say go is the failure this section
+exists to prevent — as is presenting all of them at once.
+
+On their go, **one thread per message, no section headings**, covering four things:
+
+1. what the thing is,
+2. what the reviewer wanted,
+3. why you declined it,
+4. the decision you need — bolded, on its own line, with the options named.
+
+**Simple beats short.** The failure mode is density, not length: four sentences carrying three ideas
+each are worse than twelve carrying one each. Unpack — one idea per sentence, plain words, and
+describe the thing before arguing about it. Length is the budget for being understood; spend it on
+unpacking and on nothing else.
+
+**A short code snippet is welcome** where code says it faster than prose — the branch that decides,
+the line that was removed. A few lines, and say what it shows. Long listings, file tours and full
+diffs are not.
+
+Then **stop**. Do not append the next thread, a summary, or what you plan to do after.
+
+Withheld until asked: the measurements, the alternative designs, the options table, the wider diff.
+Fine to *have* — `git show`, instrumentation, a longer argument — none of it goes in unasked.
+
+- **"too long" means cut it in half** — not rewrite it at the same length.
+- **"too complicated" / "I don't understand" means unpack it** — more sentences, fewer ideas per
+  sentence, and a snippet if one exists. Cutting further is the wrong reflex and makes it worse.
+- **A follow-up question gets that answer alone.** "why declined?" is not an invitation to re-present
+  the thread; "which three?" wants three names and nothing else.
+- Assume they have not read the code and will not. No "see the call site".
+
+Their verdicts are terse. What each one means:
+
+| They say | You do |
+|---|---|
+| "next" / "resolve, next" | reply, resolve, present the next thread — same shape, no re-asking |
+| "leave it" | reply that it is accepted as a known limit, resolve |
+| "fix it" | fix, run the gates, commit, push, reply with the SHA, resolve |
+| "file it" / "open a bug" | file the issue, reply linking it, resolve — this verdict is the only thing that authorizes filing one |
+| "why declined?" | the reasoning only |
+
+This is the one path on which a declined thread gets resolved: the human closed it, thread by thread.
+Absent that, Step 5 stands and it stays open.
 
 ## Step 7: Watch for convergence in the background (so the user doesn't have to)
 

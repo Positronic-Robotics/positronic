@@ -36,9 +36,9 @@ library must supply the tools that make late binding possible — codecs, per-tr
 projections over raw recordings.
 
 **Every decision lives with the party that has the information.** Only a driver knows its motion
-capabilities, so drivers plan through waypoints. Only a sensor knows its own cadence, so sensors
-run at their own rate instead of a rate the loop imposes. Only a policy knows what its model was
-trained on, so translation to model I/O ships with the policy.
+capabilities, so drivers own how they reach a commanded setpoint. Only a sensor knows its own
+cadence, so sensors run at their own rate instead of a rate the loop imposes. Only a policy knows
+what its model was trained on, so translation to model I/O ships with the policy.
 
 **Components are functions over flowing data.** A component sees nothing but its inputs and touches
 nothing but its outputs. Whatever varies enters as data — time is an observation field, hardware
@@ -116,20 +116,29 @@ control system its clock, and no component reads time at point of use. Trajector
 the same time frame the observations carry, so a virtual clock, a slowed sim, or a replayed episode
 changes nothing downstream.
 
-**Trajectory is the command.** Ownership puts execution with the driver: the policy emits a
-trajectory of waypoints with absolute timestamps, and the driver plays it at its own control rate,
-planning through the waypoints as well as it knows how. Signals are last-value-wins, so a new
-trajectory overwrites the current one — the previous command is merely context for the next.
-Continuous-update schemes (RTC, temporal ensembling) therefore need no special mechanism: they are
-wrappers that rewrite the command more often. An empty trajectory cancels the channel and the
-device holds.
+**The wrapper owns the plan, the harness plays it, the driver executes.** A policy speaks in
+trajectories — waypoints with absolute timestamps — because a model predicts a horizon, not an
+instant. But a trajectory on the wire makes every driver buffer the future, and makes the recording
+guess which prefix of that buffer actually ran. So the plan stops at the harness: a command channel
+carries the single command due at the moment it is emitted, the driver executes the latest one and
+holds otherwise, and emission time *is* execution time. Continuous-update schemes (RTC, temporal
+ensembling) therefore need no special mechanism: they are wrappers that hand back a new trajectory
+more often, and the harness keeps playing the old one until they do.
 
 **The harness stays thin.** It is the one layer standing between any policy and any embodiment, so
 anything it encodes about either side breaks the any-to-any goal. It assembles the observation
-dict, calls the session, demuxes the returned waypoints per command channel, and runs episode
-lifecycle — nothing else. Scheduling, blending, history stacking and error recovery live in the
-wrapper stack around the policy; a session returning `None` means "keep executing the current
+dict, calls the session, plays the returned trajectory one command per channel per round, and runs
+episode lifecycle — nothing else. Scheduling, blending, history stacking and error recovery live in
+the wrapper stack around the policy; a session returning `None` means "keep executing the current
 trajectory".
+
+**Inference cost is a fact of the trial, owned by the harness.** A call costs the trial either the
+wall time it took or nothing: the trial context's `inference_latency` flag asks a sim for the former,
+and a real rig pays it regardless. Only the harness reads the flag. Paying nothing means holding the
+world for the call, which holds a virtual clock still; paying wall time means letting the world run,
+though no further ahead of the call's start than wall time has. The clock the harness hands the
+policy stack (`now`) reads the instant the in-flight call's output takes effect, so a scheduling
+wrapper stamps its chunk at `now()` and never learns the mode.
 
 **Recordings are canonical; codecs bind the dialect late.** The dataset records every run in the
 canonical conventions (frames, key names, absolute time) — never in a model's dialect. Every
