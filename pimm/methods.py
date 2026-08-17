@@ -12,6 +12,8 @@ it serves invocations. `World.connect` binds a caller to a handler wherever the 
 - `incoming()` yields each call once.
 - Each `Call` is answered once, with `set_result` or `set_exception`; answering again raises in the handler.
 - `__call__` returns a `concurrent.futures.Future` completed by the handler's answer and by nothing else.
+- The future never waits: `done()`, `result()` and `exception()` return at once. On an unanswered future
+  `result()` and `exception()` raise `TimeoutError`; a positive `timeout` raises `NotImplementedError`.
 - `cancel()` on the future raises.
 - An exception set by the handler is what `result()` raises at the caller; its traceback does not survive a
   process boundary.
