@@ -139,10 +139,16 @@ class TestCallAndAnswer:
         with pytest.raises(NotImplementedError):
             future.exception(timeout=0.01)
 
-    def test_cancel_raises(self, bound):
+    def test_only_the_answer_completes_the_future(self, bound):
         caller, handler = bound
+        future = caller(None)
         with pytest.raises(NotImplementedError):
-            caller(None).cancel()
+            future.set_result(1)
+        with pytest.raises(NotImplementedError):
+            future.set_exception(ValueError())
+        with pytest.raises(NotImplementedError):
+            future.cancel()
+        assert not future.done()
 
     def test_unbound_caller_raises(self):
         with pytest.raises(RuntimeError):

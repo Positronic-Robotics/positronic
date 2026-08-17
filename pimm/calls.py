@@ -142,12 +142,24 @@ class _ReplyFuture(Future[Res]):
         return super().exception(timeout=0)
 
     def cancel(self) -> bool:
-        raise NotImplementedError('A method call cannot be cancelled')
+        raise NotImplementedError('A call cannot be cancelled')
+
+    def set_result(self, result: Res) -> None:
+        raise NotImplementedError("Only the handler's answer completes a call")
+
+    def set_exception(self, exception: BaseException | None) -> None:
+        raise NotImplementedError("Only the handler's answer completes a call")
+
+    def _complete(self, reply: _Result[Res] | _Failure) -> None:
+        if isinstance(reply, _Result):
+            super().set_result(reply.value)
+        else:
+            super().set_exception(reply.exc)
 
     @staticmethod
     def _reject_waiting(timeout: float | None) -> None:
         if timeout:
-            raise NotImplementedError('A method future cannot wait; poll `done()` between yields')
+            raise NotImplementedError("A call's future cannot wait; poll `done()` between yields")
 
 
 class ControlSystemCaller(Caller[Req, Res]):
@@ -171,8 +183,4 @@ class ControlSystemCaller(Caller[Req, Res]):
 
     def _deliver_replies(self) -> None:
         for reply in _drain(self.replies):
-            future = self._pending.pop(reply.id)
-            if isinstance(reply, _Result):
-                future.set_result(reply.value)
-            else:
-                future.set_exception(reply.exc)
+            self._pending.pop(reply.id)._complete(reply)
