@@ -178,6 +178,47 @@ class MultiCameraSystem(pimm.ControlSystem):
             yield pimm.Sleep(0.03)
 ```
 
+## Methods: Ask and Get an Answer
+
+A signal carries the latest state; a method carries a request that expects a reply. One control
+system declares a `pimm.methods.ControlSystemHandler` and serves calls inside its own loop; another
+declares a `pimm.methods.ControlSystemCaller` and gets a `concurrent.futures.Future` per call. The
+type parameters are the call signature and the result type.
+
+```python
+class Robot(pimm.ControlSystem):
+    def __init__(self):
+        self.reset = pimm.methods.ControlSystemHandler[[bool], None](self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        while not should_stop.value:
+            for call in self.reset.incoming():
+                (home,) = call.args
+                call.set_result(self._reset(home))   # or call.set_exception(exc)
+            yield pimm.Sleep(0.01)
+
+
+class Policy(pimm.ControlSystem):
+    def __init__(self):
+        self.reset = pimm.methods.ControlSystemCaller[[bool], None](self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        done = self.reset(True)
+        while not done.done():
+            yield pimm.Sleep(0.01)
+        done.result()                                # re-raises what the handler set
+        ...
+
+
+world.connect(policy.reset, robot.reset)
+```
+
+`incoming()` yields each call once; a call may be answered right away or kept and answered on a
+later tick. No call and no reply is dropped, whether the two systems share a process or not. A
+future is completed only by the handler's answer and never waits for it: a caller polls `done()`
+between sleeps, and `result()` on an unanswered future raises. The full contract is the docstring of
+[`pimm/methods.py`](methods.py).
+
 ## Control Systems and the World
 
 A control system is any class that subclasses `pimm.ControlSystem` and implements

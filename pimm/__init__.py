@@ -1,4 +1,4 @@
-from . import shared_memory
+from . import methods, shared_memory
 from .core import (
     Clock,
     Command,
@@ -34,6 +34,7 @@ __all__ = [
     'FakeReceiver',
     'map',
     'Message',
+    'methods',
     'NoOpEmitter',
     'NoOpReceiver',
     'NoValueException',
