@@ -23,7 +23,6 @@ invocations. `World.connect` binds a caller to a handler wherever the two run.
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
-from concurrent.futures import InvalidStateError
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
@@ -117,8 +116,7 @@ class _ControlSystemCall(Call[Req, Res]):
         self._answer(_Failure(self._request.id, exc))
 
     def _answer(self, reply: _Result[Res] | _Failure) -> None:
-        if self._answered:
-            raise InvalidStateError(f'Call {self._request.id} is already answered')
+        assert not self._answered, f'Call {self._request.id} is already answered'
         self._replies.emit(reply)
         self._answered = True
 

@@ -1,5 +1,4 @@
 import multiprocessing as mp
-from concurrent.futures import InvalidStateError
 from itertools import islice
 
 import pytest
@@ -126,9 +125,9 @@ class TestCallAndAnswer:
         caller(None)
         (call,) = handler.incoming()
         call.set_result(1)
-        with pytest.raises(InvalidStateError):
+        with pytest.raises(AssertionError):
             call.set_result(2)
-        with pytest.raises(InvalidStateError):
+        with pytest.raises(AssertionError):
             call.set_exception(ValueError())
 
     def test_result_of_an_unanswered_call_raises(self, bound):
