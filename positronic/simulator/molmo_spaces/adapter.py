@@ -43,7 +43,7 @@ class MolmoAdapter(WireCommandAdapter):
         ee_pose = geom.Transform3D(raw_obs[mapping.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[mapping.OBS_EEF_QUAT]))
         state = MujocoFrankaState()
         state.encode(raw_obs[mapping.OBS_JOINT_POS], raw_obs[mapping.OBS_JOINT_VEL], ee_pose)
-        obs: dict[str, Any] = {'robot_state': state, keys.GRIP: float(raw_obs[mapping.OBS_GRIP])}
+        obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs[mapping.OBS_GRIP])}
         for logical, molmo_key in self._camera_dict.items():
             env_key = mapping.resolve_camera_key(raw_obs, molmo_key, _CAMERA_VARIANTS.get(molmo_key, ()))
             frame = raw_obs[env_key]  # MolmoSpaces renders top-down already — no flip

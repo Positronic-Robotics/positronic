@@ -28,7 +28,7 @@ def _payload() -> dict:
 def test_observations_assemble_robot_state():
     payload = _payload()
     obs = MolmoAdapter(CAMERA_DICT).observations(payload)
-    state = obs['robot_state']
+    state = obs[keys.ROBOT_STATE]
     assert np.allclose(state.q, payload[mapping.OBS_JOINT_POS])
     assert np.allclose(state.dq, payload[mapping.OBS_JOINT_VEL])
     assert np.allclose(state.ee_pose.translation, payload[mapping.OBS_EEF_POS])

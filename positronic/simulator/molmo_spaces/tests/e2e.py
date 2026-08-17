@@ -54,9 +54,9 @@ def run(
             for i in range(episodes):
                 frame = conn.reset({mapping.TOKEN_EPISODE_INDEX: i, mapping.TOKEN_SEED: None})
                 obs = adapter.observations(frame[protocol.FRAME_OBS])
-                assert 'robot_state' in obs and keys.GRIP in obs, f'missing contract keys: {sorted(obs)}'
+                assert keys.ROBOT_STATE in obs and keys.GRIP in obs, f'missing contract keys: {sorted(obs)}'
                 assert all(logical in obs for logical in camera_dict), f'missing cameras: {sorted(obs)}'
-                q = obs['robot_state'].q
+                q = obs[keys.ROBOT_STATE].q
                 assert q.shape == (7,), f'unexpected joint shape {q.shape}'
                 sim_state = _check_sim_state(adapter, frame[protocol.FRAME_OBS])
                 print(
