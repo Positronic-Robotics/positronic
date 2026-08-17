@@ -2,6 +2,7 @@ import logging
 import multiprocessing as mp
 import struct
 import time
+from functools import partial
 from queue import Empty, Full
 from unittest.mock import Mock, patch
 
@@ -228,18 +229,13 @@ class TestVirtualClock:
             assert isinstance(world.clock, SystemClock)
 
 
-# Module scope: `start_in_subprocess` pickles the loop to reach a spawned child, and a class defined
-# inside the test would not pickle.
-class HeartbeatLoop:
+# Module scope: `start_in_subprocess` pickles the loop to reach a spawned child, and a definition inside
+# the test would not pickle.
+def heartbeat_loop(emitter, stop_reader, clock):
     """Control loop announcing every iteration of its body."""
-
-    def __init__(self, emitter: SignalEmitter):
-        self.emitter = emitter
-
-    def run(self, stop_reader, clock):
-        while not stop_reader.read().data:
-            self.emitter.emit('beat')
-            yield Sleep(0.01)
+    while not stop_reader.read().data:
+        emitter.emit('beat')
+        yield Sleep(0.01)
 
 
 class TestWorld:
@@ -260,7 +256,7 @@ class TestWorld:
         with world:
             emitter, receiver = world.mp_pipes()
             assert isinstance(receiver, SignalReceiver)
-            world.start_in_subprocess(HeartbeatLoop(emitter).run)
+            world.start_in_subprocess(partial(heartbeat_loop, emitter))
 
             assert len(world.background_processes) == 1
 
