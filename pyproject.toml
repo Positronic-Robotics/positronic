@@ -131,6 +131,7 @@ dev = [
     "pytest-cov",
     "pytest-asyncio",
     "pytest-timeout",
+    "pytest-xdist",
     "pytest",
     "rerun-sdk[notebook]",
     "positronic[telemetry]",  # the telemetry tests exercise the SDK and the samplers
@@ -199,6 +200,9 @@ i2rt = { git = "https://github.com/i2rt-robotics/i2rt.git", rev = "5d47b358bafb3
 testpaths = ["client", "pimm", "positronic", "utilities"]
 python_files = ["test_*.py", "*_test.py"]
 addopts = [
+    # The suite waits on spawned processes and sockets about as much as it computes, so it scales with cores.
+    # `-n0` puts it back in one process, which live logs and `--pdb` need.
+    "-n", "auto",
     "--cov=pimm",
     "--cov=platform_client",
     "--cov=positronic",
