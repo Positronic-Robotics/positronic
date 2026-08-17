@@ -1,9 +1,10 @@
 import configuronic as cfn
 
 from positronic import keys
-from positronic.eval import Eval, Observation, Task
+from positronic.eval import Eval, Observation, Rollout
+from positronic.simulator.env_server.protocol import META_INSTRUCTION
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
-from positronic.simulator.robolab.adapter import RobolabAdapter
+from positronic.simulator.robolab import adapter
 from positronic.simulator.robolab.launcher import serve_robolab
 
 # The 120 benchmark tasks: name -> (categories, episode_length_s). positronic cannot import robolab (it lives in
@@ -150,11 +151,11 @@ def _resolve_tasks(task) -> list[str]:
 @cfn.config(
     camera_dict={keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera', keys.WRIST_IMAGE: 'wrist_cam'},
     instruction_type='default',
-    trial_count=1,
+    rollout_count=1,
     timeout=None,
 )
-def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
-    """A RoboLab eval: the embodiment proxies a remote RoboLab env, the task carries the scenario.
+def _robolab_eval(task, instruction_type, rollout_count, timeout, camera_dict):
+    """A RoboLab eval: the embodiment proxies a remote RoboLab env, each rollout carries one task of it.
 
     RoboLab (https://github.com/NVLabs/RoboLab) is NVIDIA's Isaac Lab benchmark: 120 tabletop manipulation
     tasks on the DROID rig (Franka arm + Robotiq 2F-85), each with a fixed scene, a language instruction in
@@ -165,12 +166,12 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
 
     ``_robolab_eval`` leaves ``task`` unbound; each named config below is a ``.override`` binding it — to a
     single task name, a category, or ``all``. A list of names also works. The instruction is never pinned:
-    the task reads its language live from the env, which reports the resolved instruction in every reset's
-    meta.
+    each rollout reads its language live from the env, which reports the resolved instruction in every
+    reset's meta.
 
     positronic launches a single task-agnostic env server in RoboLab's own Isaac Lab interpreter; the proxy
-    drives it over the socket and the task name + instruction type ride each trial's reset token. There is no
-    per-trial seed: RoboLab's eval path exposes no seed hook, so trial contexts carry none. The env's live
+    drives it over the socket and the task name + instruction type ride each rollout's reset token. There is
+    no per-rollout seed: RoboLab's eval path exposes no seed hook, so the scenes carry none. The env's live
     subtask progress ``[status, completed, total, score]`` is the privileged ground truth (recorded, never
     fed to the policy).
     """
@@ -179,27 +180,28 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
         # The env truncates itself at each task's episode_length_s; the harness deadline is a backstop above
         # the longest selected task.
         timeout = max(_TASKS[name][1] for name in names) + 10.0
-    proxy = RemoteEnvControlSystem(RobolabAdapter(camera_dict), serve_robolab())
+    proxy = RemoteEnvControlSystem(adapter.RobolabAdapter(camera_dict), serve_robolab())
     # The DROID rig's model (Franka arm + Robotiq 2F-85) rides the env's ``robot_meta`` — the launcher
     # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')
-    # RoboLab exposes no seed hook, so trial contexts carry no ``eval.seed``.
-    trials = [
-        {'eval.task': name, 'eval.instruction_type': instruction_type} for name in names for _ in range(trial_count)
+    rollouts = [
+        Rollout(
+            lambda: proxy.meta[META_INSTRUCTION],
+            timeout,
+            {adapter.TASK: name, adapter.INSTRUCTION_TYPE: instruction_type},
+        )
+        for name in names
+        for _ in range(rollout_count)
     ]
-    for i, ctx in enumerate(trials):
-        ctx.update({'eval.trial_index': i, 'eval.trial_count': len(trials)})
-    return Eval(
-        embodiment,
-        Task(
-            instruction=lambda: proxy.meta['task'],
-            timeout=timeout,
-            privileged={'subtask': Observation(proxy.privileged['subtask'], None)},
+    return [
+        Eval(
+            embodiment,
+            rollouts,
             reset=proxy.reset,
+            privileged={'subtask': Observation(proxy.privileged['subtask'], None)},
             done=proxy.done,
-        ),
-        trials,
-    )
+        )
+    ]
 
 
 # The full 120-task benchmark in one run.

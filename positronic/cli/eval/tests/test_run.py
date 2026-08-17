@@ -7,11 +7,11 @@ import pytest
 
 from positronic import telemetry, telemetry_keys
 from positronic.cli.eval.run import _pass_span, main, timed_pass
-from positronic.eval import Embodiment, Eval, Task
+from positronic.eval import Embodiment, Eval
 
 
 def _eval(simulated: bool) -> Eval:
-    return Eval(embodiment=cast(Embodiment, SimpleNamespace(simulated=simulated)), task=cast(Task, SimpleNamespace()))
+    return Eval(embodiment=cast(Embodiment, SimpleNamespace(simulated=simulated)))
 
 
 def test_timed_sweep_rejects_real_embodiment(tmp_path):
@@ -37,8 +37,7 @@ def test_an_exhausted_trial_plan_ends_the_sweep():
     embodiment = Embodiment(
         descriptor='stub', observations={}, commands={}, static_meta={}, meta_source=None, simulated=True
     )
-    task = Task(instruction='stub', timeout=0.05)
-    main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, task=task, trials=[])])
+    main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, rollouts=[])])
 
 
 def test_timed_sweep_needs_an_output_dir():

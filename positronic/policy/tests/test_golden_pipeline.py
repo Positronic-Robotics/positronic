@@ -203,7 +203,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
             static_meta=dict(ROBOT_STATIC_META),
             meta_source=robot.robot_meta,
         )
-        harness = Harness(ChunkedSchedule().wrap(policy), embodiment)
+        harness = Harness(ChunkedSchedule().wrap(policy), embodiment, inference_latency=INFERENCE_LATENCY_S)
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
         directive_em = world.pair(harness.directive)
@@ -211,7 +211,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
         # Robot/gripper emit state every tick, so the script only drives the
         # episode lifecycle and the one-shot error injection.
         script = [
-            (partial(directive_em.emit, Directive.RUN(task='golden', inference_latency=INFERENCE_LATENCY_S)), 0.0),
+            (partial(directive_em.emit, Directive.RUN(task='golden')), 0.0),
             (None, 1.5),  # several reactive inference + chunk/horizon cycles
             (robot.inject_error, 0.0),  # one-shot error: that frame is dropped, then inference resumes
             (None, 0.5),

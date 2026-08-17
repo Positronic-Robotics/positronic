@@ -1,6 +1,5 @@
 import os
 import xml.etree.ElementTree as ET
-from dataclasses import replace
 
 import mujoco as mj
 import numpy as np
@@ -17,7 +16,7 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.models import bundled_panda_model
-from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
+from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Rollout
 from positronic.policy.tests.test_harness import RemoteStubPolicy, StubPolicy
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.simulator.env_server import telemetry as env_telemetry
@@ -69,31 +68,29 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     camera_dict = {keys.WRIST_IMAGE: 'handcam_left_ph'}
 
     with pos3.mirror():
-        ev = stack_cubes(
+        evals = stack_cubes(
             mujoco_model_path='positronic/assets/mujoco/franka_table.xml',
             loaders=positronic.cfg.simulator.stack_cubes_loaders(),
             camera_fps=10,
             camera_dict=camera_dict,
             instruction='integration-test',
             timeout=0.4,
+            seed=100,
+            rollout_count=2,
         )
-        main(
-            policy=ChunkedSchedule().wrap(policy),
-            evals=[replace(ev, trials=[{'eval.trial_index': i, 'eval.seed': 100 + i} for i in range(2)])],
-            output_dir=str(tmp_path),
-        )
+        main(policy=ChunkedSchedule().wrap(policy), evals=evals, output_dir=str(tmp_path))
 
     ds = LocalDataset(tmp_path)
-    # Two trials: the harness runs the plan itself, self-terminating each trial at the task's timeout.
+    # Two rollouts: the harness runs the plan itself, self-terminating each at its own timeout.
     assert len(ds) == 2
 
     episode = ds[0]
     assert episode.static[keys.EVAL_TERMINATED] is False
-    assert episode.static['eval.trial_index'] == 0
-    assert episode.static['eval.seed'] == 100
-    assert episode.static['eval.universe'] == 'sim'
-    assert episode.static['eval.embodiment'] == 'mujoco.franka'
-    assert episode.static['eval.timeout'] == 0.4
+    assert episode.static[keys.EVAL_ROLLOUT_INDEX] == 0
+    assert episode.static[keys.EVAL_SEED] == 100
+    assert episode.static[keys.EVAL_UNIVERSE] == 'sim'
+    assert episode.static[keys.EVAL_EMBODIMENT] == 'mujoco.franka'
+    assert episode.static[keys.EVAL_TIMEOUT] == 0.4
     # The post-loader scene description rides robot_meta into static: with eval.seed it makes
     # the episode self-contained for downstream scoring and faithful replay.
     assert episode.static['scene_xml'].startswith('<mujoco')
@@ -142,7 +139,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     last_obs = policy.observations[-1]
     assert isinstance(last_obs[keys.WRIST_IMAGE], np.ndarray)
     assert keys.EE_POSE in last_obs
-    # The task's instruction is injected by the harness.
+    # The rollout instruction is injected by the harness.
     assert last_obs[keys.TASK] == 'integration-test'
     assert last_obs['descriptor'] == 'mujoco.franka'
 
@@ -192,7 +189,7 @@ class _CountdownProducer(pimm.ControlSystem):
                     self._active = False
 
 
-def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
+def _countdown_eval(producer: _CountdownProducer, timeout: float, rollout_count: int = 1) -> Eval:
     embodiment = Embodiment(
         descriptor='test.countdown',
         observations={'value': Observation(producer.observations['value'], None)},
@@ -206,8 +203,8 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
         control_systems=(producer,),
         simulated=True,
     )
-    task = Task(instruction='count', timeout=timeout, privileged={}, reset=producer.reset, done=producer.done)
-    return Eval(embodiment, task)
+    rollouts = [Rollout('count', timeout, {keys.EVAL_SEED: i}) for i in range(rollout_count)]
+    return Eval(embodiment, rollouts, reset=producer.reset, done=producer.done)
 
 
 @pytest.mark.timeout(30.0)
@@ -217,11 +214,11 @@ def test_countdown_records_frame0_every_trial(tmp_path):
     drops the pre-reset frame and the producer publishes frame-0 in sequence. The small ``control_dt`` wakes
     the producer quickly between trials, so a stray step would overwrite frame-0 if it weren't published in
     the producer's own turn."""
-    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.35)
+    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.35, rollout_count=2)
     with pos3.mirror():
         main(
             policy=StubPolicy(command=ev.embodiment.commands[keys.ROBOT_COMMAND].home, target_grip=0.0),
-            evals=[replace(ev, trials=[{'eval.trial_index': i, 'eval.seed': i} for i in range(2)])],
+            evals=[ev],
             # the degenerate obs is not Franka-shaped, so run the policy unwrapped
             output_dir=str(tmp_path),
         )
@@ -239,13 +236,13 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     span taxonomy nests (episode under pass; reset, policy.infer and the recorder's record.io under episode),
     and the machine-load stats stream records at least one sample. record.io parenting proves the episode span
     stays in flight while the recorder commits STOP."""
-    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2)
+    ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2, rollout_count=2)
     with pos3.mirror():
         main(
             policy=ChunkedSchedule().wrap(
                 RemoteStubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0)
             ),
-            evals=[replace(ev, trials=[{'eval.trial_index': i} for i in range(2)])],
+            evals=[ev],
             output_dir=str(tmp_path),
             timing=True,
         )
@@ -290,7 +287,7 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     with pos3.mirror():
         main(
             policy=StubPolicy(command=ev.embodiment.commands[keys.ROBOT_COMMAND].home, target_grip=0.0),
-            evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
+            evals=[ev],
             output_dir=str(tmp_path),
         )
 
@@ -299,7 +296,7 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     episode = ds[0]
     assert episode.static[keys.EVAL_TERMINATED] is True
     assert episode.static[keys.EVAL_SUCCESS] is True  # the delivered ``done`` payload lands in static data
-    assert episode.static['eval.embodiment'] == 'test.countdown'
+    assert episode.static[keys.EVAL_EMBODIMENT] == 'test.countdown'
     # The terminal frame (the step where ``done`` fired) is recorded, not dropped by STOP closing the writer.
     values = [v for v, _ in episode.signals['value']]
     assert values[-1][0] == 4.0

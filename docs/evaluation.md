@@ -31,7 +31,7 @@ Score a suite, and browse every trial — video, robot state, per-trial success:
 # --policy.url is where the server is — <remote-server>:8000 if it runs on another machine
 uv run positronic eval run --eval=.sim.libero.object \
   --policy=.remote --policy.url=localhost:8000 \
-  --eval.trial_count=10 --output_dir=~/evals/libero
+  --eval.rollout_count=10 --output_dir=~/evals/libero
 
 uv run positronic-server --dataset.path=~/evals/libero \
   --ep_table_cfg=@positronic.cfg.server.eval_table

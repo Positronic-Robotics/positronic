@@ -1,5 +1,4 @@
 from contextlib import nullcontext
-from dataclasses import replace
 
 import numpy as np
 import pos3
@@ -14,13 +13,14 @@ from positronic.cli.eval.run import main
 from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.eval import Task
+from positronic.eval import Rollout
 from positronic.policy import Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.policy.wrappers import ChunkedSchedule
 from positronic.simulator.env_server.adapter import EnvAdapter, _in_env_control_frame, _wire_command
 from positronic.simulator.env_server.client import EnvConnection
+from positronic.simulator.env_server.protocol import META_INSTRUCTION
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.env_server.tests.conftest import serve_env
@@ -190,7 +190,7 @@ class _CountdownEnv(EnvProtocol):
 
     def reset(self, token):
         self._steps = 0
-        meta = {'task': 'countdown'}  # scene meta the env reports only at reset; ``step`` omits it
+        meta = {META_INSTRUCTION: 'countdown'}  # scene meta the env reports only at reset; ``step`` omits it
         return {
             'obs': {'q': np.full(7, self._steps, dtype=np.float64)},
             'meta': meta,
@@ -209,7 +209,7 @@ class _CountdownEnv(EnvProtocol):
 
 class _CountdownAdapter(EnvAdapter):
     def reset_token(self, context):
-        return context.get('eval.seed')
+        return context[keys.EVAL_SEED]
 
     def action(self, commands, now_ns):
         return {}
@@ -237,7 +237,7 @@ def test_proxy_publishes_frame0_then_free_runs():
         scheduler = world.start([proxy])
         drive_scheduler(scheduler, steps=2)  # inactive: the proxy paces time without an env
 
-        proxy.reset({'eval.seed': 0})  # arm frame-0; the run loop publishes it on its next turn
+        proxy.reset({keys.EVAL_SEED: 0})  # arm frame-0; the run loop publishes it on its next turn
         drive_scheduler(scheduler, steps=1)
         np.testing.assert_array_equal(obs_rx.read().data, np.zeros(7))
         assert done_rx.read().data == {}
@@ -248,35 +248,30 @@ def test_proxy_publishes_frame0_then_free_runs():
 
 @pytest.mark.timeout(60.0)
 def test_proxy_caches_reset_meta_as_live_instruction_source():
-    """The env reports scene meta only at ``reset`` (``step`` omits it); the proxy caches it so a ``Task``
+    """The env reports scene meta only at ``reset`` (``step`` omits it); the proxy caches it so a ``Rollout``
     reads its language live off ``proxy.meta`` — the callable-instruction path LIBERO relies on — and the
     cached value holds across the steps that follow."""
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
-        task = Task(instruction=lambda: proxy.meta['task'], timeout=1.0, reset=proxy.reset)
+        rollout = Rollout(lambda: proxy.meta[META_INSTRUCTION], 1.0)
         scheduler = world.start([proxy])
 
-        proxy.reset({'eval.seed': 0})
-        assert task.instruction == 'countdown'  # resolved live off the cached reset meta
+        proxy.reset({keys.EVAL_SEED: 0})
+        assert rollout.instruction == 'countdown'  # resolved live off the cached reset meta
         drive_scheduler(scheduler, steps=4)  # the env steps, each ``step`` omitting meta ...
-        assert task.instruction == 'countdown'  # ... yet the reset-scoped cache holds
+        assert rollout.instruction == 'countdown'  # ... yet the reset-scoped cache holds
 
 
 @pytest.mark.timeout(60.0)
 def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
-    """The real ``stack_cubes`` wrapper, end to end: no terminal, so the trial runs to the task timeout
+    """The real ``stack_cubes`` wrapper, end to end: no terminal, so the rollout runs to its timeout
     (``eval.terminated`` False, ``eval.success`` absent) and records the canonical signals under the shared
     camera key."""
     host, port = env_server
     with pos3.mirror():
-        ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        ev.task.timeout = 0.1
+        ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS, timeout=0.1)
         policy = StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
-        main(
-            policy=ChunkedSchedule().wrap(policy),
-            evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
-            output_dir=str(tmp_path),
-        )
+        main(policy=ChunkedSchedule().wrap(policy), evals=[ev], output_dir=str(tmp_path))
 
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
@@ -284,8 +279,8 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     assert isinstance(episode, Episode)
     assert episode.static[keys.EVAL_TERMINATED] is False
     assert keys.EVAL_SUCCESS not in episode.static
-    assert episode.static['eval.universe'] == 'sim'
-    assert episode.static['eval.embodiment'] == 'remote.mujoco.franka'
+    assert episode.static[keys.EVAL_UNIVERSE] == 'sim'
+    assert episode.static[keys.EVAL_EMBODIMENT] == 'remote.mujoco.franka'
     assert episode.static['scene_xml'].startswith('<mujoco')
     signals = episode.signals
     assert keys.EXTERIOR_IMAGE in signals
@@ -299,8 +294,8 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
 def test_every_sim_eval_publishes_the_shared_camera_keys(eval_cfg):
     """A codec names the camera it wants, so a sim spelling its cameras its own way can be scored only by a codec
     written for it. Every sim publishes the shared pair, whatever the benchmark calls those cameras."""
-    observations = eval_cfg.instantiate().embodiment.observations
-    assert {keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE} <= set(observations)
+    (ev,) = eval_cfg.instantiate()
+    assert {keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE} <= set(ev.embodiment.observations)
 
 
 class _JointposChunks(Policy):
@@ -343,13 +338,8 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     raw = _JointposChunks(roboarm_command.JointPosition(np.zeros(7)), chunk_len)
     policy = (ChunkedSchedule() | ActionTimestamp(fps=1.0 / control_dt)).wrap(raw)
     with pos3.mirror():
-        ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        ev.task.timeout = 20 * control_dt
-        main(
-            policy=policy,
-            evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
-            output_dir=str(tmp_path),
-        )
+        ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS, timeout=20 * control_dt)
+        main(policy=policy, evals=[ev], output_dir=str(tmp_path))
 
     grip = LocalDataset(tmp_path)[0].signals['target_grip']
     executed = [(float(v), int(ts)) for v, ts in (grip[i] for i in range(len(grip)))]

@@ -19,7 +19,7 @@ import positronic.cfg.simulator
 from pimm.world import LocalQueueEmitter, LocalQueueReceiver, VirtualClock
 from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.eval import Eval, Observation, Task
+from positronic.eval import Eval, Observation, Rollout
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.env_server.server import EnvProtocol
@@ -165,7 +165,7 @@ class StackCubesAdapter(WireCommandAdapter):
         self._camera_dict = camera_dict  # logical observation name -> the env's model camera name
 
     def _reset_token(self, context: dict[str, Any]) -> Any:
-        return context.get('eval.seed')
+        return context[keys.EVAL_SEED]
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         state = MujocoFrankaState()
@@ -187,17 +187,16 @@ class StackCubesAdapter(WireCommandAdapter):
         return None  # native stack_cubes scores downstream — it reports no live terminal
 
 
-def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]) -> Eval:
-    """Build the remote ``stack_cubes`` eval (embodiment + task) wired to a running env server."""
+def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str], timeout: float) -> Eval:
+    """Build the remote ``stack_cubes`` eval — one seeded rollout — wired to a running env server."""
     # The server is already up (the test fixture owns it), so the proxy just receives its address.
     proxy = RemoteEnvControlSystem(StackCubesAdapter(camera_dict), nullcontext((host, port)))
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.mujoco.franka')
-    privileged = {'sim_state': Observation(proxy.privileged['sim_state'], None)}
-    task = Task(
-        instruction='Pick up the green cube and place it on the red cube.',
-        timeout=15.0,
-        privileged=privileged,
+    rollout = Rollout('Pick up the green cube and place it on the red cube.', timeout, {keys.EVAL_SEED: 100})
+    return Eval(
+        embodiment,
+        [rollout],
         reset=proxy.reset,
+        privileged={'sim_state': Observation(proxy.privileged['sim_state'], None)},
         done=proxy.done,
     )
-    return Eval(embodiment, task)

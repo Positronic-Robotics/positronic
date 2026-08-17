@@ -30,7 +30,7 @@ import cv2  # noqa: F401 -- robolab requires cv2 imported before isaaclab
 import numpy as np
 import torch
 from isaaclab.app import AppLauncher
-from protocol import decode
+from protocol import META_INSTRUCTION, decode
 from server import EnvProtocol, EnvServer
 
 
@@ -173,7 +173,7 @@ class RobolabEnv(EnvProtocol):
         # ``instruction`` is the resolved language goal (``create_env`` picks the variant); the rest is the
         # task identity the episode records.
         self._meta = {
-            'task': self._env_cfg.instruction,
+            META_INSTRUCTION: self._env_cfg.instruction,
             'env_name': env_name,
             'task_name': self._env_cfg._task_name,
             'attributes': list(self._env_cfg._task_attributes),

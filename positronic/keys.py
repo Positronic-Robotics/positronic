@@ -88,3 +88,17 @@ SERVER_META = f'{POLICY_META}.{SERVER}'
 # leaves it absent on failure — a reader defaults it rather than assuming a False.
 EVAL_SUCCESS = 'eval.success'
 EVAL_TERMINATED = 'eval.terminated'
+
+# The draw a rollout's scene is staged from: same seed, same scene.
+EVAL_SEED = 'eval.seed'
+
+# Which eval produced an episode, and how its rollout was bounded. ``EVAL_TIMEOUT`` is absent on an
+# unbounded rollout, and the plan position on one no plan authored.
+EVAL_UNIVERSE = 'eval.universe'
+EVAL_EMBODIMENT = 'eval.embodiment'
+EVAL_TIMEOUT = 'eval.timeout'
+EVAL_ROLLOUT_INDEX = 'eval.rollout_index'
+EVAL_ROLLOUT_COUNT = 'eval.rollout_count'
+
+# The simulated inference cost the episode was recorded under.
+INFERENCE_LATENCY = 'inference_latency'
