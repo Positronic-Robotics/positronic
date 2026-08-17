@@ -1,7 +1,7 @@
 """Calls: request/reply between control systems, the counterpart of signals.
 
-A control system declares a `MethodCaller` where it invokes another control system and a `MethodHandler` where
-it serves invocations. `World.connect` binds a caller to a handler wherever the two run.
+A control system declares a `Caller` where it invokes another control system and a `Handler` where it serves
+invocations. `World.connect` binds a caller to a handler wherever the two run.
 
 - A handler serves at most one caller; unbound, its `incoming()` yields nothing.
 - Calling an unbound caller raises.
@@ -14,7 +14,8 @@ it serves invocations. `World.connect` binds a caller to a handler wherever the 
 - Each `Call` is answered once, with `set_result` or `set_exception`; answering again raises in the handler.
 - `__call__` returns a `concurrent.futures.Future` completed by the handler's answer and by nothing else.
 - The future never waits: `done()`, `result()` and `exception()` return at once. On an unanswered future
-  `result()` and `exception()` raise `TimeoutError`; a positive `timeout` raises `NotImplementedError`.
+  `result()` and `exception()` raise `TimeoutError`; a positive `timeout` raises `NotImplementedError`;
+  `concurrent.futures.wait()` and `as_completed()` never return for it.
 - `cancel()` on the future raises.
 - An exception set by the handler is what `result()` raises at the caller; its traceback does not survive a
   process boundary.
@@ -49,12 +50,12 @@ class Call(ABC, Generic[Req, Res]):
     def set_exception(self, exc: BaseException) -> None: ...
 
 
-class MethodCaller(ABC, Generic[Req, Res]):
+class Caller(ABC, Generic[Req, Res]):
     @abstractmethod
     def __call__(self, request: Req) -> Future[Res]: ...
 
 
-class MethodHandler(ABC, Generic[Req, Res]):
+class Handler(ABC, Generic[Req, Res]):
     @abstractmethod
     def incoming(self) -> Iterator[Call[Req, Res]]:
         """Calls not yet yielded; each may be answered now or on a later tick."""
@@ -107,7 +108,7 @@ class _ControlSystemCall(Call[Req, Res]):
         self._answered = True
 
 
-class ControlSystemHandler(MethodHandler[Req, Res]):
+class ControlSystemHandler(Handler[Req, Res]):
     """A control system's handler; `requests` and `replies` are the signal endpoints `World.connect` binds."""
 
     def __init__(self, owner: ControlSystem):
@@ -149,7 +150,7 @@ class _ReplyFuture(Future[Res]):
             raise NotImplementedError('A method future cannot wait; poll `done()` between yields')
 
 
-class ControlSystemCaller(MethodCaller[Req, Res]):
+class ControlSystemCaller(Caller[Req, Res]):
     """A control system's caller; `requests` and `replies` are the signal endpoints `World.connect` binds."""
 
     def __init__(self, owner: ControlSystem):

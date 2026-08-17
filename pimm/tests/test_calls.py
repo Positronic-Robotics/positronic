@@ -167,7 +167,7 @@ class TestWorldConnect:
             with pytest.raises(AssertionError):
                 world.connect(caller, ControlSystemHandler(Passive()))
 
-    def test_wrappers_do_not_apply_to_methods(self):
+    def test_wrappers_do_not_apply_to_calls(self):
         caller, handler = ControlSystemCaller(Passive()), ControlSystemHandler(Passive())
         with World() as world:
             with pytest.raises(AssertionError):

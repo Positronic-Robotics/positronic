@@ -645,7 +645,7 @@ class World:
         """
         if isinstance(source, ControlSystemCaller):
             assert isinstance(target, ControlSystemHandler)
-            assert emitter_wrapper is identity and receiver_wrapper is identity, 'Wrappers do not apply to methods'
+            assert emitter_wrapper is identity and receiver_wrapper is identity, 'Wrappers do not apply to calls'
             assert not self._is_connected(target.requests), 'Handler can serve only one Caller'
             assert not self._is_connected(source.replies), 'Caller can be connected only to one Handler'
             self.connect(source.requests, target.requests)
