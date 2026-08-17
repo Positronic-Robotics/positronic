@@ -1,9 +1,10 @@
 """Methods: request/reply between control systems, the counterpart of signals.
 
 A control system declares a `MethodCaller` where it invokes another control system and a `MethodHandler` where
-it serves invocations. The world binds a caller to a handler wherever the two run.
+it serves invocations. `World.connect` binds a caller to a handler wherever the two run.
 
-- A handler serves at most one caller.
+- A handler serves at most one caller; unbound, its `incoming()` yields nothing.
+- Calling an unbound caller raises.
 - The contract is the same in-process and across processes; across processes arguments, results and exceptions
   must be picklable.
 - No call and no reply is dropped.
