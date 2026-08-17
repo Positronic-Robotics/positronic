@@ -317,7 +317,7 @@ def test_harness_emits_cartesian_move(world):
         keys.JOINT_VEL,
         keys.EE_POSE,
         keys.GRIP,
-        keys.ROBOT_FAULT,
+        keys.ROBOT_STATUS,
         keys.TASK,
         keys.DESCRIPTOR,
     }
@@ -1260,15 +1260,16 @@ def test_harness_clears_trajectory_on_run(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_harness_skips_inference_on_error(world):
-    """An errored arm serializes to None, so the harness feeds nothing to the policy until the arm reports
-    AVAILABLE again, then resumes with a fresh chunk."""
+@pytest.mark.parametrize('unsound', [RobotStatus.RESETTING, RobotStatus.ERROR])
+def test_the_stack_keeps_the_model_away_from_an_arm_with_no_pose(world, unsound):
+    """An unsound arm reports no pose, and ``StopOnFault`` answers its observation itself rather than pass a
+    pose-less one to the model. Once the arm is sound the model is asked again, on a fresh chunk."""
     policy = ChunkPolicy()
-    harness = Harness(ChunkedSchedule().wrap(policy), make_embodiment())
+    harness = Harness((StopOnFault() | ChunkedSchedule()).wrap(policy), make_embodiment())
     p = _pair_all(world, harness)
 
     state_ok = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
-    state_err = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR)
+    state_unsound = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=unsound)
 
     scheduler = world.start([harness])
 
@@ -1279,9 +1280,9 @@ def test_harness_skips_inference_on_error(world):
     assert _last_grip(p) >= 100.0
 
     obs_before = len(policy.observations)
-    p['robot_em'].emit(state_err)
+    p['robot_em'].emit(state_unsound)
     drive_scheduler(scheduler, steps=2)
-    assert len(policy.observations) == obs_before  # the errored state is never fed to the policy
+    assert len(policy.observations) == obs_before, 'the model was asked about an arm with no pose to give'
 
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], state_ok)
     drive_scheduler(scheduler, steps=20)  # long enough for the first chunk to play out and the next to land
@@ -1335,16 +1336,16 @@ def test_cartesian_delta_applies_in_world_frame():
 
 
 @pytest.mark.parametrize('status', [RobotStatus.RESETTING, RobotStatus.ERROR])
-def test_robot_state_serializer_drops_not_ready(status):
+def test_robot_state_serializer_drops_a_not_ready_pose(status):
     state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=status)
-    assert Serializers.robot_state(state) is None
+    assert Serializers.robot_state(state) == {'.status': status}
 
 
-def test_robot_state_serializer_available_has_no_error_key():
+def test_robot_state_serializer_emits_the_status_beside_a_ready_pose():
     state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
     serialized = Serializers.robot_state(state)
-    assert serialized is not None
-    assert set(serialized) == {'.q', '.dq', '.ee_pose'}
+    assert set(serialized) == {'.status', '.q', '.dq', '.ee_pose'}
+    assert serialized['.status'] is RobotStatus.AVAILABLE
 
 
 @pytest.mark.timeout(3.0)
@@ -1819,9 +1820,10 @@ def test_harness_keeps_playing_while_a_call_is_in_flight(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_a_faulted_arm_reaches_the_policy_without_its_state(world):
-    """A fault is not swallowed as "no observation": it goes up to the policy stack, which owns what to do
-    about it. The arm's own entries are absent — a faulted arm has no sample to give."""
+@pytest.mark.parametrize('unsound', [RobotStatus.RESETTING, RobotStatus.ERROR])
+def test_an_unsound_arm_reaches_the_policy_without_its_pose(world, unsound):
+    """An arm with no pose to give is not swallowed as "no observation": its status goes up to the policy
+    stack, which owns what to do about it, and the arm's pose entries are simply absent."""
     policy = SpyPolicy()
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
@@ -1834,7 +1836,7 @@ def test_a_faulted_arm_reaches_the_policy_without_its_state(world):
                 p['frame_em'],
                 p['robot_em'],
                 p['grip_em'],
-                make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR),
+                make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=unsound),
             ),
             0.01,
         ),
@@ -1843,16 +1845,16 @@ def test_a_faulted_arm_reaches_the_policy_without_its_state(world):
 
     drive_scheduler(world.start([harness, driver]), steps=40)
 
-    assert policy.last_obs is not None, 'the fault never reached the policy'
-    assert policy.last_obs[keys.ROBOT_FAULT] is True
+    assert policy.last_obs is not None, 'the status never reached the policy'
+    assert policy.last_obs[keys.ROBOT_STATUS] is unsound
     assert keys.JOINTS not in policy.last_obs
     assert keys.EE_POSE not in policy.last_obs
 
 
 @pytest.mark.timeout(3.0)
-def test_one_arm_resetting_does_not_hide_another_arms_fault(world):
-    """A resetting arm and a faulted one both serialize to nothing. The fault wins whichever channel the
-    embodiment happens to list first, so a bimanual rig cannot carry on driving a faulted arm."""
+def test_every_arm_of_a_bimanual_rig_reports_its_own_status(world):
+    """One arm resetting and the other faulted reach the stack as themselves: neither channel stands in for
+    the other, whichever the embodiment happens to list first."""
     left, right = f'{keys.ROBOT_STATE}.left', f'{keys.ROBOT_STATE}.right'
     embodiment = Embodiment(
         '',
@@ -1887,8 +1889,9 @@ def test_one_arm_resetting_does_not_hide_another_arms_fault(world):
 
     drive_scheduler(world.start([harness, driver]), steps=40)
 
-    assert policy.last_obs is not None, 'the resetting arm swallowed the other arm’s fault'
-    assert policy.last_obs[keys.ROBOT_FAULT] is True
+    assert policy.last_obs is not None, 'neither arm reached the policy'
+    assert policy.last_obs[f'{right}.status'] is RobotStatus.ERROR
+    assert policy.last_obs[f'{left}.status'] is RobotStatus.RESETTING
 
 
 def test_the_trial_context_cannot_stand_in_for_what_the_harness_read(world):
@@ -1905,7 +1908,7 @@ def test_the_trial_context_cannot_stand_in_for_what_the_harness_read(world):
     directive_em = cast(pimm.SignalEmitter, world.pair(harness.directive))
 
     faulted = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR)
-    context = {'task': 'test', keys.ROBOT_FAULT: False, keys.GRIP: 'from the config'}
+    context = {'task': 'test', keys.ROBOT_STATUS: RobotStatus.AVAILABLE, keys.GRIP: 'from the config'}
     driver = ManualDriver([
         (partial(directive_em.emit, Directive.RUN(**context)), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, faulted), 0.01),
@@ -1915,7 +1918,7 @@ def test_the_trial_context_cannot_stand_in_for_what_the_harness_read(world):
     drive_scheduler(world.start([harness, driver]), steps=40)
 
     assert policy.last_obs is not None
-    assert policy.last_obs[keys.ROBOT_FAULT] is True, 'a context key reported the faulted arm sound'
+    assert policy.last_obs[keys.ROBOT_STATUS] is RobotStatus.ERROR, 'a context key reported the faulted arm sound'
     assert policy.last_obs[keys.GRIP] != 'from the config', 'a context key stood in for a channel'
 
 

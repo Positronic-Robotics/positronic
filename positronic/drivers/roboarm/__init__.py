@@ -4,7 +4,7 @@ This package provides drivers for various robot arms including Franka, Kinova, a
 """
 
 from abc import ABC, abstractmethod
-from enum import Enum
+from enum import IntEnum
 
 import numpy as np
 
@@ -14,7 +14,7 @@ from positronic import geom
 from . import command
 
 
-class RobotStatus(Enum):
+class RobotStatus(IntEnum):
     """Different statuses that the robot can be in.
 
     The exact meaning of this statuses currently is defined by the robot driver. But in general:
@@ -29,6 +29,12 @@ class RobotStatus(Enum):
     RESETTING = 1
     MOVING = 2
     ERROR = 3
+
+
+def is_sound(status: int) -> bool:
+    """Whether the arm is tracking the commands it was given and its pose is worth reading. Takes the
+    status's number as readily as the member, that being what a dataset and the offboard wire give back."""
+    return status in (RobotStatus.AVAILABLE, RobotStatus.MOVING)
 
 
 class State(ABC):
@@ -66,4 +72,4 @@ class State(ABC):
         return None
 
 
-__all__ = ['RobotStatus', 'State', 'command']
+__all__ = ['RobotStatus', 'State', 'command', 'is_sound']

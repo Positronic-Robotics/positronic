@@ -12,6 +12,7 @@ from collections import deque
 import numpy as np
 
 from positronic import keys
+from positronic.drivers.roboarm import is_sound
 from positronic.policy.base import DelegatingSession, Now, PolicyWrapper, Session
 
 
@@ -20,23 +21,37 @@ def _obs_time(obs) -> float:
     return obs[keys.OBS_TIME_NS] / 1e9
 
 
+# TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
+# domain types reach the border, this reads the status off the value.
+def _is_robot_status(name: str) -> bool:
+    """Whether ``name`` is an arm's status: ``robot_state.status``, or an arm's ``robot_state.{side}.status``."""
+    return name.startswith(f'{keys.ROBOT_STATE}.') and name.endswith('.status')
+
+
+def _arms_sound(obs) -> bool:
+    """Whether every arm in the observation is sound. An observation naming no arm status — a probe
+    replaying a recording — has no arm to be unsound."""
+    return all(is_sound(v) for name, v in obs.items() if _is_robot_status(name))
+
+
 class StopOnFault(PolicyWrapper):
-    """Stop the arm while it is faulted, and plan afresh once it recovers.
+    """Stop the arm while it is not sound, and plan afresh once it is.
 
-    A faulted arm is not tracking the plan it was given, so the plan is worthless: this answers the empty
-    trajectory — stop what is executing — and resets the sessions below, so the first sound observation after
-    recovery reaches the model instead of resuming a chunk stamped before the fault. It belongs outside the
-    scheduling wrapper, which would otherwise answer "keep playing" without ever seeing the fault.
+    An arm that is faulted or resetting is not tracking the plan it was given, so the plan is worthless:
+    this answers the empty trajectory — stop what is executing — and resets the sessions below, so the first
+    sound observation reaches the model instead of resuming a chunk stamped before. It belongs outside the
+    scheduling wrapper, which would otherwise answer "keep playing" without ever seeing the status.
 
-    The fault is ``keys.ROBOT_FAULT``, which the harness stamps on every observation it builds. An
-    observation from anywhere else — a probe replaying a recording — carries no arm to fault.
+    It is also what keeps a pose-less observation away from everything downstream: an unsound arm reports
+    its status and no ``q``/``dq``/``ee_pose``, which a codec reading them by name cannot answer. Every arm
+    in the observation is checked, so a bimanual rig stops on either.
     """
 
     WIRE_NAME = 'stop_on_fault'
 
     class _Session(DelegatingSession):
         def __call__(self, obs):
-            if not obs.get(keys.ROBOT_FAULT, False):
+            if _arms_sound(obs):
                 return self._inner(obs)
             self.cancel()
             return []

@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from positronic import keys
+from positronic.drivers.roboarm import RobotStatus
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
 from positronic.policy.action import (
@@ -63,41 +64,57 @@ class _ConstPolicy(Policy):
         return self._session
 
 
-def _obs(now_sec=0.0, fault=False):
-    return {keys.OBS_TIME_NS: int(now_sec * 1e9), keys.ROBOT_FAULT: fault}
+def _obs(now_sec=0.0, status=RobotStatus.AVAILABLE):
+    return {keys.OBS_TIME_NS: int(now_sec * 1e9), keys.ROBOT_STATUS: status}
 
 
 class TestStopOnFault:
-    def test_a_faulted_arm_stops_what_is_executing(self):
+    @pytest.mark.parametrize('unsound', [RobotStatus.ERROR, RobotStatus.RESETTING])
+    def test_an_unsound_arm_stops_what_is_executing(self, unsound):
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().wrap_session(inner, None, None)
 
-        assert session(_obs(0.0, fault=True)) == []
+        assert session(_obs(0.0, unsound)) == []
         assert inner.call_count == 0, 'the model was asked about an arm that is not tracking it'
 
-    def test_a_sound_arm_reaches_the_model(self):
+    @pytest.mark.parametrize('sound', [RobotStatus.AVAILABLE, RobotStatus.MOVING])
+    def test_a_sound_arm_reaches_the_model(self, sound):
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().wrap_session(inner, None, None)
 
-        assert session(_obs(0.0)) is not None
+        assert session(_obs(0.0, sound)) is not None
         assert inner.call_count == 1
 
-    def test_an_observation_with_no_flag_is_not_a_fault(self):
-        """Only the harness stamps the flag; a probe replaying a recording has no arm to fault."""
+    def test_an_observation_with_no_arm_status_reaches_the_model(self):
+        """A probe replaying a recording has no arm to stop for."""
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().wrap_session(inner, None, None)
 
         assert session({keys.OBS_TIME_NS: 0}) is not None
         assert inner.call_count == 1
 
+    def test_either_arm_of_a_bimanual_rig_stops_the_pair(self):
+        """Whichever arm is unsound stops the pair, and the status counts as its number: a server-side stack
+        reads it off a wire with no enum to carry."""
+        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        session = StopOnFault().wrap_session(inner, None, None)
+        obs = {
+            keys.OBS_TIME_NS: 0,
+            f'{keys.ROBOT_STATE}.left.status': int(RobotStatus.AVAILABLE),
+            f'{keys.ROBOT_STATE}.right.status': int(RobotStatus.ERROR),
+        }
+
+        assert session(obs) == []
+        assert inner.call_count == 0
+
     def test_recovery_plans_afresh_instead_of_resuming(self):
-        """The fault resets the scheduler below it, so the first sound observation infers again rather than
-        waiting out the chunk stamped before the fault."""
+        """The stop resets the scheduler below it, so the first sound observation infers again rather than
+        waiting out the chunk stamped before."""
         inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 1.0}])
         session = (StopOnFault() | ChunkedSchedule()).wrap(inner).new_session(now=_FakeClock(t=0.0).now)
 
         assert session(_obs(0.0)) is not None  # a chunk that runs until 1.0
-        assert session(_obs(0.2, fault=True)) == []
+        assert session(_obs(0.2, RobotStatus.ERROR)) == []
         assert session(_obs(0.3)) is not None
 
 

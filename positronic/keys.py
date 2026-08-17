@@ -32,10 +32,9 @@ ROBOT_STATE = 'robot_state'
 JOINTS = f'{ROBOT_STATE}.q'
 JOINT_VEL = f'{ROBOT_STATE}.dq'
 EE_POSE = f'{ROBOT_STATE}.ee_pose'
-# Whether the arm is faulted, in every observation the harness builds. A faulted arm has no sample to give
-# and is not tracking the plan it was handed, so the policy stack — not the harness — decides what happens
-# next: the rest of ``ROBOT_STATE`` is absent from that observation.
-ROBOT_FAULT = f'{ROBOT_STATE}.fault'
+# The arm's ``RobotStatus``, on every sample it produces. An arm that is faulted or resetting has no pose to
+# give, so the rest of ``ROBOT_STATE`` is absent from that sample and the status is all of it there is.
+ROBOT_STATUS = f'{ROBOT_STATE}.status'
 GRIP = 'grip'
 TASK = 'task'
 # The embodiment an observation came from, so a multi-embodiment policy can tell which robot it is driving.
