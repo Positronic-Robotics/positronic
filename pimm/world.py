@@ -835,7 +835,7 @@ class World:
         Returns:
             Tuple of (emitter, reader) for local communication
         """
-        q = deque(maxlen=maxsize)
+        q = deque(maxlen=maxsize or None)
         return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q)
 
     @functools.cached_property
