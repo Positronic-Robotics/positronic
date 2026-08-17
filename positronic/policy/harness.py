@@ -15,7 +15,6 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
-from positronic.drivers import roboarm
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy
@@ -434,26 +433,18 @@ class Harness(pimm.ControlSystem):
             case _:
                 raise ValueError(f'Unknown directive type: {directive.type}')
 
-    @staticmethod
-    def _is_faulted(value: Any) -> bool:
-        """Whether a raw observation is an arm reporting a fault. Every other not-ready sample is simply absent."""
-        return isinstance(value, roboarm.State) and value.status is roboarm.RobotStatus.ERROR
-
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any] | None:
         """Read every observation channel and assemble the policy input dict.
 
-        Raises ``NoValueException`` if any channel has no value yet. Returns ``None`` while a sample is not
-        ready (``robot_state`` during a ``RESETTING`` arm) or a channel still holds a pre-reset value, rather
-        than feed a partial or stale obs. A faulted arm is the exception: the plan being played was made for
-        an arm that is now somewhere else, so its observation reaches the stack carrying ``keys.ROBOT_FAULT``
-        and without the arm's own entries.
+        Raises ``NoValueException`` if any channel has no value yet, and returns ``None`` while a channel
+        still holds a pre-reset value, rather than feed a stale obs. What a device reports is otherwise
+        passed on as read: a device with nothing to say this round — a faulted or resetting arm, which
+        reports its status and no pose — is for the policy stack to answer, not the harness.
         """
         # Against the live model, not the one known at episode start: a remote env publishes its ``robot_meta``
         # a turn after the reset that produced it, so at episode start there is no model to check.
         assert_default_frame(self._statics())
         inputs: dict[str, Any] = {}
-        faulted = False
-        not_ready = False
         for name, obs in self._embodiment.observations.items():
             message = self.observations[name].read()
             if message is None:
@@ -463,24 +454,13 @@ class Harness(pimm.ControlSystem):
             value = message.data
             if obs.serializer is not None:
                 value = obs.serializer(value)
-                if value is None:  # no sample to give: a resetting or faulted arm alike
-                    # HACK(#619): a serializer answers `None` for a resetting arm and a faulted one alike, so
-                    # the fault is recovered from the raw sample and stapled on as `keys.ROBOT_FAULT` — a name
-                    # already claiming to be part of `robot_state`. Emit it from the serializer and this
-                    # branch, the raw-type check and the flag all go, and the fault reaches the recording too.
-                    faulted = faulted or self._is_faulted(message.data)
-                    not_ready = True
-                    continue
             inputs.update({full: v for full, v in expand_suffixed(name, value) if v is not None})
-        # Every channel is read before this decision, so a bimanual rig cannot hide one arm's fault behind
-        # another arm's not-ready sample: whichever channel comes first, the fault still reaches the stack.
-        if (not_ready and not faulted) or self._awaiting_obs:
+        if self._awaiting_obs:
             return None
         # The trial's context goes under what the harness read this round, never over it: a context carries
-        # whatever keys the RUN directive puts in it, and a ``robot_state.fault`` among them must not tell
+        # whatever keys the RUN directive puts in it, and a ``robot_state.status`` among them must not tell
         # ``StopOnFault`` that a faulted arm is sound.
         inputs = {**self.context, **inputs}
-        inputs[keys.ROBOT_FAULT] = faulted
         inputs[keys.WALL_TIME_NS] = time.time_ns()
         inputs[keys.OBS_TIME_NS] = clock.now_ns()
         inputs[keys.DESCRIPTOR] = self._embodiment.descriptor

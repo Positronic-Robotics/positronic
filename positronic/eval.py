@@ -16,13 +16,12 @@ class Observation:
 
     The same serializer feeds the policy *and* records the signal — recording is
     canonical policy I/O. ``None`` passes the device value through unchanged. A
-    serializer that returns ``None`` for a sample (e.g. ``robot_state`` while the arm
-    is ``RESETTING``) means "not ready": that frame is neither fed to the policy nor
-    recorded.
+    serializer that returns ``None`` drops the value from both the recording and the
+    policy input.
 
-    TODO: the serializer (and most of this class's reason to exist) goes away once
-    serialization is type-owned (steps 8-9): the value's domain type will own its
-    policy- and dataset-side encoding, so the channel won't carry a serializer at all.
+    TODO(#638): the serializer (and most of this class's reason to exist) goes away
+    once serialization is type-owned: the value's domain type will own its policy- and
+    dataset-side encoding, so the channel won't carry a serializer at all.
     """
 
     source: pimm.SignalEmitter
