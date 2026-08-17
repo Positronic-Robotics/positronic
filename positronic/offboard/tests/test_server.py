@@ -14,13 +14,13 @@ from websockets.sync.client import connect
 
 from positronic import keys
 from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
+from positronic.offboard.protocol import deserialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
-from positronic.utils.serialization import deserialise
 
 
 class _StubSource(ModelSource):

@@ -228,7 +228,7 @@ uv run positronic-inference sim --policy=.remote --policy.url=localhost:8000
 
 ### Slow-loading or subprocess models
 
-The built-in OpenPI and GR00T servers can't hand over a ready policy — checkpoints take minutes to download or run as a separate process. Instead of `PolicySource` they implement their own `ModelSource` (`positronic/policy/spec.py`), the terminal that turns checkpoint ids into policies: `get_models()` lists the ids, `resolve()` maps a request (or the default) to one of them, and `load(model_id, on_progress)` downloads and boots the model, calling `on_progress` along the way. `PolicyServer` runs `load` off the event loop and forwards every `on_progress` message to the connecting client as a `{"status": "loading", ...}` frame, so the handshake survives a multi-minute boot. The returned `Policy` owns whatever `load` started; its `close()` tears it down when the server switches checkpoints or shuts down. Model switching, the `recording_dir` taps above, and idle shutdown are all `PolicyServer`'s job — a vendor ships only its source and its named pipelines; see `positronic/vendors/openpi/server.py` and `positronic/vendors/gr00t/server.py`.
+The built-in OpenPI and GR00T servers can't hand over a ready policy — checkpoints take minutes to download or run as a separate process. Instead of `PolicySource` they implement their own `ModelSource` (`positronic/policy/spec.py`), the terminal that turns checkpoint ids into policies: `get_models()` lists the ids, `resolve()` maps a request (or the default) to one of them, and `load(model_id, on_progress)` downloads and boots the model, calling `on_progress` along the way. `PolicyServer` runs `load` off the event loop and forwards every `on_progress` message to the connecting client as a `{"status": "loading", ...}` message, so the handshake survives a multi-minute boot. The returned `Policy` owns whatever `load` started; its `close()` tears it down when the server switches checkpoints or shuts down. Model switching, the `recording_dir` taps above, and idle shutdown are all `PolicyServer`'s job — a vendor ships only its source and its named pipelines; see `positronic/vendors/openpi/server.py` and `positronic/vendors/gr00t/server.py`.
 
 ### Serialization
 
@@ -244,11 +244,11 @@ Every message is msgpack. Numpy arrays use a custom extension:
 }
 ```
 
-`positronic.utils.serialization` provides `serialise()` / `deserialise()`, which handle this and the
+`positronic.offboard.protocol` provides `serialise()` / `deserialise()`, which handle this and the
 robot commands:
 
 ```python
-from positronic.utils.serialization import serialise, deserialise
+from positronic.offboard.protocol import serialise, deserialise
 
 session = policy.new_session()           # one Session per episode/connection
 async for message in websocket.iter_bytes():
@@ -256,6 +256,10 @@ async for message in websocket.iter_bytes():
     actions = session(obs)               # list of action dicts (or None)
     await websocket.send_bytes(serialise({"result": actions}))
 ```
+
+A server written against another stack cannot import that module. Answer with the command as the plain
+mapping `positronic.drivers.roboarm.command.to_wire` produces — `{"type": "cartesian_pos", "pose": [...]}`
+— under the `robot_command` key, and the client types it on arrival.
 
 ## See Also
 

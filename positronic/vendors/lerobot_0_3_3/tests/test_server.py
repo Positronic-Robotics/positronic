@@ -4,9 +4,9 @@ import pytest
 from fastapi import WebSocketDisconnect
 from starlette.datastructures import QueryParams
 
+from positronic.offboard.protocol import deserialise
 from positronic.policy.spec import remote
 from positronic.policy.wrappers import ChunkedSchedule
-from positronic.utils.serialization import deserialise
 
 pytest.importorskip('torch')
 

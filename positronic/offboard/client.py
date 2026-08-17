@@ -11,7 +11,8 @@ from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidSta
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
-from positronic.utils.serialization import deserialise, serialise
+from . import protocol
+from .protocol import deserialise, serialise, typed_commands
 
 logger = logging.getLogger(__name__)
 
@@ -30,27 +31,25 @@ class InferenceSession:
     def _handshake(self, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
 
-        Args:
-            timeout_per_message: Timeout for each individual message (default: 30s).
-                               Server must send updates at least this frequently.
+        The server must send an update at least every ``timeout_per_message`` seconds.
         """
         try:
             while True:
                 response = deserialise(self._websocket.recv(timeout=timeout_per_message))
-                status = response.get('status')
+                if protocol.ERROR in response:
+                    raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
+                try:
+                    status = protocol.ServerStatus(response.get(protocol.STATUS))
+                except ValueError:
+                    raise RuntimeError(f'Unexpected server response: {response}') from None
 
-                if status == 'ready':
-                    return response['meta']
+                if status is protocol.ServerStatus.READY:
+                    return response[protocol.META]
+                if status is protocol.ServerStatus.ERROR:
+                    raise RuntimeError('Server error: Unknown error')
 
-                if status in ('waiting', 'loading'):
-                    message = response.get('message', status)
-                    logger.info(f'Server status: [{status}] {message}')
-                    continue
-
-                if status == 'error' or 'error' in response:
-                    raise RuntimeError(f'Server error: {response.get("error", "Unknown error")}')
-
-                raise RuntimeError(f'Unexpected server response: {response}')
+                message = response.get(protocol.MESSAGE, status)
+                logger.info(f'Server status: [{status}] {message}')
 
         except TimeoutError:
             raise TimeoutError(
@@ -63,12 +62,11 @@ class InferenceSession:
         return self._metadata
 
     def infer(self, obs: dict[str, Any]) -> Any:
-        """
-        Send an observation and get the served session's result — canonically a list of action
-        dicts, but whatever the server's session returned (a bare dict or ``None`` included).
+        """Send an observation and get the served session's result, with every robot-command channel typed.
 
-        Both `obs` and the returned action must be wire-serializable: plain-data containers and
-        scalars, plus numeric numpy arrays/scalars. Do not pass arbitrary Python objects.
+        ``obs`` must be wire-serializable: plain-data containers and scalars, plus numeric numpy
+        arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
+        returned — canonically a list of action dicts, but a bare dict or ``None`` too.
         """
         serialised = serialise(obs)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
@@ -86,10 +84,10 @@ class InferenceSession:
             ) from None
         logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
 
-        if isinstance(response, dict) and 'error' in response:
-            raise RuntimeError(f'Server error: {response["error"]}')
+        if isinstance(response, dict) and protocol.ERROR in response:
+            raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
 
-        return response['result']
+        return typed_commands(response[protocol.RESULT])
 
     def close(self):
         self._websocket.close()

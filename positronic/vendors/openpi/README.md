@@ -175,7 +175,7 @@ be JSON literals; the model source is fixed at launch, so `source.*` params are 
 
 ```python
 from websockets.sync.client import connect
-from positronic.utils.serialization import serialise, deserialise
+from positronic.offboard.protocol import serialise, deserialise
 
 # Connect to server
 ws = connect('ws://localhost:8000/api/v1/session')
