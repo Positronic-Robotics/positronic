@@ -4,7 +4,6 @@ from collections.abc import Iterator
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.roboarm.command import Trajectory, TrajectoryPlayer
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -22,7 +21,7 @@ class Robotiq2F(pimm.ControlSystem):
     def __init__(self, port: str):
         self._port = port
         self.grip = pimm.ControlSystemEmitter(self)
-        self.target_grip: pimm.ControlSystemReceiver[Trajectory[float]] = pimm.ControlSystemReceiver(self, default=[])
+        self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.force = pimm.ControlSystemReceiver(self, default=255)  # device scale 0..255
         self.speed = pimm.ControlSystemReceiver(self, default=255)  # device scale 0..255
 
@@ -37,15 +36,10 @@ class Robotiq2F(pimm.ControlSystem):
             client.write_registers(_REG_CMD, [0x0000, 0x0000, 0x0000], device_id=_SLAVE)
             client.write_registers(_REG_CMD, [0x0100, 0x0000, 0x0000], device_id=_SLAVE)
 
-            player = TrajectoryPlayer()
-
             while not should_stop.value:
                 pos_msg = self.target_grip.read()
-                if pos_msg.updated:
-                    player.set(pos_msg.data)
-                grip = player.advance(clock.now_ns())
-                if grip is not None:
-                    pos = int(max(0, min(1, grip)) * 255)
+                if pos_msg is not None and pos_msg.updated:
+                    pos = int(max(0, min(1, pos_msg.data)) * 255)
                     spd = int(max(0, min(255, self.speed.value)))
                     frc = int(max(0, min(255, self.force.value)))
 
@@ -81,7 +75,7 @@ if __name__ == '__main__':
 
         while True:
             if time.time() - start > i * 1.0:
-                tgt.emit([(world.clock.now_ns(), waypoints[i])])
+                tgt.emit(waypoints[i])
                 i += 1
                 if i >= len(waypoints):
                     break

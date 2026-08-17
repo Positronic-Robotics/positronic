@@ -59,13 +59,12 @@ class Robot(pimm.ControlSystem):
         self.kinematic = Kinematics(_SO101_URDF_PATH, _SO101_EE_JOINT)
         self.joint_limits = self.kinematic.joint_limits
         self.home_joints = home_joints if home_joints is not None else [0.0, 0.0, 0.0, 0.0, 0.0]
-        self.commands: pimm.SignalReceiver[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
-            pimm.ControlSystemReceiver(self, default=[])
-        )
-        self.target_grip: pimm.SignalReceiver[roboarm_command.Trajectory[float]] = pimm.ControlSystemReceiver(
-            self, default=[]
-        )
+        self.commands = pimm.ControlSystemReceiver[roboarm_command.CommandType](self)
+        self.target_grip = pimm.ControlSystemReceiver[float](self)
         self._last_grip: float = 0.0
+        # The arm half of the motor setpoint, in normalized units. ``None`` until the first arm command:
+        # a gripper target arriving before one has no arm position to pair with.
+        self._last_qpos: np.ndarray | None = None
 
         self.grip: pimm.SignalEmitter[float] = pimm.ControlSystemEmitter(self)
         self.state: pimm.SignalEmitter[SO101State] = pimm.ControlSystemEmitter(self)
@@ -88,40 +87,30 @@ class Robot(pimm.ControlSystem):
         rate_limit = pimm.RateLimiter(hz=1000, clock=clock)
         state = SO101State()
 
-        player = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
-        grip_player = roboarm_command.TrajectoryPlayer()
-
         while not should_stop.value:
             cmd_msg = self.commands.read()
-            if cmd_msg.updated:
-                player.set(cmd_msg.data)
             grip_msg = self.target_grip.read()
-            if grip_msg.updated:
-                grip_player.set(grip_msg.data)
-            grip = grip_player.advance(clock.now_ns())
+            grip = grip_msg.data if grip_msg is not None and grip_msg.updated else None
+            command = cmd_msg.data if cmd_msg is not None and cmd_msg.updated else None
             if grip is not None:
                 self._last_grip = grip
-            cmd = player.advance(clock.now_ns())
-            if cmd is not None:
-                match cmd:
+            if command is not None:
+                match command:
                     case roboarm_command.Reset():
                         raise NotImplementedError('Reset not implemented')
                     case roboarm_command.CartesianPosition(pose):
-                        qpos = self._solve_ik(state, pose)
-                        q_with_gripper = np.concatenate([qpos, [self._last_grip]])
-                        self.motor_bus.set_target_position(q_with_gripper)
+                        self._last_qpos = self._solve_ik(state, pose)
                     case roboarm_command.CartesianDelta() as delta_cmd:
                         ee_pose, _ = self._forward_kinematics(self.motor_bus.position)
-                        target = delta_cmd.apply(ee_pose)
-                        qpos = self._solve_ik(state, target)
-                        q_with_gripper = np.concatenate([qpos, [self._last_grip]])
-                        self.motor_bus.set_target_position(q_with_gripper)
+                        self._last_qpos = self._solve_ik(state, delta_cmd.apply(ee_pose))
                     case roboarm_command.JointPosition(qpos):
-                        q_norm = self.rad_to_norm(qpos)
-                        q_with_gripper = np.concatenate([q_norm, [self._last_grip]])
-                        self.motor_bus.set_target_position(q_with_gripper)
-                    case _:
-                        raise ValueError(f'Unknown command: {cmd}')
+                        self._last_qpos = self.rad_to_norm(qpos)
+                    case other:
+                        raise ValueError(f'Unknown command: {other}')
+            # The arm and the gripper are one setpoint on a shared bus, but they arrive as two channels that
+            # need not carry a value in the same round, so either one changing rewrites the whole vector.
+            if (command is not None or grip is not None) and self._last_qpos is not None:
+                self.motor_bus.set_target_position(np.concatenate([self._last_qpos, [self._last_grip]]))
 
             q = self.motor_bus.position
             dq = self.motor_bus.velocity[:-1]

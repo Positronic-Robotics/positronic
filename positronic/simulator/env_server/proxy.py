@@ -5,7 +5,7 @@ A dumb translator: it owns the pimm ports (command receivers, observation + priv
 to, but no command logic. Each control period it hands the latest command messages to the ``EnvAdapter``,
 round-trips the raw action it returns over the wire, and re-emits the canonical signals the adapter maps
 back — so only raw arrays cross the boundary and the World's virtual clock advances by the env's
-``control_dt`` per step. The adapter owns trajectory playing, holding, and the canonical<->raw mappings;
+``control_dt`` per step. The adapter owns holding and the canonical<->raw mappings;
 ``control_dt`` is whatever the latest observation reports (``reset`` and every ``step``).
 """
 
@@ -36,7 +36,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._cleanup = ExitStack()
         self._conn: EnvConnection | None = None
 
-        self.commands: pimm.ReceiverDict = pimm.ReceiverDict(self, default=[])
+        self.commands: pimm.ReceiverDict = pimm.ReceiverDict(self)
         self.observations: pimm.EmitterDict = pimm.EmitterDict(self)
         self.privileged: pimm.EmitterDict = pimm.EmitterDict(self)
         self.robot_meta: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
@@ -119,7 +119,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     # observation assembly (shared-memory image allocation + camera copies) inside it, so the
                     # reduce can split materialisation out of the wire cost.
                     with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
-                        self._frame = self._step_env(clock)
+                        self._frame = self._step_env()
                         with telemetry.span(telemetry_keys.SPAN_MATERIALIZE):
                             self._emit_payload(self._frame['obs'])
         finally:
@@ -127,9 +127,10 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
             # ever connected.
             self._cleanup.close()
 
-    def _step_env(self, clock: pimm.Clock) -> dict[str, Any]:
-        commands = {name: receiver.read() for name, receiver in self.commands.items()}
-        result = self._conn.step(self._adapter.action(commands, clock.now_ns()))
+    def _step_env(self) -> dict[str, Any]:
+        reads = ((name, receiver.read()) for name, receiver in self.commands.items())
+        commands = {name: msg for name, msg in reads if msg is not None}
+        result = self._conn.step(self._adapter.action(commands))
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues
             self.done.emit(payload)
@@ -152,7 +153,7 @@ def remote_franka_embodiment(
     server cannot import positronic to emit it via ``robot_meta``).
     """
     observations = {
-        'robot_state': Observation(proxy.observations['robot_state'], Serializers.robot_state),
+        keys.ROBOT_STATE: Observation(proxy.observations[keys.ROBOT_STATE], Serializers.robot_state),
         keys.GRIP: Observation(proxy.observations[keys.GRIP], None),
         **{logical: Observation(proxy.observations[logical], Serializers.camera_images) for logical in camera_dict},
     }

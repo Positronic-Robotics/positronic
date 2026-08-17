@@ -12,7 +12,7 @@ from platform_client.responses import SubmissionCreateResponse
 
 import pimm
 import positronic.cfg.policy as policy_cfg
-from positronic import telemetry, telemetry_keys, utils, wire
+from positronic import keys, telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import placeholder
 from positronic.cli.eval.submit import submit
 from positronic.dataset.ds_writer_agent import TimeMode
@@ -194,7 +194,7 @@ def run(
     eval: Eval | str,
     policy,
     output_dir=None,
-    inference_latency=False,
+    inference_latency: bool = False,
     timing=False,
     policy_image: str | None = None,
     alias: str | None = None,
@@ -222,8 +222,9 @@ def run(
         if not isinstance(eval, Eval):
             raise SystemExit(f'--eval={eval!r} is a name, not a config: pass --policy-image to run it on the platform')
         # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob
-        # (sim inference-cost simulation). Overlay it onto every trial context, then self-drive the eval.
-        eval = replace(eval, trials=[{**trial, 'inference_latency': inference_latency} for trial in eval.trials])
+        # (whether a sim charges each call its wall time). Overlay it onto every trial context, then self-drive
+        # the eval.
+        eval = replace(eval, trials=[{**trial, keys.INFERENCE_LATENCY: inference_latency} for trial in eval.trials])
         main(policy=policy, evals=[eval], output_dir=output_dir, timing=timing)
         return None
 

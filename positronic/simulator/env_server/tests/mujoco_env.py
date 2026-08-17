@@ -133,10 +133,9 @@ class MujocoEnv(EnvProtocol):
                 cmd = roboarm_command.CartesianDelta(geom.Transform3D.from_vector(command['delta'], _ROTMAT))
             case other:
                 raise ValueError(f'MujocoEnv got unsupported command type {other!r}')
-        now_ns = self._clock.now_ns()
         if cmd is not None:
-            self._cmd_emit.emit([(now_ns, cmd)])
-        self._grip_emit.emit([(now_ns, float(action['grip']))])
+            self._cmd_emit.emit(cmd)
+        self._grip_emit.emit(float(action['grip']))
         self._advance(self._timestep)
         return {'obs': self._read_obs(), 'done': False, 'control_dt': self._timestep}
 
@@ -172,7 +171,7 @@ class StackCubesAdapter(WireCommandAdapter):
         ee_pose = geom.Transform3D(raw_obs['ee_pos'], geom.Rotation.from_quat(raw_obs['ee_quat']))
         state.encode(raw_obs['q'], raw_obs['dq'], ee_pose)
         state.array[14 + 7] = float(raw_obs['status'])
-        obs: dict[str, Any] = {'robot_state': state, keys.GRIP: float(raw_obs['grip'])}
+        obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs['grip'])}
         for logical, model_name in self._camera_dict.items():
             frame = raw_obs['cameras'][model_name]
             adapter = pimm.shared_memory.NumpySMAdapter(shape=frame.shape, dtype=frame.dtype)

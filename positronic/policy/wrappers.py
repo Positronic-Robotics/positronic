@@ -1,4 +1,4 @@
-"""Composable policy wrappers — scheduling and temporal frame stacking.
+"""Composable policy wrappers — scheduling, fault handling and temporal frame stacking.
 
 Wrappers are composable serving-time concerns layered around a policy with ``|`` (left is
 outermost), exactly like codecs. Most read time from the observation (``obs_time_ns``); only
@@ -20,6 +20,34 @@ def _obs_time(obs) -> float:
     return obs[keys.OBS_TIME_NS] / 1e9
 
 
+class StopOnFault(PolicyWrapper):
+    """Stop the arm while it is faulted, and plan afresh once it recovers.
+
+    A faulted arm is not tracking the plan it was given, so the plan is worthless: this answers the empty
+    trajectory — stop what is executing — and resets the sessions below, so the first sound observation after
+    recovery reaches the model instead of resuming a chunk stamped before the fault. It belongs outside the
+    scheduling wrapper, which would otherwise answer "keep playing" without ever seeing the fault.
+
+    The fault is ``keys.ROBOT_FAULT``, which the harness stamps on every observation it builds. An
+    observation from anywhere else — a probe replaying a recording — carries no arm to fault.
+    """
+
+    WIRE_NAME = 'stop_on_fault'
+
+    class _Session(DelegatingSession):
+        def __call__(self, obs):
+            if not obs.get(keys.ROBOT_FAULT, False):
+                return self._inner(obs)
+            self.cancel()
+            return []
+
+    def wrap_session(self, inner: Session, context, now: Now | None):
+        return StopOnFault._Session(inner)
+
+    def to_spec(self):
+        return {'name': self.WIRE_NAME}
+
+
 class ChunkedSchedule(PolicyWrapper):
     """Wait for the current trajectory to finish before calling the inner policy again.
 
@@ -28,6 +56,8 @@ class ChunkedSchedule(PolicyWrapper):
     inference-finish (not inference-start). Returns ``None`` ("keep executing the current trajectory")
     until the last action's timestamp is reached, then calls the inner policy.
     """
+
+    WIRE_NAME = 'chunked_schedule'
 
     class _Session(DelegatingSession):
         """Skips inner calls while the current trajectory plays; stamps absolute on emit."""
@@ -44,7 +74,7 @@ class ChunkedSchedule(PolicyWrapper):
                     'new_session. The harness supplies it; a direct RemotePolicy.new_session() outside the harness '
                     'must too.'
                 )
-            if self._trajectory_end is not None and self._now() < self._trajectory_end:
+            if self._trajectory_end is not None and _obs_time(obs) < self._trajectory_end:
                 return None
             result = self._inner(obs)
             if result is not None:
@@ -68,7 +98,7 @@ class ChunkedSchedule(PolicyWrapper):
         return ChunkedSchedule._Session(inner, now)
 
     def to_spec(self):
-        return {'name': 'chunked_schedule'}
+        return {'name': self.WIRE_NAME}
 
 
 class _StackBuffer:
@@ -134,6 +164,8 @@ class TemporalStack(PolicyWrapper):
     chunk-0 empty prefix) never engage it on a padded full-length stack.
     """
 
+    WIRE_NAME = 'temporal_stack'
+
     class _Session(DelegatingSession):
         def __init__(self, inner: Session, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool):
             super().__init__(inner)
@@ -158,11 +190,11 @@ class TemporalStack(PolicyWrapper):
             'in-range targets and the stack would be empty'
         )
 
-    def wrap_session(self, inner: Session, context, now: Now):
+    def wrap_session(self, inner: Session, context, now: Now | None):
         return TemporalStack._Session(inner, self._keys, self._offsets_sec, self._pad_start)
 
     def to_spec(self):
         return {
-            'name': 'temporal_stack',
+            'name': self.WIRE_NAME,
             'args': {'keys': list(self._keys), 'offsets_sec': list(self._offsets_sec), 'pad_start': self._pad_start},
         }

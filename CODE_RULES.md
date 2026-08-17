@@ -190,8 +190,9 @@ inside the single entity that uses it. Distance costs the reader a search in bot
 use, to find out what it does; from the definition, to find out why it exists.
 
 A private name has every user in the file, so its place is determined. With a single user, first ask
-whether the name is worth keeping: a body that says as much as its name is better inlined than moved.
-Not touching `self` is no reason to stay at module level — that is what `@staticmethod` is for.
+whether the name is worth keeping at all (`earn-its-place`); this rule only decides where a name that
+is worth keeping goes. Not touching `self` is no reason to stay at module level — that is what
+`@staticmethod` is for.
 
 A public name is looser: most of its users are elsewhere, and a module may order its surface
 deliberately. Group it with its in-file callers where that ordering does not say otherwise. Module
@@ -285,13 +286,19 @@ except json.JSONDecodeError:
 
 ### earn-its-place
 
-Don't add a class, file, field or parameter for a distinction the code already encodes. Check each of
-the places one can already live — the dict an entry sits in, an enum member, the calling context, a
-module that owns the subject — and use that instead.
+Don't add a class, file, function, field or parameter for a distinction the code already encodes. Check
+each of the places one can already live — the dict an entry sits in, an enum member, the calling
+context, a module that owns the subject — and use that instead.
 
 The cost is not the lines. Every new type is another thing a reader holds, another place a value can
 live, and another edge to keep in sync; a field duplicating what its caller already knows goes stale
 the first time only one of the two is set.
+
+With a single user, ask what the name adds over what already stands at that one use. A function whose
+body is its name spelled out, a class whose fields the caller holds as locals anyway, a parameter only
+ever passed one value — in each the use site already carries the distinction, and the name is a second
+place to look. A name earns its place by holding what the use site cannot say: a diagnostic it raises,
+an invariant it keeps, a domain predicate that takes more than one clause.
 
 A new distinction lands beside its siblings, in the module that owns the subject. Put it there
 without asking. Raise it only when nothing suggests a home: that is a finding about the layout, and

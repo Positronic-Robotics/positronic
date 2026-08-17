@@ -34,7 +34,7 @@ class RobolabAdapter(WireCommandAdapter):
         ee_pose = eef_pose * self.env_control_frame.inv
         state = MujocoFrankaState()
         state.encode(raw_obs['joint_pos'], raw_obs['joint_vel'], ee_pose)
-        obs: dict[str, Any] = {'robot_state': state, keys.GRIP: float(raw_obs['grip'])}
+        obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs['grip'])}
         # TODO: honour a camera_dict naming any other RoboLab camera. env.py renders only the WRIST_LEFT
         # preset (over_shoulder_left + wrist) and hard-codes emitting those two, so a request for e.g.
         # over_shoulder_right_camera raises below. The full fix threads the requested set end-to-end: carry

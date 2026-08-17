@@ -141,9 +141,7 @@ class Robot(pimm.ControlSystem):
         self._home_joints_variation = (
             home_joints_variation if home_joints_variation is not None else [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
         )
-        self.commands: pimm.SignalReceiver[command.Trajectory[command.CommandType]] = pimm.ControlSystemReceiver(
-            self, default=[]
-        )
+        self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.state: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self._load = load
@@ -318,7 +316,7 @@ class Robot(pimm.ControlSystem):
         except Exception:
             logging.exception('Parking failed, the arm stays where it stands')
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         with self._desk_session():
             robot = self._ensure_robot()
             try:
@@ -332,7 +330,6 @@ class Robot(pimm.ControlSystem):
                 yield from self._reset(robot, robot_state, rate_limiter, should_stop)
 
                 in_error = False
-                player = command.TrajectoryPlayer(reduce=command.reduce)
 
                 while not should_stop.value:
                     st = robot.state()
@@ -344,23 +341,17 @@ class Robot(pimm.ControlSystem):
                         logging.warning(f'Robot error: {st.error_message}')
 
                     cmd_msg = self.commands.read()
-                    if cmd_msg.updated:
-                        player.set(cmd_msg.data)
 
                     if in_error:
                         # The driver always clears a recoverable error itself; making it optional (hold in
                         # ERROR for out-of-band recovery instead) is a config knob to add when an embodiment
                         # needs it.
                         robot.recover_from_errors()
-                        # Drop the in-flight trajectory so the arm holds position rather than resuming a stale
-                        # waypoint once the error clears.
-                        player.set([])
                         yield rate_limiter.wait()
                         continue
 
-                    cmd = player.advance(clock.now_ns())
-                    if cmd is not None:
-                        match cmd:
+                    if cmd_msg is not None and cmd_msg.updated:
+                        match cmd_msg.data:
                             case command.Reset():
                                 yield from self._reset(robot, robot_state, rate_limiter, should_stop)
                             case command.CartesianPosition(pose):
@@ -376,8 +367,8 @@ class Robot(pimm.ControlSystem):
                                 robot.set_target_joints(positions)
                             case command.JointDelta(velocities=joint_delta):
                                 robot.set_target_joints(st.q + joint_delta)
-                            case _:
-                                raise NotImplementedError(f'Unsupported command {cmd}')
+                            case other:
+                                raise NotImplementedError(f'Unsupported command {other}')
 
                     yield rate_limiter.wait()
 
@@ -419,7 +410,7 @@ if __name__ == '__main__':
             if time.monotonic() > start + duration:
                 print(f'Moving to {pos + origin.translation}')
                 target = command.CartesianPosition(geom.Transform3D(pos + origin.translation, origin.rotation))
-                commands.emit([(world.clock.now_ns(), target)])
+                commands.emit(target)
                 i += 1
             else:
                 time.sleep(0.01)

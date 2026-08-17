@@ -26,11 +26,20 @@ def is_robot_command(name: str) -> bool:
     return name == ROBOT_COMMAND or name.startswith(f'{ROBOT_COMMAND}.')
 
 
-JOINTS = 'robot_state.q'
-JOINT_VEL = 'robot_state.dq'
-EE_POSE = 'robot_state.ee_pose'
+# The arm's state channel, and the signals a recorded state unfolds into. As on the command side, the
+# suffixes are ``Serializers.robot_state``'s, so the names derive from the channel rather than restating it.
+ROBOT_STATE = 'robot_state'
+JOINTS = f'{ROBOT_STATE}.q'
+JOINT_VEL = f'{ROBOT_STATE}.dq'
+EE_POSE = f'{ROBOT_STATE}.ee_pose'
+# Whether the arm is faulted, in every observation the harness builds. A faulted arm has no sample to give
+# and is not tracking the plan it was handed, so the policy stack — not the harness — decides what happens
+# next: the rest of ``ROBOT_STATE`` is absent from that observation.
+ROBOT_FAULT = f'{ROBOT_STATE}.fault'
 GRIP = 'grip'
 TASK = 'task'
+# The embodiment an observation came from, so a multi-embodiment policy can tell which robot it is driving.
+DESCRIPTOR = 'descriptor'
 # The prefix that identifies a camera on the wire: an embodiment declares its cameras by naming
 # them this way, and every consumer picks them out of the observations by it.
 IMAGE_PREFIX = 'image.'
@@ -88,3 +97,8 @@ SERVER_META = f'{POLICY_META}.{SERVER}'
 # leaves it absent on failure — a reader defaults it rather than assuming a False.
 EVAL_SUCCESS = 'eval.success'
 EVAL_TERMINATED = 'eval.terminated'
+
+# Whether a model call charges the world clock its own wall duration. A flag: any other type is rejected
+# when the episode starts. A sim trial without it charges nothing (the world holds still per call);
+# hardware always pays wall whatever the trial asks.
+INFERENCE_LATENCY = 'inference_latency'

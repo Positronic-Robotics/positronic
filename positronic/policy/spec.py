@@ -46,7 +46,7 @@ from positronic.policy.codec import (
     RestrictImageSize,
 )
 from positronic.policy.observation import ObservationCodec
-from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
+from positronic.policy.wrappers import ChunkedSchedule, StopOnFault, TemporalStack
 
 
 class RemoteMarker(PolicyWrapper):
@@ -142,27 +142,25 @@ class PolicySource(ModelSource):
         return self._policy
 
 
-# TODO(hardcoded-keys): every name here is written twice — once as a literal in the wrapper's own ``to_spec``
-# and once as a key below — so a rename in one place silently desyncs the wire. Let each wrapper own its wire
-# name as a class attribute and build this mapping from it. ``test_wire_names_match_table`` is what catches a
-# desync until then.
-# rules-allow: hardcoded-keys — fixing one of the thirteen leaves the rest on the old pattern; the TODO above
-# names the whole-table fix, and the test above catches a desync meanwhile
 WIRE_WRAPPERS: dict[str, type[PolicyWrapper]] = {
-    'chunked_schedule': ChunkedSchedule,
-    'temporal_stack': TemporalStack,
-    'action_timestamp': ActionTimestamp,
-    'action_horizon': ActionHorizon,
-    'binarize_grip_training': BinarizeGripTraining,
-    'binarize_grip_inference': BinarizeGripInference,
-    'flip_grip': FlipGrip,
-    'restrict_image_size': RestrictImageSize,
-    'change_ee_frame': ChangeEEFrame,
-    'observation_codec': ObservationCodec,
-    'absolute_position_action': AbsolutePositionAction,
-    'absolute_joints_action': AbsoluteJointsAction,
-    'relative_position_action': RelativePositionAction,
-    'joint_delta_action': JointDeltaAction,
+    wrapper.WIRE_NAME: wrapper
+    for wrapper in (
+        ChunkedSchedule,
+        StopOnFault,
+        TemporalStack,
+        ActionTimestamp,
+        ActionHorizon,
+        BinarizeGripTraining,
+        BinarizeGripInference,
+        FlipGrip,
+        RestrictImageSize,
+        ChangeEEFrame,
+        ObservationCodec,
+        AbsolutePositionAction,
+        AbsoluteJointsAction,
+        RelativePositionAction,
+        JointDeltaAction,
+    )
 }
 
 

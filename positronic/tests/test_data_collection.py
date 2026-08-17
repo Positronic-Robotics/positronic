@@ -7,12 +7,7 @@ import pytest
 import pimm
 from positronic import keys, wire
 from positronic.data_collection import DataCollectionController, OperatorPosition, controller_positions_serializer
-from positronic.dataset.ds_writer_agent import (
-    DsWriterAgent,
-    DsWriterCommand,
-    DsWriterCommandType,
-    TrajectoryOverrideSerializer,
-)
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
@@ -162,18 +157,18 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
 
         writer_cm = LocalDatasetWriter(tmp_path)
         agent = DsWriterAgent(writer_cm.__enter__())
-        agent.add_signal('target_grip', TrajectoryOverrideSerializer(None))
-        agent.add_signal(keys.ROBOT_COMMAND, TrajectoryOverrideSerializer(Serializers.robot_command))
+        agent.add_signal(keys.TARGET_GRIP)
+        agent.add_signal(keys.ROBOT_COMMAND, Serializers.robot_command)
         agent.add_signal('controller_positions', controller_positions_serializer)
-        agent.add_signal('robot_state', Serializers.robot_state)
+        agent.add_signal(keys.ROBOT_STATE, Serializers.robot_state)
         agent.add_signal(keys.GRIP)
 
         world.connect(sim.state, dc.robot_state)
-        world.connect(sim.state, agent.inputs['robot_state'])
+        world.connect(sim.state, agent.inputs[keys.ROBOT_STATE])
         world.connect(dc.robot_commands, sim.commands)
         world.connect(dc.robot_commands, agent.inputs[keys.ROBOT_COMMAND])
         world.connect(dc.target_grip, sim.target_grip)
-        world.connect(dc.target_grip, agent.inputs['target_grip'])
+        world.connect(dc.target_grip, agent.inputs[keys.TARGET_GRIP])
         world.connect(sim.grip, agent.inputs[keys.GRIP])
         world.connect(dc.ds_agent_commands, agent.command)
 
@@ -213,7 +208,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
     ep = ds[0]
     assert isinstance(ep, Episode)
 
-    expected = {'target_grip', 'controller_positions.right', keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP}
+    expected = {keys.TARGET_GRIP, 'controller_positions.right', keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP}
     assert expected.issubset(set(ep.keys()))
 
     # Robot/gripper signals should have at least one sample
@@ -258,9 +253,9 @@ def test_mujoco_grip_one_is_closed():
         grip = world.pair(sim.grip)
 
         driver = ManualDriver([
-            (lambda: target_grip.emit([(world.clock.now_ns(), 1.0)]), 0.5),
+            (lambda: target_grip.emit(1.0), 0.5),
             (lambda: snapshots.update(closed=finger_qpos(), closed_grip=grip.read().data), 0.0),
-            (lambda: target_grip.emit([(world.clock.now_ns(), 0.0)]), 0.5),
+            (lambda: target_grip.emit(0.0), 0.5),
             (lambda: snapshots.update(opened=finger_qpos(), opened_grip=grip.read().data), 0.0),
         ])
 
