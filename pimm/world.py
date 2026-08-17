@@ -19,6 +19,7 @@ from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
 from typing import TypeVar
 
+from .calls import ControlSystemCaller, ControlSystemHandler
 from .core import (
     Clock,
     Command,
@@ -34,7 +35,6 @@ from .core import (
     Sleep,
     Yield,
 )
-from .methods import ControlSystemCaller, ControlSystemHandler
 from .shared_memory import SMCompliant
 from .utils import identity
 

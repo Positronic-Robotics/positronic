@@ -178,18 +178,18 @@ class MultiCameraSystem(pimm.ControlSystem):
             yield pimm.Sleep(0.03)
 ```
 
-## Methods: Ask and Get an Answer
+## Calls: Ask and Get an Answer
 
-A signal carries the latest state; a method carries a request that expects a reply. One control
-system declares a `pimm.methods.ControlSystemHandler` and serves calls inside its own loop; another
-declares a `pimm.methods.ControlSystemCaller` and gets a `concurrent.futures.Future` per call. The
-type parameters are the request type and the result type; a method taking several values takes one
+A signal carries the latest state; a call carries a request that expects a reply. One control
+system declares a `pimm.calls.ControlSystemHandler` and serves calls inside its own loop; another
+declares a `pimm.calls.ControlSystemCaller` and gets a `concurrent.futures.Future` per call. The
+type parameters are the request type and the result type; a call carrying several values takes one
 dataclass.
 
 ```python
 class Robot(pimm.ControlSystem):
     def __init__(self):
-        self.reset = pimm.methods.ControlSystemHandler[bool, None](self)
+        self.reset = pimm.calls.ControlSystemHandler[bool, None](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         while not should_stop.value:
@@ -200,7 +200,7 @@ class Robot(pimm.ControlSystem):
 
 class Policy(pimm.ControlSystem):
     def __init__(self):
-        self.reset = pimm.methods.ControlSystemCaller[bool, None](self)
+        self.reset = pimm.calls.ControlSystemCaller[bool, None](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         done = self.reset(True)
@@ -217,7 +217,7 @@ world.connect(policy.reset, robot.reset)
 later tick. No call and no reply is dropped, whether the two systems share a process or not. A
 future is completed only by the handler's answer and never waits for it: a caller polls `done()`
 between sleeps, and `result()` on an unanswered future raises. The full contract is the docstring of
-[`pimm/methods.py`](methods.py).
+[`pimm/calls.py`](calls.py).
 
 ## Control Systems and the World
 

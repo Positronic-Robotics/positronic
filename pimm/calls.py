@@ -1,4 +1,4 @@
-"""Methods: request/reply between control systems, the counterpart of signals.
+"""Calls: request/reply between control systems, the counterpart of signals.
 
 A control system declares a `MethodCaller` where it invokes another control system and a `MethodHandler` where
 it serves invocations. `World.connect` binds a caller to a handler wherever the two run.

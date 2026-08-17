@@ -3,8 +3,8 @@ from concurrent.futures import Future, InvalidStateError
 
 import pytest
 
+from pimm.calls import ControlSystemCaller, ControlSystemHandler
 from pimm.core import ControlSystem, Sleep
-from pimm.methods import ControlSystemCaller, ControlSystemHandler
 from pimm.world import World
 
 
