@@ -17,7 +17,7 @@ from multiprocessing.managers import ValueProxy
 from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
-from typing import ParamSpec, TypeVar
+from typing import TypeVar
 
 from .core import (
     Clock,
@@ -39,8 +39,8 @@ from .shared_memory import SMCompliant
 from .utils import identity
 
 T = TypeVar('T')
-P = ParamSpec('P')
-R = TypeVar('R')
+Req = TypeVar('Req')
+Res = TypeVar('Res')
 
 # Consecutive single-instant rounds with no clock-mover after which ``interleave`` warns of a stall.
 # Far above any real cooperative burst, reached near-instantly by a true hang (loops yielding forever
@@ -618,8 +618,8 @@ class World:
 
     def connect(
         self,
-        source: ControlSystemEmitter[T] | ControlSystemCaller[P, R],
-        target: ControlSystemReceiver[T] | ControlSystemHandler[P, R],
+        source: ControlSystemEmitter[T] | ControlSystemCaller[Req, Res],
+        target: ControlSystemReceiver[T] | ControlSystemHandler[Req, Res],
         *,
         emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = identity,
         receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[T]] = identity,

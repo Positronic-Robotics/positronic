@@ -183,24 +183,24 @@ class MultiCameraSystem(pimm.ControlSystem):
 A signal carries the latest state; a method carries a request that expects a reply. One control
 system declares a `pimm.methods.ControlSystemHandler` and serves calls inside its own loop; another
 declares a `pimm.methods.ControlSystemCaller` and gets a `concurrent.futures.Future` per call. The
-type parameters are the call signature and the result type.
+type parameters are the request type and the result type; a method taking several values takes one
+dataclass.
 
 ```python
 class Robot(pimm.ControlSystem):
     def __init__(self):
-        self.reset = pimm.methods.ControlSystemHandler[[bool], None](self)
+        self.reset = pimm.methods.ControlSystemHandler[bool, None](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         while not should_stop.value:
             for call in self.reset.incoming():
-                (home,) = call.args
-                call.set_result(self._reset(home))   # or call.set_exception(exc)
+                call.set_result(self._reset(home=call.request))   # or call.set_exception(exc)
             yield pimm.Sleep(0.01)
 
 
 class Policy(pimm.ControlSystem):
     def __init__(self):
-        self.reset = pimm.methods.ControlSystemCaller[[bool], None](self)
+        self.reset = pimm.methods.ControlSystemCaller[bool, None](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         done = self.reset(True)

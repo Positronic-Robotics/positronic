@@ -5,7 +5,7 @@ it serves invocations. `World.connect` binds a caller to a handler wherever the 
 
 - A handler serves at most one caller; unbound, its `incoming()` yields nothing.
 - Calling an unbound caller raises.
-- The contract is the same in-process and across processes; across processes arguments, results and exceptions
+- The contract is the same in-process and across processes; across processes requests, results and exceptions
   must be picklable.
 - No call and no reply is dropped.
 - Calls from one caller reach the handler in the order made; replies may return in any order.
@@ -25,55 +25,50 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, InvalidStateError
 from dataclasses import dataclass
-from typing import Any, Generic, ParamSpec, TypeVar
+from typing import Generic, TypeVar
 
 from .core import ControlSystem, ControlSystemEmitter, ControlSystemReceiver, SignalEmitter, SignalReceiver
 
-P = ParamSpec('P')
-R = TypeVar('R')
+Req = TypeVar('Req')
+Res = TypeVar('Res')
 T = TypeVar('T')
 
 
-class Call(ABC, Generic[P, R]):
-    """One invocation awaiting its answer: the arguments, and the reply slot the caller's `Future` is bound to."""
+class Call(ABC, Generic[Req, Res]):
+    """One invocation awaiting its answer: the request, and the reply slot the caller's `Future` is bound to."""
 
     @property
     @abstractmethod
-    def args(self) -> tuple[Any, ...]: ...
-
-    @property
-    @abstractmethod
-    def kwargs(self) -> dict[str, Any]: ...
+    def request(self) -> Req: ...
 
     @abstractmethod
-    def set_result(self, value: R) -> None: ...
+    def set_result(self, value: Res) -> None: ...
 
     @abstractmethod
     def set_exception(self, exc: BaseException) -> None: ...
 
 
-class MethodCaller(ABC, Generic[P, R]):
+class MethodCaller(ABC, Generic[Req, Res]):
     @abstractmethod
-    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> Future[R]: ...
+    def __call__(self, request: Req) -> Future[Res]: ...
 
 
-class MethodHandler(ABC, Generic[P, R]):
+class MethodHandler(ABC, Generic[Req, Res]):
     @abstractmethod
-    def incoming(self) -> Iterator[Call[P, R]]:
+    def incoming(self) -> Iterator[Call[Req, Res]]:
         """Calls not yet yielded; each may be answered now or on a later tick."""
 
 
 @dataclass(frozen=True)
-class _Request:
+class _Request(Generic[Req]):
     id: int
-    args: tuple[Any, ...]
-    kwargs: dict[str, Any]
+    data: Req
 
 
 @dataclass(frozen=True)
-class _Result:
+class _Result(Generic[Res]):
     id: int
-    value: Any
+    value: Res
 
 
 @dataclass(frozen=True)
@@ -88,45 +83,41 @@ def _drain(receiver: SignalReceiver[T]) -> Iterator[T]:
         yield msg.data
 
 
-class _ControlSystemCall(Call[P, R]):
-    def __init__(self, request: _Request, replies: SignalEmitter[_Result | _Failure]):
+class _ControlSystemCall(Call[Req, Res]):
+    def __init__(self, request: _Request[Req], replies: SignalEmitter[_Result[Res] | _Failure]):
         self._request = request
         self._replies = replies
         self._answered = False
 
     @property
-    def args(self) -> tuple[Any, ...]:
-        return self._request.args
+    def request(self) -> Req:
+        return self._request.data
 
-    @property
-    def kwargs(self) -> dict[str, Any]:
-        return self._request.kwargs
-
-    def set_result(self, value: R) -> None:
+    def set_result(self, value: Res) -> None:
         self._answer(_Result(self._request.id, value))
 
     def set_exception(self, exc: BaseException) -> None:
         self._answer(_Failure(self._request.id, exc))
 
-    def _answer(self, reply: _Result | _Failure) -> None:
+    def _answer(self, reply: _Result[Res] | _Failure) -> None:
         if self._answered:
             raise InvalidStateError(f'Call {self._request.id} is already answered')
         self._replies.emit(reply)
         self._answered = True
 
 
-class ControlSystemHandler(MethodHandler[P, R]):
+class ControlSystemHandler(MethodHandler[Req, Res]):
     """A control system's handler; `requests` and `replies` are the signal endpoints `World.connect` binds."""
 
     def __init__(self, owner: ControlSystem):
-        self.requests = ControlSystemReceiver[_Request](owner, maxsize=0)
-        self.replies = ControlSystemEmitter[_Result | _Failure](owner)
+        self.requests = ControlSystemReceiver[_Request[Req]](owner, maxsize=0)
+        self.replies = ControlSystemEmitter[_Result[Res] | _Failure](owner)
 
-    def incoming(self) -> Iterator[Call[P, R]]:
+    def incoming(self) -> Iterator[Call[Req, Res]]:
         return iter([_ControlSystemCall(request, self.replies) for request in _drain(self.requests)])
 
 
-class _ReplyFuture(Future[R]):
+class _ReplyFuture(Future[Res]):
     """The caller's view of one call: a `Future` that pulls its answer from the caller's replies on inspection."""
 
     def __init__(self, deliver_replies: Callable[[], None]):
@@ -137,7 +128,7 @@ class _ReplyFuture(Future[R]):
         self._deliver_replies()
         return super().done()
 
-    def result(self, timeout: float | None = None) -> R:
+    def result(self, timeout: float | None = None) -> Res:
         self._reject_waiting(timeout)
         self._deliver_replies()
         return super().result(timeout=0)
@@ -156,23 +147,23 @@ class _ReplyFuture(Future[R]):
             raise NotImplementedError('A method future cannot wait; poll `done()` between yields')
 
 
-class ControlSystemCaller(MethodCaller[P, R]):
+class ControlSystemCaller(MethodCaller[Req, Res]):
     """A control system's caller; `requests` and `replies` are the signal endpoints `World.connect` binds."""
 
     def __init__(self, owner: ControlSystem):
-        self.requests = ControlSystemEmitter[_Request](owner)
-        self.replies = ControlSystemReceiver[_Result | _Failure](owner, maxsize=0)
-        self._pending: dict[int, _ReplyFuture[R]] = {}
+        self.requests = ControlSystemEmitter[_Request[Req]](owner)
+        self.replies = ControlSystemReceiver[_Result[Res] | _Failure](owner, maxsize=0)
+        self._pending: dict[int, _ReplyFuture[Res]] = {}
         self._next_id = 0
 
-    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> Future[R]:
+    def __call__(self, request: Req) -> Future[Res]:
         if self.requests.num_bound == 0:
             raise RuntimeError('Caller is not connected to a handler')
-        request = _Request(self._next_id, args, kwargs)
+        envelope = _Request(self._next_id, request)
         self._next_id += 1
         future = _ReplyFuture(self._deliver_replies)
-        self._pending[request.id] = future
-        self.requests.emit(request)
+        self._pending[envelope.id] = future
+        self.requests.emit(envelope)
         return future
 
     def _deliver_replies(self) -> None:

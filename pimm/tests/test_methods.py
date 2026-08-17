@@ -12,7 +12,7 @@ class Adder(ControlSystem):
     """Serves `add(a, b)`, failing on a negative operand; `defer` holds every answer that many ticks."""
 
     def __init__(self, defer: int = 0):
-        self.add = ControlSystemHandler[[int, int], int](self)
+        self.add = ControlSystemHandler[tuple[int, int], int](self)
         self._defer = defer
         self.seen = []
 
@@ -20,7 +20,7 @@ class Adder(ControlSystem):
         waiting = []
         while not should_stop.value:
             for call in self.add.incoming():
-                self.seen.append(call.args)
+                self.seen.append(call.request)
                 waiting.append((self._defer, call))
             still_waiting = []
             for ticks, call in waiting:
@@ -33,7 +33,7 @@ class Adder(ControlSystem):
 
     @staticmethod
     def _answer(call):
-        a, b = call.args
+        a, b = call.request
         if a < 0 or b < 0:
             call.set_exception(ValueError('negative operand'))
         else:
@@ -44,13 +44,13 @@ class Client(ControlSystem):
     """Makes every call up front, runs until all are answered, then returns — which stops the world."""
 
     def __init__(self, calls: list[tuple[int, int]], total=None):
-        self.add = ControlSystemCaller[[int, int], int](self)
+        self.add = ControlSystemCaller[tuple[int, int], int](self)
         self._calls = calls
         self._total = total
         self.results = []
 
     def run(self, should_stop, clock):
-        futures = [self.add(a, b) for a, b in self._calls]
+        futures = [self.add(pair) for pair in self._calls]
         while not all(f.done() for f in futures):
             yield Sleep(0.001)
         self.results = [f.exception() or f.result() for f in futures]
@@ -79,12 +79,12 @@ def bound():
 class TestCallAndAnswer:
     def test_call_returns_a_future_completed_by_the_answer(self, bound):
         caller, handler = bound
-        future = caller(1, b=2)
+        future = caller((1, 2))
         assert isinstance(future, Future)
         assert not future.done()
 
         (call,) = handler.incoming()
-        assert call.args == (1,) and call.kwargs == {'b': 2}
+        assert call.request == (1, 2)
         call.set_result(3)
         assert future.done()
         assert future.result() == 3
@@ -93,7 +93,7 @@ class TestCallAndAnswer:
         caller, handler = bound
         for i in range(20):
             caller(i)
-        assert [call.args for call in handler.incoming()] == [(i,) for i in range(20)]
+        assert [call.request for call in handler.incoming()] == list(range(20))
         assert list(handler.incoming()) == []
 
     def test_replies_may_return_out_of_order(self, bound):
@@ -108,7 +108,7 @@ class TestCallAndAnswer:
 
     def test_exception_set_by_handler_is_raised_by_result(self, bound):
         caller, handler = bound
-        future = caller()
+        future = caller(None)
         (call,) = handler.incoming()
         call.set_exception(ValueError('boom'))
         assert isinstance(future.exception(), ValueError)
@@ -117,7 +117,7 @@ class TestCallAndAnswer:
 
     def test_answering_twice_raises(self, bound):
         caller, handler = bound
-        caller()
+        caller(None)
         (call,) = handler.incoming()
         call.set_result(1)
         with pytest.raises(InvalidStateError):
@@ -127,7 +127,7 @@ class TestCallAndAnswer:
 
     def test_unanswered_future_does_not_wait(self, bound):
         caller, handler = bound
-        future = caller()
+        future = caller(None)
         with pytest.raises(TimeoutError):
             future.result()
         with pytest.raises(TimeoutError):
@@ -140,11 +140,11 @@ class TestCallAndAnswer:
     def test_cancel_raises(self, bound):
         caller, handler = bound
         with pytest.raises(NotImplementedError):
-            caller().cancel()
+            caller(None).cancel()
 
     def test_unbound_caller_raises(self):
         with pytest.raises(RuntimeError):
-            ControlSystemCaller(Passive())()
+            ControlSystemCaller(Passive())(None)
 
     def test_unbound_handler_yields_nothing(self):
         assert list(ControlSystemHandler(Passive()).incoming()) == []
