@@ -1,5 +1,6 @@
 import multiprocessing as mp
 from concurrent.futures import Future, InvalidStateError
+from itertools import islice
 
 import pytest
 
@@ -89,11 +90,12 @@ class TestCallAndAnswer:
         assert future.done()
         assert future.result() == 3
 
-    def test_calls_arrive_in_order_and_each_once(self, bound):
+    def test_calls_arrive_in_order_and_unreached_ones_wait_for_the_next_incoming(self, bound):
         caller, handler = bound
         for i in range(20):
             caller(i)
-        assert [call.request for call in handler.incoming()] == list(range(20))
+        assert [call.request for call in islice(handler.incoming(), 5)] == list(range(5))
+        assert [call.request for call in handler.incoming()] == list(range(5, 20))
         assert list(handler.incoming()) == []
 
     def test_replies_may_return_out_of_order(self, bound):

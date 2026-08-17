@@ -9,7 +9,8 @@ it serves invocations. `World.connect` binds a caller to a handler wherever the 
   must be picklable.
 - No call and no reply is dropped.
 - Calls from one caller reach the handler in the order made; replies may return in any order.
-- `incoming()` yields each call once.
+- `incoming()` yields calls one at a time as it is advanced; each call is yielded once, and one it has not
+  reached is yielded by a later `incoming()`.
 - Each `Call` is answered once, with `set_result` or `set_exception`; answering again raises in the handler.
 - `__call__` returns a `concurrent.futures.Future` completed by the handler's answer and by nothing else.
 - The future never waits: `done()`, `result()` and `exception()` return at once. On an unanswered future
@@ -114,7 +115,8 @@ class ControlSystemHandler(MethodHandler[Req, Res]):
         self.replies = ControlSystemEmitter[_Result[Res] | _Failure](owner)
 
     def incoming(self) -> Iterator[Call[Req, Res]]:
-        return iter([_ControlSystemCall(request, self.replies) for request in _drain(self.requests)])
+        for request in _drain(self.requests):
+            yield _ControlSystemCall(request, self.replies)
 
 
 class _ReplyFuture(Future[Res]):

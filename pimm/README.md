@@ -213,8 +213,8 @@ class Policy(pimm.ControlSystem):
 world.connect(policy.reset, robot.reset)
 ```
 
-`incoming()` yields each call once; a call may be answered right away or kept and answered on a
-later tick. No call and no reply is dropped, whether the two systems share a process or not. A
+`incoming()` hands out calls one at a time; a call may be answered right away or kept and answered
+on a later tick, and one the handler has not reached waits for the next `incoming()`. No call and no reply is dropped, whether the two systems share a process or not. A
 future is completed only by the handler's answer and never waits for it: a caller polls `done()`
 between sleeps, and `result()` on an unanswered future raises. The full contract is the docstring of
 [`pimm/calls.py`](calls.py).
