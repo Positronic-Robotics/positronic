@@ -298,6 +298,14 @@ class TestWorld:
                 assert stale_result.data == message
                 assert stale_result.updated is False
 
+    @pytest.mark.parametrize('pipe_fn_name', ['mp_pipes', 'local_pipe'])
+    def test_world_pipe_maxsize_zero_keeps_every_message(self, pipe_fn_name):
+        with World() as world:
+            emitter, reader = getattr(world, pipe_fn_name)(maxsize=0)
+            for i in range(50):
+                emitter.emit(i)
+            assert [reader.read().data for _ in range(50)] == list(range(50))
+
     def test_world_context_manager_enter(self):
         """Test that World.__enter__ returns self."""
         world = World()

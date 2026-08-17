@@ -1,4 +1,4 @@
-from . import shared_memory
+from . import calls, shared_memory
 from .core import (
     Clock,
     Command,
@@ -32,6 +32,7 @@ __all__ = [
     'EmitterDict',
     'FakeEmitter',
     'FakeReceiver',
+    'calls',
     'map',
     'Message',
     'NoOpEmitter',

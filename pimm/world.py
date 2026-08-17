@@ -19,6 +19,7 @@ from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
 from typing import TypeVar
 
+from .calls import ControlSystemCaller, ControlSystemHandler
 from .core import (
     Clock,
     Command,
@@ -38,6 +39,8 @@ from .shared_memory import SMCompliant
 from .utils import identity
 
 T = TypeVar('T')
+Req = TypeVar('Req')
+Res = TypeVar('Res')
 
 # Consecutive single-instant rounds with no clock-mover after which ``interleave`` warns of a stall.
 # Far above any real cooperative burst, reached near-instantly by a true hang (loops yielding forever
@@ -615,21 +618,22 @@ class World:
 
     def connect(
         self,
-        emitter: ControlSystemEmitter[T],
-        receiver: ControlSystemReceiver[T],
+        source: ControlSystemEmitter[T] | ControlSystemCaller[Req, Res],
+        target: ControlSystemReceiver[T] | ControlSystemHandler[Req, Res],
         *,
         emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = identity,
         receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[T]] = identity,
-    ):
-        """Declare a logical connection between Emitter and Receiver of two control systems.
+    ) -> None:
+        """Declare a logical connection: an Emitter feeding a Receiver, or a Caller invoking a Handler.
 
         The world inspects the ownership of both endpoints when ``start`` is
         called and chooses an appropriate transport (local queue vs.
-        multiprocessing pipe). Each Receiver may only be connected once.
+        multiprocessing pipe). Each Receiver may only be connected once; a
+        Handler serves one Caller and a Caller reaches one Handler.
 
         Args:
-            emitter: The control system emitter to connect from
-            receiver: The control system receiver to connect to
+            source: The control system emitter or caller to connect from
+            target: The control system receiver or handler to connect to
             emitter_wrapper: Optional function to wrap the underlying SignalEmitter
                            before binding. Defaults to identity function.
             receiver_wrapper: Optional function to wrap the underlying SignalReceiver
@@ -637,13 +641,24 @@ class World:
 
         The wrapper functions allow for transformation or decoration of the
         underlying signal transport mechanisms, such as adding logging,
-        filtering, or other middleware functionality.
+        filtering, or other middleware functionality. They apply to signals only.
         """
-        assert receiver not in [e[1] for e in self._connections], 'Receiver can be connected only to one Emitter'
-        assert isinstance(emitter, ControlSystemEmitter)
-        assert isinstance(receiver, ControlSystemReceiver)
-        if not isinstance(emitter, FakeEmitter) and not isinstance(receiver, FakeReceiver):
-            self._connections.append((emitter, receiver, emitter_wrapper, receiver_wrapper))
+        if isinstance(source, ControlSystemCaller):
+            assert isinstance(target, ControlSystemHandler)
+            assert emitter_wrapper is identity and receiver_wrapper is identity, 'Wrappers do not apply to calls'
+            assert not self._is_connected(target.requests), 'Handler can serve only one Caller'
+            assert not self._is_connected(source.replies), 'Caller can be connected only to one Handler'
+            self.connect(source.requests, target.requests)
+            self.connect(target.replies, source.replies)
+            return
+        assert isinstance(source, ControlSystemEmitter)
+        assert isinstance(target, ControlSystemReceiver)
+        assert not self._is_connected(target), 'Receiver can be connected only to one Emitter'
+        if not isinstance(source, FakeEmitter) and not isinstance(target, FakeReceiver):
+            self._connections.append((source, target, emitter_wrapper, receiver_wrapper))
+
+    def _is_connected(self, receiver: ControlSystemReceiver) -> bool:
+        return any(receiver is connected for _, connected, _, _ in self._connections)
 
     def pair(
         self,
@@ -835,7 +850,7 @@ class World:
         Returns:
             Tuple of (emitter, reader) for local communication
         """
-        q = deque(maxlen=maxsize)
+        q = deque(maxlen=maxsize or None)
         return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q)
 
     @functools.cached_property

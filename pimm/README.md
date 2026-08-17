@@ -178,6 +178,47 @@ class MultiCameraSystem(pimm.ControlSystem):
             yield pimm.Sleep(0.03)
 ```
 
+## Calls: Ask and Get an Answer
+
+A signal carries the latest state; a call carries a request that expects a reply. One control
+system declares a `pimm.calls.ControlSystemHandler` and serves calls inside its own loop; another
+declares a `pimm.calls.ControlSystemCaller` and gets an `Answer` per call. The
+type parameters are the request type and the result type; a call carrying several values takes one
+dataclass.
+
+```python
+class Robot(pimm.ControlSystem):
+    def __init__(self):
+        self.reset = pimm.calls.ControlSystemHandler[bool, None](self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        while not should_stop.value:
+            for call in self.reset.incoming():
+                call.set_result(self._reset(home=call.request))   # or call.set_exception(exc)
+            yield pimm.Sleep(0.01)
+
+
+class Policy(pimm.ControlSystem):
+    def __init__(self):
+        self.reset = pimm.calls.ControlSystemCaller[bool, None](self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        answer = self.reset(True)
+        while not answer.done():
+            yield pimm.Sleep(0.01)
+        answer.result()                              # re-raises what the handler set
+        ...
+
+
+world.connect(policy.reset, robot.reset)
+```
+
+`incoming()` hands out calls one at a time; a call may be answered right away or kept and answered
+on a later tick, and one the handler has not reached waits for the next `incoming()`. No call and no reply is dropped, whether the two systems share a process or not. An
+`Answer` is completed only by the handler and never waits for it: a caller polls `done()` between
+sleeps, and `result()` on an unanswered call raises. The full contract is the docstring of
+[`pimm/calls.py`](calls.py).
+
 ## Control Systems and the World
 
 A control system is any class that subclasses `pimm.ControlSystem` and implements
