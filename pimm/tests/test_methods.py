@@ -188,7 +188,7 @@ class TestWorldConnect:
         assert client.results == [3, 7]
 
     def test_caller_in_background_process(self):
-        total = mp.Value('i', 0)
+        total = mp.get_context('spawn').Value('i', 0)
         client, adder = Client([(1, 2), (3, 4)], total), Adder()
         with World() as world:
             world.connect(client.add, adder.add)
