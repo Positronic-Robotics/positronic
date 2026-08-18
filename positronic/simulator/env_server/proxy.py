@@ -39,7 +39,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self.commands: pimm.ReceiverDict = pimm.ReceiverDict(self)
         self.observations: pimm.EmitterDict = pimm.EmitterDict(self)
         self.privileged: pimm.EmitterDict = pimm.EmitterDict(self)
-        self.robot_meta: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self.robot_meta = pimm.ControlSystemEmitter[dict](self)
         self.done = pimm.ControlSystemEmitter[dict](self)
 
         # A trial is live between reset and the env's done. The proxy steps only then — not before the
@@ -50,9 +50,6 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         # The scene meta the env reports at ``reset`` (the task/prompt, scene ids) — constant for the trial; read
         # by the client's ``Task`` for its live instruction. ``step`` omits it.
         self._meta: dict[str, Any] | None = None
-        # The robot model identity the env reports at ``reset`` (URDF / joint names) — emitted on the
-        # ``robot_meta`` port into the episode; distinct from the scene ``meta`` above.
-        self._robot_meta: dict[str, Any] | None = None
         # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
         self._reset_pending = False
 
@@ -81,7 +78,6 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
             receiver.read()
         self._frame = self._conn.reset(self._adapter.reset_token(context))
         self._meta = self._frame['meta']
-        self._robot_meta = self._frame['robot_meta']
         self._reset_pending = True
         self._active = True
         # Clear any terminal the previous trial left on the wire: the env can reach ``done`` while the proxy
@@ -107,7 +103,9 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     # terminal, so the recorder samples it before any step advances the env.
                     assert self._frame is not None  # reset() set the frame before arming reset_pending
                     self._reset_pending = False
-                    self.robot_meta.emit(self._robot_meta)
+                    # The robot model identity the env reports at reset (URDF / joint names), distinct from
+                    # the scene ``meta``.
+                    self.robot_meta.emit(self._frame['robot_meta'])
                     # Materialising frame-0 (allocating shared-memory image buffers, copying each camera
                     # frame) is reset cost: it is work the reset asked for, and left untimed it would land in
                     # overhead.

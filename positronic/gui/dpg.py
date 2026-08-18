@@ -83,7 +83,7 @@ class DearpyguiUi(pimm.ControlSystem):
 
             for cam_name, camera in self.cameras.items():
                 if (frame := pimm.value_updated(camera)) is not None:
-                    image = frame.array  # Extract from NumpySMAdapter
+                    image = frame.array
                     if cam_name not in im_sizes:
                         im_sizes[cam_name] = image.shape[:2]
                         if not init_done and len(im_sizes) == len(self.cameras):

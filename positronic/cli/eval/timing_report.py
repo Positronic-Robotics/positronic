@@ -411,15 +411,15 @@ def _episode_timing(episode: SpanRec, children: dict[str, list[SpanRec]]) -> _Ep
 def _env_step_split(spans: list[SpanRec], episodes: list[SpanRec], env_step_sum: float, materialize_sum: float):
     """The env-step decomposition from the env server's own spans: a server ``env.step`` (recorded in the env
     process's own file, so ``process`` is not the harness) with physics/render children. Only server steps that
-    start inside a reduced episode's wall window count — a step outside every one of them would otherwise skew
+    start inside an episode's wall window count — a step outside every one of them would otherwise skew
     fractions whose denominator covers those episodes only. ``None`` when no such span exists (a native sim
     reports no decomposition)."""
 
-    def in_reduced_episode(ts_ns: int) -> bool:
+    def in_episode(ts_ns: int) -> bool:
         return any(e.start_ns <= ts_ns <= e.end_ns for e in episodes)
 
     server_steps = [
-        s for s in spans if s.name == SPAN_ENV_STEP and s.process != HARNESS_PROCESS and in_reduced_episode(s.start_ns)
+        s for s in spans if s.name == SPAN_ENV_STEP and s.process != HARNESS_PROCESS and in_episode(s.start_ns)
     ]
     server_step_sum = sum(_dur_s(s) for s in server_steps)
     if not server_step_sum or not env_step_sum:
