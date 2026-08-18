@@ -149,7 +149,7 @@ def _driver(arm: FakeArm, *, variation: list[float] | None = None, **kwargs) -> 
 
 
 def _drive(loop, clock: MockClock | None = None) -> None:
-    """Pump a driver loop to exhaustion, honouring each yielded Sleep on ``clock`` — what the world does to it."""
+    """Pump a driver loop to exhaustion, standing in for the world by advancing ``clock`` through each Sleep."""
     clock = clock or MockClock()
     for command in loop:
         clock.advance(command.seconds)
@@ -206,7 +206,7 @@ def test_park_gives_up_when_the_arm_does_not_arrive_in_time():
 
     clock = _drive_park(_driver(arm, manage_desk=False, park_timeout_s=0.05), arm)
 
-    # It waits out the timeout and gives up within one poll interval of it, having polled all the way.
+    # It waits out the timeout and gives up within one poll interval of it.
     assert 0.05 <= clock.now() < 0.06
     assert arm.calls.count(Call.GOAL) > 1
     np.testing.assert_allclose(arm.q, JOGGED)
