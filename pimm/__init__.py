@@ -6,6 +6,7 @@ from .core import (
     ControlSystem,
     ControlSystemEmitter,
     ControlSystemReceiver,
+    DefaultingReceiver,
     EmitterDict,
     FakeEmitter,
     FakeReceiver,
@@ -19,7 +20,7 @@ from .core import (
     Sleep,
     Yield,
 )
-from .utils import RateLimiter, map
+from .utils import RateLimiter, map, read_updated, value_updated
 from .world import World
 
 __all__ = [
@@ -29,6 +30,7 @@ __all__ = [
     'ControlSystem',
     'ControlSystemEmitter',
     'ControlSystemReceiver',
+    'DefaultingReceiver',
     'EmitterDict',
     'FakeEmitter',
     'FakeReceiver',
@@ -39,11 +41,13 @@ __all__ = [
     'NoOpReceiver',
     'NoValueException',
     'RateLimiter',
+    'read_updated',
     'ReceiverDict',
     'shared_memory',
     'SignalEmitter',
     'SignalReceiver',
     'Sleep',
+    'value_updated',
     'World',
     'Yield',
 ]

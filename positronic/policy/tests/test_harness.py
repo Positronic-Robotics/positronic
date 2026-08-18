@@ -22,7 +22,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import Directive, DirectiveType, Harness, _InferenceWorker
+from positronic.policy.harness import Harness, _InferenceWorker
 from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -42,6 +42,8 @@ def _eval_pass(run_id: str):
 
 
 CAM = 'image.cam'
+# What an operator's finish puts on ``done``; the harness stamps ``eval.terminated`` over it.
+OPERATOR_DONE = {keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR}
 
 
 def make_embodiment(descriptor: str = '', cameras=(CAM,), static_meta=None, simulated=False) -> Embodiment:
@@ -238,7 +240,8 @@ def _pair_all(world, harness):
         'frame_em': world.pair(harness.observations[CAM]),
         'robot_em': world.pair(harness.observations[keys.ROBOT_STATE]),
         'grip_em': world.pair(harness.observations[keys.GRIP]),
-        'directive_em': world.pair(harness.directive),
+        'perform_task': world.pair(harness.perform_task),
+        'done_em': world.pair(harness.done),
         'command_rx': world.pair(harness.commands[keys.ROBOT_COMMAND]),
         'grip_rx': world.pair(harness.commands['target_grip']),
         'meta_em': world.pair(harness.robot_meta_in),
@@ -292,12 +295,12 @@ def test_harness_emits_cartesian_move(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    directive_em = world.pair(harness.directive)
+    perform_task = world.pair(harness.perform_task)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='stack-blocks')), 0.0),
+        (partial(perform_task, {keys.TASK: 'stack-blocks'}), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
         (None, 0.05),
     ])
@@ -351,11 +354,11 @@ def test_harness_passes_descriptor_to_policy(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    directive_em = world.pair(harness.directive)
+    perform_task = world.pair(harness.perform_task)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(perform_task, {keys.TASK: 't'}), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
         (None, 0.05),
     ])
@@ -381,11 +384,11 @@ def test_robot_model_stays_out_of_the_observation(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations['grip'])
-    directive_em = world.pair(harness.directive)
+    perform_task = world.pair(harness.perform_task)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(perform_task, {keys.TASK: 't'}), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
         (None, 0.05),
     ])
@@ -404,10 +407,10 @@ def _run_with_model(world, model, static_meta=None):
     harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
     harness.commands['target_grip']._bind(RecordingEmitter())
     harness.ds_command._bind(RecordingEmitter())
-    directive_em = world.pair(harness.directive)
+    perform_task = world.pair(harness.perform_task)
     meta_em = world.pair(harness.robot_meta_in)
 
-    steps = [(partial(directive_em.emit, Directive.RUN(task='t')), 0.0)]
+    steps = [(partial(perform_task, {keys.TASK: 't'}), 0.0)]
     if model is not None:
         steps.append((partial(meta_em.emit, model), 0.01))
     drive_scheduler(world.start([harness, ManualDriver([*steps, (None, 0.05)])]), steps=20)
@@ -452,7 +455,7 @@ def test_harness_waits_for_complete_inputs(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    directive_em = world.pair(harness.directive)
+    perform_task = world.pair(harness.perform_task)
 
     assert CAM in harness.observations
 
@@ -464,7 +467,7 @@ def test_harness_waits_for_complete_inputs(world):
         assert all(isinstance(c, Reset) for c in _emitted_commands(cmd_recorder))
 
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='dummy-task')), 0.01),
+        (partial(perform_task, {keys.TASK: 'dummy-task'}), 0.01),
         (partial(robot_em.emit, robot_state), 0.01),
         (partial(grip_em.emit, 0.25), 0.01),
         (assert_no_inference, 0.01),  # still missing a frame
@@ -495,8 +498,8 @@ def test_episode_meta_stamped_at_finalize(world):
 
     driver = ManualDriver([
         (partial(p['meta_em'].emit, {keys.URDF: '<robot/>', keys.JOINT_NAMES: ['j1']}), 0.0),
-        (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.01),
-        (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),
+        (partial(p['perform_task'], {keys.TASK: 'test'}), 0.01),
+        (partial(p['done_em'].emit, OPERATOR_DONE), 0.02),
         (None, 0.02),
     ])
 
@@ -542,9 +545,9 @@ def test_episode_meta_includes_policy_static_meta(world):
     p = _pair_all(world, harness)
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
-        (partial(p['directive_em'].emit, Directive.RUN(task='t')), 0.0),
+        (partial(p['perform_task'], {keys.TASK: 't'}), 0.0),
         (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
-        (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),
+        (partial(p['done_em'].emit, OPERATOR_DONE), 0.02),
         (None, 0.02),
     ])
     scheduler = world.start([harness, driver])
@@ -564,8 +567,8 @@ def test_finish_emits_ds_stop_with_data_and_homes(world):
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
-        (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.0),
-        (partial(p['directive_em'].emit, Directive.FINISH(outcome='Success', notes='good')), 0.02),
+        (partial(p['perform_task'], {keys.TASK: 'test'}), 0.0),
+        (partial(p['done_em'].emit, {'outcome': 'Success', 'notes': 'good'}), 0.02),
         (None, 0.02),
     ])
 
@@ -578,6 +581,37 @@ def test_finish_emits_ds_stop_with_data_and_homes(world):
     assert stops[0].static_data['notes'] == 'good'
 
     assert isinstance(_last_command(p), Reset)
+
+
+@pytest.mark.timeout(3.0)
+def test_the_call_is_answered_with_the_terminal_the_episode_ended_on(world):
+    """A task-less episode ends on ``done`` alone, and its caller gets what it ended on."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+
+    scheduler = world.start([harness])
+    answer = p['perform_task']({keys.TASK: 'test'})
+    drive_scheduler(scheduler, steps=5)
+    assert not answer.done()
+
+    p['done_em'].emit({keys.EVAL_SUCCESS: True})
+    drive_scheduler(scheduler, steps=10)
+
+    assert answer.result() == {keys.EVAL_SUCCESS: True, keys.EVAL_TERMINATED: True}
+
+
+@pytest.mark.timeout(3.0)
+def test_the_world_stopping_under_a_live_episode_fails_the_call(world):
+    """The caller hears that its episode will never answer, rather than holding a handle that never completes."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+
+    scheduler = world.start([harness, ManualDriver([(None, 0.02)])])
+    answer = p['perform_task']({keys.TASK: 'test'})
+    drive_scheduler(scheduler, steps=20)
+
+    with pytest.raises(RuntimeError):
+        answer.result()
 
 
 @pytest.mark.timeout(3.0)
@@ -636,7 +670,7 @@ def test_trial_budget_starts_at_the_first_usable_observation(world):
 
 @pytest.mark.timeout(3.0)
 def test_attended_task_run_respects_timeout(world):
-    """A task's ``timeout`` bounds an attended (directive-driven) run too: RUN arrives but no FINISH, yet
+    """A task's ``timeout`` bounds the episode a call asks for too: nothing ever lands on ``done``, yet
     the trial still self-terminates at the deadline. The deadline is armed whenever a task is supplied, not
     only on the self-driven ``trials`` path."""
     policy = StubPolicy()
@@ -644,7 +678,7 @@ def test_attended_task_run_respects_timeout(world):
     p = _pair_all(world, harness)
 
     scheduler = world.start([harness])
-    p['directive_em'].emit(Directive.RUN(task='test'))
+    p['perform_task']({keys.TASK: 'test'})
     drive_scheduler(scheduler, steps=200)
 
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
@@ -656,19 +690,17 @@ def test_attended_task_run_respects_timeout(world):
 @pytest.mark.timeout(3.0)
 def test_attended_task_run_respects_done(world):
     """The privileged ``done`` ends an attended run too: a fresh terminal within budget terminates the
-    episode even though no FINISH arrives. ``done`` is honored whenever a task supplies it, attended or
-    self-driven."""
+    episode a call asked for. ``done`` is honored whenever a task supplies it, attended or self-driven."""
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=100.0))
     p = _pair_all(world, harness)
-    done_em = world.pair(harness.done)
 
     scheduler = world.start([harness])
-    p['directive_em'].emit(Directive.RUN(task='test'))
+    p['perform_task']({keys.TASK: 'test'})
     drive_scheduler(scheduler, steps=5)
     assert not [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
 
-    done_em.emit({keys.EVAL_SUCCESS: True})
+    p['done_em'].emit({keys.EVAL_SUCCESS: True})
     drive_scheduler(scheduler, steps=10)
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
@@ -683,14 +715,13 @@ def test_trial_stop_signal_terminates(world):
     # Timeout far in the future so the stop-signal, not the clock, ends the trial.
     harness = Harness(policy, make_embodiment(), task=Task(instruction='test', timeout=100.0), trials=[{}])
     p = _pair_all(world, harness)
-    done_em = world.pair(harness.done)
 
     scheduler = world.start([harness])
     drive_scheduler(scheduler, steps=5)
     # Trial is live and unbounded by the clock: nothing committed yet.
     assert not [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
 
-    done_em.emit({keys.EVAL_SUCCESS: True})
+    p['done_em'].emit({keys.EVAL_SUCCESS: True})
     drive_scheduler(scheduler, steps=10)
 
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
@@ -709,18 +740,17 @@ def test_stale_done_does_not_terminate_next_trial(world):
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment(), task=Task(instruction='t', timeout=100.0), trials=[{}, {}])
     p = _pair_all(world, harness)
-    done_em = world.pair(harness.done)
 
     def stop_count():
         return len([c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE])
 
     scheduler = world.start([harness])
     drive_scheduler(scheduler, steps=5)
-    done_em.emit({})  # falsy: does not terminate
+    p['done_em'].emit({})  # falsy: does not terminate
     drive_scheduler(scheduler, steps=10)
     assert stop_count() == 0
 
-    done_em.emit({keys.EVAL_SUCCESS: True})  # fresh truthy: ends trial 0
+    p['done_em'].emit({keys.EVAL_SUCCESS: True})  # fresh truthy: ends trial 0
     drive_scheduler(scheduler, steps=10)
     assert stop_count() == 1
 
@@ -728,7 +758,7 @@ def test_stale_done_does_not_terminate_next_trial(world):
     drive_scheduler(scheduler, steps=10)
     assert stop_count() == 1
 
-    done_em.emit({keys.EVAL_SUCCESS: True})  # a fresh delivery ends trial 1
+    p['done_em'].emit({keys.EVAL_SUCCESS: True})  # a fresh delivery ends trial 1
     drive_scheduler(scheduler, steps=10)
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 2
@@ -844,13 +874,12 @@ def test_done_after_deadline_is_a_timeout(world):
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment(), task=Task(instruction='t', timeout=0.05), trials=[{}])
     p = _pair_all(world, harness)
-    done_em = world.pair(harness.done)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     # The 0.05s deadline lapses first; done lands at ~0.1s, after the trial has already timed out.
     driver = ManualDriver([
         (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.1),
-        (partial(done_em.emit, {keys.EVAL_SUCCESS: True}), 0.3),
+        (partial(p['done_em'].emit, {keys.EVAL_SUCCESS: True}), 0.3),
         (None, 0.0),
     ])
     scheduler = world.start([harness, driver])
@@ -864,7 +893,7 @@ def test_done_after_deadline_is_a_timeout(world):
 
 @pytest.mark.timeout(3.0)
 def test_trial_seed_reaches_task_reset_and_meta(world):
-    """Each RUN hands its ``eval.seed`` to the task's scene reset; the seed and the
+    """Each trial hands its ``eval.seed`` to the task's scene reset; the seed and the
     eval-identity block land in episode meta."""
     policy = StubPolicy()
     seeds = []
@@ -939,56 +968,50 @@ def test_timeout_during_inference_drops_the_chunk(world):
     stops = [data for _, data in ds_recorder.emitted if data.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
     assert stops[0].static_data[keys.EVAL_TERMINATED] is False
-    # The only commands are the homing Reset / home grip from the startup home and the timeout FINISH.
+    # The only commands are the homing Reset / home grip from the startup home and from the timeout's end.
     assert all(isinstance(c, Reset) for c in _emitted_commands(cmd_recorder))
     assert _emitted_grips(grip_recorder) == [0.0, 0.0]
 
 
 @pytest.mark.timeout(3.0)
-def test_abort_discards_recording_and_homes(world):
+def test_a_terminal_landing_while_idle_does_not_end_the_next_episode(world):
+    """A finish pressed with nothing running belongs to no episode, so the one asked for next runs on."""
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-
     driver = ManualDriver([
-        (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.0),
-        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
-        (partial(p['directive_em'].emit, Directive.ABORT()), 0.02),
-        (None, 0.02),
+        (partial(p['done_em'].emit, OPERATOR_DONE), 0.02),  # nothing is running to finish
+        (partial(p['perform_task'], {keys.TASK: 't'}), 0.02),
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.05),
+        (None, 0.05),
     ])
-
     scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, steps=20)
+    drive_scheduler(scheduler, steps=200)
 
-    assert DsWriterCommandType.ABORT_EPISODE in _ds_types(p)
-
-    assert isinstance(_last_command(p), Reset)
-
-    assert policy.reset_calls == 1  # only from RUN
+    assert _ds_types(p).count(DsWriterCommandType.START_EPISODE) == 1
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert keys.EVAL_ENDED_BY not in stops[0].static_data, 'the idle terminal ended the episode that followed it'
 
 
 @pytest.mark.timeout(3.0)
-def test_run_while_running_is_ignored(world):
-    """A RUN mid-trial is ignored — the operator must finish the live trial before starting a new one."""
+def test_a_call_arriving_mid_episode_is_refused(world):
+    """The live episode runs on and the second caller is told why, rather than its ask being dropped."""
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
 
-    driver = ManualDriver([
-        (partial(p['directive_em'].emit, Directive.RUN(task='ep1')), 0.0),
-        (partial(p['directive_em'].emit, Directive.RUN(task='ep2')), 0.02),
-        (None, 0.02),
-    ])
+    scheduler = world.start([harness])
+    live = p['perform_task']({keys.TASK: 'ep1'})
+    drive_scheduler(scheduler, steps=5)
+    refused = p['perform_task']({keys.TASK: 'ep2'})
+    drive_scheduler(scheduler, steps=5)
 
-    scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, steps=20)
-
-    types = _ds_types(p)
-    # ep2's RUN is ignored; ep1 stays live and is finalized once at shutdown.
-    assert types.count(DsWriterCommandType.START_EPISODE) == 1
-    assert types.count(DsWriterCommandType.STOP_EPISODE) == 1
+    with pytest.raises(RuntimeError):
+        refused.result()
+    assert not live.done()
+    assert _ds_types(p).count(DsWriterCommandType.START_EPISODE) == 1
     assert policy.reset_calls == 1
 
 
@@ -1030,7 +1053,7 @@ def test_a_producer_reusing_its_buffer_cannot_rewrite_a_pending_observation(worl
         p['grip_em'].emit(0.25)
 
     driver = ManualDriver([
-        (partial(p['directive_em'].emit, Directive.RUN(task='t', **{keys.INFERENCE_LATENCY: True})), 0.0),
+        (partial(p['perform_task'], {keys.TASK: 't', keys.INFERENCE_LATENCY: True}), 0.0),
         (partial(emit_frame, 1), 0.01),
         (partial(emit_frame, 9), 0.05),  # rewrites the buffer while the first call is still running
         (None, 0.4),
@@ -1076,10 +1099,10 @@ def test_a_new_episode_waits_out_the_call_the_last_one_abandoned(world):
     emit_obs = partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
 
     driver = ManualDriver([
-        (partial(p['directive_em'].emit, Directive.RUN(task='ep1')), 0.0),
+        (partial(p['perform_task'], {keys.TASK: 'ep1'}), 0.0),
         (emit_obs, 0.01),  # the observation that puts a call on the worker
-        (partial(p['directive_em'].emit, Directive.FINISH()), 0.02),  # while that call is still running
-        (partial(p['directive_em'].emit, Directive.RUN(task='ep2')), 0.02),
+        (partial(p['done_em'].emit, OPERATOR_DONE), 0.02),  # while that call is still running
+        (partial(p['perform_task'], {keys.TASK: 'ep2'}), 0.02),
         (None, 0.02),
     ])
 
@@ -1097,7 +1120,7 @@ def test_run_calls_policy_reset_with_context(world):
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
 
-    driver = ManualDriver([(partial(p['directive_em'].emit, Directive.RUN(task='test-task')), 0.0), (None, 0.01)])
+    driver = ManualDriver([(partial(p['perform_task'], {keys.TASK: 'test-task'}), 0.0), (None, 0.01)])
 
     scheduler = world.start([harness, driver])
     drive_scheduler(scheduler, steps=5)
@@ -1140,10 +1163,10 @@ class _LabeledRecorder(pimm.SignalEmitter):
 
 @pytest.mark.timeout(3.0)
 def test_finish_stops_playing_the_live_chunk(world):
-    """FINISH drops the schedule the harness is playing: the chunk's remaining waypoints never reach the
+    """Finishing drops the schedule the harness is playing: the chunk's remaining waypoints never reach the
     devices, and the only command after the recorder's STOP is the home the close emits."""
     policy = ChunkPolicy()
-    wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # 1.8 s chunk — won't drain before FINISH
+    wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # 1.8 s chunk — won't drain before the episode ends
     harness = Harness(wrapped, make_embodiment())
     events: list[tuple[str, object]] = []
     harness.commands[keys.ROBOT_COMMAND]._bind(_LabeledRecorder(keys.ROBOT_COMMAND, events))
@@ -1153,23 +1176,24 @@ def test_finish_stops_playing_the_live_chunk(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    directive_em = world.pair(harness.directive)
+    perform_task = world.pair(harness.perform_task)
+    done_em = world.pair(harness.done)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     script = [
-        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(perform_task, {keys.TASK: 't'}), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
         (None, 0.1),
-        (partial(directive_em.emit, Directive.FINISH()), 0.0),
+        (partial(done_em.emit, OPERATOR_DONE), 0.0),
         (None, 0.5),
     ]
     scheduler = world.start([harness, ManualDriver(script)])
     drive_scheduler(scheduler, steps=400)
 
     stops = [i for i, (_, data) in enumerate(events) if getattr(data, 'type', None) is DsWriterCommandType.STOP_EPISODE]
-    assert stops, 'FINISH did not emit STOP_EPISODE'
+    assert stops, 'finishing did not emit STOP_EPISODE'
     grips_after = [data for lbl, data in events[stops[0] :] if lbl == keys.TARGET_GRIP]
-    assert grips_after == [0.0], f'the cancelled chunk kept playing past FINISH: {grips_after}'
+    assert grips_after == [0.0], f'the cancelled chunk kept playing past the finish: {grips_after}'
 
 
 @pytest.mark.timeout(3.0)
@@ -1195,11 +1219,11 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    directive_em = world.pair(harness.directive)
+    perform_task = world.pair(harness.perform_task)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     script = [
-        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(perform_task, {keys.TASK: 't'}), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
         (None, 0.1),
     ]
@@ -1211,7 +1235,7 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
 
 
 @pytest.mark.timeout(3.0)
-def test_harness_clears_trajectory_on_abort(world):
+def test_harness_clears_trajectory_on_finish(world):
     policy = ChunkPolicy()
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
@@ -1219,7 +1243,7 @@ def test_harness_clears_trajectory_on_abort(world):
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     scheduler = world.start([harness])
 
-    p['directive_em'].emit(Directive.RUN(task='test'))
+    p['perform_task']({keys.TASK: 'test'})
     drive_scheduler(scheduler, steps=1)
 
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
@@ -1227,12 +1251,12 @@ def test_harness_clears_trajectory_on_abort(world):
 
     assert _last_grip(p) >= 100.0, 'Expected chunk 1'
 
-    p['directive_em'].emit(Directive.ABORT())
-    drive_scheduler(scheduler, steps=2)
+    p['done_em'].emit(OPERATOR_DONE)
+    drive_scheduler(scheduler, steps=3)
 
-    assert _last_grip(p) == 0.0, 'Expected 0.0 (Abort homes)'
+    assert _last_grip(p) == 0.0, 'Expected 0.0 (finishing homes)'
 
-    p['directive_em'].emit(Directive.RUN(task='test'))
+    p['perform_task']({keys.TASK: 'test'})
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, steps=4)
 
@@ -1248,7 +1272,7 @@ def test_harness_clears_trajectory_on_run(world):
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     scheduler = world.start([harness])
 
-    p['directive_em'].emit(Directive.RUN(task='test'))
+    p['perform_task']({keys.TASK: 'test'})
     drive_scheduler(scheduler, steps=1)
 
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
@@ -1256,13 +1280,13 @@ def test_harness_clears_trajectory_on_run(world):
 
     assert _last_grip(p) >= 100.0
 
-    p['directive_em'].emit(Directive.RUN(task='test-restart'))
+    p['perform_task']({keys.TASK: 'test-restart'})
     drive_scheduler(scheduler, steps=1)
 
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
     drive_scheduler(scheduler, steps=4)
 
-    assert _last_grip(p) >= 200.0, 'Expected chunk 2; trajectory clearing on RUN failed'
+    assert _last_grip(p) >= 200.0, 'Expected chunk 2; trajectory clearing on a new episode failed'
 
 
 @pytest.mark.timeout(3.0)
@@ -1279,7 +1303,7 @@ def test_the_stack_keeps_the_model_away_from_an_arm_with_no_pose(world, unsound)
 
     scheduler = world.start([harness])
 
-    p['directive_em'].emit(Directive.RUN(task='test'))
+    p['perform_task']({keys.TASK: 'test'})
     drive_scheduler(scheduler, steps=1)
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], state_ok)
     drive_scheduler(scheduler, steps=3)
@@ -1293,19 +1317,6 @@ def test_the_stack_keeps_the_model_away_from_an_arm_with_no_pose(world, unsound)
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], state_ok)
     drive_scheduler(scheduler, steps=20)  # long enough for the first chunk to play out and the next to land
     assert _last_grip(p) >= 200.0
-
-
-def test_directive_preserves_payload():
-    assert Directive.RUN(task='test').payload == {keys.TASK: 'test'}
-    assert Directive.FINISH(outcome='Success').payload == {'outcome': 'Success'}
-    assert Directive.FINISH().payload == {}
-    assert Directive.ABORT().payload is None
-
-
-def test_directive_types():
-    assert DirectiveType.RUN.value == 'run'
-    assert DirectiveType.FINISH.value == 'finish'
-    assert DirectiveType.ABORT.value == 'abort'
 
 
 def test_cartesian_delta_wire_roundtrip():
@@ -1368,13 +1379,13 @@ def test_shutdown_stops_playing_the_live_chunk(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    directive_em = world.pair(harness.directive)
+    perform_task = world.pair(harness.perform_task)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    # RUN + a complete obs schedules a chunk; the driver then ends, which makes the
+    # A call + a complete obs schedules a chunk; the driver then ends, which makes the
     # world signal shutdown while still recording — exercising the run() finalizer.
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(perform_task, {keys.TASK: 't'}), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
         (None, 0.1),
     ])
@@ -1440,7 +1451,7 @@ def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(tmp_path):
     episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
     assert len(episodes) == 1
     episode = episodes[0]
-    assert telemetry_keys.ATTR_EPISODE_STEPS in episode.attrs  # sealed via end_episode, neither leaked open nor aborted
+    assert telemetry_keys.ATTR_EPISODE_STEPS in episode.attrs  # sealed via end_episode, not left open
     flushes = [s for s in spans if s.name == telemetry_keys.SPAN_RECORD_IO]
     assert flushes and all(s.parent_id == episode.span_id for s in flushes)
 
@@ -1519,29 +1530,6 @@ def test_an_inference_outliving_its_episode_parents_to_it(world, tmp_path):
 
 
 @pytest.mark.timeout(3.0)
-def test_aborted_episode_span_marked_aborted(world, tmp_path):
-    """An ABORT discards the rollout, and its episode span is stamped ``episode.aborted`` — the reduce drops
-    it rather than charging a partial rollout's wall to a real episode."""
-    harness = Harness(ChunkPolicy(), make_embodiment())
-    p = _pair_all(world, harness)
-    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-
-    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-abort'):
-        scheduler = world.start([harness])
-        p['directive_em'].emit(Directive.RUN(task='test'))
-        drive_scheduler(scheduler, steps=1)
-        emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
-        drive_scheduler(scheduler, steps=5)
-        p['directive_em'].emit(Directive.ABORT())
-        drive_scheduler(scheduler, steps=3)
-
-    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
-    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
-    assert len(episodes) == 1
-    assert episodes[0].attrs[telemetry_keys.ATTR_EPISODE_ABORTED] is True
-
-
-@pytest.mark.timeout(3.0)
 def test_failed_pass_seals_open_episode_span(tmp_path):
     """A ``task.reset`` raising after the episode span was opened must seal that span before the
     provider flushes on exit. Ending it is what exports it at all: an unended span never leaves the batch
@@ -1597,14 +1585,14 @@ def test_episode_virtual_duration_starts_at_the_first_observation(world, tmp_pat
 
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-anchor'), _eval_pass('run-anchor'):
         scheduler = world.start([harness])
-        p['directive_em'].emit(Directive.RUN(task='test'))
+        p['perform_task']({keys.TASK: 'test'})
         drive_scheduler(scheduler, steps=1)
         gap_start = world.clock.now()
         drive_scheduler(scheduler, steps=40)  # no observation yet: the producer has not published frame zero
         gap_s = world.clock.now() - gap_start
         emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
         drive_scheduler(scheduler, steps=5)
-        p['directive_em'].emit(Directive.FINISH())
+        p['done_em'].emit(OPERATOR_DONE)
         drive_scheduler(scheduler, steps=3)
 
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
@@ -1627,14 +1615,14 @@ def test_a_later_episode_waits_for_its_own_first_observation(world, tmp_path):
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
     def episode(gap_steps: int) -> float:
-        p['directive_em'].emit(Directive.RUN(task='test'))
+        p['perform_task']({keys.TASK: 'test'})
         drive_scheduler(scheduler, steps=1)
         gap_start = world.clock.now()
         drive_scheduler(scheduler, steps=gap_steps)  # the producer has not published this episode's frame zero
         gap_s = world.clock.now() - gap_start
         emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
         drive_scheduler(scheduler, steps=5)
-        p['directive_em'].emit(Directive.FINISH())
+        p['done_em'].emit(OPERATOR_DONE)
         drive_scheduler(scheduler, steps=3)
         return gap_s
 
@@ -1768,11 +1756,11 @@ def _run_episode(
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    directive_em = world.pair(harness.directive)
+    perform_task = world.pair(harness.perform_task)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='t', **{keys.INFERENCE_LATENCY: latency})), 0.0),
+        (partial(perform_task, {keys.TASK: 't', keys.INFERENCE_LATENCY: latency}), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
         (None, run_sec),
     ])
@@ -1866,7 +1854,7 @@ def test_an_unsound_arm_reaches_the_policy_without_its_pose(world, unsound):
     p = _pair_all(world, harness)
 
     driver = ManualDriver([
-        (partial(p['directive_em'].emit, Directive.RUN(task='test')), 0.0),
+        (partial(p['perform_task'], {keys.TASK: 'test'}), 0.0),
         (
             partial(
                 emit_ready_payload,
@@ -1911,18 +1899,14 @@ def test_every_arm_of_a_bimanual_rig_reports_its_own_status(world):
     left_em = world.pair(harness.observations[left])
     right_em = world.pair(harness.observations[right])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    directive_em = world.pair(harness.directive)
+    perform_task = world.pair(harness.perform_task)
 
     def emit_states():
         left_em.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.RESETTING))
         right_em.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR))
         grip_em.emit(0.0)
 
-    driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='test')), 0.0),
-        (emit_states, 0.01),
-        (None, 0.02),
-    ])
+    driver = ManualDriver([(partial(perform_task, {keys.TASK: 'test'}), 0.0), (emit_states, 0.01), (None, 0.02)])
 
     drive_scheduler(world.start([harness, driver]), steps=40)
 
@@ -1942,12 +1926,12 @@ def test_the_trial_context_cannot_stand_in_for_what_the_harness_read(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    directive_em = cast(pimm.SignalEmitter, world.pair(harness.directive))
+    perform_task = world.pair(harness.perform_task)
 
     faulted = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR)
     context = {'task': 'test', keys.ROBOT_STATUS: RobotStatus.AVAILABLE, keys.GRIP: 'from the config'}
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(**context)), 0.0),
+        (partial(perform_task, context), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, faulted), 0.01),
         (None, 0.02),
     ])
@@ -1973,11 +1957,11 @@ def test_a_stop_clears_the_chunk_in_the_round_the_fault_is_seen(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    directive_em = world.pair(harness.directive)
+    perform_task = world.pair(harness.perform_task)
 
     pose, joints = [0.1, 0.2, 0.3], [0.4, 0.5, 0.6]
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(perform_task, {keys.TASK: 't'}), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, make_robot_state(pose, joints)), fault_at),
         (partial(robot_em.emit, make_robot_state(pose, joints, status=RobotStatus.ERROR)), 0.5),
     ])
@@ -1991,7 +1975,7 @@ def test_a_stop_clears_the_chunk_in_the_round_the_fault_is_seen(world):
 
 @pytest.mark.timeout(20.0)
 def test_finish_does_not_wait_for_the_call_in_flight():
-    """FINISH ends the episode where it lands: the recording stops and the arm homes while the model is
+    """Finishing ends the episode where it lands: the recording stops and the arm homes while the model is
     still inside its call, and the failure that call ends in reaches nobody.
 
     Real time, real rig: a wall-charged call is the only one the harness leaves in flight across rounds.
@@ -2018,13 +2002,14 @@ def test_finish_does_not_wait_for_the_call_in_flight():
         frame_em = world.pair(harness.observations[CAM])
         robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
         grip_em = world.pair(harness.observations[keys.GRIP])
-        directive_em = cast(pimm.SignalEmitter, world.pair(harness.directive))
+        perform_task = world.pair(harness.perform_task)
+        done_em = world.pair(harness.done)
 
         robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
         driver = ManualDriver([
-            (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+            (partial(perform_task, {keys.TASK: 't'}), 0.0),
             (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
-            (partial(directive_em.emit, Directive.FINISH()), 0.05),
+            (partial(done_em.emit, OPERATOR_DONE), 0.05),
             (None, 0.05),
         ])
         started = world.clock.now()
@@ -2062,13 +2047,14 @@ def test_the_run_ends_only_once_the_call_it_abandoned_is_out_of_the_policy():
         frame_em = world.pair(harness.observations[CAM])
         robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
         grip_em = world.pair(harness.observations[keys.GRIP])
-        directive_em = cast(pimm.SignalEmitter, world.pair(harness.directive))
+        perform_task = world.pair(harness.perform_task)
+        done_em = world.pair(harness.done)
 
         robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
         driver = ManualDriver([
-            (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+            (partial(perform_task, {keys.TASK: 't'}), 0.0),
             (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
-            (partial(directive_em.emit, Directive.FINISH()), 0.05),
+            (partial(done_em.emit, OPERATOR_DONE), 0.05),
             (None, 0.05),
         ])
         drive_scheduler(world.start([harness, driver]), steps=40)
@@ -2110,13 +2096,14 @@ def test_the_session_is_closed_only_once_its_call_has_left_it():
         frame_em = world.pair(harness.observations[CAM])
         robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
         grip_em = world.pair(harness.observations[keys.GRIP])
-        directive_em = cast(pimm.SignalEmitter, world.pair(harness.directive))
+        perform_task = world.pair(harness.perform_task)
+        done_em = world.pair(harness.done)
 
         robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
         driver = ManualDriver([
-            (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+            (partial(perform_task, {keys.TASK: 't'}), 0.0),
             (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
-            (partial(directive_em.emit, Directive.FINISH()), 0.05),
+            (partial(done_em.emit, OPERATOR_DONE), 0.05),
             (None, 0.05),
         ])
         drive_scheduler(world.start([harness, driver]), steps=40)
@@ -2159,11 +2146,11 @@ def test_a_rescheduled_trajectory_clears_the_channels_it_omits(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    directive_em = world.pair(harness.directive)
+    perform_task = world.pair(harness.perform_task)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='t')), 0.0),
+        (partial(perform_task, {keys.TASK: 't'}), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
         (None, 0.5),
     ])
@@ -2195,8 +2182,8 @@ def test_home_and_manual_commands_are_emitted_as_plain_values(world):
 
 
 @pytest.mark.timeout(20.0)
-def test_abort_discards_a_call_that_is_still_in_flight(world):
-    """An ABORT while the model is still inside its call throws that answer away: the trajectory it carries
+def test_finishing_discards_a_call_that_is_still_in_flight(world):
+    """Finishing while the model is still inside its call throws that answer away: the trajectory it carries
     never reaches the devices."""
     harness = Harness(ChunkedSchedule().wrap(SlowPolicy(wall_sec=1.0)), make_embodiment(simulated=True))
     cmd_recorder = RecordingEmitter()
@@ -2207,14 +2194,15 @@ def test_abort_discards_a_call_that_is_still_in_flight(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    directive_em = world.pair(harness.directive)
+    perform_task = world.pair(harness.perform_task)
+    done_em = world.pair(harness.done)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
-        (partial(directive_em.emit, Directive.RUN(task='t', **{keys.INFERENCE_LATENCY: True})), 0.0),
+        (partial(perform_task, {keys.TASK: 't', keys.INFERENCE_LATENCY: True}), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
         (None, 0.05),  # well inside the 1.0s the call takes
-        (partial(directive_em.emit, Directive.ABORT()), 0.0),
+        (partial(done_em.emit, OPERATOR_DONE), 0.0),
         (None, 0.05),
     ])
     drive_scheduler(world.start([harness, driver, _Pacer()]), steps=2000)

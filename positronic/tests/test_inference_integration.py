@@ -164,7 +164,7 @@ class _CountdownProducer(pimm.ControlSystem):
         self._active = False
         self._reset_pending = False
         self.observations = pimm.EmitterDict(self)
-        self.commands = pimm.ReceiverDict(self, default=None)
+        self.commands = pimm.ReceiverDict(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self.done = pimm.ControlSystemEmitter(self)
 

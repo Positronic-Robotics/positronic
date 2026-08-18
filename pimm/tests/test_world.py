@@ -477,14 +477,12 @@ class TestWorldControlSystems:
         wrapper = Mock(side_effect=lambda receiver: receiver)
 
         with World(virtual_time=True) as world:
-            mirrored = world.pair(system.receiver, emitter_wrapper=wrapper)
+            mirrored = world.pair(system.receiver, receiver_wrapper=wrapper)
 
             assert isinstance(mirrored, ControlSystemEmitter)
             wrapper.assert_not_called()
 
             world.start(system)
-            # receiver_wrapper is applied to the underlying transport receiver before
-            # it is bound into the logical ControlSystemReceiver.
             assert wrapper.call_count == 1
             (wrapped_receiver,), _ = wrapper.call_args
             assert isinstance(wrapped_receiver, SignalReceiver)
@@ -499,7 +497,7 @@ class TestWorldControlSystems:
     def test_mirror_rejects_unknown_connector(self):
         with World() as world:
             with pytest.raises(ValueError, match='Unsupported connector type'):
-                world.pair(object())
+                world.pair(object())  # pyright: ignore[reportCallIssue] — the runtime guard is the subject
 
     def test_start_sets_up_local_connections(self):
         producer = DummyControlSystem('producer')

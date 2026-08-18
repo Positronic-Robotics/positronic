@@ -88,9 +88,8 @@ class Robot(pimm.ControlSystem):
             current_command = np.zeros(api.actuator_count, dtype=np.float32)
 
             while not should_stop.value:
-                cmd_msg = self.commands.read()
-                if cmd_msg is not None and cmd_msg.updated:
-                    match cmd_msg.data:
+                if (cmd := pimm.value_updated(self.commands)) is not None:
+                    match cmd:
                         case command.Reset():
                             joint_controller.set_target_qpos(self.home_joints)
                         case command.CartesianPosition(pose):
