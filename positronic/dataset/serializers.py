@@ -5,7 +5,7 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
-from positronic.drivers.roboarm import RobotStatus, State, is_sound
+from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm.command import (
     CartesianDelta,
     CartesianPosition,
@@ -88,12 +88,12 @@ class Serializers:
 
     @staticmethod
     def robot_state(state: State) -> dict[str, np.ndarray | RobotStatus]:
-        # The status goes out on every sample — it is what says the pose entries below are missing, and a
-        # reader cannot otherwise tell a fault from a stretch where the arm published nothing.
-        entries: dict[str, np.ndarray | RobotStatus] = {keys.STATUS_SUFFIX: state.status}
-        if is_sound(state.status):
-            entries |= {'.q': state.q, '.dq': state.dq, '.ee_pose': Serializers.transform_3d(state.ee_pose)}
-        return entries
+        return {
+            keys.STATUS_SUFFIX: state.status,
+            '.q': state.q,
+            '.dq': state.dq,
+            '.ee_pose': Serializers.transform_3d(state.ee_pose),
+        }
 
     @staticmethod
     def robot_command(command: CommandType) -> dict[str, np.ndarray | int] | None:

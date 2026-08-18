@@ -1291,9 +1291,10 @@ def test_harness_clears_trajectory_on_run(world):
 
 @pytest.mark.timeout(3.0)
 @pytest.mark.parametrize('unsound', [RobotStatus.RESETTING, RobotStatus.ERROR])
-def test_the_stack_keeps_the_model_away_from_an_arm_with_no_pose(world, unsound):
-    """An unsound arm reports no pose, and ``StopOnFault`` answers its observation itself rather than pass a
-    pose-less one to the model. Once the arm is sound the model is asked again, on a fresh chunk."""
+def test_the_stack_keeps_the_model_away_from_an_unsound_arm(world, unsound):
+    """An unsound arm is not tracking the plan it was given, so ``StopOnFault`` answers its observation itself
+    rather than let the model plan against it. Once the arm is sound the model is asked again, on a fresh
+    chunk."""
     policy = ChunkPolicy()
     harness = Harness((StopOnFault() | ChunkedSchedule()).wrap(policy), make_embodiment())
     p = _pair_all(world, harness)
@@ -1312,7 +1313,7 @@ def test_the_stack_keeps_the_model_away_from_an_arm_with_no_pose(world, unsound)
     obs_before = len(policy.observations)
     p['robot_em'].emit(state_unsound)
     drive_scheduler(scheduler, steps=2)
-    assert len(policy.observations) == obs_before, 'the model was asked about an arm with no pose to give'
+    assert len(policy.observations) == obs_before, 'the model was asked about an arm that is not tracking it'
 
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], state_ok)
     drive_scheduler(scheduler, steps=20)  # long enough for the first chunk to play out and the next to land
@@ -1352,17 +1353,12 @@ def test_cartesian_delta_applies_in_world_frame():
     assert not np.allclose(target.translation, (current * delta).translation)  # guards against body-frame compose
 
 
-@pytest.mark.parametrize('status', [RobotStatus.RESETTING, RobotStatus.ERROR])
-def test_robot_state_serializer_drops_a_not_ready_pose(status):
+@pytest.mark.parametrize('status', list(RobotStatus))
+def test_robot_state_serializer_emits_the_status_beside_the_pose(status):
     state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=status)
-    assert Serializers.robot_state(state) == {'.status': status}
-
-
-def test_robot_state_serializer_emits_the_status_beside_a_ready_pose():
-    state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.AVAILABLE)
     serialized = Serializers.robot_state(state)
     assert set(serialized) == {'.status', '.q', '.dq', '.ee_pose'}
-    assert serialized['.status'] is RobotStatus.AVAILABLE
+    assert serialized['.status'] is status
 
 
 @pytest.mark.timeout(3.0)
@@ -1846,9 +1842,9 @@ def test_harness_keeps_playing_while_a_call_is_in_flight(world):
 
 @pytest.mark.timeout(3.0)
 @pytest.mark.parametrize('unsound', [RobotStatus.RESETTING, RobotStatus.ERROR])
-def test_an_unsound_arm_reaches_the_policy_without_its_pose(world, unsound):
-    """An arm with no pose to give is not swallowed as "no observation": its status goes up to the policy
-    stack, which owns what to do about it, and the arm's pose entries are simply absent."""
+def test_an_unsound_arm_reaches_the_policy_with_its_pose(world, unsound):
+    """An unsound arm is not swallowed as "no observation": its measurements reach the policy beside the status.
+    The harness here runs no ``StopOnFault``, so nothing filters it on the way."""
     policy = SpyPolicy()
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
@@ -1872,8 +1868,8 @@ def test_an_unsound_arm_reaches_the_policy_without_its_pose(world, unsound):
 
     assert policy.last_obs is not None, 'the status never reached the policy'
     assert policy.last_obs[keys.ROBOT_STATUS] is unsound
-    assert keys.JOINTS not in policy.last_obs
-    assert keys.EE_POSE not in policy.last_obs
+    np.testing.assert_allclose(policy.last_obs[keys.JOINTS], [0.4, 0.5, 0.6])
+    np.testing.assert_allclose(policy.last_obs[keys.EE_POSE][:3], [0.1, 0.2, 0.3])
 
 
 @pytest.mark.timeout(3.0)
