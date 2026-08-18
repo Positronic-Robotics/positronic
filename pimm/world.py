@@ -460,7 +460,38 @@ class _CallAnsweringLoop:
                 handler.fail_queued()
 
 
+# A matched pair: `LOG_DATEFMT` renders the `asctime` that `LOG_FORMAT` places, so the two change
+# together. Public — `positronic.utils.logging` configures the parent from them.
+LOG_FORMAT = '%(asctime)s.%(msecs)03d [%(levelname)s] (%(filename)s:%(lineno)s) %(message)-80s'
+LOG_DATEFMT = '%H:%M:%S'
+
+# Third-party loggers the child's root-level INFO would otherwise reach too. Each logs per connection,
+# request or retry rather than per event, so pinning them keeps the level change ours.
+_NOISY_LIBRARY_LOGGERS = (
+    'websockets',  # per connection at INFO, per frame at DEBUG
+    'httpx',  # per request, at INFO
+    'httpcore',  # per connection-pool operation
+    'urllib3',  # per connection
+    'botocore',  # per API call, and again per retry
+    'boto3',
+    's3transfer',  # per part of a multipart upload
+    'asyncio',  # per selector event, under its debug mode
+)
+
+
+def _init_child_logging() -> None:
+    """Configure a spawned child's own logging: INFO at the root, WARNING for the noisy libraries.
+
+    A spawned child runs no entry point, so nothing else configures it and its root logger would
+    otherwise sit at the stdlib default, dropping every INFO line a control system emits.
+    """
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt=LOG_DATEFMT, force=True)
+    for name in _NOISY_LIBRARY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
 def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str):
+    _init_child_logging()
     try:
         for command in run_func(EventReceiver(stop_event, clock), clock):
             match command:

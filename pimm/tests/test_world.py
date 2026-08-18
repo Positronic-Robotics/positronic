@@ -1,5 +1,6 @@
 import logging
 import multiprocessing as mp
+import re
 import struct
 import time
 from functools import partial
@@ -1246,3 +1247,57 @@ class TestEmitterDict:
 
             # Fake connection should not deliver data
             assert consumer1.receiver.read() is None
+
+
+# Enough iterations that a per-cycle line would be unmistakable against the handful of event lines.
+LOGGING_LOOP_ITERATIONS = 200
+# What `logging_loop` emits and the assertions below look for, on the child's root and on a library's.
+CHILD_LINE = 'child-own-info-line'
+LIBRARY_LINE = 'library-info-line'
+
+
+# Module scope for the same reason as `heartbeat_loop`: `start_in_subprocess` pickles the loop.
+def logging_loop(stop_reader, clock):
+    """Control loop logging two lines up front and none per cycle, then spinning."""
+    logging.info(CHILD_LINE)
+    logging.getLogger('websockets.client').info(LIBRARY_LINE)
+    for _ in range(LOGGING_LOOP_ITERATIONS):
+        yield Sleep(0.001)
+
+
+class TestChildLogging:
+    """A spawned child runs no entry point, so `_bg_wrapper` is the only thing that configures it."""
+
+    @staticmethod
+    def _stderr_of_a_logging_child(capfd) -> str:
+        with World() as world:
+            world.start_in_subprocess(logging_loop)
+            process = world.background_processes[0]
+            process.join(timeout=30)
+            assert not process.is_alive(), 'the logging child never exited'
+        # The parent's own records go to pytest's logging handler, so what reaches fd 2 is the child's.
+        return capfd.readouterr().err
+
+    def test_child_info_reaches_stderr_in_the_shared_format(self, capfd):
+        err = self._stderr_of_a_logging_child(capfd)
+
+        assert CHILD_LINE in err
+        # The line naming which control system ended the World. A child at the stdlib default drops it.
+        assert 'Stopping background process by logging_loop' in err
+        # `[INFO] (world.py:NNN)` is `LOG_FORMAT`; the stdlib fallback would render `INFO:root:`.
+        assert re.search(r'\[INFO] \(world\.py:\d+\) Stopping background process by logging_loop', err), err
+
+    def test_child_log_volume_counts_events_not_cycles(self, capfd):
+        err = self._stderr_of_a_logging_child(capfd)
+
+        # The child logged twice and stopped once, over 200 iterations. A line whose rate followed the
+        # control loop rather than the events would land two orders of magnitude above this bound.
+        lines = [line for line in err.splitlines() if line.strip()]
+        assert len(lines) <= 4, f'{len(lines)} lines over {LOGGING_LOOP_ITERATIONS} iterations:\n{err}'
+
+    def test_noisy_library_stays_at_warning_in_the_child(self, capfd):
+        err = self._stderr_of_a_logging_child(capfd)
+
+        # Pins the noisy-library boundary: a blanket `basicConfig(level=INFO)` would let this through.
+        assert CHILD_LINE in err, 'the child never logged at all, so this proves nothing'
+        assert LIBRARY_LINE not in err
