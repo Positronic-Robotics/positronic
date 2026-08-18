@@ -13,7 +13,7 @@ The fixture is generated once on a LIBERO box::
 
 then run by explicit path (macOS renders via GLFW, no env var; Linux needs ``MUJOCO_GL=osmesa``)::
 
-    uv run --locked pytest positronic/simulator/libero/tests/test_e2e.py --no-cov
+    uv run --locked pytest positronic/simulator/libero/tests/test_e2e.py
 """
 
 import os

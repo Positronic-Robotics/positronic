@@ -109,12 +109,12 @@ class DataCollectionController(pimm.ControlSystem):
         self.operator_position = operator_position
         self._static_meta = static_meta or {}
         self.metadata_getter = metadata_getter or (lambda: {})
-        self.controller_positions = pimm.ControlSystemReceiver(self, default=None)
+        self.controller_positions = pimm.DefaultingReceiver(self, default={})
         self.buttons_receiver = pimm.ControlSystemReceiver(self)
         self.robot_state = pimm.ControlSystemReceiver(self)
         self.gripper_state = pimm.FakeReceiver(self)  # To make compatible with other "policy" control systems
         self.frames = pimm.ReceiverDict(self, fake=True)
-        self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
+        self.robot_meta_in = pimm.DefaultingReceiver(self, default={})
 
         self.robot_commands = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemEmitter(self)

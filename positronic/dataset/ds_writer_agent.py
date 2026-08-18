@@ -108,13 +108,13 @@ class DsWriterAgent(pimm.ControlSystem):
         # An opaque context factory wrapped around the writer's serialize+append work; the default is
         # inert. The caller decides what it brackets — the writer never learns.
         self._telemetry_span = telemetry_span
-        self.command = pimm.ControlSystemReceiver[DsWriterCommand](self, default=None)
+        self.command = pimm.ControlSystemReceiver[DsWriterCommand](self)
 
         self._inputs: dict[str, pimm.ControlSystemReceiver[Any]] = {}
         self._serializers: dict[str, StatefulSerializer] = {}
 
     def add_signal(self, name: str, serializer: Serializer | StatefulSerializer | None = None):
-        self._inputs[name] = pimm.ControlSystemReceiver[Any](self, default=None)
+        self._inputs[name] = pimm.ControlSystemReceiver[Any](self)
         if serializer is not None:
             if not isinstance(serializer, StatefulSerializer):
                 serializer = _PureSerializer(serializer)
@@ -143,6 +143,13 @@ class DsWriterAgent(pimm.ControlSystem):
                 if v is not None:
                     ep_writer.append(full_name, v, primary_ts, extra_ts)
 
+    def _record_window(self, ep_writer: EpisodeWriter, clock: pimm.Clock, after: int | None, before: int | None):
+        """Append every input sample delivered this turn that falls inside ``(after, before]``."""
+        for name, reader in self._inputs.items():
+            msg = pimm.read_updated(reader)
+            if msg is not None and (after is None or msg.ts > after) and (before is None or msg.ts <= before):
+                self._record(ep_writer, name, msg, clock)
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         """Main loop: process commands and append updated inputs to the episode."""
         limiter = pimm.utils.RateLimiter(clock, hz=self._poll_hz)
@@ -152,42 +159,30 @@ class DsWriterAgent(pimm.ControlSystem):
 
         try:
             while not should_stop.value:
-                cmd_msg = self.command.read()
+                cmd = pimm.read_updated(self.command)
                 # Open before draining this turn's inputs, but finalize/abort after them: the trial's last
                 # frame, queued by the producer a control period earlier, is recorded before STOP closes the
                 # writer.
-                start = cmd_msg.updated and cmd_msg.data.type == DsWriterCommandType.START_EPISODE
-                closing = cmd_msg.updated and not start
-                opened = False
-                if start:
-                    was_open = ep_writer is not None
-                    ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter)
-                    opened = ep_writer is not None and not was_open
+                opened_at, stop_at, stop_cmd = None, None, None
+                if cmd is not None:
+                    if cmd.data.type == DsWriterCommandType.START_EPISODE:
+                        was_open = ep_writer is not None
+                        ep_writer, ep_counter = self._handle_command(cmd.data, ep_writer, ep_counter)
+                        opened_at = cmd.ts if ep_writer is not None and not was_open else None
+                    else:
+                        stop_at, stop_cmd = cmd.ts, cmd.data
 
                 if ep_writer is not None:
-                    for name, reader in self._inputs.items():
-                        msg = reader.read()
-                        if msg is None:
-                            continue
-                        # Scope a command turn's drain to the episode window: the open turn keeps only
-                        # samples after START (dropping the inter-episode home command and any pre-reset
-                        # frame), the closing turn keeps only samples at or before STOP (dropping post-STOP
-                        # home/sensor data the async real path queues). The post-reset frame-0 is published
-                        # after the recorder (next turn), so it never lands on the open turn and records
-                        # normally.
-                        after_start = not opened or msg.ts > cmd_msg.ts
-                        before_stop = not closing or msg.ts <= cmd_msg.ts
-                        if msg.updated and after_start and before_stop:
-                            self._record(ep_writer, name, msg, clock)
+                    self._record_window(ep_writer, clock, opened_at, stop_at)
 
-                if closing:
-                    ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter)
+                if stop_cmd is not None:
+                    ep_writer, ep_counter = self._handle_command(stop_cmd, ep_writer, ep_counter)
 
                 yield pace()
         finally:
-            cmd_msg = self.command.read()
-            if cmd_msg.updated:
-                ep_writer, ep_counter = self._handle_command(cmd_msg.data, ep_writer, ep_counter)
+            cmd = pimm.read_updated(self.command)
+            if cmd is not None:
+                ep_writer, ep_counter = self._handle_command(cmd.data, ep_writer, ep_counter)
 
             if ep_writer is not None:
                 try:

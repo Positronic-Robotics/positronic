@@ -148,7 +148,7 @@ class MujocoSim(pimm.ControlSystem):
         self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
-        self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self.grip = pimm.ControlSystemEmitter[float](self)
         self.cameras: pimm.EmitterDict = pimm.EmitterDict(self)
         # Privileged ground truth: the full ``save_state`` dict, spec keys prefixed with '.' so the
         # writer expands them into ``<signal>.<spec>`` signals. Scoring is computed downstream, not
@@ -178,14 +178,13 @@ class MujocoSim(pimm.ControlSystem):
                     self._publish_frame()
                 continue
             now = clock.now()
-            cmd_msg = self.commands.read()
+            cmd = pimm.value_updated(self.commands)
             if self._error:
                 self._error = False
-            elif cmd_msg is not None and cmd_msg.updated:
-                self._apply_command(cmd_msg.data)
-            grip_msg = self.target_grip.read()
-            if grip_msg is not None and grip_msg.updated:
-                self._last_grip = grip_msg.data
+            elif cmd is not None:
+                self._apply_command(cmd)
+            if (grip := pimm.value_updated(self.target_grip)) is not None:
+                self._last_grip = grip
             self._apply_grip(self._last_grip)
 
             # An env step is the sim advance plus the observations it produces, rendering included

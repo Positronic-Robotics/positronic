@@ -142,7 +142,7 @@ class Robot(pimm.ControlSystem):
             home_joints_variation if home_joints_variation is not None else [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
         )
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
-        self.state: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self.state = pimm.ControlSystemEmitter[FrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self._load = load
         self._collision_coeff = collision_coeff
@@ -340,7 +340,7 @@ class Robot(pimm.ControlSystem):
                     if entered_error:
                         logging.warning(f'Robot error: {st.error_message}')
 
-                    cmd_msg = self.commands.read()
+                    cmd = pimm.value_updated(self.commands)
 
                     if in_error:
                         # The driver always clears a recoverable error itself; making it optional (hold in
@@ -350,8 +350,8 @@ class Robot(pimm.ControlSystem):
                         yield rate_limiter.wait()
                         continue
 
-                    if cmd_msg is not None and cmd_msg.updated:
-                        match cmd_msg.data:
+                    if cmd is not None:
+                        match cmd:
                             case command.Reset():
                                 yield from self._reset(robot, robot_state, rate_limiter, should_stop)
                             case command.CartesianPosition(pose):

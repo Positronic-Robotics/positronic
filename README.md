@@ -321,7 +321,7 @@ repoints it at the tool.
 Run tests and linters from the root directory:
 
 ```bash
-uv run --locked pytest --no-cov
+uv run --locked pytest
 uv run --locked ruff check .
 uv run --locked ruff format .
 ```

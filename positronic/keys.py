@@ -32,10 +32,12 @@ ROBOT_STATE = 'robot_state'
 JOINTS = f'{ROBOT_STATE}.q'
 JOINT_VEL = f'{ROBOT_STATE}.dq'
 EE_POSE = f'{ROBOT_STATE}.ee_pose'
-# Whether the arm is faulted, in every observation the harness builds. A faulted arm has no sample to give
-# and is not tracking the plan it was handed, so the policy stack — not the harness — decides what happens
-# next: the rest of ``ROBOT_STATE`` is absent from that observation.
-ROBOT_FAULT = f'{ROBOT_STATE}.fault'
+# The arm's ``RobotStatus``, on every sample it produces. An arm that is faulted or resetting has no pose to
+# give, so the rest of ``ROBOT_STATE`` is absent from that sample and the status is all of it there is. The
+# suffix is named on its own because a consumer picks the entry out by it on a rig whose arms are
+# ``robot_state.{side}``.
+STATUS_SUFFIX = '.status'
+ROBOT_STATUS = f'{ROBOT_STATE}{STATUS_SUFFIX}'
 GRIP = 'grip'
 TASK = 'task'
 # The embodiment an observation came from, so a multi-embodiment policy can tell which robot it is driving.
@@ -97,6 +99,9 @@ SERVER_META = f'{POLICY_META}.{SERVER}'
 # leaves it absent on failure — a reader defaults it rather than assuming a False.
 EVAL_SUCCESS = 'eval.success'
 EVAL_TERMINATED = 'eval.terminated'
+# Who ended the trial, when it was not the task's own ground truth. An env's terminal leaves it absent.
+EVAL_ENDED_BY = 'eval.ended_by'
+ENDED_BY_OPERATOR = 'operator'
 
 # Whether a model call charges the world clock its own wall duration. A flag: any other type is rejected
 # when the episode starts. A sim trial without it charges nothing (the world holds still per call);

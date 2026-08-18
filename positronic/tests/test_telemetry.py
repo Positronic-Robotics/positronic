@@ -1,7 +1,10 @@
+import contextvars
 import json
 import os
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
 import psutil
@@ -134,6 +137,32 @@ def test_anchor_popped_out_of_order_stops_parenting(tmp_path):
     spans = _spans_by_name(telemetry.spans_path(tmp_path, HARNESS_PROCESS))
     assert spans['probe'].parent_id == spans['inner'].span_id  # the innermost anchor still stands
     assert spans['after'].parent_id is None  # nothing anchored: the span roots rather than adopting a corpse
+
+
+def test_a_thread_records_under_the_anchor_it_was_dispatched_under(tmp_path):
+    """The anchor stack is per-context, so work handed to a thread under a copy of it records where it was
+    dispatched: a call outliving the anchor that asked for it still parents to that anchor, and the one
+    anchored in its place does not adopt it."""
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'run-dispatch'), _anchored('pass'):
+        asked = telemetry.start_span('asked')
+        telemetry.push_anchor(asked)
+        proceed = threading.Event()
+
+        def late():
+            proceed.wait(5)
+            with telemetry.span('probe'):
+                pass
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            call = pool.submit(contextvars.copy_context().run, late)
+            asked.end()
+            telemetry.pop_anchor(asked)
+            with _anchored('next'):
+                proceed.set()
+                call.result(timeout=5)
+
+    spans = _spans_by_name(telemetry.spans_path(tmp_path, HARNESS_PROCESS))
+    assert spans['probe'].parent_id == spans['asked'].span_id
 
 
 def test_unbound_span_is_inert(tmp_path):
