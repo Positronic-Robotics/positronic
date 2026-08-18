@@ -1844,8 +1844,8 @@ def test_harness_keeps_playing_while_a_call_is_in_flight(world):
 @pytest.mark.timeout(3.0)
 @pytest.mark.parametrize('unsound', [RobotStatus.RESETTING, RobotStatus.ERROR])
 def test_an_unsound_arm_reaches_the_policy_with_its_pose(world, unsound):
-    """An unsound arm is not swallowed as "no observation": its measurements go up to the policy stack beside
-    the status, which owns what to do about them. A stack with no ``StopOnFault`` reads keys that are there."""
+    """An unsound arm is not swallowed as "no observation": its measurements go up beside the status, and the
+    policy stack owns what to do about them. The bare harness here declares no ``StopOnFault`` to filter it."""
     policy = SpyPolicy()
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)

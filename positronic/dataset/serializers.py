@@ -88,7 +88,7 @@ class Serializers:
 
     @staticmethod
     def robot_state(state: State) -> dict[str, np.ndarray | RobotStatus]:
-        # Every sample carries both: an arm always knows where it is, so key presence never encodes status.
+        # An arm always knows where it is: the measurements ride on every sample, and key presence never encodes status.
         return {
             keys.STATUS_SUFFIX: state.status,
             '.q': state.q,

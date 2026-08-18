@@ -373,14 +373,14 @@ def test_robot_state_serializer_records_a_resetting_arm_beside_its_pose(world):
     by_name = {}
     for name, val, _, _ in w.appends:
         by_name.setdefault(name, []).append(val)
-    assert set(by_name) == {keys.ROBOT_STATUS, keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE}
-    # Both frames record their measurements, so a reader tells the resetting one by its status rather than by
-    # a gap in the arm's samples.
-    assert all(len(vals) == 2 for vals in by_name.values())
+    expected = {keys.JOINTS: q, keys.JOINT_VEL: dq, keys.EE_POSE: np.concatenate([t, geom.Rotation.identity.as_quat])}
+    assert set(by_name) == {keys.ROBOT_STATUS, *expected}
     assert by_name[keys.ROBOT_STATUS] == [RobotStatus.RESETTING, RobotStatus.AVAILABLE]
-    np.testing.assert_allclose(by_name[keys.JOINTS][0], q)
-    np.testing.assert_allclose(by_name[keys.JOINT_VEL][0], dq)
-    np.testing.assert_allclose(by_name[keys.EE_POSE][0], np.concatenate([t, geom.Rotation.identity.as_quat]))
+    # The resetting frame records its measurements too, so a reader tells it by its status rather than by a
+    # gap in the arm's samples.
+    for name, value in expected.items():
+        assert len(by_name[name]) == 2, name
+        np.testing.assert_allclose(by_name[name][0], value)
 
 
 def test_robot_command_serializer_variants(world):
