@@ -1266,6 +1266,10 @@ def logging_loop(stop_reader, clock):
         yield Sleep(0.001)
 
 
+# What `pimm.world` logs for this loop when it ends the World, spelled once for the assertions below.
+STOP_LINE = f'Stopping background process by {logging_loop.__name__}'
+
+
 class TestChildLogging:
     """A spawned child runs no entry point, so `_bg_wrapper` is the only thing that configures it."""
 
@@ -1290,9 +1294,9 @@ class TestChildLogging:
 
         assert CHILD_LINE in err
         # The line naming which control system ended the World. A child at the stdlib default drops it.
-        assert 'Stopping background process by logging_loop' in err
+        assert STOP_LINE in err
         # `[INFO] (world.py:NNN)` is `LOG_FORMAT`; the stdlib fallback would render `INFO:root:`.
-        assert re.search(r'\[INFO] \(world\.py:\d+\) Stopping background process by logging_loop', err), err
+        assert re.search(rf'\[INFO] \(world\.py:\d+\) {re.escape(STOP_LINE)}', err), err
 
     def test_child_log_volume_counts_events_not_cycles(self, capfd):
         err = self._stderr_of_a_logging_child(capfd)
@@ -1315,7 +1319,7 @@ class TestChildLogging:
         err = self._stderr_of_a_logging_child_at(capfd, monkeypatch, 'ERROR')
 
         assert CHILD_LINE not in err, err
-        assert 'Stopping background process by logging_loop' not in err, err
+        assert STOP_LINE not in err, err
 
     def test_a_lower_threshold_does_not_pull_the_noisy_libraries_down_with_it(self, capfd, monkeypatch):
         """The library pin is a floor, not an assignment — lowering the root must not un-pin them."""
