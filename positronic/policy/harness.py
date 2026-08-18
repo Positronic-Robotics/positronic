@@ -1,4 +1,5 @@
 import concurrent.futures
+import contextvars
 import logging
 import time
 from collections import deque
@@ -113,7 +114,10 @@ class _InferenceWorker:
         """Start a call on ``obs``. The moment's wait lets a wrapper that skips inference resolve in the round
         it was asked."""
         self._t0_ns, self._wall_t0 = self._clock.now_ns(), time.monotonic()
-        self._call = self._executor.submit(self._session, frozen_view(self._owned(obs)))
+        # The call runs under a copy of the loop's context, so the telemetry it records anchors to the episode
+        # that asked for it even when it outlives that episode's close.
+        context = contextvars.copy_context()
+        self._call = self._executor.submit(context.run, self._session, frozen_view(self._owned(obs)))
         concurrent.futures.wait([self._call], timeout=SKIP_REPLY_SEC)
 
     def throttle(self) -> None:

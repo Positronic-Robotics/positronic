@@ -37,6 +37,7 @@ import threading
 import time
 from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -92,14 +93,15 @@ GPU_POWER_W = 'power_w'
 GPU_PROC_MEM_B = 'proc_mem_b'
 GPU_PROC_UTIL_PCT = 'proc_util_pct'
 
-# The bound provider and the anchor stack are process-global: the harness, env proxy and recorder run as
-# cooperative control systems in one thread and interleave their spans, so parenting is resolved here rather
-# than through OTel's ambient context (which does not survive the scheduler's generator hops). An anchor is a
-# long-running span its owner holds open (a pass, a rollout); ``span`` parents a span opened outside any
-# active span of the bound trace to the innermost anchor, while a nested span (materialize inside env.step)
-# still parents to whatever OTel span is current within its own ``with`` block.
+# The bound provider is process-global; the anchor stack is per-context. An anchor is a long-running span
+# its owner holds open (a pass, a rollout); ``span`` parents a span opened outside any active span of the
+# bound trace to the innermost anchor, while a nested span (materialize inside env.step) still parents to
+# whatever OTel span is current within its own ``with`` block. Parenting resolves through this stack rather
+# than through OTel's ambient context, which does not survive the scheduler's generator hops between the
+# cooperative control systems sharing the loop thread. Work the loop dispatches to a thread under a copied
+# context records under the anchors that stood at its dispatch, whatever the loop pops meanwhile.
 _provider: 'TracerProvider | None' = None
-_anchors: list[Span] = []
+_anchors: ContextVar[tuple[Span, ...]] = ContextVar('positronic_telemetry_anchors', default=())
 
 
 # The unbound fallback is a PRIVATE no-op, never ``trace.get_tracer``: a host application embedding this code
@@ -196,13 +198,13 @@ def force_flush() -> None:
 
 def push_anchor(anchor: Span) -> None:
     """Make ``anchor`` the innermost anchor: spans opened outside it from now on parent to it."""
-    _anchors.append(anchor)
+    _anchors.set((*_anchors.get(), anchor))
 
 
 def pop_anchor(anchor: Span) -> None:
     """Drop ``anchor`` from the stack, wherever in it it sits — a failure path can close anchors out of order,
     and a stale one would go on parenting later spans into a finished span's trace."""
-    _anchors[:] = [held for held in _anchors if held is not anchor]
+    _anchors.set(tuple(held for held in _anchors.get() if held is not anchor))
 
 
 def _anchor_context() -> Any:
@@ -214,7 +216,8 @@ def _anchor_context() -> Any:
     and every episode and phase anchored beneath it is dropped — the sidecar comes back empty and the report
     reads the run as untimed.
     """
-    return trace.set_span_in_context(_anchors[-1]) if _anchors else Context()
+    anchors = _anchors.get()
+    return trace.set_span_in_context(anchors[-1]) if anchors else Context()
 
 
 def _anchor_parent() -> Any:
@@ -223,9 +226,10 @@ def _anchor_parent() -> Any:
     span parents to the innermost anchor, or roots: between scheduler hops nothing of ours is current, and a
     host application's unrelated current span must not adopt telemetry spans — they would leave the trace the
     report reduces, and take its sampling decision with them."""
-    if _anchors:
+    anchors = _anchors.get()
+    if anchors:
         current = trace.get_current_span().get_span_context()
-        if current.is_valid and current.trace_id == _anchors[-1].get_span_context().trace_id:
+        if current.is_valid and current.trace_id == anchors[-1].get_span_context().trace_id:
             return None
     return _anchor_context()
 
