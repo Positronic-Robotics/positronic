@@ -357,12 +357,12 @@ class Harness(pimm.ControlSystem):
         # rather than overhead the timing reducer attributes to this one.
         self._reap_worker()
         self.context = context
-        latency = self.context.get(keys.INFERENCE_LATENCY, False)
-        if not isinstance(latency, bool):
-            raise ValueError(f'{keys.INFERENCE_LATENCY} is a flag, got {latency!r}')
+        charge_inference_time = self.context.get(keys.CHARGE_INFERENCE_TIME, False)
+        if not isinstance(charge_inference_time, bool):
+            raise ValueError(f'{keys.CHARGE_INFERENCE_TIME} is a flag, got {charge_inference_time!r}')
         # A real rig pays wall time whatever the trial asks: the knob is sim-only, and the eval CLI writes it
         # into every trial.
-        charge_wall = latency or not self._embodiment.simulated
+        charge_wall = charge_inference_time or not self._embodiment.simulated
         self._awaiting_obs = set(self._embodiment.observations)
         self._rollout_started = False
         # Before the reset, so the reset and the rollout's other phase spans parent to the episode span.

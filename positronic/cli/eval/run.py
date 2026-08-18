@@ -193,7 +193,7 @@ def run(
     eval: Eval | str,
     policy,
     output_dir=None,
-    inference_latency: bool = False,
+    charge_inference_time: bool = False,
     timing=False,
     policy_image: str | None = None,
     alias: str | None = None,
@@ -220,10 +220,12 @@ def run(
         _refuse({'--alias': alias, '--transaction-key': transaction_key, '--platform-url': platform_url}, 'local')
         if not isinstance(eval, Eval):
             raise SystemExit(f'--eval={eval!r} is a name, not a config: pass --policy-image to run it on the platform')
-        # The eval config owns the trial sweep (seed, task range); ``inference_latency`` is the CLI's per-run knob
-        # (whether a sim charges each call its wall time). Overlay it onto every trial context, then self-drive
-        # the eval.
-        eval = replace(eval, trials=[{**trial, keys.INFERENCE_LATENCY: inference_latency} for trial in eval.trials])
+        # The eval config owns the trial sweep (seed, task range); ``charge_inference_time`` is the CLI's
+        # per-run knob (whether a sim charges each call the time it took). Overlay it onto every trial
+        # context, then self-drive the eval.
+        eval = replace(
+            eval, trials=[{**trial, keys.CHARGE_INFERENCE_TIME: charge_inference_time} for trial in eval.trials]
+        )
         main(policy=policy, evals=[eval], output_dir=output_dir, timing=timing)
         return None
 
@@ -232,5 +234,7 @@ def run(
     if not isinstance(eval, str):
         raise SystemExit('the platform names its own evals: pass --eval=<name>, e.g. --eval=robolab.public_subset')
     # The platform owns its own trial sweep, its own output and its own telemetry.
-    _refuse({'--output-dir': output_dir, '--inference-latency': inference_latency, '--timing': timing}, 'platform')
+    _refuse(
+        {'--output-dir': output_dir, '--charge-inference-time': charge_inference_time, '--timing': timing}, 'platform'
+    )
     return submit(eval, policy_image, alias=alias, transaction_key=transaction_key, platform_url=platform_url)

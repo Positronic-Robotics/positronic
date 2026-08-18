@@ -943,7 +943,7 @@ def test_timeout_during_inference_drops_the_chunk(world):
         ChunkedSchedule().wrap(SlowPolicy(wall_sec=0.3)),  # the call runs well past the deadline
         make_embodiment(simulated=True),
         task=Task(instruction='test', timeout=0.05),
-        trials=[{keys.INFERENCE_LATENCY: True}],
+        trials=[{keys.CHARGE_INFERENCE_TIME: True}],
     )
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
@@ -1051,7 +1051,7 @@ def test_a_producer_reusing_its_buffer_cannot_rewrite_a_pending_observation(worl
         p['grip_em'].emit(0.25)
 
     driver = ManualDriver([
-        (partial(p['perform_task'], {keys.TASK: 't', keys.INFERENCE_LATENCY: True}), 0.0),
+        (partial(p['perform_task'], {keys.TASK: 't', keys.CHARGE_INFERENCE_TIME: True}), 0.0),
         (partial(emit_frame, 1), 0.01),
         (partial(emit_frame, 9), 0.05),  # rewrites the buffer while the first call is still running
         (None, 0.4),
@@ -1506,7 +1506,7 @@ def test_an_inference_outliving_its_episode_parents_to_it(world, tmp_path):
         ChunkedSchedule().wrap(RemoteStubPolicy(wall_sec=0.3)),  # the call runs well past the deadline
         make_embodiment(simulated=True),
         task=Task(instruction='stack', timeout=0.05),
-        trials=[{keys.INFERENCE_LATENCY: True}],
+        trials=[{keys.CHARGE_INFERENCE_TIME: True}],
         reset=lambda context: None,
     )
     p = _pair_all(world, harness)
@@ -1759,7 +1759,7 @@ def _run_episode(
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
-        (partial(perform_task, {keys.TASK: 't', keys.INFERENCE_LATENCY: latency}), 0.0),
+        (partial(perform_task, {keys.TASK: 't', keys.CHARGE_INFERENCE_TIME: latency}), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
         (None, run_sec),
     ])
@@ -1780,7 +1780,7 @@ def test_default_latency_pauses_the_world_for_the_call(world):
 
 @pytest.mark.timeout(20.0)
 def test_measured_latency_charges_the_calls_own_wall_duration(world):
-    """``inference_latency=True`` charges the world what the model really took, so a slow server is scored
+    """``charge_inference_time=True`` charges the world what the model really took, so a slow server is scored
     as slow — at the cost of a trace that inherits the machine's noise."""
     played = _run_episode(world, SlowPolicy(wall_sec=0.2), ChunkedSchedule(), latency=True)
 
@@ -2198,7 +2198,7 @@ def test_finishing_discards_a_call_that_is_still_in_flight(world):
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
-        (partial(perform_task, {keys.TASK: 't', keys.INFERENCE_LATENCY: True}), 0.0),
+        (partial(perform_task, {keys.TASK: 't', keys.CHARGE_INFERENCE_TIME: True}), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
         (None, 0.05),  # well inside the 1.0s the call takes
         (partial(done_em.emit, OPERATOR_DONE), 0.0),

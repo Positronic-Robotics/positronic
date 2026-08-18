@@ -92,7 +92,7 @@ class Task:
 # [ ] ``trials`` becomes ``list[Task]``, one per trial; a ``Task`` carries what ``reset`` is called with.
 # [ ] A driver walks the list and calls ``perform_task(task)``; the Harness keeps no plan.
 # [ ] ``reset`` becomes a call on the embodiment: a sim answers at once, a real rig when the human is done.
-# [ ] ``inference_latency`` is a ``Task`` field, not a context key.
+# [ ] ``charge_inference_time`` is a ``Task`` field, not a context key.
 # [ ] One runner builds the world for both.
 # [ ] Split the reset token from the policy input: the instruction is all a trial gives the policy.
 @dataclass
