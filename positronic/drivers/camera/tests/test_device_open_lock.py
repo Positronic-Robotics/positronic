@@ -71,7 +71,7 @@ def _another_process_acquires_within(lock_path: Path, seconds: float) -> bool:
 
 
 def test_two_opens_at_the_same_instant_lose_the_device():
-    """Pins that `_open` reproduces the SDK, so the serialization test below cannot pass vacuously."""
+    """Pins the fake, so the serialization test below cannot pass vacuously."""
     assert CAMERA_NOT_DETECTED in _open_at_the_same_instant(lock_path=None)
 
 
@@ -93,7 +93,6 @@ def test_a_live_holder_keeps_another_process_out(tmp_path: Path):
 
 
 def test_a_killed_holder_does_not_strand_the_lock(tmp_path: Path):
-    """A camera killed mid-open must not lock the bus for every later launch."""
     lock_path = tmp_path / 'open.lock'
     holding = CTX.Event()
     holder = CTX.Process(target=_hold_the_lock, args=(lock_path, holding))
@@ -125,7 +124,7 @@ def test_an_existing_lock_file_is_opened_without_o_creat(tmp_path: Path, monkeyp
 
 
 def test_a_created_lock_file_is_readable_by_every_account(tmp_path: Path):
-    """`umask` masks the create mode, and a lock file the next account cannot open excludes nobody."""
+    """`umask` masks the create mode."""
     lock_path = tmp_path / 'open.lock'
     previous_umask = os.umask(0o077)
     try:
@@ -138,7 +137,7 @@ def test_a_created_lock_file_is_readable_by_every_account(tmp_path: Path):
 
 
 def test_the_lock_file_is_readable_before_it_appears(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """A create killed part-way must not leave a `umask`-restricted file that outlives the process."""
+    """A create killed part-way must not strand a `umask`-restricted file."""
     lock_path = tmp_path / 'open.lock'
     real_link, modes_when_linked = os.link, []
 
@@ -160,7 +159,6 @@ def test_the_lock_file_is_readable_before_it_appears(tmp_path: Path, monkeypatch
 
 @pytest.mark.skipif(os.geteuid() == 0, reason='root bypasses the permission bits this asserts on')
 def test_an_unopenable_lock_file_raises_rather_than_opening_unserialized(tmp_path: Path):
-    """A lock that cannot be taken must fail the open, not let two SDKs onto the bus with nothing said."""
     lock_path = tmp_path / 'open.lock'
     lock_path.touch(mode=0o000)
 

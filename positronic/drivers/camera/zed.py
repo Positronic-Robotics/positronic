@@ -74,10 +74,7 @@ class SLCamera(pimm.ControlSystem):
 
     @staticmethod
     def _open_under_device_lock(zed, init_params) -> Iterator[pimm.Sleep]:
-        """Open the camera, retrying an open that lost the bus anyway. Drive with ``yield from``.
-
-        `device_open_lock` binds only openers that take it, so an open can still land on a busy bus.
-        """
+        """Open the camera, retrying: the lock binds only openers that take it, so an open can still lose the bus."""
         OPEN_ATTEMPTS = 3
         OPEN_RETRY_SEC = 1.0
         for attempt in range(1, OPEN_ATTEMPTS + 1):
