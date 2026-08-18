@@ -99,7 +99,7 @@ GPU_PROC_UTIL_PCT = 'proc_util_pct'
 # - A span opened while no span of the bound trace is active parents to the innermost anchor.
 # - A span opened inside another parents to that one.
 # - With nothing anchored, a span roots.
-# - A thread dispatched under a copied context keeps the anchors of its dispatch, whatever is popped meanwhile.
+# - A copied context carries the anchors it was copied with; a push or pop after the copy does not reach it.
 # - The stack stands in for OTel's ambient context, which does not survive the scheduler's generator hops.
 _provider: 'TracerProvider | None' = None
 _anchors: ContextVar[tuple[Span, ...]] = ContextVar('positronic_telemetry_anchors', default=())
