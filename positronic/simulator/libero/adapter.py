@@ -21,19 +21,19 @@ class LiberoAdapter(WireCommandAdapter):
         super().__init__()
         self._camera_dict = camera_dict  # logical observation name -> the LIBERO obs image key
 
-    def _reset_token(self, context: dict[str, Any]) -> Any:
-        # The whole scene spec rides the trial context: the server caches its env by ``(suite, task_id,
+    def _reset_token(self, params: dict[str, Any]) -> Any:
+        # The whole scene spec rides the trial params: the server caches its env by ``(suite, task_id,
         # camera_resolution, control_mode)``, so one adapter + one server serve any mix of suites and tasks.
         # ``seed`` selects a saved init-state (``None`` -> the server draws one at random); ``settle_steps`` is
         # the hold-arm/open-gripper wait the server runs after a seeded reset so dropped objects settle before
         # the first observation (openpi's num_steps_wait dummy-action wait).
         return {
-            'suite': context['eval.suite'],
-            'task_id': context['eval.task_id'],
-            'camera_resolution': context['eval.camera_resolution'],
-            'control_mode': context['eval.control_mode'],
-            'seed': context.get('eval.seed'),
-            'settle_steps': context['eval.settle_steps'],
+            'suite': params['eval.suite'],
+            'task_id': params['eval.task_id'],
+            'camera_resolution': params['eval.camera_resolution'],
+            'control_mode': params['eval.control_mode'],
+            'seed': params.get('eval.seed'),
+            'settle_steps': params['eval.settle_steps'],
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:

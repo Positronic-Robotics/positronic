@@ -131,7 +131,7 @@ def stats_path(out_dir: Path | str, process: str) -> Path:
 
 def _attr_value(value: Any) -> Any:
     """One span-attribute value coerced to what OTel accepts: a flat scalar or a homogeneous scalar list.
-    Anything nested is JSON-encoded, so a call site can pass a trial-context value without a shape check."""
+    Anything nested is JSON-encoded, so a call site can pass a trial param value without a shape check."""
     if isinstance(value, (bool, int, float, str)):
         return value
     if isinstance(value, (list, tuple)):

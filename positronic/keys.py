@@ -100,8 +100,3 @@ EVAL_TERMINATED = 'eval.terminated'
 # Who ended the trial, when it was not the task's own ground truth. An env's terminal leaves it absent.
 EVAL_ENDED_BY = 'eval.ended_by'
 ENDED_BY_OPERATOR = 'operator'
-
-# Whether a model call charges the world clock the time it really took. A flag: any other type is rejected
-# when the episode starts. A sim trial without it charges nothing (the world holds still per call);
-# hardware always pays whatever the trial asks.
-CHARGE_INFERENCE_TIME = 'charge_inference_time'

@@ -1,10 +1,11 @@
 import logging
 import os
 import uuid
-from collections.abc import Generator, Iterable
+from collections.abc import Generator, Iterable, Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import configuronic as cfn
 import pos3
@@ -12,12 +13,12 @@ from platform_client.responses import SubmissionCreateResponse
 
 import pimm
 import positronic.cfg.policy as policy_cfg
-from positronic import keys, telemetry, telemetry_keys, utils, wire
+from positronic import telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import placeholder
 from positronic.cli.eval.submit import submit
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
-from positronic.eval import Embodiment, Eval
+from positronic.eval import Embodiment, Eval, Task
 from positronic.policy.harness import Harness
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 
@@ -44,13 +45,37 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
     return local_dir
 
 
+class TaskDriver(pimm.ControlSystem):
+    """Asks one harness for each task in turn, and returns — stopping the world — once the last has ended.
+
+    One task is in flight at a time: the next is asked for only when the previous episode's terminal comes
+    back, so the plan never overlaps two episodes on one embodiment.
+    """
+
+    def __init__(self, tasks: list[Task]):
+        self._tasks = tasks
+        self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
+        for task in self._tasks:
+            answer = self.perform_task(task)
+            while not answer.done():
+                if should_stop.value:
+                    return
+                yield pimm.Yield()  # A sleep here would step the virtual clock on the driver's account.
+            answer.result()  # raises if the episode failed
+        # Let the recorder commit the final episode before this return brings the world down.
+        yield pimm.Sleep(0.5)
+
+
 def _run_world(policy, ev: Eval, output_dir: Path | None):
     """Wire one eval's embodiment under a fresh Harness + World and run it to completion.
 
-    The harness self-drives ``ev.trials``; the shared ``policy``'s lifetime stays with ``main``.
+    The driver walks ``ev.tasks``; the shared ``policy``'s lifetime stays with ``main``.
     """
     embodiment = ev.embodiment
-    harness = Harness(policy, embodiment, task=ev.task, trials=ev.trials, reset=ev.reset)
+    harness = Harness(policy, embodiment, reset=ev.reset)
+    driver = TaskDriver(ev.tasks)
 
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
@@ -58,22 +83,20 @@ def _run_world(policy, ev: Eval, output_dir: Path | None):
         ds_agent = wire.wire_embodiment(
             world, harness, embodiment, dataset_writer, time_mode, privileged=ev.privileged, done=ev.done
         )
+        world.connect(driver.perform_task, harness.perform_task)
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)
 
-        # Sim schedules harness, recorder, then producers (the simulator) in-process under the virtual clock,
-        # in that order; each scheduler round is one control period. The harness decides the round's action
-        # (a reset, a policy command off the last round's observation, or finish); the recorder logs that
-        # observation with the command; the producer applies the command and publishes the next observation.
-        # A reset arms the producer to publish frame-0 after the harness (last in the round); the recorder
-        # drains its channels the turn it opens, dropping the pre-reset frame, so its first recorded sample
-        # is the post-reset scene. Real runs the producers + recorder as background subprocesses; the
-        # harness's placement is otherwise identical.
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         if embodiment.simulated:
-            world.run([harness, ds_agent, *producers])
+            # Why this order:
+            # - Each scheduler pass is one instant: everything emitted in it shares a timestamp.
+            # - The harness tells the recorder when an episode opens; only later-stamped samples get in.
+            # - The recorder runs in the harness's pass, so the episode opens at the reset.
+            # - The producers run after it, so the observation the reset produced is the episode's first.
+            world.run([driver, harness, ds_agent, *producers])
         else:
-            world.run([harness], [*producers, ds_agent])
+            world.run([driver, harness], [*producers, ds_agent])
 
 
 def _validate_timing(embodiments: Iterable[Embodiment], output_dir: str | Path | None) -> None:
@@ -149,7 +172,7 @@ def timed_pass(output_dir: str | Path | None, timing: bool, policy):
 
 
 def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, timing: bool = False):
-    """Run an unattended sweep: the harness self-drives each eval's trial plan, rebuilding the World per eval.
+    """Run an unattended sweep: a driver walks each eval's tasks, rebuilding the World per eval.
 
     ``main`` owns the policy lifetime: it warms the policy once up front and closes it once after the last
     World, so a multi-eval sweep reuses one live policy across the rebuilds.
@@ -220,12 +243,7 @@ def run(
         _refuse({'--alias': alias, '--transaction-key': transaction_key, '--platform-url': platform_url}, 'local')
         if not isinstance(eval, Eval):
             raise SystemExit(f'--eval={eval!r} is a name, not a config: pass --policy-image to run it on the platform')
-        # The eval config owns the trial sweep (seed, task range); ``charge_inference_time`` is the CLI's
-        # per-run knob (whether a sim charges each call the time it took). Overlay it onto every trial
-        # context, then self-drive the eval.
-        eval = replace(
-            eval, trials=[{**trial, keys.CHARGE_INFERENCE_TIME: charge_inference_time} for trial in eval.trials]
-        )
+        eval = replace(eval, tasks=[replace(t, charge_inference_time=charge_inference_time) for t in eval.tasks])
         main(policy=policy, evals=[eval], output_dir=output_dir, timing=timing)
         return None
 

@@ -1,7 +1,7 @@
 import configuronic as cfn
 
 from positronic import keys
-from positronic.cfg.eval import build_trials
+from positronic.cfg.eval import build_tasks
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
@@ -57,7 +57,6 @@ def _libero_eval(
         proxy, camera_dict, descriptor='remote.libero.franka', static_meta=bundled_panda_model()
     )
     privileged = {'sim_state': Observation(proxy.privileged['sim_state'], None)}
-    task = Task(instruction=lambda: proxy.meta['task'], timeout=timeout)
     # One scene per (suite, task) pair: an unbound ``task_id`` sweeps each suite, a pinned one runs that task
     # in every bound suite. The scene spec rides each trial's reset token, so the single task-agnostic env
     # server serves every trial.
@@ -74,8 +73,9 @@ def _libero_eval(
     ]
     return Eval(
         embodiment,
-        task,
-        build_trials(seed, trial_count, scenes),
+        build_tasks(
+            Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout), seed, trial_count, scenes
+        ),
         privileged=privileged,
         done=proxy.done,
         reset=proxy.reset,

@@ -170,7 +170,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
 
     positronic launches a single task-agnostic env server in RoboLab's own Isaac Lab interpreter; the proxy
     drives it over the socket and the task name + instruction type ride each trial's reset token. There is no
-    per-trial seed: RoboLab's eval path exposes no seed hook, so trial contexts carry none. The env's live
+    per-trial seed: RoboLab's eval path exposes no seed hook, so trial params carry none. The env's live
     subtask progress ``[status, completed, total, score]`` is the privileged ground truth (recorded, never
     fed to the policy).
     """
@@ -183,16 +183,15 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
     # The DROID rig's model (Franka arm + Robotiq 2F-85) rides the env's ``robot_meta`` — the launcher
     # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')
-    # RoboLab exposes no seed hook, so trial contexts carry no ``eval.seed``.
-    trials = [
+    # RoboLab exposes no seed hook, so trial params carry no ``eval.seed``.
+    params = [
         {'eval.task': name, 'eval.instruction_type': instruction_type} for name in names for _ in range(trial_count)
     ]
-    for i, ctx in enumerate(trials):
-        ctx.update({'eval.trial_index': i, 'eval.trial_count': len(trials)})
+    for i, p in enumerate(params):
+        p.update({'eval.trial_index': i, 'eval.trial_count': len(params)})
     return Eval(
         embodiment,
-        Task(instruction=lambda: proxy.meta['task'], timeout=timeout),
-        trials,
+        [Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout, params=p) for p in params],
         privileged={'subtask': Observation(proxy.privileged['subtask'], None)},
         done=proxy.done,
         reset=proxy.reset,

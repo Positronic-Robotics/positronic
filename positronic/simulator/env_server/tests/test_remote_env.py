@@ -247,8 +247,8 @@ class _CountdownEnv(EnvProtocol):
 
 
 class _CountdownAdapter(EnvAdapter):
-    def reset_token(self, context):
-        return context.get('eval.seed')
+    def reset_token(self, params):
+        return params.get('eval.seed')
 
     def action(self, commands):
         return {}
@@ -292,7 +292,7 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
     cached value holds across the steps that follow."""
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
-        task = Task(instruction=lambda: proxy.meta['task'], timeout=1.0)
+        task = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=1.0)
         scheduler = world.start([proxy])
 
         proxy.reset({'eval.seed': 0})
@@ -309,13 +309,9 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     host, port = env_server
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        ev.task.timeout = 0.1
+        trial = replace(ev.tasks[0], timeout_sec=0.1, params={'eval.trial_index': 0, 'eval.seed': 100})
         policy = StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
-        main(
-            policy=ChunkedSchedule().wrap(policy),
-            evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
-            output_dir=str(tmp_path),
-        )
+        main(policy=ChunkedSchedule().wrap(policy), evals=[replace(ev, tasks=[trial])], output_dir=str(tmp_path))
 
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
@@ -383,12 +379,8 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     policy = (ChunkedSchedule() | ActionTimestamp(fps=1.0 / control_dt)).wrap(raw)
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        ev.task.timeout = 20 * control_dt
-        main(
-            policy=policy,
-            evals=[replace(ev, trials=[{'eval.trial_index': 0, 'eval.seed': 100}])],
-            output_dir=str(tmp_path),
-        )
+        trial = replace(ev.tasks[0], timeout_sec=20 * control_dt, params={'eval.trial_index': 0, 'eval.seed': 100})
+        main(policy=policy, evals=[replace(ev, tasks=[trial])], output_dir=str(tmp_path))
 
     grip = LocalDataset(tmp_path)[0].signals['target_grip']
     executed = [(float(v), int(ts)) for v, ts in (grip[i] for i in range(len(grip)))]
