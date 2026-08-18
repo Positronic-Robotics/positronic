@@ -219,8 +219,6 @@ class Harness(pimm.ControlSystem):
         # Re-randomizes the scene from the task's ``params``; ``None`` where reset is physical/human.
         self._reset = reset
         self.policy: Policy = policy
-        # The live episode's task; ``None`` while no episode is.
-        self._task: Task | None = None
         self._static_meta = static_meta or {}
         # This episode's session and the thread it runs on. ``None`` while no episode is live: while one is,
         # stepping and recording happen together.
@@ -263,12 +261,17 @@ class Harness(pimm.ControlSystem):
         """What is known about the rig before the episode runs, live values winning."""
         return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value
 
+    @property
+    def _task(self) -> Task:
+        """The live episode's task. An episode runs for the call that asked for it, so the call carries it."""
+        assert self._call is not None, 'only a live episode has a task'
+        return self._call.request
+
     def _build_episode_meta(self) -> dict[str, Any]:
-        assert self._task is not None, 'an episode is live whenever its meta is built'
         meta = self._statics()
         meta['eval.universe'] = 'sim' if self._embodiment.simulated else 'real'
         meta['eval.embodiment'] = self._embodiment.descriptor
-        meta['eval.charge_inference_time'] = self._task.charge_inference_time
+        meta[keys.EVAL_CHARGE_INFERENCE_TIME] = self._task.charge_inference_time
         if self._task.timeout_sec is not None:  # the recorder takes no nulls, and an unbounded episode has none
             meta['eval.timeout'] = self._task.timeout_sec
         # ``policy.meta`` is the static baseline; the session overlays per-episode specifics (e.g. the
@@ -338,7 +341,7 @@ class Harness(pimm.ControlSystem):
         # producer stepping in that shared round charges ≤ one control period to the closing episode.
         self._telemetry.end(virtual_now)
 
-    def _begin_episode(self, task: Task, clock: pimm.Clock, call: pimm.calls.Call[Task, dict[str, Any]]) -> None:
+    def _begin_episode(self, clock: pimm.Clock, call: pimm.calls.Call[Task, dict[str, Any]]) -> None:
         """Open a fresh episode: reset the scene, read the instruction, open the session and the recording.
 
         ``reset`` only arms the producer; the first observation lands a later round. The recorder drains its
@@ -350,7 +353,7 @@ class Harness(pimm.ControlSystem):
         # Before the span opens, so the wait for a call the last episode abandoned is inter-episode wall
         # rather than overhead the timing reducer attributes to this one.
         self._reap_worker()
-        self._task = task
+        task = call.request
         # A real rig pays wall time whatever the task asks
         charge_wall = task.charge_inference_time or not self._embodiment.simulated
         self._awaiting_obs = set(self._embodiment.observations)
@@ -377,7 +380,7 @@ class Harness(pimm.ControlSystem):
         self._home()
         assert self._call is not None, 'an episode exists only for the call that asked for it'
         self._call.set_result(payload)
-        self._call, self._task = None, None
+        self._call = None
 
     def _fail_call(self, exc: BaseException) -> None:
         """Raise to whoever asked for the live episode, in place of the terminal it will never get."""
@@ -403,7 +406,6 @@ class Harness(pimm.ControlSystem):
         Raises ``NoValueException`` if any channel has no value yet, and returns ``None`` while a channel
         still holds a pre-reset value, rather than feed a stale obs.
         """
-        assert self._task is not None, 'an episode is live whenever its observations are built'
         # Against the live model, not the one known at episode start: a remote env publishes its ``robot_meta``
         # a turn after the reset that produced it, so at episode start there is no model to check.
         assert_default_frame(self._statics())
@@ -542,7 +544,7 @@ class Harness(pimm.ControlSystem):
                     call.set_exception(RuntimeError('An episode is already running'))
                 yield from self._advance_episode(self._worker, done, clock)
             elif call is not None:
-                self._begin_episode(call.request, clock, call)
+                self._begin_episode(clock, call)
             elif manual is not None:
                 self._emit(manual)
             self._play(clock)

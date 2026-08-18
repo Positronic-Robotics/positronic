@@ -97,6 +97,9 @@ SERVER_META = f'{POLICY_META}.{SERVER}'
 # leaves it absent on failure — a reader defaults it rather than assuming a False.
 EVAL_SUCCESS = 'eval.success'
 EVAL_TERMINATED = 'eval.terminated'
+# Whether the trial charged each model call the wall time it really took. Sim-only: a real rig charges it
+# whatever the task asks.
+EVAL_CHARGE_INFERENCE_TIME = 'eval.charge_inference_time'
 # Who ended the trial, when it was not the task's own ground truth. An env's terminal leaves it absent.
 EVAL_ENDED_BY = 'eval.ended_by'
 ENDED_BY_OPERATOR = 'operator'
