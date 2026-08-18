@@ -12,7 +12,7 @@ def init_logging(level: str | int = 'INFO'):
 
     # Default to the passed level, but allow env var override
     log_level = os.getenv(LOG_LEVEL_ENV, level).upper()
-    # Spawned children carry no logging config, so they read this back (`pimm.world._init_child_logging`).
+    # Spawned children carry no logging config, so they read this back (`pimm.logging.init_child_logging`).
     os.environ[LOG_LEVEL_ENV] = log_level
     logging.basicConfig(
         level=log_level,

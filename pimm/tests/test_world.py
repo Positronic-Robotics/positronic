@@ -23,6 +23,7 @@ from pimm.core import (
     Sleep,
     Yield,
 )
+from pimm.logging import LOG_LEVEL_ENV
 from pimm.shared_memory import SMCompliant
 from pimm.tests.testing import MockClock
 from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, SystemClock, VirtualClock, World
@@ -1271,7 +1272,7 @@ class TestChildLogging:
     @staticmethod
     def _stderr_of_a_logging_child_at(capfd, monkeypatch, level: str) -> str:
         """The child's stderr with `LOG_LEVEL` set to `level` for the spawn."""
-        monkeypatch.setenv('LOG_LEVEL', level)
+        monkeypatch.setenv(LOG_LEVEL_ENV, level)
         return TestChildLogging._stderr_of_a_logging_child(capfd)
 
     @staticmethod
