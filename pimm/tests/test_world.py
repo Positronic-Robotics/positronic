@@ -1269,6 +1269,12 @@ class TestChildLogging:
     """A spawned child runs no entry point, so `_bg_wrapper` is the only thing that configures it."""
 
     @staticmethod
+    def _stderr_of_a_logging_child_at(capfd, monkeypatch, level: str) -> str:
+        """The child's stderr with `LOG_LEVEL` set to `level` for the spawn."""
+        monkeypatch.setenv('LOG_LEVEL', level)
+        return TestChildLogging._stderr_of_a_logging_child(capfd)
+
+    @staticmethod
     def _stderr_of_a_logging_child(capfd) -> str:
         with World() as world:
             world.start_in_subprocess(logging_loop)
@@ -1301,3 +1307,18 @@ class TestChildLogging:
         # Pins the noisy-library boundary: a blanket `basicConfig(level=INFO)` would let this through.
         assert CHILD_LINE in err, 'the child never logged at all, so this proves nothing'
         assert LIBRARY_LINE not in err
+
+    def test_a_requested_suppression_reaches_the_child(self, capfd, monkeypatch):
+        """The operator's threshold reaches a control system: a child that fixed its own level would
+        go on emitting INFO through a requested suppression."""
+        err = self._stderr_of_a_logging_child_at(capfd, monkeypatch, 'ERROR')
+
+        assert CHILD_LINE not in err, err
+        assert 'Stopping background process by logging_loop' not in err, err
+
+    def test_a_lower_threshold_does_not_pull_the_noisy_libraries_down_with_it(self, capfd, monkeypatch):
+        """The library pin is a floor, not an assignment — lowering the root must not un-pin them."""
+        err = self._stderr_of_a_logging_child_at(capfd, monkeypatch, 'DEBUG')
+
+        assert CHILD_LINE in err, err
+        assert LIBRARY_LINE not in err, err
