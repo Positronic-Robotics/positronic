@@ -721,7 +721,7 @@ class World:
                 return receiver
             case ControlSystemReceiver():
                 emitter = ControlSystemEmitter(connector.owner)
-                self.connect(emitter, connector, emitter_wrapper=receiver_wrapper, receiver_wrapper=emitter_wrapper)
+                self.connect(emitter, connector, emitter_wrapper=emitter_wrapper, receiver_wrapper=receiver_wrapper)
                 return emitter
             case ControlSystemCaller():
                 handler = ControlSystemHandler(connector.owner)
