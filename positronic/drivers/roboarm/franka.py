@@ -124,7 +124,6 @@ class Robot(pimm.ControlSystem):
         :param home_joints: Joints of "reset" position, and the pose the arm is parked at when the run ends.
         :param home_joints_variation: Max random deviation per joint in radians. Set to [0]*7 to disable.
         :param collision_coeff: Multiplier for collision thresholds. Higher = more tolerant.
-            Default 2.0 (data collection). Use 6.0 for inference.
         :param manage_desk: Run the Desk session from the driver: open the brakes and activate FCI on start, close
             them on stop. Requires ``FRANKA_DESK_USER`` and ``FRANKA_DESK_PASSWORD`` in the environment. Set to
             False to leave brakes and FCI to the operator; the driver then never contacts Desk and expects FCI to
