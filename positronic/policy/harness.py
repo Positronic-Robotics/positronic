@@ -202,9 +202,9 @@ class Harness(pimm.ControlSystem):
     instant the call's output takes effect, so wrappers stamp for it without knowing the mode.
 
     An episode runs one ``Task``, asked for by a ``perform_task`` call and answered with the terminal
-    payload it ended on. The task's ``timeout`` bounds it and a truthy ``done`` within budget ends it early
-    — ``eval.terminated`` records which; a task with no timeout ends on ``done`` alone. Which tasks run, and
-    in what order, belongs to whoever makes the calls.
+    payload it ended on. The task's ``timeout_sec`` bounds it and a truthy ``done`` within budget ends it
+    early — ``eval.terminated`` records which; a task without one ends on ``done`` alone. Which tasks run,
+    and in what order, belongs to whoever makes the calls.
     """
 
     def __init__(
@@ -377,7 +377,7 @@ class Harness(pimm.ControlSystem):
         self._home()
         assert self._call is not None, 'an episode exists only for the call that asked for it'
         self._call.set_result(payload)
-        self._call = None
+        self._call, self._task = None, None
 
     def _fail_call(self, exc: BaseException) -> None:
         """Raise to whoever asked for the live episode, in place of the terminal it will never get."""

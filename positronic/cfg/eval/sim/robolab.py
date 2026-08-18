@@ -1,6 +1,7 @@
 import configuronic as cfn
 
 from positronic import keys
+from positronic.cfg.eval import number_trials
 from positronic.eval import Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.robolab.adapter import RobolabAdapter
@@ -187,11 +188,9 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
     params = [
         {'eval.task': name, 'eval.instruction_type': instruction_type} for name in names for _ in range(trial_count)
     ]
-    for i, p in enumerate(params):
-        p.update({'eval.trial_index': i, 'eval.trial_count': len(params)})
     return Eval(
         embodiment,
-        [Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout, params=p) for p in params],
+        number_trials(Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout), params),
         privileged={'subtask': Observation(proxy.privileged['subtask'], None)},
         done=proxy.done,
         reset=proxy.reset,

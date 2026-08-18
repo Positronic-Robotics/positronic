@@ -223,7 +223,7 @@ def run(
     transaction_key: str | None = None,
     platform_url: str | None = None,
 ) -> SubmissionCreateResponse | None:
-    """Run a selected eval (embodiment + task + its trial sweep) through the shared inference harness.
+    """Run a selected eval (an embodiment and the tasks to run on it) through the shared inference harness.
 
     Here by default: ``--eval`` is an eval config and ``--policy`` the policy that drives it.
     ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the

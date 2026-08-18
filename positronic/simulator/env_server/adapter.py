@@ -44,8 +44,9 @@ class EnvAdapter(ABC):
     def privileged(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         """An env's raw payload -> the privileged ground-truth signals: recorded, never fed to the policy.
 
-        The split mirrors the Task's observations/privileged. The env exposes one raw payload; the adapter
-        routes ground-truth (full sim state, a real scale) here so it can never reach the policy.
+        The split mirrors ``Embodiment.observations`` against ``Eval.privileged``. The env exposes one raw
+        payload; the adapter routes ground-truth (full sim state, a real scale) here so it can never reach
+        the policy.
         """
 
     @abstractmethod

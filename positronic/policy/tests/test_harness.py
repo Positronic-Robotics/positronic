@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 import pimm
+from pimm.tests.testing import wire_call
 from positronic import keys, telemetry, telemetry_keys, wire
 from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandType
 from positronic.dataset.serializers import Serializers
@@ -1365,16 +1366,11 @@ class _ManualClock:
         return int(self.now() * 1e9)
 
 
-def _standalone_caller(world: pimm.World, harness: Harness) -> pimm.calls.ControlSystemCaller:
-    """A caller wired straight to ``harness.perform_task``. Tests that drive the harness's generator
-    themselves never reach ``World.start``, which is what otherwise binds a paired connector's transports."""
+def _ask(world: pimm.World, harness: Harness, task: Task) -> None:
+    """Deliver one ``perform_task``, for a test that drives the harness's generator rather than a World."""
     caller = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](harness)
-    ends = ((caller.requests, harness.perform_task.requests), (harness.perform_task.replies, caller.replies))
-    for emitter, receiver in ends:
-        em, re = world.local_pipe(maxsize=0)
-        emitter._bind(em)
-        receiver._bind(re)
-    return caller
+    wire_call(world, caller, harness.perform_task)
+    caller(task)
 
 
 @pytest.mark.timeout(3.0)
@@ -1388,9 +1384,7 @@ def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(world, tmp_path)
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
     # Never ends within the drive: the stop, not the deadline, is what winds this episode down.
-    _standalone_caller(world, harness)(
-        Task(instruction_source='stack', timeout_sec=10.0, params={'eval.trial_index': 0})
-    )
+    _ask(world, harness, Task(instruction_source='stack', timeout_sec=10.0, params={'eval.trial_index': 0}))
     stop = SimpleNamespace(value=False)
     clock = _ManualClock()
 
@@ -1512,9 +1506,7 @@ def test_failed_pass_seals_open_episode_span(world, tmp_path):
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment(), reset=boom)
     harness.ds_command._bind(RecordingEmitter())
-    _standalone_caller(world, harness)(
-        Task(instruction_source='stack', timeout_sec=10.0, params={'eval.trial_index': 0})
-    )
+    _ask(world, harness, Task(instruction_source='stack', timeout_sec=10.0, params={'eval.trial_index': 0}))
     stop = SimpleNamespace(value=False)
     clock = _ManualClock()
 
@@ -1713,9 +1705,9 @@ class _TimedRecorder(pimm.SignalEmitter):
 
 
 def _run_episode(
-    world, policy, wrapper, *, latency, simulated=True, steps=4000, run_sec=1.5
+    world, policy, wrapper, *, charge_inference_time, simulated=True, steps=4000, run_sec=1.5
 ) -> list[tuple[float, Any]]:
-    """One trial whose context asks for ``latency``; returns the grip commands with the world time each went
+    """One trial run with ``charge_inference_time``; returns the grip commands with the world time each went
     out at. A sim trial runs against a pacer, the sole time-master a real rig doesn't need."""
     harness = Harness(wrapper.wrap(policy), make_embodiment(simulated=simulated))
     grip_recorder = _TimedRecorder(world.clock)
@@ -1730,7 +1722,13 @@ def _run_episode(
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
-        (partial(perform_task, Task(instruction_source='t', timeout_sec=None, charge_inference_time=latency)), 0.0),
+        (
+            partial(
+                perform_task,
+                Task(instruction_source='t', timeout_sec=None, charge_inference_time=charge_inference_time),
+            ),
+            0.0,
+        ),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
         (None, run_sec),
     ])
@@ -1740,20 +1738,20 @@ def _run_episode(
 
 
 @pytest.mark.timeout(20.0)
-def test_default_latency_pauses_the_world_for_the_call(world):
+def test_an_uncharged_call_pauses_the_world(world):
     """Sim's default charges nothing: the world does not advance while the model runs, so the chunk is
     anchored at the observation's own instant however long the call really took."""
-    played = _run_episode(world, SlowPolicy(wall_sec=0.05), ChunkedSchedule(), latency=False)
+    played = _run_episode(world, SlowPolicy(wall_sec=0.05), ChunkedSchedule(), charge_inference_time=False)
 
     assert played, 'no command was played'
     assert played[0][0] < 0.01, f'the world advanced during the call: first command at {played[0][0]}s'
 
 
 @pytest.mark.timeout(20.0)
-def test_measured_latency_charges_the_calls_own_wall_duration(world):
+def test_a_charged_call_costs_its_own_wall_duration(world):
     """``charge_inference_time=True`` charges the world what the model really took, so a slow server is scored
     as slow — at the cost of a trace that inherits the machine's noise."""
-    played = _run_episode(world, SlowPolicy(wall_sec=0.2), ChunkedSchedule(), latency=True)
+    played = _run_episode(world, SlowPolicy(wall_sec=0.2), ChunkedSchedule(), charge_inference_time=True)
 
     assert played, 'no command was played'
     assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the call took'
@@ -1761,9 +1759,11 @@ def test_measured_latency_charges_the_calls_own_wall_duration(world):
 
 @pytest.mark.timeout(20.0)
 def test_a_real_rig_pays_wall_time_whatever_the_trial_asks_for(world):
-    """The knob simulates a trial; a real rig pays what its calls take, so a context asking for the world to
-    be held (the eval CLI writes the flag into every trial) does not hold it."""
-    played = _run_episode(world, SlowPolicy(wall_sec=0.2), ChunkedSchedule(), latency=False, simulated=False)
+    """The knob is sim-only: a real rig pays what its calls take, so a task leaving
+    ``charge_inference_time`` unset does not hold the world for them."""
+    played = _run_episode(
+        world, SlowPolicy(wall_sec=0.2), ChunkedSchedule(), charge_inference_time=False, simulated=False
+    )
 
     assert played, 'no command was played'
     assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the call took'
@@ -1794,7 +1794,11 @@ def test_the_wrappers_see_every_tick(world):
     not the machine inside the model call, and not the rounds in between."""
     ticks = _ObservedTicks()
     _run_episode(
-        world, SlowPolicy(wall_sec=0.01, span_sec=0.3, steps=15), ticks | ChunkedSchedule(), latency=False, run_sec=1.0
+        world,
+        SlowPolicy(wall_sec=0.01, span_sec=0.3, steps=15),
+        ticks | ChunkedSchedule(),
+        charge_inference_time=False,
+        run_sec=1.0,
     )
 
     period = 0.005  # the pacer's control period
@@ -1806,7 +1810,9 @@ def test_the_wrappers_see_every_tick(world):
 def test_harness_keeps_playing_while_a_call_is_in_flight(world):
     """A wrapper that replans before its chunk is exhausted leaves waypoints due during inference, and the
     harness emits them on time instead of standing still until the model answers."""
-    played = _run_episode(world, SlowPolicy(wall_sec=0.15, span_sec=0.4, steps=20), _ReplanEarly(), latency=True)
+    played = _run_episode(
+        world, SlowPolicy(wall_sec=0.15, span_sec=0.4, steps=20), _ReplanEarly(), charge_inference_time=True
+    )
 
     # The first chunk lands at ~0.15s and spans 0.4s; the second call starts halfway through it (~0.28s) and
     # runs for 0.15s the world runs through; the waypoints due in that window have to keep going out.
