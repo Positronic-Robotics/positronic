@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from positronic.drivers.camera import _LOCK_FILE_MODE, device_open_lock
+from positronic.drivers.camera.device_open_lock import _LOCK_FILE_MODE, device_open_lock
 
 # Spawn, not fork: a forked child inherits the parent's open fds, and with them the lock.
 CTX = mp.get_context('spawn')
@@ -170,7 +170,11 @@ def test_an_unopenable_lock_file_raises_rather_than_opening_unserialized(tmp_pat
 
 def test_the_default_lock_path_does_not_move_with_the_environment(tmp_path: Path):
     """Two openers under different `TMPDIR`s, or a unit with `PrivateTmp=`, would take different locks."""
-    read_the_path = [sys.executable, '-c', 'import positronic.drivers.camera as c; print(c.DEVICE_OPEN_LOCK_PATH)']
+    read_the_path = [
+        sys.executable,
+        '-c',
+        'from positronic.drivers.camera.device_open_lock import DEVICE_OPEN_LOCK_PATH; print(DEVICE_OPEN_LOCK_PATH)',
+    ]
     seen = set()
     for name in ('a', 'b'):
         tmpdir = tmp_path / name
