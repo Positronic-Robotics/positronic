@@ -204,15 +204,15 @@ class Robot(pimm.ControlSystem):
             grip_target = 0.0
 
             while not should_stop.value:
-                cmd_msg = self.commands.read()
-                if (grip_msg := self.target_grip.read()) is not None and grip_msg.updated:
-                    grip_target = float(grip_msg.data)
+                cmd = pimm.value_updated(self.commands)
+                if (grip := pimm.value_updated(self.target_grip)) is not None:
+                    grip_target = float(grip)
 
                 obs = arm.get_observations()
                 q = obs['joint_pos']
 
-                if cmd_msg is not None and cmd_msg.updated:
-                    match cmd_msg.data:
+                if cmd is not None:
+                    match cmd:
                         case command.Reset():
                             q_target = self._reset(arm, kin, robot_state)
                             grip_target = 0.0

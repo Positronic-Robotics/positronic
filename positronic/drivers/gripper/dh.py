@@ -37,9 +37,8 @@ class DHGripper(pimm.ControlSystem):
         # TODO: Should we translate these to physical units (N and m/s)?
         while not should_stop.value:
             try:
-                grip_msg = self.target_grip.read()
-                if grip_msg is not None and grip_msg.updated:
-                    last_grip = grip_msg.data
+                if (grip := pimm.value_updated(self.target_grip)) is not None:
+                    last_grip = grip
                 width = round((1 - max(0, min(last_grip, 1))) * 1000)
                 client.write_register(0x103, c_uint16(width).value, slave=1)
                 client.write_register(0x101, c_uint16(self.force.value).value, slave=1)

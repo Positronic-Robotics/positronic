@@ -61,8 +61,8 @@ if __name__ == '__main__':
                 stream.options = {'crf': '27', 'g': '2', 'preset': 'ultrafast', 'tune': 'zerolatency'}
 
                 while not should_stop.value:
-                    frame_msg = self.frame.read()
-                    if not frame_msg.updated:
+                    frame_msg = pimm.read_updated(self.frame)
+                    if frame_msg is None:
                         yield pimm.Sleep(0.5 / self.fps)
                         continue
 

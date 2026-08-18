@@ -163,8 +163,8 @@ class DataCollectionController(pimm.ControlSystem):
                     self.robot_commands.emit(roboarm.command.Reset())
 
                 self.target_grip.emit(button_handler.get_value('right_trigger'))
-                cp_msg = self.controller_positions.read()
-                if cp_msg.updated:
+                cp_msg = pimm.read_updated(self.controller_positions)
+                if cp_msg is not None:
                     target_robot_pos = tracker.update(cp_msg.data['right'])
 
                 if tracker.on:
@@ -173,7 +173,7 @@ class DataCollectionController(pimm.ControlSystem):
                     )
                     if entered_error:
                         self.sound.emit(error_wav_path)
-                    if not in_error and cp_msg.updated:
+                    if not in_error and cp_msg is not None:
                         cmd = roboarm.command.CartesianPosition(target_robot_pos)
                         self.robot_commands.emit(cmd)
 

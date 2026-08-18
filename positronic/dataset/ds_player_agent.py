@@ -35,9 +35,8 @@ class DsPlayerAgent(pimm.ControlSystem):
         limiter = pimm.utils.RateLimiter(clock, hz=self._poll_hz)
 
         while not should_stop.value:
-            cmd_msg = self.command.read()
-            if cmd_msg.updated:
-                playback = self._apply_command(cmd_msg.data, clock)
+            if (cmd := pimm.value_updated(self.command)) is not None:
+                playback = self._apply_command(cmd, clock)
 
             if playback is None:
                 yield limiter.wait()

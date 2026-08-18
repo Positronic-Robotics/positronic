@@ -84,11 +84,9 @@ class SoundSystem(pimm.ControlSystem):
         file_idx = 0
 
         while not should_stop.value:
-            path_msg = self.wav_path.read()
-            if path_msg is not None and path_msg.updated:
-                assert path_msg.data is not None, 'Wav path must be provided'
-                logging.info('Playing %s', path_msg.data)
-                audio_files[file_idx] = wave.open(path_msg.data, 'rb')
+            if (wav_path := pimm.value_updated(self.wav_path)) is not None:
+                logging.info('Playing %s', wav_path)
+                audio_files[file_idx] = wave.open(wav_path, 'rb')
                 assert audio_files[file_idx].getframerate() == 44100, 'Only 44100Hz wav files are currently supported'
                 assert audio_files[file_idx].getsampwidth() == 2, 'Only 16-bit wav files are currently supported'
                 file_idx += 1

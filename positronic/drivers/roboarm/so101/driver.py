@@ -88,10 +88,8 @@ class Robot(pimm.ControlSystem):
         state = SO101State()
 
         while not should_stop.value:
-            cmd_msg = self.commands.read()
-            grip_msg = self.target_grip.read()
-            grip = grip_msg.data if grip_msg is not None and grip_msg.updated else None
-            command = cmd_msg.data if cmd_msg is not None and cmd_msg.updated else None
+            command = pimm.value_updated(self.commands)
+            grip = pimm.value_updated(self.target_grip)
             if grip is not None:
                 self._last_grip = grip
             if command is not None:
