@@ -376,8 +376,6 @@ def test_robot_state_serializer_records_a_resetting_arm_beside_its_pose(world):
     expected = {keys.JOINTS: q, keys.JOINT_VEL: dq, keys.EE_POSE: np.concatenate([t, geom.Rotation.identity.as_quat])}
     assert set(by_name) == {keys.ROBOT_STATUS, *expected}
     assert by_name[keys.ROBOT_STATUS] == [RobotStatus.RESETTING, RobotStatus.AVAILABLE]
-    # The resetting frame records its measurements too, so a reader tells it by its status rather than by a
-    # gap in the arm's samples.
     for name, value in expected.items():
         assert len(by_name[name]) == 2, name
         np.testing.assert_allclose(by_name[name][0], value)

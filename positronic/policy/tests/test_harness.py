@@ -1355,7 +1355,6 @@ def test_cartesian_delta_applies_in_world_frame():
 
 @pytest.mark.parametrize('status', list(RobotStatus))
 def test_robot_state_serializer_emits_the_status_beside_the_pose(status):
-    """An unsound arm still knows where it is; the status is what says whether that pose is worth acting on."""
     state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=status)
     serialized = Serializers.robot_state(state)
     assert set(serialized) == {'.status', '.q', '.dq', '.ee_pose'}
@@ -1844,8 +1843,8 @@ def test_harness_keeps_playing_while_a_call_is_in_flight(world):
 @pytest.mark.timeout(3.0)
 @pytest.mark.parametrize('unsound', [RobotStatus.RESETTING, RobotStatus.ERROR])
 def test_an_unsound_arm_reaches_the_policy_with_its_pose(world, unsound):
-    """An unsound arm is not swallowed as "no observation": its measurements go up beside the status, and the
-    policy stack owns what to do about them. The bare harness here declares no ``StopOnFault`` to filter it."""
+    """An unsound arm is not swallowed as "no observation": its measurements reach the policy beside the status.
+    The harness here runs no ``StopOnFault``, so nothing filters it on the way."""
     policy = SpyPolicy()
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)

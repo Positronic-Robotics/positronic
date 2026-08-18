@@ -32,9 +32,8 @@ ROBOT_STATE = 'robot_state'
 JOINTS = f'{ROBOT_STATE}.q'
 JOINT_VEL = f'{ROBOT_STATE}.dq'
 EE_POSE = f'{ROBOT_STATE}.ee_pose'
-# The arm's ``RobotStatus``, on every sample beside the measurements: a faulted or resetting arm still reports
-# where it is, and this is what says whether that pose is worth acting on. The suffix is named on its own
-# because a consumer picks the entry out by it on a rig whose arms are ``robot_state.{side}``.
+# The arm's ``RobotStatus``. The suffix is named on its own because a consumer picks the entry out by it on a
+# rig whose arms are ``robot_state.{side}``.
 STATUS_SUFFIX = '.status'
 ROBOT_STATUS = f'{ROBOT_STATE}{STATUS_SUFFIX}'
 GRIP = 'grip'

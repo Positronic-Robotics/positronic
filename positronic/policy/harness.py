@@ -410,9 +410,7 @@ class Harness(pimm.ControlSystem):
         """Read every observation channel and assemble the policy input dict.
 
         Raises ``NoValueException`` if any channel has no value yet, and returns ``None`` while a channel
-        still holds a pre-reset value, rather than feed a stale obs. What a device reports is otherwise
-        passed on as read: what an arm's status means for the plan being played is for the policy stack to
-        answer, not the harness.
+        still holds a pre-reset value, rather than feed a stale obs.
         """
         # Against the live model, not the one known at episode start: a remote env publishes its ``robot_meta``
         # a turn after the reset that produced it, so at episode start there is no model to check.
