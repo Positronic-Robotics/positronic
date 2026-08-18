@@ -37,7 +37,6 @@ from positronic.telemetry import (
     read_stats,
 )
 from positronic.telemetry_keys import (
-    ATTR_EPISODE_ABORTED,
     ATTR_EPISODE_PARTIAL,
     ATTR_EPISODE_VIRTUAL_S,
     ATTR_PASS_FAILED,
@@ -120,8 +119,7 @@ class WallSplit:
     ``overhead`` is the within-episode wall unattributed to a measured phase (including the recorder's
     parquet/video close flush, which runs after record IO); ``between_episodes`` is the inter-episode wall
     (session teardown, homing, world rebuild) inside the window between one episode's finish and the next's
-    start. The measured phases plus these two cover the window minus any aborted-episode wall, which is
-    excluded from it entirely.
+    start. The measured phases plus these two cover the whole window.
     """
 
     reset: float
@@ -413,17 +411,15 @@ def _episode_timing(episode: SpanRec, children: dict[str, list[SpanRec]]) -> _Ep
 def _env_step_split(spans: list[SpanRec], episodes: list[SpanRec], env_step_sum: float, materialize_sum: float):
     """The env-step decomposition from the env server's own spans: a server ``env.step`` (recorded in the env
     process's own file, so ``process`` is not the harness) with physics/render children. Only server steps that
-    start inside a completed episode's wall window count — an aborted rollout's steps would otherwise skew
-    fractions whose denominator covers completed episodes only. ``None`` when no such span exists (a native sim
+    start inside a reduced episode's wall window count — a step outside every one of them would otherwise skew
+    fractions whose denominator covers those episodes only. ``None`` when no such span exists (a native sim
     reports no decomposition)."""
 
-    def in_completed_episode(ts_ns: int) -> bool:
+    def in_reduced_episode(ts_ns: int) -> bool:
         return any(e.start_ns <= ts_ns <= e.end_ns for e in episodes)
 
     server_steps = [
-        s
-        for s in spans
-        if s.name == SPAN_ENV_STEP and s.process != HARNESS_PROCESS and in_completed_episode(s.start_ns)
+        s for s in spans if s.name == SPAN_ENV_STEP and s.process != HARNESS_PROCESS and in_reduced_episode(s.start_ns)
     ]
     server_step_sum = sum(_dur_s(s) for s in server_steps)
     if not server_step_sum or not env_step_sum:
@@ -450,8 +446,6 @@ def _episode_windows(episodes: list[SpanRec]) -> dict[str | None, tuple[int, int
 
     Grouping by parent is what keeps two killed runs appended to one directory apart: each contributes its own
     window, so the dead wall between them falls outside both, exactly as the gap between two pass spans does.
-    Aborted episodes count towards the window, because they are subtracted from it by the same rule that
-    subtracts them from a pass span's wall.
     """
     by_parent: dict[str | None, list[SpanRec]] = defaultdict(list)
     for episode in episodes:
@@ -491,13 +485,7 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
             f'the recorded telemetry holds {len(spans)} span(s) but no closed `{SPAN_EVAL_PASS}` span and no '
             f'`{SPAN_EPISODE}` span, so there is nothing to reduce (killed before its first episode finished?)'
         )
-    # An aborted episode's wall is subtracted out: the episode is dropped as invalid data (its virtual time,
-    # phases and infers never reduce), so its wall must also leave every normalised figure rather than land in
-    # ``between_episodes`` and deflate the policy-wait / real-time factors.
-    aborted_wall = float(
-        sum(_dur_s(s) for s in all_episodes if s.attrs.get(ATTR_EPISODE_ABORTED, False) and s.parent_id in windows)
-    )
-    wall = float(sum(end - start for start, end in windows.values())) / 1e9 - aborted_wall
+    wall = float(sum(end - start for start, end in windows.values())) / 1e9
     # A failed pass still reduces — its partial window, episodes and samples are real recorded data — but
     # never silently: the mix is named so a skewed-looking split has its explanation on the console.
     failed = sum(bool(p.attrs.get(ATTR_PASS_FAILED, False)) for p in passes)
@@ -505,21 +493,20 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
         logger.warning(
             '%d of %d pass(es) failed mid-run; their partial windows are included in the report', failed, len(passes)
         )
-    # Only episodes belonging to a window reduce: where one pass completed, a killed earlier run's episodes are
-    # in the same reused directory but under no window of their own, and would inflate every normalised figure.
-    episodes = [s for s in all_episodes if not s.attrs.get(ATTR_EPISODE_ABORTED, False)]
     # A partial episode (its rollout failed mid-run) is kept, not dropped: its finished phases are real wall
     # and must attribute rather than fall into ``between_episodes``. Named, like ``pass.failed``, so the split
     # is read with its incomplete window in view.
-    partial = sum(bool(e.attrs.get(ATTR_EPISODE_PARTIAL, False)) for e in episodes)
+    partial = sum(bool(e.attrs.get(ATTR_EPISODE_PARTIAL, False)) for e in all_episodes)
     if partial:
         logger.warning(
             '%d episode(s) did not run to completion (a failed pass?); their finished phases are included', partial
         )
-    orphans = sum(e.parent_id not in windows for e in episodes)
+    orphans = sum(e.parent_id not in windows for e in all_episodes)
     if orphans:
         logger.warning('%d episode(s) belong to no completed pass (a killed run?); excluded from the report', orphans)
-        episodes = [e for e in episodes if e.parent_id in windows]
+    # Only episodes belonging to a window reduce: where one pass completed, a killed earlier run's episodes are
+    # in the same reused directory but under no window of their own, and would inflate every normalised figure.
+    episodes = [e for e in all_episodes if e.parent_id in windows]
     timings = [_episode_timing(e, children) for e in episodes]
 
     episode_wall_sum = float(sum(t.wall_s for t in timings))

@@ -4,8 +4,6 @@ import time
 from collections import deque
 from collections.abc import Generator, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
-from enum import Enum
 from typing import Any
 
 import numpy as np
@@ -24,42 +22,13 @@ from positronic.utils import flatten_dict, frozen_view
 # off by when it leaves timestamps chunk-relative or anchors them twice.
 MAX_ACTION_SKEW_SEC = 60.0
 
-# How long a real-time round may last when no waypoint is due sooner. It bounds how late a directive is
-# noticed, and with it the granularity every command timestamp is quantized to.
+# How long a real-time round may last when no waypoint is due sooner. It bounds how late a call is noticed,
+# and with it the granularity every command timestamp is quantized to.
 POLL_PERIOD_SEC = 0.01
 
 # How long a submitted call may take and still resolve within its round: a wrapper that skips inference
 # answers in microseconds, a real model call runs far past this and is throttled across rounds.
 SKIP_REPLY_SEC = 0.001
-
-
-class DirectiveType(Enum):
-    RUN = 'run'
-    FINISH = 'finish'
-    ABORT = 'abort'
-
-
-@dataclass
-class Directive:
-    """Directive from the orchestrator to the harness."""
-
-    type: DirectiveType
-    payload: Any | None = None
-
-    @classmethod
-    def RUN(cls, **kwargs) -> 'Directive':
-        """Begin running the policy with the given context."""
-        return cls(DirectiveType.RUN, kwargs)
-
-    @classmethod
-    def FINISH(cls, **kwargs) -> 'Directive':
-        """Finalize the recording with optional eval data, then home devices."""
-        return cls(DirectiveType.FINISH, kwargs)
-
-    @classmethod
-    def ABORT(cls) -> 'Directive':
-        """Discard the live recording and home the devices."""
-        return cls(DirectiveType.ABORT)
 
 
 class _InferenceWorker:
@@ -195,13 +164,6 @@ class _EpisodeTelemetry:
         self._close(virtual_now)
         telemetry.force_flush()
 
-    def abort(self) -> None:
-        """Close an aborted rollout, marked ``episode.aborted`` so the reduce drops it."""
-        if self._span is None:
-            return
-        telemetry.set_attrs(self._span, **{telemetry_keys.ATTR_EPISODE_ABORTED: True})
-        self._end_span()
-
     def seal(self, virtual_now: float) -> None:
         """Close a rollout abandoned mid-flight by a raising ``reset`` / ``new_session`` / session call, marked
         ``episode.partial`` so the reduce keeps it. Ending it is what exports it: the batch processor drops an
@@ -235,9 +197,10 @@ class Harness(pimm.ControlSystem):
     it took or nothing — the world held still for it — and the ``now`` handed to ``new_session`` reads the
     instant the call's output takes effect, so wrappers stamp for it without knowing the mode.
 
-    A ``trials`` plan makes the harness self-driving: it starts the next trial whenever idle and returns
-    once the plan is exhausted. A task's ``timeout`` bounds every trial either way, and a truthy privileged
-    ``done`` ends one early — ``eval.terminated`` records which. A task-less session ends only on directives.
+    An episode runs for one ``perform_task`` call, whose answer is the terminal payload it ended on. A
+    ``trials`` plan makes the harness self-driving instead: it starts the next trial whenever idle and
+    returns once the plan is exhausted. A task's ``timeout`` bounds every trial either way, and a truthy
+    ``done`` ends one early — ``eval.terminated`` records which. A task-less session ends on ``done`` alone.
     """
 
     def __init__(
@@ -252,24 +215,26 @@ class Harness(pimm.ControlSystem):
         assert trials is None or task is not None, 'A trial plan needs a task: its timeout bounds each trial'
         self._embodiment = embodiment
         self._task = task
-        # Each entry is a RUN context; when None, directives are the only lifecycle source.
+        # Each entry is a task context; when None, ``perform_task`` is the only lifecycle source.
         self._trials = iter(trials) if trials is not None else None
         self.policy: Policy = policy
         self.context: dict[str, Any] = {}
         self._static_meta = static_meta or {}
-        # This episode's session and the thread it runs on. ``None`` while no episode is live: between RUN
-        # and FINISH/ABORT, stepping and recording happen together.
+        # This episode's session and the thread it runs on. ``None`` while no episode is live: while one is,
+        # stepping and recording happen together.
         self._worker: _InferenceWorker | None = None
+        # The call this episode answers when it ends; ``None`` for one the trial plan started.
+        self._call: pimm.calls.Call[dict[str, Any], dict[str, Any]] | None = None
         # A worker let go of mid-call, kept until the join that makes closing its session safe.
         self._retiring: _InferenceWorker | None = None
-        # ``task.timeout``, set per episode; a task-less session has no deadline and ends on directives.
+        # ``task.timeout``, set per episode; a task-less session has no deadline and ends on ``done`` alone.
         self._deadline: float | None = None
         # False until this episode's first observation lands; until then the deadline stands where the reset
         # put it, which bounds an episode that never gets one.
         self._rollout_started = False
         # Wall-clock telemetry for the live rollout, opened under ``--timing`` and inert otherwise.
         self._telemetry = _EpisodeTelemetry()
-        # Channels that have not delivered since this episode's RUN; the first inference waits until every one
+        # Channels that have not delivered since this episode began; the first inference waits until every one
         # has. A receiver latches its last value, so a producer silent between episodes would otherwise feed
         # the previous episode's final frame. Delivery is judged by ``updated``, not ``ts``: some producers
         # stamp ``ts`` on their own clock.
@@ -284,11 +249,12 @@ class Harness(pimm.ControlSystem):
         # Each channel's waypoints not yet played, stamped with absolute clock ns and ascending.
         self._schedules: dict[str, deque[tuple[int, Any]]] = {name: deque() for name in embodiment.commands}
 
-        self.directive = pimm.ControlSystemReceiver[Directive](self, default=None, maxsize=3)
+        # One episode per call, answered with the terminal payload it ended on.
+        self.perform_task = pimm.calls.ControlSystemHandler[dict[str, Any], dict[str, Any]](self)
         self.manual_command = pimm.ControlSystemReceiver(self, default=None)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
         self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
-        # Privileged stop-signal: a truthy value within the trial's budget ends it.
+        # Stop-signal: a truthy payload within the trial's budget ends it.
         self.done = pimm.ControlSystemReceiver[dict](self, default={})
 
     def _statics(self) -> dict[str, Any]:
@@ -369,13 +335,17 @@ class Harness(pimm.ControlSystem):
         # producer stepping in that shared round charges ≤ one control period to the closing episode.
         self._telemetry.end(virtual_now)
 
-    def _begin_episode(self, context: dict[str, Any], clock: pimm.Clock) -> None:
+    def _begin_episode(
+        self, context: dict[str, Any], clock: pimm.Clock, call: pimm.calls.Call[dict[str, Any], dict[str, Any]] | None
+    ) -> None:
         """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
 
         A resettable task's ``reset`` only arms the producer; the first observation lands a later round. The
         recorder drains its channels the turn it opens, so the pre-reset frame and the inter-episode home
         command drop out. The deadline is armed here and moved to that first observation once it lands.
         """
+        # Before anything that can raise, so an episode that fails to open still answers whoever asked for it.
+        self._call = call
         # Before the span opens, so the wait for a call the last episode abandoned is inter-episode wall
         # rather than overhead the timing reducer attributes to this one.
         self._reap_worker()
@@ -401,37 +371,34 @@ class Harness(pimm.ControlSystem):
         self._deadline = clock.now() + self._task.timeout if self._task is not None else None
         self.ds_command.emit(DsWriterCommand.START())
 
-    def _end_episode(
-        self, clock: pimm.Clock, payload: dict[str, Any] | None = None, *, abort: bool = False
-    ) -> Generator[pimm.Command, None, None]:
-        """Close the live episode: finalize (or abort) the recording, retire the session, home devices.
+    def _end_episode(self, clock: pimm.Clock, payload: dict[str, Any]) -> Generator[pimm.Command, None, None]:
+        """Close the live episode: finalize the recording, retire the session, home devices, hand the terminal
+        back to whoever asked for the episode.
 
         The worker is retired rather than joined here, so a ``RemoteSession``'s websocket outlives the call
         still using it.
         """
-        if self._worker is not None:
-            if abort:
-                self._cancel_session()  # abort has no finalize to do it — stop the episode before the home
-                self.ds_command.emit(DsWriterCommand.ABORT())
-                yield self._pace(clock)  # the settling round a finalize also takes, before the home command
-                self._telemetry.abort()
-            else:
-                yield from self._finalize_recording(clock, payload)
+        yield from self._finalize_recording(clock, payload)
         self._home()
+        if self._call is not None:  # an episode the trial plan started has nobody to answer
+            self._call.set_result(payload)
+            self._call = None
 
-    def _handle_directive(self, directive: Directive, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
-        """Dispatch a directive to the episode lifecycle."""
-        match directive.type:
-            case DirectiveType.RUN:
-                if self._worker is None:  # a RUN mid-trial is ignored — the operator finishes before starting anew
-                    self._begin_episode(directive.payload or {}, clock)
-            case DirectiveType.FINISH:
-                if self._worker is not None:  # a FINISH while idle is ignored — nothing to finalize
-                    yield from self._end_episode(clock, directive.payload)
-            case DirectiveType.ABORT:
-                yield from self._end_episode(clock, abort=True)
-            case _:
-                raise ValueError(f'Unknown directive type: {directive.type}')
+    def _fail_call(self, exc: BaseException) -> None:
+        """Raise to whoever asked for the live episode, in place of the terminal it will never get."""
+        if self._call is not None:
+            self._call.set_exception(exc)
+            self._call = None
+
+    def _advance_episode(self, worker: _InferenceWorker, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
+        """One round of the live episode: end it if it is out of budget or done, else step the policy."""
+        if (terminal := self._trial_terminal(clock)) is not None:
+            yield from self._end_episode(clock, terminal)
+        else:
+            try:
+                self._step(worker, clock)
+            except pimm.NoValueException:
+                pass
 
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any] | None:
         """Read every observation channel and assemble the policy input dict.
@@ -458,7 +425,7 @@ class Harness(pimm.ControlSystem):
         if self._awaiting_obs:
             return None
         # The trial's context goes under what the harness read this round, never over it: a context carries
-        # whatever keys the RUN directive puts in it, and a ``robot_state.status`` among them must not tell
+        # whatever keys the caller puts in it, and a ``robot_state.status`` among them must not tell
         # ``StopOnFault`` that a faulted arm is sound.
         inputs = {**self.context, **inputs}
         inputs[keys.WALL_TIME_NS] = time.time_ns()
@@ -532,21 +499,19 @@ class Harness(pimm.ControlSystem):
                 self.commands[name].emit(value)
 
     def _trial_terminal(self, clock: pimm.Clock) -> dict[str, Any] | None:
-        """The terminal static payload if a self-driven trial has ended this round, else ``None``.
+        """The terminal static payload if the live trial has ended this round, else ``None``.
 
         The deadline is hard: a truthy ``done`` within budget records ``eval.terminated`` True plus its
         payload, the budget passing records False, and a terminal past the deadline is a timeout rather than
-        a late success. Only a freshly delivered ``done`` counts, or the receiver's latched value would
-        re-fire a prior trial's terminal.
+        a late success. A task-less trial has no budget and ends on ``done`` alone. Only a freshly delivered
+        ``done`` counts, or the receiver's latched value would re-fire a prior trial's terminal; only a
+        truthy one, so a producer can clear a stale terminal off the wire with an empty payload.
         """
         deadline = self._deadline
-        if deadline is None:  # a task-less session has no budget and ends on directives alone
-            return None
-        done_msg = self.done.read()
-        assert done_msg is not None  # the receiver carries a default, so ``read`` always yields a message
-        if done_msg.updated and done_msg.data and done_msg.ts <= deadline * 1e9:
+        done_msg = pimm.read_updated(self.done)
+        if done_msg is not None and done_msg.data and (deadline is None or done_msg.ts <= deadline * 1e9):
             return {**done_msg.data, keys.EVAL_TERMINATED: True}
-        if clock.now() >= deadline:
+        if deadline is not None and clock.now() >= deadline:
             return {keys.EVAL_TERMINATED: False}
         return None
 
@@ -557,43 +522,42 @@ class Harness(pimm.ControlSystem):
 
         try:
             yield from self._run(should_stop, clock)
-        except BaseException:
+        except BaseException as exc:
             # Seal the open span before the exception reaches ``bind``'s exit flush: an unended span never
             # exports, orphaning its finished children and charging the episode's wall to between_episodes.
             self._telemetry.seal(clock.now())
+            self._fail_call(exc)
             raise
         finally:
+            # A no-op once the block above has answered: the world coming down under a live episode is the
+            # one way a call goes unanswered, and it is the caller's to hear about.
+            self._fail_call(RuntimeError('The world stopped before the episode ended'))
             self._retire_worker()
             self._reap_worker()
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         while not should_stop.value:
-            # One action per round, mutually exclusive: handle a directive, start the next trial (or exit
-            # when the plan is done), finish one that is out of budget or done, or step the policy. Starting
-            # takes its own round, so inference waits for the producer's post-reset observation.
-            directive_msg = self.directive.read()
+            # One action per round, mutually exclusive: start the episode a call asks for, start the next
+            # trial (or exit when the plan is done), finish one that is out of budget or done, or step the
+            # policy. Starting takes its own round, so inference waits for the producer's post-reset
+            # observation.
+            call = next(self.perform_task.incoming(), None)
             # Read every round so the flag clears mid-episode; a press during a trial is consumed, not replayed.
-            manual_msg = self.manual_command.read()
-            # Both receivers carry a default, so ``read`` always yields a message.
-            assert directive_msg is not None and manual_msg is not None
-            if directive_msg.updated:
-                yield from self._handle_directive(directive_msg.data, clock)
-            elif self._worker is None:
-                if manual_msg.updated and manual_msg.data is not None:
-                    self._emit(manual_msg.data)
-                elif self._trials is not None:
-                    trial = next(self._trials, None)
-                    if trial is None:  # plan exhausted — let the recorder commit the final episode, then exit
-                        yield pimm.Sleep(0.5)
-                        break
-                    self._begin_episode(trial, clock)
-            elif (terminal := self._trial_terminal(clock)) is not None:
-                yield from self._end_episode(clock, terminal)
-            else:
-                try:
-                    self._step(self._worker, clock)
-                except pimm.NoValueException:
-                    pass
+            manual = pimm.value_updated(self.manual_command)
+            if self._worker is not None:
+                if call is not None:  # the live episode is the one that finishes; a second ask is refused
+                    call.set_exception(RuntimeError('An episode is already running'))
+                yield from self._advance_episode(self._worker, clock)
+            elif call is not None:
+                self._begin_episode(call.request, clock, call)
+            elif manual is not None:
+                self._emit(manual)
+            elif self._trials is not None:
+                trial = next(self._trials, None)
+                if trial is None:  # plan exhausted — let the recorder commit the final episode, then exit
+                    yield pimm.Sleep(0.5)
+                    break
+                self._begin_episode(trial, clock, None)
             self._play(clock)
             yield self._pace(clock)
 

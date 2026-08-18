@@ -3,6 +3,7 @@ aliases over ``cli.eval.run``."""
 
 from collections import Counter
 from contextlib import nullcontext
+from typing import Any
 
 import configuronic as cfn
 import pos3
@@ -10,34 +11,59 @@ import pos3
 import pimm
 import positronic.cfg.embodiment
 import positronic.cfg.policy as policy_cfg
-from positronic import wire
+from positronic import keys, wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import prepare_output_dir, run
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment
-from positronic.policy.harness import Directive, Harness
+from positronic.policy.harness import Harness
 from positronic.utils.logging import init_logging
 
 
-class KeyboardHandler:
-    def __init__(self, task: str | None = None):
-        self.task = task
+class KeyboardOperator(pimm.ControlSystem):
+    """Drives one harness from the keyboard: ``s`` asks for an episode, ``p`` ends the live one.
 
-    def harness_directive(self, key: str) -> Directive | None:
-        match key:
-            case 's':
-                return Directive.RUN(task=self.task)
-            case 'p':
-                return Directive.FINISH()
-            case 'r':
-                return Directive.ABORT()
-        return None
+    It holds the pending answers because that is where an episode's terminal — and any ask the harness
+    refuses — arrives; both are printed as they land.
+    """
+
+    def __init__(self, task: str | None = None):
+        self._task = task
+        self.keystrokes = pimm.ControlSystemReceiver[str](self, default=None)
+        self.perform_task = pimm.calls.ControlSystemCaller[dict[str, Any], dict[str, Any]](self)
+        self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        pending: list[pimm.calls.Answer[dict[str, Any]]] = []
+        while not should_stop.value:
+            if (key := pimm.value_updated(self.keystrokes)) is not None:
+                match key:
+                    case 's':
+                        pending.append(self.perform_task({keys.TASK: self._task}))
+                    case 'p':
+                        self.done.emit({keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR})
+            running = []
+            for answer in pending:
+                if answer.done():
+                    self._report(answer)
+                else:
+                    running.append(answer)
+            pending = running
+            yield pimm.Sleep(0.01)
+
+    @staticmethod
+    def _report(answer: pimm.calls.Answer[dict[str, Any]]) -> None:
+        """Print what the episode ended on, or why it never will."""
+        try:  # rules-allow: swallowed-error
+            print(f'Episode ended: {answer.result()}')
+        except Exception as e:
+            print(f'Episode failed: {e}')
 
 
 def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
-    """Run one hardware embodiment attended and headless, the keyboard deciding when an episode starts,
-    finishes or aborts.
+    """Run one hardware embodiment attended and headless, the keyboard deciding when an episode starts and
+    finishes.
 
     The world is composed here rather than by the runner: an attended surface is the binary's own business,
     and the keyboard is the only one this library ships. There is no viewer — a console that shows the
@@ -62,22 +88,18 @@ def _run_attended(policy, embodiment: Embodiment, task: str | None, output_dir) 
     output_dir = prepare_output_dir(output_dir)
     harness = Harness(policy, embodiment)
     keyboard = KeyboardControl(quit_key='q')
-    handler = KeyboardHandler(task=task)
-    print('Keyboard controls: [s]tart, sto[p], abo[r]t, [q]uit')
+    operator = KeyboardOperator(task=task)
+    print('Keyboard controls: [s]tart, sto[p], [q]uit')
 
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World() as world:
-        ds_agent = wire.wire_embodiment(world, harness, embodiment, dataset_writer)
-        world.connect(
-            keyboard.keyboard_inputs,
-            harness.directive,
-            # `World.connect` types its wrapper same-in-same-out; a keystroke->Directive map is not.
-            emitter_wrapper=pimm.map(handler.harness_directive),  # pyright: ignore[reportArgumentType]
-        )
+        ds_agent = wire.wire_embodiment(world, harness, embodiment, dataset_writer, done=operator.done)
+        world.connect(keyboard.keyboard_inputs, operator.keystrokes)
+        world.connect(operator.perform_task, harness.perform_task)
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)
         producers = [cs for cs in embodiment.control_systems if cs is not None]
-        world.run([harness, keyboard], [*producers, ds_agent])
+        world.run([harness, keyboard, operator], [*producers, ds_agent])
 
 
 real_cfg = cfn.Config(real, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder)

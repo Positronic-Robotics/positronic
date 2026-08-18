@@ -63,7 +63,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         return self._meta
 
     def reset(self, context: dict[str, Any]) -> None:
-        """Re-randomize the env from the trial context and arm frame-0 publication for the next turn (the ``RUN`` hook).
+        """Re-randomize the env from the trial context and arm frame-0 publication for the next turn.
 
         Resets the remote env (acquiring the fresh frame and its ``control_dt``), then flags the run loop
         to publish the scene meta, a full observation payload (frame-0) and a non-terminal ``done`` on its

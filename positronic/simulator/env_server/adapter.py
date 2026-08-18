@@ -22,7 +22,7 @@ class EnvAdapter(ABC):
 
     @abstractmethod
     def reset_token(self, context: dict[str, Any]) -> Any:
-        """The per-trial RUN context -> the env's opaque reset token (an int for most, a blob for exact replay).
+        """The per-trial context -> the env's opaque reset token (an int for most, a blob for exact replay).
 
         Reads the context keys it needs (e.g. ``eval.seed``, ``eval.task_id``). Called at each trial start, so
         it is also where the adapter clears any per-trial command state.
@@ -117,7 +117,7 @@ class WireCommandAdapter(EnvAdapter):
 
     @abstractmethod
     def _reset_token(self, context: dict[str, Any]) -> Any:
-        """The per-trial RUN context -> the env's opaque reset token; the command state is already cleared."""
+        """The per-trial context -> the env's opaque reset token; the command state is already cleared."""
 
     def action(self, commands: dict[str, pimm.Message]) -> dict[str, Any]:
         for name, msg in commands.items():

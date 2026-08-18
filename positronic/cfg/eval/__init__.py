@@ -13,7 +13,7 @@ def placeholder():
 
 
 def build_trials(seed: int | None, trial_count: int, scenes: list[dict] | None = None) -> list[dict]:
-    """The per-trial RUN contexts a self-driving eval sweeps: one per (scene, seed) pair.
+    """The per-trial contexts a self-driving eval sweeps: one per (scene, seed) pair.
 
     Each ``scenes`` entry is a scene-spec context base (e.g. ``{'eval.suite': ..., 'eval.task_id': ...}``)
     swept over the seed set; ``None`` sweeps the seed alone (an eval with no scene axis). ``seed`` ``None``

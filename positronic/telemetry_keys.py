@@ -29,7 +29,6 @@ SPAN_RECORD_IO = 'record.io'
 ATTR_EPISODE_INDEX = 'episode.index'
 ATTR_EPISODE_STEPS = 'episode.steps'
 ATTR_EPISODE_VIRTUAL_S = 'episode.virtual_s'
-ATTR_EPISODE_ABORTED = 'episode.aborted'
 ATTR_EPISODE_PARTIAL = 'episode.partial'
 ATTR_PASS_FAILED = 'pass.failed'
 

@@ -5704,22 +5704,6 @@
                 }
             },
             {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 34,
-                    "endColumn": 38,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 34,
-                    "endColumn": 38,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportCallIssue",
                 "range": {
                     "startColumn": 14,

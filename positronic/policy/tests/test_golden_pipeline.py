@@ -27,6 +27,7 @@ import json
 import os
 from functools import partial
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
@@ -43,9 +44,9 @@ from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import DelegatingPolicy, DelegatingSession, Now, Policy, Session
 from positronic.policy.codec import ActionTiming
-from positronic.policy.harness import Directive, Harness
+from positronic.policy.harness import Harness
 from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
-from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
+from positronic.tests.testing_coutils import ManualDriver, drive_scheduler, pair_caller
 
 GOLDEN_FILE = Path(__file__).parent / 'golden_pipeline.json.gz'
 
@@ -221,17 +222,18 @@ def _run_pipeline(tmp_path: Path) -> dict:
         )
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
-        directive_em = world.pair(harness.directive)
+        perform_task = pair_caller(world, harness.perform_task)
+        done_em = cast(pimm.SignalEmitter, world.pair(harness.done))
 
         # Robot/gripper emit state every tick, so the script only drives the
         # episode lifecycle and the one-shot error injection.
         script = [
-            (partial(directive_em.emit, Directive.RUN(task='golden')), 0.0),
+            (partial(perform_task, {keys.TASK: 'golden'}), 0.0),
             (None, 1.5),  # several reactive inference + chunk/horizon cycles
             (robot.inject_error, 0.0),  # one-shot error: that frame is dropped, then inference resumes
             (None, 0.5),
             (None, 1.5),  # more cycles after recovery
-            (partial(directive_em.emit, Directive.FINISH()), 0.0),
+            (partial(done_em.emit, {keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR}), 0.0),
             (None, 0.5),  # let DsWriterAgent commit before world exit
         ]
         scheduler = world.start([harness, ManualDriver(script), robot, gripper, ds_agent])
