@@ -17,7 +17,7 @@ from positronic.cfg.eval import placeholder
 from positronic.cli.eval.submit import submit
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
-from positronic.eval import Embodiment, Eval, Task
+from positronic.eval import Embodiment, Eval
 from positronic.policy.harness import Harness
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 
@@ -44,20 +44,19 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
     return local_dir
 
 
-def _run_world(policy, embodiment: Embodiment, task: Task | None, trials: list[dict] | None, output_dir: Path | None):
-    """Wire one embodiment under a fresh Harness + World and run it to completion.
+def _run_world(policy, ev: Eval, output_dir: Path | None):
+    """Wire one eval's embodiment under a fresh Harness + World and run it to completion.
 
-    The harness self-drives ``trials``; the shared ``policy``'s lifetime stays with ``main``.
+    The harness self-drives ``ev.trials``; the shared ``policy``'s lifetime stays with ``main``.
     """
-    harness = Harness(policy, embodiment, task=task, trials=trials)
+    embodiment = ev.embodiment
+    harness = Harness(policy, embodiment, task=ev.task, trials=ev.trials, reset=ev.reset)
 
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(virtual_time=embodiment.simulated) as world:
-        privileged = task.privileged if task is not None else {}
-        done = task.done if task is not None else None
         ds_agent = wire.wire_embodiment(
-            world, harness, embodiment, dataset_writer, time_mode, privileged=privileged, done=done
+            world, harness, embodiment, dataset_writer, time_mode, privileged=ev.privileged, done=ev.done
         )
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)
@@ -173,7 +172,7 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     try:
         with timed_pass(output_dir, timing, policy):
             for ev in evals:
-                _run_world(policy, ev.embodiment, ev.task, ev.trials, output_dir)
+                _run_world(policy, ev, output_dir)
     finally:
         policy.close()
 

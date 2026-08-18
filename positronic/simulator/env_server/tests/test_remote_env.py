@@ -292,7 +292,7 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
     cached value holds across the steps that follow."""
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
-        task = Task(instruction=lambda: proxy.meta['task'], timeout=1.0, reset=proxy.reset)
+        task = Task(instruction=lambda: proxy.meta['task'], timeout=1.0)
         scheduler = world.start([proxy])
 
         proxy.reset({'eval.seed': 0})

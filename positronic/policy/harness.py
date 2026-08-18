@@ -3,7 +3,7 @@ import contextvars
 import logging
 import time
 from collections import deque
-from collections.abc import Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
@@ -214,11 +214,14 @@ class Harness(pimm.ControlSystem):
         *,
         task: Task | None = None,
         trials: Iterable[dict[str, Any]] | None = None,
+        reset: Callable[[dict[str, Any]], None] | None = None,
         static_meta: dict[str, Any] | None = None,
     ):
         assert trials is None or task is not None, 'A trial plan needs a task: its timeout bounds each trial'
         self._embodiment = embodiment
         self._task = task
+        # Re-randomizes the scene from the trial's context; ``None`` where reset is physical/human.
+        self._reset = reset
         # Each entry is a task context; when None, ``perform_task`` is the only lifecycle source.
         self._trials = iter(trials) if trials is not None else None
         self.policy: Policy = policy
@@ -344,9 +347,9 @@ class Harness(pimm.ControlSystem):
     ) -> None:
         """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
 
-        A resettable task's ``reset`` only arms the producer; the first observation lands a later round. The
-        recorder drains its channels the turn it opens, so the pre-reset frame and the inter-episode home
-        command drop out. The deadline is armed here and moved to that first observation once it lands.
+        ``reset`` only arms the producer; the first observation lands a later round. The recorder drains its
+        channels the turn it opens, so the pre-reset frame and the inter-episode home command drop out. The
+        deadline is armed here and moved to that first observation once it lands.
         """
         # Before anything that can raise, so an episode that fails to open still answers whoever asked for it.
         self._call = call
@@ -364,11 +367,11 @@ class Harness(pimm.ControlSystem):
         self._rollout_started = False
         # Before the reset, so the reset and the rollout's other phase spans parent to the episode span.
         self._telemetry.begin(context)
-        # Reset before opening the session: a resettable task only learns its instruction on reset (a remote
-        # env reports it then), so the session context — and the sampling it drives — must read it here.
-        if self._task is not None and self._task.reset is not None:
+        # Reset before opening the session: an env may only learn its instruction on reset (a remote env
+        # reports it then), so the session context — and the sampling it drives — must read it here.
+        if self._reset is not None:
             with telemetry.span(telemetry_keys.SPAN_RESET):
-                self._task.reset(self.context)
+                self._reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
         self._worker = _InferenceWorker(self.policy, self.context, charge_wall, clock)

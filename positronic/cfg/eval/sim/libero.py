@@ -57,13 +57,7 @@ def _libero_eval(
         proxy, camera_dict, descriptor='remote.libero.franka', static_meta=bundled_panda_model()
     )
     privileged = {'sim_state': Observation(proxy.privileged['sim_state'], None)}
-    task = Task(
-        instruction=lambda: proxy.meta['task'],
-        timeout=timeout,
-        privileged=privileged,
-        reset=proxy.reset,
-        done=proxy.done,
-    )
+    task = Task(instruction=lambda: proxy.meta['task'], timeout=timeout)
     # One scene per (suite, task) pair: an unbound ``task_id`` sweeps each suite, a pinned one runs that task
     # in every bound suite. The scene spec rides each trial's reset token, so the single task-agnostic env
     # server serves every trial.
@@ -78,7 +72,14 @@ def _libero_eval(
         for s in ([suite] if isinstance(suite, str) else suite)
         for t in ([task_id] if task_id is not None else range(_SUITE_NUM_TASKS[s]))
     ]
-    return Eval(embodiment, task, build_trials(seed, trial_count, scenes))
+    return Eval(
+        embodiment,
+        task,
+        build_trials(seed, trial_count, scenes),
+        privileged=privileged,
+        done=proxy.done,
+        reset=proxy.reset,
+    )
 
 
 # Each suite binds only its LIBERO ``suite``; an unbound ``task_id`` sweeps the whole suite, ``--eval.task_id``
