@@ -93,13 +93,11 @@ GPU_POWER_W = 'power_w'
 GPU_PROC_MEM_B = 'proc_mem_b'
 GPU_PROC_UTIL_PCT = 'proc_util_pct'
 
-# The bound provider is process-global; the anchor stack is per-context. An anchor is a long-running span
-# its owner holds open (a pass, a rollout); ``span`` parents a span opened outside any active span of the
-# bound trace to the innermost anchor, while a nested span (materialize inside env.step) still parents to
-# whatever OTel span is current within its own ``with`` block. Parenting resolves through this stack rather
-# than through OTel's ambient context, which does not survive the scheduler's generator hops between the
-# cooperative control systems sharing the loop thread. Work the loop dispatches to a thread under a copied
-# context records under the anchors that stood at its dispatch, whatever the loop pops meanwhile.
+# The bound provider is process-global; the anchor stack is per-context, so a thread dispatched under a copied
+# context keeps the anchors of its dispatch. An anchor is a long-running span its owner holds open (a pass, a
+# rollout): a span opened outside any active span of the bound trace parents to the innermost one, a nested
+# span to the current OTel span. The stack stands in for OTel's ambient context, which does not survive the
+# scheduler's generator hops.
 _provider: 'TracerProvider | None' = None
 _anchors: ContextVar[tuple[Span, ...]] = ContextVar('positronic_telemetry_anchors', default=())
 
