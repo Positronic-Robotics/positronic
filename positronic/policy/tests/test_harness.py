@@ -166,13 +166,16 @@ class ChunkPolicy(StubPolicy):
 
 
 class _FakeInferenceSession(InferenceSession):
-    """A stub ``InferenceSession`` returning a canned action, so a ``RemoteSession`` over it round-trips
-    ``RemoteSession.__call__`` — the real inference boundary that records the ``policy.infer`` span."""
+    """A stub ``InferenceSession`` returning a canned action after ``wall_sec`` of real time, so a
+    ``RemoteSession`` over it round-trips ``RemoteSession.__call__`` — the real inference boundary that records
+    the ``policy.infer`` span."""
 
-    def __init__(self, action: list[dict[str, Any]]) -> None:
+    def __init__(self, action: list[dict[str, Any]], wall_sec: float = 0.0) -> None:
         self._action = action
+        self._wall_sec = wall_sec
 
     def infer(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
+        time.sleep(self._wall_sec)
         return self._action
 
     @property
@@ -187,16 +190,19 @@ class RemoteStubPolicy(Policy):
     """A stub policy served through a real ``RemoteSession`` over a fake inference session, so its inference
     round-trips ``RemoteSession.__call__`` and records the ``policy.infer`` span independent of any wrapper."""
 
-    def __init__(self, command: roboarm.command.CommandType | None = None, target_grip: float = 0.33) -> None:
+    def __init__(
+        self, command: roboarm.command.CommandType | None = None, target_grip: float = 0.33, wall_sec: float = 0.0
+    ) -> None:
         if command is None:
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             command = CartesianPosition(pose=pose)
         self.command = command
         self.target_grip = float(target_grip)
+        self.wall_sec = wall_sec
 
     def new_session(self, context=None, now=None) -> RemoteSession:
         action = [{'robot_command': self.command, 'target_grip': self.target_grip, 'timestamp': 0.0}]
-        return RemoteSession(_FakeInferenceSession(action))
+        return RemoteSession(_FakeInferenceSession(action, self.wall_sec))
 
 
 @pytest.fixture
@@ -1479,6 +1485,37 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     assert episode.attrs[telemetry_keys.ATTR_EPISODE_INDEX] == 0
     assert episode.attrs[telemetry_keys.ATTR_EPISODE_STEPS] == len(by_name[telemetry_keys.SPAN_POLICY_INFER])
     assert episode.attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S] >= 0.0
+
+
+@pytest.mark.timeout(10.0)
+def test_an_inference_outliving_its_episode_parents_to_it(world, tmp_path):
+    """A trial whose deadline lapses mid-call ends the episode while the model is still inside it, so the
+    ``policy.infer`` span is recorded off the loop thread after the episode span closed. It still parents to
+    the episode that asked for it rather than to the pass: charging wall time is the mode that measures real
+    inference cost, so that span is the one a reader most wants attributed."""
+    harness = Harness(
+        ChunkedSchedule().wrap(RemoteStubPolicy(wall_sec=0.3)),  # the call runs well past the deadline
+        make_embodiment(simulated=True),
+        task=Task(instruction='stack', timeout=0.05, reset=lambda context: None),
+        trials=[{keys.INFERENCE_LATENCY: True}],
+    )
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    producer = ManualDriver([
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
+        (None, 0.3),
+    ])
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-outlive'), _eval_pass('run-outlive'):
+        scheduler = world.start([harness, producer, _Pacer()])
+        drive_scheduler(scheduler, steps=2000)
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episodes = [s for s in spans if s.name == telemetry_keys.SPAN_EPISODE]
+    infers = [s for s in spans if s.name == telemetry_keys.SPAN_POLICY_INFER]
+    assert len(episodes) == 1 and len(infers) == 1
+    assert infers[0].end_ns > episodes[0].end_ns  # the call did outlive the episode
+    assert infers[0].parent_id == episodes[0].span_id
 
 
 @pytest.mark.timeout(3.0)
