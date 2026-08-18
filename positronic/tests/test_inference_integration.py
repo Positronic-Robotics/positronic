@@ -206,8 +206,8 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
         control_systems=(producer,),
         simulated=True,
     )
-    task = Task(instruction='count', timeout=timeout, privileged={}, reset=producer.reset, done=producer.done)
-    return Eval(embodiment, task)
+    task = Task(instruction='count', timeout=timeout)
+    return Eval(embodiment, task, done=producer.done, reset=producer.reset)
 
 
 @pytest.mark.timeout(30.0)

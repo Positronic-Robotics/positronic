@@ -133,7 +133,7 @@ the wrapper stack around the policy; a session returning `None` means "keep exec
 trajectory".
 
 **Inference cost is a fact of the trial, owned by the harness.** A call costs the trial either the
-wall time it took or nothing: the trial context's `inference_latency` flag asks a sim for the former,
+wall time it took or nothing: the trial context's `charge_inference_time` flag asks a sim for the former,
 and a real rig pays it regardless. Only the harness reads the flag. Paying nothing means holding the
 world for the call, which holds a virtual clock still; paying wall time means letting the world run,
 though no further ahead of the call's start than wall time has. The clock the harness hands the

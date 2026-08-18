@@ -120,7 +120,7 @@ def test_a_run_cannot_be_both_here_and_there(platform, run_command):
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('local_only', [{'timing': True}, {'output_dir': '/tmp/x'}, {'inference_latency': True}])
+@pytest.mark.parametrize('local_only', [{'timing': True}, {'output_dir': '/tmp/x'}, {'charge_inference_time': True}])
 def test_a_platform_run_refuses_what_only_a_local_run_can_mean(platform, run_command, local_only: dict):
     # The platform owns its own trial sweep, output and telemetry, so silently dropping these would
     # hand back a run the caller believes they configured.

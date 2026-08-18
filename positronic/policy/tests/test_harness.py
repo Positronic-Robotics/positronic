@@ -809,9 +809,8 @@ def test_policy_first_obs_is_frame0(world):
         control_systems=(device,),
         simulated=True,
     )
-    task = Task(instruction='t', timeout=100.0, reset=device.reset)
     policy = StubPolicy()
-    harness = Harness(policy, embodiment, task=task, trials=[{}])
+    harness = Harness(policy, embodiment, task=Task(instruction='t', timeout=100.0), trials=[{}], reset=device.reset)
     wire.wire_embodiment(world, harness, embodiment, None)
 
     scheduler = world.start([harness, device])
@@ -824,7 +823,7 @@ def test_policy_first_obs_is_frame0(world):
 
 @pytest.mark.timeout(3.0)
 def test_task_done_terminates_through_wire_embodiment(world):
-    """A Task's ``done`` source reaches ``harness.done`` through ``wire_embodiment`` and ends the
+    """An eval's ``done`` source reaches ``harness.done`` through ``wire_embodiment`` and ends the
     trial, recording its payload — the production wiring path, not a direct port pairing."""
 
     class _Device(pimm.ControlSystem):
@@ -850,13 +849,12 @@ def test_task_done_terminates_through_wire_embodiment(world):
         static_meta={},
         meta_source=None,
     )
-    task = Task(instruction='t', timeout=100.0, done=device.done)
     # Termination is independent of the policy wrappers; the minimal embodiment has no
     # ``robot_state``, so run the stub policy bare.
-    harness = Harness(StubPolicy(), embodiment, task=task, trials=[{}])
+    harness = Harness(StubPolicy(), embodiment, task=Task(instruction='t', timeout=100.0), trials=[{}])
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
-    wire.wire_embodiment(world, harness, embodiment, None, done=task.done)
+    wire.wire_embodiment(world, harness, embodiment, None, done=device.done)
 
     scheduler = world.start([harness, device])
     drive_scheduler(scheduler, steps=60)
@@ -903,8 +901,8 @@ def test_trial_seed_reaches_task_reset_and_meta(world):
         seeds.append(context.get('eval.seed'))
         p['meta_em'].emit({})  # the producer publishes fresh scene meta, recorded into the episode at finalize
 
-    task = Task(instruction='stack', timeout=0.05, reset=reset)
-    harness = Harness(policy, make_embodiment(), task=task, trials=trials)
+    task = Task(instruction='stack', timeout=0.05)
+    harness = Harness(policy, make_embodiment(), task=task, trials=trials, reset=reset)
     p = _pair_all(world, harness)
 
     scheduler = world.start([harness])
@@ -945,7 +943,7 @@ def test_timeout_during_inference_drops_the_chunk(world):
         ChunkedSchedule().wrap(SlowPolicy(wall_sec=0.3)),  # the call runs well past the deadline
         make_embodiment(simulated=True),
         task=Task(instruction='test', timeout=0.05),
-        trials=[{keys.INFERENCE_LATENCY: True}],
+        trials=[{keys.CHARGE_INFERENCE_TIME: True}],
     )
     cmd_recorder = RecordingEmitter()
     grip_recorder = RecordingEmitter()
@@ -1053,7 +1051,7 @@ def test_a_producer_reusing_its_buffer_cannot_rewrite_a_pending_observation(worl
         p['grip_em'].emit(0.25)
 
     driver = ManualDriver([
-        (partial(p['perform_task'], {keys.TASK: 't', keys.INFERENCE_LATENCY: True}), 0.0),
+        (partial(p['perform_task'], {keys.TASK: 't', keys.CHARGE_INFERENCE_TIME: True}), 0.0),
         (partial(emit_frame, 1), 0.01),
         (partial(emit_frame, 9), 0.05),  # rewrites the buffer while the first call is still running
         (None, 0.4),
@@ -1139,8 +1137,8 @@ def test_task_instruction_reaches_session_context_after_reset(world):
     def reset(_context):
         scene['task'] = 'resolved-on-reset'  # the env reports its task only here
 
-    task = Task(instruction=lambda: scene['task'], timeout=0.05, reset=reset)
-    harness = Harness(policy, make_embodiment(), task=task, trials=[{}])
+    task = Task(instruction=lambda: scene['task'], timeout=0.05)
+    harness = Harness(policy, make_embodiment(), task=task, trials=[{}], reset=reset)
     _pair_all(world, harness)
 
     scheduler = world.start([harness])
@@ -1415,8 +1413,10 @@ def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(tmp_path):
     shutdown-flush ``record.io`` span parents to the episode, not the pass. Driven straight through the
     generator protocol: the yield after the queued STOP is the recorder's flush slot."""
     policy = StubPolicy()
-    task = Task(instruction='stack', timeout=10.0, reset=lambda context: None)  # never ends within the drive
-    harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
+    task = Task(instruction='stack', timeout=10.0)  # never ends within the drive
+    harness = Harness(
+        policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}], reset=lambda context: None
+    )
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
     stop = SimpleNamespace(value=False)
@@ -1459,8 +1459,10 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     ``policy.infer`` span is recorded at the remote inference boundary, so the terminal is a ``RemoteStubPolicy``
     (a real ``RemoteSession`` over a fake inference session)."""
     policy = ChunkedSchedule().wrap(RemoteStubPolicy())
-    task = Task(instruction='stack', timeout=0.05, reset=lambda context: None)
-    harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
+    task = Task(instruction='stack', timeout=0.05)
+    harness = Harness(
+        policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}], reset=lambda context: None
+    )
     p = _pair_all(world, harness)
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     # A latched observation set makes every step's inference fire (the harness reads the latest value).
@@ -1503,8 +1505,9 @@ def test_an_inference_outliving_its_episode_parents_to_it(world, tmp_path):
     harness = Harness(
         ChunkedSchedule().wrap(RemoteStubPolicy(wall_sec=0.3)),  # the call runs well past the deadline
         make_embodiment(simulated=True),
-        task=Task(instruction='stack', timeout=0.05, reset=lambda context: None),
-        trials=[{keys.INFERENCE_LATENCY: True}],
+        task=Task(instruction='stack', timeout=0.05),
+        trials=[{keys.CHARGE_INFERENCE_TIME: True}],
+        reset=lambda context: None,
     )
     p = _pair_all(world, harness)
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -1527,7 +1530,7 @@ def test_an_inference_outliving_its_episode_parents_to_it(world, tmp_path):
 
 @pytest.mark.timeout(3.0)
 def test_failed_pass_seals_open_episode_span(tmp_path):
-    """A ``task.reset`` raising after the episode span was opened must seal that span before the
+    """A ``reset`` raising after the episode span was opened must seal that span before the
     provider flushes on exit. Ending it is what exports it at all: an unended span never leaves the batch
     processor, so its finished ``reset`` child orphans (unknown parent) and the report loses that phase and
     charges the episode's whole wall to ``between_episodes``. Sealed and marked ``episode.partial`` — with its
@@ -1538,8 +1541,8 @@ def test_failed_pass_seals_open_episode_span(tmp_path):
         raise RuntimeError('reset boom')
 
     policy = StubPolicy()
-    task = Task(instruction='stack', timeout=10.0, reset=boom)
-    harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}])
+    task = Task(instruction='stack', timeout=10.0)
+    harness = Harness(policy, make_embodiment(), task=task, trials=[{'eval.trial_index': 0}], reset=boom)
     harness.ds_command._bind(RecordingEmitter())
     stop = SimpleNamespace(value=False)
     clock = _ManualClock()
@@ -1756,7 +1759,7 @@ def _run_episode(
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
-        (partial(perform_task, {keys.TASK: 't', keys.INFERENCE_LATENCY: latency}), 0.0),
+        (partial(perform_task, {keys.TASK: 't', keys.CHARGE_INFERENCE_TIME: latency}), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
         (None, run_sec),
     ])
@@ -1777,7 +1780,7 @@ def test_default_latency_pauses_the_world_for_the_call(world):
 
 @pytest.mark.timeout(20.0)
 def test_measured_latency_charges_the_calls_own_wall_duration(world):
-    """``inference_latency=True`` charges the world what the model really took, so a slow server is scored
+    """``charge_inference_time=True`` charges the world what the model really took, so a slow server is scored
     as slow — at the cost of a trace that inherits the machine's noise."""
     played = _run_episode(world, SlowPolicy(wall_sec=0.2), ChunkedSchedule(), latency=True)
 
@@ -2195,7 +2198,7 @@ def test_finishing_discards_a_call_that_is_still_in_flight(world):
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
-        (partial(perform_task, {keys.TASK: 't', keys.INFERENCE_LATENCY: True}), 0.0),
+        (partial(perform_task, {keys.TASK: 't', keys.CHARGE_INFERENCE_TIME: True}), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
         (None, 0.05),  # well inside the 1.0s the call takes
         (partial(done_em.emit, OPERATOR_DONE), 0.0),

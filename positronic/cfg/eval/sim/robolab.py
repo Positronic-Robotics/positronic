@@ -191,14 +191,11 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
         ctx.update({'eval.trial_index': i, 'eval.trial_count': len(trials)})
     return Eval(
         embodiment,
-        Task(
-            instruction=lambda: proxy.meta['task'],
-            timeout=timeout,
-            privileged={'subtask': Observation(proxy.privileged['subtask'], None)},
-            reset=proxy.reset,
-            done=proxy.done,
-        ),
+        Task(instruction=lambda: proxy.meta['task'], timeout=timeout),
         trials,
+        privileged={'subtask': Observation(proxy.privileged['subtask'], None)},
+        done=proxy.done,
+        reset=proxy.reset,
     )
 
 

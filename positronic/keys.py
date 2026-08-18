@@ -101,7 +101,7 @@ EVAL_TERMINATED = 'eval.terminated'
 EVAL_ENDED_BY = 'eval.ended_by'
 ENDED_BY_OPERATOR = 'operator'
 
-# Whether a model call charges the world clock its own wall duration. A flag: any other type is rejected
+# Whether a model call charges the world clock the time it really took. A flag: any other type is rejected
 # when the episode starts. A sim trial without it charges nothing (the world holds still per call);
-# hardware always pays wall whatever the trial asks.
-INFERENCE_LATENCY = 'inference_latency'
+# hardware always pays whatever the trial asks.
+CHARGE_INFERENCE_TIME = 'charge_inference_time'
