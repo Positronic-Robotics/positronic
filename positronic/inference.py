@@ -55,7 +55,7 @@ class KeyboardOperator(pimm.ControlSystem):
     @staticmethod
     def _report(answer: pimm.calls.Answer[dict[str, Any]]) -> None:
         """Print what the episode ended on, or why it never will."""
-        try:  # rules-allow: swallowed-error
+        try:  # rules-allow: swallowed-error — the operator is who this failure is for
             print(f'Episode ended: {answer.result()}')
         except Exception as e:
             print(f'Episode failed: {e}')
