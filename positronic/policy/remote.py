@@ -1,4 +1,5 @@
 import collections.abc as cabc
+import logging
 import time
 from typing import Any
 
@@ -13,6 +14,7 @@ from positronic.utils.serialization import encode_jpeg
 from .base import Policy, PolicyWrapper, Session
 from .recording import Recorder
 from .spec import from_spec
+from .wrappers import StopOnFault
 
 
 class RemoteSession(Session):
@@ -74,6 +76,8 @@ class _Endpoint(Policy):
     """
 
     def __init__(self, url: str, *, headers: dict[str, str] | None, infer_timeout: float):
+        # Credentials travel in ``headers``, never here, so this is safe to log.
+        self.url = url
         self._client = InferenceClient(url, headers=headers, infer_timeout=infer_timeout)
         # Filled on first contact, via a throwaway session if ``meta`` is read before any real one exists.
         self._server_meta: dict[str, Any] | None = None
@@ -140,6 +144,19 @@ class RemotePolicy(Policy):
                 f'Server declares no rig-side stack (server positronic {version}); the rig runs what the '
                 f'handshake declares and nothing else, so serve it from a pipeline that declares one'
             )
+        # The one departure from "the rig runs what the handshake declares and nothing else": an arm that
+        # faults reports its status and no q/dq/ee_pose, and a declared stack reading those by name raises
+        # on the control loop's thread, ending the run (Positronic-Robotics/internal#558). The guard goes
+        # outermost, where it answers that observation before anything declared sees it.
+        if not any(isinstance(component, StopOnFault) for component in stack._wrappers()):
+            logging.warning(
+                'Endpoint %s declares a rig-side stack with no %r, so the rig is adding one in front of it: '
+                'without it a faulted arm ends the run. The stack being run is NOT the one the handshake '
+                'declares (Positronic-Robotics/internal#558).',
+                self._endpoint.url,
+                StopOnFault.WIRE_NAME,
+            )
+            stack = StopOnFault() | stack
         return stack
 
     def _policy(self) -> Policy:
