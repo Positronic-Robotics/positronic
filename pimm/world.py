@@ -39,6 +39,8 @@ from .logging import init_child_logging
 from .shared_memory import SMCompliant
 from .utils import identity
 
+logger = logging.getLogger(__name__)
+
 T = TypeVar('T')
 Req = TypeVar('Req')
 Res = TypeVar('Res')
@@ -481,11 +483,11 @@ def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, nam
         print(f'{"=" * 60}', file=sys.stderr)
         print(traceback.format_exc(), file=sys.stderr)
         print(f'{"=" * 60}\n', file=sys.stderr)
-        logging.error(f'Error in control system {name}:\n{traceback.format_exc()}')
+        logger.error(f'Error in control system {name}:\n{traceback.format_exc()}')
     finally:
         # Whatever ended this loop — a return, a raise, an interrupt — ends the WORLD: the event is
         # the one every other control system reads, in this process and in the parent.
-        logging.info(f'Stopping background process by {name}')
+        logger.info(f'Stopping background process by {name}')
         stop_event.set()
 
 
@@ -516,22 +518,22 @@ class World:
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.entered = False
-        logging.info('Stopping background processes...')
+        logger.info('Stopping background processes...')
         self.request_stop()
 
-        logging.info(f'Waiting for {len(self.background_processes)} background processes to terminate...')
+        logger.info(f'Waiting for {len(self.background_processes)} background processes to terminate...')
         for process in self.background_processes:
             # Control systems run teardown (with-blocks in run()) after the stop signal, and some drivers may
             # need tens of seconds to park their hardware, so give them the time before resorting to SIGTERM.
             process.join(timeout=90)
             if process.is_alive():
-                logging.warning(f'Process {process.name} (pid {process.pid}) did not respond, terminating...')
+                logger.warning(f'Process {process.name} (pid {process.pid}) did not respond, terminating...')
                 process.terminate()
                 process.join(timeout=2)  # Give it a moment to terminate
                 if process.is_alive():
-                    logging.warning(f'Process {process.name} (pid {process.pid}) still alive, killing...')
+                    logger.warning(f'Process {process.name} (pid {process.pid}) still alive, killing...')
                     process.kill()
-            logging.info(f'Process {process.name} (pid {process.pid}) finished')
+            logger.info(f'Process {process.name} (pid {process.pid}) finished')
             process.close()
 
         for emitter, receivers in self._cleanup_emitters_readers:
@@ -616,7 +618,7 @@ class World:
             # pacing — a hang in virtual time, a busy-spin on a wall clock — so warn once it crosses the bound.
             stalled_rounds = 0 if pq or finished else stalled_rounds + 1
             if stalled_rounds == _STALL_WARNING_ROUNDS:
-                logging.warning(
+                logger.warning(
                     'Scheduler stalled: %d rounds resolved at one instant with every due control loop '
                     'yielding and none sleeping or finishing, so the clock is not advancing. A Yield() is '
                     'only valid when another loop in the same instant sleeps to pace it — ensure a '
@@ -890,7 +892,7 @@ class World:
                     'inside the background process or run them in the main process.'
                 ) from e
             self.background_processes.append(p)
-            logging.info(f'Started background process {name} (pid {p.pid})')
+            logger.info(f'Started background process {name} (pid {p.pid})')
 
     def local_pipe(self, maxsize: int = 1) -> tuple[SignalEmitter[T], SignalReceiver[T]]:
         """Create a queue-based communication channel within the same process.

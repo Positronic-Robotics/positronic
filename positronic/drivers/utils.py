@@ -9,6 +9,8 @@ import numpy as np
 
 import pimm
 
+logger = logging.getLogger(__name__)
+
 Req = TypeVar('Req')
 
 
@@ -164,5 +166,5 @@ def grip_setpoint(
             return _clamped(streamed)
         # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
         except ValueError as exc:
-            logging.warning(f'grip target not applied: {exc}')
+            logger.warning(f'grip target not applied: {exc}')
     return None

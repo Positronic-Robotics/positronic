@@ -21,6 +21,8 @@ with vendor_import('positronic_franka', 'Franka support', platforms=('linux',)):
     import positronic_franka._franka as pf
     from positronic_franka.desk import Desk, SafetyControllerError
 
+logger = logging.getLogger(__name__)
+
 
 def _check_error(is_error, was_error):
     return is_error, is_error and not was_error
@@ -261,17 +263,17 @@ class _Arm(DriverRun):
         """
         target = np.asarray(self._home_joints, dtype=np.float64)
         try:
-            logging.info('Parking the arm at the home pose')
+            logger.info('Parking the arm at the home pose')
             self.vendor.recover_from_errors()  # once, before the move: a reflex during the move ends the park
             deadline = self.clock.now() + self._park_timeout_s
             outcome = yield from self.await_goal(
                 target, lambda: self.clock.now() >= deadline, lambda: pimm.Sleep(self._PARK_POLL_S)
             )
             if outcome is MoveStatus.GAVE_UP:
-                logging.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
+                logger.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
         # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
         except Exception:
-            logging.exception('Parking failed, the arm stays where it stands')
+            logger.exception('Parking failed, the arm stays where it stands')
 
 
 class Robot(pimm.ControlSystem):
@@ -376,7 +378,7 @@ class Robot(pimm.ControlSystem):
         )
         robot.set_control_mode(pf.InternalImpedance([3000, 3000, 3000, 2500, 2500, 2000, 2000]))
         if self._load is not None:
-            logging.info(f'Setting load to {self._load}')
+            logger.info(f'Setting load to {self._load}')
             robot.set_load(*self._load)
         else:
             robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
@@ -387,7 +389,7 @@ class Robot(pimm.ControlSystem):
         control on exit. Hands both over to the operator when the driver does not manage Desk. When configured,
         recover a control box stuck in ``SafetyError`` by rebooting it once and retrying."""
         if self._desk_credentials is None:
-            logging.info('Desk is not managed by the driver; brakes must be open and FCI active before the run')
+            logger.info('Desk is not managed by the driver; brakes must be open and FCI active before the run')
             yield
             return
         rebooted = False
@@ -398,12 +400,12 @@ class Robot(pimm.ControlSystem):
                 except SafetyControllerError:
                     if rebooted or not self._reboot_on_safety_error:
                         raise
-                    logging.warning('Control box in SafetyError; rebooting it (unreachable ~40s) and retrying once')
+                    logger.warning('Control box in SafetyError; rebooting it (unreachable ~40s) and retrying once')
                     desk.reboot(wait=True)
                     rebooted = True
                 else:
                     if rebooted:
-                        logging.info('Control box recovered after reboot')
+                        logger.info('Control box recovered after reboot')
                     yield desk
                     return
 
@@ -443,7 +445,7 @@ class Robot(pimm.ControlSystem):
                 yield from arm.move_to(arm.home_target())
             # rules-allow: swallowed-error — an arm that will not home reads ERROR; it does not end the run
             except Exception as exc:
-                logging.error(f'Homing failed, the arm is not where the driver put it: {exc}')
+                logger.error(f'Homing failed, the arm is not where the driver put it: {exc}')
 
             in_error = False
 
@@ -453,7 +455,7 @@ class Robot(pimm.ControlSystem):
 
                 in_error, entered_error = _check_error(st.error != 0, in_error)
                 if entered_error:
-                    logging.warning(f'Robot error: {st.error_message}')
+                    logger.warning(f'Robot error: {st.error_message}')
 
                 if in_error:
                     vendor.recover_from_errors()
@@ -470,7 +472,7 @@ class Robot(pimm.ControlSystem):
                             vendor.set_target_joints(arm.target_joints(cmd))
                     # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
                     except Exception as exc:
-                        logging.warning(f'{cmd} not applied: {exc}')
+                        logger.warning(f'{cmd} not applied: {exc}')
 
                 yield arm.limiter.wait()
 

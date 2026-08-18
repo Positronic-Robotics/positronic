@@ -6,6 +6,8 @@ import tty
 
 import pimm
 
+logger = logging.getLogger(__name__)
+
 
 class KeyboardControl(pimm.ControlSystem):
     def __init__(self, quit_key: str | None = None):
@@ -16,7 +18,7 @@ class KeyboardControl(pimm.ControlSystem):
         # Check if stdin is a TTY before attempting terminal operations
         if not sys.stdin.isatty():
             print('WARNING: KeyboardControl cannot read input - stdin is not a terminal', file=sys.stderr)
-            logging.warning('KeyboardControl cannot read input - stdin is not a terminal')
+            logger.warning('KeyboardControl cannot read input - stdin is not a terminal')
             return
 
         fd = sys.stdin.fileno()

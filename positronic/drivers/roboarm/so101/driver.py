@@ -14,6 +14,8 @@ from positronic.drivers.roboarm.kinematics import Kinematics
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, add_default_frame
 from positronic.drivers.utils import DriverRun, MoveStatus, PendingMove
 
+logger = logging.getLogger(__name__)
+
 
 class SO101State(State, pimm.shared_memory.NumpySMAdapter):
     def __init__(self):
@@ -256,7 +258,7 @@ class Robot(pimm.ControlSystem):
                             arm.track(cmd)
                         # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
                         except Exception as exc:
-                            logging.warning(f'{cmd} not applied: {exc}')
+                            logger.warning(f'{cmd} not applied: {exc}')
 
                 arm.write()
                 arm.publish()

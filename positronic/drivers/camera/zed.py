@@ -12,6 +12,8 @@ from positronic.drivers.camera.device_open_lock import device_open_lock
 with vendor_import('pyzed', 'ZED camera support', platforms=('linux',)):
     import pyzed.sl as sl
 
+logger = logging.getLogger(__name__)
+
 
 class SLCamera(pimm.ControlSystem):
     def __init__(
@@ -84,7 +86,7 @@ class SLCamera(pimm.ControlSystem):
                 return
             if attempt == OPEN_ATTEMPTS:
                 raise RuntimeError(f'Failed to open camera after {OPEN_ATTEMPTS} attempts: {error_code}')
-            logging.error(f'Failed to open camera (attempt {attempt} of {OPEN_ATTEMPTS}): {error_code}')
+            logger.error(f'Failed to open camera (attempt {attempt} of {OPEN_ATTEMPTS}): {error_code}')
             yield pimm.Sleep(OPEN_RETRY_SEC)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
@@ -135,16 +137,16 @@ class SLCamera(pimm.ControlSystem):
             result = zed.grab()
             if result != SUCCESS:
                 if self.recovery_start_time is None:
-                    logging.warning('Camera lost with error code %s, starting recovery', result)
+                    logger.warning('Camera lost with error code %s, starting recovery', result)
                     self.recovery_start_time = clock.now()
                 if clock.now() - self.recovery_start_time > self.max_recovery_time_sec:
-                    logging.error(f'Recovery time exceeded {self.max_recovery_time_sec} seconds, stopping')
+                    logger.error(f'Recovery time exceeded {self.max_recovery_time_sec} seconds, stopping')
                     return
                 yield pimm.Sleep(0.01)
                 continue
 
             if self.recovery_start_time is not None:
-                logging.info(f'Camera recovered after {clock.now() - self.recovery_start_time:.2f} seconds')
+                logger.info(f'Camera recovered after {clock.now() - self.recovery_start_time:.2f} seconds')
                 self.recovery_start_time = None
 
             image = sl.Mat()

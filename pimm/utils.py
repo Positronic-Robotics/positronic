@@ -6,6 +6,8 @@ from typing import Generic, TypeVar, overload
 from pimm import Message, SignalEmitter, SignalReceiver
 from pimm.core import Clock, Command, Sleep, Yield
 
+logger = logging.getLogger(__name__)
+
 T = TypeVar('T')
 U = TypeVar('U')
 
@@ -197,7 +199,7 @@ class RateCounter:
         if self.level is None:
             print(f'{self.prefix}: {rate:.2f} Hz')
         else:
-            logging.log(self.level, '%s: %.2f Hz', self.prefix, rate)
+            logger.log(self.level, '%s: %.2f Hz', self.prefix, rate)
         self.last_report_time = time.monotonic()
         self.tick_count = 0
 
