@@ -64,10 +64,21 @@ class TestRequestedLevel:
         with pytest.raises(ValueError, match=f'{variable}=.EROR.'):
             configure_process_logging()
 
+    def test_a_number_this_process_cannot_name_is_a_level(self, monkeypatch):
+        """The boundary against the refusal above: an unnamed number is what a parent's custom level
+        arrives as, so refusing it would end a World over configuration that is entirely valid."""
+        monkeypatch.delenv(LOG_LEVEL_ENV, raising=False)
+        monkeypatch.setenv(RESOLVED_LOG_LEVEL_ENV, '15')
+        assert 15 not in logging.getLevelNamesMapping().values(), 'pick a number this process cannot name'
+
+        configure_process_logging()
+
+        assert logging.root.level == 15
+
     def test_the_resolved_level_outranks_the_operators_own(self, monkeypatch):
         """`init_logging` resolved its level having already read `LOG_LEVEL`, so it is the informed one."""
         monkeypatch.setenv(LOG_LEVEL_ENV, 'DEBUG')
-        monkeypatch.setenv(RESOLVED_LOG_LEVEL_ENV, 'ERROR')
+        monkeypatch.setenv(RESOLVED_LOG_LEVEL_ENV, str(logging.ERROR))
 
         configure_process_logging()
 

@@ -8,12 +8,21 @@ from pimm.logging import LOG_LEVEL_ENV, RESOLVED_LOG_LEVEL_ENV
 from positronic.utils.logging import init_logging
 
 CHILD_LINE = 'init-logging-child-line'
+# Between DEBUG and INFO, so a child at this threshold emits `custom_level_loop`'s line and a child
+# at INFO does not. The name is registered by the test that wants it, never at import.
+CUSTOM_LEVEL, CUSTOM_LEVEL_NAME = 15, 'PIMMTRACE'
 
 
 # Module scope because `start_in_subprocess` pickles the loop.
 def logging_loop(stop_reader, clock):
     """A control loop logging one line at INFO, then ending."""
     logging.info(CHILD_LINE)
+    yield Sleep(0.001)
+
+
+def custom_level_loop(stop_reader, clock):
+    """A control loop logging one line at a level whose name only the parent registered."""
+    logging.log(CUSTOM_LEVEL, CHILD_LINE)
     yield Sleep(0.001)
 
 
@@ -32,9 +41,9 @@ def _clean_environment_and_root(monkeypatch):
     logging.root.setLevel(level)
 
 
-def _stderr_of_a_logging_child(capfd) -> str:
+def _stderr_of_a_logging_child(capfd, loop=logging_loop) -> str:
     with World() as world:
-        world.start_in_subprocess(logging_loop)
+        world.start_in_subprocess(loop)
         process = world.background_processes[0]
         process.join(timeout=30)
         assert not process.is_alive(), 'the logging child never exited'
@@ -60,10 +69,39 @@ class TestASecondCallCanStillChangeTheThreshold:
         assert CHILD_LINE not in err, err
         assert STOP_LINE not in err, err
 
-    def test_the_operators_own_level_still_outranks_the_argument(self, monkeypatch):
-        """Unchanged precedence: `LOG_LEVEL` set by hand beats what a program asks for."""
+    def test_the_operators_own_level_outranks_the_argument(self, monkeypatch):
+        """`LOG_LEVEL` set by hand beats what a program asks for."""
         monkeypatch.setenv(LOG_LEVEL_ENV, 'DEBUG')
 
         init_logging('ERROR')
 
         assert logging.root.level == logging.DEBUG
+
+
+class TestALevelTheChildCannotName:
+    """The threshold reaches a child as a number, so it does not depend on the child's own registry."""
+
+    def test_a_level_registered_only_in_the_parent_still_starts_the_child(self, capfd):
+        # `addLevelName` is process-local and a spawn starts an empty registry, so the child cannot
+        # resolve this name. Carried as one, it would raise in `configure_process_logging` and end the
+        # World before the control loop ran.
+        logging.addLevelName(CUSTOM_LEVEL, CUSTOM_LEVEL_NAME)
+
+        init_logging(CUSTOM_LEVEL_NAME)
+        err = _stderr_of_a_logging_child(capfd, custom_level_loop)
+
+        assert CHILD_LINE in err, err
+        assert STOP_LINE.replace(logging_loop.__name__, custom_level_loop.__name__) in err, err
+
+    def test_a_level_with_no_name_at_all_still_starts_the_child(self, capfd):
+        """The same path without `addLevelName`: a number neither process can name is still a level."""
+        init_logging(CUSTOM_LEVEL)
+
+        err = _stderr_of_a_logging_child(capfd, custom_level_loop)
+
+        assert CHILD_LINE in err, err
+
+    def test_a_name_that_is_not_a_level_is_still_refused(self):
+        """The boundary: carrying numbers must not stop the operator's own typo being rejected."""
+        with pytest.raises(ValueError, match='EROR'):
+            init_logging('EROR')

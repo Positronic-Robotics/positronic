@@ -16,9 +16,12 @@ LOG_DATEFMT = '%H:%M:%S'
 # The operator's own input, read and never written: a resolved level stored here would be the next
 # `init_logging` call's own input, so a later `init_logging('ERROR')` could not change the threshold.
 LOG_LEVEL_ENV = 'LOG_LEVEL'
-# The level a parent resolved, for spawned children, which carry no logging configuration of their
-# own. Unset means nothing configured a threshold, and a child then logs at INFO rather than falling
-# silent — an entry point is what asks for a threshold and a spawned control system has none.
+# The level a parent resolved, as a NUMBER, for spawned children, which carry no logging
+# configuration of their own. A number because a name means whatever the reading process's registry
+# says it means, and a spawn starts an empty one: a level an entry point registered with
+# `addLevelName` names nothing in the child. Unset means nothing configured a threshold, and a child
+# then logs at INFO rather than falling silent — an entry point asks for a threshold, a control
+# system has none.
 RESOLVED_LOG_LEVEL_ENV = 'PIMM_RESOLVED_LOG_LEVEL'
 
 # Third-party loggers the child's root-level INFO would otherwise reach too. Each logs per connection,
@@ -35,13 +38,29 @@ _NOISY_LIBRARY_LOGGERS = (
 )
 
 
-def _requested_level() -> tuple[str, str]:
-    """The level name to configure with, and the variable that named it."""
-    for variable in (RESOLVED_LOG_LEVEL_ENV, LOG_LEVEL_ENV):
-        value = os.getenv(variable)
-        if value:
-            return variable, value.upper()
-    return RESOLVED_LOG_LEVEL_ENV, 'INFO'
+def level_number(name: str, source: str) -> int:
+    """The number `name` stands for in this process, raising when it names no level.
+
+    `source` is what carried the name, and naming it is most of the error's value: a threshold that
+    quietly became something else reads as working configuration.
+    """
+    levels = logging.getLevelNamesMapping()
+    if name.upper() not in levels:
+        raise ValueError(f'{source}={name!r} is not a logging level (one of {", ".join(sorted(levels))})')
+    return levels[name.upper()]
+
+
+def _requested_level() -> int:
+    """The threshold: the level a parent resolved, else the operator's own, else INFO."""
+    resolved = os.getenv(RESOLVED_LOG_LEVEL_ENV)
+    if resolved:
+        # Ours to write and ours to read, so a value that is not a number is a broken handoff rather
+        # than an operator's typo. It raises either way; the message says which.
+        if not resolved.lstrip('-').isdigit():
+            raise ValueError(f'{RESOLVED_LOG_LEVEL_ENV}={resolved!r} is not a numeric logging level')
+        return int(resolved)
+    name = os.getenv(LOG_LEVEL_ENV)
+    return level_number(name, LOG_LEVEL_ENV) if name else logging.INFO
 
 
 def configure_process_logging() -> None:
@@ -52,14 +71,10 @@ def configure_process_logging() -> None:
     operator's own, so a requested suppression reaches a control system rather than stopping at the
     parent; the noisy libraries are pinned no lower than WARNING.
 
-    Raises `ValueError` on a value that is not a level, which would otherwise configure some other
+    Raises `ValueError` on a value that names no level, which would otherwise configure some other
     threshold and read as working configuration.
     """
-    variable, name = _requested_level()
-    levels = logging.getLevelNamesMapping()
-    if name not in levels:
-        raise ValueError(f'{variable}={name!r} is not a logging level (one of {", ".join(sorted(levels))})')
-    level = levels[name]
+    level = _requested_level()
     logging.basicConfig(level=level, format=LOG_FORMAT, datefmt=LOG_DATEFMT, force=True)
     for logger_name in _NOISY_LIBRARY_LOGGERS:
         logging.getLogger(logger_name).setLevel(max(level, logging.WARNING))

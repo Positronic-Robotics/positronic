@@ -465,8 +465,7 @@ class _CallAnsweringLoop:
 
 def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str):
     try:
-        # Inside the try: a bad level raises here, and the World still has to end rather than leave
-        # the parent waiting out its 90s join on a process that died before it could set the event.
+        # Inside the try: a raise here must still end the World, not strand the parent in its join.
         configure_process_logging()
         for command in run_func(EventReceiver(stop_event, clock), clock):
             match command:
