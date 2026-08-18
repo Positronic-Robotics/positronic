@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 
 from pimm.core import Clock, ControlSystem, ControlSystemReceiver, Message, SignalEmitter, SignalReceiver
-from pimm.utils import MapSignalEmitter, MapSignalReceiver, RateLimiter
+from pimm.utils import MapSignalEmitter, MapSignalReceiver, RateLimiter, read_updated, value_updated
 
 
 class TestMapSignalReceiver:
@@ -425,3 +425,54 @@ class TestRateLimiter:
         for i in range(1, len(waits)):
             assert waits[i] > 0, f'Tick {i} returned 0 — would cause pairing'
             assert abs(waits[i] - 0.008) < 1e-10, f'Expected ~8ms wait, got {waits[i] * 1000:.1f}ms'
+
+
+class TestReadUpdated:
+    """Test the read_updated helper."""
+
+    def test_returns_the_message_when_it_was_just_delivered(self):
+        receiver = Mock(spec=SignalReceiver)
+        receiver.read.return_value = Message(data='k', ts=7)
+
+        assert read_updated(receiver) == Message(data='k', ts=7)
+
+    def test_returns_none_when_the_receiver_only_has_a_latched_value(self):
+        receiver = Mock(spec=SignalReceiver)
+        receiver.read.return_value = Message(data='k', ts=7, updated=False)
+
+        assert read_updated(receiver) is None
+
+    def test_returns_none_when_the_receiver_has_never_seen_a_message(self):
+        receiver = Mock(spec=SignalReceiver)
+        receiver.read.return_value = None
+
+        assert read_updated(receiver) is None
+
+    def test_consumes_the_read_so_one_message_is_returned_once(self):
+        receiver = Mock(spec=SignalReceiver)
+        receiver.read.side_effect = [Message(data='k', ts=7), Message(data='k', ts=7, updated=False)]
+
+        assert read_updated(receiver) == Message(data='k', ts=7)
+        assert read_updated(receiver) is None
+
+
+class TestValueUpdated:
+    """Test the value_updated helper."""
+
+    def test_returns_the_value_when_it_was_just_delivered(self):
+        receiver = Mock(spec=SignalReceiver)
+        receiver.read.return_value = Message(data='k', ts=7)
+
+        assert value_updated(receiver) == 'k'
+
+    def test_returns_none_when_the_receiver_only_has_a_latched_value(self):
+        receiver = Mock(spec=SignalReceiver)
+        receiver.read.return_value = Message(data='k', ts=7, updated=False)
+
+        assert value_updated(receiver) is None
+
+    def test_a_delivered_none_reads_the_same_as_nothing_delivered(self):
+        receiver = Mock(spec=SignalReceiver)
+        receiver.read.return_value = Message(data=None, ts=7)
+
+        assert value_updated(receiver) is None

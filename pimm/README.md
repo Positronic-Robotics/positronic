@@ -114,6 +114,9 @@ that logic lives in a dedicated control system such as `positronic.dataset.ds_wr
 Signals also expose freshness straight on the payload: every `Message` has an
 `updated` flag that is `True` only when the value changed since the previous read.
 Control loops can gate their work on that bit without extra wrappers.
+`pimm.read_updated(receiver)` hands back the message only when it is fresh and
+`None` otherwise; `pimm.value_updated(receiver)` hands back its value the same way,
+which reads a delivered `None` as nothing delivered.
 
 `ControlSystemReceiver` accepts a `default=` parameter to supply safe defaults
 until real data arrives. When a receiver has no value yet, it returns a message

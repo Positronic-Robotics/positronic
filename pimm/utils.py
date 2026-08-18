@@ -14,6 +14,21 @@ def identity(x):
     return x
 
 
+def read_updated(receiver: SignalReceiver[T]) -> Message[T] | None:
+    """The receiver's message if it was delivered since the last read, else None."""
+    msg = receiver.read()
+    return msg if msg is not None and msg.updated else None
+
+
+def value_updated(receiver: SignalReceiver[T]) -> T | None:
+    """The receiver's value if it was delivered since the last read, else None.
+
+    A delivered ``None`` reads as nothing delivered; ``read_updated`` tells the two apart.
+    """
+    msg = read_updated(receiver)
+    return msg.data if msg is not None else None
+
+
 class MapSignalReceiver(SignalReceiver[U], Generic[T, U]):
     """Transform and filter signal data on read.
 
