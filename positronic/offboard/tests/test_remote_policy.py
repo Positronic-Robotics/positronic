@@ -9,7 +9,7 @@ from websockets.exceptions import InvalidStatus
 from websockets.http11 import Response
 
 from positronic import keys, telemetry, telemetry_keys
-from positronic.drivers.roboarm import command
+from positronic.drivers.roboarm import RobotStatus, command
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, _ConnectRetries
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
@@ -401,6 +401,30 @@ def test_unknown_declared_entry_fails_before_motion():
     policy, _ = _mock_remote_policy({'local_stack': {'name': 'run_arbitrary_code'}, keys.POSITRONIC_VERSION: '9.9.9'})
     with pytest.raises(ValueError, match='9.9.9'):
         policy.new_session()
+
+
+def test_a_declared_stack_without_the_fault_guard_is_given_one():
+    """A faulted arm reports its status and no pose, which a declared stack reading poses by name cannot
+    answer. The rig adds ``stop_on_fault`` outside such a stack, so the observation is answered rather
+    than raised on (Positronic-Robotics/internal#558)."""
+    policy, _ = _mock_remote_policy({
+        'local_stack': {
+            'seq': [
+                {'name': 'temporal_stack', 'args': {'keys': [keys.EE_POSE], 'offsets_sec': [0.0]}},
+                {'name': 'chunked_schedule'},
+            ]
+        }
+    })
+    session = policy.new_session(now=lambda: 0.0)
+    assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: RobotStatus.ERROR}) == []
+
+
+def test_a_declared_fault_guard_is_built_exactly_as_declared():
+    """A stack that declares the guard itself is built as declared — same wrappers, same order — so the
+    rig adds nothing and the declaration keeps deciding where the guard sits."""
+    declared = {'seq': [{'name': 'stop_on_fault'}, {'name': 'chunked_schedule'}]}
+    policy, _ = _mock_remote_policy({'local_stack': declared})
+    assert policy._resolve_stack().to_spec() == declared
 
 
 def test_compression_follows_the_server_declaration():
