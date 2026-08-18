@@ -1,8 +1,8 @@
 """How a pimm process configures logging — the parent's format, and a spawned child's own setup.
 
-A spawned control system runs no entry point, so nothing else configures it; `init_child_logging`
-is what gives it a threshold and the shared format. The parent's own configuration is
-`positronic.utils.logging`, which reads its format from here.
+A spawned control system runs no entry point, so nothing else configures it;
+`configure_process_logging` is what gives it a threshold and the shared format. The parent's own
+configuration is `positronic.utils.logging`, which reads its format from here.
 """
 
 import logging
@@ -13,9 +13,13 @@ import os
 LOG_FORMAT = '%(asctime)s.%(msecs)03d [%(levelname)s] (%(filename)s:%(lineno)s) %(message)-80s'
 LOG_DATEFMT = '%H:%M:%S'
 
-# The threshold's one carrier between a parent and its spawned children: spawn passes no logging
-# configuration, so the parent writes the level it resolved here and a child reads it back.
+# The operator's own input, read and never written: a resolved level stored here would be the next
+# `init_logging` call's own input, so a later `init_logging('ERROR')` could not change the threshold.
 LOG_LEVEL_ENV = 'LOG_LEVEL'
+# The level a parent resolved, for spawned children, which carry no logging configuration of their
+# own. Unset means nothing configured a threshold, and a child then logs at INFO rather than falling
+# silent — an entry point is what asks for a threshold and a spawned control system has none.
+RESOLVED_LOG_LEVEL_ENV = 'PIMM_RESOLVED_LOG_LEVEL'
 
 # Third-party loggers the child's root-level INFO would otherwise reach too. Each logs per connection,
 # request or retry rather than per event, so pinning them keeps the level change ours.
@@ -31,16 +35,31 @@ _NOISY_LIBRARY_LOGGERS = (
 )
 
 
-def init_child_logging() -> None:
-    """Configure a spawned child's own logging from `LOG_LEVEL`, defaulting to INFO.
+def _requested_level() -> tuple[str, str]:
+    """The level name to configure with, and the variable that named it."""
+    for variable in (RESOLVED_LOG_LEVEL_ENV, LOG_LEVEL_ENV):
+        value = os.getenv(variable)
+        if value:
+            return variable, value.upper()
+    return RESOLVED_LOG_LEVEL_ENV, 'INFO'
 
-    A spawned child runs no entry point, so nothing else configures it and its root logger would
-    otherwise sit at the stdlib default, dropping every line a control system emits. `LOG_LEVEL` is
-    what the parent resolves its own threshold from (`positronic.utils.logging.init_logging` writes
-    the level it resolved back into the environment), so a suppression reaches a control system
-    rather than stopping at the parent. The noisy libraries are pinned no lower than WARNING.
+
+def configure_process_logging() -> None:
+    """Configure this process's root logger and its library pins from the environment.
+
+    A process nothing else configures — a spawned control system — would otherwise sit at the stdlib
+    default and drop every line it emits. The threshold is the level a parent resolved, else the
+    operator's own, so a requested suppression reaches a control system rather than stopping at the
+    parent; the noisy libraries are pinned no lower than WARNING.
+
+    Raises `ValueError` on a value that is not a level, which would otherwise configure some other
+    threshold and read as working configuration.
     """
-    level = logging.getLevelNamesMapping().get(os.getenv(LOG_LEVEL_ENV, 'INFO').upper(), logging.INFO)
+    variable, name = _requested_level()
+    levels = logging.getLevelNamesMapping()
+    if name not in levels:
+        raise ValueError(f'{variable}={name!r} is not a logging level (one of {", ".join(sorted(levels))})')
+    level = levels[name]
     logging.basicConfig(level=level, format=LOG_FORMAT, datefmt=LOG_DATEFMT, force=True)
-    for name in _NOISY_LIBRARY_LOGGERS:
-        logging.getLogger(name).setLevel(max(level, logging.WARNING))
+    for logger_name in _NOISY_LIBRARY_LOGGERS:
+        logging.getLogger(logger_name).setLevel(max(level, logging.WARNING))

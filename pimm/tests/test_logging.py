@@ -1,7 +1,10 @@
 import contextlib
 import logging
 
+import pytest
+
 import pimm
+from pimm.logging import LOG_LEVEL_ENV, RESOLVED_LOG_LEVEL_ENV, configure_process_logging
 from pimm.utils import RateCounter
 
 # What the two components below emit at INFO, and what the assertions look for.
@@ -39,12 +42,49 @@ def _world_lines(caplog) -> list[str]:
     return [record.getMessage() for record in caplog.records if record.getMessage() == WORLD_LINE]
 
 
-class TestPerComponentLevels:
-    """Each module logs under its own name, so an operator can move one component's threshold alone.
+class TestRequestedLevel:
+    """What `configure_process_logging` reads, and what it refuses."""
 
-    Under the root logger there was one threshold for everything: the first two assertions below could
-    not both hold, whichever way it was set.
-    """
+    @pytest.fixture(autouse=True)
+    def _restore_root(self):
+        """`configure_process_logging` reconfigures the root logger, which every later test shares."""
+        level, handlers = logging.root.level, logging.root.handlers[:]
+        yield
+        logging.root.handlers[:] = handlers
+        logging.root.setLevel(level)
+
+    @pytest.mark.parametrize('variable', [LOG_LEVEL_ENV, RESOLVED_LOG_LEVEL_ENV])
+    def test_a_value_that_is_not_a_level_is_refused(self, monkeypatch, variable):
+        monkeypatch.delenv(LOG_LEVEL_ENV, raising=False)
+        monkeypatch.delenv(RESOLVED_LOG_LEVEL_ENV, raising=False)
+        monkeypatch.setenv(variable, 'EROR')
+
+        # Naming the variable is the point: a typo silently read as INFO looks like working
+        # configuration, and the parent would have raised on the same value.
+        with pytest.raises(ValueError, match=f'{variable}=.EROR.'):
+            configure_process_logging()
+
+    def test_the_resolved_level_outranks_the_operators_own(self, monkeypatch):
+        """`init_logging` resolved its level having already read `LOG_LEVEL`, so it is the informed one."""
+        monkeypatch.setenv(LOG_LEVEL_ENV, 'DEBUG')
+        monkeypatch.setenv(RESOLVED_LOG_LEVEL_ENV, 'ERROR')
+
+        configure_process_logging()
+
+        assert logging.root.level == logging.ERROR
+
+    def test_an_unconfigured_parent_leaves_this_process_at_info(self, monkeypatch):
+        """Neither variable set means nothing asked for a threshold, which must not read as silence."""
+        monkeypatch.delenv(LOG_LEVEL_ENV, raising=False)
+        monkeypatch.delenv(RESOLVED_LOG_LEVEL_ENV, raising=False)
+
+        configure_process_logging()
+
+        assert logging.root.level == logging.INFO
+
+
+class TestPerComponentLevels:
+    """Each module logs under its own name, so a threshold set on one component moves only that one."""
 
     def test_raising_one_components_level_silences_that_component(self, caplog):
         caplog.set_level(logging.INFO)

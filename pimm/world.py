@@ -35,7 +35,7 @@ from .core import (
     Sleep,
     Yield,
 )
-from .logging import init_child_logging
+from .logging import configure_process_logging
 from .shared_memory import SMCompliant
 from .utils import identity
 
@@ -464,8 +464,10 @@ class _CallAnsweringLoop:
 
 
 def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str):
-    init_child_logging()
     try:
+        # Inside the try: a bad level raises here, and the World still has to end rather than leave
+        # the parent waiting out its 90s join on a process that died before it could set the event.
+        configure_process_logging()
         for command in run_func(EventReceiver(stop_event, clock), clock):
             match command:
                 case Sleep(seconds):
