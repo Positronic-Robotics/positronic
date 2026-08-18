@@ -32,10 +32,8 @@ ROBOT_STATE = 'robot_state'
 JOINTS = f'{ROBOT_STATE}.q'
 JOINT_VEL = f'{ROBOT_STATE}.dq'
 EE_POSE = f'{ROBOT_STATE}.ee_pose'
-# The arm's ``RobotStatus``, on every sample it produces. An arm that is faulted or resetting has no pose to
-# give, so the rest of ``ROBOT_STATE`` is absent from that sample and the status is all of it there is. The
-# suffix is named on its own because a consumer picks the entry out by it on a rig whose arms are
-# ``robot_state.{side}``.
+# The arm's ``RobotStatus``. The suffix is named on its own because a consumer picks the entry out by it on a
+# rig whose arms are ``robot_state.{side}``.
 STATUS_SUFFIX = '.status'
 ROBOT_STATUS = f'{ROBOT_STATE}{STATUS_SUFFIX}'
 GRIP = 'grip'
@@ -103,7 +101,7 @@ EVAL_TERMINATED = 'eval.terminated'
 EVAL_ENDED_BY = 'eval.ended_by'
 ENDED_BY_OPERATOR = 'operator'
 
-# Whether a model call charges the world clock its own wall duration. A flag: any other type is rejected
+# Whether a model call charges the world clock the time it really took. A flag: any other type is rejected
 # when the episode starts. A sim trial without it charges nothing (the world holds still per call);
-# hardware always pays wall whatever the trial asks.
-INFERENCE_LATENCY = 'inference_latency'
+# hardware always pays whatever the trial asks.
+CHARGE_INFERENCE_TIME = 'charge_inference_time'

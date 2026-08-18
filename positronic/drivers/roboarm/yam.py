@@ -232,7 +232,7 @@ class Robot(pimm.ControlSystem):
 
                 arm.command_joint_pos(np.append(q_target, 1.0 - grip_target))
 
-                robot_state.encode(q, obs['joint_vel'], self._base_pose * kin.fk(q))
+                self._encode_state(robot_state, kin, obs)
                 self.state.emit(robot_state)
                 self.grip.emit(1.0 - float(obs['gripper_pos'][0]))
                 yield limiter.wait()
@@ -240,12 +240,16 @@ class Robot(pimm.ControlSystem):
             arm.zero_torque_mode()
             arm.close()
 
+    def _encode_state(self, robot_state: YamState, kin: _Kinematics, obs) -> None:
+        q = obs['joint_pos']
+        robot_state.encode(q, obs['joint_vel'], self._base_pose * kin.fk(q))
+
     def _reset(self, arm, kin: _Kinematics, robot_state: YamState) -> np.ndarray:
-        robot_state._start_reset()
+        self._encode_state(robot_state, kin, arm.get_observations())
+        robot_state._start_reset()  # ``encode`` clears RESETTING; the arm has not arrived
         self.state.emit(robot_state)
         arm.move_joints(np.append(self._home_joints, 1.0), time_interval_s=2.0)  # chain gripper 1.0 = open
-        obs = arm.get_observations()
-        robot_state.encode(obs['joint_pos'], obs['joint_vel'], self._base_pose * kin.fk(obs['joint_pos']))
+        self._encode_state(robot_state, kin, arm.get_observations())
         self.state.emit(robot_state)
         return self._home_joints.copy()
 

@@ -118,13 +118,7 @@ def _molmo_eval(
     )
     # The env's full MuJoCo state is recorded as privileged ground truth, never fed to the policy.
     privileged = {mapping.OBS_SIM_STATE: Observation(proxy.privileged[mapping.OBS_SIM_STATE], None)}
-    task = Task(
-        instruction=lambda: proxy.meta[mapping.META_TASK],
-        timeout=timeout,
-        privileged=privileged,
-        reset=proxy.reset,
-        done=proxy.done,
-    )
+    task = Task(instruction=lambda: proxy.meta[mapping.META_TASK], timeout=timeout)
     # Benchmark episodes are exact-pose deterministic and carry their own seed. An unset ``seed`` leaves
     # ``eval.seed`` off the trial, so the env falls back to the episode's spec seed (reproducing the benchmark);
     # an explicit ``seed`` overrides it, sweeping ``seed .. seed + trial_count - 1``. (``build_trials`` injects a
@@ -136,7 +130,7 @@ def _molmo_eval(
     ]
     for j, ctx in enumerate(trials):
         ctx.update({EVAL_TRIAL_INDEX: j, EVAL_TRIAL_COUNT: len(trials)})
-    return Eval(embodiment, task, trials)
+    return Eval(embodiment, task, trials, privileged=privileged, reset=proxy.reset, done=proxy.done)
 
 
 # The whole benchmark in one run (every episode in ``--eval.benchmark_dir``'s benchmark.json).

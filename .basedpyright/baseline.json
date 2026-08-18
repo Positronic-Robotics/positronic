@@ -4190,14 +4190,6 @@
             {
                 "code": "reportReturnType",
                 "range": {
-                    "startColumn": 26,
-                    "endColumn": 38,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportReturnType",
-                "range": {
                     "startColumn": 18,
                     "endColumn": 30,
                     "lineCount": 1

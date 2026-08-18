@@ -79,7 +79,7 @@ def wire_embodiment(
 
     Connects device observation sources -> ``harness.observations`` and
     ``harness.commands`` -> device receivers, and records observations, command
-    chunks, and the task's privileged ground-truth into the dataset. The task's ``done``
+    chunks, and the eval's privileged ground-truth into the dataset. The ``done``
     terminating signal, when present, is connected to ``harness.done``. GUI camera wiring
     stays with the caller — it is a presentation concern, not part of the embodiment contract.
     """

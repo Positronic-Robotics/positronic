@@ -1,7 +1,7 @@
 """``RemoteEnvControlSystem``: a remote env server driven as one pimm control system.
 
 A dumb translator: it owns the pimm ports (command receivers, observation + privileged emitters,
-``robot_meta``, the Task's ``done``), the trial lifecycle, and the lifetime of the ``serve`` server it talks
+``robot_meta``, the eval's ``done``), the trial lifecycle, and the lifetime of the ``serve`` server it talks
 to, but no command logic. Each control period it hands the latest command messages to the ``EnvAdapter``,
 round-trips the raw action it returns over the wire, and re-emits the canonical signals the adapter maps
 back — so only raw arrays cross the boundary and the World's virtual clock advances by the env's

@@ -3,7 +3,7 @@ import contextvars
 import logging
 import time
 from collections import deque
-from collections.abc import Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
@@ -214,11 +214,14 @@ class Harness(pimm.ControlSystem):
         *,
         task: Task | None = None,
         trials: Iterable[dict[str, Any]] | None = None,
+        reset: Callable[[dict[str, Any]], None] | None = None,
         static_meta: dict[str, Any] | None = None,
     ):
         assert trials is None or task is not None, 'A trial plan needs a task: its timeout bounds each trial'
         self._embodiment = embodiment
         self._task = task
+        # Re-randomizes the scene from the trial's context; ``None`` where reset is physical/human.
+        self._reset = reset
         # Each entry is a task context; when None, ``perform_task`` is the only lifecycle source.
         self._trials = iter(trials) if trials is not None else None
         self.policy: Policy = policy
@@ -344,9 +347,9 @@ class Harness(pimm.ControlSystem):
     ) -> None:
         """Open a fresh episode: reset the scene, fix the task context and session, and open the recording.
 
-        A resettable task's ``reset`` only arms the producer; the first observation lands a later round. The
-        recorder drains its channels the turn it opens, so the pre-reset frame and the inter-episode home
-        command drop out. The deadline is armed here and moved to that first observation once it lands.
+        ``reset`` only arms the producer; the first observation lands a later round. The recorder drains its
+        channels the turn it opens, so the pre-reset frame and the inter-episode home command drop out. The
+        deadline is armed here and moved to that first observation once it lands.
         """
         # Before anything that can raise, so an episode that fails to open still answers whoever asked for it.
         self._call = call
@@ -354,21 +357,21 @@ class Harness(pimm.ControlSystem):
         # rather than overhead the timing reducer attributes to this one.
         self._reap_worker()
         self.context = context
-        latency = self.context.get(keys.INFERENCE_LATENCY, False)
-        if not isinstance(latency, bool):
-            raise ValueError(f'{keys.INFERENCE_LATENCY} is a flag, got {latency!r}')
+        charge_inference_time = self.context.get(keys.CHARGE_INFERENCE_TIME, False)
+        if not isinstance(charge_inference_time, bool):
+            raise ValueError(f'{keys.CHARGE_INFERENCE_TIME} is a flag, got {charge_inference_time!r}')
         # A real rig pays wall time whatever the trial asks: the knob is sim-only, and the eval CLI writes it
         # into every trial.
-        charge_wall = latency or not self._embodiment.simulated
+        charge_wall = charge_inference_time or not self._embodiment.simulated
         self._awaiting_obs = set(self._embodiment.observations)
         self._rollout_started = False
         # Before the reset, so the reset and the rollout's other phase spans parent to the episode span.
         self._telemetry.begin(context)
-        # Reset before opening the session: a resettable task only learns its instruction on reset (a remote
-        # env reports it then), so the session context — and the sampling it drives — must read it here.
-        if self._task is not None and self._task.reset is not None:
+        # Reset before opening the session: an env may only learn its instruction on reset (a remote env
+        # reports it then), so the session context — and the sampling it drives — must read it here.
+        if self._reset is not None:
             with telemetry.span(telemetry_keys.SPAN_RESET):
-                self._task.reset(self.context)
+                self._reset(self.context)
         if self._task is not None:
             self.context = {**self.context, keys.TASK: self._task.instruction}
         self._worker = _InferenceWorker(self.policy, self.context, charge_wall, clock)
@@ -410,9 +413,7 @@ class Harness(pimm.ControlSystem):
         """Read every observation channel and assemble the policy input dict.
 
         Raises ``NoValueException`` if any channel has no value yet, and returns ``None`` while a channel
-        still holds a pre-reset value, rather than feed a stale obs. What a device reports is otherwise
-        passed on as read: a device with nothing to say this round — a faulted or resetting arm, which
-        reports its status and no pose — is for the policy stack to answer, not the harness.
+        still holds a pre-reset value, rather than feed a stale obs.
         """
         # Against the live model, not the one known at episode start: a remote env publishes its ``robot_meta``
         # a turn after the reset that produced it, so at episode start there is no model to check.

@@ -229,7 +229,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
         script = [
             (partial(perform_task, {keys.TASK: 'golden'}), 0.0),
             (None, 1.5),  # several reactive inference + chunk/horizon cycles
-            (robot.inject_error, 0.0),  # one-shot error: that frame is dropped, then inference resumes
+            (robot.inject_error, 0.0),  # one-shot error: StopOnFault stops the arm for that frame
             (None, 0.5),
             (None, 1.5),  # more cycles after recovery
             (partial(done_em.emit, {keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR}), 0.0),
