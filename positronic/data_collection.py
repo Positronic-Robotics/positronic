@@ -3,6 +3,7 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import nullcontext
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
@@ -123,10 +124,11 @@ class DataCollectionController(pimm.ControlSystem):
         self.sound = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
-        start_wav_path = 'positronic/assets/sounds/recording-has-started.wav'
-        end_wav_path = 'positronic/assets/sounds/recording-has-stopped.wav'
-        abort_wav_path = 'positronic/assets/sounds/recording-has-been-aborted.wav'
-        error_wav_path = 'positronic/assets/sounds/error-occurred.wav'
+        sounds = Path(package_assets_path('assets/sounds'))
+        start_wav_path = sounds / 'recording-has-started.wav'
+        end_wav_path = sounds / 'recording-has-stopped.wav'
+        abort_wav_path = sounds / 'recording-has-been-aborted.wav'
+        error_wav_path = sounds / 'error-occurred.wav'
 
         tracker = _Tracker(self.operator_position)
         button_handler = ButtonHandler()
