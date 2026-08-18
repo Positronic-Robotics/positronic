@@ -105,6 +105,14 @@ class Task:
         return self._instruction()
 
 
+# TODO: the attended and the unattended run collapse into one path.
+# Roadmap:
+# [ ] ``privileged``, ``done`` and ``reset`` are per-run: they move to ``Eval``.
+# [ ] ``trials`` becomes ``list[Task]``, one per trial; a ``Task`` carries what ``reset`` is called with.
+# [ ] The Harness takes the list and who advances it — a plan or a call.
+# [ ] One runner builds the world for both.
+# [ ] Split the reset token from the policy input: the instruction is all a trial gives the policy.
+# [ ] ``inference_latency`` is a ``Task`` field, not a context key.
 @dataclass
 class Eval:
     """An eval = embodiment + task + the trial sweep, produced by a single config.
