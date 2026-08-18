@@ -390,9 +390,11 @@ class Harness(pimm.ControlSystem):
             self._call.set_exception(exc)
             self._call = None
 
-    def _advance_episode(self, worker: _InferenceWorker, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
+    def _advance_episode(
+        self, worker: _InferenceWorker, done: pimm.Message[dict] | None, clock: pimm.Clock
+    ) -> Generator[pimm.Command, None, None]:
         """One round of the live episode: end it if it is out of budget or done, else step the policy."""
-        if (terminal := self._trial_terminal(clock)) is not None:
+        if (terminal := self._trial_terminal(done, clock)) is not None:
             yield from self._end_episode(clock, terminal)
         else:
             try:
@@ -498,19 +500,17 @@ class Harness(pimm.ControlSystem):
             if value is not None:
                 self.commands[name].emit(value)
 
-    def _trial_terminal(self, clock: pimm.Clock) -> dict[str, Any] | None:
+    def _trial_terminal(self, done: pimm.Message[dict] | None, clock: pimm.Clock) -> dict[str, Any] | None:
         """The terminal static payload if the live trial has ended this round, else ``None``.
 
         The deadline is hard: a truthy ``done`` within budget records ``eval.terminated`` True plus its
         payload, the budget passing records False, and a terminal past the deadline is a timeout rather than
-        a late success. A task-less trial has no budget and ends on ``done`` alone. Only a freshly delivered
-        ``done`` counts, or the receiver's latched value would re-fire a prior trial's terminal; only a
-        truthy one, so a producer can clear a stale terminal off the wire with an empty payload.
+        a late success. A task-less trial has no budget and ends on ``done`` alone. Only a truthy ``done``
+        counts, so a producer can clear a stale terminal off the wire with an empty payload.
         """
         deadline = self._deadline
-        done_msg = pimm.read_updated(self.done)
-        if done_msg is not None and done_msg.data and (deadline is None or done_msg.ts <= deadline * 1e9):
-            return {**done_msg.data, keys.EVAL_TERMINATED: True}
+        if done is not None and done.data and (deadline is None or done.ts <= deadline * 1e9):
+            return {**done.data, keys.EVAL_TERMINATED: True}
         if deadline is not None and clock.now() >= deadline:
             return {keys.EVAL_TERMINATED: False}
         return None
@@ -544,10 +544,13 @@ class Harness(pimm.ControlSystem):
             call = next(self.perform_task.incoming(), None)
             # Read every round so the flag clears mid-episode; a press during a trial is consumed, not replayed.
             manual = pimm.value_updated(self.manual_command)
+            # Read every round for the same reason: a terminal landing between episodes belongs to none of
+            # them, and left on the wire it would end the next one on its first round.
+            done = pimm.read_updated(self.done)
             if self._worker is not None:
                 if call is not None:  # the live episode is the one that finishes; a second ask is refused
                     call.set_exception(RuntimeError('An episode is already running'))
-                yield from self._advance_episode(self._worker, clock)
+                yield from self._advance_episode(self._worker, done, clock)
             elif call is not None:
                 self._begin_episode(call.request, clock, call)
             elif manual is not None:

@@ -968,6 +968,28 @@ def test_timeout_during_inference_drops_the_chunk(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_a_terminal_landing_while_idle_does_not_end_the_next_episode(world):
+    """A finish pressed with nothing running belongs to no episode, so the one asked for next runs on."""
+    policy = StubPolicy()
+    harness = Harness(policy, make_embodiment())
+    p = _pair_all(world, harness)
+
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(p['done_em'].emit, OPERATOR_DONE), 0.02),  # nothing is running to finish
+        (partial(p['perform_task'], {keys.TASK: 't'}), 0.02),
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.05),
+        (None, 0.05),
+    ])
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=200)
+
+    assert _ds_types(p).count(DsWriterCommandType.START_EPISODE) == 1
+    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
+    assert keys.EVAL_ENDED_BY not in stops[0].static_data, 'the idle terminal ended the episode that followed it'
+
+
+@pytest.mark.timeout(3.0)
 def test_a_call_arriving_mid_episode_is_refused(world):
     """The live episode runs on and the second caller is told why, rather than its ask being dropped."""
     policy = StubPolicy()
