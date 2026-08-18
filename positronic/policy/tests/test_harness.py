@@ -25,7 +25,7 @@ from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import Harness, _InferenceWorker
 from positronic.policy.remote import RemoteSession
 from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
-from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler, pair_caller
+from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
 
 @contextmanager
@@ -234,7 +234,7 @@ def _pair_all(world, harness):
         'frame_em': world.pair(harness.observations[CAM]),
         'robot_em': world.pair(harness.observations[keys.ROBOT_STATE]),
         'grip_em': world.pair(harness.observations[keys.GRIP]),
-        'perform_task': pair_caller(world, harness.perform_task),
+        'perform_task': world.pair(harness.perform_task),
         'done_em': world.pair(harness.done),
         'command_rx': world.pair(harness.commands[keys.ROBOT_COMMAND]),
         'grip_rx': world.pair(harness.commands['target_grip']),
@@ -289,7 +289,7 @@ def test_harness_emits_cartesian_move(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = pair_caller(world, harness.perform_task)
+    perform_task = world.pair(harness.perform_task)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
@@ -348,7 +348,7 @@ def test_harness_passes_descriptor_to_policy(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = pair_caller(world, harness.perform_task)
+    perform_task = world.pair(harness.perform_task)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
@@ -378,7 +378,7 @@ def test_robot_model_stays_out_of_the_observation(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations['grip'])
-    perform_task = pair_caller(world, harness.perform_task)
+    perform_task = world.pair(harness.perform_task)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
@@ -401,7 +401,7 @@ def _run_with_model(world, model, static_meta=None):
     harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
     harness.commands['target_grip']._bind(RecordingEmitter())
     harness.ds_command._bind(RecordingEmitter())
-    perform_task = pair_caller(world, harness.perform_task)
+    perform_task = world.pair(harness.perform_task)
     meta_em = world.pair(harness.robot_meta_in)
 
     steps = [(partial(perform_task, {keys.TASK: 't'}), 0.0)]
@@ -449,7 +449,7 @@ def test_harness_waits_for_complete_inputs(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = pair_caller(world, harness.perform_task)
+    perform_task = world.pair(harness.perform_task)
 
     assert CAM in harness.observations
 
@@ -1148,8 +1148,8 @@ def test_finish_stops_playing_the_live_chunk(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = pair_caller(world, harness.perform_task)
-    done_em = cast(pimm.SignalEmitter, world.pair(harness.done))
+    perform_task = world.pair(harness.perform_task)
+    done_em = world.pair(harness.done)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     script = [
@@ -1191,7 +1191,7 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = pair_caller(world, harness.perform_task)
+    perform_task = world.pair(harness.perform_task)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     script = [
@@ -1351,7 +1351,7 @@ def test_shutdown_stops_playing_the_live_chunk(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = pair_caller(world, harness.perform_task)
+    perform_task = world.pair(harness.perform_task)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     # A call + a complete obs schedules a chunk; the driver then ends, which makes the
@@ -1697,7 +1697,7 @@ def _run_episode(
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = pair_caller(world, harness.perform_task)
+    perform_task = world.pair(harness.perform_task)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
@@ -1840,7 +1840,7 @@ def test_every_arm_of_a_bimanual_rig_reports_its_own_status(world):
     left_em = world.pair(harness.observations[left])
     right_em = world.pair(harness.observations[right])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = pair_caller(world, harness.perform_task)
+    perform_task = world.pair(harness.perform_task)
 
     def emit_states():
         left_em.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.RESETTING))
@@ -1867,7 +1867,7 @@ def test_the_trial_context_cannot_stand_in_for_what_the_harness_read(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = pair_caller(world, harness.perform_task)
+    perform_task = world.pair(harness.perform_task)
 
     faulted = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR)
     context = {'task': 'test', keys.ROBOT_STATUS: RobotStatus.AVAILABLE, keys.GRIP: 'from the config'}
@@ -1898,7 +1898,7 @@ def test_a_stop_clears_the_chunk_in_the_round_the_fault_is_seen(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = pair_caller(world, harness.perform_task)
+    perform_task = world.pair(harness.perform_task)
 
     pose, joints = [0.1, 0.2, 0.3], [0.4, 0.5, 0.6]
     driver = ManualDriver([
@@ -1943,8 +1943,8 @@ def test_finish_does_not_wait_for_the_call_in_flight():
         frame_em = world.pair(harness.observations[CAM])
         robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
         grip_em = world.pair(harness.observations[keys.GRIP])
-        perform_task = pair_caller(world, harness.perform_task)
-        done_em = cast(pimm.SignalEmitter, world.pair(harness.done))
+        perform_task = world.pair(harness.perform_task)
+        done_em = world.pair(harness.done)
 
         robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
         driver = ManualDriver([
@@ -1988,8 +1988,8 @@ def test_the_run_ends_only_once_the_call_it_abandoned_is_out_of_the_policy():
         frame_em = world.pair(harness.observations[CAM])
         robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
         grip_em = world.pair(harness.observations[keys.GRIP])
-        perform_task = pair_caller(world, harness.perform_task)
-        done_em = cast(pimm.SignalEmitter, world.pair(harness.done))
+        perform_task = world.pair(harness.perform_task)
+        done_em = world.pair(harness.done)
 
         robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
         driver = ManualDriver([
@@ -2037,8 +2037,8 @@ def test_the_session_is_closed_only_once_its_call_has_left_it():
         frame_em = world.pair(harness.observations[CAM])
         robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
         grip_em = world.pair(harness.observations[keys.GRIP])
-        perform_task = pair_caller(world, harness.perform_task)
-        done_em = cast(pimm.SignalEmitter, world.pair(harness.done))
+        perform_task = world.pair(harness.perform_task)
+        done_em = world.pair(harness.done)
 
         robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
         driver = ManualDriver([
@@ -2087,7 +2087,7 @@ def test_a_rescheduled_trajectory_clears_the_channels_it_omits(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = pair_caller(world, harness.perform_task)
+    perform_task = world.pair(harness.perform_task)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([
@@ -2135,8 +2135,8 @@ def test_finishing_discards_a_call_that_is_still_in_flight(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = pair_caller(world, harness.perform_task)
-    done_em = cast(pimm.SignalEmitter, world.pair(harness.done))
+    perform_task = world.pair(harness.perform_task)
+    done_em = world.pair(harness.done)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     driver = ManualDriver([

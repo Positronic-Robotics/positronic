@@ -128,6 +128,10 @@ class ControlSystemHandler(Handler[Req, Res]):
         self.requests = ControlSystemReceiver[_Request[Req]](owner, maxsize=0)
         self.replies = ControlSystemEmitter[_Result[Res] | _Failure](owner)
 
+    @property
+    def owner(self) -> ControlSystem:
+        return self.requests.owner
+
     def incoming(self) -> Iterator[Call[Req, Res]]:
         for request in _drain(self.requests):
             yield _ControlSystemCall(request, self.replies)
@@ -166,6 +170,10 @@ class ControlSystemCaller(Caller[Req, Res]):
         self.replies = ControlSystemReceiver[_Result[Res] | _Failure](owner, maxsize=0)
         self._pending: dict[int, _ControlSystemAnswer[Res]] = {}
         self._next_id = 0
+
+    @property
+    def owner(self) -> ControlSystem:
+        return self.requests.owner
 
     def __call__(self, request: Req) -> Answer[Res]:
         if self.requests.num_bound == 0:

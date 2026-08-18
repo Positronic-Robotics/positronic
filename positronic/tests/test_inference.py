@@ -2,7 +2,6 @@ import io
 import sys
 from functools import partial
 from types import SimpleNamespace
-from typing import Any, cast
 
 import pytest
 
@@ -58,33 +57,25 @@ def test_the_keyboard_path_refuses_a_simulated_embodiment():
         real(policy=_IdlePolicy(), embodiment=_embodiment(simulated=True), task='stub')
 
 
-class _StubHarness(pimm.ControlSystem):
-    """Mimics the harness's one-episode-at-a-time rule: it holds the first call and refuses the rest."""
-
-    def __init__(self):
-        self.perform_task = pimm.calls.ControlSystemHandler[dict[str, Any], dict[str, Any]](self)
-        self.received: list[dict[str, Any]] = []
-
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        while not should_stop.value:
-            for call in self.perform_task.incoming():
-                self.received.append(call.request)
-                if len(self.received) > 1:
-                    call.set_exception(RuntimeError('An episode is already running'))
-            yield pimm.Sleep(0.01)
-
-
 def test_the_operator_reports_an_ask_the_harness_refuses(capsys):
     """The operator does not police who may start an episode: every press is asked for, and what comes back
     is printed as it lands."""
     operator = KeyboardOperator(task='pick')
-    harness = _StubHarness()
     with pimm.World(virtual_time=True) as world:
-        keystrokes = cast(pimm.SignalEmitter[str], world.pair(operator.keystrokes))
-        world.connect(operator.perform_task, harness.perform_task)
-        press = partial(keystrokes.emit, 's')
-        driver = scripted_driver((press, 0.05), (press, 0.05), (None, 0.05))
-        drive_scheduler(world.start([operator, harness, driver]))
+        keystrokes = world.pair(operator.keystrokes)
+        harness = world.pair(operator.perform_task)
+        received = []
 
-    assert harness.received == [{keys.TASK: 'pick'}, {keys.TASK: 'pick'}]
+        def refuse_a_second_ask():
+            """Stand in for the harness's one-episode-at-a-time rule: hold the first call, refuse the rest."""
+            for call in harness.incoming():
+                received.append(call.request)
+                if len(received) > 1:
+                    call.set_exception(RuntimeError('An episode is already running'))
+
+        press = partial(keystrokes.emit, 's')
+        driver = scripted_driver((press, 0.05), (refuse_a_second_ask, 0.05), (press, 0.05), (refuse_a_second_ask, 0.05))
+        drive_scheduler(world.start([operator, driver]))
+
+    assert received == [{keys.TASK: 'pick'}, {keys.TASK: 'pick'}]
     assert 'already running' in capsys.readouterr().out

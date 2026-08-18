@@ -148,7 +148,7 @@ class MujocoSim(pimm.ControlSystem):
         self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
-        self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self.grip = pimm.ControlSystemEmitter[float](self)
         self.cameras: pimm.EmitterDict = pimm.EmitterDict(self)
         # Privileged ground truth: the full ``save_state`` dict, spec keys prefixed with '.' so the
         # writer expands them into ``<signal>.<spec>`` signals. Scoring is computed downstream, not

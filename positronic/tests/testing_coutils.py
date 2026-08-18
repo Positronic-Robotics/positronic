@@ -14,16 +14,6 @@ ScriptStep = tuple[Callable[[], object] | None, float]
 T = TypeVar('T')
 
 
-def pair_caller(world: pimm.World, handler: pimm.calls.ControlSystemHandler) -> pimm.calls.ControlSystemCaller:
-    """A caller bound to ``handler`` and owned by the same control system, so a test drives it from outside.
-
-    ``World.pair`` does this for a signal endpoint; it has no call form.
-    """
-    caller = pimm.calls.ControlSystemCaller(handler.requests.owner)
-    world.connect(caller, handler)
-    return caller
-
-
 def drive_scheduler(iterator: Iterable[pimm.Command], *, steps: int = 200) -> None:
     """Pump a world scheduler up to ``steps`` times.
 

@@ -142,7 +142,7 @@ class Robot(pimm.ControlSystem):
             home_joints_variation if home_joints_variation is not None else [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
         )
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
-        self.state: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self.state = pimm.ControlSystemEmitter[FrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self._load = load
         self._collision_coeff = collision_coeff

@@ -17,7 +17,7 @@ from multiprocessing.managers import ValueProxy
 from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
-from typing import TypeVar
+from typing import TypeVar, overload
 
 from .calls import ControlSystemCaller, ControlSystemHandler
 from .core import (
@@ -660,12 +660,36 @@ class World:
     def _is_connected(self, receiver: ControlSystemReceiver) -> bool:
         return any(receiver is connected for _, connected, _, _ in self._connections)
 
+    @overload
     def pair(
         self,
-        connector: ControlSystemEmitter | ControlSystemReceiver,
+        connector: ControlSystemEmitter[T],
         *,
-        emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = identity,
-        receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[T]] = identity,
+        emitter_wrapper: Callable[[SignalEmitter], SignalEmitter] = ...,
+        receiver_wrapper: Callable[[SignalReceiver], SignalReceiver] = ...,
+    ) -> ControlSystemReceiver[T]: ...
+
+    @overload
+    def pair(
+        self,
+        connector: ControlSystemReceiver[T],
+        *,
+        emitter_wrapper: Callable[[SignalEmitter], SignalEmitter] = ...,
+        receiver_wrapper: Callable[[SignalReceiver], SignalReceiver] = ...,
+    ) -> ControlSystemEmitter[T]: ...
+
+    @overload
+    def pair(self, connector: ControlSystemCaller[Req, Res]) -> ControlSystemHandler[Req, Res]: ...
+
+    @overload
+    def pair(self, connector: ControlSystemHandler[Req, Res]) -> ControlSystemCaller[Req, Res]: ...
+
+    def pair(
+        self,
+        connector: ControlSystemEmitter | ControlSystemReceiver | ControlSystemCaller | ControlSystemHandler,
+        *,
+        emitter_wrapper: Callable[[SignalEmitter], SignalEmitter] = identity,
+        receiver_wrapper: Callable[[SignalReceiver], SignalReceiver] = identity,
     ):
         """Create the complementary connector for an existing endpoint.
 
@@ -676,30 +700,39 @@ class World:
         :meth:`connect`.
 
         Args:
-            connector: Either side of a control-system connection that needs a
-                matching peer.
+            connector: Any side of a control-system connection that needs a matching peer.
             emitter_wrapper: Optional callable applied to the transport bound to the
-                emitter side before the link is registered.
+                emitter side before the link is registered. Signals only.
             receiver_wrapper: Optional callable applied to the transport bound to the
-                receiver side before the link is registered.
+                receiver side before the link is registered. Signals only.
 
         Returns:
-            The freshly created counterpart (`ControlSystemEmitter` for a
-            receiver input or `ControlSystemReceiver` for an emitter output).
+            The freshly created counterpart: an emitter for a receiver, a receiver for an
+            emitter, a handler for a caller, a caller for a handler.
 
         Raises:
-            ValueError: If ``connector`` is neither an emitter nor a receiver.
+            ValueError: If ``connector`` is none of the four.
         """
-        if isinstance(connector, ControlSystemEmitter):
-            # We put the same owner, so that both ends are always either local or remote
-            receiver = ControlSystemReceiver(connector.owner)
-            self.connect(connector, receiver, emitter_wrapper=emitter_wrapper, receiver_wrapper=receiver_wrapper)
-            return receiver
-        elif isinstance(connector, ControlSystemReceiver):
-            emitter = ControlSystemEmitter(connector.owner)
-            self.connect(emitter, connector, emitter_wrapper=receiver_wrapper, receiver_wrapper=emitter_wrapper)
-            return emitter
-        raise ValueError(f'Unsupported connector type: {type(connector)}.')
+        match connector:
+            case ControlSystemEmitter():
+                # We put the same owner, so that both ends are always either local or remote
+                receiver = ControlSystemReceiver(connector.owner)
+                self.connect(connector, receiver, emitter_wrapper=emitter_wrapper, receiver_wrapper=receiver_wrapper)
+                return receiver
+            case ControlSystemReceiver():
+                emitter = ControlSystemEmitter(connector.owner)
+                self.connect(emitter, connector, emitter_wrapper=receiver_wrapper, receiver_wrapper=emitter_wrapper)
+                return emitter
+            case ControlSystemCaller():
+                handler = ControlSystemHandler(connector.owner)
+                self.connect(connector, handler)
+                return handler
+            case ControlSystemHandler():
+                caller = ControlSystemCaller(connector.owner)
+                self.connect(caller, connector)
+                return caller
+            case _:
+                raise ValueError(f'Unsupported connector type: {type(connector)}.')
 
     def start(  # noqa: C901
         self,

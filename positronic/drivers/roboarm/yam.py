@@ -15,7 +15,7 @@ on close (``zero_torque_mode``).
 
 import logging
 from collections.abc import Callable, Iterator
-from typing import Any, cast
+from typing import Any
 
 import mujoco as mj
 import numpy as np
@@ -317,10 +317,10 @@ if __name__ == '__main__':
     with pimm.World() as world:
         # `World.pair` cannot express that it returns the counterpart of the port it is given, so the four
         # payload types are named here.
-        commands = cast(pimm.SignalEmitter[command.CommandType], world.pair(robot.commands))
-        target_grip = cast(pimm.SignalEmitter[float], world.pair(robot.target_grip))
-        state = cast(pimm.SignalReceiver[YamState], world.pair(robot.state))
-        grip = cast(pimm.SignalReceiver[float], world.pair(robot.grip))
+        commands = world.pair(robot.commands)
+        target_grip = world.pair(robot.target_grip)
+        state = world.pair(robot.state)
+        grip = world.pair(robot.grip)
 
         loop = world.start([robot])
 

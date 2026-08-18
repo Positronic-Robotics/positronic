@@ -499,7 +499,7 @@ class TestWorldControlSystems:
     def test_mirror_rejects_unknown_connector(self):
         with World() as world:
             with pytest.raises(ValueError, match='Unsupported connector type'):
-                world.pair(object())
+                world.pair(object())  # pyright: ignore[reportCallIssue] — the runtime guard is the subject
 
     def test_start_sets_up_local_connections(self):
         producer = DummyControlSystem('producer')

@@ -27,7 +27,6 @@ import json
 import os
 from functools import partial
 from pathlib import Path
-from typing import cast
 
 import numpy as np
 import pytest
@@ -46,7 +45,7 @@ from positronic.policy.base import DelegatingPolicy, DelegatingSession, Now, Pol
 from positronic.policy.codec import ActionTiming
 from positronic.policy.harness import Harness
 from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
-from positronic.tests.testing_coutils import ManualDriver, drive_scheduler, pair_caller
+from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 GOLDEN_FILE = Path(__file__).parent / 'golden_pipeline.json.gz'
 
@@ -222,8 +221,8 @@ def _run_pipeline(tmp_path: Path) -> dict:
         )
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
-        perform_task = pair_caller(world, harness.perform_task)
-        done_em = cast(pimm.SignalEmitter, world.pair(harness.done))
+        perform_task = world.pair(harness.perform_task)
+        done_em = world.pair(harness.done)
 
         # Robot/gripper emit state every tick, so the script only drives the
         # episode lifecycle and the one-shot error injection.

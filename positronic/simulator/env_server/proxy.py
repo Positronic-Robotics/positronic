@@ -40,7 +40,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self.observations: pimm.EmitterDict = pimm.EmitterDict(self)
         self.privileged: pimm.EmitterDict = pimm.EmitterDict(self)
         self.robot_meta: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
-        self.done: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self.done = pimm.ControlSystemEmitter[dict](self)
 
         # A trial is live between reset and the env's done. The proxy steps only then — not before the
         # first reset (Gym envs reject step-before-reset), not after done. It sleeps every turn regardless.
