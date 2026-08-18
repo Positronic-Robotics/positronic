@@ -32,8 +32,8 @@ ROBOT_STATE = 'robot_state'
 JOINTS = f'{ROBOT_STATE}.q'
 JOINT_VEL = f'{ROBOT_STATE}.dq'
 EE_POSE = f'{ROBOT_STATE}.ee_pose'
-# The arm's ``RobotStatus``, on every sample it produces. An arm that is faulted or resetting has no pose to
-# give, so the rest of ``ROBOT_STATE`` is absent from that sample and the status is all of it there is. The
+# The arm's ``RobotStatus``, beside the measurements on every sample rather than in place of them: a faulted
+# or resetting arm still reports where it is, and this is what says whether that pose is worth acting on. The
 # suffix is named on its own because a consumer picks the entry out by it on a rig whose arms are
 # ``robot_state.{side}``.
 STATUS_SUFFIX = '.status'

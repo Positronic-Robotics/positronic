@@ -351,7 +351,7 @@ def test_transform_3d_serializer(world):
     np.testing.assert_allclose(names_vals[0][1][3:], q.as_quat)
 
 
-def test_robot_state_serializer_records_a_resetting_arm_as_its_status_alone(world):
+def test_robot_state_serializer_records_a_resetting_arm_beside_its_pose(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({keys.ROBOT_STATE: Serializers.robot_state}, ds, world)
 
@@ -370,15 +370,17 @@ def test_robot_state_serializer_records_a_resetting_arm_as_its_status_alone(worl
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    items = {name: val for (name, val, _, _) in w.appends}
-    assert set(items.keys()) == {keys.ROBOT_STATUS, keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE}
-    # The resetting frame carries its status and nothing else, so a reader tells it from a gap in the arm's
-    # samples; the pose entries are the available frame's.
-    statuses = [val for (name, val, _, _) in w.appends if name == keys.ROBOT_STATUS]
-    assert statuses == [RobotStatus.RESETTING, RobotStatus.AVAILABLE]
-    np.testing.assert_allclose(items[keys.JOINTS], q)
-    np.testing.assert_allclose(items[keys.JOINT_VEL], dq)
-    np.testing.assert_allclose(items[keys.EE_POSE], np.concatenate([t, geom.Rotation.identity.as_quat]))
+    by_name = {}
+    for name, val, _, _ in w.appends:
+        by_name.setdefault(name, []).append(val)
+    assert set(by_name) == {keys.ROBOT_STATUS, keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE}
+    # Both frames record their measurements, so a reader tells the resetting one by its status rather than by
+    # a gap in the arm's samples.
+    assert all(len(vals) == 2 for vals in by_name.values())
+    assert by_name[keys.ROBOT_STATUS] == [RobotStatus.RESETTING, RobotStatus.AVAILABLE]
+    np.testing.assert_allclose(by_name[keys.JOINTS][0], q)
+    np.testing.assert_allclose(by_name[keys.JOINT_VEL][0], dq)
+    np.testing.assert_allclose(by_name[keys.EE_POSE][0], np.concatenate([t, geom.Rotation.identity.as_quat]))
 
 
 def test_robot_command_serializer_variants(world):

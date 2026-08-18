@@ -411,8 +411,8 @@ class Harness(pimm.ControlSystem):
 
         Raises ``NoValueException`` if any channel has no value yet, and returns ``None`` while a channel
         still holds a pre-reset value, rather than feed a stale obs. What a device reports is otherwise
-        passed on as read: a device with nothing to say this round — a faulted or resetting arm, which
-        reports its status and no pose — is for the policy stack to answer, not the harness.
+        passed on as read: what an arm's status means for the plan being played is for the policy stack to
+        answer, not the harness.
         """
         # Against the live model, not the one known at episode start: a remote env publishes its ``robot_meta``
         # a turn after the reset that produced it, so at episode start there is no model to check.

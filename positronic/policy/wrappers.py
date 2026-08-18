@@ -46,9 +46,7 @@ class StopOnFault(PolicyWrapper):
     sound observation reaches the model instead of resuming a chunk stamped before. It belongs outside the
     scheduling wrapper, which would otherwise answer "keep playing" without ever seeing the status.
 
-    It is also what keeps a pose-less observation away from everything downstream: an unsound arm reports
-    its status and no ``q``/``dq``/``ee_pose``, which a codec reading them by name cannot answer. Every arm
-    in the observation is checked, so a bimanual rig stops on either.
+    Every arm in the observation is checked, so a bimanual rig stops on either.
     """
 
     WIRE_NAME = 'stop_on_fault'
