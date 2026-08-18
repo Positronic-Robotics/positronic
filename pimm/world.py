@@ -465,6 +465,7 @@ class _CallAnsweringLoop:
 
 def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str):
     try:
+        # The World spawns rather than forks, so a child starts with an empty logging registry.
         # Inside the try: a raise here must still end the World, not strand the parent in its join.
         configure_process_logging()
         for command in run_func(EventReceiver(stop_event, clock), clock):
