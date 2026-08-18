@@ -22,8 +22,8 @@ class Robotiq2F(pimm.ControlSystem):
         self._port = port
         self.grip = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
-        self.force = pimm.ControlSystemReceiver(self, default=255)  # device scale 0..255
-        self.speed = pimm.ControlSystemReceiver(self, default=255)  # device scale 0..255
+        self.force = pimm.DefaultingReceiver(self, default=255)  # device scale 0..255
+        self.speed = pimm.DefaultingReceiver(self, default=255)  # device scale 0..255
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         client = ModbusClient.ModbusSerialClient(

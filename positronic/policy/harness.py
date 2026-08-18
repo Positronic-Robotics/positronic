@@ -251,11 +251,11 @@ class Harness(pimm.ControlSystem):
 
         # One episode per call, answered with the terminal payload it ended on.
         self.perform_task = pimm.calls.ControlSystemHandler[dict[str, Any], dict[str, Any]](self)
-        self.manual_command = pimm.ControlSystemReceiver(self, default=None)
+        self.manual_command = pimm.ControlSystemReceiver(self)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
-        self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
+        self.robot_meta_in = pimm.DefaultingReceiver(self, default={})
         # Stop-signal: a truthy payload within the trial's budget ends it.
-        self.done = pimm.ControlSystemReceiver[dict](self, default={})
+        self.done = pimm.DefaultingReceiver[dict](self, default={})
 
     def _statics(self) -> dict[str, Any]:
         """What is known about the rig before the episode runs, live values winning."""

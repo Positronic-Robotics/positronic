@@ -115,9 +115,9 @@ Signals also expose freshness straight on the payload: every `Message` has an
 `updated` flag that is `True` only when the value changed since the previous read.
 Control loops can gate their work on that bit without extra wrappers.
 
-`ControlSystemReceiver` accepts a `default=` parameter to supply safe defaults
-until real data arrives. When a receiver has no value yet, it returns a message
-with the default value and `updated=False`.
+`ControlSystemReceiver` reads `None` until real data arrives. `DefaultingReceiver`
+takes a `default=` instead and always has a value: until the first message it
+returns that default with `updated=False`.
 
 For data transformation, Pimm provides:
 

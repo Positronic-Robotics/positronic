@@ -1,6 +1,14 @@
 from unittest.mock import Mock
 
-from pimm.core import Clock, ControlSystem, ControlSystemReceiver, Message, SignalEmitter, SignalReceiver
+from pimm.core import (
+    Clock,
+    ControlSystem,
+    ControlSystemReceiver,
+    DefaultingReceiver,
+    Message,
+    SignalEmitter,
+    SignalReceiver,
+)
 from pimm.utils import MapSignalEmitter, MapSignalReceiver, RateLimiter, read_updated, value_updated
 
 
@@ -220,13 +228,13 @@ class TestMapSignalEmitter:
         mock_emitter.emit.assert_not_called()
 
 
-class TestControlSystemReceiverDefault:
-    """Test the ControlSystemReceiver with default parameter."""
+class TestDefaultingReceiver:
+    """Test the DefaultingReceiver class."""
 
     def test_returns_default_when_not_bound(self):
         """Test that default value is returned when receiver is not bound."""
         mock_system = Mock(spec=ControlSystem)
-        receiver = ControlSystemReceiver(mock_system, default='default_value')
+        receiver = DefaultingReceiver(mock_system, default='default_value')
 
         result = receiver.read()
 
@@ -238,7 +246,7 @@ class TestControlSystemReceiverDefault:
     def test_returns_actual_value_when_bound(self):
         """Test that actual value is returned when receiver is bound and has data."""
         mock_system = Mock(spec=ControlSystem)
-        receiver = ControlSystemReceiver(mock_system, default='default_value')
+        receiver = DefaultingReceiver(mock_system, default='default_value')
 
         # Mock the internal receiver
         mock_internal = Mock(spec=SignalReceiver)
@@ -257,7 +265,7 @@ class TestControlSystemReceiverDefault:
     def test_returns_default_when_bound_but_no_data(self):
         """Test that default is returned when bound but internal receiver returns None."""
         mock_system = Mock(spec=ControlSystem)
-        receiver = ControlSystemReceiver(mock_system, default=42)
+        receiver = DefaultingReceiver(mock_system, default=42)
 
         # Mock the internal receiver to return None
         mock_internal = Mock(spec=SignalReceiver)
@@ -271,8 +279,11 @@ class TestControlSystemReceiverDefault:
         assert result.ts == -1
         assert result.updated is False
 
-    def test_no_default_returns_none(self):
-        """Test that None is returned when no default is specified and no data available."""
+
+class TestControlSystemReceiver:
+    """Test the ControlSystemReceiver class."""
+
+    def test_returns_none_before_anything_arrives(self):
         mock_system = Mock(spec=ControlSystem)
         receiver = ControlSystemReceiver(mock_system)
 

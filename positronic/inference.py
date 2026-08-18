@@ -30,7 +30,7 @@ class KeyboardOperator(pimm.ControlSystem):
 
     def __init__(self, task: str | None = None):
         self._task = task
-        self.keystrokes = pimm.ControlSystemReceiver[str](self, default=None)
+        self.keystrokes = pimm.ControlSystemReceiver[str](self)
         self.perform_task = pimm.calls.ControlSystemCaller[dict[str, Any], dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 

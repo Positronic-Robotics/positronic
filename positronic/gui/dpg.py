@@ -15,9 +15,9 @@ def _get_down_keys() -> list[int]:
 
 class DearpyguiUi(pimm.ControlSystem):
     def __init__(self):
-        self.cameras = pimm.ReceiverDict(self, default=None)
+        self.cameras = pimm.ReceiverDict(self)
         self.im_sizes = {}
-        self.info = pimm.ControlSystemReceiver(self, default='')
+        self.info = pimm.DefaultingReceiver(self, default='')
         self.buttons = pimm.ControlSystemEmitter(self)
 
     def init(self, im_sizes: dict[str, tuple[int, int]]):

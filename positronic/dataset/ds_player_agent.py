@@ -25,7 +25,7 @@ DsPlayerCommand = DsPlayerStartCommand | DsPlayerAbortCommand
 
 class DsPlayerAgent(pimm.ControlSystem):
     def __init__(self, poll_hz: float = 100.0):
-        self.command = pimm.ControlSystemReceiver[DsPlayerCommand](self, default=None)
+        self.command = pimm.ControlSystemReceiver[DsPlayerCommand](self)
         self.outputs = pimm.EmitterDict(self)
         self.finished = pimm.ControlSystemEmitter[DsPlayerStartCommand](self)
         self._poll_hz = float(poll_hz)
