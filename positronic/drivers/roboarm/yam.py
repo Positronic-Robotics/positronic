@@ -43,6 +43,7 @@ HOME_Q = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
 _MJCF_PATH = 'assets/mujoco/i2rt_yam/yam.xml'
 _IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limit clamping
 _IK_ROT_TOL = 1e-2  # radians
+_PLACE_TIME_S = 2.0  # seconds the vendor move is given to travel
 
 
 def _reach_postures(x: float, y: float) -> list[np.ndarray]:
@@ -185,6 +186,8 @@ class Robot(pimm.ControlSystem):
         self._connect = connect
 
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
+        # The synchronous version of the above
+        self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
@@ -211,24 +214,20 @@ class Robot(pimm.ControlSystem):
                 obs = arm.get_observations()
                 q = obs['joint_pos']
 
-                if cmd is not None:
-                    match cmd:
-                        case command.Reset():
-                            q_target = self._reset(arm, kin, robot_state)
-                            grip_target = 0.0
-                            obs = arm.get_observations()
-                            q = obs['joint_pos']
-                        case command.JointPosition(positions):
-                            q_target = np.asarray(positions, dtype=np.float64)
-                        case command.JointDelta(velocities=delta):
-                            q_target = q + np.asarray(delta, dtype=np.float64)
-                        case command.CartesianPosition(pose):
-                            q_target = self._ik_or_hold(kin, pose, q, q_target)
-                        case command.CartesianDelta() as delta_cmd:
-                            target = delta_cmd.apply(self._base_pose * kin.fk(q))
-                            q_target = self._ik_or_hold(kin, target, q, q_target)
-                        case other:
-                            raise NotImplementedError(f'Unsupported command {other}')
+                if (call := next(self.sync_move.incoming(), None)) is not None:
+                    if isinstance(call.request, command.Reset):
+                        grip_target = 0.0  # homing opens the gripper, as a ``Reset`` command does
+                    q_target = self._serve_sync_move(arm, kin, robot_state, call, q, q_target, grip_target)
+                    obs = arm.get_observations()
+                    q = obs['joint_pos']
+                elif cmd is not None:
+                    if isinstance(cmd, command.Reset):
+                        q_target = self._reset(arm, kin, robot_state)
+                        grip_target = 0.0
+                        obs = arm.get_observations()
+                        q = obs['joint_pos']
+                    else:
+                        q_target = self._target_joints(kin, cmd, q, q_target)
 
                 arm.command_joint_pos(np.append(q_target, 1.0 - grip_target))
 
@@ -244,14 +243,50 @@ class Robot(pimm.ControlSystem):
         q = obs['joint_pos']
         robot_state.encode(q, obs['joint_vel'], self._base_pose * kin.fk(q))
 
-    def _reset(self, arm, kin: _Kinematics, robot_state: YamState) -> np.ndarray:
+    def _place(self, arm, kin: _Kinematics, robot_state: YamState, target: np.ndarray, grip: float) -> np.ndarray:
+        """Move the chain to ``target`` and return the joints it now holds; the vendor move runs to completion."""
         self._encode_state(robot_state, kin, arm.get_observations())
         robot_state._start_reset()  # ``encode`` clears RESETTING; the arm has not arrived
         self.state.emit(robot_state)
-        arm.move_joints(np.append(self._home_joints, 1.0), time_interval_s=2.0)  # chain gripper 1.0 = open
+        arm.move_joints(np.append(target, 1.0 - grip), time_interval_s=_PLACE_TIME_S)  # chain gripper 1.0 = open
         self._encode_state(robot_state, kin, arm.get_observations())
         self.state.emit(robot_state)
-        return self._home_joints.copy()
+        return np.asarray(target, dtype=np.float64).copy()
+
+    def _reset(self, arm, kin: _Kinematics, robot_state: YamState) -> np.ndarray:
+        return self._place(arm, kin, robot_state, self._home_joints, 0.0)
+
+    def _target_joints(self, kin: _Kinematics, cmd, q: np.ndarray, hold: np.ndarray) -> np.ndarray:
+        """The joints ``cmd`` asks the chain to hold."""
+        match cmd:
+            case command.JointPosition(positions):
+                return np.asarray(positions, dtype=np.float64)
+            case command.JointDelta(velocities=delta):
+                return q + np.asarray(delta, dtype=np.float64)
+            case command.CartesianPosition(pose):
+                return self._ik_or_hold(kin, pose, q, hold)
+            case command.CartesianDelta() as delta_cmd:
+                target = delta_cmd.apply(self._base_pose * kin.fk(q))
+                return self._ik_or_hold(kin, target, q, hold)
+            case other:
+                raise NotImplementedError(f'Unsupported command {other}')
+
+    def _serve_sync_move(
+        self, arm, kin: _Kinematics, robot_state: YamState, call, q: np.ndarray, hold: np.ndarray, grip: float
+    ) -> np.ndarray:
+        """Put the chain where ``call`` asks, answer it, and return the joints it now holds."""
+        request = call.request
+        try:
+            target = (
+                self._home_joints if isinstance(request, command.Reset) else self._target_joints(kin, request, q, hold)
+            )
+            held = self._place(arm, kin, robot_state, target, grip)
+        # rules-allow: swallowed-error — a chain that cannot be placed is the asker's failure to hear about
+        except Exception as exc:
+            call.set_exception(exc)
+            return hold
+        call.set_result(None)
+        return held
 
     def _ik_or_hold(
         self, kin: _Kinematics, world_pose: geom.Transform3D, q: np.ndarray, hold: np.ndarray

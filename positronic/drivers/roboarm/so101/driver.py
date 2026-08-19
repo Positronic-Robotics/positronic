@@ -50,6 +50,9 @@ _SO101_URDF_PATH = 'positronic/drivers/roboarm/so101/so101.urdf'
 _SO101_JOINT_NAMES = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll']
 _SO101_EE_LINK = 'gripper_frame_link'
 _SO101_EE_JOINT = 'gripper_frame_joint'
+# How close to its setpoint the arm counts as placed, in the bus's normalized units: the bus reports
+# position but no goal, so arrival is judged from the reading
+_PLACED_TOL = 0.02
 
 
 class Robot(pimm.ControlSystem):
@@ -60,6 +63,8 @@ class Robot(pimm.ControlSystem):
         self.joint_limits = self.kinematic.joint_limits
         self.home_joints = home_joints if home_joints is not None else [0.0, 0.0, 0.0, 0.0, 0.0]
         self.commands = pimm.ControlSystemReceiver[roboarm_command.CommandType](self)
+        # The synchronous version of the above
+        self.sync_move = pimm.calls.ControlSystemHandler[roboarm_command.CommandType, None](self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
         self._last_grip: float = 0.0
         # The arm half of the motor setpoint, in normalized units. ``None`` until the first arm command:
@@ -74,6 +79,27 @@ class Robot(pimm.ControlSystem):
         print('Warning: Proper dq units is not implemented for SO101!')
         print('================================================================')
 
+    def _target_qpos(self, state: SO101State, cmd: roboarm_command.CommandType) -> np.ndarray:
+        """The setpoint ``cmd`` asks the arm to hold, in the bus's normalized units."""
+        match cmd:
+            case roboarm_command.Reset():
+                return self.rad_to_norm(np.asarray(self.home_joints, dtype=np.float32))
+            case roboarm_command.CartesianPosition(pose):
+                return self._solve_ik(state, pose)
+            case roboarm_command.CartesianDelta() as delta_cmd:
+                ee_pose, _ = self._forward_kinematics(self.motor_bus.position)
+                return self._solve_ik(state, delta_cmd.apply(ee_pose))
+            case roboarm_command.JointPosition(qpos):
+                return self.rad_to_norm(qpos)
+            case other:
+                raise ValueError(f'Unknown command: {other}')
+
+    def _is_placed(self) -> bool:
+        """Whether the arm has reached the setpoint it was last given."""
+        return self._last_qpos is not None and bool(
+            np.all(np.abs(self.motor_bus.position[:-1] - self._last_qpos) < _PLACED_TOL)
+        )
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self.motor_bus.connect()
         urdf = ET.fromstring(Path(_SO101_URDF_PATH).read_text())
@@ -87,24 +113,28 @@ class Robot(pimm.ControlSystem):
         rate_limit = pimm.RateLimiter(hz=1000, clock=clock)
         state = SO101State()
 
+        # The bus reports position only while this loop reads it, so it cannot be held for a move
+        pending_move = None
+
         while not should_stop.value:
             command = pimm.value_updated(self.commands)
             grip = pimm.value_updated(self.target_grip)
             if grip is not None:
                 self._last_grip = grip
-            if command is not None:
-                match command:
-                    case roboarm_command.Reset():
-                        raise NotImplementedError('Reset not implemented')
-                    case roboarm_command.CartesianPosition(pose):
-                        self._last_qpos = self._solve_ik(state, pose)
-                    case roboarm_command.CartesianDelta() as delta_cmd:
-                        ee_pose, _ = self._forward_kinematics(self.motor_bus.position)
-                        self._last_qpos = self._solve_ik(state, delta_cmd.apply(ee_pose))
-                    case roboarm_command.JointPosition(qpos):
-                        self._last_qpos = self.rad_to_norm(qpos)
-                    case other:
-                        raise ValueError(f'Unknown command: {other}')
+            if pending_move is not None and self._is_placed():
+                pending_move.set_result(None)
+                pending_move = None
+            if pending_move is None and (call := next(self.sync_move.incoming(), None)) is not None:
+                try:
+                    self._last_qpos = self._target_qpos(state, call.request)
+                # rules-allow: swallowed-error — an arm that cannot be placed is the asker's failure to hear about
+                except Exception as exc:
+                    call.set_exception(exc)
+                else:
+                    command = call.request  # written to the bus below, as for any other command
+                    pending_move = call
+            elif command is not None:
+                self._last_qpos = self._target_qpos(state, command)
             # The arm and the gripper are one setpoint on a shared bus, but they arrive as two channels that
             # need not carry a value in the same round, so either one changing rewrites the whole vector.
             if (command is not None or grip is not None) and self._last_qpos is not None:
@@ -126,7 +156,7 @@ class Robot(pimm.ControlSystem):
         q_rad_new = self.kinematic.inverse(q, pose, n_iter=10)
         return self.rad_to_norm(q_rad_new)[:-1]
 
-    def _forward_kinematics(self, motor_position) -> geom.Transform3D:
+    def _forward_kinematics(self, motor_position) -> tuple[geom.Transform3D, float]:
         q_rad = self.norm_to_rad(motor_position)
         ee_pose = self.kinematic.forward(q_rad)
         gripper = motor_position[-1]

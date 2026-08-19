@@ -4,6 +4,7 @@ from collections.abc import Iterator
 
 import pimm
 from positronic.drivers import vendor_import
+from positronic.drivers.gripper import PLACE_TIMEOUT_S, answer_when_placed
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -21,11 +22,14 @@ class Robotiq2F(pimm.ControlSystem):
     def __init__(self, port: str):
         self._port = port
         self.grip = pimm.ControlSystemEmitter(self)
+        # Where the caller wants the grip to be
         self.target_grip = pimm.ControlSystemReceiver[float](self)
+        # The synchronous version of the above
+        self.sync_move = pimm.calls.ControlSystemHandler[float, None](self)
         self.force = pimm.DefaultingReceiver(self, default=255)  # device scale 0..255
         self.speed = pimm.DefaultingReceiver(self, default=255)  # device scale 0..255
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         client = ModbusClient.ModbusSerialClient(
             port=self._port, baudrate=_BAUD_RATE, bytesize=_BYTESIZE, parity=_PARITY, stopbits=_STOPBITS
         )
@@ -36,8 +40,16 @@ class Robotiq2F(pimm.ControlSystem):
             client.write_registers(_REG_CMD, [0x0000, 0x0000, 0x0000], device_id=_SLAVE)
             client.write_registers(_REG_CMD, [0x0100, 0x0000, 0x0000], device_id=_SLAVE)
 
+            pending_call, deadline = None, 0.0
+
             while not should_stop.value:
-                if (target := pimm.value_updated(self.target_grip)) is not None:
+                target = None
+                if pending_call is None:
+                    target = pimm.value_updated(self.target_grip)
+                    if (call := next(self.sync_move.incoming(), None)) is not None:
+                        target = float(call.request)
+                        pending_call, deadline = call, clock.now() + PLACE_TIMEOUT_S
+                if target is not None:
                     pos = int(max(0, min(1, target)) * 255)
                     spd = int(max(0, min(255, self.speed.value)))
                     frc = int(max(0, min(255, self.force.value)))
@@ -45,7 +57,11 @@ class Robotiq2F(pimm.ControlSystem):
                     client.write_registers(_REG_CMD, [0x0900, pos, (frc << 8) | spd], device_id=_SLAVE)
 
                 reg = client.read_input_registers(_REG_IN_POS, count=1, device_id=_SLAVE).registers[0]
-                self.grip.emit(min(1.0, max(0.0, (reg >> 8) / 255.0)))
+                grip = min(1.0, max(0.0, (reg >> 8) / 255.0))
+                self.grip.emit(grip)
+                if pending_call is not None:
+                    out_of_time = clock.now() >= deadline
+                    pending_call = answer_when_placed(pending_call, grip, pending_call.request, out_of_time)
 
                 yield limiter.wait()
         finally:

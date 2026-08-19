@@ -141,6 +141,8 @@ class Robot(pimm.ControlSystem):
             home_joints_variation if home_joints_variation is not None else [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
         )
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
+        # The synchronous version of the above
+        self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state = pimm.ControlSystemEmitter[FrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self._load = load
@@ -233,23 +235,18 @@ class Robot(pimm.ControlSystem):
             if goal.status == pf.GoalStatus.REACHED:
                 return True
             if goal.status != pf.GoalStatus.IN_FLIGHT:
-                raise RuntimeError(f'homing failed: {goal.reason or goal.status}')
+                raise RuntimeError(f'the arm stopped short of its target: {goal.reason or goal.status}')
             yield pimm.Sleep(POLL_INTERVAL_S)
         return False
 
-    def _reset(self, robot, robot_state: FrankaState, rate_limiter, should_stop) -> Iterator[pimm.Sleep]:
-        """Home the arm, yielding until it arrives. Drive with ``yield from``."""
+    def _place(
+        self, robot, robot_state: FrankaState, rate_limiter, should_stop, target: np.ndarray
+    ) -> Generator[pimm.Sleep, None, bool]:
+        """Travel to ``target``, yielding until it arrives; ``False`` means the stop ended the wait."""
         # The first emit must not ship an unfilled state.
         robot_state.encode(robot.state())
         robot_state._start_reset()
         self.state.emit(robot_state)
-
-        target = np.asarray(self._home_joints, dtype=np.float64)
-        if any(v > 0 for v in self._home_joints_variation):
-            variation = np.random.uniform(
-                -np.asarray(self._home_joints_variation), np.asarray(self._home_joints_variation)
-            )
-            target = target + variation
 
         for _ in self._travel(robot, target, lambda: should_stop.value):
             st = robot.state()
@@ -261,9 +258,52 @@ class Robot(pimm.ControlSystem):
             yield rate_limiter.wait()
 
         if should_stop.value:  # the travel gave up on the stop rather than on arrival
-            return
+            return False
         robot_state._finish_reset()
         self.state.emit(robot_state)
+        return True
+
+    def _home_target(self) -> np.ndarray:
+        """The home joints this trip aims for, drawn afresh from the spread each time."""
+        target = np.asarray(self._home_joints, dtype=np.float64)
+        if any(v > 0 for v in self._home_joints_variation):
+            variation = np.random.uniform(
+                -np.asarray(self._home_joints_variation), np.asarray(self._home_joints_variation)
+            )
+            target = target + variation
+        return target
+
+    def _target_joints(self, robot, robot_state: FrankaState, cmd: command.CommandType) -> np.ndarray:
+        """The joints ``cmd`` asks the arm to hold."""
+        match cmd:
+            case command.Reset():
+                return self._home_target()
+            case command.CartesianPosition(pose):
+                return robot.inverse_kinematics_with_limits(np.asarray([*pose.translation, *pose.rotation.as_quat]))
+            case command.CartesianDelta() as delta_cmd:
+                target = delta_cmd.apply(robot_state.ee_pose)
+                return robot.inverse_kinematics_with_limits(np.asarray([*target.translation, *target.rotation.as_quat]))
+            case command.JointPosition(positions):
+                return np.asarray(positions, dtype=np.float64)
+            case command.JointDelta(velocities=joint_delta):
+                return robot_state.q + joint_delta
+            case other:
+                raise NotImplementedError(f'Unsupported command {other}')
+
+    def _serve_sync_move(
+        self, robot, robot_state: FrankaState, rate_limiter, should_stop, call
+    ) -> Iterator[pimm.Sleep]:
+        """Put the arm where ``call`` asks and answer it once it is there; a stop cuts it short unanswered."""
+        try:
+            arrived = yield from self._place(
+                robot, robot_state, rate_limiter, should_stop, self._target_joints(robot, robot_state, call.request)
+            )
+        # rules-allow: swallowed-error — an arm that cannot be placed is the asker's failure to hear about
+        except Exception as exc:
+            call.set_exception(exc)
+        else:
+            if arrived:
+                call.set_result(None)
 
     @contextlib.contextmanager
     def _desk_session(self):
@@ -326,7 +366,7 @@ class Robot(pimm.ControlSystem):
                 robot_state = FrankaState()
                 rate_limiter = pimm.RateLimiter(clock, hz=2000)
 
-                yield from self._reset(robot, robot_state, rate_limiter, should_stop)
+                yield from self._place(robot, robot_state, rate_limiter, should_stop, self._home_target())
 
                 in_error = False
 
@@ -349,25 +389,13 @@ class Robot(pimm.ControlSystem):
                         yield rate_limiter.wait()
                         continue
 
-                    if cmd is not None:
-                        match cmd:
-                            case command.Reset():
-                                yield from self._reset(robot, robot_state, rate_limiter, should_stop)
-                            case command.CartesianPosition(pose):
-                                target_pose_wxyz = np.asarray([*pose.translation, *pose.rotation.as_quat])
-                                ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
-                                robot.set_target_joints(ik_solution)
-                            case command.CartesianDelta() as delta_cmd:
-                                target = delta_cmd.apply(robot_state.ee_pose)
-                                target_pose_wxyz = np.asarray([*target.translation, *target.rotation.as_quat])
-                                ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
-                                robot.set_target_joints(ik_solution)
-                            case command.JointPosition(positions):
-                                robot.set_target_joints(positions)
-                            case command.JointDelta(velocities=joint_delta):
-                                robot.set_target_joints(st.q + joint_delta)
-                            case other:
-                                raise NotImplementedError(f'Unsupported command {other}')
+                    if (call := next(self.sync_move.incoming(), None)) is not None:
+                        yield from self._serve_sync_move(robot, robot_state, rate_limiter, should_stop, call)
+                    elif cmd is not None:
+                        if isinstance(cmd, command.Reset):
+                            yield from self._place(robot, robot_state, rate_limiter, should_stop, self._home_target())
+                        else:
+                            robot.set_target_joints(self._target_joints(robot, robot_state, cmd))
 
                     yield rate_limiter.wait()
 

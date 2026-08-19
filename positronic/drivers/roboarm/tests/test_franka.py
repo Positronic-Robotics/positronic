@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 
 import pimm
-from pimm.tests.testing import MockClock
-from positronic.drivers.roboarm import franka
+from pimm.tests.testing import MockClock, wire_call
+from positronic.drivers.roboarm import command, franka
 
 HOME = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 JOGGED = HOME + np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
@@ -151,8 +151,8 @@ def _driver(arm: FakeArm, *, variation: list[float] | None = None, **kwargs) -> 
 def _drive(loop, clock: MockClock | None = None) -> None:
     """Pump a driver loop to exhaustion, standing in for the world by advancing ``clock`` through each Sleep."""
     clock = clock or MockClock()
-    for command in loop:
-        clock.advance(command.seconds)
+    for sleep in loop:
+        clock.advance(sleep.seconds)
 
 
 def _drive_park(driver: franka.Robot, arm: FakeArm) -> MockClock:
@@ -294,3 +294,63 @@ def test_a_stop_during_the_reset_ends_the_run_without_a_fault(desk):
     _drive(loop, clock)
 
     assert arm.calls[-1] == Call.STOP
+
+
+def _ask_to_move(world: pimm.World, driver: franka.Robot, cmd: command.CommandType):
+    """Ask ``driver`` to place the arm, for a test that pumps its generator rather than running a World."""
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
+    wire_call(world, caller, driver.sync_move)
+    return caller(cmd)
+
+
+@pytest.fixture
+def world():
+    with pimm.World() as w:
+        yield w
+
+
+def test_a_sync_move_answers_once_the_arm_is_there(world):
+    """What a sync move adds over a command: a command is fire and forget, so a caller that must know the arm
+    is in place has nothing to wait on. The answer is that arrival."""
+    arm = FakeArm(HOME, polls_to_reach=3)  # more than one poll, so an answer cannot land in the asking round
+    driver = _driver(arm, manage_desk=False)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = driver.run(stop, clock)
+
+    for _ in range(2):  # through the opening reset
+        next(loop)
+    answer = _ask_to_move(world, driver, command.JointPosition(JOGGED))
+    next(loop)
+    assert not answer.done(), 'answered before the arm could have arrived'
+
+    for _ in range(20):
+        if answer.done():
+            break
+        next(loop)
+
+    answer.result()  # raises if the move failed
+    np.testing.assert_allclose(arm.targets[-1], JOGGED)
+    np.testing.assert_allclose(arm.q, JOGGED)
+
+
+def test_a_sync_move_the_arm_cannot_make_fails_the_asker(world):
+    """A move that stops advancing is the asker's failure to hear about — it is what they were waiting on, and
+    silence would hold them for the rest of the run."""
+    arm = FakeArm(HOME)
+    driver = _driver(arm, manage_desk=False)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = driver.run(stop, clock)
+
+    for _ in range(2):
+        next(loop)
+    arm.goal_status = franka.pf.GoalStatus.ABORTED
+    answer = _ask_to_move(world, driver, command.JointPosition(JOGGED))
+    for _ in range(20):
+        if answer.done():
+            break
+        next(loop)
+
+    with pytest.raises(RuntimeError, match='stopped short'):
+        answer.result()

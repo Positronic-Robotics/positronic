@@ -94,7 +94,8 @@ class Task:
 # [✓] A driver walks the list and calls ``perform_task(task)``; the Harness keeps no plan.
 # [✓] ``charge_inference_time`` is a ``Task`` field, not a context key.
 # [✓] Split the reset token from the policy input: the instruction is all a trial gives the policy.
-# [ ] ``reset`` becomes a call on the embodiment: a sim answers at once, a real rig when the human is done.
+# [ ] Homing becomes a ``prepare`` call the arm and gripper answer once in place; ``Command.home`` goes with it.
+# [ ] A trial's reset is every ``prepare`` it asks for — scene, arm, gripper, human — and it opens once all answer.
 # [ ] One runner builds the world for both.
 @dataclass
 class Eval:

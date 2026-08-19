@@ -69,7 +69,24 @@ class Robot(pimm.ControlSystem):
         self.solver = KinematicsSolver()
         self.home_joints = home_joints if home_joints is not None else [0.0, -0, 0.5, -1.5, 0.0, -0.5, 1.57079633]
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
+        # The synchronous version of the above
+        self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state: pimm.SignalEmitter[KinovaState] = pimm.ControlSystemEmitter(self)
+
+    def _target_qpos(self, joint_controller, robot_state: KinovaState, cmd: command.CommandType) -> np.ndarray:
+        """The joints ``cmd`` asks the arm to hold."""
+        match cmd:
+            case command.Reset():
+                return np.asarray(self.home_joints, dtype=np.float32)
+            case command.CartesianPosition(pose):
+                return self.solver.inverse(pose, robot_state.q)
+            case command.CartesianDelta() as delta_cmd:
+                target = delta_cmd.apply(self.solver.forward(joint_controller.q_s))
+                return self.solver.inverse(target, robot_state.q)
+            case command.JointPosition(positions):
+                return np.array(positions, dtype=np.float32)
+            case other:
+                raise NotImplementedError(f'Unsupported command {other}')
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         _set_realtime_priority()
@@ -87,23 +104,23 @@ class Robot(pimm.ControlSystem):
             joint_controller.compute_torque(q, dq, tau)
             current_command = np.zeros(api.actuator_count, dtype=np.float32)
 
+            # The arm is torque-controlled, so it only travels while this loop runs: it cannot be held for a move
+            pending_move = None
+
             while not should_stop.value:
-                if (cmd := pimm.value_updated(self.commands)) is not None:
-                    match cmd:
-                        case command.Reset():
-                            joint_controller.set_target_qpos(self.home_joints)
-                        case command.CartesianPosition(pose):
-                            qpos = self.solver.inverse(pose, robot_state.q)
-                            joint_controller.set_target_qpos(qpos)
-                        case command.CartesianDelta() as delta_cmd:
-                            target = delta_cmd.apply(self.solver.forward(joint_controller.q_s))
-                            qpos = self.solver.inverse(target, robot_state.q)
-                            joint_controller.set_target_qpos(qpos)
-                        case command.JointPosition(positions):
-                            qpos = np.array(positions, dtype=np.float32)
-                            joint_controller.set_target_qpos(qpos)
-                        case other:
-                            print(f'Unsuported command: {other}')
+                if pending_move is not None and joint_controller.finished:
+                    pending_move.set_result(None)
+                    pending_move = None
+                if pending_move is None and (call := next(self.sync_move.incoming(), None)) is not None:
+                    try:
+                        joint_controller.set_target_qpos(self._target_qpos(joint_controller, robot_state, call.request))
+                    # rules-allow: swallowed-error — an arm that cannot be placed is the asker's failure to hear about
+                    except Exception as exc:
+                        call.set_exception(exc)
+                    else:
+                        pending_move = call
+                elif (cmd := pimm.value_updated(self.commands)) is not None:
+                    joint_controller.set_target_qpos(self._target_qpos(joint_controller, robot_state, cmd))
 
                 torque_command = joint_controller.compute_torque(q, dq, tau)
                 np.divide(torque_command, torque_constant, out=current_command)
