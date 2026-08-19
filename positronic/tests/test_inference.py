@@ -6,8 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 import pimm
-from positronic import keys
-from positronic.eval import Embodiment
+from positronic.eval import Embodiment, Task
 from positronic.inference import KeyboardOperator, real
 from positronic.tests.testing_coutils import drive_scheduler, scripted_driver
 
@@ -60,7 +59,8 @@ def test_the_keyboard_path_refuses_a_simulated_embodiment():
 def test_the_operator_reports_an_ask_the_harness_refuses(capsys):
     """The operator does not police who may start an episode: every press is asked for, and what comes back
     is printed as it lands."""
-    operator = KeyboardOperator(task='pick')
+    task = Task(instruction_source='pick', timeout_sec=None)
+    operator = KeyboardOperator(task)
     with pimm.World(virtual_time=True) as world:
         keystrokes = world.pair(operator.keystrokes)
         harness = world.pair(operator.perform_task)
@@ -77,5 +77,5 @@ def test_the_operator_reports_an_ask_the_harness_refuses(capsys):
         driver = scripted_driver((press, 0.05), (refuse_a_second_ask, 0.05), (press, 0.05), (refuse_a_second_ask, 0.05))
         drive_scheduler(world.start([operator, driver]))
 
-    assert received == [{keys.TASK: 'pick'}, {keys.TASK: 'pick'}]
+    assert received == [task, task]
     assert 'already running' in capsys.readouterr().out

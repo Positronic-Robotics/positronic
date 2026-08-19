@@ -1,7 +1,7 @@
 import configuronic as cfn
 
 from positronic.cfg.embodiment import droid
-from positronic.cfg.eval import build_trials
+from positronic.cfg.eval import build_tasks
 from positronic.cfg.eval.real.tasks import BATTERIES_TASK, SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK, UNIFIED_TASK
 from positronic.eval import Eval, Task
 
@@ -15,8 +15,7 @@ def _droid_pick_place(embodiment, instruction, timeout, trial_count):
     a computed criterion. ``timeout`` is the per-trial wall-clock budget the Harness applies on the unattended path;
     ``trial_count`` is how many such trials it sweeps (real has no seed or task axis, so each is a bare timed trial).
     """
-    task = Task(instruction=instruction, timeout=timeout)
-    return Eval(embodiment, task, build_trials(None, trial_count))
+    return Eval(embodiment, build_tasks(Task(instruction_source=instruction, timeout_sec=timeout), None, trial_count))
 
 
 pick_place = _droid_pick_place.override(instruction=UNIFIED_TASK)

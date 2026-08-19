@@ -3,10 +3,10 @@ from pathlib import Path
 
 from positronic import keys
 
-# Namespaced raw wire keys that denote an observation signal, and the verdict keys a trial records, wherever
-# they appear as a string literal. Writing any of these as a bare literal instead of importing the constant is
-# what this guard forbids — the value must live once, in `positronic.keys`, so a rename stays a single-site
-# change.
+# Namespaced raw wire keys that denote an observation signal, and the keys a trial records — the params it
+# runs under and the verdict it ends on — wherever they appear as a string literal. Writing any of these as a
+# bare literal instead of importing the constant is what this guard forbids — the value must live once, in
+# `positronic.keys`, so a rename stays a single-site change.
 _GUARDED = {
     keys.JOINTS,
     keys.JOINT_VEL,
@@ -15,6 +15,20 @@ _GUARDED = {
     keys.EXTERIOR_IMAGE,
     keys.EVAL_SUCCESS,
     keys.EVAL_TERMINATED,
+    keys.EVAL_CHARGE_INFERENCE_TIME,
+    keys.EVAL_UNIVERSE,
+    keys.EVAL_EMBODIMENT,
+    keys.EVAL_TIMEOUT,
+    keys.EVAL_SEED,
+    keys.EVAL_TRIAL_INDEX,
+    keys.EVAL_TRIAL_COUNT,
+    keys.EVAL_SUITE,
+    keys.EVAL_TASK_ID,
+    keys.EVAL_CAMERA_RESOLUTION,
+    keys.EVAL_CONTROL_MODE,
+    keys.EVAL_SETTLE_STEPS,
+    keys.EVAL_TASK,
+    keys.EVAL_INSTRUCTION_TYPE,
     keys.OBS_TIME_NS,
     keys.WALL_TIME_NS,
 }

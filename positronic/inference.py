@@ -16,22 +16,22 @@ from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import prepare_output_dir, run
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
-from positronic.eval import Embodiment
+from positronic.eval import Embodiment, Task
 from positronic.policy.harness import Harness
 from positronic.utils.logging import init_logging
 
 
 class KeyboardOperator(pimm.ControlSystem):
-    """Drives one harness from the keyboard: ``s`` asks for an episode, ``p`` ends the live one.
+    """Turns keystrokes into episodes: ``s`` asks for one through ``perform_task``, ``p`` ends the live one.
 
-    It holds the pending answers because that is where an episode's terminal — and any ask the harness
-    refuses — arrives; both are printed as they land.
+    It holds the pending answers because that is where an episode's terminal — and any refused ask —
+    arrives; both are printed as they land.
     """
 
-    def __init__(self, task: str | None = None):
+    def __init__(self, task: Task):
         self._task = task
         self.keystrokes = pimm.ControlSystemReceiver[str](self)
-        self.perform_task = pimm.calls.ControlSystemCaller[dict[str, Any], dict[str, Any]](self)
+        self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
@@ -40,7 +40,7 @@ class KeyboardOperator(pimm.ControlSystem):
             if (key := pimm.value_updated(self.keystrokes)) is not None:
                 match key:
                     case 's':
-                        pending.append(self.perform_task({keys.TASK: self._task}))
+                        pending.append(self.perform_task(self._task))
                     case 'p':
                         self.done.emit({keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR})
             running = []
@@ -88,7 +88,8 @@ def _run_attended(policy, embodiment: Embodiment, task: str | None, output_dir) 
     output_dir = prepare_output_dir(output_dir)
     harness = Harness(policy, embodiment)
     keyboard = KeyboardControl(quit_key='q')
-    operator = KeyboardOperator(task=task)
+    # An attended episode has no budget: the operator ends it, so nothing but ``done`` can.
+    operator = KeyboardOperator(Task(instruction_source=task or '', timeout_sec=None))
     print('Keyboard controls: [s]tart, sto[p], [q]uit')
 
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)

@@ -1,7 +1,7 @@
 import configuronic as cfn
 
 from positronic import keys
-from positronic.cfg.eval import build_trials
+from positronic.cfg.eval import build_tasks
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
@@ -57,25 +57,26 @@ def _libero_eval(
         proxy, camera_dict, descriptor='remote.libero.franka', static_meta=bundled_panda_model()
     )
     privileged = {'sim_state': Observation(proxy.privileged['sim_state'], None)}
-    task = Task(instruction=lambda: proxy.meta['task'], timeout=timeout)
     # One scene per (suite, task) pair: an unbound ``task_id`` sweeps each suite, a pinned one runs that task
     # in every bound suite. The scene spec rides each trial's reset token, so the single task-agnostic env
     # server serves every trial.
     scenes = [
         {
-            'eval.suite': s,
-            'eval.task_id': t,
-            'eval.camera_resolution': camera_resolution,
-            'eval.control_mode': control_mode,
-            'eval.settle_steps': settle_steps,
+            keys.EVAL_SUITE: s,
+            keys.EVAL_TASK_ID: t,
+            keys.EVAL_CAMERA_RESOLUTION: camera_resolution,
+            keys.EVAL_CONTROL_MODE: control_mode,
+            keys.EVAL_SETTLE_STEPS: settle_steps,
         }
         for s in ([suite] if isinstance(suite, str) else suite)
         for t in ([task_id] if task_id is not None else range(_SUITE_NUM_TASKS[s]))
     ]
     return Eval(
         embodiment,
-        task,
-        build_trials(seed, trial_count, scenes),
+        # rules-allow: hardcoded-keys — the env names this reset-meta field; it is not positronic's ``keys.TASK``
+        build_tasks(
+            Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout), seed, trial_count, scenes
+        ),
         privileged=privileged,
         done=proxy.done,
         reset=proxy.reset,
