@@ -65,13 +65,17 @@ def fake_server() -> Generator[Callable[..., str], None, None]:
         thread.join(timeout=5.0)
 
 
+# Sent by the fake server and asserted on by the tests that read a refusal's message.
+LOADING_MESSAGE = 'loading checkpoint 50k'
+
+
 async def _stream_loading(websocket):
     """Accept, then stream ``loading`` indefinitely without ever becoming ready.
 
     Frames go out inside the per-message allowance, so the timeout that bounds SILENCE never fires.
     """
     while True:
-        await websocket.send(serialise({STATUS: ServerStatus.LOADING, MESSAGE: 'loading checkpoint 50k'}))
+        await websocket.send(serialise({STATUS: ServerStatus.LOADING, MESSAGE: LOADING_MESSAGE}))
         await asyncio.sleep(0.05)
 
 
@@ -107,7 +111,7 @@ def test_a_server_that_never_becomes_ready_is_given_up_on_and_names_its_last_sta
     # The refusal names the endpoint and its last status frame.
     assert url in str(excinfo.value)
     assert excinfo.value.status == ServerStatus.LOADING
-    assert 'loading checkpoint 50k' in str(excinfo.value)
+    assert LOADING_MESSAGE in str(excinfo.value)
 
 
 @pytest.mark.timeout(20)
