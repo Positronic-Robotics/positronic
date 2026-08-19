@@ -7,6 +7,7 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
+from positronic.drivers.arrival import ARRIVAL_TIMEOUT_S, MoveStatus, answer_when_arrived
 from positronic.drivers.motors.feetech import MotorBus
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
@@ -84,22 +85,20 @@ class Robot(pimm.ControlSystem):
         """The setpoint ``cmd`` asks the arm to hold, in the bus's normalized units."""
         match cmd:
             case roboarm_command.Reset():
-                return self.rad_to_norm(np.asarray(self.home_joints, dtype=np.float32))
+                return self._arm_rad_to_norm(np.asarray(self.home_joints, dtype=np.float32))
             case roboarm_command.CartesianPosition(pose):
                 return self._solve_ik(state, pose)
             case roboarm_command.CartesianDelta() as delta_cmd:
                 ee_pose, _ = self._forward_kinematics(self.motor_bus.position)
                 return self._solve_ik(state, delta_cmd.apply(ee_pose))
             case roboarm_command.JointPosition(qpos):
-                return self.rad_to_norm(qpos)
+                return self._arm_rad_to_norm(np.asarray(qpos, dtype=np.float32))
             case other:
                 raise ValueError(f'Unknown command: {other}')
 
-    def _has_arrived(self) -> bool:
-        """Whether the arm has reached the setpoint it was last given."""
-        return self._last_qpos is not None and bool(
-            np.all(np.abs(self.motor_bus.position[:-1] - self._last_qpos) < _ARRIVED_TOL)
-        )
+    def _arm_rad_to_norm(self, q_rad: np.ndarray) -> np.ndarray:
+        """Normalize the five arm joints. ``rad_to_norm`` spans the bus, whose last entry is the gripper."""
+        return self.rad_to_norm(np.append(q_rad, 0.0))[:-1]
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self.motor_bus.connect()
@@ -115,21 +114,27 @@ class Robot(pimm.ControlSystem):
         state = SO101State()
 
         # The bus reports position only while this loop reads it, so it cannot be held for a move
-        pending_move = None
+        pending_move, pending_target, deadline = None, np.zeros(len(self.home_joints)), 0.0
 
         while not should_stop.value:
             command = pimm.value_updated(self.commands)
             grip = pimm.value_updated(self.target_grip)
             if grip is not None:
                 self._last_grip = grip
-            if pending_move is not None and self._has_arrived():
-                pending_move.set_result(None)
-                pending_move = None
+            if pending_move is not None:
+                # Against the target the call asked for, which a command arriving meanwhile does not change
+                status = answer_when_arrived(
+                    pending_move, self.motor_bus.position[:-1], pending_target, _ARRIVED_TOL, clock.now() >= deadline
+                )
+                if status is not MoveStatus.MOVING:
+                    pending_move = None
             if pending_move is None and (call := next(self.sync_move.incoming(), None)) is not None:
-                with pimm.calls.answering(call):
-                    self._last_qpos = self._target_qpos(state, call.request)
+                with pimm.calls.forward_failure(call):
+                    pending_target = self._target_qpos(state, call.request)
+                    self._last_qpos = pending_target
                     command = call.request  # written to the bus below, as for any other command
                     pending_move = call  # answered once the arm reads back at the setpoint
+                    deadline = clock.now() + ARRIVAL_TIMEOUT_S
             elif command is not None:
                 try:
                     self._last_qpos = self._target_qpos(state, command)

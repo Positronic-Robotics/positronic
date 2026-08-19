@@ -12,6 +12,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers import vendor_import
+from positronic.drivers.arrival import MoveStatus
 
 from . import RobotStatus, State, command
 from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
@@ -225,43 +226,49 @@ class Robot(pimm.ControlSystem):
         else:
             robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
 
-    def _await_goal(self, target: np.ndarray, should_stop: Callable[[], bool]) -> Generator[pimm.Sleep, None, bool]:
-        """Command ``target`` and poll the goal until the arm arrives; ``False`` means the stop ended the wait."""
+    def _await_goal(
+        self, target: np.ndarray, should_stop: Callable[[], bool]
+    ) -> Generator[pimm.Sleep, None, MoveStatus]:
+        """Command ``target`` and poll the goal until the arm arrives."""
         POLL_INTERVAL_S = 0.005
         robot = self._arm
         robot.set_target_joints(target)
         while not should_stop():
             goal = robot.goal()
             if goal.status == pf.GoalStatus.REACHED:
-                return True
+                return MoveStatus.ARRIVED
             if goal.status != pf.GoalStatus.IN_FLIGHT:
                 raise RuntimeError(f'the arm stopped short of its target: {goal.reason or goal.status}')
             yield pimm.Sleep(POLL_INTERVAL_S)
-        return False
+        return MoveStatus.GAVE_UP
 
-    def _move_to(self, target: np.ndarray) -> Generator[pimm.Command, None, bool]:
-        """Travel to ``target``, yielding until it arrives; ``False`` means the stop ended the wait."""
+    def _move_to(self, target: np.ndarray) -> Generator[pimm.Command, None, MoveStatus]:
+        """Travel to ``target``, yielding until it arrives."""
         robot = self._arm
         # The first emit must not ship an unfilled state.
         self._state.encode(robot.state())
         self._state._start_reset()
         self.state.emit(self._state)
 
-        for _ in self._await_goal(target, lambda: self._should_stop.value):
-            st = robot.state()
-            self._state.encode(st)
-            self._state._start_reset()  # `encode` clears RESETTING; the arm has not arrived
-            self.state.emit(self._state)
-            if st.error != 0:
-                robot.recover_from_errors()
-            yield self._limiter.wait()
+        try:
+            for _ in self._await_goal(target, lambda: self._should_stop.value):
+                st = robot.state()
+                self._state.encode(st)
+                self._state._start_reset()  # `encode` clears RESETTING; the arm has not arrived
+                self.state.emit(self._state)
+                if st.error != 0:
+                    robot.recover_from_errors()
+                yield self._limiter.wait()
+        except Exception:
+            self._errored = True  # wherever the arm stopped, it is not where it was sent
+            raise
 
         if self._should_stop.value:  # the travel gave up on the stop rather than on arrival
-            return False
+            return MoveStatus.GAVE_UP
         self._errored = False
         self._state._finish_reset()
         self.state.emit(self._state)
-        return True
+        return MoveStatus.ARRIVED
 
     def _home_target(self) -> np.ndarray:
         """The home joints this trip aims for, drawn afresh from the spread each time."""
@@ -293,8 +300,8 @@ class Robot(pimm.ControlSystem):
 
     def _serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
         """Put the arm where ``call`` asks and answer it once it is there; a stop cuts it short unanswered."""
-        with pimm.calls.answering(call):
-            if (yield from self._move_to(self._target_joints(call.request))):
+        with pimm.calls.forward_failure(call):
+            if (yield from self._move_to(self._target_joints(call.request))) is MoveStatus.ARRIVED:
                 call.set_result(None)
 
     @contextlib.contextmanager
@@ -341,8 +348,8 @@ class Robot(pimm.ControlSystem):
             robot = self._arm
             robot.recover_from_errors()  # once, before the move: a reflex during the move ends the park
             deadline = clock.now() + self._park_timeout_s
-            arrived = yield from self._await_goal(target, lambda: clock.now() >= deadline)
-            if not arrived:
+            outcome = yield from self._await_goal(target, lambda: clock.now() >= deadline)
+            if outcome is MoveStatus.GAVE_UP:
                 logging.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
         # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
         except Exception:
@@ -367,7 +374,6 @@ class Robot(pimm.ControlSystem):
                 # rules-allow: swallowed-error — an arm that will not home reads ERROR; it does not end the run
                 except Exception as exc:
                     logging.error(f'Homing failed, the arm is not where the driver put it: {exc}')
-                    self._errored = True
 
                 in_error = False
 

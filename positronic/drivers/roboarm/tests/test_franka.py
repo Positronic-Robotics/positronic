@@ -297,11 +297,11 @@ def test_a_stop_during_the_reset_ends_the_run_without_a_fault(desk):
     assert arm.calls[-1] == Call.STOP
 
 
-def _ask_to_move(world: pimm.World, driver: franka.Robot, cmd: command.CommandType):
-    """Ask ``driver`` to place the arm, for a test that pumps its generator rather than running a World."""
+def _mover(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[command.CommandType, None]:
+    """A caller on ``driver.sync_move``, for a test that pumps its generator rather than running a World."""
     caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
     wire_call(world, caller, driver.sync_move)
-    return caller(cmd)
+    return caller
 
 
 @pytest.fixture
@@ -339,7 +339,7 @@ def test_a_sync_move_answers_once_the_arm_is_there(world):
 
     for _ in range(2):  # through the opening reset
         next(loop)
-    answer = _ask_to_move(world, driver, command.JointPosition(JOGGED))
+    answer = _mover(world, driver)(command.JointPosition(JOGGED))
     next(loop)
     assert not answer.done(), 'answered before the arm could have arrived'
 
@@ -365,7 +365,7 @@ def test_a_sync_move_the_arm_cannot_make_fails_the_asker(world):
     for _ in range(2):
         next(loop)
     arm.goal_status = franka.pf.GoalStatus.ABORTED
-    answer = _ask_to_move(world, driver, command.JointPosition(JOGGED))
+    answer = _mover(world, driver)(command.JointPosition(JOGGED))
     for _ in range(20):
         if answer.done():
             break
@@ -373,3 +373,39 @@ def test_a_sync_move_the_arm_cannot_make_fails_the_asker(world):
 
     with pytest.raises(RuntimeError, match='stopped short'):
         answer.result()
+
+
+def test_an_arm_that_stopped_short_reads_error_until_a_move_lands(world):
+    """A move that fails leaves the arm somewhere nobody asked for. The vendor reports its own faults, and a
+    stall is not one of them, so without this the next state reads AVAILABLE at a pose no caller chose."""
+    arm = FakeArm(HOME)
+    driver = _driver(arm, manage_desk=False)
+    states = RecordingEmitter()
+    driver.state._bind(states)
+    move = _mover(world, driver)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = driver.run(stop, clock)
+
+    for _ in range(2):  # through the opening reset
+        next(loop)
+    arm.goal_status = franka.pf.GoalStatus.ABORTED
+    answer = move(command.JointPosition(JOGGED))
+    for _ in range(20):
+        if answer.done():
+            break
+        next(loop)
+    next(loop)
+
+    assert states.emitted[-1][1].status == RobotStatus.ERROR
+
+    arm.goal_status = None  # whatever stalled the arm is cleared
+    answer = move(command.JointPosition(HOME))
+    for _ in range(20):
+        if answer.done():
+            break
+        next(loop)
+    answer.result()
+    next(loop)
+
+    assert states.emitted[-1][1].status == RobotStatus.AVAILABLE

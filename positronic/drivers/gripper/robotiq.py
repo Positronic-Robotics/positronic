@@ -4,7 +4,7 @@ from collections.abc import Iterator
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.gripper import ARRIVAL_TIMEOUT_S, answer_when_arrived
+from positronic.drivers.arrival import ARRIVAL_TIMEOUT_S, MoveStatus, answer_when_arrived
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -16,6 +16,7 @@ _BAUD_RATE = 115200
 _BYTESIZE = 8
 _PARITY = 'N'
 _STOPBITS = 1
+_ARRIVED_TOL = 0.05  # the fingers report width, so arrival is judged from the reading
 
 
 class Robotiq2F(pimm.ControlSystem):
@@ -61,7 +62,9 @@ class Robotiq2F(pimm.ControlSystem):
                 self.grip.emit(grip)
                 if pending_call is not None:
                     out_of_time = clock.now() >= deadline
-                    pending_call = answer_when_arrived(pending_call, grip, pending_call.request, out_of_time)
+                    status = answer_when_arrived(pending_call, grip, pending_call.request, _ARRIVED_TOL, out_of_time)
+                    if status is not MoveStatus.MOVING:
+                        pending_call = None
 
                 yield limiter.wait()
         finally:

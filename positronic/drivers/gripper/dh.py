@@ -1,12 +1,16 @@
 import time
+from collections.abc import Iterator
 from ctypes import c_uint16
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.gripper import ARRIVAL_TIMEOUT_S, answer_when_arrived
+from positronic.drivers.arrival import ARRIVAL_TIMEOUT_S, MoveStatus, answer_when_arrived
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
+
+
+_ARRIVED_TOL = 0.05  # the fingers report width, so arrival is judged from the reading
 
 
 class DHGripper(pimm.ControlSystem):
@@ -20,9 +24,9 @@ class DHGripper(pimm.ControlSystem):
         self.force = pimm.DefaultingReceiver(self, default=100)
         self.speed = pimm.DefaultingReceiver(self, default=100)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        client = ModbusClient.ModbusSerialClient(port=self.port, baudrate=115200, bytesize=8, parity='N', stopbits=1)
-        client.connect()
+    @staticmethod
+    def _initialize(client) -> Iterator[pimm.Sleep]:
+        """Run the gripper's calibration, yielding until both axes report themselves ready."""
 
         def _state_g():
             return client.read_holding_registers(0x200, count=1, slave=1).registers[0]
@@ -30,11 +34,15 @@ class DHGripper(pimm.ControlSystem):
         def _state_r():
             return client.read_holding_registers(0x20A, count=1, slave=1).registers[0]
 
-        # Initial setup
         if _state_g() != 1 or _state_r() != 1:
             client.write_register(0x100, 0xA5, slave=1)
             while _state_g() != 1 and _state_r() != 1:
                 yield pimm.Sleep(0.1)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+        client = ModbusClient.ModbusSerialClient(port=self.port, baudrate=115200, bytesize=8, parity='N', stopbits=1)
+        client.connect()
+        yield from self._initialize(client)
 
         last_grip = 0.0
         pending_call, deadline = None, 0.0
@@ -55,7 +63,11 @@ class DHGripper(pimm.ControlSystem):
             self.grip.emit(current_grip)
             if pending_call is not None:
                 out_of_time = clock.now() >= deadline
-                pending_call = answer_when_arrived(pending_call, current_grip, pending_call.request, out_of_time)
+                status = answer_when_arrived(
+                    pending_call, current_grip, pending_call.request, _ARRIVED_TOL, out_of_time
+                )
+                if status is not MoveStatus.MOVING:
+                    pending_call = None
 
             yield pimm.Sleep(0.001)  # Small delay to prevent busy-waiting
 

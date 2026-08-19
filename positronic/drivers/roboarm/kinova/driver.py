@@ -7,9 +7,13 @@ from mujoco import Any
 
 import pimm
 from positronic import geom
+from positronic.drivers.arrival import ARRIVAL_TIMEOUT_S, MoveStatus, answer_when_arrived
 from positronic.drivers.roboarm import RobotStatus, State, command
 from positronic.drivers.roboarm.kinova.api import KinovaAPI
-from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver
+from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
+
+# Radians; the arm reports joints but no goal, so arrival is judged from the joints it reads
+_ARRIVED_TOL = 0.02
 
 
 def _set_realtime_priority():
@@ -105,16 +109,27 @@ class Robot(pimm.ControlSystem):
             current_command = np.zeros(api.actuator_count, dtype=np.float32)
 
             # The arm is torque-controlled, so it only travels while this loop runs: it cannot be held for a move
-            pending_move = None
+            pending_move, pending_target, deadline = None, q.copy(), 0.0
 
             while not should_stop.value:
-                if pending_move is not None and joint_controller.finished:
-                    pending_move.set_result(None)
-                    pending_move = None
+                if pending_move is not None:
+                    # ``joint_controller.finished`` says the reference trajectory ran out, not that the arm
+                    # tracked it, so arrival is judged from the joints the arm reports.
+                    status = answer_when_arrived(
+                        pending_move,
+                        q,
+                        wrap_joint_angle(pending_target, q),  # the branch the controller tracks
+                        _ARRIVED_TOL,
+                        clock.now() >= deadline,
+                    )
+                    if status is not MoveStatus.MOVING:
+                        pending_move = None
                 if pending_move is None and (call := next(self.sync_move.incoming(), None)) is not None:
-                    with pimm.calls.answering(call):
-                        joint_controller.set_target_qpos(self._target_qpos(joint_controller, robot_state, call.request))
-                        pending_move = call  # answered once the controller reports it finished
+                    with pimm.calls.forward_failure(call):
+                        pending_target = self._target_qpos(joint_controller, robot_state, call.request)
+                        joint_controller.set_target_qpos(pending_target)
+                        pending_move = call  # answered once the arm reads back at the target
+                        deadline = clock.now() + ARRIVAL_TIMEOUT_S
                 elif (cmd := pimm.value_updated(self.commands)) is not None:
                     try:
                         joint_controller.set_target_qpos(self._target_qpos(joint_controller, robot_state, cmd))
