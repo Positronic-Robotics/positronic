@@ -5,6 +5,7 @@ import pytest
 
 from pimm.calls import Answer, ControlSystemCaller, ControlSystemHandler
 from pimm.core import ControlSystem, NoValueException, Sleep
+from pimm.tests.testing import wire_call
 from pimm.world import World
 
 
@@ -73,10 +74,7 @@ def bound():
     """A caller wired to a handler in-process, without scheduling either owner."""
     caller, handler = ControlSystemCaller(Passive()), ControlSystemHandler(Passive())
     with World() as world:
-        for emitter, receiver in ((caller.requests, handler.requests), (handler.replies, caller.replies)):
-            physical_emitter, physical_receiver = world.local_pipe(maxsize=0)
-            emitter._bind(physical_emitter)
-            receiver._bind(physical_receiver)
+        wire_call(world, caller, handler)
         yield caller, handler
 
 

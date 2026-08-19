@@ -105,7 +105,7 @@ def test_nested_spans_round_trip(tmp_path):
 
 
 def test_mixed_type_attribute_sequence_survives_as_json(tmp_path):
-    """OTel drops an attribute array whose elements disagree in type, so a mixed sequence — a trial context
+    """OTel drops an attribute array whose elements disagree in type, so a mixed sequence — a trial param
     holding a label beside a number — is JSON-encoded rather than lost between the caller and the sidecar."""
     with telemetry.bind(tmp_path, HARNESS_PROCESS, 'run-mixed'):
         with telemetry.span('probe', mixed=[1, 'two'], plain=[1, 2]):

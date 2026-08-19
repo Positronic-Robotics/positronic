@@ -97,11 +97,34 @@ SERVER_META = f'{POLICY_META}.{SERVER}'
 # leaves it absent on failure — a reader defaults it rather than assuming a False.
 EVAL_SUCCESS = 'eval.success'
 EVAL_TERMINATED = 'eval.terminated'
+# Whether the trial charged each model call the wall time it really took. True on a real rig whatever the
+# task asked, since it cannot hold the world still while the model thinks.
+EVAL_CHARGE_INFERENCE_TIME = 'eval.charge_inference_time'
 # Who ended the trial, when it was not the task's own ground truth. An env's terminal leaves it absent.
 EVAL_ENDED_BY = 'eval.ended_by'
 ENDED_BY_OPERATOR = 'operator'
 
-# Whether a model call charges the world clock the time it really took. A flag: any other type is rejected
-# when the episode starts. A sim trial without it charges nothing (the world holds still per call);
-# hardware always pays whatever the trial asks.
-CHARGE_INFERENCE_TIME = 'charge_inference_time'
+# The conditions the trial ran under, stamped into its episode's statics. ``EVAL_UNIVERSE`` is ``'sim'`` or
+# ``'real'``; ``EVAL_TIMEOUT`` is absent from an episode whose task set no budget.
+EVAL_UNIVERSE = 'eval.universe'
+EVAL_EMBODIMENT = 'eval.embodiment'
+EVAL_TIMEOUT = 'eval.timeout'
+
+# A trial's place in its eval's sweep, stamped into every trial's params and recorded in its episode's
+# statics. ``EVAL_SEED`` also rides an env's reset token, where absent means the env draws its own.
+EVAL_SEED = 'eval.seed'
+EVAL_TRIAL_INDEX = 'eval.trial_index'
+EVAL_TRIAL_COUNT = 'eval.trial_count'
+
+# The scene a trial runs, named by its eval config in the trial's params and read back by the benchmark's
+# adapter to build the env's reset token. LIBERO names a task inside a suite plus the render and control
+# settings its server caches an env by; RoboLab names a task and the phrasing of its instruction; MolmoSpaces
+# names an episode of the benchmark it was pointed at.
+EVAL_EPISODE_INDEX = 'eval.episode_index'
+EVAL_SUITE = 'eval.suite'
+EVAL_TASK_ID = 'eval.task_id'
+EVAL_CAMERA_RESOLUTION = 'eval.camera_resolution'
+EVAL_CONTROL_MODE = 'eval.control_mode'
+EVAL_SETTLE_STEPS = 'eval.settle_steps'
+EVAL_TASK = 'eval.task'
+EVAL_INSTRUCTION_TYPE = 'eval.instruction_type'

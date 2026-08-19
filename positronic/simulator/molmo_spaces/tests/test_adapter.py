@@ -12,7 +12,6 @@ from pathlib import Path
 import numpy as np
 
 from positronic import keys
-from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED
 from positronic.simulator.env_server import protocol
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.adapter import DEFAULT_CAMERA_DICT as CAMERA_DICT
@@ -80,6 +79,9 @@ def test_terminal_reports_success_only_when_done():
 def test_reset_token_carries_episode_and_seed():
     adapter = MolmoAdapter(CAMERA_DICT)
     expected = {mapping.TOKEN_EPISODE_INDEX: 3, mapping.TOKEN_SEED: 7}
-    assert adapter.reset_token({EVAL_EPISODE_INDEX: 3, EVAL_SEED: 7}) == expected
+    assert adapter.reset_token({keys.EVAL_EPISODE_INDEX: 3, keys.EVAL_SEED: 7}) == expected
     # An absent seed falls back to the spec's own (None here).
-    assert adapter.reset_token({EVAL_EPISODE_INDEX: 2}) == {mapping.TOKEN_EPISODE_INDEX: 2, mapping.TOKEN_SEED: None}
+    assert adapter.reset_token({keys.EVAL_EPISODE_INDEX: 2}) == {
+        mapping.TOKEN_EPISODE_INDEX: 2,
+        mapping.TOKEN_SEED: None,
+    }

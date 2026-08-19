@@ -1,8 +1,10 @@
 import random
+from dataclasses import replace
 
 import configuronic as cfn
 
-from positronic.eval import EVAL_SEED, EVAL_TRIAL_COUNT, EVAL_TRIAL_INDEX
+from positronic import keys
+from positronic.eval import Task
 
 
 @cfn.config()
@@ -14,19 +16,26 @@ def placeholder():
     )
 
 
-def build_trials(seed: int | None, trial_count: int, scenes: list[dict] | None = None) -> list[dict]:
-    """The per-trial contexts a self-driving eval sweeps: one per (scene, seed) pair.
+def number_trials(task: Task, params: list[dict]) -> list[Task]:
+    """One copy of ``task`` per entry in ``params``, each also carrying its place in the sweep."""
+    return [
+        replace(task, params={**p, keys.EVAL_TRIAL_INDEX: i, keys.EVAL_TRIAL_COUNT: len(params)})
+        for i, p in enumerate(params)
+    ]
 
-    Each ``scenes`` entry is a scene-spec context base (e.g. ``{'eval.suite': ..., 'eval.task_id': ...}``)
-    swept over the seed set; ``None`` sweeps the seed alone (an eval with no scene axis). ``seed`` ``None``
-    draws an independent random seed per trial; an int runs ``seed .. seed + trial_count - 1`` for every
-    scene. Each context also carries its flat ``eval.trial_index`` and the total ``eval.trial_count``.
+
+def build_tasks(task: Task, seed: int | None, trial_count: int, scenes: list[dict] | None = None) -> list[Task]:
+    """The sweep an eval runs: one copy of ``task`` per (scene, seed) pair.
+
+    Each ``scenes`` entry is a scene-spec base (LIBERO's suite and task id, say) swept over the seed set;
+    ``None`` sweeps the seed alone (an eval with no scene axis). ``seed`` ``None`` draws an independent
+    random seed per trial; an int runs ``seed .. seed + trial_count - 1`` for every scene.
     """
-    trials = []
-    for scene in scenes if scenes is not None else [{}]:
-        for s in range(trial_count):
-            trials.append({**scene, EVAL_SEED: seed + s if seed is not None else random.randrange(2**31)})
-    for i, ctx in enumerate(trials):
-        ctx[EVAL_TRIAL_INDEX] = i
-        ctx[EVAL_TRIAL_COUNT] = len(trials)
-    return trials
+    return number_trials(
+        task,
+        [
+            {**scene, keys.EVAL_SEED: seed + s if seed is not None else random.randrange(2**31)}
+            for scene in (scenes if scenes is not None else [{}])
+            for s in range(trial_count)
+        ],
+    )

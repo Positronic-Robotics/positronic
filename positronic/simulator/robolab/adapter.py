@@ -24,9 +24,9 @@ class RobolabAdapter(WireCommandAdapter):
         super().__init__(DROID_EE_FRAME)
         self._camera_dict = camera_dict  # logical observation name -> the RoboLab obs image key
 
-    def _reset_token(self, context: dict[str, Any]) -> Any:
+    def _reset_token(self, params: dict[str, Any]) -> Any:
         # No seed rides the token: RoboLab's eval path has no seed hook, so a recorded seed would only mislead.
-        return {'task': context['eval.task'], 'instruction_type': context['eval.instruction_type']}
+        return {'task': params[keys.EVAL_TASK], 'instruction_type': params[keys.EVAL_INSTRUCTION_TYPE]}
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         # The env reports the eef pose in the control frame IK drives; ``eef_quat`` is scalar-first (wxyz),

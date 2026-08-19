@@ -19,22 +19,22 @@ def benchmark_dir(tmp_path):
 
 def test_timeout_defaults_to_the_benchmark_horizon_plus_a_margin(benchmark_dir):
     ev = benchmark.override(benchmark_dir=benchmark_dir).instantiate()
-    assert ev.task.timeout == _HORIZON_SEC + _TIMEOUT_MARGIN_SEC
+    assert ev.tasks[0].timeout_sec == _HORIZON_SEC + _TIMEOUT_MARGIN_SEC
 
 
 def test_explicit_timeout_can_only_lower_the_deadline(benchmark_dir, caplog):
     with caplog.at_level(logging.WARNING):
         short = benchmark.override(benchmark_dir=benchmark_dir, timeout=20.0).instantiate()
         long = benchmark.override(benchmark_dir=benchmark_dir, timeout=999.0).instantiate()
-    assert short.task.timeout == 20.0
-    assert long.task.timeout == _HORIZON_SEC + _TIMEOUT_MARGIN_SEC
+    assert short.tasks[0].timeout_sec == 20.0
+    assert long.tasks[0].timeout_sec == _HORIZON_SEC + _TIMEOUT_MARGIN_SEC
     assert len(caplog.records) == 2, 'both directions differ from the backstop, so both warn'
 
 
 def test_timeout_matching_the_backstop_is_silent(benchmark_dir, caplog):
     with caplog.at_level(logging.WARNING):
         ev = benchmark.override(benchmark_dir=benchmark_dir, timeout=_HORIZON_SEC + _TIMEOUT_MARGIN_SEC).instantiate()
-    assert ev.task.timeout == _HORIZON_SEC + _TIMEOUT_MARGIN_SEC
+    assert ev.tasks[0].timeout_sec == _HORIZON_SEC + _TIMEOUT_MARGIN_SEC
     assert not caplog.records
 
 

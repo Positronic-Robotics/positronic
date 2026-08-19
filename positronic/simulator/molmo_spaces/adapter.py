@@ -10,7 +10,6 @@ from typing import Any
 
 import pimm
 from positronic import geom, keys
-from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.molmo_spaces import mapping
@@ -33,9 +32,12 @@ class MolmoAdapter(WireCommandAdapter):
         super().__init__()
         self._camera_dict = camera_dict  # logical observation name -> the MolmoSpaces obs camera key
 
-    def _reset_token(self, context: dict[str, Any]) -> Any:
+    def _reset_token(self, params: dict[str, Any]) -> Any:
         # The benchmark episode selector rides the token. An absent seed leaves the episode spec's own in force.
-        return {mapping.TOKEN_EPISODE_INDEX: context[EVAL_EPISODE_INDEX], mapping.TOKEN_SEED: context.get(EVAL_SEED)}
+        return {
+            mapping.TOKEN_EPISODE_INDEX: params[keys.EVAL_EPISODE_INDEX],
+            mapping.TOKEN_SEED: params.get(keys.EVAL_SEED),
+        }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         # env.py reports the eef pose in the grasp-site world frame; ``eef_quat`` is scalar-first (wxyz, from

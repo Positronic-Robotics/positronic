@@ -6,8 +6,10 @@ from typing import Any
 
 import configuronic as cfn
 
+from positronic import keys
+from positronic.cfg.eval import number_trials
 from positronic.drivers.roboarm.models import GRASP_SITE_LINK, bundled_franka_model
-from positronic.eval import EVAL_EPISODE_INDEX, EVAL_SEED, EVAL_TRIAL_COUNT, EVAL_TRIAL_INDEX, Eval, Observation, Task
+from positronic.eval import Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.adapter import DEFAULT_CAMERA_DICT, MolmoAdapter
@@ -118,19 +120,17 @@ def _molmo_eval(
     )
     # The env's full MuJoCo state is recorded as privileged ground truth, never fed to the policy.
     privileged = {mapping.OBS_SIM_STATE: Observation(proxy.privileged[mapping.OBS_SIM_STATE], None)}
-    task = Task(instruction=lambda: proxy.meta[mapping.META_TASK], timeout=timeout)
+    task = Task(instruction_source=lambda: proxy.meta[mapping.META_TASK], timeout_sec=timeout)
     # Benchmark episodes are exact-pose deterministic and carry their own seed. An unset ``seed`` leaves
     # ``eval.seed`` off the trial, so the env falls back to the episode's spec seed (reproducing the benchmark);
-    # an explicit ``seed`` overrides it, sweeping ``seed .. seed + trial_count - 1``. (``build_trials`` injects a
+    # an explicit ``seed`` overrides it, sweeping ``seed .. seed + trial_count - 1``. (``build_tasks`` injects a
     # random seed when ``seed`` is None, which would clobber the spec seed and make the run non-reproducible.)
-    trials = [
-        {EVAL_EPISODE_INDEX: i, **({EVAL_SEED: seed + t} if seed is not None else {})}
+    params = [
+        {keys.EVAL_EPISODE_INDEX: i, **({keys.EVAL_SEED: seed + t} if seed is not None else {})}
         for i in indices
         for t in range(trial_count)
     ]
-    for j, ctx in enumerate(trials):
-        ctx.update({EVAL_TRIAL_INDEX: j, EVAL_TRIAL_COUNT: len(trials)})
-    return Eval(embodiment, task, trials, privileged=privileged, reset=proxy.reset, done=proxy.done)
+    return Eval(embodiment, number_trials(task, params), privileged=privileged, reset=proxy.reset, done=proxy.done)
 
 
 # The whole benchmark in one run (every episode in ``--eval.benchmark_dir``'s benchmark.json).

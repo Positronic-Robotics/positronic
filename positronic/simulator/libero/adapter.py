@@ -12,7 +12,6 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
-from positronic.eval import EVAL_SEED
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.mujoco.sim import MujocoFrankaState
@@ -23,19 +22,19 @@ class LiberoAdapter(WireCommandAdapter):
         super().__init__()
         self._camera_dict = camera_dict  # logical observation name -> the LIBERO obs image key
 
-    def _reset_token(self, context: dict[str, Any]) -> Any:
-        # The whole scene spec rides the trial context: the server caches its env by ``(suite, task_id,
+    def _reset_token(self, params: dict[str, Any]) -> Any:
+        # The whole scene spec rides the trial params: the server caches its env by ``(suite, task_id,
         # camera_resolution, control_mode)``, so one adapter + one server serve any mix of suites and tasks.
         # ``seed`` selects a saved init-state (``None`` -> the server draws one at random); ``settle_steps`` is
         # the hold-arm/open-gripper wait the server runs after a seeded reset so dropped objects settle before
         # the first observation (openpi's num_steps_wait dummy-action wait).
         return {
-            'suite': context['eval.suite'],
-            'task_id': context['eval.task_id'],
-            'camera_resolution': context['eval.camera_resolution'],
-            'control_mode': context['eval.control_mode'],
-            'seed': context.get(EVAL_SEED),
-            'settle_steps': context['eval.settle_steps'],
+            'suite': params[keys.EVAL_SUITE],
+            'task_id': params[keys.EVAL_TASK_ID],
+            'camera_resolution': params[keys.EVAL_CAMERA_RESOLUTION],
+            'control_mode': params[keys.EVAL_CONTROL_MODE],
+            'seed': params.get(keys.EVAL_SEED),
+            'settle_steps': params[keys.EVAL_SETTLE_STEPS],
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:

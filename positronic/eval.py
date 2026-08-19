@@ -9,12 +9,6 @@ from positronic.dataset.serializers import Serializer
 # Embodiment-level static meta: how recorded signals map to the canonical robot fields.
 ROBOT_STATIC_META = {keys.JOINT_SIGNALS: [keys.JOINTS], keys.POSE_SIGNALS: [keys.EE_POSE, keys.TARGET_EE_POSE]}
 
-# Per-trial context keys the trial builders set and the sim adapters read from each trial's reset context.
-EVAL_SEED = 'eval.seed'
-EVAL_EPISODE_INDEX = 'eval.episode_index'
-EVAL_TRIAL_INDEX = 'eval.trial_index'
-EVAL_TRIAL_COUNT = 'eval.trial_count'
-
 
 @dataclass
 class Observation:
@@ -72,29 +66,25 @@ class Embodiment:
         return {name: cmd.home for name, cmd in self.commands.items()}
 
 
+@dataclass
 class Task:
-    """The scenario layered on an embodiment: the policy-facing instruction and the trial's time budget.
+    """One trial: the goal the policy conditions on, the time budget it runs under, and what sets it up."""
 
-    ``instruction`` is the language goal the policy conditions on, resolved live on every read: an embodiment
-    that only learns its task on reset (a remote env reporting it in meta) passes a source callable, while a
-    fixed scenario passes a plain string (wrapped as a constant). ``timeout`` is the per-trial time budget in
-    seconds (sim-time for simulated embodiments, wall-clock for real).
-
-    Two tiers own the trial's end. For a benchmark sim the env owns the horizon — the task's native horizon is
-    part of its definition, and the env enforces it and reports expiry as a terminal ``done``; ``timeout`` is
-    then only a runaway-cost safety net, set deliberately longer than any healthy sim horizon so it fires solely
-    when the sim never terminates. For a real or attended eval there is no such terminal, so ``timeout`` is the
-    actual budget. A ``done`` within budget ends the trial and records ``eval.terminated`` True; the budget
-    lapsing records it False, distinguishing a safety-net cutoff from a genuine terminal.
-    """
-
-    def __init__(self, instruction: str | Callable[[], str], timeout: float):
-        self._instruction = (lambda: instruction) if isinstance(instruction, str) else instruction
-        self.timeout = timeout
+    instruction_source: str | Callable[[], str]
+    # Time budget for a rollout; ``None`` ends on ``Eval.done`` alone. A benchmark sim enforces the task's own
+    # horizon and reports expiry as a terminal, so there the budget is a runaway-cost net set well beyond any
+    # healthy horizon; a real or attended eval has no such terminal and the budget is the trial's actual bound.
+    timeout_sec: float | None
+    # What ``Eval.reset`` is called with, and what the episode records as the trial's identity.
+    params: dict[str, Any] = field(default_factory=dict)
+    # Sim-only: a real rig cannot pretend the time is paused when inference is run.
+    charge_inference_time: bool = False
 
     @property
     def instruction(self) -> str:
-        return self._instruction()
+        """An embodiment that learns its task on reset has one to report only once that reset has run."""
+        src = self.instruction_source
+        return src if isinstance(src, str) else src()
 
 
 # rules-allow: stale-doc — a plan is read for what is left, which needs the landed steps marked
@@ -102,24 +92,22 @@ class Task:
 # TODO: the attended and the unattended run collapse into one path.
 # Roadmap:
 # [✓] ``privileged``, ``done`` and ``reset`` are per-run: they move to ``Eval``.
-# [ ] ``trials`` becomes ``list[Task]``, one per trial; a ``Task`` carries what ``reset`` is called with.
-# [ ] A driver walks the list and calls ``perform_task(task)``; the Harness keeps no plan.
+# [✓] ``trials`` becomes ``list[Task]``, one per trial; a ``Task`` carries what ``reset`` is called with.
+# [✓] A driver walks the list and calls ``perform_task(task)``; the Harness keeps no plan.
+# [✓] ``charge_inference_time`` is a ``Task`` field, not a context key.
+# [✓] Split the reset token from the policy input: the instruction is all a trial gives the policy.
 # [ ] ``reset`` becomes a call on the embodiment: a sim answers at once, a real rig when the human is done.
-# [ ] ``charge_inference_time`` is a ``Task`` field, not a context key.
 # [ ] One runner builds the world for both.
-# [ ] Split the reset token from the policy input: the instruction is all a trial gives the policy.
 @dataclass
 class Eval:
-    """An eval = embodiment + task + the trial sweep, produced by a single config.
+    """An eval = embodiment + the tasks to run on it, produced by a single config.
 
-    ``privileged``, ``done`` and ``reset`` are per-run, not per-trial: the World wires the signals once,
-    before it runs. ``trials`` is the sequence of task contexts the self-driving Harness runs — one per
-    (task variant, seed) the config sweeps; empty for an attended/real eval, whose episodes begin on a call.
+    ``privileged``, ``done`` and ``reset`` are per-run, not per-task: the World wires the signals once,
+    before it runs. ``tasks`` is the sweep — one entry per (scenario, seed) the config expands.
     """
 
     embodiment: Embodiment
-    task: Task
-    trials: list[dict[str, Any]] = field(default_factory=list)
+    tasks: list[Task]
     privileged: dict[str, Observation] = field(default_factory=dict)
     done: pimm.SignalEmitter | None = None
     reset: Callable[[dict[str, Any]], None] | None = None

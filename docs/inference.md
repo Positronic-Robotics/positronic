@@ -92,7 +92,7 @@ Use local when latency is critical (<50ms), robot has built-in GPU, or offline o
 
 Something has to say when an episode starts and when it finishes. `positronic-inference` ships two commands, one per answer (see [`positronic/inference.py`](../positronic/inference.py)):
 
-**Unattended (`sim`):** the harness self-drives the eval's trial plan — `--eval.trial_count=10` episodes back-to-back, each ending when the task's `timeout` expires (override with `--eval.timeout=60`, seconds per episode). Batch evaluation with nobody in the loop.
+**Unattended (`sim`):** a driver walks the eval's tasks — `--eval.trial_count=10` episodes back-to-back, each ending when its task's `timeout` expires (override with `--eval.timeout=60`, seconds per episode). Batch evaluation with nobody in the loop.
 
 **Keyboard (`real`):** press `s` to start an episode, `p` to stop and save, `q` to quit. Headless — it renders nothing — and it takes `--task`, `--embodiment`, `--policy` and `--output_dir`. Manual evaluation and debugging on hardware.
 
@@ -116,7 +116,7 @@ try:
     # `None` where the run records nothing, which is why the writer is a nullcontext below.
     output_dir = prepare_output_dir(output_dir)
     harness = Harness(policy, embodiment)
-    console = MyConsole()  # calls `perform_task` per episode and emits its terminal on `done`
+    console = MyConsole()  # asks `perform_task` for a `Task` per episode and emits its terminal on `done`
 
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as writer, pimm.World() as world:

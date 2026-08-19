@@ -22,10 +22,10 @@ class EnvAdapter(ABC):
     """The mappings between the canonical embodiment contract and an env's raw wire payloads."""
 
     @abstractmethod
-    def reset_token(self, context: dict[str, Any]) -> Any:
-        """The per-trial context -> the env's opaque reset token (an int for most, a blob for exact replay).
+    def reset_token(self, params: dict[str, Any]) -> Any:
+        """The trial's params -> the env's opaque reset token (an int for most, a blob for exact replay).
 
-        Reads the context keys it needs (e.g. ``eval.seed``, ``eval.task_id``). Called at each trial start, so
+        Reads the param keys it needs (e.g. ``eval.seed``, ``eval.task_id``). Called at each trial start, so
         it is also where the adapter clears any per-trial command state.
         """
 
@@ -45,8 +45,9 @@ class EnvAdapter(ABC):
     def privileged(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         """An env's raw payload -> the privileged ground-truth signals: recorded, never fed to the policy.
 
-        The split mirrors the Task's observations/privileged. The env exposes one raw payload; the adapter
-        routes ground-truth (full sim state, a real scale) here so it can never reach the policy.
+        The split mirrors ``Embodiment.observations`` against ``Eval.privileged``. The env exposes one raw
+        payload; the adapter routes ground-truth (full sim state, a real scale) here so it can never reach
+        the policy.
         """
 
     @abstractmethod
@@ -118,13 +119,13 @@ class WireCommandAdapter(EnvAdapter):
         self._held: dict[str, Any] = {}  # last command per channel — re-sent until the next one arrives
 
     @final
-    def reset_token(self, context: dict[str, Any]) -> Any:
+    def reset_token(self, params: dict[str, Any]) -> Any:
         self._reset_command_state()
-        return self._reset_token(context)
+        return self._reset_token(params)
 
     @abstractmethod
-    def _reset_token(self, context: dict[str, Any]) -> Any:
-        """The per-trial context -> the env's opaque reset token; the command state is already cleared."""
+    def _reset_token(self, params: dict[str, Any]) -> Any:
+        """The trial's params -> the env's opaque reset token; the command state is already cleared."""
 
     def action(self, commands: dict[str, pimm.Message]) -> dict[str, Any]:
         for name, msg in commands.items():

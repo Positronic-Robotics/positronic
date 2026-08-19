@@ -3,8 +3,8 @@ import configuronic as cfn
 import positronic.cfg.simulator
 from positronic import keys
 from positronic.cfg.embodiment import mujoco_franka
-from positronic.cfg.eval import build_trials
-from positronic.eval import EVAL_SEED, Eval, Observation, Task
+from positronic.cfg.eval import build_tasks
+from positronic.eval import Eval, Observation, Task
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.utils import package_assets_path
 
@@ -38,10 +38,9 @@ def _mujoco_franka_eval(mujoco_model_path, loaders, camera_fps, camera_dict, ins
     privileged = {'sim_state': Observation(sim.sim_state, None)}
     return Eval(
         embodiment,
-        Task(instruction=instruction, timeout=timeout),
-        build_trials(seed, trial_count),
+        build_tasks(Task(instruction_source=instruction, timeout_sec=timeout), seed, trial_count),
         privileged=privileged,
-        reset=lambda ctx: sim.reset(ctx.get(EVAL_SEED)),
+        reset=lambda params: sim.reset(params.get(keys.EVAL_SEED)),
     )
 
 

@@ -86,7 +86,7 @@ class Policy(ABC):
         """Create a new inference session for an episode.
 
         Args:
-            context: Episode context (task description, eval metadata, etc.).
+            context: The episode's task description.
             now: The runtime clock (current time in seconds), supplied by the harness and passed down
                 to every wrapped session. ``None`` where no runtime clock exists (server-side, warmup).
         """

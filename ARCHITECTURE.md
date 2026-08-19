@@ -32,7 +32,7 @@ A policy trained in another end-effector frame declares that frame; a policy nee
 controller declares its control mode; a trial carries its own instruction and done predicate.
 Binding these per session collapses the comparison — two policies wanting different execution can
 no longer be interleaved in one A/B session, which is what evaluation exists to do. Corollary: the
-library must supply the tools that make late binding possible — codecs, per-trial context,
+library must supply the tools that make late binding possible — codecs, per-trial tasks,
 projections over raw recordings.
 
 **Every decision lives with the party that has the information.** Only a driver knows its motion
@@ -133,7 +133,7 @@ the wrapper stack around the policy; a session returning `None` means "keep exec
 trajectory".
 
 **Inference cost is a fact of the trial, owned by the harness.** A call costs the trial either the
-wall time it took or nothing: the trial context's `charge_inference_time` flag asks a sim for the former,
+wall time it took or nothing: the task's `charge_inference_time` flag asks a sim for the former,
 and a real rig pays it regardless. Only the harness reads the flag. Paying nothing means holding the
 world for the call, which holds a virtual clock still; paying wall time means letting the world run,
 though no further ahead of the call's start than wall time has. The clock the harness hands the

@@ -39,7 +39,7 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, CommandType, Reset
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
-from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
+from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import DelegatingPolicy, DelegatingSession, Now, Policy, Session
 from positronic.policy.codec import ActionTiming
@@ -227,7 +227,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
         # Robot/gripper emit state every tick, so the script only drives the
         # episode lifecycle and the one-shot error injection.
         script = [
-            (partial(perform_task, {keys.TASK: 'golden'}), 0.0),
+            (partial(perform_task, Task(instruction_source='golden', timeout_sec=None)), 0.0),
             (None, 1.5),  # several reactive inference + chunk/horizon cycles
             (robot.inject_error, 0.0),  # one-shot error: StopOnFault stops the arm for that frame
             (None, 0.5),

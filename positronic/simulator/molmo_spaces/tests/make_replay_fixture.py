@@ -47,7 +47,6 @@ import numpy as np
 from positronic import keys
 from positronic.dataset.local_dataset import DiskEpisode
 from positronic.dataset.signal import Signal
-from positronic.eval import EVAL_EPISODE_INDEX
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import launcher, mapping
@@ -76,9 +75,9 @@ def find_episode_dir(dataset_dir: Path, episode_index: int) -> Path:
     """The recorded episode directory whose spec carries ``episode_index``."""
     for path in sorted(dataset_dir.rglob('static.json')):
         episode_dir = path.parent
-        if DiskEpisode(episode_dir).static.get(EVAL_EPISODE_INDEX) == episode_index:
+        if DiskEpisode(episode_dir).static.get(keys.EVAL_EPISODE_INDEX) == episode_index:
             return episode_dir
-    raise SystemExit(f'no recorded episode with {EVAL_EPISODE_INDEX}={episode_index} under {dataset_dir}')
+    raise SystemExit(f'no recorded episode with {keys.EVAL_EPISODE_INDEX}={episode_index} under {dataset_dir}')
 
 
 def read_benchmark_path(dataset_dir: Path) -> str:
@@ -160,7 +159,7 @@ def build_fixture(episode_dir: Path, benchmark_path: str, assets_dir: Path) -> d
 
     steps = np.arange(1, replayable + 1)
     checkpoints = np.unique(np.concatenate([steps[::CHECKPOINT_STRIDE], steps[-1:]]))
-    episode_index = int(episode.static[EVAL_EPISODE_INDEX])
+    episode_index = int(episode.static[keys.EVAL_EPISODE_INDEX])
     played_prefix = np.stack(played[:replayable])
     grip_prefix = np.array(grip[:replayable], dtype=np.float32)
     benchmark_dir = assets_dir / mapping.ASSETS_BENCHMARKS_DIR / benchmark_path
@@ -171,7 +170,7 @@ def build_fixture(episode_dir: Path, benchmark_path: str, assets_dir: Path) -> d
             'so the recording and the integration no longer agree on the trial length'
         )
     return {
-        FIELD_EPISODE_INDEX: np.asarray(episode.static[EVAL_EPISODE_INDEX], dtype=np.int32),
+        FIELD_EPISODE_INDEX: np.asarray(episode.static[keys.EVAL_EPISODE_INDEX], dtype=np.int32),
         FIELD_BENCHMARK_PATH: np.asarray(benchmark_path),
         FIELD_TASK: np.asarray(episode.static[mapping.META_TASK]),
         FIELD_COMMANDS: played_prefix,
