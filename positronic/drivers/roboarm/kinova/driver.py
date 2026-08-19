@@ -114,7 +114,9 @@ class Robot(pimm.ControlSystem):
             move = PendingMove(_ARRIVED_TOL)
 
             while not should_stop.value:
-                if move.active and move.settle(q, clock.now()) is MoveStatus.GAVE_UP:
+                # The actuators report 0..2pi, so a move across the boundary reads a turn from its target
+                # until the reading is put on the same branch the controller tracks.
+                if move.active and move.settle(wrap_joint_angle(q, move.target), clock.now()) is MoveStatus.GAVE_UP:
                     # Leaving the controller on the target the arm stopped short of would resume the move
                     # once whatever blocked it goes away, long after its asker was told it failed.
                     joint_controller.set_target_qpos(q)

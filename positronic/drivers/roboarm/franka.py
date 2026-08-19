@@ -265,6 +265,9 @@ class Robot(pimm.ControlSystem):
                     robot.recover_from_errors()
                 yield self._limiter.wait()
             if self._clock.now() >= deadline:
+                # The vendor controller is still tracking the goal it did not reach; left alone it would
+                # resume the move once whatever held the arm back goes away.
+                robot.set_target_joints(robot.state().q)
                 raise TimeoutError(f'the arm stopped short of {target}')
         except Exception:
             self._errored = True  # wherever the arm stopped, it is not where it was sent

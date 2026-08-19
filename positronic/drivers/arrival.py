@@ -41,6 +41,12 @@ class PendingMove:
     def active(self) -> bool:
         return self._call is not None
 
+    @property
+    def target(self) -> np.ndarray | float:
+        """What the move in flight asked for, for a device that must put its reading in the same terms."""
+        assert self._call is not None, 'no move is in flight'
+        return self._target
+
     def accept(self, call: Call[Any, None], target: np.ndarray | float, now: float) -> None:
         """Take `call` as the move in flight, aiming at `target`."""
         self._call, self._target, self._deadline = call, target, now + self._timeout_s

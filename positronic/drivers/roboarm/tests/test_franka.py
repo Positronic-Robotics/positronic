@@ -56,7 +56,7 @@ class FakeArm:
         self.targets: list[np.ndarray] = []
         self.raises: Exception | None = None
         self.raises_once: Exception | None = None
-        self._polls_to_reach = polls_to_reach
+        self.polls_to_reach = polls_to_reach
         self._polls = 0
         self.goal_status = goal_status
 
@@ -77,7 +77,7 @@ class FakeArm:
         self._polls += 1
         if self.goal_status is not None:
             return _Goal(self.goal_status, 'scripted')
-        if self._polls >= self._polls_to_reach:
+        if self._polls >= self.polls_to_reach:
             self.q = self.targets[-1].copy()
             return _Goal(franka.pf.GoalStatus.REACHED, None)
         return _Goal(franka.pf.GoalStatus.IN_FLIGHT, None)
@@ -409,3 +409,34 @@ def test_an_arm_that_stopped_short_reads_error_until_a_move_lands(world):
     next(loop)
 
     assert states.emitted[-1][1].status == RobotStatus.AVAILABLE
+
+
+def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stopped(world):
+    """A goal the controller never converges on is not an error the vendor reports, so without a deadline the
+    asker waits for the rest of the run — and the arm keeps chasing a target it was told it failed."""
+    arm = FakeArm(HOME)
+    driver = _driver(arm, manage_desk=False)
+    states = RecordingEmitter()
+    driver.state._bind(states)
+    move = _mover(world, driver)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = driver.run(stop, clock)
+
+    for _ in range(2):  # through the opening reset, which still lands
+        next(loop)
+    arm.polls_to_reach = 10**9  # from here the goal stays in flight
+    answer = move(command.JointPosition(JOGGED))
+    for _ in range(int(franka._MOVE_TIMEOUT_S) * 2):
+        if answer.done():
+            break
+        clock.advance(1.0)
+        next(loop)
+
+    with pytest.raises(TimeoutError, match='stopped short'):
+        answer.result()
+    # The last thing said to the arm is where it stands, not where it was sent
+    np.testing.assert_allclose(arm.targets[-1], HOME)
+    np.testing.assert_allclose(arm.targets[-2], JOGGED)
+    next(loop)
+    assert states.emitted[-1][1].status == RobotStatus.ERROR
