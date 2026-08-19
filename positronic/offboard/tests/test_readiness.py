@@ -66,18 +66,13 @@ def fake_server() -> Generator[Callable[..., str], None, None]:
 
 
 async def _stream_loading(websocket):
-    """Stream ``loading`` indefinitely.
+    """Accept, then stream ``loading`` indefinitely without ever becoming ready.
 
     Frames go out inside the per-message allowance, so the timeout that bounds SILENCE never fires.
     """
     while True:
         await websocket.send(serialise({STATUS: ServerStatus.LOADING, MESSAGE: 'loading checkpoint 50k'}))
         await asyncio.sleep(0.05)
-
-
-async def _forever_loading(websocket):
-    """Accept, then never become ready."""
-    await _stream_loading(websocket)
 
 
 # Minimal buildable declaration: a ready server must still name a stack for the endpoint to be usable.
@@ -101,7 +96,7 @@ async def _ready_at_once(websocket):
 @pytest.mark.timeout(20)
 def test_a_server_that_never_becomes_ready_is_given_up_on_and_names_its_last_state(fake_server):
     """Connected, talking, never servable — and bounded."""
-    url = fake_server(_forever_loading)
+    url = fake_server(_stream_loading)
     client = InferenceClient(url)
 
     started = time.monotonic()
@@ -189,7 +184,7 @@ def test_the_reported_wait_covers_the_connect_retries_too(fake_server):
 def test_the_handshake_is_bounded_by_the_shorter_of_the_two_deadlines(fake_server):
     """``connect_deadline`` bounds the whole call, so a server that connects and then streams
     ``loading`` cannot outlive it by handshaking under the caller's later deadline."""
-    client = InferenceClient(fake_server(_forever_loading), connect_deadline=1.0)
+    client = InferenceClient(fake_server(_stream_loading), connect_deadline=1.0)
 
     started = time.monotonic()
     with pytest.raises(ServerNotReady):
@@ -202,7 +197,7 @@ def test_the_handshake_is_bounded_by_the_shorter_of_the_two_deadlines(fake_serve
 @pytest.mark.timeout(20)
 def test_giving_up_is_not_retried_as_a_cold_start(fake_server):
     """A reconnect does not fix it, so the cold-backend retry loop must not swallow it."""
-    url = fake_server(_forever_loading)
+    url = fake_server(_stream_loading)
     client = InferenceClient(url, connect_deadline=600.0)
 
     started = time.monotonic()
@@ -217,7 +212,7 @@ def test_giving_up_is_not_retried_as_a_cold_start(fake_server):
 
 @pytest.mark.timeout(30)
 def test_a_remote_policy_waits_on_its_own_endpoint_and_names_it(fake_server):
-    url = fake_server(_forever_loading)
+    url = fake_server(_stream_loading)
     with pytest.raises(ServerNotReady) as excinfo:
         RemotePolicy(url).wait_ready(1.0)
     assert url in str(excinfo.value)
@@ -264,7 +259,7 @@ def test_a_run_is_refused_before_anything_downstream_is_built(fake_server, tmp_p
     is synced and snapshotted into, and each eval brings a world up around the hardware."""
     with pytest.raises(ServerNotReady):
         main(
-            policy=RemotePolicy(fake_server(_forever_loading)),
+            policy=RemotePolicy(fake_server(_stream_loading)),
             evals=[cast(Eval, SimpleNamespace(embodiment=_Untouchable(), task=None, trials=[]))],
             output_dir=tmp_path,
             ready_timeout=1.0,
