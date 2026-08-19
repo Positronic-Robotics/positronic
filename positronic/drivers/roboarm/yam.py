@@ -216,12 +216,7 @@ class Robot(pimm.ControlSystem):
             self.robot_meta.emit(meta)
 
             grip_target = 0.0
-            q_target = np.asarray(self._home_joints, dtype=np.float64)
-            try:
-                yield from self._move_to(q_target, grip_target)  # Home the robot first.
-            # rules-allow: swallowed-error — a chain that will not home reads ERROR; it does not end the run
-            except Exception as exc:
-                logging.error(f'Homing failed, the chain is not where the driver put it: {exc}')
+            q_target = yield from self._home(grip_target)
 
             while not should_stop.value:
                 if (grip := pimm.value_updated(self.target_grip)) is not None:
@@ -236,8 +231,7 @@ class Robot(pimm.ControlSystem):
                     try:
                         if isinstance(cmd, command.Reset):
                             grip_target = 0.0  # homing opens the gripper
-                            q_target = np.asarray(self._home_joints, dtype=np.float64)
-                            yield from self._move_to(q_target, grip_target)
+                            q_target = yield from self._home(grip_target)
                         else:
                             q_target = self._target_joints(cmd, q)
                     # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
@@ -292,6 +286,21 @@ class Robot(pimm.ControlSystem):
         self.state.emit(self._state)
         return MoveStatus.ARRIVED
 
+    def _home(self, grip: float) -> Generator[pimm.Command, None, np.ndarray]:
+        """Ramp the chain home, and return the joints to hold: home if it got there, where it stopped if not."""
+        home = np.asarray(self._home_joints, dtype=np.float64)
+        try:
+            if (yield from self._move_to(home, grip)) is MoveStatus.ARRIVED:
+                return home
+        # rules-allow: swallowed-error — a chain that will not home reads ERROR; it does not end the run
+        except Exception as exc:
+            logging.error(f'Homing failed, the chain is not where the driver put it: {exc}')
+        return self._measured_joints()
+
+    def _measured_joints(self) -> np.ndarray:
+        """The joints the chain reports, as a target that holds it where it stands."""
+        return np.asarray(self._arm.get_observations()[_JOINT_POS], dtype=np.float64)
+
     def _emit_moving(self) -> None:
         """Publish the chain's state mid-move, where its pose is not the one it was commanded to track."""
         self._encode_state(self._arm.get_observations())
@@ -324,7 +333,7 @@ class Robot(pimm.ControlSystem):
             return np.asarray(target, dtype=np.float64)
         # The move failed and its asker was told. ``q`` predates the ramp, so holding it would drive the chain
         # back the way it came; where it stopped is the only posture nobody has to be surprised by.
-        return np.asarray(self._arm.get_observations()[_JOINT_POS], dtype=np.float64)
+        return self._measured_joints()
 
     def _ik(self, world_pose: geom.Transform3D, q: np.ndarray) -> np.ndarray:
         """IK in the arm-base frame."""

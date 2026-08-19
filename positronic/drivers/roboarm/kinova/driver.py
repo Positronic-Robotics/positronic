@@ -122,6 +122,10 @@ class Robot(pimm.ControlSystem):
                         _ARRIVED_TOL,
                         clock.now() >= deadline,
                     )
+                    if move_status is MoveStatus.GAVE_UP:
+                        # Leaving the controller on the target the arm stopped short of would resume the move
+                        # once whatever blocked it goes away, long after its asker was told it failed.
+                        joint_controller.set_target_qpos(q)
                     if move_status is not MoveStatus.MOVING:
                         pending_move = None
                 # The command stream goes unread while a move is pending: it owns the arm until it answers,

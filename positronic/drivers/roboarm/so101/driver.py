@@ -69,9 +69,6 @@ class Robot(pimm.ControlSystem):
         self.sync_move = pimm.calls.ControlSystemHandler[roboarm_command.CommandType, None](self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
         self._last_grip: float = 0.0
-        # The arm half of the motor setpoint, in normalized units. ``None`` until the first arm command:
-        # a gripper target arriving before one has no arm position to pair with.
-        self._last_qpos: np.ndarray | None = None
 
         self.grip: pimm.SignalEmitter[float] = pimm.ControlSystemEmitter(self)
         self.state: pimm.SignalEmitter[SO101State] = pimm.ControlSystemEmitter(self)
@@ -96,6 +93,17 @@ class Robot(pimm.ControlSystem):
             case other:
                 raise ValueError(f'Unknown command: {other}')
 
+    def _streamed_setpoint(self, state: SO101State) -> np.ndarray | None:
+        """The setpoint the command stream asks for, if one arrived and the arm can be put there."""
+        if (cmd := pimm.value_updated(self.commands)) is None:
+            return None
+        try:
+            return self._target_qpos(state, cmd)
+        # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
+        except Exception as exc:
+            logging.warning(f'{cmd} not applied: {exc}')
+            return None
+
     def _arm_rad_to_norm(self, q_rad: np.ndarray) -> np.ndarray:
         """Normalize the five arm joints. ``rad_to_norm`` spans the bus, whose last entry is the gripper."""
         return self.rad_to_norm(np.append(q_rad, 0.0))[:-1]
@@ -112,41 +120,44 @@ class Robot(pimm.ControlSystem):
 
         rate_limit = pimm.RateLimiter(hz=1000, clock=clock)
         state = SO101State()
+        # The arm half of the motor setpoint, in normalized units. Read here, not in ``__init__``: the arm
+        # holds where the bus finds it until something asks otherwise, and there is no bus until now.
+        self._last_qpos = np.asarray(self.motor_bus.position[:-1])
 
         # The bus reports position only while this loop reads it, so it cannot be held for a move
         pending_move, pending_target, deadline = None, np.zeros(len(self.home_joints)), 0.0
 
         while not should_stop.value:
-            grip = pimm.value_updated(self.target_grip)
-            if grip is not None:
-                self._last_grip = grip
+            # The arm and the gripper are one setpoint on a shared bus, but they arrive as two channels that
+            # need not carry a value in the same round, so either one changing rewrites the whole vector.
+            setpoint_changed = False
+            if (grip := pimm.value_updated(self.target_grip)) is not None:
+                self._last_grip, setpoint_changed = grip, True
+
             if pending_move is not None:
                 move_status = answer_when_arrived(
                     pending_move, self.motor_bus.position[:-1], pending_target, _ARRIVED_TOL, clock.now() >= deadline
                 )
+                if move_status is MoveStatus.GAVE_UP:
+                    # Holding the target the arm stopped short of would resume the move once whatever blocked
+                    # it goes away, long after its asker was told it failed.
+                    self._last_qpos, setpoint_changed = np.asarray(self.motor_bus.position[:-1]), True
                 if move_status is not MoveStatus.MOVING:
                     pending_move = None
 
             # The command stream goes unread while a move is pending: it owns the arm until it answers, and
             # a superseding setpoint would fail it for something its asker did not do.
-            command = None
             if pending_move is None:
                 if (call := next(self.sync_move.incoming(), None)) is not None:
                     with pimm.calls.forward_failure(call):
                         pending_target = self._target_qpos(state, call.request)
-                        self._last_qpos = pending_target
-                        command = call.request  # written to the bus below, as for any other command
+                        self._last_qpos, setpoint_changed = pending_target, True
                         pending_move = call  # answered once the arm reads back at the setpoint
                         deadline = clock.now() + ARRIVAL_TIMEOUT_S
-                elif (command := pimm.value_updated(self.commands)) is not None:
-                    try:
-                        self._last_qpos = self._target_qpos(state, command)
-                    # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
-                    except Exception as exc:
-                        logging.warning(f'{command} not applied: {exc}')
-            # The arm and the gripper are one setpoint on a shared bus, but they arrive as two channels that
-            # need not carry a value in the same round, so either one changing rewrites the whole vector.
-            if (command is not None or grip is not None) and self._last_qpos is not None:
+                elif (target := self._streamed_setpoint(state)) is not None:
+                    self._last_qpos, setpoint_changed = target, True
+
+            if setpoint_changed:
                 self.motor_bus.set_target_position(np.concatenate([self._last_qpos, [self._last_grip]]))
 
             q = self.motor_bus.position
