@@ -887,9 +887,9 @@ def test_trial_seed_reaches_task_reset_and_meta(world):
     assert len(stops) == 2
     assert [s.static_data[keys.EVAL_SEED] for s in stops] == [7, 8]
     assert all(s.static_data[keys.TASK] == 'stack' for s in stops)
-    assert all(s.static_data['eval.universe'] == 'real' for s in stops)
-    assert all(s.static_data['eval.embodiment'] == '' for s in stops)
-    assert all(s.static_data['eval.timeout'] == 0.05 for s in stops)
+    assert all(s.static_data[keys.EVAL_UNIVERSE] == 'real' for s in stops)
+    assert all(s.static_data[keys.EVAL_EMBODIMENT] == '' for s in stops)
+    assert all(s.static_data[keys.EVAL_TIMEOUT] == 0.05 for s in stops)
     assert all(s.static_data[keys.EVAL_CHARGE_INFERENCE_TIME] is True for s in stops)
     assert policy.reset_calls == 2
 
@@ -1626,7 +1626,7 @@ def test_a_reply_is_scheduled_only_while_the_trial_still_has_budget(world, expir
     harness = Harness(policy, make_embodiment())
     now = world.clock.now()
     harness._deadline = now - 1.0 if expired else now + 1.0
-    harness._worker = _InferenceWorker(policy, {}, charge_wall=True, clock=world.clock)
+    harness._worker = _InferenceWorker(policy, {}, charges_wall_time=True, clock=world.clock)
     harness._worker.submit({})
 
     harness._throttle_and_reschedule(harness._worker, world.clock)

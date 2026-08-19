@@ -36,12 +36,12 @@ class _InferenceWorker:
     """One episode's policy session, called one at a time on a thread of its own so the harness keeps
     playing while the model runs.
 
-    ``charge_wall`` is what a call costs the trial: the wall time it took, or nothing — the loop is held
-    for the call, which holds a virtual clock still.
+    ``charges_wall_time`` says whether a call costs the trial the wall time it really took or nothing —
+    the loop is held for the call, which holds a virtual clock still.
     """
 
-    def __init__(self, policy: Policy, context: dict[str, Any], charge_wall: bool, clock: pimm.Clock) -> None:
-        self._charge_wall = charge_wall
+    def __init__(self, policy: Policy, context: dict[str, Any], charges_wall_time: bool, clock: pimm.Clock) -> None:
+        self._charges_wall_time = charges_wall_time
         self._clock = clock
         # World clock and ``time.monotonic()`` at the in-flight call's submit, anchored at the episode's
         # start so ``effect_time`` reads a trial instant from the moment the session exists.
@@ -66,7 +66,7 @@ class _InferenceWorker:
     def effect_time(self) -> float:
         """The trial instant the in-flight call's output takes effect: its submit, plus its wall duration so
         far when the trial pays wall time."""
-        wall = time.monotonic() - self._wall_t0 if self._charge_wall else 0.0
+        wall = time.monotonic() - self._wall_t0 if self._charges_wall_time else 0.0
         return self._t0_ns / 1e9 + wall
 
     @staticmethod
@@ -94,7 +94,7 @@ class _InferenceWorker:
         world is held for it, else only while the world is ahead of the call's own wall clock."""
         assert self._call is not None
         # Wall time cannot be held still, so the world runs no further ahead of the call's start than it has.
-        timeout = max(self._clock.now() - self.effect_time(), 0.0) if self._charge_wall else None
+        timeout = max(self._clock.now() - self.effect_time(), 0.0) if self._charges_wall_time else None
         concurrent.futures.wait([self._call], timeout=timeout)
 
     def result(self) -> list[dict[str, Any]] | None:
@@ -268,17 +268,17 @@ class Harness(pimm.ControlSystem):
         return self._call.request
 
     @property
-    def _charge_wall(self) -> bool:
+    def _charges_wall_time(self) -> bool:
         """Whether each model call costs the trial the wall time it took. A real rig has no other option."""
         return self._task.charge_inference_time or not self._embodiment.simulated
 
     def _build_episode_meta(self) -> dict[str, Any]:
         meta = self._statics()
-        meta['eval.universe'] = 'sim' if self._embodiment.simulated else 'real'
-        meta['eval.embodiment'] = self._embodiment.descriptor
-        meta[keys.EVAL_CHARGE_INFERENCE_TIME] = self._charge_wall
+        meta[keys.EVAL_UNIVERSE] = 'sim' if self._embodiment.simulated else 'real'
+        meta[keys.EVAL_EMBODIMENT] = self._embodiment.descriptor
+        meta[keys.EVAL_CHARGE_INFERENCE_TIME] = self._charges_wall_time
         if self._task.timeout_sec is not None:  # the recorder takes no nulls, and an unbounded episode has none
-            meta['eval.timeout'] = self._task.timeout_sec
+            meta[keys.EVAL_TIMEOUT] = self._task.timeout_sec
         # ``policy.meta`` is the static baseline; the session overlays per-episode specifics (e.g. the
         # sampled sub-policy) and wins on conflict.
         session_meta = self.policy.meta | (self._worker.meta if self._worker else {})
@@ -367,7 +367,9 @@ class Harness(pimm.ControlSystem):
                 self._reset(self._task.params)
         # Read after the reset: an embodiment that learns its task from the scene reports it only once the
         # scene is set up.
-        self._worker = _InferenceWorker(self.policy, {keys.TASK: self._task.instruction}, self._charge_wall, clock)
+        self._worker = _InferenceWorker(
+            self.policy, {keys.TASK: self._task.instruction}, self._charges_wall_time, clock
+        )
         budget = self._task.timeout_sec
         self._deadline = clock.now() + budget if budget is not None else None
         self.ds_command.emit(DsWriterCommand.START())

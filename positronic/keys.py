@@ -104,6 +104,12 @@ EVAL_CHARGE_INFERENCE_TIME = 'eval.charge_inference_time'
 EVAL_ENDED_BY = 'eval.ended_by'
 ENDED_BY_OPERATOR = 'operator'
 
+# The conditions the trial ran under, stamped into its episode's statics. ``EVAL_UNIVERSE`` is ``'sim'`` or
+# ``'real'``; ``EVAL_TIMEOUT`` is absent from an episode whose task set no budget.
+EVAL_UNIVERSE = 'eval.universe'
+EVAL_EMBODIMENT = 'eval.embodiment'
+EVAL_TIMEOUT = 'eval.timeout'
+
 # A trial's place in its eval's sweep, stamped into every trial's params and recorded in its episode's
 # statics. ``EVAL_SEED`` also rides an env's reset token, where absent means the env draws its own.
 EVAL_SEED = 'eval.seed'

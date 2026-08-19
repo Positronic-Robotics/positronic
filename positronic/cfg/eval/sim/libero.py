@@ -74,7 +74,7 @@ def _libero_eval(
     return Eval(
         embodiment,
         build_tasks(
-            Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout), seed, trial_count, scenes
+            Task(instruction_source=lambda: proxy.meta[keys.TASK], timeout_sec=timeout), seed, trial_count, scenes
         ),
         privileged=privileged,
         done=proxy.done,
