@@ -13,13 +13,14 @@ from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
 
 from positronic import keys
-from positronic.offboard.client import InferenceClient, InferenceSession
+from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
+from positronic.offboard.protocol import deserialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
+from positronic.offboard.server_utils import warmup
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
 from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
-from positronic.utils.serialization import deserialise
 
 
 class _StubSource(ModelSource):
@@ -68,9 +69,7 @@ def test_full_inference_cycle(stub_server):
 
 
 def test_no_codec(stub_server):
-    host, port, server, _policy = stub_server
-    assert server._remote is None
-
+    host, port, _server, _policy = stub_server
     client = InferenceClient(f'{host}:{port}')
     session = client.new_session()
     try:
@@ -178,9 +177,6 @@ class _IdentityCodec(Codec):
     def meta(self):
         return {'codec': 'identity'}
 
-    def dummy_encoded(self, data=None):
-        return data or {}
-
 
 @pytest.fixture
 def codec_server(start_server, make_mock_policy) -> tuple[str, int, MagicMock]:
@@ -201,10 +197,24 @@ def test_codec_wrapping(codec_server):
         session.close()
 
 
-def test_warmup_runs_dummy_inference_at_startup(codec_server):
-    _host, _port, policy = codec_server
-    # Startup warmed the pinned model up through the codec's dummy_encoded() before serving.
-    policy._mock_session.assert_called_once_with({})
+def test_warmup_runs_one_inference_and_ends_its_session(make_mock_policy):
+    policy = make_mock_policy([{'action': [1, 2, 3]}], {})
+    obs = {'obs': 'zeros'}
+
+    warmup(policy, obs)
+
+    policy._mock_session.assert_called_once_with(obs)
+    policy._mock_session.close.assert_called_once()
+
+
+def test_a_backend_that_cannot_answer_its_warmup_raises_and_still_ends_its_session(make_mock_policy):
+    policy = make_mock_policy([], {})
+    policy._mock_session.side_effect = RuntimeError('shape mismatch')
+
+    with pytest.raises(RuntimeError, match='shape mismatch'):
+        warmup(policy, {})
+
+    policy._mock_session.close.assert_called_once()
 
 
 def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
@@ -416,7 +426,10 @@ def authed_endpoint(start_server, make_mock_policy) -> tuple[str, str]:
         pytest.param(lambda token: token, id='no-bearer-prefix'),
     ],
 )
-def test_auth_rejects_requests_without_the_token(authed_endpoint, make_header):
+def test_auth_rejects_requests_without_the_token(authed_endpoint, make_header, monkeypatch):
+    # A 403 buys retries for a backend that may be merely cold. This one is refusing, so those attempts and
+    # the waits between them are dead time; `TestNewSessionRetriesRefusedUpgrades` is what tests the budget.
+    monkeypatch.setattr(_ConnectRetries, 'MAX_FORBIDDEN_ATTEMPTS', 1)
     url, token = authed_endpoint
     header = make_header(token)
     client = InferenceClient(url, headers=None if header is None else {AUTH_HEADER: header})

@@ -37,6 +37,7 @@ import threading
 import time
 from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -92,14 +93,16 @@ GPU_POWER_W = 'power_w'
 GPU_PROC_MEM_B = 'proc_mem_b'
 GPU_PROC_UTIL_PCT = 'proc_util_pct'
 
-# The bound provider and the anchor stack are process-global: the harness, env proxy and recorder run as
-# cooperative control systems in one thread and interleave their spans, so parenting is resolved here rather
-# than through OTel's ambient context (which does not survive the scheduler's generator hops). An anchor is a
-# long-running span its owner holds open (a pass, a rollout); ``span`` parents a span opened outside any
-# active span of the bound trace to the innermost anchor, while a nested span (materialize inside env.step)
-# still parents to whatever OTel span is current within its own ``with`` block.
+# The bound provider is process-global; the anchor stack is per-context. An anchor is a long-running span its
+# owner holds open (a pass, a rollout).
+#
+# - A span opened while no span of the bound trace is active parents to the innermost anchor.
+# - A span opened inside another parents to that one.
+# - With nothing anchored, a span roots.
+# - A copied context carries the anchors it was copied with; a push or pop after the copy does not reach it.
+# - The stack stands in for OTel's ambient context, which does not survive the scheduler's generator hops.
 _provider: 'TracerProvider | None' = None
-_anchors: list[Span] = []
+_anchors: ContextVar[tuple[Span, ...]] = ContextVar('positronic_telemetry_anchors', default=())
 
 
 # The unbound fallback is a PRIVATE no-op, never ``trace.get_tracer``: a host application embedding this code
@@ -196,45 +199,39 @@ def force_flush() -> None:
 
 def push_anchor(anchor: Span) -> None:
     """Make ``anchor`` the innermost anchor: spans opened outside it from now on parent to it."""
-    _anchors.append(anchor)
+    _anchors.set((*_anchors.get(), anchor))
 
 
 def pop_anchor(anchor: Span) -> None:
     """Drop ``anchor`` from the stack, wherever in it it sits — a failure path can close anchors out of order,
     and a stale one would go on parenting later spans into a finished span's trace."""
-    _anchors[:] = [held for held in _anchors if held is not anchor]
+    _anchors.set(tuple(held for held in _anchors.get() if held is not anchor))
 
 
 def _anchor_context() -> Any:
     """The context parenting a span to the innermost anchor, or a root context when nothing is anchored.
 
-    Rooting is explicit rather than ``None``, which would mean "whatever is ambient": a host application
-    embedding this code can have its own OTel span current, and inheriting it makes the span a child of a
-    foreign trace. Under parent-based sampling an unsampled host span then makes ``eval.pass`` non-recording,
-    and every episode and phase anchored beneath it is dropped — the sidecar comes back empty and the report
-    reads the run as untimed.
+    Rooting is explicit rather than ``None``: a host application's current span would adopt the span into a
+    foreign trace, and under parent-based sampling an unsampled one silences the whole sidecar.
     """
-    return trace.set_span_in_context(_anchors[-1]) if _anchors else Context()
+    anchors = _anchors.get()
+    return trace.set_span_in_context(anchors[-1]) if anchors else Context()
 
 
 def _anchor_parent() -> Any:
-    """The parent context for a span that is not nested in an active one. A currently-active span of THIS
-    provider's trace means a genuinely nested span — ``None`` lets it parent ambiently. Otherwise the
-    span parents to the innermost anchor, or roots: between scheduler hops nothing of ours is current, and a
-    host application's unrelated current span must not adopt telemetry spans — they would leave the trace the
-    report reduces, and take its sampling decision with them."""
-    if _anchors:
+    """The parent context for a span opened outside an active one: ``None`` where the current span belongs to
+    this provider's trace, so a nested span parents ambiently."""
+    anchors = _anchors.get()
+    if anchors:
         current = trace.get_current_span().get_span_context()
-        if current.is_valid and current.trace_id == _anchors[-1].get_span_context().trace_id:
+        if current.is_valid and current.trace_id == anchors[-1].get_span_context().trace_id:
             return None
     return _anchor_context()
 
 
 def start_span(name: str, **attrs: Any) -> Span:
-    """Start a span its caller holds and ends itself, without entering it as the OTel-current span — so it
-    never becomes the ambient parent of the enclosed code's spans. It parents to the innermost anchor, and
-    roots when nothing is anchored. Anchor it (``push_anchor``) to collect the spans opened under it.
-    A no-op while unbound returns an invalid span the caller ends harmlessly."""
+    """Start a span its caller holds and ends itself, without entering it as the OTel-current span. A no-op
+    while unbound returns an invalid span the caller ends harmlessly."""
     return _tracer().start_span(name, context=_anchor_context(), attributes=_encode_attrs(attrs))
 
 
@@ -244,9 +241,8 @@ def set_attrs(span: Span, **attrs: Any) -> None:
 
 
 def span(name: str, **attrs: Any):
-    """A wall-clock span named ``name``, entered as the current span for the enclosed block. A span opened
-    while no OTel span is active parents to the innermost anchor; a span opened inside another parents to
-    it. A no-op while unbound."""
+    """A wall-clock span named ``name``, entered as the current span for the enclosed block. A no-op while
+    unbound."""
     return _tracer().start_as_current_span(name, context=_anchor_parent(), attributes=_encode_attrs(attrs))
 
 

@@ -26,11 +26,20 @@ def is_robot_command(name: str) -> bool:
     return name == ROBOT_COMMAND or name.startswith(f'{ROBOT_COMMAND}.')
 
 
-JOINTS = 'robot_state.q'
-JOINT_VEL = 'robot_state.dq'
-EE_POSE = 'robot_state.ee_pose'
+# The arm's state channel, and the signals a recorded state unfolds into. As on the command side, the
+# suffixes are ``Serializers.robot_state``'s, so the names derive from the channel rather than restating it.
+ROBOT_STATE = 'robot_state'
+JOINTS = f'{ROBOT_STATE}.q'
+JOINT_VEL = f'{ROBOT_STATE}.dq'
+EE_POSE = f'{ROBOT_STATE}.ee_pose'
+# The arm's ``RobotStatus``. The suffix is named on its own because a consumer picks the entry out by it on a
+# rig whose arms are ``robot_state.{side}``.
+STATUS_SUFFIX = '.status'
+ROBOT_STATUS = f'{ROBOT_STATE}{STATUS_SUFFIX}'
 GRIP = 'grip'
 TASK = 'task'
+# The embodiment an observation came from, so a multi-embodiment policy can tell which robot it is driving.
+DESCRIPTOR = 'descriptor'
 # The prefix that identifies a camera on the wire: an embodiment declares its cameras by naming
 # them this way, and every consumer picks them out of the observations by it.
 IMAGE_PREFIX = 'image.'
@@ -88,3 +97,11 @@ SERVER_META = f'{POLICY_META}.{SERVER}'
 # leaves it absent on failure — a reader defaults it rather than assuming a False.
 EVAL_SUCCESS = 'eval.success'
 EVAL_TERMINATED = 'eval.terminated'
+# Who ended the trial, when it was not the task's own ground truth. An env's terminal leaves it absent.
+EVAL_ENDED_BY = 'eval.ended_by'
+ENDED_BY_OPERATOR = 'operator'
+
+# Whether a model call charges the world clock the time it really took. A flag: any other type is rejected
+# when the episode starts. A sim trial without it charges nothing (the world holds still per call);
+# hardware always pays whatever the trial asks.
+CHARGE_INFERENCE_TIME = 'charge_inference_time'

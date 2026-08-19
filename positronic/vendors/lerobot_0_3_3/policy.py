@@ -4,6 +4,8 @@ import configuronic as cfn
 import numpy as np
 import pos3
 import torch
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.configs.types import FeatureType
 from lerobot.constants import CHECKPOINTS_DIR, PRETRAINED_MODEL_DIR
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.pretrained import PreTrainedPolicy
@@ -11,8 +13,9 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.policy import Codec, Policy, Session
+from positronic.policy.observation import TASK_FIELD
 from positronic.policy.spec import PolicySource, inline
-from positronic.policy.wrappers import ChunkedSchedule
+from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot_0_3_3.backbone import register_all
 
@@ -45,7 +48,7 @@ class _LerobotSession(Session):
     def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
         obs_int = {}
         for key, val in obs.items():
-            if key == 'task':
+            if key == TASK_FIELD:
                 obs_int[key] = val
             elif isinstance(val, np.ndarray):
                 if key.startswith('observation.images.'):
@@ -62,6 +65,25 @@ class _LerobotSession(Session):
     @property
     def meta(self) -> dict[str, Any]:
         return self._meta
+
+
+def warm_observation(config: PreTrainedConfig) -> dict[str, Any]:
+    """Zero-filled inputs matching the features ``config`` declares.
+
+    Taken from the policy that was built rather than from the checkpoint directory, so a factory is free to
+    load one however it likes. Visual features are declared channels-first and arrive here channels-last, the
+    way a session takes them.
+    """
+    if not config.input_features:
+        raise ValueError('The policy declares no input features, so there is nothing to warm it with')
+    obs: dict[str, Any] = {TASK_FIELD: ''}
+    for name, feature in config.input_features.items():
+        if feature.type is FeatureType.VISUAL:
+            channels, height, width = feature.shape
+            obs[name] = np.zeros((height, width, channels), dtype=np.uint8)
+        else:
+            obs[name] = np.zeros(feature.shape, dtype=np.float32)
+    return obs
 
 
 class LerobotPolicy(Policy):
@@ -105,4 +127,4 @@ def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None
 )
 def act_absolute(base: Policy, codec: Codec):
     """ACT with the absolute-position codec, composed in-process."""
-    return inline(ChunkedSchedule() | codec | PolicySource(base))
+    return inline(StopOnFault() | ChunkedSchedule() | codec | PolicySource(base))

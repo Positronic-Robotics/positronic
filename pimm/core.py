@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Generic, TypeVar, cast, final
+from typing import Generic, TypeVar, final
 
 T = TypeVar('T')
 U = TypeVar('U')
@@ -9,9 +9,6 @@ U = TypeVar('U')
 
 class NoValueException(Exception):
     pass
-
-
-NODEFAULT = object()
 
 
 @dataclass
@@ -164,9 +161,8 @@ class ControlSystemEmitter(SignalEmitter[T]):
 class ControlSystemReceiver(SignalReceiver[T]):
     """Receiver adaptor bound to a single upstream signal on behalf of a system."""
 
-    def __init__(self, owner: ControlSystem, default: T | None = NODEFAULT, maxsize: int | None = None):
+    def __init__(self, owner: ControlSystem, maxsize: int | None = None):
         self._owner = owner
-        self._default = default
         self._internal: SignalReceiver[T] | None = None
         self._maxsize = maxsize
 
@@ -183,14 +179,20 @@ class ControlSystemReceiver(SignalReceiver[T]):
         self._internal = receiver
 
     def read(self) -> Message[T] | None:
-        if self._internal is not None:
-            value = self._internal.read()
-            if value is not None:
-                return value
-        if self._default is not NODEFAULT:
-            # Always not-updated; the check above excludes the sentinel, which `T | None` cannot express.
-            return Message(cast(T, self._default), -1, False)
-        return None
+        return self._internal.read() if self._internal is not None else None
+
+
+class DefaultingReceiver(ControlSystemReceiver[T]):
+    """A receiver that always has a value: whatever the signal last carried, or its default before that."""
+
+    def __init__(self, owner: ControlSystem, default: T, maxsize: int | None = None):
+        super().__init__(owner, maxsize)
+        self._default = default
+
+    def read(self) -> Message[T]:
+        msg = super().read()
+        # The default is always not-updated: it is a value the signal never carried.
+        return msg if msg is not None else Message(self._default, -1, False)
 
 
 class FakeEmitter(ControlSystemEmitter[T]):
@@ -227,16 +229,15 @@ class ReceiverDict(dict[str, ControlSystemReceiver[U]]):
     Pass fake=True for all fake receivers, or fake={'key1', 'key2'} for specific keys.
     """
 
-    def __init__(self, owner: ControlSystem, *, default: U | None = NODEFAULT, fake: bool | Iterable[str] = False):
+    def __init__(self, owner: ControlSystem, *, fake: bool | Iterable[str] = False):
         super().__init__()
         self._owner = owner
-        self._default = default
         self._fake = set(fake) if isinstance(fake, Iterable) else set()
         self._all_fake = fake is True
 
     def __missing__(self, key: str) -> ControlSystemReceiver[U]:
         fake = self._all_fake or key in self._fake
-        receiver = FakeReceiver(self._owner) if fake else ControlSystemReceiver(self._owner, self._default)
+        receiver = FakeReceiver(self._owner) if fake else ControlSystemReceiver(self._owner)
         self[key] = receiver
         return receiver
 

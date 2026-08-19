@@ -99,9 +99,9 @@ class MujocoSim(pimm.ControlSystem):
 
     ``reset`` rebuilds the scene and flags frame-0 publication; the run loop publishes that post-reset
     scene on its next turn — in sequence, before any step — so the first inference reads it and the
-    recorder logs it. Every other turn applies the due command waypoints, steps once, and emits the due
-    streams (post-step, Gym-style). The sim sleeps one control period each turn, so it is the eval's sole
-    time-master. Each stream has an independent rate (``*_fps``, ``None`` = every physics tick).
+    recorder logs it. Every other turn applies whatever command has just arrived, steps once, and emits
+    the due streams (post-step, Gym-style). The sim sleeps one control period each turn, so it is the
+    eval's sole time-master. Each stream has an independent rate (``*_fps``, ``None`` = every physics tick).
     """
 
     def __init__(
@@ -118,7 +118,7 @@ class MujocoSim(pimm.ControlSystem):
         grip_fps: float | None = None,
         sim_state_fps: float | None = None,
     ):
-        self.mujoco_model_path = mujoco_model_path
+        self.mujoco_model_path = str(Path(mujoco_model_path).expanduser())
         self.loaders = loaders
         self.warmup_steps = 1000
         self.fps_counter = pimm.utils.RateCounter('MujocoSim')
@@ -140,21 +140,15 @@ class MujocoSim(pimm.ControlSystem):
         self._home()
         self._error = False
         self._adapters: dict[str, pimm.shared_memory.NumpySMAdapter] | None = None
-        self._arm_player = roboarm_command.TrajectoryPlayer(reduce=roboarm_command.reduce)
-        self._grip_player = roboarm_command.TrajectoryPlayer()
         self._last_grip = 0.0
         # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
         self._reset_pending = False
 
-        self.commands: pimm.SignalReceiver[roboarm_command.Trajectory[roboarm_command.CommandType]] = (
-            pimm.ControlSystemReceiver(self, default=[])
-        )
+        self.commands = pimm.ControlSystemReceiver[roboarm_command.CommandType](self)
         self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
-        self.target_grip: pimm.SignalReceiver[roboarm_command.Trajectory[float]] = pimm.ControlSystemReceiver(
-            self, default=[]
-        )
-        self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self.target_grip = pimm.ControlSystemReceiver[float](self)
+        self.grip = pimm.ControlSystemEmitter[float](self)
         self.cameras: pimm.EmitterDict = pimm.EmitterDict(self)
         # Privileged ground truth: the full ``save_state`` dict, spec keys prefixed with '.' so the
         # writer expands them into ``<signal>.<spec>`` signals. Scoring is computed downstream, not
@@ -162,12 +156,14 @@ class MujocoSim(pimm.ControlSystem):
         # replays these states through it (``mj_setState`` + ``mj_forward``).
         self.sim_state: pimm.SignalEmitter[dict[str, np.ndarray]] = pimm.ControlSystemEmitter(self)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self._emit_robot_meta()
-        state_due = _Cadence(self._state_fps)
-        grip_due = _Cadence(self._grip_fps)
-        sim_state_due = _Cadence(self._sim_state_fps)
-        cameras_due = _Cadence(self._camera_fps)
+        streams = [
+            (_Cadence(self._state_fps), self._emit_state),
+            (_Cadence(self._grip_fps), self._emit_grip),
+            (_Cadence(self._sim_state_fps), self._emit_sim_state),
+            (_Cadence(self._camera_fps), self._emit_cameras),
+        ]
 
         while not should_stop.value:
             yield pimm.Sleep(self.model.opt.timestep)
@@ -182,23 +178,12 @@ class MujocoSim(pimm.ControlSystem):
                     self._publish_frame()
                 continue
             now = clock.now()
-            cmd_msg = self.commands.read()
-            if cmd_msg.updated:
-                self._arm_player.set(cmd_msg.data)
+            cmd = pimm.value_updated(self.commands)
             if self._error:
                 self._error = False
-                # Drop the in-flight trajectory so the arm holds position rather than resuming a stale
-                # waypoint once the error clears.
-                self._arm_player.set([])
-            else:
-                cmd = self._arm_player.advance(clock.now_ns())
-                if cmd is not None:
-                    self._apply_command(cmd)
-            grip_msg = self.target_grip.read()
-            if grip_msg.updated:
-                self._grip_player.set(grip_msg.data)
-            grip = self._grip_player.advance(clock.now_ns())
-            if grip is not None:
+            elif cmd is not None:
+                self._apply_command(cmd)
+            if (grip := pimm.value_updated(self.target_grip)) is not None:
                 self._last_grip = grip
             self._apply_grip(self._last_grip)
 
@@ -208,14 +193,9 @@ class MujocoSim(pimm.ControlSystem):
             with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
                 self.step()
                 self.fps_counter.tick()
-                if state_due(now):
-                    self._emit_state()
-                if grip_due(now):
-                    self._emit_grip()
-                if sim_state_due(now):
-                    self._emit_sim_state()
-                if cameras_due(now):
-                    self._emit_cameras()
+                for due, emit in streams:
+                    if due(now):
+                        emit()
 
         if self._renderer is not None:
             self._renderer.close()
@@ -228,17 +208,14 @@ class MujocoSim(pimm.ControlSystem):
         colors, cameras) re-randomize too; the renderer and IK physics rebind lazily. The run loop
         publishes the prepared scene as frame-0 on its next turn — in sequence, before any step — so the
         first inference reads the reset state and the recorder logs it. Stale commands queued while idle
-        (e.g. the inter-episode home) are dropped and the run-loop's trajectory players and held grip are
-        cleared, so the first step neither applies a queued command nor replays the previous episode's
-        trajectory on the freshly reset scene.
+        (e.g. the inter-episode home) are dropped and the held grip is cleared, so the first step does not
+        apply a queued command on the freshly reset scene.
         """
         self._load_scene(seed)
         self._home()
         self._error = False
         self.commands.read()
         self.target_grip.read()
-        self._arm_player.set([])
-        self._grip_player.set([])
         self._last_grip = 0.0
         self._reset_pending = True
 

@@ -133,10 +133,9 @@ class MujocoEnv(EnvProtocol):
                 cmd = roboarm_command.CartesianDelta(geom.Transform3D.from_vector(command['delta'], _ROTMAT))
             case other:
                 raise ValueError(f'MujocoEnv got unsupported command type {other!r}')
-        now_ns = self._clock.now_ns()
         if cmd is not None:
-            self._cmd_emit.emit([(now_ns, cmd)])
-        self._grip_emit.emit([(now_ns, float(action['grip']))])
+            self._cmd_emit.emit(cmd)
+        self._grip_emit.emit(float(action['grip']))
         self._advance(self._timestep)
         return {'obs': self._read_obs(), 'done': False, 'control_dt': self._timestep}
 
@@ -172,7 +171,7 @@ class StackCubesAdapter(WireCommandAdapter):
         ee_pose = geom.Transform3D(raw_obs['ee_pos'], geom.Rotation.from_quat(raw_obs['ee_quat']))
         state.encode(raw_obs['q'], raw_obs['dq'], ee_pose)
         state.array[14 + 7] = float(raw_obs['status'])
-        obs: dict[str, Any] = {'robot_state': state, keys.GRIP: float(raw_obs['grip'])}
+        obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs['grip'])}
         for logical, model_name in self._camera_dict.items():
             frame = raw_obs['cameras'][model_name]
             adapter = pimm.shared_memory.NumpySMAdapter(shape=frame.shape, dtype=frame.dtype)
@@ -192,12 +191,11 @@ def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]
     # The server is already up (the test fixture owns it), so the proxy just receives its address.
     proxy = RemoteEnvControlSystem(StackCubesAdapter(camera_dict), nullcontext((host, port)))
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.mujoco.franka')
-    privileged = {'sim_state': Observation(proxy.privileged['sim_state'], None)}
-    task = Task(
-        instruction='Pick up the green cube and place it on the red cube.',
-        timeout=15.0,
-        privileged=privileged,
-        reset=proxy.reset,
+    task = Task(instruction='Pick up the green cube and place it on the red cube.', timeout=15.0)
+    return Eval(
+        embodiment,
+        task,
+        privileged={'sim_state': Observation(proxy.privileged['sim_state'], None)},
         done=proxy.done,
+        reset=proxy.reset,
     )
-    return Eval(embodiment, task)

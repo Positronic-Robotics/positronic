@@ -68,9 +68,7 @@ class Robot(pimm.ControlSystem):
         self.relative_dynamics_factor = relative_dynamics_factor
         self.solver = KinematicsSolver()
         self.home_joints = home_joints if home_joints is not None else [0.0, -0, 0.5, -1.5, 0.0, -0.5, 1.57079633]
-        self.commands: pimm.SignalReceiver[command.Trajectory[command.CommandType]] = pimm.ControlSystemReceiver(
-            self, default=[]
-        )
+        self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.state: pimm.SignalEmitter[KinovaState] = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
@@ -89,14 +87,8 @@ class Robot(pimm.ControlSystem):
             joint_controller.compute_torque(q, dq, tau)
             current_command = np.zeros(api.actuator_count, dtype=np.float32)
 
-            player = command.TrajectoryPlayer(reduce=command.reduce)
-
             while not should_stop.value:
-                cmd_msg = self.commands.read()
-                if cmd_msg.updated:
-                    player.set(cmd_msg.data)
-                cmd = player.advance(clock.now_ns())
-                if cmd is not None:
+                if (cmd := pimm.value_updated(self.commands)) is not None:
                     match cmd:
                         case command.Reset():
                             joint_controller.set_target_qpos(self.home_joints)
@@ -110,8 +102,8 @@ class Robot(pimm.ControlSystem):
                         case command.JointPosition(positions):
                             qpos = np.array(positions, dtype=np.float32)
                             joint_controller.set_target_qpos(qpos)
-                        case _:
-                            print(f'Unsuported command: {cmd}')
+                        case other:
+                            print(f'Unsuported command: {other}')
 
                 torque_command = joint_controller.compute_torque(q, dq, tau)
                 np.divide(torque_command, torque_constant, out=current_command)

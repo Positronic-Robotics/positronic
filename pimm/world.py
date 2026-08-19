@@ -1,5 +1,6 @@
 """Implementation of multiprocessing channels."""
 
+import functools
 import heapq
 import logging
 import multiprocessing as mp
@@ -16,8 +17,9 @@ from multiprocessing.managers import ValueProxy
 from multiprocessing.queues import Queue
 from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
-from typing import TypeVar
+from typing import TypeVar, overload
 
+from .calls import ControlSystemCaller, ControlSystemHandler
 from .core import (
     Clock,
     Command,
@@ -37,6 +39,8 @@ from .shared_memory import SMCompliant
 from .utils import identity
 
 T = TypeVar('T')
+Req = TypeVar('Req')
+Res = TypeVar('Res')
 
 # Consecutive single-instant rounds with no clock-mover after which ``interleave`` warns of a stall.
 # Far above any real cooperative burst, reached near-instantly by a true hang (loops yielding forever
@@ -482,9 +486,6 @@ class World:
 
         self._stop_event = self._mp_ctx.Event()
         self.background_processes = []
-        # Use a spawn-context manager so queues/values behave synchronously even
-        # when used in a single process (tests rely on immediate read after emit).
-        self._manager = self._mp_ctx.Manager()
         self._cleanup_emitters_readers = []
         self.entered = False
         self._connections = []
@@ -497,7 +498,6 @@ class World:
         self.entered = False
         logging.info('Stopping background processes...')
         self.request_stop()
-        time.sleep(0.1)
 
         logging.info(f'Waiting for {len(self.background_processes)} background processes to terminate...')
         for process in self.background_processes:
@@ -618,21 +618,22 @@ class World:
 
     def connect(
         self,
-        emitter: ControlSystemEmitter[T],
-        receiver: ControlSystemReceiver[T],
+        source: ControlSystemEmitter[T] | ControlSystemCaller[Req, Res],
+        target: ControlSystemReceiver[T] | ControlSystemHandler[Req, Res],
         *,
         emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = identity,
         receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[T]] = identity,
-    ):
-        """Declare a logical connection between Emitter and Receiver of two control systems.
+    ) -> None:
+        """Declare a logical connection: an Emitter feeding a Receiver, or a Caller invoking a Handler.
 
         The world inspects the ownership of both endpoints when ``start`` is
         called and chooses an appropriate transport (local queue vs.
-        multiprocessing pipe). Each Receiver may only be connected once.
+        multiprocessing pipe). Each Receiver may only be connected once; a
+        Handler serves one Caller and a Caller reaches one Handler.
 
         Args:
-            emitter: The control system emitter to connect from
-            receiver: The control system receiver to connect to
+            source: The control system emitter or caller to connect from
+            target: The control system receiver or handler to connect to
             emitter_wrapper: Optional function to wrap the underlying SignalEmitter
                            before binding. Defaults to identity function.
             receiver_wrapper: Optional function to wrap the underlying SignalReceiver
@@ -640,20 +641,55 @@ class World:
 
         The wrapper functions allow for transformation or decoration of the
         underlying signal transport mechanisms, such as adding logging,
-        filtering, or other middleware functionality.
+        filtering, or other middleware functionality. They apply to signals only.
         """
-        assert receiver not in [e[1] for e in self._connections], 'Receiver can be connected only to one Emitter'
-        assert isinstance(emitter, ControlSystemEmitter)
-        assert isinstance(receiver, ControlSystemReceiver)
-        if not isinstance(emitter, FakeEmitter) and not isinstance(receiver, FakeReceiver):
-            self._connections.append((emitter, receiver, emitter_wrapper, receiver_wrapper))
+        if isinstance(source, ControlSystemCaller):
+            assert isinstance(target, ControlSystemHandler)
+            assert emitter_wrapper is identity and receiver_wrapper is identity, 'Wrappers do not apply to calls'
+            assert not self._is_connected(target.requests), 'Handler can serve only one Caller'
+            assert not self._is_connected(source.replies), 'Caller can be connected only to one Handler'
+            self.connect(source.requests, target.requests)
+            self.connect(target.replies, source.replies)
+            return
+        assert isinstance(source, ControlSystemEmitter)
+        assert isinstance(target, ControlSystemReceiver)
+        assert not self._is_connected(target), 'Receiver can be connected only to one Emitter'
+        if not isinstance(source, FakeEmitter) and not isinstance(target, FakeReceiver):
+            self._connections.append((source, target, emitter_wrapper, receiver_wrapper))
+
+    def _is_connected(self, receiver: ControlSystemReceiver) -> bool:
+        return any(receiver is connected for _, connected, _, _ in self._connections)
+
+    @overload
+    def pair(
+        self,
+        connector: ControlSystemEmitter[T],
+        *,
+        emitter_wrapper: Callable[[SignalEmitter], SignalEmitter] = ...,
+        receiver_wrapper: Callable[[SignalReceiver], SignalReceiver] = ...,
+    ) -> ControlSystemReceiver[T]: ...
+
+    @overload
+    def pair(
+        self,
+        connector: ControlSystemReceiver[T],
+        *,
+        emitter_wrapper: Callable[[SignalEmitter], SignalEmitter] = ...,
+        receiver_wrapper: Callable[[SignalReceiver], SignalReceiver] = ...,
+    ) -> ControlSystemEmitter[T]: ...
+
+    @overload
+    def pair(self, connector: ControlSystemCaller[Req, Res]) -> ControlSystemHandler[Req, Res]: ...
+
+    @overload
+    def pair(self, connector: ControlSystemHandler[Req, Res]) -> ControlSystemCaller[Req, Res]: ...
 
     def pair(
         self,
-        connector: ControlSystemEmitter | ControlSystemReceiver,
+        connector: ControlSystemEmitter | ControlSystemReceiver | ControlSystemCaller | ControlSystemHandler,
         *,
-        emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = identity,
-        receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[T]] = identity,
+        emitter_wrapper: Callable[[SignalEmitter], SignalEmitter] = identity,
+        receiver_wrapper: Callable[[SignalReceiver], SignalReceiver] = identity,
     ):
         """Create the complementary connector for an existing endpoint.
 
@@ -664,30 +700,39 @@ class World:
         :meth:`connect`.
 
         Args:
-            connector: Either side of a control-system connection that needs a
-                matching peer.
+            connector: Any side of a control-system connection that needs a matching peer.
             emitter_wrapper: Optional callable applied to the transport bound to the
-                emitter side before the link is registered.
+                emitter side before the link is registered. Signals only.
             receiver_wrapper: Optional callable applied to the transport bound to the
-                receiver side before the link is registered.
+                receiver side before the link is registered. Signals only.
 
         Returns:
-            The freshly created counterpart (`ControlSystemEmitter` for a
-            receiver input or `ControlSystemReceiver` for an emitter output).
+            The freshly created counterpart: an emitter for a receiver, a receiver for an
+            emitter, a handler for a caller, a caller for a handler.
 
         Raises:
-            ValueError: If ``connector`` is neither an emitter nor a receiver.
+            ValueError: If ``connector`` is none of the four.
         """
-        if isinstance(connector, ControlSystemEmitter):
-            # We put the same owner, so that both ends are always either local or remote
-            receiver = ControlSystemReceiver(connector.owner)
-            self.connect(connector, receiver, emitter_wrapper=emitter_wrapper, receiver_wrapper=receiver_wrapper)
-            return receiver
-        elif isinstance(connector, ControlSystemReceiver):
-            emitter = ControlSystemEmitter(connector.owner)
-            self.connect(emitter, connector, emitter_wrapper=receiver_wrapper, receiver_wrapper=emitter_wrapper)
-            return emitter
-        raise ValueError(f'Unsupported connector type: {type(connector)}.')
+        match connector:
+            case ControlSystemEmitter():
+                # We put the same owner, so that both ends are always either local or remote
+                receiver = ControlSystemReceiver(connector.owner)
+                self.connect(connector, receiver, emitter_wrapper=emitter_wrapper, receiver_wrapper=receiver_wrapper)
+                return receiver
+            case ControlSystemReceiver():
+                emitter = ControlSystemEmitter(connector.owner)
+                self.connect(emitter, connector, emitter_wrapper=emitter_wrapper, receiver_wrapper=receiver_wrapper)
+                return emitter
+            case ControlSystemCaller():
+                handler = ControlSystemHandler(connector.owner)
+                self.connect(connector, handler)
+                return handler
+            case ControlSystemHandler():
+                caller = ControlSystemCaller(connector.owner)
+                self.connect(caller, connector)
+                return caller
+            case _:
+                raise ValueError(f'Unsupported connector type: {type(connector)}.')
 
     def start(  # noqa: C901
         self,
@@ -838,8 +883,14 @@ class World:
         Returns:
             Tuple of (emitter, reader) for local communication
         """
-        q = deque(maxlen=maxsize)
+        q = deque(maxlen=maxsize or None)
         return LocalQueueEmitter(q, self._clock), LocalQueueReceiver(q)
+
+    @functools.cached_property
+    def _manager(self):
+        """A spawn-context manager, so queues and values behave synchronously even within a single process."""
+        # It runs as a process of its own, so a world that opens no mp pipe never starts one.
+        return self._mp_ctx.Manager()
 
     def mp_pipes(
         self,

@@ -3,7 +3,6 @@ from ctypes import c_uint16
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.roboarm.command import Trajectory, TrajectoryPlayer
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -12,10 +11,10 @@ with vendor_import('pymodbus', 'Gripper support'):
 class DHGripper(pimm.ControlSystem):
     def __init__(self, port: str):
         self.port = port
-        self.grip: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
-        self.target_grip: pimm.SignalReceiver[Trajectory[float]] = pimm.ControlSystemReceiver(self, default=[])
-        self.force: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=100)
-        self.speed: pimm.SignalReceiver = pimm.ControlSystemReceiver(self, default=100)
+        self.grip = pimm.ControlSystemEmitter[float](self)
+        self.target_grip = pimm.ControlSystemReceiver[float](self)
+        self.force = pimm.DefaultingReceiver(self, default=100)
+        self.speed = pimm.DefaultingReceiver(self, default=100)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         client = ModbusClient.ModbusSerialClient(port=self.port, baudrate=115200, bytesize=8, parity='N', stopbits=1)
@@ -33,24 +32,16 @@ class DHGripper(pimm.ControlSystem):
             while _state_g() != 1 and _state_r() != 1:
                 yield pimm.Sleep(0.1)
 
-        player = TrajectoryPlayer()
         last_grip = 0.0
 
-        # TODO: We must translate these to physical units (N and m/s)
+        # TODO: Should we translate these to physical units (N and m/s)?
         while not should_stop.value:
-            try:
-                grip_msg = self.target_grip.read()
-                if grip_msg.updated:
-                    player.set(grip_msg.data)
-                grip = player.advance(clock.now_ns())
-                if grip is not None:
-                    last_grip = grip
-                width = round((1 - max(0, min(last_grip, 1))) * 1000)
-                client.write_register(0x103, c_uint16(width).value, slave=1)
-                client.write_register(0x101, c_uint16(self.force.value).value, slave=1)
-                client.write_register(0x104, c_uint16(self.speed.value).value, slave=1)
-            except pimm.NoValueException:
-                pass
+            if (grip := pimm.value_updated(self.target_grip)) is not None:
+                last_grip = grip
+            width = round((1 - max(0, min(last_grip, 1))) * 1000)
+            client.write_register(0x103, c_uint16(width).value, slave=1)
+            client.write_register(0x101, c_uint16(self.force.value).value, slave=1)
+            client.write_register(0x104, c_uint16(self.speed.value).value, slave=1)
 
             current_grip = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
             self.grip.emit(current_grip)
@@ -78,7 +69,7 @@ if __name__ == '__main__':
         force.emit(100)
 
         for width in np.sin(np.linspace(0, 10 * np.pi, 60)) + 1:
-            target_grip.emit([(world.clock.now_ns(), width)])
+            target_grip.emit(width)
             time.sleep(0.5)
             try:
                 print(f'Real grip position: {grip.value}')

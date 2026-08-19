@@ -13,8 +13,8 @@ robot changes state only when a command is *applied*, so
   * horizon/gating regression   -> the state trajectory diverges
 
 Everything runs on CPU in a virtual-time world only: no GL/GPU/MuJoCo, no wall
-clock in the asserted path (a fixed-float ``inference_latency`` is used so
-inference latency is deterministic).
+clock in the asserted path (``_SimulatedLatency`` charges a fixed world-time
+latency, so inference latency is deterministic).
 
 Regenerate the golden after an intentional behavior change:
 
@@ -37,13 +37,14 @@ from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianPosition, Reset, TrajectoryPlayer
+from positronic.drivers.roboarm.command import CartesianPosition, CommandType, Reset
+from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.geom import Rotation, Transform3D
-from positronic.policy.base import Policy, Session
+from positronic.policy.base import DelegatingPolicy, DelegatingSession, Now, Policy, Session
 from positronic.policy.codec import ActionTiming
-from positronic.policy.harness import Directive, Harness
-from positronic.policy.wrappers import ChunkedSchedule
+from positronic.policy.harness import Harness
+from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 GOLDEN_FILE = Path(__file__).parent / 'golden_pipeline.json.gz'
@@ -52,7 +53,7 @@ INITIAL_POS = np.array([0.30, 0.00, 0.40], dtype=np.float32)
 INITIAL_Q = np.array([0.10, -0.20, 0.30, -0.40, 0.50, -0.60, 0.70], dtype=np.float32)
 TARGET_POS = np.array([0.50, 0.00, 0.45], dtype=np.float32)
 
-# Fixed deterministic inference latency. Spans >1 control tick (harness loop is
+# Fixed deterministic inference latency in world time. Spans >1 control tick (harness loop is
 # 0.01 s) so the post-inference anchoring effect is observable in recorded ts.
 INFERENCE_LATENCY_S = 0.05
 ACTION_FPS = 15.0
@@ -86,35 +87,55 @@ class ScriptedProportionalPolicy(Policy):
         return _ScriptedSession()
 
 
-class _FakeRobotState:
-    """Lossless re-expression of the last applied command over sim-time."""
+class _SimulatedLatency(DelegatingPolicy):
+    """A fixed inference latency in world time: every chunk is stamped for, and reaches the harness at,
+    ``latency_sec`` after the call that produced it, whatever the machine took. Sits outermost, so nothing
+    below sees an observation while a chunk is held. A skip or a stop passes through at once."""
 
-    def __init__(self, pos: np.ndarray, q: np.ndarray, status: RobotStatus):
-        self._pos = pos
-        self._q = q
-        self.status = status
+    def __init__(self, inner: Policy, latency_sec: float):
+        super().__init__(inner)
+        self._latency_ns = round(latency_sec * 1e9)
 
-    @property
-    def q(self) -> np.ndarray:
-        return self._q.copy()
+    class _Session(DelegatingSession):
+        def __init__(self, inner: Session, now: Now, latency_ns: int):
+            super().__init__(inner)
+            self._now = now
+            self._latency_ns = latency_ns
+            self._held: list | None = None
+            self._release_at_ns = 0
 
-    @property
-    def dq(self) -> np.ndarray:
-        return np.zeros(7, dtype=np.float32)
+        def __call__(self, obs):
+            # Integer ns, the world's own timeline: a float compare can miss the release instant by one ULP.
+            now_ns = round(self._now() * 1e9)
+            if self._held is not None:
+                if now_ns < self._release_at_ns:
+                    return None
+                held, self._held = self._held, None
+                return held
+            result = self._inner(obs)
+            if not result:
+                return result
+            self._held, self._release_at_ns = result, now_ns + self._latency_ns
+            return None
 
-    @property
-    def ee_pose(self) -> Transform3D:
-        return Transform3D(translation=self._pos.copy(), rotation=Rotation.identity)
+        def cancel(self):
+            self._held = None
+            super().cancel()
+
+    def new_session(self, context=None, now=None):
+        assert now is not None, 'the harness supplies the clock'
+        latency_ns = self._latency_ns
+        return _SimulatedLatency._Session(
+            self._inner.new_session(context, lambda: now() + latency_ns / 1e9), now, latency_ns
+        )
 
 
 class FakeRobot(pimm.ControlSystem):
-    """Deterministic closed-loop arm: applies the latest command immediately.
+    """Deterministic closed-loop arm: applies each command as it arrives.
 
-    Mirrors ``MujocoSim``'s arm loop (read latest command, apply, emit
-    state). ``ee_pose`` becomes the applied ``CartesianPosition`` target and the
-    first three joints track it, so recorded state is a lossless re-expression
-    of applied commands. Closed loop: the policy's next chunk evolves with this
-    feedback.
+    Mirrors ``MujocoSim``'s arm loop (execute on updated, emit state). ``ee_pose`` becomes the applied
+    ``CartesianPosition`` target and the first three joints track it, so recorded state is a lossless
+    re-expression of applied commands. Closed loop: the policy's next chunk evolves with this feedback.
     """
 
     def __init__(self):
@@ -122,7 +143,7 @@ class FakeRobot(pimm.ControlSystem):
         self._q = INITIAL_Q.copy()
         self._status = RobotStatus.AVAILABLE
         self._error_pending = False
-        self.commands = pimm.ControlSystemReceiver(self, default=[])
+        self.commands = pimm.ControlSystemReceiver[CommandType](self)
         self.state = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
 
@@ -142,23 +163,16 @@ class FakeRobot(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         self.robot_meta.emit({})
-        player = TrajectoryPlayer()
         while not should_stop.value:
             cmd_msg = self.commands.read()
-            if cmd_msg.updated:
-                player.set(cmd_msg.data)
             if self._status == RobotStatus.ERROR:
                 self._status = RobotStatus.AVAILABLE
-                # Drop the in-flight trajectory so the arm holds position rather than resuming a stale waypoint.
-                player.set([])
-            else:
-                cmd = player.advance(clock.now_ns())
-                if cmd is not None:
-                    self._apply(cmd)
+            elif cmd_msg is not None and cmd_msg.updated:
+                self._apply(cmd_msg.data)
             if self._error_pending:
                 self._status = RobotStatus.ERROR
                 self._error_pending = False
-            self.state.emit(_FakeRobotState(self._pos, self._q, self._status))
+            self.state.emit(make_robot_state(self._pos, self._q, self._status))
             yield pimm.Sleep(CONTROL_PERIOD_S)
 
 
@@ -167,18 +181,14 @@ class FakeGripper(pimm.ControlSystem):
 
     def __init__(self):
         self._grip = 0.0
-        self.target_grip = pimm.ControlSystemReceiver(self, default=[])
+        self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.grip = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        player = TrajectoryPlayer()
         while not should_stop.value:
             msg = self.target_grip.read()
-            if msg.updated:
-                player.set(msg.data)
-            grip = player.advance(clock.now_ns())
-            if grip is not None:
-                self._grip = float(grip)
+            if msg is not None and msg.updated:
+                self._grip = float(msg.data)
             self.grip.emit(self._grip)
             yield pimm.Sleep(CONTROL_PERIOD_S)
 
@@ -193,7 +203,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
         embodiment = Embodiment(
             descriptor='',
             observations={
-                'robot_state': Observation(robot.state, Serializers.robot_state),
+                keys.ROBOT_STATE: Observation(robot.state, Serializers.robot_state),
                 keys.GRIP: Observation(gripper.grip, None),
             },
             commands={
@@ -202,21 +212,27 @@ def _run_pipeline(tmp_path: Path) -> dict:
             },
             static_meta=dict(ROBOT_STATIC_META),
             meta_source=robot.robot_meta,
+            # The fake robot's control-period sleep is this world's sole time-master — the shape a sim eval
+            # runs in.
+            simulated=True,
         )
-        harness = Harness(ChunkedSchedule().wrap(policy), embodiment)
+        harness = Harness(
+            _SimulatedLatency((StopOnFault() | ChunkedSchedule()).wrap(policy), INFERENCE_LATENCY_S), embodiment
+        )
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
-        directive_em = world.pair(harness.directive)
+        perform_task = world.pair(harness.perform_task)
+        done_em = world.pair(harness.done)
 
         # Robot/gripper emit state every tick, so the script only drives the
         # episode lifecycle and the one-shot error injection.
         script = [
-            (partial(directive_em.emit, Directive.RUN(task='golden', inference_latency=INFERENCE_LATENCY_S)), 0.0),
+            (partial(perform_task, {keys.TASK: 'golden'}), 0.0),
             (None, 1.5),  # several reactive inference + chunk/horizon cycles
-            (robot.inject_error, 0.0),  # one-shot error: that frame is dropped, then inference resumes
+            (robot.inject_error, 0.0),  # one-shot error: StopOnFault stops the arm for that frame
             (None, 0.5),
             (None, 1.5),  # more cycles after recovery
-            (partial(directive_em.emit, Directive.FINISH()), 0.0),
+            (partial(done_em.emit, {keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR}), 0.0),
             (None, 0.5),  # let DsWriterAgent commit before world exit
         ]
         scheduler = world.start([harness, ManualDriver(script), robot, gripper, ds_agent])

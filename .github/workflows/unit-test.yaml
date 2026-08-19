@@ -31,21 +31,10 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
-      - name: "Run tests (coverage: term, html)"
+      - name: Run tests
         env:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
-        run: uv run pytest --cov-report=html
-
-      - name: Coverage summary (job summary)
-        if: always()
-        run: uv run coverage report -m >> $GITHUB_STEP_SUMMARY
-
-      - name: Upload coverage HTML artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-html-core-${{ matrix.os }}-${{ matrix.python }}
-          path: htmlcov
+        run: uv run pytest
 
   packaging:
     runs-on: ubuntu-latest
@@ -81,7 +70,7 @@ jobs:
       - name: Run lerobot vendor tests
         env:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
-        run: uv run pytest positronic/vendors/lerobot_0_3_3/tests --no-cov
+        run: uv run pytest positronic/vendors/lerobot_0_3_3/tests
 
   lerobot-latest:
     runs-on: ubuntu-latest
@@ -101,7 +90,7 @@ jobs:
       - name: Run lerobot vendor tests
         env:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
-        run: uv run pytest positronic/vendors/lerobot/tests --no-cov
+        run: uv run pytest positronic/vendors/lerobot/tests
 
   lockfile-portability:
     strategy:

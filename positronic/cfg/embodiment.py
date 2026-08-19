@@ -25,7 +25,7 @@ from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 def droid(robot_arm, gripper, cameras):
     """Real single-arm Franka (DROID) + Robotiq gripper + ZED cameras."""
     observations = {
-        'robot_state': Observation(robot_arm.state, Serializers.robot_state),
+        keys.ROBOT_STATE: Observation(robot_arm.state, Serializers.robot_state),
         keys.GRIP: Observation(gripper.grip, None),
         **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
     }
@@ -48,7 +48,7 @@ def droid(robot_arm, gripper, cameras):
 def yam(robot_arm, cameras):
     """Real single-arm i2rt YAM: the arm driver carries the gripper (they share one CAN chain)."""
     observations = {
-        'robot_state': Observation(robot_arm.state, Serializers.robot_state),
+        keys.ROBOT_STATE: Observation(robot_arm.state, Serializers.robot_state),
         keys.GRIP: Observation(robot_arm.grip, None),
         **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
     }
@@ -96,21 +96,22 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
         for side, channel in (('left', left_channel), ('right', right_channel))
     }
     observations = {
-        **{f'robot_state.{s}': Observation(arm.state, Serializers.robot_state) for s, arm in arms.items()},
-        **{f'grip.{s}': Observation(arm.grip, None) for s, arm in arms.items()},
+        **{f'{keys.ROBOT_STATE}.{s}': Observation(arm.state, Serializers.robot_state) for s, arm in arms.items()},
+        **{f'{keys.GRIP}.{s}': Observation(arm.grip, None) for s, arm in arms.items()},
         **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
     }
     commands = {
         **{
-            f'robot_command.{s}': Command(arm.commands, roboarm_command.Reset(), Serializers.robot_command)
+            f'{keys.ROBOT_COMMAND}.{s}': Command(arm.commands, roboarm_command.Reset(), Serializers.robot_command)
             for s, arm in arms.items()
         },
-        **{f'target_grip.{s}': Command(arm.target_grip, 0.0, None) for s, arm in arms.items()},
+        **{f'{keys.TARGET_GRIP}.{s}': Command(arm.target_grip, 0.0, None) for s, arm in arms.items()},
     }
-    joint_signals = {side: f'robot_state.{side}.q' for side in arms}
+    joint_signals = {side: f'{keys.ROBOT_STATE}.{side}.q' for side in arms}
     static_meta = {
         keys.JOINT_SIGNALS: list(joint_signals.values()),
-        keys.POSE_SIGNALS: [f'robot_state.{s}.ee_pose' for s in arms] + [f'robot_command.{s}.pose' for s in arms],
+        keys.POSE_SIGNALS: [f'{keys.ROBOT_STATE}.{s}.ee_pose' for s in arms]
+        + [f'{keys.ROBOT_COMMAND}.{s}.pose' for s in arms],
         keys.MOUNTS: {sig: mounts[side] for side, sig in joint_signals.items()},
     }
     return Embodiment(
@@ -133,7 +134,7 @@ def mujoco_franka(sim, camera_dict):
     Mujoco does not render the second image when using only 2 cameras.
     """
     observations = {
-        'robot_state': Observation(sim.state, Serializers.robot_state),
+        keys.ROBOT_STATE: Observation(sim.state, Serializers.robot_state),
         keys.GRIP: Observation(sim.grip, None),
         **{name: Observation(sim.cameras[orig], Serializers.camera_images) for name, orig in camera_dict.items()},
     }

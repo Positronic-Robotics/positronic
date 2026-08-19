@@ -1,11 +1,11 @@
 """``RemoteEnvControlSystem``: a remote env server driven as one pimm control system.
 
 A dumb translator: it owns the pimm ports (command receivers, observation + privileged emitters,
-``robot_meta``, the Task's ``done``), the trial lifecycle, and the lifetime of the ``serve`` server it talks
+``robot_meta``, the eval's ``done``), the trial lifecycle, and the lifetime of the ``serve`` server it talks
 to, but no command logic. Each control period it hands the latest command messages to the ``EnvAdapter``,
 round-trips the raw action it returns over the wire, and re-emits the canonical signals the adapter maps
 back — so only raw arrays cross the boundary and the World's virtual clock advances by the env's
-``control_dt`` per step. The adapter owns trajectory playing, holding, and the canonical<->raw mappings;
+``control_dt`` per step. The adapter owns holding and the canonical<->raw mappings;
 ``control_dt`` is whatever the latest observation reports (``reset`` and every ``step``).
 """
 
@@ -36,11 +36,11 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._cleanup = ExitStack()
         self._conn: EnvConnection | None = None
 
-        self.commands: pimm.ReceiverDict = pimm.ReceiverDict(self, default=[])
+        self.commands: pimm.ReceiverDict = pimm.ReceiverDict(self)
         self.observations: pimm.EmitterDict = pimm.EmitterDict(self)
         self.privileged: pimm.EmitterDict = pimm.EmitterDict(self)
-        self.robot_meta: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
-        self.done: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self.robot_meta = pimm.ControlSystemEmitter[dict](self)
+        self.done = pimm.ControlSystemEmitter[dict](self)
 
         # A trial is live between reset and the env's done. The proxy steps only then — not before the
         # first reset (Gym envs reject step-before-reset), not after done. It sleeps every turn regardless.
@@ -50,9 +50,6 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         # The scene meta the env reports at ``reset`` (the task/prompt, scene ids) — constant for the trial; read
         # by the client's ``Task`` for its live instruction. ``step`` omits it.
         self._meta: dict[str, Any] | None = None
-        # The robot model identity the env reports at ``reset`` (URDF / joint names) — emitted on the
-        # ``robot_meta`` port into the episode; distinct from the scene ``meta`` above.
-        self._robot_meta: dict[str, Any] | None = None
         # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
         self._reset_pending = False
 
@@ -63,7 +60,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         return self._meta
 
     def reset(self, context: dict[str, Any]) -> None:
-        """Re-randomize the env from the trial context and arm frame-0 publication for the next turn (the ``RUN`` hook).
+        """Re-randomize the env from the trial context and arm frame-0 publication for the next turn.
 
         Resets the remote env (acquiring the fresh frame and its ``control_dt``), then flags the run loop
         to publish the scene meta, a full observation payload (frame-0) and a non-terminal ``done`` on its
@@ -81,7 +78,6 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
             receiver.read()
         self._frame = self._conn.reset(self._adapter.reset_token(context))
         self._meta = self._frame['meta']
-        self._robot_meta = self._frame['robot_meta']
         self._reset_pending = True
         self._active = True
         # Clear any terminal the previous trial left on the wire: the env can reach ``done`` while the proxy
@@ -107,7 +103,9 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     # terminal, so the recorder samples it before any step advances the env.
                     assert self._frame is not None  # reset() set the frame before arming reset_pending
                     self._reset_pending = False
-                    self.robot_meta.emit(self._robot_meta)
+                    # The robot model identity the env reports at reset (URDF / joint names), distinct from
+                    # the scene ``meta``.
+                    self.robot_meta.emit(self._frame['robot_meta'])
                     # Materialising frame-0 (allocating shared-memory image buffers, copying each camera
                     # frame) is reset cost: it is work the reset asked for, and left untimed it would land in
                     # overhead.
@@ -119,7 +117,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     # observation assembly (shared-memory image allocation + camera copies) inside it, so the
                     # reduce can split materialisation out of the wire cost.
                     with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
-                        self._frame = self._step_env(clock)
+                        self._frame = self._step_env()
                         with telemetry.span(telemetry_keys.SPAN_MATERIALIZE):
                             self._emit_payload(self._frame['obs'])
         finally:
@@ -127,9 +125,10 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
             # ever connected.
             self._cleanup.close()
 
-    def _step_env(self, clock: pimm.Clock) -> dict[str, Any]:
-        commands = {name: receiver.read() for name, receiver in self.commands.items()}
-        result = self._conn.step(self._adapter.action(commands, clock.now_ns()))
+    def _step_env(self) -> dict[str, Any]:
+        reads = ((name, receiver.read()) for name, receiver in self.commands.items())
+        commands = {name: msg for name, msg in reads if msg is not None}
+        result = self._conn.step(self._adapter.action(commands))
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues
             self.done.emit(payload)
@@ -152,7 +151,7 @@ def remote_franka_embodiment(
     server cannot import positronic to emit it via ``robot_meta``).
     """
     observations = {
-        'robot_state': Observation(proxy.observations['robot_state'], Serializers.robot_state),
+        keys.ROBOT_STATE: Observation(proxy.observations[keys.ROBOT_STATE], Serializers.robot_state),
         keys.GRIP: Observation(proxy.observations[keys.GRIP], None),
         **{logical: Observation(proxy.observations[logical], Serializers.camera_images) for logical in camera_dict},
     }

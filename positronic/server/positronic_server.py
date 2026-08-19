@@ -560,7 +560,7 @@ def main(
     dataset: Dataset,
     ep_table_cfg: TableConfig | None,
     max_resolution: int,
-    cache_dir: str = os.path.expanduser('~/.cache/positronic/server/'),
+    cache_dir: str = '~/.cache/positronic/server/',
     host: str = '0.0.0.0',
     port: int = 8400,
     debug: bool = False,
@@ -618,6 +618,7 @@ def main(
     deb_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=deb_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
+    cache_dir = os.path.expanduser(cache_dir)
     app_state['root'] = root
     app_state['cache_dir'] = cache_dir
     app_state['loading_state'] = True

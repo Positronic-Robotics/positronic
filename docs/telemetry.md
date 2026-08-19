@@ -20,8 +20,10 @@ one starts to. Code that needs timing there takes it as an opaque injected conte
 no notion of an episode, a pass or an inference call. An **anchor** is a long-running span its owner holds
 open; the spans an instrumented call site emits parent to the innermost one, which is how a phase span
 emitted by one control system lands under the rollout another control system is running (OTel's ambient
-context does not survive the scheduler's generator hops). Ownership follows the phase: the harness opens,
-stamps and closes the `episode` span, the eval CLI the `eval.pass` span.
+context does not survive the scheduler's generator hops). The anchor stack is per-context, so work the loop
+dispatches to a thread — an inference call it keeps playing through — records under the anchors that stood when
+it was dispatched rather than under whatever is anchored by the time it returns. Ownership follows the phase:
+the harness opens, stamps and closes the `episode` span, the eval CLI the `eval.pass` span.
 
 The contract literals split by who writes the bytes they name. Every span name and attribute key in the tables
 below is written by eval-domain code through the span helpers, which pass them opaquely and never match on
@@ -73,7 +75,7 @@ The span names are the contract:
 | Span | Parent | Attributes | Measures |
 |---|---|---|---|
 | `eval.pass` | root | `run.id`, policy name | one eval sweep (its wall is `W_pass`) |
-| `episode` | `eval.pass` | `episode.index` + flat trial-context keys; at end `episode.steps`, `episode.virtual_s`; `episode.aborted` on an abort | one rollout's wall |
+| `episode` | `eval.pass` | `episode.index` + flat trial-context keys; at end `episode.steps`, `episode.virtual_s` | one rollout's wall |
 | `reset` | `episode` | — | scene reset (harness arming + producer frame-0 materialisation) |
 | `env.step` | `episode` | — | the client-observed env step (materialisation included) |
 | `materialize` | `env.step` | — | client-side observation assembly (shared-memory image alloc + camera copies) |

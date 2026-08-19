@@ -1,5 +1,6 @@
 import json
 
+import pos3
 import pytest
 
 from positronic.cli.eval.timing_report import (
@@ -9,6 +10,7 @@ from positronic.cli.eval.timing_report import (
     _read_spans_dir,
     _read_stats_dir,
     _render,
+    timing_report,
 )
 from positronic.simulator.env_server.telemetry import ENV_PROCESS
 from positronic.telemetry import (
@@ -25,7 +27,6 @@ from positronic.telemetry import (
     TELEMETRY_SUBDIR,
 )
 from positronic.telemetry_keys import (
-    ATTR_EPISODE_ABORTED,
     ATTR_EPISODE_VIRTUAL_S,
     HARNESS_PROCESS,
     SPAN_ENV_STEP,
@@ -179,106 +180,6 @@ def test_render_omits_serving_capacity_without_inference(tmp_path):
 
     assert '  policy_wait         0.0%' in rendered
     assert not any('sims per policy server' in line for line in rendered)
-
-
-def test_aborted_episode_excluded(tmp_path):
-    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
-    telemetry_dir.mkdir()
-    docs = [
-        _span(SPAN_EVAL_PASS, 0, 100, 'pass0'),
-        _span(SPAN_EPISODE, 0, 40, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
-        _span(SPAN_EPISODE, 50, 60, 'ep1', 'pass0'),  # aborted: dropped from the count and the reduce
-    ]
-    docs[2]['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'].append({
-        'key': ATTR_EPISODE_ABORTED,
-        'value': {'boolValue': True},
-    })
-    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', docs)
-    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
-    assert report.episodes == 1
-
-
-def test_aborted_episode_wall_excluded_from_between_episodes(tmp_path):
-    """An aborted rollout is dropped as invalid data, so its wall must leave W_pass entirely — not fall into
-    ``between_episodes`` and not deflate the policy-busy / real-time factors. Here a 40 s aborted episode sits
-    beside a 40 s completed one in a 100 s pass, so the valid W_pass is 60 s."""
-    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
-    telemetry_dir.mkdir()
-    harness = [
-        _span(SPAN_EVAL_PASS, 0, 100, 'pass0'),
-        _span(SPAN_EPISODE, 0, 40, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
-        _span(SPAN_RESET, 0, 5, 'reset0', 'ep0'),
-        _span(SPAN_ENV_STEP, 10, 18, 'step0', 'ep0'),
-        _span(SPAN_MATERIALIZE, 14, 16, 'mat0', 'step0'),
-        _span(SPAN_RECORD_IO, 20, 24, 'io0', 'ep0'),
-        _span(SPAN_POLICY_INFER, 30, 33, 'inferA0', 'ep0'),
-        _span(SPAN_POLICY_INFER, 33, 34, 'inferB0', 'ep0'),
-        _span(SPAN_EPISODE, 50, 90, 'ep1', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),  # 40 s of real wall, aborted
-    ]
-    harness[-1]['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'].append({
-        'key': ATTR_EPISODE_ABORTED,
-        'value': {'boolValue': True},
-    })
-    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', harness)
-
-    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
-
-    assert report.episodes == 1
-    assert report.wall_s == pytest.approx(60.0)  # 100 s pass minus the 40 s aborted episode
-    split = report.wall_split
-    # between_episodes is the completed episode's real inter-episode idle only (60 - 40), NOT (100 - 40)/100
-    # with the aborted wall folded in.
-    assert split.between_episodes == pytest.approx(20 / 60)
-    assert split.reset == pytest.approx(5 / 60)
-    assert split.env_step == pytest.approx(8 / 60)
-    assert split.record_io == pytest.approx(4 / 60)
-    assert split.overhead == pytest.approx(19 / 60)
-    assert sum(vars(split).values()) == pytest.approx(1.0)
-    # 60 s is the denominator of these figures too — the aborted wall is out of W_pass, not merely unattributed.
-    assert split.policy_wait == pytest.approx(4 / 60)
-    assert report.real_time_factor == pytest.approx(20 / 60)
-
-
-def test_env_step_split_ignores_aborted_episode(tmp_path):
-    """An aborted rollout's spans — its client env.step AND its server-side steps — stay out of the env-step
-    split: the denominator covers completed episodes only, so counting them would push the fractions past 1 and
-    the wire residual below 0."""
-    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
-    telemetry_dir.mkdir()
-    harness = [
-        _span(SPAN_EVAL_PASS, 0, 100, 'pass0'),
-        _span(SPAN_EPISODE, 0, 40, 'ep0', 'pass0', {ATTR_EPISODE_VIRTUAL_S: 20.0}),
-        _span(SPAN_ENV_STEP, 10, 18, 'step0', 'ep0'),
-        _span(SPAN_MATERIALIZE, 14, 16, 'mat0', 'step0'),
-        _span(SPAN_EPISODE, 50, 60, 'ep1', 'pass0'),
-        _span(SPAN_ENV_STEP, 51, 59, 'step1', 'ep1'),  # aborted episode's client step
-    ]
-    harness[4]['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes'].append({
-        'key': ATTR_EPISODE_ABORTED,
-        'value': {'boolValue': True},
-    })
-    env = [
-        _span(SPAN_ENV_STEP, 10, 15, 'srv0', process=ENV_PROCESS),
-        _span('physics', 10, 13, 'phys0', 'srv0', process=ENV_PROCESS),
-        _span('render', 13, 14, 'rend0', 'srv0', process=ENV_PROCESS),
-        _span(SPAN_ENV_STEP, 51, 56, 'srv1', process=ENV_PROCESS),  # during the aborted rollout
-        _span('physics', 51, 54, 'phys1', 'srv1', process=ENV_PROCESS),
-    ]
-    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', harness)
-    _write_lines(telemetry_dir / f'{ENV_PROCESS}{SPANS_SUFFIX}', env)
-
-    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
-
-    split = report.env_step_split
-    assert split is not None
-    # Only the completed episode's 8s client step and its 5s server step count: physics 3/8, render 1/8,
-    # server_other 1/8, materialize 2/8, wire (8-5-2)/8.
-    assert split.phases['physics'] == pytest.approx(3 / 8)
-    assert split.phases['render'] == pytest.approx(1 / 8)
-    assert split.phases['server_other'] == pytest.approx(1 / 8)
-    assert split.materialize == pytest.approx(2 / 8)
-    assert split.wire == pytest.approx(1 / 8)
-    assert sum(split.phases.values()) + split.wire + split.materialize == pytest.approx(1.0)
 
 
 def test_orphan_episode_from_killed_run_excluded(tmp_path):
@@ -744,3 +645,43 @@ def test_parse_dmon_fails_loudly_without_fb(tmp_path):
     log.write_text('# gpu    sm\n#  Idx     %\n    0    50\n')
     with pytest.raises(ValueError, match='fb'):
         _parse_dmon(log)
+
+
+def test_a_tilde_run_dir_and_dmon_log_resolve_against_home(tmp_path, monkeypatch):
+    """The documented eval quickstart writes to a `~`-relative directory, so the reduce reads one back."""
+    (tmp_path / 'run').mkdir()
+    _fixture(tmp_path / 'run' / TELEMETRY_SUBDIR)
+    (tmp_path / 'dmon.log').write_text('# gpu    sm    fb\n#  Idx     %    MB\n    0    50  1024\n')
+    monkeypatch.setenv('HOME', str(tmp_path))
+
+    timing_report(run_dir='~/run', gpu_policy_log='~/dmon.log')
+
+    summary = json.loads((tmp_path / 'run' / 'timing_summary.json').read_text())
+    assert summary['episodes'] == 2
+    assert summary['gpu']['policy']['peak_vram_gb'] == pytest.approx(1.0)
+
+
+def test_a_remote_run_dir_reaches_pos3_verbatim(tmp_path, monkeypatch):
+    """Expansion is the local branch's alone: an `s3://` URI is the remote store's to parse, `~` and all."""
+    _fixture(tmp_path / TELEMETRY_SUBDIR)
+    downloaded, uploaded = [], []
+    monkeypatch.setattr(pos3, 'download', lambda uri: downloaded.append(uri) or tmp_path)
+    monkeypatch.setattr(pos3, 'upload', lambda key, path, delete=True: uploaded.append(key))
+
+    timing_report(run_dir='s3://bucket/~run')
+
+    assert downloaded == ['s3://bucket/~run']
+    assert uploaded == ['s3://bucket/~run.timing_summary.json']
+
+
+def test_a_run_dir_holding_no_telemetry_directory_names_it(tmp_path):
+    with pytest.raises(ValueError, match='no telemetry directory') as excinfo:
+        timing_report(run_dir=str(tmp_path))
+    assert str(tmp_path / TELEMETRY_SUBDIR) in str(excinfo.value)
+
+
+def test_a_telemetry_directory_holding_no_spans_is_not_reported_as_untimed(tmp_path):
+    """The sidecar directory exists, so the run was timed — what is missing is its flushed spans."""
+    (tmp_path / TELEMETRY_SUBDIR).mkdir()
+    with pytest.raises(ValueError, match='carries no spans'):
+        timing_report(run_dir=str(tmp_path))

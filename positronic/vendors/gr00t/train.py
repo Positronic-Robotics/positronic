@@ -35,8 +35,9 @@ def main(
 ):
     exp_name = str(exp_name)
     groot_root = Path(__file__).parents[4] / 'gr00t'
-    python_bin = str(Path(groot_venv_path) / 'bin' / 'python')
-    modality_config_path = MODALITY_CONFIGS.get(modality_config, modality_config)
+    python_bin = str(Path(groot_venv_path).expanduser() / 'bin' / 'python')
+    known = MODALITY_CONFIGS.get(modality_config)
+    modality_config_path = known.path if known is not None else Path(modality_config)
 
     with pos3.mirror():
         dataset_local_path = pos3.download(input_path)
@@ -54,7 +55,7 @@ def main(
         command = [python_bin, 'gr00t/experiment/launch_finetune.py']
         command.extend(['--base_model_path', 'nvidia/GR00T-N1.6-3B'])
         command.extend(['--dataset_path', str(dataset_local_path)])
-        command.extend(['--modality_config_path', modality_config_path])
+        command.extend(['--modality_config_path', str(modality_config_path)])
         command.extend(['--embodiment_tag', 'NEW_EMBODIMENT'])
         command.extend(['--output_dir', str(output_dir)])
         command.extend(['--num_gpus', '1'])

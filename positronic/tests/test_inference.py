@@ -1,11 +1,15 @@
 import io
 import sys
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
 
+import pimm
+from positronic import keys
 from positronic.eval import Embodiment
-from positronic.inference import real
+from positronic.inference import KeyboardOperator, real
+from positronic.tests.testing_coutils import drive_scheduler, scripted_driver
 
 
 class _IdlePolicy:
@@ -51,3 +55,27 @@ def test_the_keyboard_path_refuses_a_simulated_embodiment():
     neither of."""
     with pytest.raises(ValueError, match='sim'):
         real(policy=_IdlePolicy(), embodiment=_embodiment(simulated=True), task='stub')
+
+
+def test_the_operator_reports_an_ask_the_harness_refuses(capsys):
+    """The operator does not police who may start an episode: every press is asked for, and what comes back
+    is printed as it lands."""
+    operator = KeyboardOperator(task='pick')
+    with pimm.World(virtual_time=True) as world:
+        keystrokes = world.pair(operator.keystrokes)
+        harness = world.pair(operator.perform_task)
+        received = []
+
+        def refuse_a_second_ask():
+            """Stand in for the harness's one-episode-at-a-time rule: hold the first call, refuse the rest."""
+            for call in harness.incoming():
+                received.append(call.request)
+                if len(received) > 1:
+                    call.set_exception(RuntimeError('An episode is already running'))
+
+        press = partial(keystrokes.emit, 's')
+        driver = scripted_driver((press, 0.05), (refuse_a_second_ask, 0.05), (press, 0.05), (refuse_a_second_ask, 0.05))
+        drive_scheduler(world.start([operator, driver]))
+
+    assert received == [{keys.TASK: 'pick'}, {keys.TASK: 'pick'}]
+    assert 'already running' in capsys.readouterr().out

@@ -12,13 +12,14 @@ from openpi_client.websocket_client_policy import WebsocketClientPolicy
 
 from positronic import geom, keys
 from positronic.offboard.server import serve
-from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
+from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
 from positronic.policy import Codec, Policy, Session
 from positronic.policy.codec import ChangeEEFrame, RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
-from positronic.policy.wrappers import ChunkedSchedule
+from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.utils.logging import init_logging
+from positronic.vendors import openpi
 from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,8 @@ class OpenpiSource(ModelSource):
     A ``gs://`` checkpoints_dir is a published openpi checkpoint served as-is: openpi fetches it
     itself via fsspec[gcs] (pos3 handles only s3://), and there are no numeric-step subdirs to
     resolve — the dir is the single model.
+
+    ``warm_observation`` builds the observation each load runs one inference on, before the policy serves.
     """
 
     def __init__(
@@ -167,11 +170,16 @@ class OpenpiSource(ModelSource):
         config_name: str = 'pi05_positronic_lowmem',
         checkpoint: str | None = None,
         openpi_ws_port: int = 8001,
+        warm_observation: Callable[[], dict[str, Any]] = openpi.warm_observation,
     ):
         self.checkpoints_dir = str(checkpoints_dir).rstrip('/')
         self.config_name = config_name
         self.checkpoint = checkpoint
         self.openpi_ws_port = openpi_ws_port
+        # What builds the observation each load warms on, rather than the observation itself: two sources are
+        # compared by their attributes, and arrays do not answer that question. The default carries every
+        # field the shipped configs read; a ``config_name`` reading something else supplies its own.
+        self.warm_observation = warm_observation
 
     @property
     def _passthrough(self) -> bool:
@@ -216,10 +224,13 @@ class OpenpiSource(ModelSource):
         )
         try:
             subproc.start(on_progress)
+            policy = OpenpiPolicy(subproc)
+            # The subprocess compiles the model on its first inference, which outlasts a rig's inference timeout.
+            warmup(policy, self.warm_observation(), on_progress)
         except Exception:
             subproc.stop()
             raise
-        return OpenpiPolicy(subproc)
+        return policy
 
     def meta(self, model_id: str) -> dict[str, Any]:
         return {
@@ -247,7 +258,7 @@ def pipeline(codec: Codec, source: ModelSource, ee_frame: geom.Transform3D | Non
     ``ee_frame`` places the end-effector frame this checkpoint's poses live in relative to ``DEFAULT_FRAME``
     (``models.DROID_EE_FRAME``); ``None`` for a checkpoint trained in ``default``, or one speaking joints.
     """
-    local = ChunkedSchedule() | RestrictImageSize(224, 224)
+    local = StopOnFault() | ChunkedSchedule() | RestrictImageSize(224, 224)
     if ee_frame is not None:
         # Outermost, so everything downstream — the wire, the server's codec — sees poses already in ``ee_frame``.
         local = ChangeEEFrame(ee_frame) | local

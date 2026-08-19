@@ -8,7 +8,8 @@ from typing import TypeVar
 
 import pimm
 
-ScriptStep = tuple[Callable[[], None] | None, float]
+# The driver runs a step for its effect, so a step that hands something back — a call's answer — is one too.
+ScriptStep = tuple[Callable[[], object] | None, float]
 
 T = TypeVar('T')
 

@@ -1,4 +1,3 @@
-import time
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -7,7 +6,7 @@ import numpy as np
 import pytest
 
 import pimm
-from pimm.world import SystemClock
+from pimm.tests.testing import MockClock
 from positronic.drivers.roboarm import franka
 
 HOME = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
@@ -149,16 +148,24 @@ def _driver(arm: FakeArm, *, variation: list[float] | None = None, **kwargs) -> 
     return robot
 
 
-def _drive(loop) -> None:
-    """Pump a driver loop to exhaustion, honouring each yielded Sleep — what the world does to it."""
+def _drive(loop, clock: MockClock | None = None) -> None:
+    """Pump a driver loop to exhaustion, standing in for the world by advancing ``clock`` through each Sleep."""
+    clock = clock or MockClock()
     for command in loop:
-        time.sleep(command.seconds)
+        clock.advance(command.seconds)
+
+
+def _drive_park(driver: franka.Robot, arm: FakeArm) -> MockClock:
+    """Park ``arm`` under a clock that moves only by the waits the park itself asks for."""
+    clock = MockClock()
+    _drive(driver._park(arm, clock), clock)
+    return clock
 
 
 def test_park_drives_the_arm_to_the_home_pose():
     arm = FakeArm(JOGGED)
 
-    _drive(_driver(arm, manage_desk=False)._park(arm))
+    _drive_park(_driver(arm, manage_desk=False), arm)
 
     np.testing.assert_allclose(arm.targets, [HOME])
     np.testing.assert_allclose(arm.q, HOME)
@@ -168,7 +175,7 @@ def test_park_commands_the_exact_home_pose_from_inside_the_homing_spread():
     variation = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
     arm = FakeArm(HOME + np.asarray(variation))
 
-    _drive(_driver(arm, variation=variation, manage_desk=False)._park(arm))
+    _drive_park(_driver(arm, variation=variation, manage_desk=False), arm)
 
     # An arm inside the spread, or travelling through it, is not asked to be judged already home: the
     # controller reports arrival, and a pose it already holds arrives at once.
@@ -180,7 +187,7 @@ def test_the_park_waits_by_yielding_rather_than_blocking():
     """A driver's waits are the world's to honour, teardown included: the park asks for them with Sleep."""
     arm = FakeArm(JOGGED, polls_to_reach=3)
 
-    commands = list(_driver(arm, manage_desk=False)._park(arm))
+    commands = list(_driver(arm, manage_desk=False)._park(arm, MockClock()))
 
     assert commands and all(isinstance(command, pimm.Sleep) for command in commands)
 
@@ -188,7 +195,7 @@ def test_the_park_waits_by_yielding_rather_than_blocking():
 def test_park_gives_up_when_the_goal_stops_advancing():
     arm = FakeArm(JOGGED, goal_status=franka.pf.GoalStatus.ABORTED)
 
-    _drive(_driver(arm, manage_desk=False)._park(arm))
+    _drive_park(_driver(arm, manage_desk=False), arm)
 
     assert arm.calls.count(Call.GOAL) == 1
     np.testing.assert_allclose(arm.q, JOGGED)
@@ -197,11 +204,10 @@ def test_park_gives_up_when_the_goal_stops_advancing():
 def test_park_gives_up_when_the_arm_does_not_arrive_in_time():
     arm = FakeArm(JOGGED, polls_to_reach=10**9)
 
-    started = time.monotonic()
-    _drive(_driver(arm, manage_desk=False, park_timeout_s=0.05)._park(arm))
-    elapsed = time.monotonic() - started
+    clock = _drive_park(_driver(arm, manage_desk=False, park_timeout_s=0.05), arm)
 
-    assert 0.05 <= elapsed < 2.0
+    # It waits out the timeout and gives up within one poll interval of it.
+    assert 0.05 <= clock.now() < 0.06
     assert arm.calls.count(Call.GOAL) > 1
     np.testing.assert_allclose(arm.q, JOGGED)
 
@@ -210,7 +216,7 @@ def test_park_swallows_a_robot_that_fails_mid_move():
     arm = FakeArm(JOGGED)
     arm.raises = RuntimeError('libfranka: connection lost')
 
-    _drive(_driver(arm, manage_desk=False)._park(arm))
+    _drive_park(_driver(arm, manage_desk=False), arm)
 
     np.testing.assert_allclose(arm.q, JOGGED)
 
@@ -218,14 +224,15 @@ def test_park_swallows_a_robot_that_fails_mid_move():
 def test_teardown_parks_the_arm_before_stopping_control(desk):
     arm = FakeArm(HOME)
     stop = StopFlag()
-    loop = _driver(arm).run(stop, SystemClock())
+    clock = MockClock()
+    loop = _driver(arm).run(stop, clock)
 
     for _ in range(3):
         next(loop)
     arm.q = JOGGED  # the operator jogs the arm, then finishes the run from there
     mark = len(arm.calls)
     stop.stopped = True
-    _drive(loop)
+    _drive(loop, clock)
 
     teardown = arm.calls[mark:]
     assert teardown.index(Call.SET_TARGET_JOINTS) < teardown.index(Call.STOP)
@@ -237,7 +244,8 @@ def test_teardown_parks_the_arm_before_stopping_control(desk):
 def test_teardown_stops_control_and_releases_desk_when_parking_fails(desk):
     arm = FakeArm(HOME)
     stop = StopFlag()
-    loop = _driver(arm).run(stop, SystemClock())
+    clock = MockClock()
+    loop = _driver(arm).run(stop, clock)
 
     for _ in range(3):
         next(loop)
@@ -245,7 +253,7 @@ def test_teardown_stops_control_and_releases_desk_when_parking_fails(desk):
     arm.raises = RuntimeError('libfranka: connection lost')
     mark = len(arm.calls)
     stop.stopped = True
-    _drive(loop)
+    _drive(loop, clock)
 
     # the park was attempted, and its failure went no further
     assert arm.calls[mark:] == [Call.RECOVER_FROM_ERRORS, Call.STOP]
@@ -255,7 +263,8 @@ def test_teardown_stops_control_and_releases_desk_when_parking_fails(desk):
 def test_a_control_fault_stops_the_arm_without_parking_it(desk):
     arm = FakeArm(HOME)
     stop = StopFlag()
-    loop = _driver(arm).run(stop, SystemClock())
+    clock = MockClock()
+    loop = _driver(arm).run(stop, clock)
 
     for _ in range(3):
         next(loop)
@@ -263,7 +272,7 @@ def test_a_control_fault_stops_the_arm_without_parking_it(desk):
     arm.raises_once = RuntimeError('libfranka: connection lost')  # the fault, not a dead arm — a park could move it
     mark = len(arm.calls)
     with pytest.raises(RuntimeError):
-        _drive(loop)
+        _drive(loop, clock)
 
     assert Call.SET_TARGET_JOINTS not in arm.calls[mark:]  # a fault is not answered with autonomous motion
     assert arm.calls[-1] == Call.STOP
@@ -275,12 +284,13 @@ def test_a_stop_during_the_reset_ends_the_run_without_a_fault(desk):
     reports failure. Reading it would turn a clean shutdown into a control fault — which skips the park."""
     arm = FakeArm(JOGGED, polls_to_reach=10**9)  # the opening reset never lands on its own
     stop = StopFlag()
-    loop = _driver(arm).run(stop, SystemClock())
+    clock = MockClock()
+    loop = _driver(arm).run(stop, clock)
 
     next(loop)  # suspended inside the reset's travel
     stop.stopped = True
     arm.goal_status = franka.pf.GoalStatus.ABORTED
 
-    _drive(loop)
+    _drive(loop, clock)
 
     assert arm.calls[-1] == Call.STOP

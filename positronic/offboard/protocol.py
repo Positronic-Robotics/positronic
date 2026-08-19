@@ -1,23 +1,74 @@
-"""The offboard session wire protocol: the field names and status values both ends spell.
+"""The offboard wire's contract: its message keys, the shared msgpack encoding, and the robot command
+this boundary carries.
 
-- A session opens with status frames until ``READY``, then carries observations one way, results the other.
-- `server.PolicyServer` writes these names and `client.InferenceSession` reads them, across two processes
-  that share no code path and may run different versions of this package.
-- The status values are the server's vocabulary, not a closed set: an unknown one is reported, not guessed.
+A served command arrives either inside the ``__cmd__`` envelope or as the bare ``to_wire`` mapping at a
+command channel, and nothing but the channel tells that mapping from any other dict.
 """
 
-# Frame fields.
+import collections.abc as cabc
+import functools
+from enum import StrEnum
+from typing import Any
+
+import msgpack
+import numpy as np
+
+from positronic import keys
+from positronic.drivers.roboarm import command
+from positronic.utils import serialization
+
+# The top-level keys of every server-to-client message: ``STATUS`` until the server reports itself ready
+# and hands over its ``META``, then one ``RESULT`` or ``ERROR`` per inference.
 STATUS = 'status'
 MESSAGE = 'message'
 META = 'meta'
 RESULT = 'result'
-# Both the field carrying a failure's reason and the STATUS value announcing one — one word, one meaning.
 ERROR = 'error'
 
-# Status values, in the order a session passes through them. A failed session reports ERROR.
-WAITING = 'waiting'  # queued behind another session holding the model slot or the backend
-LOADING = 'loading'  # the checkpoint is being loaded; carries a progress MESSAGE
-READY = 'ready'  # the model is loaded and a session is reset — the server can serve, and only now
 
-# Not yet, keep waiting — a session in flight rather than one that failed.
-PENDING_STATUSES = (WAITING, LOADING)
+class ServerStatus(StrEnum):
+    READY = 'ready'
+    WAITING = 'waiting'
+    LOADING = 'loading'
+    ERROR = 'error'
+
+
+_CMD = b'__cmd__'
+
+
+def _pack(obj):
+    if isinstance(obj, command.CommandType):
+        return {_CMD: command.to_wire(obj)}
+    return serialization.pack(obj)
+
+
+def _unpack(obj):
+    if _CMD in obj:
+        return command.from_wire(obj[_CMD])
+    return serialization.unpack(obj)
+
+
+def serialise(obj: Any) -> bytes:
+    packed = msgpack.packb(obj, default=_pack)
+    assert packed is not None
+    return packed
+
+
+deserialise = functools.partial(msgpack.unpackb, object_hook=_unpack)
+
+
+def _typed(value: Any) -> Any:
+    """One command channel's value, typed."""
+    if not isinstance(value, cabc.Mapping):
+        return value
+    # ``from_wire`` reads the vectors as arrays; the wire carries sequences, and ``type`` is its one string.
+    return command.from_wire({k: v if isinstance(v, str) else np.asarray(v) for k, v in value.items()})
+
+
+def typed_commands(result: Any) -> Any:
+    """A served result — one action, a list of them, or ``None`` — with every command channel typed."""
+    if isinstance(result, cabc.Mapping):
+        return {k: _typed(v) if keys.is_robot_command(k) else v for k, v in result.items()}
+    if isinstance(result, list):
+        return [typed_commands(action) for action in result]
+    return result

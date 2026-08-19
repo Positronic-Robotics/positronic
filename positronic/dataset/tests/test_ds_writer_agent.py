@@ -9,17 +9,12 @@ import pytest
 import pimm
 from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.dataset import DatasetWriter, EpisodeWriter
-from positronic.dataset.ds_writer_agent import (
-    DsWriterAgent,
-    DsWriterCommand,
-    DsWriterCommandType,
-    TimeMode,
-    TrajectoryOverrideSerializer,
-)
+from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType, TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
-from positronic.drivers.roboarm import RobotStatus, State
+from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import command as rcmd
+from positronic.drivers.roboarm.tests.fakes import FakeRobotState
 from positronic.tests.testing_coutils import run_scripted_agent
 
 
@@ -356,33 +351,9 @@ def test_transform_3d_serializer(world):
     np.testing.assert_allclose(names_vals[0][1][3:], q.as_quat)
 
 
-class _FakeState(State):
-    def __init__(self, q, dq, ee_pose, status):
-        self._q = q
-        self._dq = dq
-        self._ee = ee_pose
-        self._status = status
-
-    @property
-    def q(self):
-        return self._q
-
-    @property
-    def dq(self):
-        return self._dq
-
-    @property
-    def ee_pose(self):
-        return self._ee
-
-    @property
-    def status(self):
-        return self._status
-
-
-def test_robot_state_serializer_drops_reset_and_emits_components(world):
+def test_robot_state_serializer_records_a_resetting_arm_beside_its_pose(world):
     ds = FakeDatasetWriter()
-    agent, cmd_em, emitters = build_agent_with_pipes({'robot_state': Serializers.robot_state}, ds, world)
+    agent, cmd_em, emitters = build_agent_with_pipes({keys.ROBOT_STATE: Serializers.robot_state}, ds, world)
 
     q = np.arange(7, dtype=np.float32)
     dq = np.arange(7, dtype=np.float32) + 10
@@ -391,20 +362,23 @@ def test_robot_state_serializer_drops_reset_and_emits_components(world):
 
     script = [
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: emitters['robot_state'].emit(_FakeState(q, dq, pose, RobotStatus.RESETTING)), 0.001),
-        (lambda: emitters['robot_state'].emit(_FakeState(q, dq, pose, RobotStatus.AVAILABLE)), 0.001),
+        (lambda: emitters[keys.ROBOT_STATE].emit(FakeRobotState(q, dq, pose, RobotStatus.RESETTING)), 0.001),
+        (lambda: emitters[keys.ROBOT_STATE].emit(FakeRobotState(q, dq, pose, RobotStatus.AVAILABLE)), 0.001),
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
     run_scripted_agent(agent, script, world=world)
 
     w = ds.created[-1]
-    items = {name: val for (name, val, _, _) in w.appends}
-    # Should not contain any data from RESETTING
-    assert set(items.keys()) == {keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE}
-    np.testing.assert_allclose(items[keys.JOINTS], q)
-    np.testing.assert_allclose(items[keys.JOINT_VEL], dq)
-    np.testing.assert_allclose(items[keys.EE_POSE], np.concatenate([t, geom.Rotation.identity.as_quat]))
+    by_name = {}
+    for name, val, _, _ in w.appends:
+        by_name.setdefault(name, []).append(val)
+    expected = {keys.JOINTS: q, keys.JOINT_VEL: dq, keys.EE_POSE: np.concatenate([t, geom.Rotation.identity.as_quat])}
+    assert set(by_name) == {keys.ROBOT_STATUS, *expected}
+    assert by_name[keys.ROBOT_STATUS] == [RobotStatus.RESETTING, RobotStatus.AVAILABLE]
+    for name, value in expected.items():
+        assert len(by_name[name]) == 2, name
+        np.testing.assert_allclose(by_name[name][0], value)
 
 
 def test_robot_command_serializer_variants(world):
@@ -482,36 +456,18 @@ def test_pickles_with_every_constructor_argument_filled():
         virtual_time=True,
         telemetry_span=partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
     )
-    agent.add_signal('robot_command', TrajectoryOverrideSerializer(Serializers.robot_command))
-    agent.add_signal('robot_state', Serializers.robot_state)
+    agent.add_signal(keys.ROBOT_COMMAND, Serializers.robot_command)
+    agent.add_signal(keys.ROBOT_STATE, Serializers.robot_state)
 
     loaded = pickle.loads(pickle.dumps(agent))
 
-    assert set(loaded.inputs) == {'robot_command', 'robot_state'}
+    assert set(loaded.inputs) == {keys.ROBOT_COMMAND, keys.ROBOT_STATE}
     with loaded._telemetry_span():
         pass
 
 
-def test_trajectory_override_serializer():
-    s = TrajectoryOverrideSerializer(None)
-    s.reset()
-
-    # First trajectory: nothing is final yet (could be overridden).
-    assert s([(1, 'a'), (2, 'b'), (3, 'c')]) == []
-
-    # Next trajectory starts at ts=2 -> only ts<2 ('a') is final; 'b','c' overridden.
-    out = s([(2, 'B'), (3, 'C'), (4, 'D')])
-    assert [(t.ts, t.value) for t in out] == [(1, 'a')]
-
-    # Episode end drains the still-live buffer.
-    assert [(t.ts, t.value) for t in s.flush()] == [(2, 'B'), (3, 'C'), (4, 'D')]
-
-
 def test_serializer_plain_list_value(world):
-    """A serializer returning a plain list (non-`Timestamped`) is appended as one sample.
-
-    The trajectory-stream dispatch must not hijack legitimate list-valued samples.
-    """
+    """A serializer returning a plain list is appended as one sample, values and all."""
     ds = FakeDatasetWriter()
 
     def to_list(_):
@@ -527,52 +483,3 @@ def test_serializer_plain_list_value(world):
 
     w = ds.created[-1]
     assert [(s, v) for (s, v, _, _) in w.appends] == [('v', [1, 2, 3])]
-
-
-def test_trajectory_override_serializer_empty_cancels_buffer():
-    """Empty trajectory is the Harness STOP cancel signal: drop the buffered tail."""
-    s = TrajectoryOverrideSerializer(None)
-    s.reset()
-
-    # Buffer a trajectory (nothing committed yet).
-    assert s([(1, 'a'), (2, 'b'), (3, 'c')]) == []
-    # Empty trajectory = cancel: nothing committed AND buffer cleared.
-    assert s([]) == []
-    # Subsequent flush must not emit the canceled waypoints.
-    assert s.flush() == []
-
-
-def test_trajectory_override_serializer_flush_cutoff():
-    """flush(now_ns) commits only points already due; the future tail is dropped."""
-    s = TrajectoryOverrideSerializer(None)
-    s.reset()
-
-    # Buffer a chunk scheduled at ts 1..4 (nothing committed yet).
-    assert s([(1, 'a'), (2, 'b'), (3, 'c'), (4, 'd')]) == []
-
-    # Episode ends at ts=2: only the due points (ts <= 2) are committed; 'c','d' dropped.
-    assert [(t.ts, t.value) for t in s.flush(now_ns=2)] == [(1, 'a'), (2, 'b')]
-
-    # No cutoff keeps the legacy "commit everything" behavior.
-    s.reset()
-    assert s([(1, 'a'), (2, 'b')]) == []
-    assert [(t.ts, t.value) for t in s.flush()] == [(1, 'a'), (2, 'b')]
-
-
-def test_stop_commits_due_drops_future_trajectory(world):
-    """A mid-trajectory STOP commits already-due samples and drops the un-executed tail."""
-    ds = FakeDatasetWriter()
-    agent, cmd_em, emitters = build_agent_with_pipes({'traj': TrajectoryOverrideSerializer(None)}, ds, world)
-
-    future = 10**18  # far beyond the test clock, so it stays an un-executed tail
-    script = [
-        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (partial(emitters['traj'].emit, [(0, 'due'), (future, 'tail')]), 0.001),
-        (partial(cmd_em.emit, DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
-    ]
-    run_scripted_agent(agent, script, world=world)
-
-    w = ds.created[-1]
-    # 'due' (ts <= stop time) is committed; the future 'tail' is dropped.
-    assert [(s, v) for (s, v, _, _) in w.appends] == [('traj', 'due')]
-    assert w.exited is True

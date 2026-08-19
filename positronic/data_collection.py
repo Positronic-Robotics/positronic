@@ -3,6 +3,7 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import nullcontext
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
@@ -109,12 +110,12 @@ class DataCollectionController(pimm.ControlSystem):
         self.operator_position = operator_position
         self._static_meta = static_meta or {}
         self.metadata_getter = metadata_getter or (lambda: {})
-        self.controller_positions = pimm.ControlSystemReceiver(self, default=None)
+        self.controller_positions = pimm.DefaultingReceiver(self, default={})
         self.buttons_receiver = pimm.ControlSystemReceiver(self)
         self.robot_state = pimm.ControlSystemReceiver(self)
         self.gripper_state = pimm.FakeReceiver(self)  # To make compatible with other "policy" control systems
         self.frames = pimm.ReceiverDict(self, fake=True)
-        self.robot_meta_in = pimm.ControlSystemReceiver(self, default={})
+        self.robot_meta_in = pimm.DefaultingReceiver(self, default={})
 
         self.robot_commands = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemEmitter(self)
@@ -123,10 +124,11 @@ class DataCollectionController(pimm.ControlSystem):
         self.sound = pimm.ControlSystemEmitter(self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
-        start_wav_path = 'positronic/assets/sounds/recording-has-started.wav'
-        end_wav_path = 'positronic/assets/sounds/recording-has-stopped.wav'
-        abort_wav_path = 'positronic/assets/sounds/recording-has-been-aborted.wav'
-        error_wav_path = 'positronic/assets/sounds/error-occurred.wav'
+        sounds = Path(package_assets_path('assets/sounds'))
+        start_wav_path = sounds / 'recording-has-started.wav'
+        end_wav_path = sounds / 'recording-has-stopped.wav'
+        abort_wav_path = sounds / 'recording-has-been-aborted.wav'
+        error_wav_path = sounds / 'error-occurred.wav'
 
         tracker = _Tracker(self.operator_position)
         button_handler = ButtonHandler()
@@ -160,9 +162,9 @@ class DataCollectionController(pimm.ControlSystem):
                         self.sound.emit(abort_wav_path)
                     tracker.turn_off()
                     recording = False
-                    self.robot_commands.emit([(clock.now_ns(), roboarm.command.Reset())])
+                    self.robot_commands.emit(roboarm.command.Reset())
 
-                self.target_grip.emit([(clock.now_ns(), button_handler.get_value('right_trigger'))])
+                self.target_grip.emit(button_handler.get_value('right_trigger'))
                 cp_msg = self.controller_positions.read()
                 if cp_msg.updated:
                     target_robot_pos = tracker.update(cp_msg.data['right'])
@@ -175,7 +177,7 @@ class DataCollectionController(pimm.ControlSystem):
                         self.sound.emit(error_wav_path)
                     if not in_error and cp_msg.updated:
                         cmd = roboarm.command.CartesianPosition(target_robot_pos)
-                        self.robot_commands.emit([(clock.now_ns(), cmd)])
+                        self.robot_commands.emit(cmd)
 
                 yield pimm.Sleep(0.001)
 

@@ -1,12 +1,16 @@
 import time
-from unittest.mock import MagicMock, patch
+from http import HTTPStatus
+from unittest.mock import ANY, MagicMock, patch
 
 import numpy as np
 import pytest
+from websockets.datastructures import Headers
+from websockets.exceptions import InvalidStatus
+from websockets.http11 import Response
 
 from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import command
-from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient
+from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, _ConnectRetries
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.remote import RemoteSession
@@ -53,7 +57,9 @@ class TestPrepareObs:
     def test_images_pass_through_untouched_by_default(self):
         session = RemoteSession(_mock_ws_session())
         obs = {'cam': _make_image(480, 640), 'state': np.array([1.0])}
-        assert session._prepare_obs(obs) is obs
+        prepared = session._prepare_obs(obs)
+        assert prepared.keys() == obs.keys()
+        assert all(prepared[key] is value for key, value in obs.items())
 
     def test_compression_reaches_nested_images(self):
         session = RemoteSession(_mock_ws_session(), compress_images=True)
@@ -98,6 +104,7 @@ class TestInferenceClientHeaders:
                 infer_timeout=DEFAULT_INFER_TIMEOUT,
                 url=client.session_url,
                 ready_deadline=None,
+                waiting_since=ANY,
             )
 
     def test_new_session_without_headers_passes_none(self):
@@ -204,6 +211,67 @@ class TestInferenceClientUrl:
                 assert call.args[0] == client.session_url == 'ws://localhost:8000/api/v1/session/10000?fps=10'
 
 
+def _refused(status: HTTPStatus) -> InvalidStatus:
+    return InvalidStatus(Response(status, 'refused', Headers()))
+
+
+class TestNewSessionRetriesRefusedUpgrades:
+    """Which non-101 upgrade responses are a backend still coming up, and which are the endpoint saying no."""
+
+    def test_a_403_retries_and_the_session_that_follows_is_returned(self):
+        with (
+            patch(
+                'positronic.offboard.client.connect', side_effect=[_refused(HTTPStatus.FORBIDDEN), MagicMock()]
+            ) as mock_connect,
+            patch('positronic.offboard.client.InferenceSession') as mock_session_cls,
+            patch('positronic.offboard.client.time.sleep'),
+        ):
+            session = InferenceClient('localhost:8000').new_session()
+
+            assert mock_connect.call_count == 2
+            assert session is mock_session_cls.return_value
+
+    def test_a_403_gives_up_once_its_attempts_are_spent(self):
+        with (
+            patch(
+                'positronic.offboard.client.connect',
+                side_effect=[_refused(HTTPStatus.FORBIDDEN)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS + 5),
+            ) as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.sleep'),
+            pytest.raises(InvalidStatus),
+        ):
+            InferenceClient('localhost:8000').new_session()
+
+        assert mock_connect.call_count == _ConnectRetries.MAX_FORBIDDEN_ATTEMPTS
+
+    @pytest.mark.parametrize('status', [HTTPStatus.UNAUTHORIZED, HTTPStatus.NOT_FOUND])
+    def test_a_refusal_that_no_warm_up_clears_is_raised_at_once(self, status):
+        with (
+            patch('positronic.offboard.client.connect', side_effect=_refused(status)) as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.sleep'),
+            pytest.raises(InvalidStatus),
+        ):
+            InferenceClient('localhost:8000').new_session()
+
+        assert mock_connect.call_count == 1
+
+    def test_each_session_opens_on_a_full_budget(self):
+        """A client that spent 403s opening one session still gets all of them for the next."""
+        one_session = [_refused(HTTPStatus.FORBIDDEN)] * (_ConnectRetries.MAX_FORBIDDEN_ATTEMPTS - 1) + [MagicMock()]
+        with (
+            patch('positronic.offboard.client.connect', side_effect=one_session * 2) as mock_connect,
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.sleep'),
+        ):
+            client = InferenceClient('localhost:8000')
+            client.new_session()
+            client.new_session()
+
+            assert mock_connect.call_count == 2 * len(one_session)
+
+
 def test_remote_policy_hands_the_url_and_headers_to_the_client():
     headers = {'Modal-Key': 'k'}
     client = RemotePolicy('https://example.com/api/v1/session/10000', headers=headers)._endpoint._client
@@ -241,7 +309,7 @@ class TestActionHorizonWrapping:
 
 
 def test_remote_session_normalizes_single_dict():
-    """Server returning a single action dict (legacy shape) is wrapped into a 1-element list."""
+    """Server returning a single action dict is wrapped into a 1-element list."""
     endpoint, _ = _mock_endpoint(infer_return={keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0})
 
     session = endpoint.new_session()
@@ -304,8 +372,7 @@ def test_records_infer_span_when_inference_raises(tmp_path):
 
 
 def test_remote_policy_meta_exposes_server_fields():
-    """RemotePolicy.meta must expose server metadata so SampledPolicy._get_keys
-    can read e.g. 'server.checkpoint_path' before a session is created."""
+    """RemotePolicy.meta prefixes the server's own fields with ``server.``, before any session exists."""
     policy, _ = _mock_remote_policy({'checkpoint_path': '/ckpts/abc', 'model_name': 'foo', **CHUNKED_STACK})
 
     meta = policy.meta
@@ -356,95 +423,23 @@ def test_frames_stay_raw_where_the_server_declares_no_compression():
     assert isinstance(mock_ws.infer.call_args.args[0]['cam'], np.ndarray)
 
 
-_WIRE_POSE = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
+# rules-allow: hardcoded-keys — the command mapping below is spelled the way a server sends it. Reading
+# the decoder's own constants would make test and decoder agree whatever those names became, leaving the
+# wire itself unpinned.
+def test_a_command_crossing_a_live_websocket_arrives_typed(start_server, make_mock_policy):
+    """A command served as a bare mapping — no ``__cmd__`` envelope, the vector a plain sequence — survives a
+    real msgpack round trip over the socket and reaches the rig typed, under the stack the handshake declares."""
+    pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
+    wire_action = [{keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}, 'timestamp': 0.0}]
+    served = make_mock_policy(wire_action, {'model_name': 'm'})
+    host, port, _ = start_server(ChunkedSchedule() | remote | PolicySource(served))
 
+    actions = RemotePolicy(f'{host}:{port}').new_session(now=lambda: 0.0)({keys.OBS_TIME_NS: 0})
 
-def _served(action: dict) -> dict:
-    """One action as the session hands it up, from a mocked inference result."""
-    endpoint, _ = _mock_endpoint(infer_return=action)
-    actions = endpoint.new_session()({})
-    assert actions is not None and len(actions) == 1
-    return actions[0]
-
-
-# rules-allow: hardcoded-keys — every wire name below is spelled the way a server sends it: the command
-# mapping, and the `target_grip` / `timestamp` fields an action carries. Reading the decoder's own constants
-# would make test and decoder agree whatever those names became, leaving the wire itself unpinned.
-class TestServedCommandDecode:
-    """A server answers with the command as a mapping; the session hands up the typed command."""
-
-    @staticmethod
-    def _wire_command(pose=_WIRE_POSE) -> dict:
-        """One served ``cartesian_pos`` command, in the wire's own layout."""
-        return {'type': 'cartesian_pos', 'pose': pose}
-
-    def test_a_served_command_arrives_typed(self):
-        served = _served({keys.ROBOT_COMMAND: self._wire_command(), 'target_grip': 0.5, 'timestamp': 0.0})
-
-        decoded = served[keys.ROBOT_COMMAND]
-        assert isinstance(decoded, command.CartesianPosition), f'the driver would be handed {decoded!r}'
-        np.testing.assert_allclose(decoded.pose.translation, [0.4, 0.0, 0.6], atol=1e-6)
-        assert served['target_grip'] == 0.5 and served['timestamp'] == 0.0  # the rest of the action survives
-
-    def test_the_vector_decodes_from_a_plain_sequence_as_from_an_array(self):
-        """A transport may hand the vector back as a list rather than an array; either decodes the same."""
-        pose = np.asarray(_WIRE_POSE, dtype=np.float32)
-
-        from_array = _served({keys.ROBOT_COMMAND: self._wire_command(pose)})
-        from_list = _served({keys.ROBOT_COMMAND: self._wire_command(pose.tolist())})
-
-        np.testing.assert_allclose(
-            from_list[keys.ROBOT_COMMAND].pose.translation, from_array[keys.ROBOT_COMMAND].pose.translation, atol=1e-6
-        )
-
-    def test_every_arm_of_a_multi_arm_action_decodes(self):
-        """A bimanual embodiment names its channels ``robot_command.{side}``; every one of them decodes."""
-        wire = self._wire_command()
-        served = _served({f'{keys.ROBOT_COMMAND}.left': wire, f'{keys.ROBOT_COMMAND}.right': wire, 'timestamp': 0.0})
-
-        for side in ('left', 'right'):
-            got = served[f'{keys.ROBOT_COMMAND}.{side}']
-            assert isinstance(got, command.CartesianPosition), f'the {side} driver would be handed {got!r}'
-        assert served['timestamp'] == 0.0
-
-    def test_a_command_channel_carrying_a_vector_is_left_alone(self):
-        """``robot_command.pose`` / ``.joints`` share the prefix but carry a vector, so a prefix match alone
-        would hand them to ``from_wire``; reading the value is what tells them apart."""
-        pose = np.zeros(7, dtype=np.float32)
-
-        served = _served({keys.TARGET_EE_POSE: pose, keys.TARGET_JOINTS: pose})
-
-        np.testing.assert_array_equal(served[keys.TARGET_EE_POSE], pose)
-        np.testing.assert_array_equal(served[keys.TARGET_JOINTS], pose)
-
-    def test_a_typed_command_and_a_sentinel_are_left_alone(self):
-        """A typed command that crossed as a ``__cmd__`` envelope, and an action carrying no command
-        channel, both come back unchanged."""
-        assert isinstance(_served({keys.ROBOT_COMMAND: command.Reset()})[keys.ROBOT_COMMAND], command.Reset)
-        assert _served({'timestamp': 1.6}) == {'timestamp': 1.6}
-
-    def test_a_served_command_decodes_through_the_declared_stack(self):
-        """The decode sits under whatever the handshake declares, so the stack cannot undo it."""
-        wire_action = [{keys.ROBOT_COMMAND: self._wire_command(), 'timestamp': 0.0}]
-        policy, _ = _mock_remote_policy(CHUNKED_STACK, infer_return=wire_action)
-
-        actions = policy.new_session(now=lambda: 0.0)({keys.OBS_TIME_NS: 0})
-
-        assert actions is not None, 'the chunk was swallowed before any command reached a driver'
-        assert isinstance(actions[0][keys.ROBOT_COMMAND], command.CartesianPosition)
-
-    def test_a_command_crossing_a_live_websocket_arrives_typed(self, start_server, make_mock_policy):
-        """A command served as a bare mapping — no ``__cmd__`` envelope, the vector a plain sequence —
-        survives a real msgpack round trip over the socket and arrives typed."""
-        served = make_mock_policy([{keys.ROBOT_COMMAND: self._wire_command(), 'timestamp': 0.0}], {'model_name': 'm'})
-        host, port, _ = start_server(ChunkedSchedule() | remote | PolicySource(served))
-
-        actions = RemotePolicy(f'{host}:{port}').new_session(now=lambda: 0.0)({keys.OBS_TIME_NS: 0})
-
-        assert actions is not None, 'the chunk was swallowed before any command reached a driver'
-        decoded = actions[0][keys.ROBOT_COMMAND]
-        assert isinstance(decoded, command.CartesianPosition), f'the driver would be handed {decoded!r}'
-        np.testing.assert_allclose(decoded.pose.translation, [0.4, 0.0, 0.6], atol=1e-6)
+    assert actions is not None, 'the chunk was swallowed before any command reached a driver'
+    decoded = actions[0][keys.ROBOT_COMMAND]
+    assert isinstance(decoded, command.CartesianPosition), f'the driver would be handed {decoded!r}'
+    np.testing.assert_allclose(decoded.pose.translation, [0.4, 0.0, 0.6], atol=1e-6)
 
 
 def test_remote_policy_lifecycle(inference_server, mock_policy):

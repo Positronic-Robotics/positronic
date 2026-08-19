@@ -2,6 +2,7 @@ import logging
 import math
 import wave
 from collections.abc import Iterator
+from pathlib import Path
 
 import numpy as np
 
@@ -48,13 +49,10 @@ class SoundSystem(pimm.ControlSystem):
 
         self.active = True
         self.current_phase = 0.0
-        self.level: pimm.SignalReceiver[float] = pimm.ControlSystemReceiver(self, default=0.0)
-        self.wav_path: pimm.SignalReceiver[str] = pimm.ControlSystemReceiver(self, default='')
+        self.level = pimm.DefaultingReceiver(self, default=0.0)
+        self.wav_path = pimm.ControlSystemReceiver[Path](self)
 
-    def _level_to_frequency(self, level: float | None) -> tuple[float, float]:
-        if level is None:
-            return 0.0, self.base_frequency
-
+    def _level_to_frequency(self, level: float) -> tuple[float, float]:
         level_f = float(level)
         if not math.isfinite(level_f) or level_f < self.enable_threshold:
             return 0.0, self.base_frequency
@@ -84,11 +82,11 @@ class SoundSystem(pimm.ControlSystem):
         file_idx = 0
 
         while not should_stop.value:
-            path_msg = self.wav_path.read()
-            if path_msg is not None and path_msg.updated:
-                assert path_msg.data is not None, 'Wav path must be provided'
-                logging.info('Playing %s', path_msg.data)
-                audio_files[file_idx] = wave.open(path_msg.data, 'rb')
+            if (wav_path := pimm.value_updated(self.wav_path)) is not None:
+                logging.info('Playing %s', wav_path)
+                # wave.open takes a filename or an already-open file, never a Path. Handing it the name
+                # keeps wave the opener, so its close() closes the file.
+                audio_files[file_idx] = wave.open(str(wav_path), 'rb')
                 assert audio_files[file_idx].getframerate() == 44100, 'Only 44100Hz wav files are currently supported'
                 assert audio_files[file_idx].getsampwidth() == 2, 'Only 16-bit wav files are currently supported'
                 file_idx += 1
@@ -107,10 +105,9 @@ class SoundSystem(pimm.ControlSystem):
             finished_files = []
             for name, wave_file in audio_files.items():
                 wave_chunk = wave_file.readframes(chunk_size)
-                if wave_chunk is None:
+                if not wave_chunk:  # readframes returns b'' once the file is drained
                     wave_file.close()
                     finished_files.append(name)
-                    yield pimm.Yield()
                     continue
                 wave_chunk = np.frombuffer(wave_chunk, dtype=np.int16)
 

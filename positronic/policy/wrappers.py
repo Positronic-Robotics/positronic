@@ -1,4 +1,4 @@
-"""Composable policy wrappers — scheduling and temporal frame stacking.
+"""Composable policy wrappers — scheduling, fault handling and temporal frame stacking.
 
 Wrappers are composable serving-time concerns layered around a policy with ``|`` (left is
 outermost), exactly like codecs. Most read time from the observation (``obs_time_ns``); only
@@ -12,12 +12,57 @@ from collections import deque
 import numpy as np
 
 from positronic import keys
+from positronic.drivers.roboarm import RobotStatus, is_sound
 from positronic.policy.base import DelegatingSession, Now, PolicyWrapper, Session
 
 
 def _obs_time(obs) -> float:
     """Observation timestamp in seconds, from the harness's nanosecond stamp."""
     return obs[keys.OBS_TIME_NS] / 1e9
+
+
+# TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
+# domain types reach the border, this reads the status off the value.
+def _is_robot_status(name: str) -> bool:
+    """Whether ``name`` is an arm's status: ``robot_state.status``, or an arm's ``robot_state.{side}.status``."""
+    return name.startswith(f'{keys.ROBOT_STATE}.') and name.endswith(keys.STATUS_SUFFIX)
+
+
+def _arms_sound(obs) -> bool:
+    """Whether every arm in the observation is sound. An observation naming no arm status — a probe
+    replaying a recording — has no arm to be unsound.
+
+    The wire carries a status as its number, so this is where one becomes a ``RobotStatus`` again — and a
+    number no status answers to raises, the rig and the server disagreeing about the protocol.
+    """
+    return all(is_sound(RobotStatus(v)) for name, v in obs.items() if _is_robot_status(name))
+
+
+class StopOnFault(PolicyWrapper):
+    """Stop the arm while it is not sound, and plan afresh once it is.
+
+    An arm that is faulted or resetting is not tracking the plan it was given, so the plan is worthless:
+    this answers the empty trajectory — stop what is executing — and resets the sessions below, so the first
+    sound observation reaches the model instead of resuming a chunk stamped before. It belongs outside the
+    scheduling wrapper, which would otherwise answer "keep playing" without ever seeing the status.
+
+    Every arm in the observation is checked, so a bimanual rig stops on either.
+    """
+
+    WIRE_NAME = 'stop_on_fault'
+
+    class _Session(DelegatingSession):
+        def __call__(self, obs):
+            if _arms_sound(obs):
+                return self._inner(obs)
+            self.cancel()
+            return []
+
+    def wrap_session(self, inner: Session, context, now: Now | None):
+        return StopOnFault._Session(inner)
+
+    def to_spec(self):
+        return {'name': self.WIRE_NAME}
 
 
 class ChunkedSchedule(PolicyWrapper):
@@ -28,6 +73,8 @@ class ChunkedSchedule(PolicyWrapper):
     inference-finish (not inference-start). Returns ``None`` ("keep executing the current trajectory")
     until the last action's timestamp is reached, then calls the inner policy.
     """
+
+    WIRE_NAME = 'chunked_schedule'
 
     class _Session(DelegatingSession):
         """Skips inner calls while the current trajectory plays; stamps absolute on emit."""
@@ -44,7 +91,7 @@ class ChunkedSchedule(PolicyWrapper):
                     'new_session. The harness supplies it; a direct RemotePolicy.new_session() outside the harness '
                     'must too.'
                 )
-            if self._trajectory_end is not None and self._now() < self._trajectory_end:
+            if self._trajectory_end is not None and _obs_time(obs) < self._trajectory_end:
                 return None
             result = self._inner(obs)
             if result is not None:
@@ -68,7 +115,7 @@ class ChunkedSchedule(PolicyWrapper):
         return ChunkedSchedule._Session(inner, now)
 
     def to_spec(self):
-        return {'name': 'chunked_schedule'}
+        return {'name': self.WIRE_NAME}
 
 
 class _StackBuffer:
@@ -134,6 +181,8 @@ class TemporalStack(PolicyWrapper):
     chunk-0 empty prefix) never engage it on a padded full-length stack.
     """
 
+    WIRE_NAME = 'temporal_stack'
+
     class _Session(DelegatingSession):
         def __init__(self, inner: Session, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool):
             super().__init__(inner)
@@ -158,11 +207,11 @@ class TemporalStack(PolicyWrapper):
             'in-range targets and the stack would be empty'
         )
 
-    def wrap_session(self, inner: Session, context, now: Now):
+    def wrap_session(self, inner: Session, context, now: Now | None):
         return TemporalStack._Session(inner, self._keys, self._offsets_sec, self._pad_start)
 
     def to_spec(self):
         return {
-            'name': 'temporal_stack',
+            'name': self.WIRE_NAME,
             'args': {'keys': list(self._keys), 'offsets_sec': list(self._offsets_sec), 'pad_start': self._pad_start},
         }

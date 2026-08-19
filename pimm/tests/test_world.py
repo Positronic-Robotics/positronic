@@ -2,6 +2,7 @@ import logging
 import multiprocessing as mp
 import struct
 import time
+from functools import partial
 from queue import Empty, Full
 from unittest.mock import Mock, patch
 
@@ -228,6 +229,15 @@ class TestVirtualClock:
             assert isinstance(world.clock, SystemClock)
 
 
+# Module scope: `start_in_subprocess` pickles the loop to reach a spawned child, and a definition inside
+# the test would not pickle.
+def heartbeat_loop(emitter, stop_reader, clock):
+    """Control loop announcing every iteration of its body."""
+    while not stop_reader.read().data:
+        emitter.emit('beat')
+        yield Sleep(0.01)
+
+
 class TestWorld:
     """Test the World class."""
 
@@ -244,17 +254,22 @@ class TestWorld:
         """Test that background processes will run simple control loop."""
         world = World()
         with world:
-            world.start_in_subprocess(dummy_process)
+            emitter, receiver = world.mp_pipes()
+            assert isinstance(receiver, SignalReceiver)
+            world.start_in_subprocess(partial(heartbeat_loop, emitter))
 
-            time.sleep(0.2)  # Some time to let the process run
             assert len(world.background_processes) == 1
+
+            # Stopping before the child reaches its loop body would leave the loop untested: the generator
+            # sees a set event on its first condition and returns without ever running the body.
+            deadline = time.monotonic() + 30
+            while receiver.read() is None:
+                assert time.monotonic() < deadline, 'background process never entered its control loop'
+                time.sleep(0.01)
 
             # We have to set the private event manually, because out of the scope of the context manager
             # we can't access exit code of the process
             world._stop_event.set()
-            # The child is spawned, so it boots a fresh interpreter and imports this module before it can
-            # observe the stop event — on a slow runner that outlasts any tight deadline. `join` returns the
-            # moment it exits, so a generous ceiling costs a passing run nothing.
             world.background_processes[0].join(timeout=30)
             assert not world.background_processes[0].is_alive()
             assert world.background_processes[0].exitcode == 0
@@ -282,6 +297,14 @@ class TestWorld:
                 assert isinstance(stale_result, Message)
                 assert stale_result.data == message
                 assert stale_result.updated is False
+
+    @pytest.mark.parametrize('pipe_fn_name', ['mp_pipes', 'local_pipe'])
+    def test_world_pipe_maxsize_zero_keeps_every_message(self, pipe_fn_name):
+        with World() as world:
+            emitter, reader = getattr(world, pipe_fn_name)(maxsize=0)
+            for i in range(50):
+                emitter.emit(i)
+            assert [reader.read().data for _ in range(50)] == list(range(50))
 
     def test_world_context_manager_enter(self):
         """Test that World.__enter__ returns self."""
@@ -454,14 +477,12 @@ class TestWorldControlSystems:
         wrapper = Mock(side_effect=lambda receiver: receiver)
 
         with World(virtual_time=True) as world:
-            mirrored = world.pair(system.receiver, emitter_wrapper=wrapper)
+            mirrored = world.pair(system.receiver, receiver_wrapper=wrapper)
 
             assert isinstance(mirrored, ControlSystemEmitter)
             wrapper.assert_not_called()
 
             world.start(system)
-            # receiver_wrapper is applied to the underlying transport receiver before
-            # it is bound into the logical ControlSystemReceiver.
             assert wrapper.call_count == 1
             (wrapped_receiver,), _ = wrapper.call_args
             assert isinstance(wrapped_receiver, SignalReceiver)
@@ -476,7 +497,7 @@ class TestWorldControlSystems:
     def test_mirror_rejects_unknown_connector(self):
         with World() as world:
             with pytest.raises(ValueError, match='Unsupported connector type'):
-                world.pair(object())
+                world.pair(object())  # pyright: ignore[reportCallIssue] — the runtime guard is the subject
 
     def test_start_sets_up_local_connections(self):
         producer = DummyControlSystem('producer')

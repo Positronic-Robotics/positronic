@@ -1,11 +1,10 @@
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
 import pimm
-from positronic import geom
+from positronic import geom, keys
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm.command import (
     CartesianDelta,
@@ -26,18 +25,7 @@ from positronic.drivers.roboarm.command import (
 #         - use "" (empty string) to keep the base name as-is
 #         - any dict entry with value None is skipped
 #     * None -> the sample is dropped
-#     * a list[Timestamped] -> a self-timestamped stream (recording only): each item is
-#       recorded at its own ``ts_ns``. An empty list defers; a StatefulSerializer may emit
-#       the remainder later from ``flush()``. The per-item ``value`` follows the rules above.
 Serializer = Callable[[Any], Any | dict[str, Any]]
-
-
-@dataclass
-class Timestamped:
-    """A sample paired with its own absolute timestamp (ns)."""
-
-    ts: int
-    value: Any
 
 
 class StatefulSerializer:
@@ -51,18 +39,8 @@ class StatefulSerializer:
     def reset(self) -> None:
         pass
 
-    def __call__(self, value: Any) -> Any | dict[str, Any] | list['Timestamped']:
+    def __call__(self, value: Any) -> Any | dict[str, Any]:
         raise NotImplementedError
-
-    def flush(self, now_ns: int | None = None) -> list['Timestamped']:
-        """Drain any buffered samples at episode end (mirror of ``reset``).
-
-        Called once on ``STOP_EPISODE`` before the episode is finalized. ``now_ns``
-        is the episode-end time; serializers that buffer future-scheduled samples
-        use it to drop the un-executed tail. The default keeps stateless
-        serializers a no-op.
-        """
-        return []
 
 
 class _PureSerializer(StatefulSerializer):
@@ -109,12 +87,13 @@ class Serializers:
             return geom.Transform3D(x.translation, rotation).as_vector(geom.Rotation.Representation.QUAT)
 
     @staticmethod
-    def robot_state(state: State) -> dict[str, np.ndarray] | None:
-        # ERROR, like RESETTING, is a not-ready state: drop the frame rather than record or infer on a
-        # mid-error pose.
-        if state.status in (RobotStatus.RESETTING, RobotStatus.ERROR):
-            return None
-        return {'.q': state.q, '.dq': state.dq, '.ee_pose': Serializers.transform_3d(state.ee_pose)}
+    def robot_state(state: State) -> dict[str, np.ndarray | RobotStatus]:
+        return {
+            keys.STATUS_SUFFIX: state.status,
+            '.q': state.q,
+            '.dq': state.dq,
+            '.ee_pose': Serializers.transform_3d(state.ee_pose),
+        }
 
     @staticmethod
     def robot_command(command: CommandType) -> dict[str, np.ndarray | int] | None:

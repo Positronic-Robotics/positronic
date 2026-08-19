@@ -124,7 +124,6 @@ class Robot(pimm.ControlSystem):
         :param home_joints: Joints of "reset" position, and the pose the arm is parked at when the run ends.
         :param home_joints_variation: Max random deviation per joint in radians. Set to [0]*7 to disable.
         :param collision_coeff: Multiplier for collision thresholds. Higher = more tolerant.
-            Default 2.0 (data collection). Use 6.0 for inference.
         :param manage_desk: Run the Desk session from the driver: open the brakes and activate FCI on start, close
             them on stop. Requires ``FRANKA_DESK_USER`` and ``FRANKA_DESK_PASSWORD`` in the environment. Set to
             False to leave brakes and FCI to the operator; the driver then never contacts Desk and expects FCI to
@@ -141,10 +140,8 @@ class Robot(pimm.ControlSystem):
         self._home_joints_variation = (
             home_joints_variation if home_joints_variation is not None else [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
         )
-        self.commands: pimm.SignalReceiver[command.Trajectory[command.CommandType]] = pimm.ControlSystemReceiver(
-            self, default=[]
-        )
-        self.state: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
+        self.state = pimm.ControlSystemEmitter[FrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self._load = load
         self._collision_coeff = collision_coeff
@@ -294,7 +291,7 @@ class Robot(pimm.ControlSystem):
                     yield desk
                     return
 
-    def _park(self, robot) -> Iterator[pimm.Sleep]:
+    def _park(self, robot, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         """Move the arm to the home pose, giving up after ``park_timeout_s``. Drive with ``yield from``.
 
         Runs after the control loop rather than in its ``finally``, so that only a stop request earns it.
@@ -310,15 +307,15 @@ class Robot(pimm.ControlSystem):
         try:
             logging.info('Parking the arm at the home pose')
             robot.recover_from_errors()  # once, before the move: a reflex during the move ends the park
-            deadline = time.monotonic() + self._park_timeout_s
-            arrived = yield from self._travel(robot, target, lambda: time.monotonic() >= deadline)
+            deadline = clock.now() + self._park_timeout_s
+            arrived = yield from self._travel(robot, target, lambda: clock.now() >= deadline)
             if not arrived:
                 logging.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
         # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
         except Exception:
             logging.exception('Parking failed, the arm stays where it stands')
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         with self._desk_session():
             robot = self._ensure_robot()
             try:
@@ -332,7 +329,6 @@ class Robot(pimm.ControlSystem):
                 yield from self._reset(robot, robot_state, rate_limiter, should_stop)
 
                 in_error = False
-                player = command.TrajectoryPlayer(reduce=command.reduce)
 
                 while not should_stop.value:
                     st = robot.state()
@@ -343,22 +339,16 @@ class Robot(pimm.ControlSystem):
                     if entered_error:
                         logging.warning(f'Robot error: {st.error_message}')
 
-                    cmd_msg = self.commands.read()
-                    if cmd_msg.updated:
-                        player.set(cmd_msg.data)
+                    cmd = pimm.value_updated(self.commands)
 
                     if in_error:
                         # The driver always clears a recoverable error itself; making it optional (hold in
                         # ERROR for out-of-band recovery instead) is a config knob to add when an embodiment
                         # needs it.
                         robot.recover_from_errors()
-                        # Drop the in-flight trajectory so the arm holds position rather than resuming a stale
-                        # waypoint once the error clears.
-                        player.set([])
                         yield rate_limiter.wait()
                         continue
 
-                    cmd = player.advance(clock.now_ns())
                     if cmd is not None:
                         match cmd:
                             case command.Reset():
@@ -376,12 +366,12 @@ class Robot(pimm.ControlSystem):
                                 robot.set_target_joints(positions)
                             case command.JointDelta(velocities=joint_delta):
                                 robot.set_target_joints(st.q + joint_delta)
-                            case _:
-                                raise NotImplementedError(f'Unsupported command {cmd}')
+                            case other:
+                                raise NotImplementedError(f'Unsupported command {other}')
 
                     yield rate_limiter.wait()
 
-                yield from self._park(robot)
+                yield from self._park(robot, clock)
             finally:
                 # Halt the driver's control thread before _desk_session deactivates FCI, or it dies mid-control
                 # with "TCP connection got interrupted".
@@ -419,7 +409,7 @@ if __name__ == '__main__':
             if time.monotonic() > start + duration:
                 print(f'Moving to {pos + origin.translation}')
                 target = command.CartesianPosition(geom.Transform3D(pos + origin.translation, origin.rotation))
-                commands.emit([(world.clock.now_ns(), target)])
+                commands.emit(target)
                 i += 1
             else:
                 time.sleep(0.01)

@@ -2,6 +2,8 @@ import logging
 import ssl
 import time
 import urllib.parse
+from enum import Enum
+from http import HTTPStatus
 from typing import Any
 
 import httpx
@@ -9,14 +11,14 @@ from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidSta
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
-from positronic.offboard.protocol import ERROR, MESSAGE, META, PENDING_STATUSES, READY, RESULT, STATUS
-from positronic.utils.serialization import deserialise, serialise
+from . import protocol
+from .protocol import deserialise, serialise, typed_commands
 
 logger = logging.getLogger(__name__)
 
-# Only the checkpoint pinned at server startup is pre-warmed; a session that requests any other model loads it
-# cold, so its first ``infer`` can include the backend's JAX compilation. Bound each ``recv`` generously enough to
-# outlast that compile (still surfacing a stalled/half-open connection), and let callers override per use.
+# A first ``infer`` can include the backend's own startup cost, such as a JAX compilation. Bound each ``recv``
+# generously enough to outlast that (still surfacing a stalled/half-open connection), and let callers override
+# per use.
 DEFAULT_INFER_TIMEOUT = 180.0
 
 # Overall bound on reaching ``ready``: the per-message timeout bounds SILENCE only, so a server streaming
@@ -47,15 +49,21 @@ class InferenceSession:
         *,
         url: str = '',
         ready_deadline: float | None = None,
+        waiting_since: float | None = None,
     ):
         self._websocket = websocket
         self._infer_timeout = infer_timeout
-        self._metadata = self._handshake(url=url, ready_deadline=ready_deadline)
+        self._metadata = self._handshake(url=url, ready_deadline=ready_deadline, waiting_since=waiting_since)
 
     def _handshake(
-        self, timeout_per_message: float = 30.0, *, url: str = '', ready_deadline: float | None = None
+        self,
+        timeout_per_message: float = 30.0,
+        *,
+        url: str = '',
+        ready_deadline: float | None = None,
+        waiting_since: float | None = None,
     ) -> dict[str, Any]:
-        """Receive status updates until the server reports itself ready.
+        """Receive status updates until server is ready.
 
         Every layer below ``ready`` — connect, TLS, upgrade — completes while the model is still loading.
 
@@ -63,9 +71,12 @@ class InferenceSession:
             timeout_per_message: how long the server may stay SILENT between frames (default: 30s).
             url: the endpoint being waited on, for the failure to name.
             ready_deadline: monotonic deadline for reaching ``ready``; ``None`` waits while it keeps talking.
+            waiting_since: when the caller started waiting — its first connection attempt, not this
+                handshake, so the reported wait covers the same span the deadline bounds.
         """
-        started = time.monotonic()
-        status, message = 'no status frame', ''
+        started = time.monotonic() if waiting_since is None else waiting_since
+        status: str = 'no status frame'
+        message = ''
         try:
             while True:
                 timeout = timeout_per_message
@@ -75,20 +86,22 @@ class InferenceSession:
                         raise ServerNotReady(url, status, message, time.monotonic() - started)
                     timeout = min(timeout, remaining)
                 response = deserialise(self._websocket.recv(timeout=timeout))
-                status = response.get(STATUS)
+                if protocol.ERROR in response:
+                    raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
+                try:
+                    reported = protocol.ServerStatus(response.get(protocol.STATUS))
+                except ValueError:
+                    raise RuntimeError(f'Unexpected server response: {response}') from None
 
-                if status == READY:
-                    return response[META]
+                if reported is protocol.ServerStatus.READY:
+                    return response[protocol.META]
+                if reported is protocol.ServerStatus.ERROR:
+                    raise RuntimeError('Server error: Unknown error')
 
-                if status in PENDING_STATUSES:
-                    message = response.get(MESSAGE, status)
-                    logger.info(f'Server status: [{status}] {message}')
-                    continue
-
-                if status == ERROR or ERROR in response:
-                    raise RuntimeError(f'Server error: {response.get(ERROR, "Unknown error")}')
-
-                raise RuntimeError(f'Unexpected server response: {response}')
+                # Everything else the server can report is a session still in flight rather than one that
+                # failed: keep the last of them, which is what a give-up names.
+                status, message = reported, response.get(protocol.MESSAGE, reported)
+                logger.info(f'Server status: [{status}] {message}')
 
         except TimeoutError:
             # A recv bounded by the deadline expiring is not the server going quiet — report which happened.
@@ -104,12 +117,11 @@ class InferenceSession:
         return self._metadata
 
     def infer(self, obs: dict[str, Any]) -> Any:
-        """
-        Send an observation and get the served session's result — canonically a list of action
-        dicts, but whatever the server's session returned (a bare dict or ``None`` included).
+        """Send an observation and get the served session's result, with every robot-command channel typed.
 
-        Both `obs` and the returned action must be wire-serializable: plain-data containers and
-        scalars, plus numeric numpy arrays/scalars. Do not pass arbitrary Python objects.
+        ``obs`` must be wire-serializable: plain-data containers and scalars, plus numeric numpy
+        arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
+        returned — canonically a list of action dicts, but a bare dict or ``None`` too.
         """
         serialised = serialise(obs)
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
@@ -127,10 +139,10 @@ class InferenceSession:
             ) from None
         logger.debug('Size of deserialised response: %1.f KiB', len(response) / 1024)
 
-        if isinstance(response, dict) and ERROR in response:
-            raise RuntimeError(f'Server error: {response[ERROR]}')
+        if isinstance(response, dict) and protocol.ERROR in response:
+            raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
 
-        return response[RESULT]
+        return typed_commands(response[protocol.RESULT])
 
     def close(self):
         self._websocket.close()
@@ -150,6 +162,36 @@ def _session_path(path: str, url: str) -> str:
     # the URL meant: a trailing slash is part of that id, and an id may itself be a path (a HuggingFace
     # repo, say), whose own slashes stay separators.
     return path
+
+
+class _ConnectOutcome(Enum):
+    RETRY = 'retry'
+    SURFACE = 'surface'
+
+
+class _ConnectRetries:
+    """The retry policy over one ``new_session``'s connect attempts.
+
+    403 is both a cold backend and a refused credential, so it gets a few attempts rather than the whole
+    ``connect_deadline``.
+    """
+
+    MAX_FORBIDDEN_ATTEMPTS = 3
+
+    def __init__(self) -> None:
+        self._forbidden_attempts = 0
+
+    def take(self, e: Exception) -> _ConnectOutcome:
+        """Spend a refused connect against the budget."""
+        if not isinstance(e, InvalidStatus):
+            return _ConnectOutcome.RETRY
+        status = e.response.status_code
+        if status == HTTPStatus.FORBIDDEN:
+            self._forbidden_attempts += 1
+            again = self._forbidden_attempts < self.MAX_FORBIDDEN_ATTEMPTS
+        else:
+            again = status >= HTTPStatus.INTERNAL_SERVER_ERROR or status == HTTPStatus.TOO_MANY_REQUESTS
+        return _ConnectOutcome.RETRY if again else _ConnectOutcome.SURFACE
 
 
 class InferenceClient:
@@ -206,7 +248,10 @@ class InferenceClient:
 
         ``ready_deadline`` bounds the whole wait, reconnects included; ``None`` leaves ``connect_deadline``.
         """
-        deadline = time.monotonic() + self.connect_deadline
+        # Before the first attempt, so a refusal reports the wait the deadline bounds rather than the last
+        # handshake: an endpoint that spends most of its budget refusing connections waited that long too.
+        started = time.monotonic()
+        deadline = started + self.connect_deadline
         if ready_deadline is not None:
             deadline = min(deadline, ready_deadline)
         # The handshake gets the same bound as the connects, so a shorter ``connect_deadline`` is not
@@ -214,6 +259,7 @@ class InferenceClient:
         # named no readiness bound: ``connect_deadline`` covers reaching a server, not loading a checkpoint.
         handshake_deadline = deadline if ready_deadline is not None else None
         backoff = 1.0
+        retries = _ConnectRetries()
         while True:
             ws = None
             session = None
@@ -224,13 +270,14 @@ class InferenceClient:
                 # after 60s — well inside one ``infer_timeout`` inference, which sends nothing until it
                 # answers. The pings keep it open.
                 ws = connect(
-                    self.session_url,
-                    open_timeout=open_timeout,
-                    additional_headers=self.headers,
-                    ping_interval=20.0,
+                    self.session_url, open_timeout=open_timeout, additional_headers=self.headers, ping_interval=20.0
                 )
                 session = InferenceSession(
-                    ws, infer_timeout=self.infer_timeout, url=self.session_url, ready_deadline=handshake_deadline
+                    ws,
+                    infer_timeout=self.infer_timeout,
+                    url=self.session_url,
+                    ready_deadline=handshake_deadline,
+                    waiting_since=started,
                 )
                 return session
             # ``SSLCertVerificationError`` is an ``ssl.SSLError``, but a bad certificate is permanent
@@ -243,11 +290,11 @@ class InferenceClient:
             # handshake inside ``InferenceSession`` (``ConnectionClosed``/``TimeoutError``). All mean "not ready
             # yet", so retry within the deadline instead of letting one kill the run.
             except (TimeoutError, ssl.SSLError, ConnectionClosed, InvalidHandshake) as e:
-                # A non-101 upgrade response only means "not ready" when it's a 5xx or 429; any other status
-                # (401/403/404, …) is permanent misconfiguration and surfaces immediately.
-                if isinstance(e, InvalidStatus) and not (
-                    e.response.status_code >= 500 or e.response.status_code == 429
-                ):
+                # Closed here rather than left to ``finally``, which runs after the backoff below.
+                if ws is not None:
+                    ws.close()
+                    ws = None
+                if retries.take(e) is _ConnectOutcome.SURFACE:
                     raise
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'{e} (connecting to {self.session_url})') from e

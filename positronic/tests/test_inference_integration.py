@@ -144,7 +144,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     assert keys.EE_POSE in last_obs
     # The task's instruction is injected by the harness.
     assert last_obs[keys.TASK] == 'integration-test'
-    assert last_obs['descriptor'] == 'mujoco.franka'
+    assert last_obs[keys.DESCRIPTOR] == 'mujoco.franka'
 
 
 class _CountdownProducer(pimm.ControlSystem):
@@ -164,7 +164,7 @@ class _CountdownProducer(pimm.ControlSystem):
         self._active = False
         self._reset_pending = False
         self.observations = pimm.EmitterDict(self)
-        self.commands = pimm.ReceiverDict(self, default=None)
+        self.commands = pimm.ReceiverDict(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self.done = pimm.ControlSystemEmitter(self)
 
@@ -206,8 +206,8 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
         control_systems=(producer,),
         simulated=True,
     )
-    task = Task(instruction='count', timeout=timeout, privileged={}, reset=producer.reset, done=producer.done)
-    return Eval(embodiment, task)
+    task = Task(instruction='count', timeout=timeout)
+    return Eval(embodiment, task, done=producer.done, reset=producer.reset)
 
 
 @pytest.mark.timeout(30.0)

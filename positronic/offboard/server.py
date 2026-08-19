@@ -18,11 +18,12 @@ from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocke
 from starlette.datastructures import QueryParams
 
 from positronic import keys
-from positronic.offboard.protocol import ERROR, LOADING, MESSAGE, META, READY, RESULT, STATUS, WAITING
-from positronic.policy import Codec, Policy, Recorder
+from positronic.policy import Policy, Recorder
 from positronic.policy.base import PolicyWrapper
 from positronic.policy.spec import ModelSource, Pipeline, split
-from positronic.utils.serialization import deserialise, serialise
+
+from . import protocol
+from .protocol import deserialise, serialise
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,9 @@ async def _acquire_with_keepalives(lock: asyncio.Lock, websocket: WebSocket | No
             return
         except TimeoutError:
             if websocket is not None:
-                await websocket.send_bytes(serialise({STATUS: WAITING, MESSAGE: message}))
+                await websocket.send_bytes(
+                    serialise({protocol.STATUS: protocol.ServerStatus.WAITING, protocol.MESSAGE: message})
+                )
 
 
 class PolicyManager:
@@ -76,7 +79,9 @@ class PolicyManager:
                     message = f'Waiting for {self.active_sessions} active session(s) to finish...'
                     logger.info(message)
                     if websocket:
-                        await websocket.send_bytes(serialise({STATUS: WAITING, MESSAGE: message}))
+                        await websocket.send_bytes(
+                            serialise({protocol.STATUS: protocol.ServerStatus.WAITING, protocol.MESSAGE: message})
+                        )
 
                     try:
                         await asyncio.wait_for(self._condition.wait(), timeout=5.0)
@@ -92,7 +97,10 @@ class PolicyManager:
 
                 if websocket:
                     await websocket.send_bytes(
-                        serialise({STATUS: LOADING, MESSAGE: f'Loading checkpoint {checkpoint_id}...'})
+                        serialise({
+                            protocol.STATUS: protocol.ServerStatus.LOADING,
+                            protocol.MESSAGE: f'Loading checkpoint {checkpoint_id}...',
+                        })
                     )
 
                 logger.info(f'Loading policy {checkpoint_id}')
@@ -109,10 +117,10 @@ class PolicyManager:
 
     @staticmethod
     def _progress_callback(websocket: WebSocket | None) -> Callable[[str], None] | None:
-        """Sync callback for the loader thread, marshaling ``loading`` frames onto the event loop.
+        """Sync callback for the loader thread, marshaling ``loading`` messages onto the event loop.
 
-        Blocks the loader until each frame is on the wire, so a message emitted at the very end of a
-        load cannot overtake the ``ready`` that follows it and be read as the first inference result.
+        Blocks the loader until each message is on the wire, so one emitted at the very end of a load
+        cannot overtake the ``ready`` that follows it and be read as the first inference result.
         """
         if websocket is None:
             return None
@@ -120,7 +128,10 @@ class PolicyManager:
 
         def on_progress(msg: str) -> None:
             asyncio.run_coroutine_threadsafe(
-                websocket.send_bytes(serialise({STATUS: LOADING, MESSAGE: msg})), loop
+                websocket.send_bytes(
+                    serialise({protocol.STATUS: protocol.ServerStatus.LOADING, protocol.MESSAGE: msg})
+                ),
+                loop,
             ).result()
 
         return on_progress
@@ -185,7 +196,7 @@ class PolicyServer:
     The WebSocket session flow is:
         accept → session params → resolve → load via manager → remote-half wrap → reset → inference loop
 
-    On startup (before accepting connections): resolve(None) → load → warmup.
+    On startup (before accepting connections): resolve(None) → load.
 
     The default checkpoint is resolved once, at startup, and pinned for every request that names no
     explicit one — a running server never switches to a newer checkpoint that lands later. A request
@@ -206,7 +217,7 @@ class PolicyServer:
         assert isinstance(self._pipeline, Pipeline), (
             f'PolicyServer serves a policy pipeline closed by a model source, got {type(self._pipeline).__name__}'
         )
-        local, _, self._remote = split(self._pipeline)
+        local, _, _ = split(self._pipeline)
         # A local half that is missing or cannot be rendered fails at startup, not at a client's connect.
         # The spec itself is built per session, which params may have changed.
         _declared_stack(local)
@@ -331,7 +342,7 @@ class PolicyServer:
                 keys.COMPRESS_IMAGES: border.compress_images,
                 keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
-            await websocket.send_bytes(serialise({STATUS: READY, META: meta}))
+            await websocket.send_bytes(serialise({protocol.STATUS: protocol.ServerStatus.READY, protocol.META: meta}))
 
             try:
                 while True:
@@ -340,20 +351,22 @@ class PolicyServer:
                     try:
                         raw_obs = deserialise(message)
                         # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
-                        # would mis-parse a ``waiting`` frame. Its ``infer_timeout`` bounds the wait.
+                        # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
                         async with self._infer_lock:
                             actions = await asyncio.to_thread(session, raw_obs)
-                        await websocket.send_bytes(serialise({RESULT: actions}))
+                        await websocket.send_bytes(serialise({protocol.RESULT: actions}))
                     except Exception as e:
                         logger.error(f'Error processing message: {e}', exc_info=True)
-                        await websocket.send_bytes(serialise({ERROR: str(e)}))
+                        await websocket.send_bytes(serialise({protocol.ERROR: str(e)}))
             except WebSocketDisconnect:
                 logger.info('Client disconnected')
 
         except Exception as e:
             logger.error(f'Failed session: {e}', exc_info=True)
             try:
-                await websocket.send_bytes(serialise({STATUS: ERROR, ERROR: str(e)}))
+                await websocket.send_bytes(
+                    serialise({protocol.STATUS: protocol.ServerStatus.ERROR, protocol.ERROR: str(e)})
+                )
                 await websocket.close(code=1008, reason=str(e)[:100])
             except Exception:
                 logger.debug('Failed to send error to client', exc_info=True)
@@ -371,27 +384,10 @@ class PolicyServer:
                 if policy is not None:
                     await self._manager.release_session()
 
-    async def _warmup(self, policy: Policy):
-        """Run one warmup inference through the launch codec's ``dummy_encoded()``. Non-fatal on failure."""
-        if not isinstance(self._remote, Codec):
-            return
-        session = None
-        try:
-            logger.info('Running warmup inference...')
-            session = policy.new_session()
-            await asyncio.to_thread(session, self._remote.dummy_encoded())
-            logger.info('Warmup inference complete')
-        except Exception:
-            logger.warning('Warmup inference failed (non-fatal)', exc_info=True)
-        finally:
-            if session is not None:
-                session.close()
-
     async def _startup(self):
         self._default_id = self._source.resolve(None)
         logger.info(f'Pinned default checkpoint at startup: {self._default_id}')
-        policy = await self._manager.get_policy(self._default_id)
-        await self._warmup(policy)
+        await self._manager.get_policy(self._default_id)
 
     async def _idle_watchdog(self, server: uvicorn.Server):
         assert self.idle_timeout_min is not None

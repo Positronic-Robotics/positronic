@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from positronic import keys
+from positronic.drivers.roboarm import RobotStatus
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
 from positronic.policy.action import (
@@ -27,7 +28,7 @@ from positronic.policy.codec import (
     RestrictImageSize,
 )
 from positronic.policy.observation import ObservationCodec
-from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
+from positronic.policy.wrappers import ChunkedSchedule, StopOnFault, TemporalStack
 
 
 class _FakeClock:
@@ -63,28 +64,86 @@ class _ConstPolicy(Policy):
         return self._session
 
 
-def _obs(now_sec=0.0):
-    return {keys.OBS_TIME_NS: int(now_sec * 1e9)}
+def _obs(now_sec=0.0, status=RobotStatus.AVAILABLE):
+    return {keys.OBS_TIME_NS: int(now_sec * 1e9), keys.ROBOT_STATUS: status}
+
+
+class TestStopOnFault:
+    @pytest.mark.parametrize('unsound', [RobotStatus.ERROR, RobotStatus.RESETTING])
+    def test_an_unsound_arm_stops_what_is_executing(self, unsound):
+        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        session = StopOnFault().wrap_session(inner, None, None)
+
+        assert session(_obs(0.0, unsound)) == []
+        assert inner.call_count == 0, 'the model was asked about an arm that is not tracking it'
+
+    @pytest.mark.parametrize('sound', [RobotStatus.AVAILABLE, RobotStatus.MOVING])
+    def test_a_sound_arm_reaches_the_model(self, sound):
+        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        session = StopOnFault().wrap_session(inner, None, None)
+
+        assert session(_obs(0.0, sound)) is not None
+        assert inner.call_count == 1
+
+    def test_an_observation_with_no_arm_status_reaches_the_model(self):
+        """A probe replaying a recording has no arm to stop for."""
+        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        session = StopOnFault().wrap_session(inner, None, None)
+
+        assert session({keys.OBS_TIME_NS: 0}) is not None
+        assert inner.call_count == 1
+
+    def test_either_arm_of_a_bimanual_rig_stops_the_pair(self):
+        """Whichever arm is unsound stops the pair, and the status counts as its number: a server-side stack
+        reads it off a wire with no enum to carry."""
+        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        session = StopOnFault().wrap_session(inner, None, None)
+        obs = {
+            keys.OBS_TIME_NS: 0,
+            f'{keys.ROBOT_STATE}.left.status': int(RobotStatus.AVAILABLE),
+            f'{keys.ROBOT_STATE}.right.status': int(RobotStatus.ERROR),
+        }
+
+        assert session(obs) == []
+        assert inner.call_count == 0
+
+    def test_a_status_no_arm_answers_to_raises(self):
+        """A number outside ``RobotStatus`` is the rig and the server disagreeing about the protocol, which
+        is not something to drive an arm through."""
+        session = StopOnFault().wrap_session(_ConstSession([]), None, None)
+
+        with pytest.raises(ValueError):
+            session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 99})
+
+    def test_recovery_plans_afresh_instead_of_resuming(self):
+        """The stop resets the scheduler below it, so the first sound observation infers again rather than
+        waiting out the chunk stamped before."""
+        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 1.0}])
+        session = (StopOnFault() | ChunkedSchedule()).wrap(inner).new_session(now=_FakeClock(t=0.0).now)
+
+        assert session(_obs(0.0)) is not None  # a chunk that runs until 1.0
+        assert session(_obs(0.2, RobotStatus.ERROR)) == []
+        assert session(_obs(0.3)) is not None
 
 
 class TestChunkedSchedule:
     def test_first_call_runs_inference(self):
         # Relative timestamps: trajectory of duration 0.5s
         clock = _FakeClock(t=1.0)
-        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
+        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
         policy = ChunkedSchedule().wrap(inner)
         session = policy.new_session(now=clock.now)
         result = session(_obs())
         assert result is not None
         assert len(result) == 2
         # Timestamps stamped to absolute by ChunkedSchedule.
-        assert result[0]['timestamp'] == 1.0
-        assert result[1]['timestamp'] == 1.5
+        assert result[0][keys.ACTION_TIMESTAMP] == 1.0
+        assert result[1][keys.ACTION_TIMESTAMP] == 1.5
 
     def test_returns_none_while_trajectory_active(self):
         # Trajectory starts at clock=1.0, ends at 1.0+0.5=1.5.
         clock = _FakeClock(t=1.0)
-        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
+        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
         policy = ChunkedSchedule().wrap(inner)
         session = policy.new_session(now=clock.now)
         session(_obs())
@@ -95,25 +154,32 @@ class TestChunkedSchedule:
 
     def test_re_infers_after_trajectory_consumed(self):
         clock = _FakeClock(t=1.0)
-        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.5}])
+        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
         session = ChunkedSchedule().wrap(inner).new_session(now=clock.now)
-        session(_obs())  # trajectory ends at clock=1.5
-        clock.t = 1.3
-        assert session(_obs()) is None
+        session(_obs(1.0))  # trajectory ends at clock=1.5
+        assert session(_obs(1.3)) is None
         clock.t = 1.6
-        result = session(_obs())
+        result = session(_obs(1.6))
         assert result is not None
         assert inner._session.call_count == 2
 
     def test_single_action_refires_immediately_after(self):
         """Single action at ts=0 → trajectory_end = now → next tick re-infers."""
         clock = _FakeClock(t=1.0)
-        policy = ChunkedSchedule().wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}]))
+        policy = ChunkedSchedule().wrap(_ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]))
         session = policy.new_session(now=clock.now)
-        session(_obs())
+        session(_obs(1.0))
         clock.t = 1.01
-        result = session(_obs())
+        result = session(_obs(1.01))
         assert result is not None
+
+    def test_expiry_is_judged_at_the_observation_instant(self):
+        """Whether the trajectory has run out is a question about the observation, not about ``now``."""
+        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
+        session = ChunkedSchedule().wrap(inner).new_session(now=_FakeClock(t=2.0).now)
+        session(_obs(1.0))  # anchored at now()=2.0, so the trajectory ends at 2.5
+        assert session(_obs(2.4)) is None
+        assert session(_obs(2.6)) is not None
 
 
 class TestPipelineComposition:
@@ -123,7 +189,7 @@ class TestPipelineComposition:
         clock = _FakeClock(t=1.0)
         pipeline = TemporalStack(keys=('v',), offsets_sec=(0.0,)) | ChunkedSchedule()
         assert isinstance(pipeline, PolicyWrapper)
-        policy = pipeline.wrap(_ConstPolicy([{'v': 1, 'timestamp': 0.0}]))
+        policy = pipeline.wrap(_ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]))
         session = policy.new_session(now=clock.now)
         result = session({keys.OBS_TIME_NS: int(1e9), 'v': np.array([5.0])})
         assert result is not None
@@ -134,7 +200,7 @@ class TestPipelineComposition:
         codec = ActionTimestamp(fps=10.0)
         pipeline = codec | ChunkedSchedule()
         assert isinstance(pipeline, PolicyWrapper)
-        policy = pipeline.wrap(_ConstPolicy([{'action': 'test', 'timestamp': 0.0}]))
+        policy = pipeline.wrap(_ConstPolicy([{'action': 'test', keys.ACTION_TIMESTAMP: 0.0}]))
         session = policy.new_session(now=clock.now)
         result = session(_obs())
         assert result is not None
@@ -150,7 +216,7 @@ class TestPipelineComposition:
         session = policy.new_session(now=clock.now)
         result = session(_obs())
         assert result is not None
-        assert result[0]['timestamp'] == 1.0
+        assert result[0][keys.ACTION_TIMESTAMP] == 1.0
         # Second call within trajectory window returns None (ChunkedSchedule).
         clock.t = 1.2
         assert session(_obs()) is None
@@ -368,9 +434,12 @@ class TestPipelineSpec:
         with pytest.raises(NotImplementedError, match='not deliverable'):
             IKJointsAction(solver_cls=None).to_spec()
 
-    def test_wire_names_match_table(self):
+    def test_the_table_publishes_these_exact_wire_names(self):
+        """The strings a deployed server already declares its local stack with. Spelled out here rather than
+        read off ``WIRE_NAME``, so renaming an attribute cannot quietly rename the wire."""
         instances = {
             'chunked_schedule': ChunkedSchedule(),
+            'stop_on_fault': StopOnFault(),
             'temporal_stack': TemporalStack(('v',), (0.0,)),
             'action_timestamp': ActionTimestamp(fps=10.0),
             'action_horizon': ActionHorizon(1.0),
@@ -462,17 +531,17 @@ class TestPipe:
         session = policy.new_session(now=clock.now)
         result = session(_obs())
         assert result is not None
-        assert result[0]['timestamp'] == 1.0
+        assert result[0][keys.ACTION_TIMESTAMP] == 1.0
         clock.t = 1.2
         assert session(_obs()) is None
 
     def test_inline_tolerates_marker_less_pipe(self):
         clock = _FakeClock(t=1.0)
-        inner = _ConstPolicy([{'v': 1, 'timestamp': 0.0}])
+        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         policy = spec.inline(ChunkedSchedule() | spec.PolicySource(inner))
         session = policy.new_session(now=clock.now)
         result = session(_obs())
-        assert result is not None and result[0]['timestamp'] == 1.0
+        assert result is not None and result[0][keys.ACTION_TIMESTAMP] == 1.0
 
     def test_inline_bare_source_pipe_is_the_loaded_policy(self):
         inner = _ConstPolicy([])

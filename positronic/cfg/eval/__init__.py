@@ -6,11 +6,14 @@ import configuronic as cfn
 @cfn.config()
 def placeholder():
     # Lets ``--eval=.sim.positronic.stack_cubes`` resolve relative to this package; never instantiated.
-    raise SystemExit('--eval is required, e.g. --eval=.sim.positronic.stack_cubes')
+    raise SystemExit(
+        '--eval is required: a config to run here (--eval=.sim.positronic.stack_cubes), '
+        'or the name of one the platform offers (--eval=robolab.public_subset, with --policy-image)'
+    )
 
 
 def build_trials(seed: int | None, trial_count: int, scenes: list[dict] | None = None) -> list[dict]:
-    """The per-trial RUN contexts a self-driving eval sweeps: one per (scene, seed) pair.
+    """The per-trial contexts a self-driving eval sweeps: one per (scene, seed) pair.
 
     Each ``scenes`` entry is a scene-spec context base (e.g. ``{'eval.suite': ..., 'eval.task_id': ...}``)
     swept over the seed set; ``None`` sweeps the seed alone (an eval with no scene axis). ``seed`` ``None``
