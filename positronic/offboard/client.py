@@ -254,9 +254,8 @@ class InferenceClient:
         deadline = started + self.connect_deadline
         if ready_deadline is not None:
             deadline = min(deadline, ready_deadline)
-        # The handshake gets the same bound as the connects, so a shorter ``connect_deadline`` is not
-        # outlived by a server that connects and then streams ``loading``. Left unbounded where the caller
-        # named no readiness bound: ``connect_deadline`` covers reaching a server, not loading a checkpoint.
+        # ``connect_deadline`` covers reaching a server, not loading a checkpoint, so it bounds the
+        # handshake only where the caller named a readiness bound.
         handshake_deadline = deadline if ready_deadline is not None else None
         backoff = 1.0
         retries = _ConnectRetries()
@@ -306,7 +305,7 @@ class InferenceClient:
             except OSError as e:
                 raise type(e)(f'{e} (connecting to {self.session_url})') from e
             finally:
-                # A socket that produced no session is owned by nobody; a returned session owns its own.
+                # Close a socket no session took ownership of.
                 if session is None and ws is not None:
                     ws.close()
 
