@@ -21,6 +21,10 @@ with vendor_import('positronic_franka', 'Franka support', platforms=('linux',)):
     import positronic_franka._franka as pf
     from positronic_franka.desk import Desk, SafetyControllerError
 
+# Seconds an arm may travel to a target before the move is judged failed. The vendor reports a goal it
+# abandons, but a goal it never converges on stays in flight for as long as the arm is pushed off course.
+_MOVE_TIMEOUT_S = 10.0
+
 
 def _check_error(is_error, was_error):
     return is_error, is_error and not was_error
@@ -250,8 +254,9 @@ class Robot(pimm.ControlSystem):
         self._state._start_reset()
         self.state.emit(self._state)
 
+        deadline = self._clock.now() + _MOVE_TIMEOUT_S
         try:
-            for _ in self._await_goal(target, lambda: self._should_stop.value):
+            for _ in self._await_goal(target, lambda: self._should_stop.value or self._clock.now() >= deadline):
                 st = robot.state()
                 self._state.encode(st)
                 self._state._start_reset()  # `encode` clears RESETTING; the arm has not arrived
@@ -259,6 +264,8 @@ class Robot(pimm.ControlSystem):
                 if st.error != 0:
                     robot.recover_from_errors()
                 yield self._limiter.wait()
+            if self._clock.now() >= deadline:
+                raise TimeoutError(f'the arm stopped short of {target}')
         except Exception:
             self._errored = True  # wherever the arm stopped, it is not where it was sent
             raise
@@ -360,6 +367,7 @@ class Robot(pimm.ControlSystem):
             robot = self._arm
             # Set up here, not in ``__init__``: a background control system is pickled before it runs
             self._should_stop = should_stop
+            self._clock = clock
             self._state = FrankaState()
             self._limiter = pimm.RateLimiter(clock, hz=2000)
             # Set by a move that does not arrive, cleared by the next that does: the arm is not where it was put.

@@ -4,7 +4,7 @@ from ctypes import c_uint16
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.arrival import ARRIVAL_TIMEOUT_S, MoveStatus, answer_when_arrived
+from positronic.drivers.arrival import PendingMove
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -45,15 +45,16 @@ class DHGripper(pimm.ControlSystem):
         yield from self._initialize(client)
 
         last_grip = 0.0
-        pending_call, deadline = None, 0.0
+        move = PendingMove(_ARRIVED_TOL)
 
         # TODO: Should we translate these to physical units (N and m/s)?
         while not should_stop.value:
-            if pending_call is None:
+            if not move.active:
                 # A call first, and the stream only when none came: reading both would consume a streamed
                 # target the call then overwrites, and a signal holds only its latest value.
                 if (call := next(self.sync_move.incoming(), None)) is not None:
-                    last_grip, pending_call, deadline = float(call.request), call, clock.now() + ARRIVAL_TIMEOUT_S
+                    last_grip = float(call.request)
+                    move.accept(call, last_grip, clock.now())
                 elif (grip := pimm.value_updated(self.target_grip)) is not None:
                     last_grip = grip
             width = round((1 - max(0, min(last_grip, 1))) * 1000)
@@ -63,13 +64,10 @@ class DHGripper(pimm.ControlSystem):
 
             current_grip = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
             self.grip.emit(current_grip)
-            if pending_call is not None:
-                out_of_time = clock.now() >= deadline
-                move_status = answer_when_arrived(
-                    pending_call, current_grip, pending_call.request, _ARRIVED_TOL, out_of_time
-                )
-                if move_status is not MoveStatus.MOVING:
-                    pending_call = None
+            if move.active:
+                # A grasp is a move that times out: the fingers stop on the object. The target stands, so
+                # they keep holding it.
+                move.settle(current_grip, clock.now())
 
             yield pimm.Sleep(0.001)  # Small delay to prevent busy-waiting
 

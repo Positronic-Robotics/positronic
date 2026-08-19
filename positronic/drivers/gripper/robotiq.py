@@ -4,7 +4,7 @@ from collections.abc import Iterator
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.arrival import ARRIVAL_TIMEOUT_S, MoveStatus, answer_when_arrived
+from positronic.drivers.arrival import PendingMove
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -41,16 +41,16 @@ class Robotiq2F(pimm.ControlSystem):
             client.write_registers(_REG_CMD, [0x0000, 0x0000, 0x0000], device_id=_SLAVE)
             client.write_registers(_REG_CMD, [0x0100, 0x0000, 0x0000], device_id=_SLAVE)
 
-            pending_call, deadline = None, 0.0
+            move = PendingMove(_ARRIVED_TOL)
 
             while not should_stop.value:
                 target = None
-                if pending_call is None:
+                if not move.active:
                     # A call first, and the stream only when none came: reading both would consume a streamed
                     # target the call then overwrites, and a signal holds only its latest value.
                     if (call := next(self.sync_move.incoming(), None)) is not None:
                         target = float(call.request)
-                        pending_call, deadline = call, clock.now() + ARRIVAL_TIMEOUT_S
+                        move.accept(call, target, clock.now())
                     else:
                         target = pimm.value_updated(self.target_grip)
                 if target is not None:
@@ -63,13 +63,10 @@ class Robotiq2F(pimm.ControlSystem):
                 reg = client.read_input_registers(_REG_IN_POS, count=1, device_id=_SLAVE).registers[0]
                 grip = min(1.0, max(0.0, (reg >> 8) / 255.0))
                 self.grip.emit(grip)
-                if pending_call is not None:
-                    out_of_time = clock.now() >= deadline
-                    move_status = answer_when_arrived(
-                        pending_call, grip, pending_call.request, _ARRIVED_TOL, out_of_time
-                    )
-                    if move_status is not MoveStatus.MOVING:
-                        pending_call = None
+                if move.active:
+                    # A grasp is a move that times out: the fingers stop on the object. The target stands, so
+                    # they keep holding it.
+                    move.settle(grip, clock.now())
 
                 yield limiter.wait()
         finally:

@@ -7,7 +7,7 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
-from positronic.drivers.arrival import ARRIVAL_TIMEOUT_S, MoveStatus, answer_when_arrived
+from positronic.drivers.arrival import MoveStatus, PendingMove
 from positronic.drivers.motors.feetech import MotorBus
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
@@ -123,12 +123,8 @@ class Robot(pimm.ControlSystem):
         # The arm half of the motor setpoint, in normalized units. Read here, not in ``__init__``: the arm
         # holds where the bus finds it until something asks otherwise, and there is no bus until now.
         self._last_qpos = np.asarray(self.motor_bus.position[:-1])
-        # ERROR from a move that does not arrive until one does: the bus reports position, not whether the
-        # arm is where the driver put it
-        arm_status = RobotStatus.AVAILABLE
-
         # The bus reports position only while this loop reads it, so it cannot be held for a move
-        pending_move, pending_target, deadline = None, np.zeros(len(self.home_joints)), 0.0
+        move = PendingMove(_ARRIVED_TOL)
 
         while not should_stop.value:
             # The arm and the gripper are one setpoint on a shared bus, but they arrive as two channels that
@@ -137,28 +133,17 @@ class Robot(pimm.ControlSystem):
             if (grip := pimm.value_updated(self.target_grip)) is not None:
                 self._last_grip, setpoint_changed = grip, True
 
-            if pending_move is not None:
-                move_status = answer_when_arrived(
-                    pending_move, self.motor_bus.position[:-1], pending_target, _ARRIVED_TOL, clock.now() >= deadline
-                )
-                if move_status is not MoveStatus.MOVING:
-                    arm_status = RobotStatus.AVAILABLE
-                    pending_move = None
-                if move_status is MoveStatus.GAVE_UP:
-                    # Holding the target the arm stopped short of would resume the move once whatever blocked
-                    # it goes away, long after its asker was told it failed.
-                    self._last_qpos, setpoint_changed = np.asarray(self.motor_bus.position[:-1]), True
-                    arm_status = RobotStatus.ERROR
+            if move.active and move.settle(self.motor_bus.position[:-1], clock.now()) is MoveStatus.GAVE_UP:
+                # Holding the target the arm stopped short of would resume the move once whatever blocked
+                # it goes away, long after its asker was told it failed.
+                self._last_qpos, setpoint_changed = np.asarray(self.motor_bus.position[:-1]), True
 
-            # The command stream goes unread while a move is pending: it owns the arm until it answers, and
-            # a superseding setpoint would fail it for something its asker did not do.
-            if pending_move is None:
+            if not move.active:
                 if (call := next(self.sync_move.incoming(), None)) is not None:
                     with pimm.calls.forward_failure(call):
-                        pending_target = self._target_qpos(state, call.request)
-                        self._last_qpos, setpoint_changed = pending_target, True
-                        pending_move = call  # answered once the arm reads back at the setpoint
-                        deadline = clock.now() + ARRIVAL_TIMEOUT_S
+                        target = self._target_qpos(state, call.request)
+                        self._last_qpos, setpoint_changed = target, True
+                        move.accept(call, target, clock.now())
                 elif (target := self._streamed_setpoint(state)) is not None:
                     self._last_qpos, setpoint_changed = target, True
 
@@ -169,7 +154,8 @@ class Robot(pimm.ControlSystem):
             dq = self.motor_bus.velocity[:-1]
             ee_pose, gripper = self._forward_kinematics(q)
             position_rad = self.norm_to_rad(q)[:-1]
-            state.encode(position_rad, dq, ee_pose, arm_status)
+            # The bus reports position, not whether the arm is where the driver put it
+            state.encode(position_rad, dq, ee_pose, RobotStatus.ERROR if move.errored else RobotStatus.AVAILABLE)
 
             self.state.emit(state)
             self.grip.emit(gripper)

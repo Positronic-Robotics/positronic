@@ -7,7 +7,7 @@ from mujoco import Any
 
 import pimm
 from positronic import geom
-from positronic.drivers.arrival import ARRIVAL_TIMEOUT_S, MoveStatus, answer_when_arrived
+from positronic.drivers.arrival import MoveStatus, PendingMove
 from positronic.drivers.roboarm import RobotStatus, State, command
 from positronic.drivers.roboarm.kinova.api import KinovaAPI
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
@@ -109,37 +109,22 @@ class Robot(pimm.ControlSystem):
             current_command = np.zeros(api.actuator_count, dtype=np.float32)
 
             # The arm is torque-controlled, so it only travels while this loop runs: it cannot be held for a move
-            pending_move, pending_target, deadline = None, q.copy(), 0.0
-            # Set by a move that does not arrive, cleared by the next that does: the arm is not where it was put
-            errored = False
+            # ``joint_controller.finished`` says the reference trajectory ran out, not that the arm tracked it,
+            # so arrival is judged from the joints the arm reports.
+            move = PendingMove(_ARRIVED_TOL)
 
             while not should_stop.value:
-                if pending_move is not None:
-                    # ``joint_controller.finished`` says the reference trajectory ran out, not that the arm
-                    # tracked it, so arrival is judged from the joints the arm reports.
-                    move_status = answer_when_arrived(
-                        pending_move,
-                        q,
-                        wrap_joint_angle(pending_target, q),  # the branch the controller tracks
-                        _ARRIVED_TOL,
-                        clock.now() >= deadline,
-                    )
-                    if move_status is MoveStatus.GAVE_UP:
-                        # Leaving the controller on the target the arm stopped short of would resume the move
-                        # once whatever blocked it goes away, long after its asker was told it failed.
-                        joint_controller.set_target_qpos(q)
-                    if move_status is not MoveStatus.MOVING:
-                        errored = move_status is MoveStatus.GAVE_UP
-                        pending_move = None
-                # The command stream goes unread while a move is pending: it owns the arm until it answers,
-                # and a superseding target would fail it for something its asker did not do.
-                if pending_move is None:
+                if move.active and move.settle(q, clock.now()) is MoveStatus.GAVE_UP:
+                    # Leaving the controller on the target the arm stopped short of would resume the move
+                    # once whatever blocked it goes away, long after its asker was told it failed.
+                    joint_controller.set_target_qpos(q)
+                if not move.active:
                     if (call := next(self.sync_move.incoming(), None)) is not None:
                         with pimm.calls.forward_failure(call):
-                            pending_target = self._target_qpos(joint_controller, robot_state, call.request)
-                            joint_controller.set_target_qpos(pending_target)
-                            pending_move = call  # answered once the arm reads back at the target
-                            deadline = clock.now() + ARRIVAL_TIMEOUT_S
+                            target = self._target_qpos(joint_controller, robot_state, call.request)
+                            joint_controller.set_target_qpos(target)
+                            # The branch the controller tracks: it wraps the target once, when it is set
+                            move.accept(call, wrap_joint_angle(target, q), clock.now())
                     elif (cmd := pimm.value_updated(self.commands)) is not None:
                         try:
                             joint_controller.set_target_qpos(self._target_qpos(joint_controller, robot_state, cmd))
@@ -153,7 +138,7 @@ class Robot(pimm.ControlSystem):
                 ee_pose = self.solver.forward(joint_controller.q_s)
 
                 status = RobotStatus.MOVING if not joint_controller.finished else RobotStatus.AVAILABLE
-                if errored:  # the controller reports its own trajectory, not whether the arm is where it was put
+                if move.errored:  # the controller reports its trajectory, not whether the arm got there
                     status = RobotStatus.ERROR
                 robot_state.encode(q, dq, ee_pose, status)
                 self.state.emit(robot_state)
