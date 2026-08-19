@@ -40,12 +40,12 @@ class SO101State(State, pimm.shared_memory.NumpySMAdapter):
     def status(self) -> RobotStatus:
         return RobotStatus(int(self.array[17]))
 
-    def encode(self, q, dq, ee_pose):
+    def encode(self, q, dq, ee_pose, status: RobotStatus):
         self.array[:5] = q
         self.array[5:10] = dq
         self.array[10 : 10 + 3] = ee_pose.translation
         self.array[10 + 3 : 10 + 7] = ee_pose.rotation.as_quat
-        self.array[17] = RobotStatus.AVAILABLE.value
+        self.array[17] = status.value
 
 
 _SO101_URDF_PATH = 'positronic/drivers/roboarm/so101/so101.urdf'
@@ -78,6 +78,10 @@ class Robot(pimm.ControlSystem):
         print('Warning: Proper dq units is not implemented for SO101!')
         print('================================================================')
 
+    def _arm_rad_to_norm(self, q_rad: np.ndarray) -> np.ndarray:
+        """Normalize the five arm joints. ``rad_to_norm`` spans the bus, whose last entry is the gripper."""
+        return self.rad_to_norm(np.append(q_rad, 0.0))[:-1]
+
     def _target_qpos(self, state: SO101State, cmd: roboarm_command.CommandType) -> np.ndarray:
         """The setpoint ``cmd`` asks the arm to hold, in the bus's normalized units."""
         match cmd:
@@ -104,10 +108,6 @@ class Robot(pimm.ControlSystem):
             logging.warning(f'{cmd} not applied: {exc}')
             return None
 
-    def _arm_rad_to_norm(self, q_rad: np.ndarray) -> np.ndarray:
-        """Normalize the five arm joints. ``rad_to_norm`` spans the bus, whose last entry is the gripper."""
-        return self.rad_to_norm(np.append(q_rad, 0.0))[:-1]
-
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self.motor_bus.connect()
         urdf = ET.fromstring(Path(_SO101_URDF_PATH).read_text())
@@ -123,6 +123,9 @@ class Robot(pimm.ControlSystem):
         # The arm half of the motor setpoint, in normalized units. Read here, not in ``__init__``: the arm
         # holds where the bus finds it until something asks otherwise, and there is no bus until now.
         self._last_qpos = np.asarray(self.motor_bus.position[:-1])
+        # ERROR from a move that does not arrive until one does: the bus reports position, not whether the
+        # arm is where the driver put it
+        arm_status = RobotStatus.AVAILABLE
 
         # The bus reports position only while this loop reads it, so it cannot be held for a move
         pending_move, pending_target, deadline = None, np.zeros(len(self.home_joints)), 0.0
@@ -138,12 +141,14 @@ class Robot(pimm.ControlSystem):
                 move_status = answer_when_arrived(
                     pending_move, self.motor_bus.position[:-1], pending_target, _ARRIVED_TOL, clock.now() >= deadline
                 )
+                if move_status is not MoveStatus.MOVING:
+                    arm_status = RobotStatus.AVAILABLE
+                    pending_move = None
                 if move_status is MoveStatus.GAVE_UP:
                     # Holding the target the arm stopped short of would resume the move once whatever blocked
                     # it goes away, long after its asker was told it failed.
                     self._last_qpos, setpoint_changed = np.asarray(self.motor_bus.position[:-1]), True
-                if move_status is not MoveStatus.MOVING:
-                    pending_move = None
+                    arm_status = RobotStatus.ERROR
 
             # The command stream goes unread while a move is pending: it owns the arm until it answers, and
             # a superseding setpoint would fail it for something its asker did not do.
@@ -164,7 +169,7 @@ class Robot(pimm.ControlSystem):
             dq = self.motor_bus.velocity[:-1]
             ee_pose, gripper = self._forward_kinematics(q)
             position_rad = self.norm_to_rad(q)[:-1]
-            state.encode(position_rad, dq, ee_pose)
+            state.encode(position_rad, dq, ee_pose, arm_status)
 
             self.state.emit(state)
             self.grip.emit(gripper)

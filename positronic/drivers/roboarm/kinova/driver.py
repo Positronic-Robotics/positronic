@@ -110,6 +110,8 @@ class Robot(pimm.ControlSystem):
 
             # The arm is torque-controlled, so it only travels while this loop runs: it cannot be held for a move
             pending_move, pending_target, deadline = None, q.copy(), 0.0
+            # Set by a move that does not arrive, cleared by the next that does: the arm is not where it was put
+            errored = False
 
             while not should_stop.value:
                 if pending_move is not None:
@@ -127,6 +129,7 @@ class Robot(pimm.ControlSystem):
                         # once whatever blocked it goes away, long after its asker was told it failed.
                         joint_controller.set_target_qpos(q)
                     if move_status is not MoveStatus.MOVING:
+                        errored = move_status is MoveStatus.GAVE_UP
                         pending_move = None
                 # The command stream goes unread while a move is pending: it owns the arm until it answers,
                 # and a superseding target would fail it for something its asker did not do.
@@ -150,6 +153,8 @@ class Robot(pimm.ControlSystem):
                 ee_pose = self.solver.forward(joint_controller.q_s)
 
                 status = RobotStatus.MOVING if not joint_controller.finished else RobotStatus.AVAILABLE
+                if errored:  # the controller reports its own trajectory, not whether the arm is where it was put
+                    status = RobotStatus.ERROR
                 robot_state.encode(q, dq, ee_pose, status)
                 self.state.emit(robot_state)
 

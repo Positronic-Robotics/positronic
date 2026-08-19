@@ -388,8 +388,6 @@ class Robot(pimm.ControlSystem):
                     if entered_error:
                         logging.warning(f'Robot error: {st.error_message}')
 
-                    cmd = pimm.value_updated(self.commands)
-
                     if in_error:
                         # The driver clears a recoverable error itself.
                         robot.recover_from_errors()
@@ -398,7 +396,7 @@ class Robot(pimm.ControlSystem):
 
                     if (call := next(self.sync_move.incoming(), None)) is not None:
                         yield from self._serve_sync_move(call)
-                    elif cmd is not None:
+                    elif (cmd := pimm.value_updated(self.commands)) is not None:
                         try:
                             if isinstance(cmd, command.Reset):
                                 yield from self._move_to(self._home_target())
