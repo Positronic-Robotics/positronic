@@ -50,10 +50,12 @@ class DHGripper(pimm.ControlSystem):
         # TODO: Should we translate these to physical units (N and m/s)?
         while not should_stop.value:
             if pending_call is None:
-                if (grip := pimm.value_updated(self.target_grip)) is not None:
-                    last_grip = grip
+                # A call first, and the stream only when none came: reading both would consume a streamed
+                # target the call then overwrites, and a signal holds only its latest value.
                 if (call := next(self.sync_move.incoming(), None)) is not None:
                     last_grip, pending_call, deadline = float(call.request), call, clock.now() + ARRIVAL_TIMEOUT_S
+                elif (grip := pimm.value_updated(self.target_grip)) is not None:
+                    last_grip = grip
             width = round((1 - max(0, min(last_grip, 1))) * 1000)
             client.write_register(0x103, c_uint16(width).value, slave=1)
             client.write_register(0x101, c_uint16(self.force.value).value, slave=1)

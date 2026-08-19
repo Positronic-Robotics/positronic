@@ -46,10 +46,13 @@ class Robotiq2F(pimm.ControlSystem):
             while not should_stop.value:
                 target = None
                 if pending_call is None:
-                    target = pimm.value_updated(self.target_grip)
+                    # A call first, and the stream only when none came: reading both would consume a streamed
+                    # target the call then overwrites, and a signal holds only its latest value.
                     if (call := next(self.sync_move.incoming(), None)) is not None:
                         target = float(call.request)
                         pending_call, deadline = call, clock.now() + ARRIVAL_TIMEOUT_S
+                    else:
+                        target = pimm.value_updated(self.target_grip)
                 if target is not None:
                     pos = int(max(0, min(1, target)) * 255)
                     spd = int(max(0, min(255, self.speed.value)))
