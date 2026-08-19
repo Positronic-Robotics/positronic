@@ -14,7 +14,7 @@ on close (``zero_torque_mode``).
 """
 
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from typing import Any
 
 import mujoco as mj
@@ -43,7 +43,9 @@ HOME_Q = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
 _MJCF_PATH = 'assets/mujoco/i2rt_yam/yam.xml'
 _IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limit clamping
 _IK_ROT_TOL = 1e-2  # radians
-_PLACE_TIME_S = 2.0  # seconds the vendor move is given to travel
+_MOVE_TIME_S = 2.0  # seconds the commanded position is ramped over on the way to a target
+_SETTLE_S = 1.0  # seconds the chain is given to reach the last waypoint before the move gives up
+_ARRIVED_TOL = 0.02  # radians; the chain has no goal to report, so arrival is judged from the joints it reads
 
 
 def _reach_postures(x: float, y: float) -> list[np.ndarray]:
@@ -91,6 +93,9 @@ class YamState(State, pimm.shared_memory.NumpySMAdapter):
 
     def _start_reset(self):
         self.array[YamState.STATUS_OFFSET] = RobotStatus.RESETTING.value
+
+    def _set_error(self):
+        self.array[YamState.STATUS_OFFSET] = RobotStatus.ERROR.value
 
     def encode(self, q: np.ndarray, dq: np.ndarray, ee_pose: geom.Transform3D):
         self.array[YamState.Q_OFFSET : YamState.Q_OFFSET + 6] = q
@@ -194,108 +199,130 @@ class Robot(pimm.ControlSystem):
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        arm = self._connect(self._channel, self._sim)
+        # Set up here, not in ``__init__``: a background control system is pickled before it runs
+        self._arm = self._connect(self._channel, self._sim)
+        self._should_stop = should_stop
+        self._clock = clock
+        self._limiter = pimm.RateLimiter(clock, hz=100)
+        # Set by a move that does not arrive, cleared by the next that does: the chain is not where it was put.
+        self._errored = False
         try:
-            kin = _Kinematics()
+            self._kin = _Kinematics()
+            self._state = YamState()
             meta = {'robot': 'i2rt_yam', keys.JOINT_NAMES: list(_JOINT_NAMES), keys.CONTROL_FRAME: DEFAULT_FRAME}
             self.robot_meta.emit(meta)
 
-            robot_state = YamState()
-            limiter = pimm.RateLimiter(clock, hz=100)
-
-            q_target = self._reset(arm, kin, robot_state)
             grip_target = 0.0
+            q_target = np.asarray(self._home_joints, dtype=np.float64)
+            try:
+                yield from self._move_to(q_target, grip_target)  # Home the robot first.
+            # rules-allow: swallowed-error — a chain that will not home reads ERROR; it does not end the run
+            except Exception as exc:
+                logging.error(f'Homing failed, the chain is not where the driver put it: {exc}')
+                self._errored = True
 
             while not should_stop.value:
-                cmd = pimm.value_updated(self.commands)
                 if (grip := pimm.value_updated(self.target_grip)) is not None:
                     grip_target = float(grip)
 
-                obs = arm.get_observations()
-                q = obs['joint_pos']
-
+                q = self._arm.get_observations()['joint_pos']
                 if (call := next(self.sync_move.incoming(), None)) is not None:
                     if isinstance(call.request, command.Reset):
                         grip_target = 0.0  # homing opens the gripper, as a ``Reset`` command does
-                    q_target = self._serve_sync_move(arm, kin, robot_state, call, q, q_target, grip_target)
-                    obs = arm.get_observations()
-                    q = obs['joint_pos']
-                elif cmd is not None:
-                    if isinstance(cmd, command.Reset):
-                        q_target = self._reset(arm, kin, robot_state)
-                        grip_target = 0.0
-                        obs = arm.get_observations()
-                        q = obs['joint_pos']
-                    else:
-                        q_target = self._target_joints(kin, cmd, q, q_target)
+                    q_target = yield from self._serve_sync_move(call, q, grip_target)
+                elif (cmd := pimm.value_updated(self.commands)) is not None:
+                    try:
+                        if isinstance(cmd, command.Reset):
+                            grip_target = 0.0  # homing opens the gripper
+                            q_target = np.asarray(self._home_joints, dtype=np.float64)
+                            yield from self._move_to(q_target, grip_target)
+                        else:
+                            q_target = self._target_joints(cmd, q)
+                    # rules-allow: swallowed-error — no command must be capable of terminating the driver
+                    except Exception as exc:
+                        logging.warning(f'{cmd} not applied: {exc}')
 
-                arm.command_joint_pos(np.append(q_target, 1.0 - grip_target))
+                self._arm.command_joint_pos(np.append(q_target, 1.0 - grip_target))
 
-                self._encode_state(robot_state, kin, obs)
-                self.state.emit(robot_state)
+                # Read afresh: a move above ran for seconds, so the reading taken before it is long stale.
+                obs = self._arm.get_observations()
+                self._encode_state(obs)
+                if self._errored:  # ``encode`` clears the status; the chain is still where it was left
+                    self._state._set_error()
+                self.state.emit(self._state)
                 self.grip.emit(1.0 - float(obs['gripper_pos'][0]))
-                yield limiter.wait()
+                yield self._limiter.wait()
         finally:
-            arm.zero_torque_mode()
-            arm.close()
+            self._arm.zero_torque_mode()
+            self._arm.close()
 
-    def _encode_state(self, robot_state: YamState, kin: _Kinematics, obs) -> None:
+    def _encode_state(self, obs: dict[str, np.ndarray]) -> None:
         q = obs['joint_pos']
-        robot_state.encode(q, obs['joint_vel'], self._base_pose * kin.fk(q))
+        self._state.encode(q, obs['joint_vel'], self._base_pose * self._kin.fk(q))
 
-    def _place(self, arm, kin: _Kinematics, robot_state: YamState, target: np.ndarray, grip: float) -> np.ndarray:
-        """Move the chain to ``target`` and return the joints it now holds; the vendor move runs to completion."""
-        self._encode_state(robot_state, kin, arm.get_observations())
-        robot_state._start_reset()  # ``encode`` clears RESETTING; the arm has not arrived
-        self.state.emit(robot_state)
-        arm.move_joints(np.append(target, 1.0 - grip), time_interval_s=_PLACE_TIME_S)  # chain gripper 1.0 = open
-        self._encode_state(robot_state, kin, arm.get_observations())
-        self.state.emit(robot_state)
-        return np.asarray(target, dtype=np.float64).copy()
+    def _move_to(self, target: np.ndarray, grip: float) -> Generator[pimm.Command, None, bool]:
+        """Ramp the chain to ``target``, yielding until it reads back there; ``False`` means the stop ended it.
 
-    def _reset(self, arm, kin: _Kinematics, robot_state: YamState) -> np.ndarray:
-        return self._place(arm, kin, robot_state, self._home_joints, 0.0)
+        Drive with ``yield from``. The vendor's own ``move_joints`` is not used: it blocks the world for the
+        whole ramp and returns without ever reading where the chain got to.
+        """
+        start = np.asarray(self._arm.get_observations()['joint_pos'], dtype=np.float64)
+        started = self._clock.now()
+        while not np.all(np.abs(self._arm.get_observations()['joint_pos'] - target) < _ARRIVED_TOL):
+            if self._should_stop.value:
+                return False
+            elapsed = self._clock.now() - started
+            if elapsed > _MOVE_TIME_S + _SETTLE_S:
+                raise TimeoutError(f'the chain stopped short of {target}')
+            # Ramped rather than commanded outright, so the chain travels at a pace the joints can hold, and
+            # held at the target afterwards while it settles the last of the way in.
+            alpha = min(elapsed / _MOVE_TIME_S, 1.0)
+            self._arm.command_joint_pos(np.append((1 - alpha) * start + alpha * target, 1.0 - grip))  # 1.0 = open
+            self._emit_moving()
+            yield self._limiter.wait()
 
-    def _target_joints(self, kin: _Kinematics, cmd, q: np.ndarray, hold: np.ndarray) -> np.ndarray:
-        """The joints ``cmd`` asks the chain to hold."""
+        self._errored = False
+        self._encode_state(self._arm.get_observations())
+        self.state.emit(self._state)
+        return True
+
+    def _emit_moving(self) -> None:
+        """Publish the chain's state mid-move, where its pose is not the one it was commanded to track."""
+        self._encode_state(self._arm.get_observations())
+        self._state._start_reset()  # ``encode`` clears RESETTING; the chain has not arrived
+        self.state.emit(self._state)
+
+    def _target_joints(self, cmd: command.CommandType, q: np.ndarray) -> np.ndarray:
+        """The joints ``cmd`` asks the chain to hold; raises what the chain cannot be asked for."""
         match cmd:
             case command.JointPosition(positions):
                 return np.asarray(positions, dtype=np.float64)
             case command.JointDelta(velocities=delta):
                 return q + np.asarray(delta, dtype=np.float64)
             case command.CartesianPosition(pose):
-                return self._ik_or_hold(kin, pose, q, hold)
+                return self._ik(pose, q)
             case command.CartesianDelta() as delta_cmd:
-                target = delta_cmd.apply(self._base_pose * kin.fk(q))
-                return self._ik_or_hold(kin, target, q, hold)
+                return self._ik(delta_cmd.apply(self._base_pose * self._kin.fk(q)), q)
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
 
     def _serve_sync_move(
-        self, arm, kin: _Kinematics, robot_state: YamState, call, q: np.ndarray, hold: np.ndarray, grip: float
-    ) -> np.ndarray:
+        self, call: pimm.calls.Call[command.CommandType, None], q: np.ndarray, grip: float
+    ) -> Generator[pimm.Command, None, np.ndarray]:
         """Put the chain where ``call`` asks, answer it, and return the joints it now holds."""
         request = call.request
-        try:
-            target = (
-                self._home_joints if isinstance(request, command.Reset) else self._target_joints(kin, request, q, hold)
-            )
-            held = self._place(arm, kin, robot_state, target, grip)
-        # rules-allow: swallowed-error — a chain that cannot be placed is the asker's failure to hear about
-        except Exception as exc:
-            call.set_exception(exc)
-            return hold
-        call.set_result(None)
-        return held
+        with pimm.calls.answering(call):
+            target = self._home_joints if isinstance(request, command.Reset) else self._target_joints(request, q)
+            if (yield from self._move_to(target, grip)):
+                call.set_result(None)
+            return np.asarray(target, dtype=np.float64)
+        return q  # the move failed and ``answering`` told the asker; the chain holds where it stands
 
-    def _ik_or_hold(
-        self, kin: _Kinematics, world_pose: geom.Transform3D, q: np.ndarray, hold: np.ndarray
-    ) -> np.ndarray:
-        """IK in the arm-base frame; on failure hold the previous joint target rather than jump."""
-        solution = kin.ik(self._base_pose.inv * world_pose, q)
+    def _ik(self, world_pose: geom.Transform3D, q: np.ndarray) -> np.ndarray:
+        """IK in the arm-base frame."""
+        solution = self._kin.ik(self._base_pose.inv * world_pose, q)
         if solution is None:
-            logging.warning(f'IK failed for target {world_pose}, holding previous joint target')
-            return hold
+            raise ValueError(f'{world_pose} is out of reach')
         return solution
 
 
@@ -357,6 +384,7 @@ if __name__ == '__main__':
         # `World.pair` cannot express that it returns the counterpart of the port it is given, so the four
         # payload types are named here.
         commands = world.pair(robot.commands)
+        sync_move = world.pair(robot.sync_move)
         target_grip = world.pair(robot.target_grip)
         state = world.pair(robot.state)
         grip = world.pair(robot.grip)
@@ -370,17 +398,17 @@ if __name__ == '__main__':
                 time.sleep(cmd.seconds if isinstance(cmd, pimm.Sleep) else 0)
 
         pump(0.1)
-        while state.read() is None:
-            pump(0.1)
+        while state.read() is None or state.value.status == RobotStatus.RESETTING:
+            pump(0.1)  # the opening move ramps the chain home over a couple of seconds
         assert state.value.status == RobotStatus.AVAILABLE, state.value.status
 
         kin = _Kinematics()
 
         if fake is not None:
             # State round-trip: the homed chain comes back through the driver's FK.
-            assert np.allclose(state.value.q, HOME_Q, atol=1e-3), state.value.q
+            assert np.allclose(state.value.q, HOME_Q, atol=_ARRIVED_TOL), state.value.q
             home_err = np.linalg.norm(state.value.ee_pose.translation - kin.fk(HOME_Q).translation)
-            assert home_err < 1e-4, home_err
+            assert home_err < 0.02, home_err  # the chain arrives within `_ARRIVED_TOL` of home, not onto it
 
             # Grip round-trip: polarity inverted on the way out (command) and on the way back (observation).
             target_grip.emit(0.8)
@@ -393,13 +421,19 @@ if __name__ == '__main__':
             assert abs(fake.last_command[6] - 1.0) < 1e-6, fake.last_command
             assert abs(grip.value) < 0.02, grip.value
 
-        # Unfold toward the workspace, then drive a Cartesian square through the driver's IK. The square
-        # sits well inside the reach envelope, at the unfolded posture's wrist orientation.
+        # Unfold toward the workspace with a synchronous move: it answers only once the chain is there.
         reach_q = np.array([0.0, 1.2, 1.2, 0.0, 0.6, 0.0])
-        commands.emit(command.JointPosition(reach_q))
-        pump(0.5)
+        answer = sync_move(command.JointPosition(reach_q))
+        for _ in range(100):
+            if answer.done():
+                break
+            pump(0.1)
+        answer.result()  # raises if the chain never arrived
         if fake is not None:
-            assert np.allclose(state.value.q, reach_q, atol=0.02), state.value.q
+            assert np.allclose(state.value.q, reach_q, atol=_ARRIVED_TOL), state.value.q
+
+        # Then a Cartesian square through the driver's IK, commanded rather than asked for. The square sits
+        # well inside the reach envelope, at the unfolded posture's wrist orientation.
 
         center = geom.Transform3D(np.array([0.30, 0.05, 0.20]), state.value.ee_pose.rotation)
         print(f'Square center: {center}')

@@ -112,15 +112,15 @@ class Robot(pimm.ControlSystem):
                     pending_move.set_result(None)
                     pending_move = None
                 if pending_move is None and (call := next(self.sync_move.incoming(), None)) is not None:
-                    try:
+                    with pimm.calls.answering(call):
                         joint_controller.set_target_qpos(self._target_qpos(joint_controller, robot_state, call.request))
-                    # rules-allow: swallowed-error — an arm that cannot be placed is the asker's failure to hear about
-                    except Exception as exc:
-                        call.set_exception(exc)
-                    else:
-                        pending_move = call
+                        pending_move = call  # answered once the controller reports it finished
                 elif (cmd := pimm.value_updated(self.commands)) is not None:
-                    joint_controller.set_target_qpos(self._target_qpos(joint_controller, robot_state, cmd))
+                    try:
+                        joint_controller.set_target_qpos(self._target_qpos(joint_controller, robot_state, cmd))
+                    # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
+                    except Exception as exc:
+                        logging.warning(f'{cmd} not applied: {exc}')
 
                 torque_command = joint_controller.compute_torque(q, dq, tau)
                 np.divide(torque_command, torque_constant, out=current_command)

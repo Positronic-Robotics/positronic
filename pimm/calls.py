@@ -23,6 +23,7 @@ invocations. `World.connect` binds a caller to a handler wherever the two run.
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
@@ -52,6 +53,16 @@ class Call(ABC, Generic[Req, Res]):
 
     @abstractmethod
     def set_exception(self, exc: BaseException) -> None: ...
+
+
+@contextmanager
+def answering(call: Call[Req, Res]) -> Iterator[None]:
+    """Answer `call` with whatever the block raises; its result, if any, the block sets itself."""
+    try:
+        yield
+    # rules-allow: swallowed-error — the exception is not dropped but handed to the caller, who raises it
+    except Exception as exc:
+        call.set_exception(exc)
 
 
 class Answer(ABC, Generic[Res]):

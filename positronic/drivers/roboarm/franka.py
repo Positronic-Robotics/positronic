@@ -86,6 +86,9 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
     def _finish_reset(self):
         self.array[FrankaState.STATUS_OFFSET] = RobotStatus.AVAILABLE.value
 
+    def _set_error(self):
+        self.array[FrankaState.STATUS_OFFSET] = RobotStatus.ERROR.value
+
     def encode(self, state: pf.State):
         self.array[FrankaState.Q_OFFSET : FrankaState.Q_OFFSET + 7] = state.q
         self.array[FrankaState.DQ_OFFSET : FrankaState.DQ_OFFSET + 7] = state.dq
@@ -188,7 +191,9 @@ class Robot(pimm.ControlSystem):
             'gripper': gripper,
         }
 
-    def _ensure_robot(self) -> pf.Robot:
+    @property
+    def _arm(self) -> pf.Robot:
+        """The vendor handle, connected on first use."""
         if self._robot is None:
             self._robot = pf.Robot(
                 self._ip,
@@ -220,15 +225,10 @@ class Robot(pimm.ControlSystem):
         else:
             robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
 
-    @staticmethod
-    def _travel(robot, target, should_stop: Callable[[], bool]) -> Generator[pimm.Sleep, None, bool]:
-        """Command ``target`` and poll the goal until the arm arrives; raise if the goal stops advancing.
-
-        Returns whether the arm arrived: ``False`` means ``should_stop`` ended the wait first. It is asked
-        before each poll and never after one, so a caller that gives up never reads a goal it has already
-        given up on.
-        """
+    def _await_goal(self, target: np.ndarray, should_stop: Callable[[], bool]) -> Generator[pimm.Sleep, None, bool]:
+        """Command ``target`` and poll the goal until the arm arrives; ``False`` means the stop ended the wait."""
         POLL_INTERVAL_S = 0.005
+        robot = self._arm
         robot.set_target_joints(target)
         while not should_stop():
             goal = robot.goal()
@@ -239,28 +239,28 @@ class Robot(pimm.ControlSystem):
             yield pimm.Sleep(POLL_INTERVAL_S)
         return False
 
-    def _place(
-        self, robot, robot_state: FrankaState, rate_limiter, should_stop, target: np.ndarray
-    ) -> Generator[pimm.Sleep, None, bool]:
+    def _move_to(self, target: np.ndarray) -> Generator[pimm.Command, None, bool]:
         """Travel to ``target``, yielding until it arrives; ``False`` means the stop ended the wait."""
+        robot = self._arm
         # The first emit must not ship an unfilled state.
-        robot_state.encode(robot.state())
-        robot_state._start_reset()
-        self.state.emit(robot_state)
+        self._state.encode(robot.state())
+        self._state._start_reset()
+        self.state.emit(self._state)
 
-        for _ in self._travel(robot, target, lambda: should_stop.value):
+        for _ in self._await_goal(target, lambda: self._should_stop.value):
             st = robot.state()
-            robot_state.encode(st)
-            robot_state._start_reset()  # `encode` clears RESETTING; the arm has not arrived
-            self.state.emit(robot_state)
+            self._state.encode(st)
+            self._state._start_reset()  # `encode` clears RESETTING; the arm has not arrived
+            self.state.emit(self._state)
             if st.error != 0:
                 robot.recover_from_errors()
-            yield rate_limiter.wait()
+            yield self._limiter.wait()
 
-        if should_stop.value:  # the travel gave up on the stop rather than on arrival
+        if self._should_stop.value:  # the travel gave up on the stop rather than on arrival
             return False
-        robot_state._finish_reset()
-        self.state.emit(robot_state)
+        self._errored = False
+        self._state._finish_reset()
+        self.state.emit(self._state)
         return True
 
     def _home_target(self) -> np.ndarray:
@@ -273,36 +273,28 @@ class Robot(pimm.ControlSystem):
             target = target + variation
         return target
 
-    def _target_joints(self, robot, robot_state: FrankaState, cmd: command.CommandType) -> np.ndarray:
+    def _target_joints(self, cmd: command.CommandType) -> np.ndarray:
         """The joints ``cmd`` asks the arm to hold."""
+        robot = self._arm
         match cmd:
             case command.Reset():
                 return self._home_target()
             case command.CartesianPosition(pose):
                 return robot.inverse_kinematics_with_limits(np.asarray([*pose.translation, *pose.rotation.as_quat]))
             case command.CartesianDelta() as delta_cmd:
-                target = delta_cmd.apply(robot_state.ee_pose)
+                target = delta_cmd.apply(self._state.ee_pose)
                 return robot.inverse_kinematics_with_limits(np.asarray([*target.translation, *target.rotation.as_quat]))
             case command.JointPosition(positions):
                 return np.asarray(positions, dtype=np.float64)
             case command.JointDelta(velocities=joint_delta):
-                return robot_state.q + joint_delta
+                return self._state.q + joint_delta
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
 
-    def _serve_sync_move(
-        self, robot, robot_state: FrankaState, rate_limiter, should_stop, call
-    ) -> Iterator[pimm.Sleep]:
+    def _serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
         """Put the arm where ``call`` asks and answer it once it is there; a stop cuts it short unanswered."""
-        try:
-            arrived = yield from self._place(
-                robot, robot_state, rate_limiter, should_stop, self._target_joints(robot, robot_state, call.request)
-            )
-        # rules-allow: swallowed-error — an arm that cannot be placed is the asker's failure to hear about
-        except Exception as exc:
-            call.set_exception(exc)
-        else:
-            if arrived:
+        with pimm.calls.answering(call):
+            if (yield from self._move_to(self._target_joints(call.request))):
                 call.set_result(None)
 
     @contextlib.contextmanager
@@ -331,7 +323,7 @@ class Robot(pimm.ControlSystem):
                     yield desk
                     return
 
-    def _park(self, robot, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def _park(self, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         """Move the arm to the home pose, giving up after ``park_timeout_s``. Drive with ``yield from``.
 
         Runs after the control loop rather than in its ``finally``, so that only a stop request earns it.
@@ -346,34 +338,45 @@ class Robot(pimm.ControlSystem):
         target = np.asarray(self._home_joints, dtype=np.float64)
         try:
             logging.info('Parking the arm at the home pose')
+            robot = self._arm
             robot.recover_from_errors()  # once, before the move: a reflex during the move ends the park
             deadline = clock.now() + self._park_timeout_s
-            arrived = yield from self._travel(robot, target, lambda: clock.now() >= deadline)
+            arrived = yield from self._await_goal(target, lambda: clock.now() >= deadline)
             if not arrived:
                 logging.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
         # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
         except Exception:
             logging.exception('Parking failed, the arm stays where it stands')
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         with self._desk_session():
-            robot = self._ensure_robot()
+            robot = self._arm
+            # Set up here, not in ``__init__``: a background control system is pickled before it runs
+            self._should_stop = should_stop
+            self._state = FrankaState()
+            self._limiter = pimm.RateLimiter(clock, hz=2000)
+            # Set by a move that does not arrive, cleared by the next that does: the arm is not where it was put.
+            self._errored = False
             try:
                 self._init_robot(robot)
                 self.robot_meta.emit(Robot._build_robot_meta(robot))
                 robot.recover_from_errors()
 
-                robot_state = FrankaState()
-                rate_limiter = pimm.RateLimiter(clock, hz=2000)
-
-                yield from self._place(robot, robot_state, rate_limiter, should_stop, self._home_target())
+                try:
+                    yield from self._move_to(self._home_target())
+                # rules-allow: swallowed-error — an arm that will not home reads ERROR; it does not end the run
+                except Exception as exc:
+                    logging.error(f'Homing failed, the arm is not where the driver put it: {exc}')
+                    self._errored = True
 
                 in_error = False
 
                 while not should_stop.value:
                     st = robot.state()
-                    robot_state.encode(st)
-                    self.state.emit(robot_state)
+                    self._state.encode(st)
+                    if self._errored:  # ``encode`` reads the vendor's fault flag, not where the arm was put
+                        self._state._set_error()
+                    self.state.emit(self._state)
 
                     in_error, entered_error = _check_error(st.error != 0, in_error)
                     if entered_error:
@@ -382,24 +385,26 @@ class Robot(pimm.ControlSystem):
                     cmd = pimm.value_updated(self.commands)
 
                     if in_error:
-                        # The driver always clears a recoverable error itself; making it optional (hold in
-                        # ERROR for out-of-band recovery instead) is a config knob to add when an embodiment
-                        # needs it.
+                        # The driver clears a recoverable error itself.
                         robot.recover_from_errors()
-                        yield rate_limiter.wait()
+                        yield self._limiter.wait()
                         continue
 
                     if (call := next(self.sync_move.incoming(), None)) is not None:
-                        yield from self._serve_sync_move(robot, robot_state, rate_limiter, should_stop, call)
+                        yield from self._serve_sync_move(call)
                     elif cmd is not None:
-                        if isinstance(cmd, command.Reset):
-                            yield from self._place(robot, robot_state, rate_limiter, should_stop, self._home_target())
-                        else:
-                            robot.set_target_joints(self._target_joints(robot, robot_state, cmd))
+                        try:
+                            if isinstance(cmd, command.Reset):
+                                yield from self._move_to(self._home_target())
+                            else:
+                                robot.set_target_joints(self._target_joints(cmd))
+                        # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
+                        except Exception as exc:
+                            logging.warning(f'{cmd} not applied: {exc}')
 
-                    yield rate_limiter.wait()
+                    yield self._limiter.wait()
 
-                yield from self._park(robot, clock)
+                yield from self._park(clock)
             finally:
                 # Halt the driver's control thread before _desk_session deactivates FCI, or it dies mid-control
                 # with "TCP connection got interrupted".

@@ -3672,22 +3672,6 @@
                     "endColumn": 69,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportReturnType",
-                "range": {
-                    "startColumn": 30,
-                    "endColumn": 49,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportReturnType",
-                "range": {
-                    "startColumn": 26,
-                    "endColumn": 45,
-                    "lineCount": 1
-                }
             }
         ],
         "./positronic/drivers/roboarm/generate_urdf.py": [

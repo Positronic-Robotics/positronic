@@ -7,7 +7,8 @@ import pytest
 
 import pimm
 from pimm.tests.testing import MockClock, wire_call
-from positronic.drivers.roboarm import command, franka
+from positronic.drivers.roboarm import RobotStatus, command, franka
+from positronic.tests.testing_coutils import RecordingEmitter
 
 HOME = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 JOGGED = HOME + np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
@@ -144,7 +145,7 @@ def desk(monkeypatch) -> FakeDesk:
 
 def _driver(arm: FakeArm, *, variation: list[float] | None = None, **kwargs) -> franka.Robot:
     robot = franka.Robot('192.0.2.1', home_joints=list(HOME), home_joints_variation=variation or [0.0] * 7, **kwargs)
-    robot._robot = arm  # _ensure_robot hands back an already-set handle, which is how the fake arm gets in
+    robot._robot = arm  # `_arm` hands back an already-set handle, which is how the fake arm gets in
     return robot
 
 
@@ -158,7 +159,7 @@ def _drive(loop, clock: MockClock | None = None) -> None:
 def _drive_park(driver: franka.Robot, arm: FakeArm) -> MockClock:
     """Park ``arm`` under a clock that moves only by the waits the park itself asks for."""
     clock = MockClock()
-    _drive(driver._park(arm, clock), clock)
+    _drive(driver._park(clock), clock)
     return clock
 
 
@@ -187,7 +188,7 @@ def test_the_park_waits_by_yielding_rather_than_blocking():
     """A driver's waits are the world's to honour, teardown included: the park asks for them with Sleep."""
     arm = FakeArm(JOGGED, polls_to_reach=3)
 
-    commands = list(_driver(arm, manage_desk=False)._park(arm, MockClock()))
+    commands = list(_driver(arm, manage_desk=False)._park(MockClock()))
 
     assert commands and all(isinstance(command, pimm.Sleep) for command in commands)
 
@@ -307,6 +308,24 @@ def _ask_to_move(world: pimm.World, driver: franka.Robot, cmd: command.CommandTy
 def world():
     with pimm.World() as w:
         yield w
+
+
+def test_an_arm_that_will_not_home_reads_error_rather_than_ending_the_run():
+    """The driver's own move is the one thing that can fail before a caller exists to hear about it. It reports
+    the arm as it is — not where it was put — and keeps running, so the rig is diagnosable rather than gone."""
+    arm = FakeArm(JOGGED, goal_status=franka.pf.GoalStatus.ABORTED)  # the opening homing never lands
+    driver = _driver(arm, manage_desk=False)
+    states = RecordingEmitter()
+    driver.state._bind(states)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = driver.run(stop, clock)
+
+    for _ in range(5):
+        next(loop)  # the run goes on past the failed homing
+
+    assert states.emitted, 'the driver published nothing'
+    assert states.emitted[-1][1].status == RobotStatus.ERROR
 
 
 def test_a_sync_move_answers_once_the_arm_is_there(world):

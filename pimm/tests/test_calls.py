@@ -3,7 +3,7 @@ from itertools import islice
 
 import pytest
 
-from pimm.calls import Answer, ControlSystemCaller, ControlSystemHandler
+from pimm.calls import Answer, ControlSystemCaller, ControlSystemHandler, answering
 from pimm.core import ControlSystem, NoValueException, Sleep
 from pimm.tests.testing import wire_call
 from pimm.world import World
@@ -117,6 +117,28 @@ class TestCallAndAnswer:
         assert answer.done()
         with pytest.raises(ValueError, match='boom'):
             answer.result()
+
+    def test_a_block_that_raises_answers_the_call_with_it(self, bound):
+        caller, handler = bound
+        answer = caller(None)
+        (call,) = handler.incoming()
+
+        with answering(call):
+            raise ValueError('boom')
+
+        with pytest.raises(ValueError, match='boom'):
+            answer.result()
+
+    def test_a_block_that_returns_leaves_the_answer_to_it(self, bound):
+        """The block sets its own result, so a handler that answers later — or not at all — still can."""
+        caller, handler = bound
+        answer = caller(None)
+        (call,) = handler.incoming()
+
+        with answering(call):
+            pass
+
+        assert not answer.done()
 
     def test_answering_twice_raises(self, bound):
         caller, handler = bound

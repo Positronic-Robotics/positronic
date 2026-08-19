@@ -1,3 +1,4 @@
+import logging
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from pathlib import Path
@@ -50,9 +51,9 @@ _SO101_URDF_PATH = 'positronic/drivers/roboarm/so101/so101.urdf'
 _SO101_JOINT_NAMES = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll']
 _SO101_EE_LINK = 'gripper_frame_link'
 _SO101_EE_JOINT = 'gripper_frame_joint'
-# How close to its setpoint the arm counts as placed, in the bus's normalized units: the bus reports
+# How close to its setpoint the arm counts as arrived, in the bus's normalized units: the bus reports
 # position but no goal, so arrival is judged from the reading
-_PLACED_TOL = 0.02
+_ARRIVED_TOL = 0.02
 
 
 class Robot(pimm.ControlSystem):
@@ -94,10 +95,10 @@ class Robot(pimm.ControlSystem):
             case other:
                 raise ValueError(f'Unknown command: {other}')
 
-    def _is_placed(self) -> bool:
+    def _has_arrived(self) -> bool:
         """Whether the arm has reached the setpoint it was last given."""
         return self._last_qpos is not None and bool(
-            np.all(np.abs(self.motor_bus.position[:-1] - self._last_qpos) < _PLACED_TOL)
+            np.all(np.abs(self.motor_bus.position[:-1] - self._last_qpos) < _ARRIVED_TOL)
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
@@ -121,20 +122,20 @@ class Robot(pimm.ControlSystem):
             grip = pimm.value_updated(self.target_grip)
             if grip is not None:
                 self._last_grip = grip
-            if pending_move is not None and self._is_placed():
+            if pending_move is not None and self._has_arrived():
                 pending_move.set_result(None)
                 pending_move = None
             if pending_move is None and (call := next(self.sync_move.incoming(), None)) is not None:
-                try:
+                with pimm.calls.answering(call):
                     self._last_qpos = self._target_qpos(state, call.request)
-                # rules-allow: swallowed-error — an arm that cannot be placed is the asker's failure to hear about
-                except Exception as exc:
-                    call.set_exception(exc)
-                else:
                     command = call.request  # written to the bus below, as for any other command
-                    pending_move = call
+                    pending_move = call  # answered once the arm reads back at the setpoint
             elif command is not None:
-                self._last_qpos = self._target_qpos(state, command)
+                try:
+                    self._last_qpos = self._target_qpos(state, command)
+                # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
+                except Exception as exc:
+                    logging.warning(f'{command} not applied: {exc}')
             # The arm and the gripper are one setpoint on a shared bus, but they arrive as two channels that
             # need not carry a value in the same round, so either one changing rewrites the whole vector.
             if (command is not None or grip is not None) and self._last_qpos is not None:

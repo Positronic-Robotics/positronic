@@ -1,7 +1,7 @@
-"""When a gripper counts as placed, and what a caller waiting on it hears."""
+"""When a gripper counts as arrived, and what a caller waiting on it hears."""
 
 import pimm
-from positronic.drivers.gripper import PLACED_TOL, answer_when_placed
+from positronic.drivers.gripper import ARRIVED_TOL, answer_when_arrived
 
 
 class _Call(pimm.calls.Call[float, None]):
@@ -24,17 +24,17 @@ class _Call(pimm.calls.Call[float, None]):
         self.exception = exc
 
 
-def test_a_gripper_within_tolerance_is_placed():
+def test_a_gripper_within_tolerance_has_arrived():
     call = _Call(0.0)
 
-    assert answer_when_placed(call, PLACED_TOL / 2, 0.0, out_of_time=False) is None
+    assert answer_when_arrived(call, ARRIVED_TOL / 2, 0.0, out_of_time=False) is None
     assert call.answered and call.exception is None
 
 
-def test_a_gripper_still_travelling_keeps_the_caller_waiting():
+def test_a_gripper_still_moving_keeps_the_caller_waiting():
     call = _Call(1.0)
 
-    assert answer_when_placed(call, 0.0, 1.0, out_of_time=False) is call
+    assert answer_when_arrived(call, 0.0, 1.0, out_of_time=False) is call
     assert not call.answered
 
 
@@ -43,14 +43,14 @@ def test_a_gripper_that_never_arrives_fails_the_caller_rather_than_holding_it():
     the rest of the run."""
     call = _Call(1.0)
 
-    assert answer_when_placed(call, 0.4, 1.0, out_of_time=True) is None
+    assert answer_when_arrived(call, 0.4, 1.0, out_of_time=True) is None
     assert isinstance(call.exception, TimeoutError)
     assert 'stopped at 0.40' in str(call.exception)
 
 
-def test_a_gripper_out_of_time_but_arrived_is_placed():
+def test_a_gripper_out_of_time_but_at_its_target_has_arrived():
     """Arrival is judged before the clock: a move that lands on the deadline succeeded."""
     call = _Call(1.0)
 
-    assert answer_when_placed(call, 1.0, 1.0, out_of_time=True) is None
+    assert answer_when_arrived(call, 1.0, 1.0, out_of_time=True) is None
     assert call.exception is None

@@ -3,7 +3,7 @@ from ctypes import c_uint16
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.gripper import PLACE_TIMEOUT_S, answer_when_placed
+from positronic.drivers.gripper import ARRIVAL_TIMEOUT_S, answer_when_arrived
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -45,7 +45,7 @@ class DHGripper(pimm.ControlSystem):
                 if (grip := pimm.value_updated(self.target_grip)) is not None:
                     last_grip = grip
                 if (call := next(self.sync_move.incoming(), None)) is not None:
-                    last_grip, pending_call, deadline = float(call.request), call, clock.now() + PLACE_TIMEOUT_S
+                    last_grip, pending_call, deadline = float(call.request), call, clock.now() + ARRIVAL_TIMEOUT_S
             width = round((1 - max(0, min(last_grip, 1))) * 1000)
             client.write_register(0x103, c_uint16(width).value, slave=1)
             client.write_register(0x101, c_uint16(self.force.value).value, slave=1)
@@ -55,7 +55,7 @@ class DHGripper(pimm.ControlSystem):
             self.grip.emit(current_grip)
             if pending_call is not None:
                 out_of_time = clock.now() >= deadline
-                pending_call = answer_when_placed(pending_call, current_grip, pending_call.request, out_of_time)
+                pending_call = answer_when_arrived(pending_call, current_grip, pending_call.request, out_of_time)
 
             yield pimm.Sleep(0.001)  # Small delay to prevent busy-waiting
 
