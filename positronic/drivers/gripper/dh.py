@@ -63,10 +63,10 @@ class DHGripper(pimm.ControlSystem):
             self.grip.emit(current_grip)
             if pending_call is not None:
                 out_of_time = clock.now() >= deadline
-                status = answer_when_arrived(
+                move_status = answer_when_arrived(
                     pending_call, current_grip, pending_call.request, _ARRIVED_TOL, out_of_time
                 )
-                if status is not MoveStatus.MOVING:
+                if move_status is not MoveStatus.MOVING:
                     pending_call = None
 
             yield pimm.Sleep(0.001)  # Small delay to prevent busy-waiting

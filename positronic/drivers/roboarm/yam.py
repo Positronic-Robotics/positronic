@@ -322,7 +322,9 @@ class Robot(pimm.ControlSystem):
             if (yield from self._move_to(target, grip)) is MoveStatus.ARRIVED:
                 call.set_result(None)
             return np.asarray(target, dtype=np.float64)
-        return q  # the move failed and its asker was told; the chain holds where it stands
+        # The move failed and its asker was told. ``q`` predates the ramp, so holding it would drive the chain
+        # back the way it came; where it stopped is the only posture nobody has to be surprised by.
+        return np.asarray(self._arm.get_observations()[_JOINT_POS], dtype=np.float64)
 
     def _ik(self, world_pose: geom.Transform3D, q: np.ndarray) -> np.ndarray:
         """IK in the arm-base frame."""

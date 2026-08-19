@@ -115,27 +115,30 @@ class Robot(pimm.ControlSystem):
                 if pending_move is not None:
                     # ``joint_controller.finished`` says the reference trajectory ran out, not that the arm
                     # tracked it, so arrival is judged from the joints the arm reports.
-                    status = answer_when_arrived(
+                    move_status = answer_when_arrived(
                         pending_move,
                         q,
                         wrap_joint_angle(pending_target, q),  # the branch the controller tracks
                         _ARRIVED_TOL,
                         clock.now() >= deadline,
                     )
-                    if status is not MoveStatus.MOVING:
+                    if move_status is not MoveStatus.MOVING:
                         pending_move = None
-                if pending_move is None and (call := next(self.sync_move.incoming(), None)) is not None:
-                    with pimm.calls.forward_failure(call):
-                        pending_target = self._target_qpos(joint_controller, robot_state, call.request)
-                        joint_controller.set_target_qpos(pending_target)
-                        pending_move = call  # answered once the arm reads back at the target
-                        deadline = clock.now() + ARRIVAL_TIMEOUT_S
-                elif (cmd := pimm.value_updated(self.commands)) is not None:
-                    try:
-                        joint_controller.set_target_qpos(self._target_qpos(joint_controller, robot_state, cmd))
-                    # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
-                    except Exception as exc:
-                        logging.warning(f'{cmd} not applied: {exc}')
+                # The command stream goes unread while a move is pending: it owns the arm until it answers,
+                # and a superseding target would fail it for something its asker did not do.
+                if pending_move is None:
+                    if (call := next(self.sync_move.incoming(), None)) is not None:
+                        with pimm.calls.forward_failure(call):
+                            pending_target = self._target_qpos(joint_controller, robot_state, call.request)
+                            joint_controller.set_target_qpos(pending_target)
+                            pending_move = call  # answered once the arm reads back at the target
+                            deadline = clock.now() + ARRIVAL_TIMEOUT_S
+                    elif (cmd := pimm.value_updated(self.commands)) is not None:
+                        try:
+                            joint_controller.set_target_qpos(self._target_qpos(joint_controller, robot_state, cmd))
+                        # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
+                        except Exception as exc:
+                            logging.warning(f'{cmd} not applied: {exc}')
 
                 torque_command = joint_controller.compute_torque(q, dq, tau)
                 np.divide(torque_command, torque_constant, out=current_command)

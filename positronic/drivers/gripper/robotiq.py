@@ -62,8 +62,10 @@ class Robotiq2F(pimm.ControlSystem):
                 self.grip.emit(grip)
                 if pending_call is not None:
                     out_of_time = clock.now() >= deadline
-                    status = answer_when_arrived(pending_call, grip, pending_call.request, _ARRIVED_TOL, out_of_time)
-                    if status is not MoveStatus.MOVING:
+                    move_status = answer_when_arrived(
+                        pending_call, grip, pending_call.request, _ARRIVED_TOL, out_of_time
+                    )
+                    if move_status is not MoveStatus.MOVING:
                         pending_call = None
 
                 yield limiter.wait()

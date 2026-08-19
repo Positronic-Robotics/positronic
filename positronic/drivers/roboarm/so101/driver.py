@@ -117,30 +117,33 @@ class Robot(pimm.ControlSystem):
         pending_move, pending_target, deadline = None, np.zeros(len(self.home_joints)), 0.0
 
         while not should_stop.value:
-            command = pimm.value_updated(self.commands)
             grip = pimm.value_updated(self.target_grip)
             if grip is not None:
                 self._last_grip = grip
             if pending_move is not None:
-                # Against the target the call asked for, which a command arriving meanwhile does not change
-                status = answer_when_arrived(
+                move_status = answer_when_arrived(
                     pending_move, self.motor_bus.position[:-1], pending_target, _ARRIVED_TOL, clock.now() >= deadline
                 )
-                if status is not MoveStatus.MOVING:
+                if move_status is not MoveStatus.MOVING:
                     pending_move = None
-            if pending_move is None and (call := next(self.sync_move.incoming(), None)) is not None:
-                with pimm.calls.forward_failure(call):
-                    pending_target = self._target_qpos(state, call.request)
-                    self._last_qpos = pending_target
-                    command = call.request  # written to the bus below, as for any other command
-                    pending_move = call  # answered once the arm reads back at the setpoint
-                    deadline = clock.now() + ARRIVAL_TIMEOUT_S
-            elif command is not None:
-                try:
-                    self._last_qpos = self._target_qpos(state, command)
-                # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
-                except Exception as exc:
-                    logging.warning(f'{command} not applied: {exc}')
+
+            # The command stream goes unread while a move is pending: it owns the arm until it answers, and
+            # a superseding setpoint would fail it for something its asker did not do.
+            command = None
+            if pending_move is None:
+                if (call := next(self.sync_move.incoming(), None)) is not None:
+                    with pimm.calls.forward_failure(call):
+                        pending_target = self._target_qpos(state, call.request)
+                        self._last_qpos = pending_target
+                        command = call.request  # written to the bus below, as for any other command
+                        pending_move = call  # answered once the arm reads back at the setpoint
+                        deadline = clock.now() + ARRIVAL_TIMEOUT_S
+                elif (command := pimm.value_updated(self.commands)) is not None:
+                    try:
+                        self._last_qpos = self._target_qpos(state, command)
+                    # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
+                    except Exception as exc:
+                        logging.warning(f'{command} not applied: {exc}')
             # The arm and the gripper are one setpoint on a shared bus, but they arrive as two channels that
             # need not carry a value in the same round, so either one changing rewrites the whole vector.
             if (command is not None or grip is not None) and self._last_qpos is not None:
