@@ -238,7 +238,7 @@ class Robot(pimm.ControlSystem):
                             yield from self._move_to(q_target, grip_target)
                         else:
                             q_target = self._target_joints(cmd, q)
-                    # rules-allow: swallowed-error — no command must be capable of terminating the driver
+                    # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
                     except Exception as exc:
                         logging.warning(f'{cmd} not applied: {exc}')
 
