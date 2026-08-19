@@ -192,7 +192,8 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
     ]
     return Eval(
         embodiment,
-        number_trials(Task(instruction_source=lambda: proxy.meta[keys.TASK], timeout_sec=timeout), params),
+        # rules-allow: hardcoded-keys — the env names this reset-meta field; it is not positronic's ``keys.TASK``
+        number_trials(Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout), params),
         privileged={'subtask': Observation(proxy.privileged['subtask'], None)},
         done=proxy.done,
         reset=proxy.reset,
