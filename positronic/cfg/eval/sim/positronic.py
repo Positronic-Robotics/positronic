@@ -40,7 +40,7 @@ def _mujoco_franka_eval(mujoco_model_path, loaders, camera_fps, camera_dict, ins
         embodiment,
         build_tasks(Task(instruction_source=instruction, timeout_sec=timeout), seed, trial_count),
         privileged=privileged,
-        reset=lambda params: sim.reset(params.get('eval.seed')),
+        reset=lambda params: sim.reset(params.get(keys.EVAL_SEED)),
     )
 
 

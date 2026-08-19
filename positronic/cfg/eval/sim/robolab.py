@@ -186,7 +186,9 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')
     # RoboLab exposes no seed hook, so trial params carry no ``eval.seed``.
     params = [
-        {'eval.task': name, 'eval.instruction_type': instruction_type} for name in names for _ in range(trial_count)
+        {keys.EVAL_TASK: name, keys.EVAL_INSTRUCTION_TYPE: instruction_type}
+        for name in names
+        for _ in range(trial_count)
     ]
     return Eval(
         embodiment,

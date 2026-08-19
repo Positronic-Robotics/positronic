@@ -62,11 +62,11 @@ def _libero_eval(
     # server serves every trial.
     scenes = [
         {
-            'eval.suite': s,
-            'eval.task_id': t,
-            'eval.camera_resolution': camera_resolution,
-            'eval.control_mode': control_mode,
-            'eval.settle_steps': settle_steps,
+            keys.EVAL_SUITE: s,
+            keys.EVAL_TASK_ID: t,
+            keys.EVAL_CAMERA_RESOLUTION: camera_resolution,
+            keys.EVAL_CONTROL_MODE: control_mode,
+            keys.EVAL_SETTLE_STEPS: settle_steps,
         }
         for s in ([suite] if isinstance(suite, str) else suite)
         for t in ([task_id] if task_id is not None else range(_SUITE_NUM_TASKS[s]))

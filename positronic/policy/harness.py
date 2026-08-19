@@ -267,11 +267,16 @@ class Harness(pimm.ControlSystem):
         assert self._call is not None, 'only a live episode has a task'
         return self._call.request
 
+    @property
+    def _charge_wall(self) -> bool:
+        """Whether each model call costs the trial the wall time it took. A real rig has no other option."""
+        return self._task.charge_inference_time or not self._embodiment.simulated
+
     def _build_episode_meta(self) -> dict[str, Any]:
         meta = self._statics()
         meta['eval.universe'] = 'sim' if self._embodiment.simulated else 'real'
         meta['eval.embodiment'] = self._embodiment.descriptor
-        meta[keys.EVAL_CHARGE_INFERENCE_TIME] = self._task.charge_inference_time
+        meta[keys.EVAL_CHARGE_INFERENCE_TIME] = self._charge_wall
         if self._task.timeout_sec is not None:  # the recorder takes no nulls, and an unbounded episode has none
             meta['eval.timeout'] = self._task.timeout_sec
         # ``policy.meta`` is the static baseline; the session overlays per-episode specifics (e.g. the
@@ -353,20 +358,18 @@ class Harness(pimm.ControlSystem):
         # Before the span opens, so the wait for a call the last episode abandoned is inter-episode wall
         # rather than overhead the timing reducer attributes to this one.
         self._reap_worker()
-        task = call.request
-        # A real rig pays wall time whatever the task asks
-        charge_wall = task.charge_inference_time or not self._embodiment.simulated
         self._awaiting_obs = set(self._embodiment.observations)
         self._rollout_started = False
         # Before the reset, so the reset and the rollout's other phase spans parent to the episode span.
-        self._telemetry.begin(task.params)
+        self._telemetry.begin(self._task.params)
         if self._reset is not None:
             with telemetry.span(telemetry_keys.SPAN_RESET):
-                self._reset(task.params)
+                self._reset(self._task.params)
         # Read after the reset: an embodiment that learns its task from the scene reports it only once the
         # scene is set up.
-        self._worker = _InferenceWorker(self.policy, {keys.TASK: task.instruction}, charge_wall, clock)
-        self._deadline = clock.now() + task.timeout_sec if task.timeout_sec is not None else None
+        self._worker = _InferenceWorker(self.policy, {keys.TASK: self._task.instruction}, self._charge_wall, clock)
+        budget = self._task.timeout_sec
+        self._deadline = clock.now() + budget if budget is not None else None
         self.ds_command.emit(DsWriterCommand.START())
 
     def _end_episode(self, clock: pimm.Clock, payload: dict[str, Any]) -> Generator[pimm.Command, None, None]:

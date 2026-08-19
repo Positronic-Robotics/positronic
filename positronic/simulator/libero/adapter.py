@@ -28,12 +28,12 @@ class LiberoAdapter(WireCommandAdapter):
         # the hold-arm/open-gripper wait the server runs after a seeded reset so dropped objects settle before
         # the first observation (openpi's num_steps_wait dummy-action wait).
         return {
-            'suite': params['eval.suite'],
-            'task_id': params['eval.task_id'],
-            'camera_resolution': params['eval.camera_resolution'],
-            'control_mode': params['eval.control_mode'],
-            'seed': params.get('eval.seed'),
-            'settle_steps': params['eval.settle_steps'],
+            'suite': params[keys.EVAL_SUITE],
+            'task_id': params[keys.EVAL_TASK_ID],
+            'camera_resolution': params[keys.EVAL_CAMERA_RESOLUTION],
+            'control_mode': params[keys.EVAL_CONTROL_MODE],
+            'seed': params.get(keys.EVAL_SEED),
+            'settle_steps': params[keys.EVAL_SETTLE_STEPS],
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:

@@ -6,7 +6,7 @@ from typing import cast
 import pytest
 
 import pimm
-from positronic import telemetry, telemetry_keys
+from positronic import keys, telemetry, telemetry_keys
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, timed_pass
 from positronic.eval import Embodiment, Eval, Task
 from positronic.tests.testing_coutils import drive_scheduler
@@ -63,7 +63,7 @@ class _EpisodeStub(pimm.ControlSystem):
 def test_the_driver_asks_for_its_tasks_one_at_a_time():
     """The plan belongs to the driver: it asks for each task in turn, and only once the running episode has
     answered."""
-    tasks = [Task(instruction_source='stack', timeout_sec=0.05, params={'eval.trial_index': i}) for i in range(2)]
+    tasks = [Task(instruction_source='stack', timeout_sec=0.05, params={keys.EVAL_TRIAL_INDEX: i}) for i in range(2)]
     stub = _EpisodeStub()
     driver = TaskDriver(tasks)
     with pimm.World(virtual_time=True) as world:

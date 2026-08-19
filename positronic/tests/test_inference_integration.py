@@ -77,7 +77,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
             instruction='integration-test',
             timeout=0.4,
         )
-        trials = [replace(ev.tasks[0], params={'eval.trial_index': i, 'eval.seed': 100 + i}) for i in range(2)]
+        trials = [replace(ev.tasks[0], params={keys.EVAL_TRIAL_INDEX: i, keys.EVAL_SEED: 100 + i}) for i in range(2)]
         main(policy=ChunkedSchedule().wrap(policy), evals=[replace(ev, tasks=trials)], output_dir=str(tmp_path))
 
     ds = LocalDataset(tmp_path)
@@ -86,8 +86,8 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
 
     episode = ds[0]
     assert episode.static[keys.EVAL_TERMINATED] is False
-    assert episode.static['eval.trial_index'] == 0
-    assert episode.static['eval.seed'] == 100
+    assert episode.static[keys.EVAL_TRIAL_INDEX] == 0
+    assert episode.static[keys.EVAL_SEED] == 100
     assert episode.static['eval.universe'] == 'sim'
     assert episode.static['eval.embodiment'] == 'mujoco.franka'
     assert episode.static['eval.timeout'] == 0.4
@@ -216,7 +216,7 @@ def test_countdown_records_frame0_every_trial(tmp_path):
     the producer quickly between trials, so a stray step would overwrite frame-0 if it weren't published in
     the producer's own turn."""
     ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.35)
-    trials = [replace(ev.tasks[0], params={'eval.trial_index': i, 'eval.seed': i}) for i in range(2)]
+    trials = [replace(ev.tasks[0], params={keys.EVAL_TRIAL_INDEX: i, keys.EVAL_SEED: i}) for i in range(2)]
     with pos3.mirror():
         main(
             policy=StubPolicy(command=ev.embodiment.commands[keys.ROBOT_COMMAND].home, target_grip=0.0),
@@ -239,7 +239,7 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     and the machine-load stats stream records at least one sample. record.io parenting proves the episode span
     stays in flight while the recorder commits STOP."""
     ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2)
-    trials = [replace(ev.tasks[0], params={'eval.trial_index': i}) for i in range(2)]
+    trials = [replace(ev.tasks[0], params={keys.EVAL_TRIAL_INDEX: i}) for i in range(2)]
     with pos3.mirror():
         main(
             policy=ChunkedSchedule().wrap(
@@ -287,7 +287,7 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     """[harness + recorder + sim] with no MuJoCo: a trial ends early when the producer's ``done`` fires,
     recording ``eval.terminated`` True and the delivered payload into the episode's static data."""
     ev = _countdown_eval(_CountdownProducer(done_after=4), timeout=15.0)
-    trial = replace(ev.tasks[0], params={'eval.trial_index': 0, 'eval.seed': 100})
+    trial = replace(ev.tasks[0], params={keys.EVAL_TRIAL_INDEX: 0, keys.EVAL_SEED: 100})
     with pos3.mirror():
         main(
             policy=StubPolicy(command=ev.embodiment.commands[keys.ROBOT_COMMAND].home, target_grip=0.0),

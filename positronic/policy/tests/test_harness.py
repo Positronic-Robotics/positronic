@@ -865,12 +865,13 @@ def test_done_after_deadline_is_a_timeout(world):
 @pytest.mark.timeout(3.0)
 def test_trial_seed_reaches_task_reset_and_meta(world):
     """Each trial hands its ``params`` to the scene reset; they land in episode meta with the
-    eval-identity block and the instruction."""
+    eval-identity block and the instruction. A real rig records that it charged inference time, whatever
+    the task asked."""
     policy = StubPolicy()
     seeds = []
 
     def reset(params):
-        seeds.append(params.get('eval.seed'))
+        seeds.append(params.get(keys.EVAL_SEED))
         p['meta_em'].emit({})  # the producer publishes fresh scene meta, recorded into the episode at finalize
 
     harness = Harness(policy, make_embodiment(), reset=reset)
@@ -878,17 +879,18 @@ def test_trial_seed_reaches_task_reset_and_meta(world):
 
     scheduler = world.start([harness])
     for i in range(2):
-        p['perform_task'](Task(instruction_source='stack', timeout_sec=0.05, params={'eval.seed': 7 + i}))
+        p['perform_task'](Task(instruction_source='stack', timeout_sec=0.05, params={keys.EVAL_SEED: 7 + i}))
         drive_scheduler(scheduler, steps=200)
 
     assert seeds == [7, 8]
     stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 2
-    assert [s.static_data['eval.seed'] for s in stops] == [7, 8]
+    assert [s.static_data[keys.EVAL_SEED] for s in stops] == [7, 8]
     assert all(s.static_data[keys.TASK] == 'stack' for s in stops)
     assert all(s.static_data['eval.universe'] == 'real' for s in stops)
     assert all(s.static_data['eval.embodiment'] == '' for s in stops)
     assert all(s.static_data['eval.timeout'] == 0.05 for s in stops)
+    assert all(s.static_data[keys.EVAL_CHARGE_INFERENCE_TIME] is True for s in stops)
     assert policy.reset_calls == 2
 
 
@@ -1384,7 +1386,7 @@ def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(world, tmp_path)
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
     # Never ends within the drive: the stop, not the deadline, is what winds this episode down.
-    _ask(world, harness, Task(instruction_source='stack', timeout_sec=10.0, params={'eval.trial_index': 0}))
+    _ask(world, harness, Task(instruction_source='stack', timeout_sec=10.0, params={keys.EVAL_TRIAL_INDEX: 0}))
     stop = SimpleNamespace(value=False)
     clock = _ManualClock()
 
@@ -1435,7 +1437,7 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
 
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-taxonomy'), _eval_pass('run-taxonomy'):
         scheduler = world.start([harness, producer])
-        p['perform_task'](Task(instruction_source='stack', timeout_sec=0.05, params={'eval.trial_index': 0}))
+        p['perform_task'](Task(instruction_source='stack', timeout_sec=0.05, params={keys.EVAL_TRIAL_INDEX: 0}))
         drive_scheduler(scheduler, steps=400)
 
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
@@ -1506,7 +1508,7 @@ def test_failed_pass_seals_open_episode_span(world, tmp_path):
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment(), reset=boom)
     harness.ds_command._bind(RecordingEmitter())
-    _ask(world, harness, Task(instruction_source='stack', timeout_sec=10.0, params={'eval.trial_index': 0}))
+    _ask(world, harness, Task(instruction_source='stack', timeout_sec=10.0, params={keys.EVAL_TRIAL_INDEX: 0}))
     stop = SimpleNamespace(value=False)
     clock = _ManualClock()
 

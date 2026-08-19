@@ -248,7 +248,7 @@ class _CountdownEnv(EnvProtocol):
 
 class _CountdownAdapter(EnvAdapter):
     def reset_token(self, params):
-        return params.get('eval.seed')
+        return params.get(keys.EVAL_SEED)
 
     def action(self, commands):
         return {}
@@ -276,7 +276,7 @@ def test_proxy_publishes_frame0_then_free_runs():
         scheduler = world.start([proxy])
         drive_scheduler(scheduler, steps=2)  # inactive: the proxy paces time without an env
 
-        proxy.reset({'eval.seed': 0})  # arm frame-0; the run loop publishes it on its next turn
+        proxy.reset({keys.EVAL_SEED: 0})  # arm frame-0; the run loop publishes it on its next turn
         drive_scheduler(scheduler, steps=1)
         np.testing.assert_array_equal(obs_rx.read().data, np.zeros(7))
         assert done_rx.read().data == {}
@@ -295,7 +295,7 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
         task = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=1.0)
         scheduler = world.start([proxy])
 
-        proxy.reset({'eval.seed': 0})
+        proxy.reset({keys.EVAL_SEED: 0})
         assert task.instruction == 'countdown'  # resolved live off the cached reset meta
         drive_scheduler(scheduler, steps=4)  # the env steps, each ``step`` omitting meta ...
         assert task.instruction == 'countdown'  # ... yet the reset-scoped cache holds
@@ -309,7 +309,7 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     host, port = env_server
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        trial = replace(ev.tasks[0], timeout_sec=0.1, params={'eval.trial_index': 0, 'eval.seed': 100})
+        trial = replace(ev.tasks[0], timeout_sec=0.1, params={keys.EVAL_TRIAL_INDEX: 0, keys.EVAL_SEED: 100})
         policy = StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
         main(policy=ChunkedSchedule().wrap(policy), evals=[replace(ev, tasks=[trial])], output_dir=str(tmp_path))
 
@@ -379,7 +379,9 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     policy = (ChunkedSchedule() | ActionTimestamp(fps=1.0 / control_dt)).wrap(raw)
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        trial = replace(ev.tasks[0], timeout_sec=20 * control_dt, params={'eval.trial_index': 0, 'eval.seed': 100})
+        trial = replace(
+            ev.tasks[0], timeout_sec=20 * control_dt, params={keys.EVAL_TRIAL_INDEX: 0, keys.EVAL_SEED: 100}
+        )
         main(policy=policy, evals=[replace(ev, tasks=[trial])], output_dir=str(tmp_path))
 
     grip = LocalDataset(tmp_path)[0].signals['target_grip']

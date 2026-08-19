@@ -164,7 +164,7 @@ class StackCubesAdapter(WireCommandAdapter):
         self._camera_dict = camera_dict  # logical observation name -> the env's model camera name
 
     def _reset_token(self, params: dict[str, Any]) -> Any:
-        return params.get('eval.seed')
+        return params.get(keys.EVAL_SEED)
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         state = MujocoFrankaState()
