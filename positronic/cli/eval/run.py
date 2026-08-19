@@ -46,10 +46,11 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
 
 
 class TaskDriver(pimm.ControlSystem):
-    """Asks one harness for each task in turn, and returns — stopping the world — once the last has ended.
+    """Walks a plan of tasks, asking for each as an episode through ``perform_task``, and returns —
+    stopping the world — once the last has ended.
 
     One task is in flight at a time: the next is asked for only when the previous episode's terminal comes
-    back, so the plan never overlaps two episodes on one embodiment.
+    back, so the plan never overlaps two episodes.
     """
 
     def __init__(self, tasks: list[Task]):

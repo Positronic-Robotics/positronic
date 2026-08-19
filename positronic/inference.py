@@ -22,10 +22,10 @@ from positronic.utils.logging import init_logging
 
 
 class KeyboardOperator(pimm.ControlSystem):
-    """Drives one harness from the keyboard: ``s`` asks for an episode, ``p`` ends the live one.
+    """Turns keystrokes into episodes: ``s`` asks for one through ``perform_task``, ``p`` ends the live one.
 
-    It holds the pending answers because that is where an episode's terminal — and any ask the harness
-    refuses — arrives; both are printed as they land.
+    It holds the pending answers because that is where an episode's terminal — and any refused ask —
+    arrives; both are printed as they land.
     """
 
     def __init__(self, task: Task):
