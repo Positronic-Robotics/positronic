@@ -5,7 +5,7 @@ Policies and sessions:
 - Control happens in a `Session`; a `Policy` makes them.
 - Sessions are independent, and several may exist at the same moment.
 - A `Policy` is told which robot it is to control, so the session comes ready for it.
-- A session is cancellable from outside at any moment, and lives until it is cancelled.
+- The framework may cancel a session at any moment; a session never ends itself.
 
 The control loop:
 - One tick: `(observations, time) -> (commands, due)` — the current observations and time in, the
