@@ -91,18 +91,12 @@ class YamState(State, pimm.shared_memory.NumpySMAdapter):
     def status(self) -> RobotStatus:
         return RobotStatus(int(self.array[YamState.STATUS_OFFSET]))
 
-    def _set_busy(self):
-        self.array[YamState.STATUS_OFFSET] = RobotStatus.BUSY.value
-
-    def _set_error(self):
-        self.array[YamState.STATUS_OFFSET] = RobotStatus.ERROR.value
-
-    def encode(self, q: np.ndarray, dq: np.ndarray, ee_pose: geom.Transform3D):
+    def encode(self, q: np.ndarray, dq: np.ndarray, ee_pose: geom.Transform3D, status: RobotStatus):
         self.array[YamState.Q_OFFSET : YamState.Q_OFFSET + 6] = q
         self.array[YamState.DQ_OFFSET : YamState.DQ_OFFSET + 6] = dq
         self.array[YamState.EE_POSE_OFFSET : YamState.EE_POSE_OFFSET + 3] = ee_pose.translation
         self.array[YamState.EE_POSE_OFFSET + 3 : YamState.EE_POSE_OFFSET + 7] = ee_pose.rotation.as_quat
-        self.array[YamState.STATUS_OFFSET] = RobotStatus.AVAILABLE.value
+        self.array[YamState.STATUS_OFFSET] = status.value
 
 
 class _Kinematics:
@@ -211,16 +205,14 @@ class _Chain(DriverRun):
         """How closed the fingers are, from the width they read back."""
         return 1.0 - float(obs[_GRIPPER_POS][0])
 
-    def encode(self, obs: dict[str, np.ndarray]) -> None:
+    def encode(self, obs: dict[str, np.ndarray], status: RobotStatus) -> None:
         q = obs[_JOINT_POS]
-        self.state.encode(q, obs[_JOINT_VEL], self._base_pose * self._kin.fk(q))
+        self.state.encode(q, obs[_JOINT_VEL], self._base_pose * self._kin.fk(q), status)
 
     def publish(self, obs: dict[str, np.ndarray]) -> None:
         """Ship the chain as it reports itself, arm and fingers, marked ERROR while it is not where the
         driver put it."""
-        self.encode(obs)
-        if self.errored:  # ``encode`` clears the status; the chain is still where it was left
-            self.state._set_error()
+        self.encode(obs, RobotStatus.ERROR if self.errored else RobotStatus.AVAILABLE)
         self.out.emit(self.state)
         self.grip_out.emit(self._grip(obs))
 
@@ -276,8 +268,7 @@ class _Chain(DriverRun):
                 # and held at the target afterwards while it settles the last of the way in.
                 alpha = min(elapsed / self._MOVE_TIME_S, 1.0)
                 self.vendor.command_joint_pos(np.append((1 - alpha) * start + alpha * target, 1.0 - grip))
-                self.encode(obs)
-                self.state._set_busy()  # ``encode`` clears the status; the chain has not arrived
+                self.encode(obs, RobotStatus.BUSY)  # the driver owns the chain until it arrives
                 self.out.emit(self.state)
                 self.grip_out.emit(self._grip(obs))
                 yield self.limiter.wait()

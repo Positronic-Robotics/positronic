@@ -81,20 +81,12 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
     def status(self) -> RobotStatus:
         return RobotStatus(int(self.array[FrankaState.STATUS_OFFSET]))
 
-    def _set_busy(self):
-        self.array[FrankaState.STATUS_OFFSET] = RobotStatus.BUSY.value
-
-    def _set_error(self):
-        self.array[FrankaState.STATUS_OFFSET] = RobotStatus.ERROR.value
-
-    def encode(self, state: pf.State):
+    def encode(self, state: pf.State, status: RobotStatus):
         self.array[FrankaState.Q_OFFSET : FrankaState.Q_OFFSET + 7] = state.q
         self.array[FrankaState.DQ_OFFSET : FrankaState.DQ_OFFSET + 7] = state.dq
         self.array[FrankaState.EE_POSE_OFFSET : FrankaState.EE_POSE_OFFSET + 7] = state.end_effector_pose
         self.array[FrankaState.EE_WRENCH_OFFSET : FrankaState.EE_WRENCH_OFFSET + 6] = state.ee_wrench
-        self.array[FrankaState.STATUS_OFFSET] = (
-            RobotStatus.AVAILABLE.value if state.error == 0 else RobotStatus.ERROR.value
-        )
+        self.array[FrankaState.STATUS_OFFSET] = status.value
 
 
 def _revolute_joint_names(urdf_xml):
@@ -154,9 +146,8 @@ class _Arm(DriverRun):
 
     def publish(self, st: pf.State) -> None:
         """Ship the arm as the vendor reports it, marked ERROR while it is not where the driver put it."""
-        self.state.encode(st)
-        if self.errored:  # ``encode`` reads the vendor's fault flag, not where the arm was put
-            self.state._set_error()
+        faulted = self.errored or st.error != 0  # the vendor reports its own faults; a stall is not one
+        self.state.encode(st, RobotStatus.ERROR if faulted else RobotStatus.AVAILABLE)
         self.out.emit(self.state)
 
     def home_target(self) -> np.ndarray:
@@ -194,8 +185,7 @@ class _Arm(DriverRun):
     def move_to(self, target: np.ndarray) -> Generator[pimm.Command, None, MoveStatus]:
         """Travel to ``target``, yielding until it arrives."""
         # The first emit must not ship an unfilled state.
-        self.state.encode(self.vendor.state())
-        self.state._set_busy()
+        self.state.encode(self.vendor.state(), RobotStatus.BUSY)
         self.out.emit(self.state)
 
         deadline = self.clock.now() + self._travel_s(self.state.q, target)
@@ -205,8 +195,7 @@ class _Arm(DriverRun):
                 target, lambda: self.should_stop.value or self.clock.now() >= deadline, self.limiter.wait
             ):
                 st = self.vendor.state()
-                self.state.encode(st)
-                self.state._set_busy()  # `encode` clears the status; the arm has not arrived
+                self.state.encode(st, RobotStatus.BUSY)  # the driver owns the arm until it arrives
                 self.out.emit(self.state)
                 if st.error != 0:
                     self.vendor.recover_from_errors()
