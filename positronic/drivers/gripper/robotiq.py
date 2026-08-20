@@ -16,10 +16,11 @@ _BAUD_RATE = 115200
 _BYTESIZE = 8
 _PARITY = 'N'
 _STOPBITS = 1
-_ARRIVED_TOL = 0.05  # the fingers report width, so arrival is judged from the reading
 
 
 class Robotiq2F(pimm.ControlSystem):
+    _ARRIVED_TOL = 0.05  # the fingers report width, so arrival is judged from the reading
+
     def __init__(self, port: str):
         self._port = port
         self.grip = pimm.ControlSystemEmitter(self)
@@ -34,7 +35,7 @@ class Robotiq2F(pimm.ControlSystem):
         )
         assert client.connect(), f'Failed to connect to Robotiq gripper at {self._port}'
 
-        move = PendingMove(_ARRIVED_TOL)
+        move = PendingMove(self._ARRIVED_TOL)
         try:
             limiter = pimm.RateLimiter(clock, hz=200)  # According to the manual, the gripper can handle 200Hz
             client.write_registers(_REG_CMD, [0x0000, 0x0000, 0x0000], device_id=_SLAVE)

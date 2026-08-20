@@ -8,9 +8,6 @@ import numpy as np
 
 import pimm
 
-# Fingers stopped by what they are holding never reach their target
-_GRIP_TIMEOUT_S = 3.0
-
 
 class DriverRun:
     """What a driver has only while it runs: the clock it reads, the rate it ticks at, the stop it watches.
@@ -97,6 +94,10 @@ class PendingMove:
 def _clamped(grip: float) -> float:
     """``grip`` saturated to the range the fingers report back."""
     return max(0.0, min(1.0, float(grip)))
+
+
+# Fingers stopped by what they are holding never reach their target
+_GRIP_TIMEOUT_S = 3.0
 
 
 def grip_setpoint(

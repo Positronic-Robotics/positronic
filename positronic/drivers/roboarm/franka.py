@@ -21,13 +21,6 @@ with vendor_import('positronic_franka', 'Franka support', platforms=('linux',)):
     import positronic_franka._franka as pf
     from positronic_franka.desk import Desk, SafetyControllerError
 
-# A move needs a deadline at all because the vendor reports a goal it abandons, but a goal it never
-# converges on stays in flight for as long as the arm is pushed off course.
-# FR3 joint velocity limits in rad/s, from the bundled ``fr3.urdf``; ``relative_dynamics_factor`` scales them
-_MAX_JOINT_VELOCITY = np.array([2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26])
-# On top of the travel itself: the vendor controller ramps in and out of its speed cap, and settles late
-_MOVE_GRACE_S = 5.0
-
 
 def _check_error(is_error, was_error):
     return is_error, is_error and not was_error
@@ -118,6 +111,13 @@ _MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collisio
 class _Arm(DriverRun):
     """The arm the driver drives: the libfranka handle, the state published from it, and the moves made with it."""
 
+    # A move needs a deadline at all because the vendor reports a goal it abandons, but a goal it never
+    # converges on stays in flight for as long as the arm is pushed off course.
+    # FR3 joint velocity limits in rad/s, from the bundled ``fr3.urdf``; ``relative_dynamics_factor`` scales them
+    _MAX_JOINT_VELOCITY = np.array([2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26])
+    # On top of the travel itself: the vendor controller ramps in and out of its speed cap, and settles late
+    _MOVE_GRACE_S = 5.0
+
     def __init__(
         self,
         vendor: pf.Robot,
@@ -175,7 +175,8 @@ class _Arm(DriverRun):
 
         A conservative factor buys proportionally more time rather than failing a move the arm is tracking.
         """
-        return _MOVE_GRACE_S + float(np.max(np.abs(target - q) / (_MAX_JOINT_VELOCITY * self._dynamics_factor)))
+        cap = self._MAX_JOINT_VELOCITY * self._dynamics_factor
+        return self._MOVE_GRACE_S + float(np.max(np.abs(target - q) / cap))
 
     def move_to(self, target: np.ndarray) -> Generator[pimm.Command, None, MoveStatus]:
         """Travel to ``target``, yielding until it arrives."""

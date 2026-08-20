@@ -52,14 +52,15 @@ _SO101_URDF_PATH = 'positronic/drivers/roboarm/so101/so101.urdf'
 _SO101_JOINT_NAMES = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll']
 _SO101_EE_LINK = 'gripper_frame_link'
 _SO101_EE_JOINT = 'gripper_frame_joint'
-# How close to its setpoint the arm counts as arrived, in the bus's normalized units: the bus reports
-# position but no goal, so arrival is judged from the reading
-_ARRIVED_TOL = 0.02
-# Seconds a synchronous move gets: the bus drives the whole range in well under this
-_MOVE_TIMEOUT_S = 5.0
 
 
 class Robot(pimm.ControlSystem):
+    # How close to its setpoint the arm counts as arrived, in the bus's normalized units: the bus reports
+    # position but no goal, so arrival is judged from the reading
+    _ARRIVED_TOL = 0.02
+    # Seconds a synchronous move gets: the bus drives the whole range in well under this
+    _MOVE_TIMEOUT_S = 5.0
+
     def __init__(self, motor_bus: MotorBus, home_joints: list[float] | None = None):
         self.motor_bus = motor_bus
         self.mujoco_model_path = 'positronic/drivers/roboarm/so101/so101.xml'
@@ -132,7 +133,7 @@ class Robot(pimm.ControlSystem):
         # holds where the bus finds it until something asks otherwise, and there is no bus until now.
         self._last_qpos = np.asarray(self.motor_bus.position[:-1])
         # The bus reports position only while this loop reads it, so it cannot be held for a move
-        move = PendingMove(_ARRIVED_TOL)
+        move = PendingMove(self._ARRIVED_TOL)
 
         try:
             while not should_stop.value:
@@ -152,7 +153,7 @@ class Robot(pimm.ControlSystem):
                         with pimm.calls.forward_failure(call):
                             target = self._target_qpos(state, call.request)
                             self._last_qpos, setpoint_changed = target, True
-                            move.accept(call, target, clock.now(), _MOVE_TIMEOUT_S)
+                            move.accept(call, target, clock.now(), self._MOVE_TIMEOUT_S)
                     elif (target := self._streamed_setpoint(state)) is not None:
                         self._last_qpos, setpoint_changed = target, True
 

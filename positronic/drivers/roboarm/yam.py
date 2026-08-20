@@ -44,10 +44,6 @@ HOME_Q = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
 _MJCF_PATH = 'assets/mujoco/i2rt_yam/yam.xml'
 _IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limit clamping
 _IK_ROT_TOL = 1e-2  # radians
-_MOVE_TIME_S = 2.0  # seconds the commanded position is ramped over on the way to a target
-_SETTLE_S = 1.0  # seconds the chain is given to reach the last waypoint before the move gives up
-_ARRIVED_TOL = 0.02  # radians; the chain has no goal to report, so arrival is judged from the joints it reads
-_GRIP_ARRIVED_TOL = 0.05  # normalized; the fingers report width, so arrival is judged from that reading
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
 
@@ -166,6 +162,11 @@ class _Kinematics:
 class _Chain(DriverRun):
     """The chain the driver drives: the vendor handle, the state published from it, and the moves made with it."""
 
+    _MOVE_TIME_S = 2.0  # seconds the commanded position is ramped over on the way to a target
+    _SETTLE_S = 1.0  # seconds the chain is given to reach the last waypoint before the move gives up
+    _ARRIVED_TOL = 0.02  # radians; the chain has no goal to report, so arrival is judged from the joints it reads
+    _GRIP_ARRIVED_TOL = 0.05  # normalized; the fingers report width, so arrival is judged from that reading
+
     def __init__(
         self,
         vendor: Any,
@@ -233,8 +234,8 @@ class _Chain(DriverRun):
         """Whether the chain is where it was sent. The fingers count as much as the joints: a caller told a
         move landed may act on the whole chain, gripper included."""
         obs = self.observations()
-        return bool(np.all(np.abs(obs[_JOINT_POS] - target) < _ARRIVED_TOL)) and (
-            abs((1.0 - float(obs[_GRIPPER_POS][0])) - grip) < _GRIP_ARRIVED_TOL
+        return bool(np.all(np.abs(obs[_JOINT_POS] - target) < self._ARRIVED_TOL)) and (
+            abs((1.0 - float(obs[_GRIPPER_POS][0])) - grip) < self._GRIP_ARRIVED_TOL
         )
 
     def move_to(self, target: np.ndarray, grip: float) -> Generator[pimm.Command, None, MoveStatus]:
@@ -250,11 +251,11 @@ class _Chain(DriverRun):
                 if self.should_stop.value:
                     return MoveStatus.GAVE_UP
                 elapsed = self.clock.now() - started
-                if elapsed > _MOVE_TIME_S + _SETTLE_S:
+                if elapsed > self._MOVE_TIME_S + self._SETTLE_S:
                     raise TimeoutError(f'the chain stopped short of {target} at grip {grip}')
                 # Ramped rather than commanded outright, so the chain travels at a pace the joints can hold,
                 # and held at the target afterwards while it settles the last of the way in.
-                alpha = min(elapsed / _MOVE_TIME_S, 1.0)
+                alpha = min(elapsed / self._MOVE_TIME_S, 1.0)
                 self.vendor.command_joint_pos(np.append((1 - alpha) * start + alpha * target, 1.0 - grip))
                 self._publish_moving()
                 yield self.limiter.wait()
@@ -457,9 +458,9 @@ if __name__ == '__main__':
 
         if fake is not None:
             # State round-trip: the homed chain comes back through the driver's FK.
-            assert np.allclose(state.value.q, HOME_Q, atol=_ARRIVED_TOL), state.value.q
+            assert np.allclose(state.value.q, HOME_Q, atol=_Chain._ARRIVED_TOL), state.value.q
             home_err = np.linalg.norm(state.value.ee_pose.translation - kin.fk(HOME_Q).translation)
-            assert home_err < 0.02, home_err  # the chain arrives within `_ARRIVED_TOL` of home, not onto it
+            assert home_err < 0.02, home_err  # the chain arrives within `_Chain._ARRIVED_TOL` of home, not onto it
 
             # Grip round-trip: polarity inverted on the way out (command) and on the way back (observation).
             target_grip.emit(0.8)
@@ -480,7 +481,7 @@ if __name__ == '__main__':
             pump(0.1)
         answer.result()
         if fake is not None:
-            assert np.allclose(state.value.q, reach_q, atol=_ARRIVED_TOL), state.value.q
+            assert np.allclose(state.value.q, reach_q, atol=_Chain._ARRIVED_TOL), state.value.q
 
         # Then a Cartesian square through the driver's IK, commanded rather than asked for. The square sits
         # well inside the reach envelope, at the unfolded posture's wrist orientation.

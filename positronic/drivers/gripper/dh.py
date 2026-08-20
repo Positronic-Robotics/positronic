@@ -10,10 +10,9 @@ with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
 
 
-_ARRIVED_TOL = 0.05  # the fingers report width, so arrival is judged from the reading
-
-
 class DHGripper(pimm.ControlSystem):
+    _ARRIVED_TOL = 0.05  # the fingers report width, so arrival is judged from the reading
+
     def __init__(self, port: str):
         self.port = port
         self.grip = pimm.ControlSystemEmitter[float](self)
@@ -43,7 +42,7 @@ class DHGripper(pimm.ControlSystem):
         yield from self._initialize(client)
 
         last_grip = 0.0
-        move = PendingMove(_ARRIVED_TOL)
+        move = PendingMove(self._ARRIVED_TOL)
 
         # TODO: Should we translate these to physical units (N and m/s)?
         try:

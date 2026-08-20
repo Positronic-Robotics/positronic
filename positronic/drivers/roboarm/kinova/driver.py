@@ -12,11 +12,6 @@ from positronic.drivers.roboarm.kinova.api import KinovaAPI
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
 from positronic.drivers.utils import MoveStatus, PendingMove
 
-# Radians; the arm reports joints but no goal, so arrival is judged from the joints it reads
-_ARRIVED_TOL = 0.02
-# On top of the travel itself: the controller ramps in and out of its speed cap, and the arm settles late
-_MOVE_GRACE_S = 3.0
-
 
 def _set_realtime_priority():
     try:
@@ -63,6 +58,11 @@ class KinovaState(State, pimm.shared_memory.NumpySMAdapter):
 
 
 class Robot(pimm.ControlSystem):
+    # Radians; the arm reports joints but no goal, so arrival is judged from the joints it reads
+    _ARRIVED_TOL = 0.02
+    # On top of the travel itself: the controller ramps in and out of its speed cap, and the arm settles late
+    _MOVE_GRACE_S = 3.0
+
     def __init__(self, ip: str, relative_dynamics_factor=0.2, home_joints: list[float] | None = None) -> None:
         # A zero factor caps every joint at zero speed: the arm would never travel and no move could land
         assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
@@ -89,14 +89,13 @@ class Robot(pimm.ControlSystem):
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
 
-    @staticmethod
-    def _travel_s(joint_controller, q: np.ndarray, target: np.ndarray) -> float:
+    def _travel_s(self, joint_controller, q: np.ndarray, target: np.ndarray) -> float:
         """How long the arm may take to reach ``target``, from the speed its controller is capped at.
 
         ``relative_dynamics_factor`` scales that cap, so a conservative factor buys proportionally more time
         rather than failing moves the arm is tracking perfectly well.
         """
-        return _MOVE_GRACE_S + float(np.max(np.abs(target - q)) / np.min(joint_controller.max_velocity))
+        return self._MOVE_GRACE_S + float(np.max(np.abs(target - q)) / np.min(joint_controller.max_velocity))
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         _set_realtime_priority()
@@ -115,7 +114,7 @@ class Robot(pimm.ControlSystem):
             current_command = np.zeros(api.actuator_count, dtype=np.float32)
 
             # The arm is torque-controlled, so it only travels while this loop runs: it cannot be held for a move
-            move = PendingMove(_ARRIVED_TOL)
+            move = PendingMove(self._ARRIVED_TOL)
 
             try:
                 while not should_stop.value:
