@@ -411,6 +411,31 @@ def test_an_arm_that_stopped_short_reads_error_until_a_move_lands(world):
     assert states.emitted[-1][1].status == RobotStatus.AVAILABLE
 
 
+def test_the_state_answering_a_sync_move_carries_the_pose_the_arm_reached(world):
+    """The poll that reports arrival is the one the travel stops on, so the sample before it was taken while the
+    arm was still moving. Publishing that one hands the caller ``AVAILABLE`` at the pose it set out from."""
+    arm = FakeArm(HOME, polls_to_reach=3)
+    driver = _driver(arm, manage_desk=False)
+    states = RecordingEmitter()
+    driver.state._bind(states)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = driver.run(stop, clock)
+
+    for _ in range(2):  # through the opening reset
+        next(loop)
+    answer = _mover(world, driver)(command.JointPosition(JOGGED))
+    for _ in range(20):
+        if answer.done():
+            break
+        next(loop)
+
+    answer.result()
+    arrived = states.emitted[-1][1]
+    assert arrived.status == RobotStatus.AVAILABLE
+    np.testing.assert_allclose(arrived.q, JOGGED)
+
+
 def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stopped(world):
     """A goal the controller never converges on is not an error the vendor reports, so without a deadline the
     asker waits for the rest of the run — and the arm keeps chasing a target it was told it failed."""

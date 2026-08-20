@@ -276,6 +276,7 @@ class Robot(pimm.ControlSystem):
         if self._should_stop.value:  # the travel gave up on the stop rather than on arrival
             return MoveStatus.GAVE_UP
         self._errored = False
+        self._state.encode(robot.state())  # the poll that reports arrival ends the loop, so its last sample predates it
         self._state._finish_reset()
         self.state.emit(self._state)
         return MoveStatus.ARRIVED
