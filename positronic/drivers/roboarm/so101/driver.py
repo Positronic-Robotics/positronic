@@ -84,38 +84,54 @@ class Robot(pimm.ControlSystem):
         """Normalize the five arm joints. ``rad_to_norm`` spans the bus, whose last entry is the gripper."""
         return self.rad_to_norm(np.append(q_rad, 0.0))[:-1]
 
-    def _requested_qpos(self, state: SO101State, cmd: roboarm_command.CommandType) -> np.ndarray:
-        """The setpoint ``cmd`` asks for, in the bus's normalized units, whether or not the arm can hold it."""
+    def _requested_qpos(self, q_norm: np.ndarray, cmd: roboarm_command.CommandType) -> np.ndarray:
+        """The setpoint ``cmd`` asks for, in the bus's normalized units, whether or not the arm can hold it.
+
+        ``q_norm`` is the bus vector as it reads now: the pose a delta applies to, and the seed IK starts from.
+        """
         match cmd:
             case roboarm_command.Reset():
                 return self._arm_rad_to_norm(np.asarray(self.home_joints, dtype=np.float32))
             case roboarm_command.CartesianPosition(pose):
-                return self._solve_ik(state, pose)
+                return self._solve_ik(q_norm, pose)
             case roboarm_command.CartesianDelta() as delta_cmd:
-                ee_pose, _ = self._forward_kinematics(self.motor_bus.position)
-                return self._solve_ik(state, delta_cmd.apply(ee_pose))
+                ee_pose, _ = self._forward_kinematics(q_norm)
+                return self._solve_ik(q_norm, delta_cmd.apply(ee_pose))
             case roboarm_command.JointPosition(qpos):
                 return self._arm_rad_to_norm(np.asarray(qpos, dtype=np.float32))
             case other:
                 raise ValueError(f'Unknown command: {other}')
 
-    def _target_qpos(self, state: SO101State, cmd: roboarm_command.CommandType) -> np.ndarray:
+    def _target_qpos(self, q_norm: np.ndarray, cmd: roboarm_command.CommandType) -> np.ndarray:
         """The setpoint ``cmd`` asks the arm to hold, clipped to the calibrated range the bus reports from.
 
         The bus clips the command anyway, so a target outside it is one the arm can reach but never read back.
         """
-        return np.clip(self._requested_qpos(state, cmd), 0.0, 1.0)
+        return np.clip(self._requested_qpos(q_norm, cmd), 0.0, 1.0)
 
-    def _streamed_setpoint(self, state: SO101State) -> np.ndarray | None:
+    def _streamed_setpoint(self, q_norm: np.ndarray) -> np.ndarray | None:
         """The setpoint the command stream asks for, if one arrived and the arm can be put there."""
         if (cmd := pimm.value_updated(self.commands)) is None:
             return None
         try:
-            return self._target_qpos(state, cmd)
+            return self._target_qpos(q_norm, cmd)
         # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
         except Exception as exc:
             logging.warning(f'{cmd} not applied: {exc}')
             return None
+
+    def _take_setpoint(self, q_norm: np.ndarray, move: PendingMove, clock: pimm.Clock) -> np.ndarray | None:
+        """Take whichever setpoint is on offer, a synchronous move ahead of the command stream, and return it.
+
+        A command that cannot be turned into a setpoint leaves the arm where it is, and nothing is taken.
+        """
+        if (call := next(self.sync_move.incoming(), None)) is not None:
+            target = None
+            with pimm.calls.forward_failure(call):
+                target = self._target_qpos(q_norm, call.request)
+                move.accept(call, target, clock.now(), self._MOVE_TIMEOUT_S)
+            return target
+        return self._streamed_setpoint(q_norm)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         self.motor_bus.connect()
@@ -137,33 +153,30 @@ class Robot(pimm.ControlSystem):
 
         try:
             while not should_stop.value:
+                # One read a tick: the bus answers over a serial round-trip, and everything below wants the
+                # arm as it was at the same instant.
+                q_norm = self.motor_bus.position
+
                 # The arm and the gripper are one setpoint on a shared bus, but they arrive as two channels that
                 # need not carry a value in the same round, so either one changing rewrites the whole vector.
                 setpoint_changed = False
                 if (grip := pimm.value_updated(self.target_grip)) is not None:
                     self._last_grip, setpoint_changed = grip, True
 
-                if move.active and move.settle(self.motor_bus.position[:-1], clock.now()) is MoveStatus.GAVE_UP:
+                if move.active and move.settle(q_norm[:-1], clock.now()) is MoveStatus.GAVE_UP:
                     # Holding the target the arm stopped short of would resume the move once whatever blocked
                     # it goes away, long after its asker was told it failed.
-                    self._last_qpos, setpoint_changed = np.asarray(self.motor_bus.position[:-1]), True
+                    self._last_qpos, setpoint_changed = np.asarray(q_norm[:-1]), True
 
-                if not move.active:
-                    if (call := next(self.sync_move.incoming(), None)) is not None:
-                        with pimm.calls.forward_failure(call):
-                            target = self._target_qpos(state, call.request)
-                            self._last_qpos, setpoint_changed = target, True
-                            move.accept(call, target, clock.now(), self._MOVE_TIMEOUT_S)
-                    elif (target := self._streamed_setpoint(state)) is not None:
-                        self._last_qpos, setpoint_changed = target, True
+                if not move.active and (target := self._take_setpoint(q_norm, move, clock)) is not None:
+                    self._last_qpos, setpoint_changed = target, True
 
                 if setpoint_changed:
                     self.motor_bus.set_target_position(np.concatenate([self._last_qpos, [self._last_grip]]))
 
-                q = self.motor_bus.position
                 dq = self.motor_bus.velocity[:-1]
-                ee_pose, gripper = self._forward_kinematics(q)
-                position_rad = self.norm_to_rad(q)[:-1]
+                ee_pose, gripper = self._forward_kinematics(q_norm)
+                position_rad = self.norm_to_rad(q_norm)[:-1]
                 if move.active:  # the driver owns the arm until the move answers, and reads no command meanwhile
                     status = RobotStatus.BUSY
                 else:  # the bus reports position, not whether the arm is where the driver put it
@@ -177,9 +190,9 @@ class Robot(pimm.ControlSystem):
             move.fail(exc)  # a run that dies mid-move must not leave its asker waiting
             raise
 
-    def _solve_ik(self, state, pose: geom.Transform3D) -> np.ndarray:
-        q = np.array(state.q).tolist()
-        q.append(0.0)  # ignore gripper in ik
+    def _solve_ik(self, q_norm: np.ndarray, pose: geom.Transform3D) -> np.ndarray:
+        q = self.norm_to_rad(q_norm).tolist()
+        q[-1] = 0.0  # ignore gripper in ik
         q_rad_new = self.kinematic.inverse(q, pose, n_iter=10)
         return self.rad_to_norm(q_rad_new)[:-1]
 

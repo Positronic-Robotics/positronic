@@ -210,9 +210,7 @@ class _Arm(DriverRun):
             return MoveStatus.GAVE_UP
         self.errored = False
         # The poll that reports arrival ends the loop, so the sample before it was taken mid-travel
-        self.state.encode(self.vendor.state())
-        self.state._set_available()
-        self.out.emit(self.state)
+        self.publish(self.vendor.state())
         return MoveStatus.ARRIVED
 
     def target_joints(self, cmd: command.CommandType) -> np.ndarray:

@@ -47,11 +47,12 @@ class FakeArm:
     """In-memory ``pf.Robot``: a commanded joint target is reached after ``polls_to_reach`` reads of ``goal``.
 
     ``goal_status`` pins the reported status, so a move that never lands can be scripted; ``raises``, once
-    set, is what every call but ``stop`` raises.
+    set, is what every call but ``stop`` raises; ``error`` is the vendor fault flag every state carries.
     """
 
     def __init__(self, q, *, polls_to_reach: int = 2, goal_status: 'franka.pf.GoalStatus | None' = None):
         self.q = np.asarray(q, dtype=np.float64)
+        self.error = 0
         self.calls: list[Call] = []
         self.targets: list[np.ndarray] = []
         self.raises: Exception | None = None
@@ -70,7 +71,8 @@ class FakeArm:
 
     def state(self) -> _ArmState:
         self._record(Call.STATE)
-        return _ArmState(self.q.copy(), np.zeros(7), np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]), np.zeros(6), 0, '')
+        pose = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+        return _ArmState(self.q.copy(), np.zeros(7), pose, np.zeros(6), self.error, '')
 
     def goal(self) -> _Goal:
         self._record(Call.GOAL)
@@ -454,6 +456,23 @@ def test_a_move_that_lands_as_its_deadline_expires_is_an_arrival():
     assert done.value.value is franka.MoveStatus.ARRIVED
     # Only the goal itself was commanded: an arrival is not answered with a hold at where the arm stands
     assert arm.calls.count(Call.SET_TARGET_JOINTS) == 1
+
+
+def test_a_fault_that_lands_with_the_arrival_reads_error_rather_than_available():
+    """A reflex between the goal poll and the state read leaves the arm faulted at the target it reached. The
+    state answering the move reports the arm as the vendor describes it, not the arrival the goal reported."""
+    arm = FakeArm(HOME, polls_to_reach=1)  # the first poll of the goal already reports it reached
+    driver = _driver(arm, manage_desk=False)
+    states = RecordingEmitter()
+    driver.state._bind(states)
+    travel = driver._arm(StopFlag(), MockClock()).move_to(JOGGED)
+
+    arm.error = 1
+    with pytest.raises(StopIteration) as done:
+        next(travel)
+
+    assert done.value.value is franka.MoveStatus.ARRIVED
+    assert states.emitted[-1][1].status == RobotStatus.ERROR
 
 
 def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stopped(world):

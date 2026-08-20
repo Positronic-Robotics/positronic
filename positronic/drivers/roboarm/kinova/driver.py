@@ -74,16 +74,16 @@ class Robot(pimm.ControlSystem):
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state: pimm.SignalEmitter[KinovaState] = pimm.ControlSystemEmitter(self)
 
-    def _target_qpos(self, joint_controller, robot_state: KinovaState, cmd: command.CommandType) -> np.ndarray:
-        """The joints ``cmd`` asks the arm to hold."""
+    def _target_qpos(self, joint_controller, q: np.ndarray, cmd: command.CommandType) -> np.ndarray:
+        """The joints ``cmd`` asks the arm to hold, solved from the joints ``q`` it reports now."""
         match cmd:
             case command.Reset():
                 return np.asarray(self.home_joints, dtype=np.float32)
             case command.CartesianPosition(pose):
-                return self.solver.inverse(pose, robot_state.q)
+                return self.solver.inverse(pose, q)
             case command.CartesianDelta() as delta_cmd:
                 target = delta_cmd.apply(self.solver.forward(joint_controller.q_s))
-                return self.solver.inverse(target, robot_state.q)
+                return self.solver.inverse(target, q)
             case command.JointPosition(positions):
                 return np.array(positions, dtype=np.float32)
             case other:
@@ -96,6 +96,22 @@ class Robot(pimm.ControlSystem):
         rather than failing moves the arm is tracking perfectly well.
         """
         return self._MOVE_GRACE_S + float(np.max(np.abs(target - q)) / np.min(joint_controller.max_velocity))
+
+    def _take_setpoint(self, joint_controller, move: PendingMove, q: np.ndarray, clock: pimm.Clock) -> None:
+        """Put the controller on whichever setpoint is on offer: a synchronous move first, then the stream."""
+        if (call := next(self.sync_move.incoming(), None)) is not None:
+            with pimm.calls.forward_failure(call):
+                target = self._target_qpos(joint_controller, q, call.request)
+                joint_controller.set_target_qpos(target)
+                # The branch the controller tracks: it wraps the target once, when it is set
+                wrapped = wrap_joint_angle(target, q)
+                move.accept(call, wrapped, clock.now(), self._travel_s(joint_controller, q, wrapped))
+        elif (cmd := pimm.value_updated(self.commands)) is not None:
+            try:
+                joint_controller.set_target_qpos(self._target_qpos(joint_controller, q, cmd))
+            # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
+            except Exception as exc:
+                logging.warning(f'{cmd} not applied: {exc}')
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         _set_realtime_priority()
@@ -125,19 +141,7 @@ class Robot(pimm.ControlSystem):
                         # once whatever blocked it goes away, long after its asker was told it failed.
                         joint_controller.set_target_qpos(q)
                     if not move.active:
-                        if (call := next(self.sync_move.incoming(), None)) is not None:
-                            with pimm.calls.forward_failure(call):
-                                target = self._target_qpos(joint_controller, robot_state, call.request)
-                                joint_controller.set_target_qpos(target)
-                                # The branch the controller tracks: it wraps the target once, when it is set
-                                wrapped = wrap_joint_angle(target, q)
-                                move.accept(call, wrapped, clock.now(), self._travel_s(joint_controller, q, wrapped))
-                        elif (cmd := pimm.value_updated(self.commands)) is not None:
-                            try:
-                                joint_controller.set_target_qpos(self._target_qpos(joint_controller, robot_state, cmd))
-                            # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
-                            except Exception as exc:
-                                logging.warning(f'{cmd} not applied: {exc}')
+                        self._take_setpoint(joint_controller, move, q, clock)
 
                     torque_command = joint_controller.compute_torque(q, dq, tau)
                     np.divide(torque_command, torque_constant, out=current_command)
