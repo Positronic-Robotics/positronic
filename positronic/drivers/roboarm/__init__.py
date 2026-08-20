@@ -19,22 +19,21 @@ class RobotStatus(IntEnum):
 
     The exact meaning of this statuses currently is defined by the robot driver. But in general:
 
-    - AVAILABLE: The robot is available to accept new commands.
-    - RESETTING: The driver is putting the robot somewhere itself — homing, or serving a synchronous move —
-      and no command stream reaches it until it arrives.
-    - MOVING: The robot is moving to a new position, but is not yet at the new position.
+    - AVAILABLE: The robot is tracking whatever it was last commanded, and will take another command.
+    - MOVING: The driver is putting the robot somewhere itself — homing, or serving a synchronous move — and
+      no command stream reaches it until it arrives.
     - ERROR: The robot is in an error state.
     """
 
+    # These numbers are written into recorded datasets
     AVAILABLE = 0
-    RESETTING = 1
     MOVING = 2
     ERROR = 3
 
 
 def is_sound(status: RobotStatus) -> bool:
     """Whether the arm is tracking the commands it was given and its pose is worth reading."""
-    return status in (RobotStatus.AVAILABLE, RobotStatus.MOVING)
+    return status == RobotStatus.AVAILABLE
 
 
 class State(ABC):

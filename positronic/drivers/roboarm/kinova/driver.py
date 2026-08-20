@@ -54,10 +54,10 @@ class KinovaState(State, pimm.shared_memory.NumpySMAdapter):
     def status(self) -> RobotStatus:
         return RobotStatus(int(self.array[14 + 7]))
 
-    def _start_reset(self):
-        self.array[14 + 7] = RobotStatus.RESETTING.value
+    def _set_moving(self):
+        self.array[14 + 7] = RobotStatus.MOVING.value
 
-    def _finish_reset(self):
+    def _set_available(self):
         self.array[14 + 7] = RobotStatus.AVAILABLE.value
 
     def encode(self, q, dq, ee_pose, status: RobotStatus):
@@ -152,11 +152,11 @@ class Robot(pimm.ControlSystem):
                     ee_pose = self.solver.forward(joint_controller.q_s)
 
                     if move.active:  # the driver owns the arm until the move answers, and reads no command meanwhile
-                        status = RobotStatus.RESETTING
+                        status = RobotStatus.MOVING
                     elif move.errored:  # the controller reports its trajectory, not whether the arm got there
                         status = RobotStatus.ERROR
-                    else:
-                        status = RobotStatus.AVAILABLE if joint_controller.finished else RobotStatus.MOVING
+                    else:  # a streamed setpoint still in flight is one the arm is tracking, not one it owns
+                        status = RobotStatus.AVAILABLE
                     robot_state.encode(q, dq, ee_pose, status)
                     self.state.emit(robot_state)
 

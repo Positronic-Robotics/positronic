@@ -69,7 +69,7 @@ def _obs(now_sec=0.0, status=RobotStatus.AVAILABLE):
 
 
 class TestStopOnFault:
-    @pytest.mark.parametrize('unsound', [RobotStatus.ERROR, RobotStatus.RESETTING])
+    @pytest.mark.parametrize('unsound', [RobotStatus.ERROR, RobotStatus.MOVING])
     def test_an_unsound_arm_stops_what_is_executing(self, unsound):
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().wrap_session(inner, None, None)
@@ -77,12 +77,11 @@ class TestStopOnFault:
         assert session(_obs(0.0, unsound)) == []
         assert inner.call_count == 0, 'the model was asked about an arm that is not tracking it'
 
-    @pytest.mark.parametrize('sound', [RobotStatus.AVAILABLE, RobotStatus.MOVING])
-    def test_a_sound_arm_reaches_the_model(self, sound):
+    def test_a_sound_arm_reaches_the_model(self):
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().wrap_session(inner, None, None)
 
-        assert session(_obs(0.0, sound)) is not None
+        assert session(_obs(0.0, RobotStatus.AVAILABLE)) is not None
         assert inner.call_count == 1
 
     def test_an_observation_with_no_arm_status_reaches_the_model(self):

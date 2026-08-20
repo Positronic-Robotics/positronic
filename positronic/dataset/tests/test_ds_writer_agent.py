@@ -362,7 +362,7 @@ def test_robot_state_serializer_records_a_resetting_arm_beside_its_pose(world):
 
     script = [
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: emitters[keys.ROBOT_STATE].emit(FakeRobotState(q, dq, pose, RobotStatus.RESETTING)), 0.001),
+        (lambda: emitters[keys.ROBOT_STATE].emit(FakeRobotState(q, dq, pose, RobotStatus.MOVING)), 0.001),
         (lambda: emitters[keys.ROBOT_STATE].emit(FakeRobotState(q, dq, pose, RobotStatus.AVAILABLE)), 0.001),
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
@@ -375,7 +375,7 @@ def test_robot_state_serializer_records_a_resetting_arm_beside_its_pose(world):
         by_name.setdefault(name, []).append(val)
     expected = {keys.JOINTS: q, keys.JOINT_VEL: dq, keys.EE_POSE: np.concatenate([t, geom.Rotation.identity.as_quat])}
     assert set(by_name) == {keys.ROBOT_STATUS, *expected}
-    assert by_name[keys.ROBOT_STATUS] == [RobotStatus.RESETTING, RobotStatus.AVAILABLE]
+    assert by_name[keys.ROBOT_STATUS] == [RobotStatus.MOVING, RobotStatus.AVAILABLE]
     for name, value in expected.items():
         assert len(by_name[name]) == 2, name
         np.testing.assert_allclose(by_name[name][0], value)
