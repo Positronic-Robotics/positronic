@@ -106,6 +106,15 @@ class TestStopOnFault:
         assert session(obs) == []
         assert inner.call_count == 0
 
+    def test_the_status_a_recording_carries_for_a_taken_arm_still_reads(self):
+        """Episodes and rigs written against the older status set send 1, which names what BUSY names."""
+        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        session = StopOnFault().wrap_session(inner, None, None)
+
+        assert RobotStatus(1) is RobotStatus.BUSY
+        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 1}) == []
+        assert inner.call_count == 0
+
     def test_a_status_no_arm_answers_to_raises(self):
         """A number outside ``RobotStatus`` is the rig and the server disagreeing about the protocol, which
         is not something to drive an arm through."""

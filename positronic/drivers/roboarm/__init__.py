@@ -30,6 +30,11 @@ class RobotStatus(IntEnum):
     BUSY = 2
     ERROR = 3
 
+    @classmethod
+    def _missing_(cls, value: object) -> 'RobotStatus | None':
+        # Recorded episodes and rigs that predate the folded status carry 1 for an arm its driver has taken
+        return cls.BUSY if value == 1 else None
+
 
 def is_sound(status: RobotStatus) -> bool:
     """Whether the arm is under the commander's control, rather than the driver's or a fault's."""
