@@ -28,21 +28,23 @@ Pure functions:
   change what it computes.
 
 Composability:
-- A session is a chain of layers; the innermost answers on its own, with or without pure functions.
-- Every link of the chain speaks the session protocol.
-- Layers are the toolbox: a serving algorithm is built by chaining them, without touching the framework.
+- A `Layer` is a config-time recipe: per control session it makes a session wrapping the inner session
+  it is given.
 - A chain of layers is a layer.
-- Layers communicate only through the observations and commands flowing through them.
-- A layer knows nothing of its neighbours or its position.
-- What an inner layer sees is its outer's choice.
+- The innermost session answers on its own, with or without pure functions.
 - Chain order fully determines behavior.
-- A `Codec` transforms data at a link: a pure function's inputs and outputs, or a layer's observations
-  down and commands up. It never touches `due`.
+- A session communicates only through the observations and commands flowing through it; it knows
+  nothing of its neighbours or its position.
+- What an inner session sees is its outer's choice.
+- A `Codec` is a data transform written once and applicable to both: around a pure function, its
+  inputs and outputs; as a trivial layer, observations down and commands up, `due` untouched.
+- Any policy fits the API as it stands: implement a session directly, or compose it from layers and
+  pure functions. Neither ever requires a framework change.
 
 Logging:
 - The framework records the top-level exchange — observations in, commands out — on its own.
-- A layer can log named data of its own; the framework records it with the control session, on the same
-  clock.
+- A session can log named data of its own; the framework records it with the control session, on the
+  same clock.
 - Logging never affects control: it adds no waiting and no failure path to the loop.
 
 Remote policies:
@@ -55,7 +57,7 @@ Remote policies:
 
 TODO: the Python shape of the pass — an object protocol, with generators as a supported authoring style
   the framework adapts.
-TODO: how a layer logs — a handle given at construction, or part of the return value.
+TODO: how a session logs — a handle given at construction, or part of the return value.
 TODO: the shape of the robot description, and a server's ability to refuse one.
 TODO: the protocol delivering the declared stack to the rig — versioning and compatibility.
 """
