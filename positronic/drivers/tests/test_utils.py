@@ -4,36 +4,18 @@ import numpy as np
 import pytest
 
 import pimm
-from pimm.tests.testing import wire_call
+from pimm.tests.testing import FakeCall, Passive, wire_call
 from positronic.drivers.utils import _GRIP_TIMEOUT_S, MoveStatus, PendingMove, grip_setpoint
 from positronic.tests.testing_coutils import ManualCommandReceiver
 
 TOL = 0.05
 
 
-class _Call(pimm.calls.Call[float, None]):
-    """Records the one answer a call is allowed."""
-
-    def __init__(self, request: float):
-        self._request = request
-        self.answered = False
-        self.exception: BaseException | None = None
-
-    @property
-    def request(self) -> float:
-        return self._request
-
-    def set_result(self, value: None) -> None:
-        self.answered = True
-
-    def set_exception(self, exc: BaseException) -> None:
-        self.answered = True
-        self.exception = exc
-
-
-def _accepted(target: float | np.ndarray, tol: float = TOL, timeout_s: float = 3.0) -> tuple[PendingMove, _Call]:
+def _accepted(
+    target: float | np.ndarray, tol: float = TOL, timeout_s: float = 3.0
+) -> tuple[PendingMove[float], FakeCall[float, None]]:
     move = PendingMove(tol, _unasked())
-    call = _Call(0.0)
+    call = FakeCall[float, None](0.0)
     move.accept(call, target, now=0.0, timeout_s=timeout_s)
     return move, call
 
@@ -104,28 +86,21 @@ def test_a_move_that_arrives_clears_the_error_left_by_one_that_did_not():
     move.settle(0.4, now=3.0)
     assert move.errored
 
-    move.accept(_Call(0.0), 1.0, now=3.0, timeout_s=3.0)
+    move.accept(FakeCall[float, None](0.0), 1.0, now=3.0, timeout_s=3.0)
     assert move.settle(1.0, now=3.1) is MoveStatus.ARRIVED
     assert not move.errored
 
 
-class _Idle(pimm.ControlSystem):
-    """An owner for a caller/handler pair that no test schedules."""
-
-    def run(self, should_stop, clock):
-        yield pimm.Sleep(0.0)
-
-
 def _unasked() -> pimm.calls.ControlSystemHandler[float, None]:
     """A handler no caller is bound to, for a move driven by hand rather than asked for."""
-    return pimm.calls.ControlSystemHandler[float, None](_Idle())
+    return pimm.calls.ControlSystemHandler[float, None](Passive())
 
 
 @pytest.fixture
 def asking():
     """A caller wired to the handler a gripper polls, so a test asks the way a client does."""
-    caller = pimm.calls.ControlSystemCaller[float, None](_Idle())
-    handler = pimm.calls.ControlSystemHandler[float, None](_Idle())
+    caller = pimm.calls.ControlSystemCaller[float, None](Passive())
+    handler = pimm.calls.ControlSystemHandler[float, None](Passive())
     with pimm.World() as world:
         wire_call(world, caller, handler)
         yield caller, handler
@@ -232,7 +207,7 @@ def test_a_run_that_dies_with_one_move_settled_and_another_in_flight_answers_bot
     """One outcome each: the settled move earned its answer, the travelling one is owed what killed it."""
     move, landed = _accepted(0.0)
     move.settle(TOL / 2, now=0.1)
-    travelling = _Call(0.0)
+    travelling = FakeCall[float, None](0.0)
     move.accept(travelling, 1.0, now=0.1, timeout_s=3.0)
 
     move.fail(RuntimeError('the bus went away'))

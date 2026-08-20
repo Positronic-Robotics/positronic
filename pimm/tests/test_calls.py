@@ -5,7 +5,7 @@ import pytest
 
 from pimm.calls import Answer, ControlSystemCaller, ControlSystemHandler, raise_to
 from pimm.core import ControlSystem, NoValueException, Sleep
-from pimm.tests.testing import wire_call
+from pimm.tests.testing import Passive, wire_call
 from pimm.world import World
 
 
@@ -61,12 +61,6 @@ class Client(ControlSystem):
                 self.results.append(e)
         if self._total is not None:
             self._total.value = sum(r for r in self.results if isinstance(r, int))
-
-
-class Passive(ControlSystem):
-    def run(self, should_stop, clock):
-        while not should_stop.value:
-            yield Sleep(0.001)
 
 
 @pytest.fixture

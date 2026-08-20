@@ -4,9 +4,14 @@ Exposes lightweight fakes/mocks to simplify deterministic testing of
 control loops and components that depend on `pimm.Clock`.
 """
 
-from ..calls import ControlSystemCaller, ControlSystemHandler
-from ..core import Clock
+from typing import Generic, TypeVar
+
+from ..calls import Call, ControlSystemCaller, ControlSystemHandler
+from ..core import Clock, ControlSystem, Sleep
 from ..world import World
+
+Req = TypeVar('Req')
+Res = TypeVar('Res')
 
 
 class MockClock(Clock):
@@ -32,6 +37,34 @@ class MockClock(Clock):
     def set(self, time_sec: float) -> float:
         self._time = float(time_sec)
         return self._time
+
+
+class Passive(ControlSystem):
+    """An owner for a caller or handler that no test schedules."""
+
+    def run(self, should_stop, clock):
+        while not should_stop.value:
+            yield Sleep(0.001)
+
+
+class FakeCall(Call[Req, Res], Generic[Req, Res]):
+    """A call answered by hand, recording the one answer it is allowed."""
+
+    def __init__(self, request: Req):
+        self._request = request
+        self.answered = False
+        self.result: Res | None = None
+        self.exception: BaseException | None = None
+
+    @property
+    def request(self) -> Req:
+        return self._request
+
+    def set_result(self, value: Res) -> None:
+        self.answered, self.result = True, value
+
+    def set_exception(self, exc: BaseException) -> None:
+        self.answered, self.exception = True, exc
 
 
 def wire_call(world: World, caller: ControlSystemCaller, handler: ControlSystemHandler) -> None:
