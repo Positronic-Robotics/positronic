@@ -114,8 +114,8 @@ class _Arm(DriverRun):
     _MAX_JOINT_VELOCITY = np.array([2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26])
     # On top of the travel itself: the vendor controller ramps in and out of its speed cap, and settles late
     _MOVE_GRACE_S = 5.0
-    # What ``await_goal`` sleeps between polls when the caller driving it has no rate of its own
-    _UNPACED_POLL_S = 0.005
+    # Parking publishes nothing, so it comes back only as often as it needs to ask again
+    _PARK_POLL_S = 0.005
 
     def __init__(
         self,
@@ -155,12 +155,13 @@ class _Arm(DriverRun):
         return target
 
     def await_goal(
-        self, target: np.ndarray, should_stop: Callable[[], bool]
-    ) -> Generator[pimm.Sleep, None, MoveStatus]:
-        """Command ``target`` and poll the goal until the arm arrives, once per resume.
+        self, target: np.ndarray, should_stop: Callable[[], bool], pace: Callable[[], pimm.Command]
+    ) -> Generator[pimm.Command, None, MoveStatus]:
+        """Command ``target`` and poll the goal until the arm arrives, one poll per resume.
 
-        The yielded sleep paces a caller that has no rate of its own. One that does — ``move_to`` ticks at
-        the arm's rate, because it publishes every tick — polls at that rate instead, and drops the sleep.
+        ``pace`` is what to wait between polls, and so how often the goal is asked about. It is the caller's
+        to choose: one with work of its own to do each pass comes back at the rate that work needs, one with
+        none comes back only as often as it needs to ask.
         """
         self.vendor.set_target_joints(target)
         while not should_stop():
@@ -169,7 +170,7 @@ class _Arm(DriverRun):
                 return MoveStatus.ARRIVED
             if goal.status != pf.GoalStatus.IN_FLIGHT:
                 raise RuntimeError(f'the arm stopped short of its target: {goal.reason or goal.status}')
-            yield pimm.Sleep(self._UNPACED_POLL_S)
+            yield pace()
         return MoveStatus.GAVE_UP
 
     def _travel_s(self, q: np.ndarray, target: np.ndarray) -> float:
@@ -189,14 +190,17 @@ class _Arm(DriverRun):
 
         deadline = self.clock.now() + self._travel_s(self.state.q, target)
         try:
-            for _ in self.await_goal(target, lambda: self.should_stop.value or self.clock.now() >= deadline):
+            # The arm's own rate: this loop publishes every pass, so the goal is asked about that often too
+            for wait in self.await_goal(
+                target, lambda: self.should_stop.value or self.clock.now() >= deadline, self.limiter.wait
+            ):
                 st = self.vendor.state()
                 self.state.encode(st)
                 self.state._set_busy()  # `encode` clears the status; the arm has not arrived
                 self.out.emit(self.state)
                 if st.error != 0:
                     self.vendor.recover_from_errors()
-                yield self.limiter.wait()
+                yield wait
             # The deadline stops the poll loop before it asks, so a goal that landed as it expired has not
             # been seen yet; reading a timeout off the clock alone would fail a move the arm completed.
             if self.clock.now() >= deadline and self.vendor.goal().status != pf.GoalStatus.REACHED:
@@ -250,7 +254,7 @@ class _Arm(DriverRun):
             finally:
                 call.set_exception(exc)  # an arm the driver cannot read still leaves nobody waiting
 
-    def park(self) -> Iterator[pimm.Sleep]:
+    def park(self) -> Iterator[pimm.Command]:
         """Move the arm to the home pose, giving up after ``park_timeout_s``. Drive with ``yield from``.
 
         Runs after the control loop rather than in its ``finally``, so that only a stop request earns it.
@@ -267,7 +271,9 @@ class _Arm(DriverRun):
             logging.info('Parking the arm at the home pose')
             self.vendor.recover_from_errors()  # once, before the move: a reflex during the move ends the park
             deadline = self.clock.now() + self._park_timeout_s
-            outcome = yield from self.await_goal(target, lambda: self.clock.now() >= deadline)
+            outcome = yield from self.await_goal(
+                target, lambda: self.clock.now() >= deadline, lambda: pimm.Sleep(self._PARK_POLL_S)
+            )
             if outcome is MoveStatus.GAVE_UP:
                 logging.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
         # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
