@@ -25,18 +25,37 @@ Pure functions:
   them.
 - The framework makes no stateful guarantees: a function may cache, but dropping the cache must not
   change what it computes.
-- Codecs transform a pure function's inputs and outputs.
 
-Distribution:
-- A policy is declarable as data: its pure functions plus the stack around them. A server declares it,
-  and the rig runs what is declared and nothing else.
+Composability:
+- A session is a chain of layers; the innermost answers on its own, with or without pure functions.
+- A layer's runtime instance is itself a session: an outer layer drives its inner one exactly as the
+  framework drives the whole chain.
+- Layers are the toolbox: a serving algorithm is built by chaining them, without touching the framework.
+- A chain of layers is a layer.
+- Layers communicate only through the observations and commands flowing through them — no other channel
+  exists between layers. A layer knows nothing of its neighbours or its position.
+- Chaining hides nothing: every layer sees every observation, whether or not it acts on one.
+- Chain order fully determines behavior.
+- A `Codec` transforms data at any joint: around a pure function, its inputs and outputs; around a
+  layer, observations down and commands up — never when control returns.
 
-Under discussion:
-- The rig-side algorithm is assembled from declarable components — named, parameterized, composable —
-  because the server declares it as data. The pure ones are codecs; whether the stateful ones are a
-  distinct concept or codecs-with-serving-state is unsettled.
+Logging:
+- The framework records the top-level exchange — observations in, commands out — on its own.
+- A layer can log named data of its own; the framework records it with the control session, on the
+  same clock.
+- Logging never affects control: it adds no waiting and no failure path to the loop.
 
-TODO: sessions as generators — how observations get in and commands out.
+Remote policies:
+- Framework natively supports remote policies: a server describes the full policy: the pure functions it serves
+  and the stack around them.
+- One URL is enough to fully specify the policy, given that the server returns a proper declaration.
+- Declarations are backward compatible: the framework evolves without changing what an already-served
+  policy does.
+- A declaration the rig cannot honor is refused at the handshake.
+
+TODO: the session protocol is a plain call — observation in, (command, control-back time) out; a
+  generator is a supported authoring style the framework adapts. Details of both are open.
+TODO: how a layer logs — a handle given at construction, or part of the return value.
 TODO: the shape of the robot description, and a server's ability to refuse one.
 TODO: the protocol delivering the declared stack to the rig — versioning and compatibility.
 """
