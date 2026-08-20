@@ -1,5 +1,4 @@
-"""Helpers shared by the drivers: what a driver has only while it runs, and when a device counts as
-having arrived where it was sent."""
+"""Shared by the drivers: the handles a run owns, and the synchronous move a driver carries."""
 
 from enum import Enum, auto
 from typing import Any
@@ -12,8 +11,7 @@ import pimm
 class DriverRun:
     """What a driver has only while it runs: the clock it reads, the rate it ticks at, the stop it watches.
 
-    ``World.start`` pickles a background control system before it runs, so none of this can be built in
-    ``__init__``, and a helper that suspends inside a move cannot hold it in a local either.
+    ``World.start`` pickles a background control system, so none of it survives being built in ``__init__``.
     """
 
     def __init__(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock, hz: float):
@@ -32,19 +30,17 @@ class MoveStatus(Enum):
 
 
 class MoveAbandoned(RuntimeError):
-    """A move the world came down under, before the device reached what it was sent to."""
+    """A move the world came down under."""
 
     def __init__(self):
         super().__init__('the world stopped before the move arrived')
 
 
 class PendingMove:
-    """The synchronous move a driver has in flight, if any.
+    """The synchronous move a driver has in flight, for a device whose loop cannot be held for its duration.
 
-    For a device whose control loop cannot be held for the duration of a move: the driver carries one of
-    these across ticks and settles it against what the device reads back. A move owns the device until it
-    settles, so a driver leaves its command stream unread while ``active`` — a superseding setpoint would
-    otherwise fail a move for something its asker never did.
+    The driver carries one across ticks and settles it against what the device reads back. A move owns the
+    device until it settles: a driver leaves its command stream unread while ``active``.
     """
 
     def __init__(self, tol: float):
@@ -63,23 +59,19 @@ class PendingMove:
 
     @property
     def settled(self) -> bool:
-        """A move is over but its asker has not been told: nothing new may be taken until ``answer``."""
+        """The move is over and its asker not yet told."""
         return self._settled is not None
 
     @property
     def target(self) -> np.ndarray | float:
-        """What the move in flight asked for, for a device that must put its reading in the same terms."""
+        """What the move in flight asked for."""
         assert self._call is not None, 'no move is in flight'
         return self._target
 
     def accept(
         self, call: pimm.calls.Call[Any, None], target: np.ndarray | float, now: float, timeout_s: float
     ) -> None:
-        """Take `call` as the move in flight, aiming at `target`, with `timeout_s` to get there.
-
-        How long a move may take is the driver's to say: a device that ramps to a capped speed needs longer
-        for a longer trip, and one stopped by what it is holding needs a fixed grace instead.
-        """
+        """Take `call` as the move in flight, aiming at `target`, with `timeout_s` to get there."""
         self._call, self._target, self._deadline = call, target, now + timeout_s
 
     def fail(self, exc: BaseException) -> None:
@@ -93,8 +85,7 @@ class PendingMove:
     def settle(self, position: np.ndarray | float, now: float) -> MoveStatus:
         """Where the move in flight stands, once the device reads back at ``position``.
 
-        ARRIVED and GAVE_UP end the move but do not answer it: the device is free from here, and the state
-        saying so has to reach the asker before the answer does. ``answer`` is what hands it over.
+        ARRIVED and GAVE_UP end the move without answering it; ``answer`` hands the outcome over.
         """
         assert self._call is not None, 'no move is in flight'
         if bool(np.all(np.abs(np.asarray(position) - np.asarray(self._target)) < self._tol)):
@@ -107,7 +98,7 @@ class PendingMove:
         return MoveStatus.MOVING
 
     def answer(self) -> None:
-        """Hand a settled move its outcome. Call once the state that goes with it has been published."""
+        """Hand a settled move its outcome, once the state that goes with it is published."""
         if self._settled is None:
             return
         call, short = self._settled
@@ -136,9 +127,8 @@ def grip_setpoint(
 ) -> float | None:
     """The width to command the fingers this tick, or ``None`` to leave the last one standing.
 
-    A move in flight owns the fingers, so neither the calls nor the stream is read until it settles. One
-    that gives up hands back the width the fingers stopped at; the driver writes that width and then calls
-    ``PendingMove.answer``, so the fingers stop pushing before their asker hears the move failed.
+    A move in flight owns the fingers; one that gives up hands back the width they stopped at, which the
+    driver writes before calling ``PendingMove.answer``.
     """
     if move.active:
         return grip if move.settle(grip, now) is MoveStatus.GAVE_UP else None

@@ -58,10 +58,9 @@ class KinovaState(State, pimm.shared_memory.NumpySMAdapter):
 
 
 class _Arm(DriverRun):
-    """The arm the driver drives: the API it commands current through, the compliant controller that decides
-    that current, and the state published from what the actuators report back.
+    """The arm the driver drives: the API it commands current through, and the controller that decides it.
 
-    The arm is torque-controlled, so it only travels while the loop steps it: it cannot be held for a move.
+    Torque-controlled, so the arm only travels while the loop steps it and cannot be held for a move.
     """
 
     # Radians; the arm reports joints but no goal, so arrival is judged from the joints it reads
@@ -97,12 +96,11 @@ class _Arm(DriverRun):
 
     @property
     def takes_commands(self) -> bool:
-        """Whether the arm will take a setpoint: a move owns it until it settles, and a settled one until it
-        is answered."""
+        """Whether the arm will take a setpoint: a move owns it until it is answered."""
         return not (self._move.active or self._move.settled)
 
     def settle(self) -> None:
-        """Judge a move in flight against the joints the arm reads, and stop chasing a target it missed."""
+        """Judge a move in flight against the joints the arm reads."""
         if not self._move.active:
             return
         # The actuators report 0..2pi, so a move across the boundary reads a turn from its target
@@ -129,15 +127,11 @@ class _Arm(DriverRun):
                 raise NotImplementedError(f'Unsupported command {other}')
 
     def track(self, cmd: command.CommandType) -> None:
-        """Put the controller on the setpoint ``cmd`` asks for, with nobody waiting on the arm getting there."""
+        """Put the controller on the setpoint ``cmd`` asks for, with nobody waiting on the arrival."""
         self.controller.set_target_qpos(self._target_qpos(cmd))
 
     def _travel_s(self, target: np.ndarray) -> float:
-        """How long the arm may take to reach ``target``, from the speed its controller is capped at.
-
-        ``relative_dynamics_factor`` scales that cap, so a conservative factor buys proportionally more time
-        rather than failing moves the arm is tracking perfectly well.
-        """
+        """How long the arm may take to reach ``target``, from the speed its controller is capped at."""
         return self._MOVE_GRACE_S + float(np.max(np.abs(target - self.q)) / np.min(self.controller.max_velocity))
 
     def serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
@@ -150,7 +144,7 @@ class _Arm(DriverRun):
             self._move.accept(call, wrapped, self.clock.now(), self._travel_s(wrapped))
 
     def step(self) -> None:
-        """Drive one control cycle: the controller's torque as current, and whatever the actuators report back."""
+        """Drive one cycle: the controller's torque as current, and what the actuators report back."""
         torque = self.controller.compute_torque(self.q, self.dq, self.tau)
         np.divide(torque, self._TORQUE_CONSTANT, out=self._current)
         self.q, self.dq, self.tau = self.api.apply_current_command(self._current)
@@ -171,7 +165,7 @@ class _Arm(DriverRun):
         self._move.answer()
 
     def fail(self, exc: BaseException) -> None:
-        """Hand `exc` to a move the run died under, whose asker is blocked on an answer."""
+        """Hand `exc` to a move the run died under."""
         self._move.fail(exc)
 
 
@@ -187,11 +181,7 @@ class Robot(pimm.ControlSystem):
         self.state = pimm.ControlSystemEmitter[KinovaState](self)
 
     def _arm(self, api: KinovaAPI, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
-        """The arm this run drives, built from the driver's configuration.
-
-        Built here, not in ``__init__``: a background control system is pickled before it runs, and a live
-        connection to the arm does not survive the trip.
-        """
+        """The arm this run drives, built from the driver's configuration."""
         return _Arm(api, self.state, self.home_joints, self.relative_dynamics_factor, should_stop, clock)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:

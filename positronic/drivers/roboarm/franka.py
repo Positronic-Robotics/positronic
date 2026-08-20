@@ -106,7 +106,7 @@ _MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collisio
 
 
 class _Arm(DriverRun):
-    """The arm the driver drives: the libfranka handle, the state published from it, and the moves made with it."""
+    """The arm the driver drives: the vendor handle, and the state and moves that go with it."""
 
     # A move needs a deadline at all because the vendor reports a goal it abandons, but a goal it never
     # converges on stays in flight for as long as the arm is pushed off course.
@@ -159,9 +159,7 @@ class _Arm(DriverRun):
     ) -> Generator[pimm.Command, None, MoveStatus]:
         """Command ``target`` and poll the goal until the arm arrives, one poll per resume.
 
-        ``pace`` is what to wait between polls, and so how often the goal is asked about. It is the caller's
-        to choose: one with work of its own to do each pass comes back at the rate that work needs, one with
-        none comes back only as often as it needs to ask.
+        ``pace`` is what to wait between polls, and so how often the goal is asked about.
         """
         self.vendor.set_target_joints(target)
         while not should_stop():
@@ -174,10 +172,7 @@ class _Arm(DriverRun):
         return MoveStatus.GAVE_UP
 
     def _travel_s(self, q: np.ndarray, target: np.ndarray) -> float:
-        """How long the arm may take to reach ``target``, from the speed its dynamics factor allows.
-
-        A conservative factor buys proportionally more time rather than failing a move the arm is tracking.
-        """
+        """How long the arm may take to reach ``target``, from the speed its dynamics factor allows."""
         cap = self._MAX_JOINT_VELOCITY * self._dynamics_factor
         return self._MOVE_GRACE_S + float(np.max(np.abs(target - q) / cap))
 
@@ -241,10 +236,7 @@ class _Arm(DriverRun):
                 raise NotImplementedError(f'Unsupported command {other}')
 
     def serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
-        """Put the arm where ``call`` asks and answer it once the state saying so is out.
-
-        A stop cuts the move short, and the asker hears that rather than waiting on an arm coming down.
-        """
+        """Put the arm where ``call`` asks and answer it once the state saying so is out."""
         try:
             if (yield from self.move_to(self.target_joints(call.request))) is MoveStatus.ARRIVED:
                 call.set_result(None)
@@ -429,11 +421,7 @@ class Robot(pimm.ControlSystem):
         return self._robot
 
     def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
-        """The arm this run drives, built from the driver's configuration.
-
-        Built here, not in ``__init__``: a background control system is pickled before it runs, and a live
-        libfranka handle does not survive the trip.
-        """
+        """The arm this run drives, built from the driver's configuration."""
         return _Arm(
             self._vendor,
             self.state,

@@ -107,8 +107,7 @@ class TestStopOnFault:
         assert inner.call_count == 0
 
     def test_the_status_a_recording_carries_for_a_taken_arm_stops_the_policy(self):
-        """A status is persisted and sent as its number, so the numbers themselves are the contract between a
-        rig and a server: 1 is the arm its driver has taken."""
+        """The numbers are the contract between a rig and a server: 1 is an arm its driver has taken."""
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().wrap_session(inner, None, None)
 

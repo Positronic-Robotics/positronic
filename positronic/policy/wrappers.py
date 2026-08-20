@@ -29,11 +29,9 @@ def _is_robot_status(name: str) -> bool:
 
 
 def _arms_available(obs) -> bool:
-    """Whether every arm in the observation will take a command. An observation naming no arm status — a
-    probe replaying a recording — has no arm to be unavailable.
+    """Whether every arm in the observation will take a command; one naming no arm status has none to stop for.
 
-    The wire carries a status as its number, so this is where one becomes a ``RobotStatus`` again — and a
-    number no status answers to raises, the rig and the server disagreeing about the protocol.
+    The wire carries a status as its number, so this is where one becomes a ``RobotStatus`` again.
     """
     return all(RobotStatus(v) is RobotStatus.AVAILABLE for name, v in obs.items() if _is_robot_status(name))
 
@@ -41,13 +39,10 @@ def _arms_available(obs) -> bool:
 class StopOnFault(PolicyWrapper):
     """Stop the arm while it will not take a command, and plan afresh once it will.
 
-    An arm that is faulted, or that its driver has taken for a move of its own, is not tracking the plan it
-    was given, so the plan is worthless: this answers the empty trajectory — stop what is executing — and
-    resets the sessions below, so the first observation from an available arm reaches the model instead of
-    resuming a chunk stamped before. It belongs outside the scheduling wrapper, which would otherwise answer
-    "keep playing" without ever seeing the status.
-
-    Every arm in the observation is checked, so a bimanual rig stops on either.
+    An arm the driver has taken, or that is faulted, is not tracking the plan it was given: this answers the
+    empty trajectory and resets the sessions below. It goes outside the scheduling wrapper, which would
+    otherwise answer "keep playing" without seeing the status. Every arm is checked, so a bimanual rig stops
+    on either.
     """
 
     WIRE_NAME = 'stop_on_fault'

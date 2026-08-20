@@ -55,10 +55,9 @@ _SO101_EE_JOINT = 'gripper_frame_joint'
 
 
 class _Arm(DriverRun):
-    """The arm the driver drives: the bus it reads and writes, the setpoint it holds the arm at, and the state
-    published from what the bus reports.
+    """The arm the driver drives: the bus it reads and writes, and the setpoint it holds the arm at.
 
-    The bus reports position only while the loop reads it, so it cannot be held for a move.
+    The bus reports position only while the loop reads it, so the arm cannot be held for a move.
     """
 
     # How close to its setpoint the arm counts as arrived, in the bus's normalized units: the bus reports
@@ -128,24 +127,20 @@ class _Arm(DriverRun):
                 raise ValueError(f'Unknown command: {other}')
 
     def _target_qpos(self, cmd: roboarm_command.CommandType) -> np.ndarray:
-        """The setpoint ``cmd`` asks the arm to hold, clipped to the calibrated range the bus reports from.
-
-        The bus clips the command anyway, so a target outside it is one the arm can reach but never read back.
-        """
+        """The setpoint ``cmd`` asks the arm to hold, clipped to the calibrated range the bus reports from."""
         return np.clip(self._requested_qpos(cmd), 0.0, 1.0)
 
     @property
     def takes_commands(self) -> bool:
-        """Whether the arm will take a setpoint: a move owns it until it settles, and a settled one until it
-        is answered."""
+        """Whether the arm will take a setpoint: a move owns it until it is answered."""
         return not (self._move.active or self._move.settled)
 
     def read(self) -> None:
-        """Take the arm off the bus: one serial round-trip a tick, and every step below wants the same instant."""
+        """Take the arm off the bus, once a tick: every step below wants the same instant."""
         self.q_norm = self.bus.position
 
     def settle(self) -> None:
-        """Judge a move in flight against what the bus reports, and stop holding a target the arm missed."""
+        """Judge a move in flight against what the bus reports."""
         if not self._move.active:
             return
         if self._move.settle(self.q_norm[:-1], self.clock.now()) is MoveStatus.GAVE_UP:
@@ -158,7 +153,7 @@ class _Arm(DriverRun):
         self._grip, self._unsent = grip, True
 
     def track(self, cmd: roboarm_command.CommandType) -> None:
-        """Hold the arm at the setpoint ``cmd`` asks for, with nobody waiting on it getting there."""
+        """Hold the arm at the setpoint ``cmd`` asks for, with nobody waiting on the arrival."""
         self._qpos, self._unsent = self._target_qpos(cmd), True
 
     def serve_sync_move(self, call: pimm.calls.Call[roboarm_command.CommandType, None]) -> None:
@@ -171,8 +166,8 @@ class _Arm(DriverRun):
     def write(self) -> None:
         """Put the setpoint on the bus, if anything has asked for one since it was last written.
 
-        The arm and the gripper are one setpoint on a shared bus, but they arrive as two channels that need
-        not carry a value in the same round, so either one changing rewrites the whole vector.
+        Arm and gripper share one bus setpoint but arrive as two channels, so either one rewrites the whole
+        vector.
         """
         if not self._unsent:
             return
@@ -195,7 +190,7 @@ class _Arm(DriverRun):
         self._move.answer()
 
     def fail(self, exc: BaseException) -> None:
-        """Hand `exc` to a move the run died under, whose asker is blocked on an answer."""
+        """Hand `exc` to a move the run died under."""
         self._move.fail(exc)
 
 
@@ -217,11 +212,7 @@ class Robot(pimm.ControlSystem):
         print('================================================================')
 
     def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
-        """The arm this run drives, built from the driver's configuration.
-
-        Built here, not in ``__init__``: a background control system is pickled before it runs, and an open
-        serial port does not survive the trip.
-        """
+        """The arm this run drives, built from the driver's configuration."""
         self.motor_bus.connect()
         return _Arm(self.motor_bus, self.state, self.grip, self.home_joints, should_stop, clock)
 

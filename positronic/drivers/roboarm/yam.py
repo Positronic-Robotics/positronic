@@ -160,7 +160,7 @@ class _Kinematics:
 
 
 class _Chain(DriverRun):
-    """The chain the driver drives: the vendor handle, the state published from it, and the moves made with it."""
+    """The chain the driver drives: the vendor handle, and the state and moves that go with it."""
 
     _MOVE_TIME_S = 2.0  # seconds the commanded position is ramped over on the way to a target
     _SETTLE_S = 1.0  # seconds the chain is given to reach the last waypoint before the move gives up
@@ -209,10 +209,7 @@ class _Chain(DriverRun):
         self.grip_out.emit(self._grip(obs))
 
     def hold_where_it_stopped(self) -> tuple[np.ndarray, float]:
-        """Command the chain to stay where it reads, publish that, and return it as the target to keep holding.
-
-        A move that did not land leaves the chain part-way along its ramp, still commanded at the far end.
-        """
+        """Command the chain to stay where it reads, publish that, and return it as the target to hold."""
         obs = self.observations()
         self.vendor.command_joint_pos(np.append(obs[_JOINT_POS], obs[_GRIPPER_POS][0]))
         self.publish(obs)
@@ -240,17 +237,15 @@ class _Chain(DriverRun):
                 raise NotImplementedError(f'Unsupported command {other}')
 
     def _arrived(self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float) -> bool:
-        """Whether ``obs`` reads the chain where it was sent. The fingers count as much as the joints: a
-        caller told a move landed may act on the whole chain, gripper included."""
+        """Whether ``obs`` reads the chain where it was sent, fingers as much as joints."""
         return bool(np.all(np.abs(obs[_JOINT_POS] - target) < self._ARRIVED_TOL)) and (
             abs(self._grip(obs) - grip) < self._GRIP_ARRIVED_TOL
         )
 
     def move_to(self, target: np.ndarray, grip: float) -> Generator[pimm.Command, None, MoveStatus]:
-        """Ramp the chain to ``target``, yielding until it reads back there.
+        """Ramp the chain to ``target``, yielding until it reads back there. Drive with ``yield from``.
 
-        Drive with ``yield from``. The vendor's own ``move_joints`` is not used: it blocks the world for the
-        whole ramp and returns without ever reading where the chain got to.
+        The vendor's own ``move_joints`` blocks the world for the whole ramp and never reads where the chain got to.
         """
         try:
             start = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
@@ -279,8 +274,7 @@ class _Chain(DriverRun):
         return MoveStatus.ARRIVED
 
     def home(self, grip: float) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
-        """Ramp the chain home, and return the joints and grip to hold: what was asked if it got there, what
-        the chain reads if not."""
+        """Ramp the chain home, and return the joints and grip to hold."""
         home = np.asarray(self.home_joints, dtype=np.float64)
         try:
             if (yield from self.move_to(home, grip)) is MoveStatus.ARRIVED:
@@ -295,9 +289,7 @@ class _Chain(DriverRun):
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
         """Put the chain where ``call`` asks, hold it wherever it ends up, and answer it once that is out.
 
-        Only an arrival earns the target: commanding it from wherever the ramp got to is the jump the ramp
-        exists to avoid. A stop cuts the move short, and the asker hears that rather than waiting on a
-        chain coming down.
+        Only an arrival earns the target: commanding it part-way is the jump the ramp exists to avoid.
         """
         request = call.request
         try:
@@ -355,11 +347,7 @@ class Robot(pimm.ControlSystem):
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
     def _chain(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Chain:
-        """The chain this run drives, built from the driver's configuration.
-
-        Built here, not in ``__init__``: a background control system is pickled before it runs, and a live
-        CAN handle does not survive the trip.
-        """
+        """The chain this run drives, built from the driver's configuration."""
         vendor = self._connect(self._channel, self._sim)
         return _Chain(vendor, self.state, self.grip, self._home_joints, self._base_pose, should_stop, clock)
 

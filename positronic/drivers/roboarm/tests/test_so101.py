@@ -22,8 +22,7 @@ JOGGED = np.full(5, 0.7)
 class _Kinematics:
     """Kinematics with the vendor solver taken out: the end effector sits at the first three joints.
 
-    Every joint spans 0..1 radians, so the bus's normalized units and radians are the same number and a
-    test reads as the setpoints it asserts. Real solving is ``kinematics.py``'s job, and its own tests'.
+    Every joint spans 0..1 radians, so the bus's normalized units and radians are the same number.
     """
 
     joint_limits = np.tile(np.array([0.0, 1.0]), (6, 1))
@@ -49,9 +48,8 @@ def _kinematics(monkeypatch):
 class FakeBus(MotorBus):
     """In-memory ``MotorBus``: the servos latch the goal they are given and are at it by the next read.
 
-    ``blocked`` holds them where they stand, as something the arm is pushing against would. Position is in
-    the bus's normalized 0..1 units, five arm joints and the gripper; ``raises``, once set, is what reading
-    the bus raises.
+    Position is in the bus's normalized units, five arm joints and the gripper. ``blocked`` holds the
+    servos where they stand; ``raises``, once set, is what reading the bus raises.
     """
 
     def __init__(self, position=MIDDLE):
@@ -118,8 +116,7 @@ def _pump(loop, answer, clock: MockClock | None = None, steps: int = 10) -> None
 
 
 def test_the_bus_is_written_only_once_something_has_asked_for_a_setpoint():
-    """The bus answers over a serial round-trip, and until something asks, the arm holds whatever the bus
-    was left holding."""
+    """Until something asks, the arm holds whatever the bus was left holding."""
     bus = FakeBus()
     driver, _, loop = _driven(bus)
     grip = ManualCommandReceiver()
@@ -138,8 +135,7 @@ def test_the_bus_is_written_only_once_something_has_asked_for_a_setpoint():
 
 
 def test_closing_the_fingers_reaches_the_bus_from_an_arm_that_starts_open():
-    """Zero is a width like any other: the fingers start somewhere else, and a caller asking for it is
-    asking for a move."""
+    """Zero is a width like any other, and a caller asking for it is asking for a move."""
     bus = FakeBus(np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.8]))
     driver, _, loop = _driven(bus)
     grip = ManualCommandReceiver()
@@ -152,8 +148,7 @@ def test_closing_the_fingers_reaches_the_bus_from_an_arm_that_starts_open():
 
 
 def test_the_gripper_and_the_arm_reach_the_bus_as_one_setpoint():
-    """They share a bus that takes them together, but arrive as two channels that need not carry a value in
-    the same round."""
+    """They share one bus setpoint, but arrive as two channels."""
     bus = FakeBus()
     driver, _, loop = _driven(bus)
     grip = ManualCommandReceiver()
@@ -179,8 +174,7 @@ def test_a_streamed_joint_command_reaches_the_bus():
 
 
 def test_a_streamed_arm_command_leaves_the_fingers_where_the_bus_found_them():
-    """The whole setpoint goes out on every write, so the half nobody has commanded has to carry the width
-    the fingers are already holding."""
+    """The whole setpoint goes out on every write, so the half nobody commanded carries what is held."""
     bus = FakeBus(np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.8]))
     driver, _, loop = _driven(bus)
     commands = ManualCommandReceiver()
@@ -238,8 +232,7 @@ def test_an_arm_serving_a_move_reads_busy_and_takes_commands_once_it_lands(world
 
 
 def test_the_state_that_answers_a_move_is_published_before_the_answer(world):
-    """A caller that learns its move landed reads the arm next, and must not find the sample from
-    mid-travel. Watched at each emit, because both orderings look the same once the tick is over."""
+    """A caller that learns its move landed reads the arm next, and must not find the mid-travel sample."""
     bus = FakeBus()
     driver = so101.Robot(bus)
     answer = _mover(world, driver)(command.JointPosition(JOGGED))
@@ -267,8 +260,7 @@ def test_the_state_answering_a_move_carries_the_pose_the_arm_reached(world):
 
 
 def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stopped(world):
-    """A caller told nothing waits for the rest of the run, and an arm left on the target it missed would
-    resume the move once whatever blocked it goes away."""
+    """An arm left on the target it missed would resume the move once whatever blocked it goes away."""
     bus = FakeBus()
     bus.blocked = True
     clock = MockClock()

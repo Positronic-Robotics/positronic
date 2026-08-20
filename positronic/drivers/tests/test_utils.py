@@ -48,8 +48,7 @@ def test_a_device_within_tolerance_has_arrived():
 
 
 def test_a_settled_move_waits_for_the_driver_to_publish_before_it_is_answered():
-    """A caller that learns its move landed reads the arm next. Answering before the state that says so is
-    out hands it the sample from mid-travel."""
+    """Answering before the state that says so is out hands the caller the sample from mid-travel."""
     move, call = _accepted(0.0)
 
     assert move.settle(TOL / 2, now=0.1) is MoveStatus.ARRIVED
@@ -69,8 +68,7 @@ def test_a_device_still_moving_keeps_the_caller_waiting():
 
 
 def test_a_device_that_never_arrives_fails_the_caller_rather_than_holding_it():
-    """Fingers stopped by what they are holding never reach their target, and a caller told nothing waits for
-    the rest of the run."""
+    """Fingers stopped by what they are holding never reach their target."""
     move, call = _accepted(1.0)
 
     assert move.settle(0.4, now=3.0) is MoveStatus.GAVE_UP
@@ -143,8 +141,7 @@ def test_a_grip_call_takes_the_fingers_until_it_arrives(asking):
 
 
 def test_a_grip_that_gives_up_hands_back_the_width_the_fingers_stopped_at(asking):
-    """A caller told its move failed must not be left with fingers still pushing at a width they missed, so
-    the answer waits for the driver to have written the width handed back here."""
+    """The answer waits for the driver to write the width handed back here, so the fingers stop first."""
     ask, calls = asking
     move, stream = PendingMove(TOL), ManualCommandReceiver()
     answer = ask(1.0)
@@ -216,8 +213,7 @@ def test_a_run_that_dies_with_nothing_in_flight_has_nobody_to_tell():
 
 
 def test_a_settled_move_holds_the_device_against_the_next_one():
-    """The driver publishes the arrival and answers at the end of the tick. Taking another move before that
-    would put BUSY over the state its asker is about to be handed."""
+    """Taking another move first would put BUSY over the state the settled move's asker is owed."""
     move, _ = _accepted(0.0)
 
     assert move.settle(TOL / 2, now=0.1) is MoveStatus.ARRIVED
@@ -228,8 +224,7 @@ def test_a_settled_move_holds_the_device_against_the_next_one():
 
 
 def test_a_run_that_dies_with_one_move_settled_and_another_in_flight_answers_both():
-    """One outcome each: the settled move earned its answer before the run died, and the one still
-    travelling is owed whatever killed it."""
+    """One outcome each: the settled move earned its answer, the travelling one is owed what killed it."""
     move, landed = _accepted(0.0)
     move.settle(TOL / 2, now=0.1)
     travelling = _Call(0.0)
@@ -242,8 +237,7 @@ def test_a_run_that_dies_with_one_move_settled_and_another_in_flight_answers_bot
 
 
 def test_a_run_that_dies_after_a_move_settled_still_hands_over_the_outcome():
-    """The move is over and the device is where it ended up; what killed the run afterwards did not change
-    that, and an asker left unanswered waits for the rest of the run."""
+    """The move is over; what killed the run afterwards did not change that."""
     move, call = _accepted(0.0)
     move.settle(TOL / 2, now=0.1)
 

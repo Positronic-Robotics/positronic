@@ -299,8 +299,8 @@ def _mover(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[command
 
 
 def test_an_arm_that_will_not_home_reads_error_rather_than_ending_the_run():
-    """The driver's own move is the one thing that can fail before a caller exists to hear about it. It reports
-    the arm as it is — not where it was put — and keeps running, so the rig is diagnosable rather than gone."""
+    """The driver's own move is the one that can fail before a caller exists to hear about it, so the run
+    goes on and the arm reads as it is."""
     arm = FakeArm(JOGGED, goal_status=franka.pf.GoalStatus.ABORTED)  # the opening homing never lands
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
@@ -317,8 +317,7 @@ def test_an_arm_that_will_not_home_reads_error_rather_than_ending_the_run():
 
 
 def test_a_sync_move_answers_once_the_arm_is_there(world):
-    """What a sync move adds over a command: a command is fire and forget, so a caller that must know the arm
-    is in place has nothing to wait on. The answer is that arrival."""
+    """What a sync move adds over a command: something to wait on that means the arm is in place."""
     arm = FakeArm(HOME, polls_to_reach=3)  # more than one poll, so an answer cannot land in the asking round
     driver = _driver(arm, manage_desk=False)
     stop = StopFlag()
@@ -367,8 +366,7 @@ def test_a_move_the_world_stops_under_is_handed_back_to_its_asker(world):
 
 
 def test_a_sync_move_the_arm_cannot_make_fails_the_asker(world):
-    """A move that stops advancing is the asker's failure to hear about — it is what they were waiting on, and
-    silence would hold them for the rest of the run."""
+    """A move that stops advancing is the asker's failure to hear about."""
     arm = FakeArm(HOME)
     driver = _driver(arm, manage_desk=False)
     stop = StopFlag()
@@ -389,8 +387,8 @@ def test_a_sync_move_the_arm_cannot_make_fails_the_asker(world):
 
 
 def test_an_arm_that_stopped_short_reads_error_until_a_move_lands(world):
-    """A move that fails leaves the arm somewhere nobody asked for. The vendor reports its own faults, and a
-    stall is not one of them, so without this the next state reads AVAILABLE at a pose no caller chose."""
+    """A stall is not a fault the vendor reports, so without this the arm reads AVAILABLE at a pose nobody
+    asked for."""
     arm = FakeArm(HOME)
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
@@ -425,8 +423,8 @@ def test_an_arm_that_stopped_short_reads_error_until_a_move_lands(world):
 
 
 def test_the_state_answering_a_sync_move_carries_the_pose_the_arm_reached(world):
-    """The poll that reports arrival is the one the travel stops on, so the sample before it was taken while the
-    arm was still moving. Publishing that one hands the caller ``AVAILABLE`` at the pose it set out from."""
+    """The sample before the arriving poll was taken mid-travel, and would read AVAILABLE at the pose the
+    arm set out from."""
     arm = FakeArm(HOME, polls_to_reach=3)
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
@@ -450,8 +448,7 @@ def test_the_state_answering_a_sync_move_carries_the_pose_the_arm_reached(world)
 
 
 def test_a_move_that_lands_as_its_deadline_expires_is_an_arrival():
-    """The deadline stops the poll loop before it asks again, so a goal that landed just then has not been
-    seen. Reading a timeout off the clock alone would fail a caller whose arm is exactly where it asked."""
+    """The deadline stops the poll loop before it asks again, so a goal that landed just then is unseen."""
     arm = FakeArm(HOME, polls_to_reach=10**9)  # it never lands on a poll of its own
     driver = _driver(arm, manage_desk=False)
     driver.state._bind(RecordingEmitter())
@@ -470,8 +467,7 @@ def test_a_move_that_lands_as_its_deadline_expires_is_an_arrival():
 
 
 def test_a_fault_that_lands_with_the_arrival_reads_error_rather_than_available():
-    """A reflex between the goal poll and the state read leaves the arm faulted at the target it reached. The
-    state answering the move reports the arm as the vendor describes it, not the arrival the goal reported."""
+    """The state answering a move reports the arm as the vendor describes it, not as the goal reported."""
     arm = FakeArm(HOME, polls_to_reach=1)  # the first poll of the goal already reports it reached
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
@@ -487,8 +483,8 @@ def test_a_fault_that_lands_with_the_arrival_reads_error_rather_than_available()
 
 
 def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stopped(world):
-    """A goal the controller never converges on is not an error the vendor reports, so without a deadline the
-    asker waits for the rest of the run — and the arm keeps chasing a target it was told it failed."""
+    """A goal the controller never converges on is not an error the vendor reports, so the deadline is what
+    ends the move."""
     arm = FakeArm(HOME)
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()

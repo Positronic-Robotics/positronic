@@ -17,10 +17,9 @@ from . import command
 class RobotStatus(IntEnum):
     """Whether a command sent to the robot now will reach it.
 
-    - AVAILABLE: The robot is tracking whatever it was last commanded, and will take another command.
-    - BUSY: The driver is putting the robot somewhere itself — homing, or serving a synchronous move — and
-      leaves the command stream unread until it arrives.
-    - ERROR: The robot is in an error state.
+    - AVAILABLE: tracking what it was last commanded, and will take another command.
+    - BUSY: the driver is putting it somewhere itself, and leaves the command stream unread until it arrives.
+    - ERROR: the robot is in an error state.
 
     State is published every tick whatever the status; only who is driving the robot changes.
     """
