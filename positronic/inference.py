@@ -11,6 +11,7 @@ import pos3
 import pimm
 import positronic.cfg.embodiment
 import positronic.cfg.policy as policy_cfg
+from pimm.logging import init_logging
 from positronic import keys, wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import prepare_output_dir, run
@@ -18,7 +19,6 @@ from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datase
 from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment, Task
 from positronic.policy.harness import Harness
-from positronic.utils.logging import init_logging
 
 
 class KeyboardOperator(pimm.ControlSystem):

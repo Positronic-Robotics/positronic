@@ -11,6 +11,7 @@ import tqdm
 import pimm
 import positronic.cfg.ds
 import positronic.cfg.simulator
+from pimm.logging import init_logging
 from positronic import geom, keys, wire
 from positronic.dataset import Dataset, Episode, transforms
 from positronic.dataset.ds_player_agent import DsPlayerAgent, DsPlayerStartCommand
@@ -22,7 +23,6 @@ from positronic.gui import dpg_ui
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path
-from positronic.utils.logging import init_logging
 
 
 class Replay(DsPlayerAgent):

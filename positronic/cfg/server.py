@@ -5,13 +5,13 @@ from datetime import datetime
 import configuronic as cfn
 import pos3
 
+from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset import Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig
 from positronic.server.positronic_server import main as server_main
-from positronic.utils.logging import init_logging
 
 from . import analysis as analysis_cfg
 from . import ds

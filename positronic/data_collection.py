@@ -17,6 +17,7 @@ import positronic.cfg.hardware.roboarm
 import positronic.cfg.simulator
 import positronic.cfg.sound
 import positronic.cfg.webxr
+from pimm.logging import init_logging
 from positronic import geom, keys, utils, wire
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
@@ -29,7 +30,6 @@ from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 from positronic.utils import package_assets_path
 from positronic.utils.buttons import ButtonHandler
-from positronic.utils.logging import init_logging
 
 
 def _parse_buttons(buttons: dict, button_handler: ButtonHandler):

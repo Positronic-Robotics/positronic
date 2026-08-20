@@ -10,6 +10,7 @@ import configuronic as cfn
 import pos3
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
 
+from pimm.logging import init_logging
 from positronic import geom, keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
@@ -18,7 +19,6 @@ from positronic.policy.codec import ChangeEEFrame, RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
-from positronic.utils.logging import init_logging
 from positronic.vendors import openpi
 from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer
 

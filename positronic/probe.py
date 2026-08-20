@@ -29,11 +29,11 @@ import rerun.blueprint as rrb
 
 import positronic.cfg.ds
 import positronic.cfg.policy as policy_cfg
+from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.drivers.roboarm.command import CartesianPosition, JointDelta
 from positronic.policy import Policy, Recorder, is_action
-from positronic.utils.logging import init_logging
 
 # Tap name; the recorder logs each obs/action entity under ``{_TAP}/{key}`` (see recording.py).
 _TAP = 'raw'

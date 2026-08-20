@@ -1,15 +1,18 @@
-"""How a pimm process configures logging — the parent's format, and a spawned child's own setup.
+"""How a pimm process configures logging, at an entry point and in a spawned control system.
 
-A spawned control system runs no entry point, so nothing else configures it;
-`configure_process_logging` is what gives it a threshold and the shared format. The parent's own
-configuration is `positronic.utils.logging`, which reads its format from here.
+`init_logging` is the entry point's call: it resolves a threshold, publishes it, and then
+configures its own process through `configure_process_logging`, which is all a child runs, having
+no entry point of its own. Both processes therefore take the same format, the same threshold and
+the same library pins.
 """
 
 import logging
 import os
 
+import coloredlogs
+
 # A matched pair: `LOG_DATEFMT` renders the `asctime` that `LOG_FORMAT` places, so the two change
-# together. Public — `positronic.utils.logging` configures the parent from them.
+# together.
 LOG_FORMAT = '%(asctime)s.%(msecs)03d [%(levelname)s] (%(filename)s:%(lineno)s) %(message)-80s'
 LOG_DATEFMT = '%H:%M:%S'
 
@@ -74,3 +77,22 @@ def configure_process_logging() -> None:
     logging.basicConfig(level=level, format=LOG_FORMAT, datefmt=LOG_DATEFMT, force=True)
     for logger_name in _NOISY_LIBRARY_LOGGERS:
         logging.getLogger(logger_name).setLevel(max(level, logging.WARNING))
+
+
+def init_logging(level: str | int = 'INFO') -> None:
+    """Configure the entry point's own process, and publish the threshold its children read.
+
+    `level` is what the program asks for; the operator's own `LOG_LEVEL` outranks it. Colour is the
+    one thing an entry point does that a child does not: a child's output is a pipe.
+    """
+    requested = os.getenv(LOG_LEVEL_ENV)
+    if requested is not None:
+        log_level = level_number(requested, LOG_LEVEL_ENV)
+    else:
+        log_level = level_number(level, 'level') if isinstance(level, str) else level
+
+    # A number, and in its own variable: a name resolves against the reading process's registry, and
+    # `LOG_LEVEL` is the operator's, so writing there makes this call's output its own next input.
+    os.environ[RESOLVED_LOG_LEVEL_ENV] = str(log_level)
+    configure_process_logging()  # reads the number just written, so a parent configures as its children do
+    coloredlogs.install(level=log_level, fmt=LOG_FORMAT, datefmt=LOG_DATEFMT)

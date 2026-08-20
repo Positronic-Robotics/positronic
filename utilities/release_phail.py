@@ -28,12 +28,12 @@ import configuronic as cfn
 import numpy as np
 import pos3
 
+from pimm.logging import init_logging
 from positronic.cfg import analysis as analysis_cfg
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.utilities.migrate_remote import migrate_dataset
 from positronic.utils import PUBLIC
 from positronic.utils.checkpoints import get_latest_checkpoint
-from positronic.utils.logging import init_logging
 
 DEST_ROOT = 's3://positronic-public/phail'
 

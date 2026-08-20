@@ -7,6 +7,7 @@ import numpy as np
 import pos3
 
 import positronic.cfg.ds as base_cfg
+from pimm.logging import init_logging
 from positronic import keys
 from positronic.cfg.ds import internal
 from positronic.cfg.eval.real import tasks
@@ -15,7 +16,6 @@ from positronic.dataset.transforms.episode import Derive, FromValue, Group, Iden
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
 from positronic.server.positronic_server import main as server_main
-from positronic.utils.logging import init_logging
 
 
 def task_code(ep: Episode) -> str:

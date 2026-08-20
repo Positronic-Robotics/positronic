@@ -29,12 +29,12 @@ import pos3
 import pyarrow as pa
 import tqdm
 
+from pimm.logging import init_logging
 from positronic import utils
 from positronic.cfg.ds import apply_codec
 from positronic.dataset import Dataset
 from positronic.dataset.episode import Episode
 from positronic.dataset.signal import Kind
-from positronic.utils.logging import init_logging
 
 
 def _write_mp4(path: Path, frames: Iterable[np.ndarray], fps: int) -> dict:

@@ -12,6 +12,7 @@ import numpy as np
 import pos3
 import zmq
 
+from pimm.logging import init_logging
 from positronic import keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT
 from positronic.offboard.server import serve
@@ -21,7 +22,6 @@ from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.utils.checkpoints import list_checkpoints
-from positronic.utils.logging import init_logging
 from positronic.vendors import gr00t
 from positronic.vendors.gr00t import codecs
 
