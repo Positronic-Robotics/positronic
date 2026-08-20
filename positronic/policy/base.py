@@ -1,35 +1,35 @@
 """Policy API Design requirements
 
-Agreed:
-- A `Policy` is the algorithm that defines how to control a robot from the observed data.
-- A `Policy` makes one `Session` per control session; state lives in the session, what is shared across
-  sessions lives in the policy.
-- A `Policy` is told which robot it is asked to control, so the session it produces comes ready for it.
-- A `Session` has the shape of a pimm control system without being one literally: it reads observations,
-  emits commands, and sleeps between ticks. The API expresses that shape in plain data — dicts in, dicts
-  out.
-- A well-behaved session does not block a tick; a badly behaved one may, so a session must be cancellable
-  from outside at any moment. Threads and futures inside a session are its own business.
-- The split at the wire is stateful/stateless: the rig holds all of the algorithm's state, and the remote
-  call is a pure function. A server may cache for speed, but dropping the cache must not change what it computes.
-- The server specifies the full policy: the pure function it serves plus the rig-side stack that
-  completes the algorithm. The rig runs what is declared and nothing else.
-- Codecs transform a pure function's inputs and outputs, on either side of the wire, and a serving
-  transform has a training dual: the model is served behind the representation it was trained on.
-- The framework calls the session with the current observation; the session returns what to execute and when
-  it wants control back. A returned command executes the moment it is returned — no timestamp ever
-  crosses the interface; timing lives only in when the session chooses to return.
-- The framework does its best to give the session control at the moment it asked for, and also when a
-  submitted call lands.
-- A session has no clock of its own: time reaches it as data, handed over by the framework. The exact
-  path is open.
-- The framework gives the session the policy's pure function as a call that never waits: invoking it
-  starts the work and returns a handle at once; the session reads the answer from the handle when it next
-  has control.
-- A trial charged for time pays for all of the session's compute — work done while in control (codecs,
-  blending) and the call behind the handle alike.
-- A command can be computed against the current state — a delta applied to the pose now, not the pose at
-  inference start — because a fresh observation is in hand at the moment of release.
+Policies and sessions:
+- A `Policy` is the algorithm that controls a robot from observed data.
+- A `Policy` makes one `Session` per control session. Sessions are independent, and several may exist at
+  the same moment.
+- A `Policy` is told which robot it is to control, so the session comes ready for it.
+- A session is cancellable from outside at any moment, and lives until it is cancelled.
+
+The control loop:
+- The framework calls the session with the current observation; the session returns what to execute and
+  when it wants control back.
+- A returned command is emitted towards the robot driver in the same control pass.
+- The framework does its best to return control at the moment asked, or earlier — when a call's answer
+  is ready.
+- A session has no clock of its own: time reaches it as data.
+- Observations and commands carry domain types (a robot command, an image).
+
+Pure functions:
+- A policy may define pure functions that are available to sessions.
+- The framework serves these functions through a future-like API: invoking one starts the work and returns
+  a handle the session reads when it next has control.
+- A function's inputs and outputs are plain types including numpy; domain types may be supported.
+- A session computes only while in control or inside a served call; it runs no work of its own beside
+  them.
+- The framework makes no stateful guarantees: a function may cache, but dropping the cache must not
+  change what it computes.
+- Codecs transform a pure function's inputs and outputs.
+
+Distribution:
+- A policy is declarable as data: its pure functions plus the stack around them. A server declares it,
+  and the rig runs what is declared and nothing else.
 
 Under discussion:
 - The rig-side algorithm is assembled from declarable components — named, parameterized, composable —
