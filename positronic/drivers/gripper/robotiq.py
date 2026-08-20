@@ -34,12 +34,11 @@ class Robotiq2F(pimm.ControlSystem):
         )
         assert client.connect(), f'Failed to connect to Robotiq gripper at {self._port}'
 
+        move = PendingMove(_ARRIVED_TOL)
         try:
             limiter = pimm.RateLimiter(clock, hz=200)  # According to the manual, the gripper can handle 200Hz
             client.write_registers(_REG_CMD, [0x0000, 0x0000, 0x0000], device_id=_SLAVE)
             client.write_registers(_REG_CMD, [0x0100, 0x0000, 0x0000], device_id=_SLAVE)
-
-            move = PendingMove(_ARRIVED_TOL)
 
             while not should_stop.value:
                 reg = client.read_input_registers(_REG_IN_POS, count=1, device_id=_SLAVE).registers[0]
@@ -55,6 +54,9 @@ class Robotiq2F(pimm.ControlSystem):
                     client.write_registers(_REG_CMD, [0x0900, pos, (frc << 8) | spd], device_id=_SLAVE)
 
                 yield limiter.wait()
+        except Exception as exc:
+            move.fail(exc)  # a run that dies mid-move must not leave its asker waiting
+            raise
         finally:
             client.close()
 

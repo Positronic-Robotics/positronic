@@ -5,7 +5,7 @@ import pytest
 
 import pimm
 from pimm.tests.testing import wire_call
-from positronic.drivers.utils import ARRIVAL_TIMEOUT_S, MoveStatus, PendingMove, grip_setpoint
+from positronic.drivers.utils import _GRIP_TIMEOUT_S, MoveStatus, PendingMove, grip_setpoint
 from positronic.tests.testing_coutils import ManualCommandReceiver
 
 TOL = 0.05
@@ -31,10 +31,10 @@ class _Call(pimm.calls.Call[float, None]):
         self.exception = exc
 
 
-def _accepted(target: float | np.ndarray, tol: float = TOL) -> tuple[PendingMove, _Call]:
-    move = PendingMove(tol, timeout_s=3.0)
+def _accepted(target: float | np.ndarray, tol: float = TOL, timeout_s: float = 3.0) -> tuple[PendingMove, _Call]:
+    move = PendingMove(tol)
     call = _Call(0.0)
-    move.accept(call, target, now=0.0)
+    move.accept(call, target, now=0.0, timeout_s=timeout_s)
     return move, call
 
 
@@ -89,7 +89,7 @@ def test_a_move_that_arrives_clears_the_error_left_by_one_that_did_not():
     move.settle(0.4, now=3.0)
     assert move.errored
 
-    move.accept(_Call(0.0), 1.0, now=3.0)
+    move.accept(_Call(0.0), 1.0, now=3.0, timeout_s=3.0)
     assert move.settle(1.0, now=3.1) is MoveStatus.ARRIVED
     assert not move.errored
 
@@ -131,7 +131,7 @@ def test_a_grip_that_gives_up_hands_back_the_width_the_fingers_stopped_at(asking
     answer = ask(1.0)
     grip_setpoint(move, calls, stream, grip=0.0, now=0.0)
 
-    assert grip_setpoint(move, calls, stream, grip=0.42, now=ARRIVAL_TIMEOUT_S) == 0.42
+    assert grip_setpoint(move, calls, stream, grip=0.42, now=_GRIP_TIMEOUT_S) == 0.42
     assert not move.active and move.errored
     with pytest.raises(TimeoutError, match='stopped at 0.42'):
         answer.result()
@@ -159,3 +159,32 @@ def test_a_streamed_grip_waits_for_the_call_queue_to_be_empty(asking):
     assert grip_setpoint(move, calls, stream, grip=0.9, now=0.1) is None  # the call arrives
     assert grip_setpoint(move, calls, stream, grip=0.9, now=0.2) == 0.25  # the stream, still waiting
     assert grip_setpoint(move, calls, stream, grip=0.25, now=0.3) is None
+
+
+def test_how_long_a_move_gets_is_the_driver_s_to_say():
+    """An arm ramping to a capped speed needs longer for a longer trip than fingers closing on an object."""
+    brief, brief_call = _accepted(1.0, timeout_s=1.0)
+    patient, patient_call = _accepted(1.0, timeout_s=10.0)
+
+    assert brief.settle(0.0, now=2.0) is MoveStatus.GAVE_UP
+    assert isinstance(brief_call.exception, TimeoutError)
+    assert patient.settle(0.0, now=2.0) is MoveStatus.MOVING
+    assert not patient_call.answered
+
+
+def test_a_run_that_dies_hands_what_killed_it_to_the_move_in_flight():
+    """The asker is blocked on an answer, and a driver that stops looping will never produce one."""
+    move, call = _accepted(1.0)
+
+    move.fail(RuntimeError('the bus went away'))
+
+    assert isinstance(call.exception, RuntimeError)
+    assert not move.active and move.errored
+
+
+def test_a_run_that_dies_with_nothing_in_flight_has_nobody_to_tell():
+    move = PendingMove(TOL)
+
+    move.fail(RuntimeError('the bus went away'))
+
+    assert not move.active and not move.errored

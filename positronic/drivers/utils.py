@@ -8,8 +8,8 @@ import numpy as np
 
 import pimm
 
-# A device stopped by what it is holding never reaches its target
-ARRIVAL_TIMEOUT_S = 3.0
+# Fingers stopped by what they are holding never reach their target
+_GRIP_TIMEOUT_S = 3.0
 
 
 class DriverRun:
@@ -43,9 +43,8 @@ class PendingMove:
     otherwise fail a move for something its asker never did.
     """
 
-    def __init__(self, tol: float, timeout_s: float = ARRIVAL_TIMEOUT_S):
+    def __init__(self, tol: float):
         self._tol = tol
-        self._timeout_s = timeout_s
         self._call: pimm.calls.Call[Any, None] | None = None
         self._target: np.ndarray | float = 0.0
         self._deadline = 0.0
@@ -62,9 +61,22 @@ class PendingMove:
         assert self._call is not None, 'no move is in flight'
         return self._target
 
-    def accept(self, call: pimm.calls.Call[Any, None], target: np.ndarray | float, now: float) -> None:
-        """Take `call` as the move in flight, aiming at `target`."""
-        self._call, self._target, self._deadline = call, target, now + self._timeout_s
+    def accept(
+        self, call: pimm.calls.Call[Any, None], target: np.ndarray | float, now: float, timeout_s: float
+    ) -> None:
+        """Take `call` as the move in flight, aiming at `target`, with `timeout_s` to get there.
+
+        How long a move may take is the driver's to say: a device that ramps to a capped speed needs longer
+        for a longer trip, and one stopped by what it is holding needs a fixed grace instead.
+        """
+        self._call, self._target, self._deadline = call, target, now + timeout_s
+
+    def fail(self, exc: BaseException) -> None:
+        """Hand `exc` to the move in flight, if there is one."""
+        if self._call is None:
+            return
+        self._call.set_exception(exc)
+        self._call, self.errored = None, True
 
     def settle(self, position: np.ndarray | float, now: float) -> MoveStatus:
         """Answer the move in flight once the device reads back at its target, or once it runs out of time."""
@@ -104,7 +116,7 @@ def grip_setpoint(
         return grip if move.settle(grip, now) is MoveStatus.GAVE_UP else None
     if (call := next(calls.incoming(), None)) is not None:
         target = _clamped(call.request)
-        move.accept(call, target, now)
+        move.accept(call, target, now, _GRIP_TIMEOUT_S)
         return target
     if (streamed := pimm.value_updated(stream)) is not None:
         return _clamped(streamed)

@@ -4084,14 +4084,6 @@
                     "endColumn": 57,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportReturnType",
-                "range": {
-                    "startColumn": 22,
-                    "endColumn": 41,
-                    "lineCount": 1
-                }
             }
         ],
         "./positronic/drivers/roboarm/models.py": [
@@ -4110,14 +4102,6 @@
                 "range": {
                     "startColumn": 55,
                     "endColumn": 65,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportReturnType",
-                "range": {
-                    "startColumn": 18,
-                    "endColumn": 35,
                     "lineCount": 1
                 }
             }

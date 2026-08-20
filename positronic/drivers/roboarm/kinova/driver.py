@@ -14,6 +14,17 @@ from positronic.drivers.utils import MoveStatus, PendingMove
 
 # Radians; the arm reports joints but no goal, so arrival is judged from the joints it reads
 _ARRIVED_TOL = 0.02
+# On top of the travel itself: the controller ramps in and out of its speed cap, and the arm settles late
+_MOVE_GRACE_S = 3.0
+
+
+def _travel_s(joint_controller, q: np.ndarray, target: np.ndarray) -> float:
+    """How long the arm may take to reach ``target``, from the speed its controller is capped at.
+
+    ``relative_dynamics_factor`` scales that cap, so a conservative factor buys proportionally more time
+    rather than failing moves the arm is tracking perfectly well.
+    """
+    return _MOVE_GRACE_S + float(np.max(np.abs(target - q)) / np.min(joint_controller.max_velocity))
 
 
 def _set_realtime_priority():
@@ -91,7 +102,7 @@ class Robot(pimm.ControlSystem):
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         _set_realtime_priority()
         robot_state = KinovaState()
         rate_limiter = pimm.RateLimiter(clock, hz=1000)
@@ -110,39 +121,44 @@ class Robot(pimm.ControlSystem):
             # The arm is torque-controlled, so it only travels while this loop runs: it cannot be held for a move
             move = PendingMove(_ARRIVED_TOL)
 
-            while not should_stop.value:
-                # The actuators report 0..2pi, so a move across the boundary reads a turn from its target
-                # until the reading is put on the same branch the controller tracks.
-                if move.active and move.settle(wrap_joint_angle(q, move.target), clock.now()) is MoveStatus.GAVE_UP:
-                    # Leaving the controller on the target the arm stopped short of would resume the move
-                    # once whatever blocked it goes away, long after its asker was told it failed.
-                    joint_controller.set_target_qpos(q)
-                if not move.active:
-                    if (call := next(self.sync_move.incoming(), None)) is not None:
-                        with pimm.calls.forward_failure(call):
-                            target = self._target_qpos(joint_controller, robot_state, call.request)
-                            joint_controller.set_target_qpos(target)
-                            # The branch the controller tracks: it wraps the target once, when it is set
-                            move.accept(call, wrap_joint_angle(target, q), clock.now())
-                    elif (cmd := pimm.value_updated(self.commands)) is not None:
-                        try:
-                            joint_controller.set_target_qpos(self._target_qpos(joint_controller, robot_state, cmd))
-                        # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
-                        except Exception as exc:
-                            logging.warning(f'{cmd} not applied: {exc}')
+            try:
+                while not should_stop.value:
+                    # The actuators report 0..2pi, so a move across the boundary reads a turn from its target
+                    # until the reading is put on the same branch the controller tracks.
+                    if move.active and move.settle(wrap_joint_angle(q, move.target), clock.now()) is MoveStatus.GAVE_UP:
+                        # Leaving the controller on the target the arm stopped short of would resume the move
+                        # once whatever blocked it goes away, long after its asker was told it failed.
+                        joint_controller.set_target_qpos(q)
+                    if not move.active:
+                        if (call := next(self.sync_move.incoming(), None)) is not None:
+                            with pimm.calls.forward_failure(call):
+                                target = self._target_qpos(joint_controller, robot_state, call.request)
+                                joint_controller.set_target_qpos(target)
+                                # The branch the controller tracks: it wraps the target once, when it is set
+                                wrapped = wrap_joint_angle(target, q)
+                                move.accept(call, wrapped, clock.now(), _travel_s(joint_controller, q, wrapped))
+                        elif (cmd := pimm.value_updated(self.commands)) is not None:
+                            try:
+                                joint_controller.set_target_qpos(self._target_qpos(joint_controller, robot_state, cmd))
+                            # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
+                            except Exception as exc:
+                                logging.warning(f'{cmd} not applied: {exc}')
 
-                torque_command = joint_controller.compute_torque(q, dq, tau)
-                np.divide(torque_command, torque_constant, out=current_command)
-                q, dq, tau = api.apply_current_command(current_command)
-                ee_pose = self.solver.forward(joint_controller.q_s)
+                    torque_command = joint_controller.compute_torque(q, dq, tau)
+                    np.divide(torque_command, torque_constant, out=current_command)
+                    q, dq, tau = api.apply_current_command(current_command)
+                    ee_pose = self.solver.forward(joint_controller.q_s)
 
-                if move.active:  # the driver owns the arm until the move answers, and reads no command meanwhile
-                    status = RobotStatus.RESETTING
-                elif move.errored:  # the controller reports its trajectory, not whether the arm got there
-                    status = RobotStatus.ERROR
-                else:
-                    status = RobotStatus.AVAILABLE if joint_controller.finished else RobotStatus.MOVING
-                robot_state.encode(q, dq, ee_pose, status)
-                self.state.emit(robot_state)
+                    if move.active:  # the driver owns the arm until the move answers, and reads no command meanwhile
+                        status = RobotStatus.RESETTING
+                    elif move.errored:  # the controller reports its trajectory, not whether the arm got there
+                        status = RobotStatus.ERROR
+                    else:
+                        status = RobotStatus.AVAILABLE if joint_controller.finished else RobotStatus.MOVING
+                    robot_state.encode(q, dq, ee_pose, status)
+                    self.state.emit(robot_state)
 
-                yield rate_limiter.wait()
+                    yield rate_limiter.wait()
+            except Exception as exc:
+                move.fail(exc)  # a run that dies mid-move must not leave its asker waiting
+                raise
