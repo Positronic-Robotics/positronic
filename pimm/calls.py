@@ -12,7 +12,9 @@ invocations. `World.connect` binds a caller to a handler wherever the two run.
 - `incoming()` yields calls one at a time as it is advanced; each call is yielded once, and one it has not
   reached is yielded by a later `incoming()`.
 - Each `Call` is answered once, with `set_result` or `set_exception`; answering again raises in the handler.
-- A handler whose control system ends answers what it never reached with `HandlerStopped`.
+- A handler whose control system ends answers what it never reached with `HandlerStopped`. A call made
+  after it has ended is not answered at all, so a caller waiting on an answer must also watch
+  `should_stop`.
 - `__call__` returns an `Answer` completed by the handler's answer and by nothing else.
 - An `Answer` never waits: `done()` and `result()` return at once; `result()` on an unanswered call raises
   `NoValueException`.
