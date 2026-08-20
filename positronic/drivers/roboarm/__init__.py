@@ -36,11 +36,6 @@ class RobotStatus(IntEnum):
         return cls.BUSY if value == 1 else None
 
 
-def is_sound(status: RobotStatus) -> bool:
-    """Whether the arm is under the commander's control, rather than the driver's or a fault's."""
-    return status == RobotStatus.AVAILABLE
-
-
 class State(ABC):
     """
     Abstract state of the robot. Each robot must have its own implementation of this class.
@@ -76,4 +71,4 @@ class State(ABC):
         return None
 
 
-__all__ = ['RobotStatus', 'State', 'command', 'is_sound']
+__all__ = ['RobotStatus', 'State', 'command']

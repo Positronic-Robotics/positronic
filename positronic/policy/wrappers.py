@@ -12,7 +12,7 @@ from collections import deque
 import numpy as np
 
 from positronic import keys
-from positronic.drivers.roboarm import RobotStatus, is_sound
+from positronic.drivers.roboarm import RobotStatus
 from positronic.policy.base import DelegatingSession, Now, PolicyWrapper, Session
 
 
@@ -28,24 +28,24 @@ def _is_robot_status(name: str) -> bool:
     return name.startswith(f'{keys.ROBOT_STATE}.') and name.endswith(keys.STATUS_SUFFIX)
 
 
-def _arms_sound(obs) -> bool:
-    """Whether every arm in the observation is sound. An observation naming no arm status — a probe
-    replaying a recording — has no arm to be unsound.
+def _arms_available(obs) -> bool:
+    """Whether every arm in the observation will take a command. An observation naming no arm status — a
+    probe replaying a recording — has no arm to be unavailable.
 
     The wire carries a status as its number, so this is where one becomes a ``RobotStatus`` again — and a
     number no status answers to raises, the rig and the server disagreeing about the protocol.
     """
-    return all(is_sound(RobotStatus(v)) for name, v in obs.items() if _is_robot_status(name))
+    return all(RobotStatus(v) is RobotStatus.AVAILABLE for name, v in obs.items() if _is_robot_status(name))
 
 
 class StopOnFault(PolicyWrapper):
-    """Stop the arm while it is not sound, and plan afresh once it is.
+    """Stop the arm while it will not take a command, and plan afresh once it will.
 
-    An arm that is faulted, or that its driver has taken, is not tracking the plan it was given, so the plan
-    is worthless:
-    this answers the empty trajectory — stop what is executing — and resets the sessions below, so the first
-    sound observation reaches the model instead of resuming a chunk stamped before. It belongs outside the
-    scheduling wrapper, which would otherwise answer "keep playing" without ever seeing the status.
+    An arm that is faulted, or that its driver has taken for a move of its own, is not tracking the plan it
+    was given, so the plan is worthless: this answers the empty trajectory — stop what is executing — and
+    resets the sessions below, so the first observation from an available arm reaches the model instead of
+    resuming a chunk stamped before. It belongs outside the scheduling wrapper, which would otherwise answer
+    "keep playing" without ever seeing the status.
 
     Every arm in the observation is checked, so a bimanual rig stops on either.
     """
@@ -54,7 +54,7 @@ class StopOnFault(PolicyWrapper):
 
     class _Session(DelegatingSession):
         def __call__(self, obs):
-            if _arms_sound(obs):
+            if _arms_available(obs):
                 return self._inner(obs)
             self.cancel()
             return []
