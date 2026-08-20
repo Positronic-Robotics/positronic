@@ -25,15 +25,10 @@ class RobotStatus(IntEnum):
     State is published every tick whatever the status; only who is driving the robot changes.
     """
 
-    # These numbers are written into recorded datasets
+    # These numbers are written into recorded datasets and sent over the wire
     AVAILABLE = 0
-    BUSY = 2
+    BUSY = 1
     ERROR = 3
-
-    @classmethod
-    def _missing_(cls, value: object) -> 'RobotStatus | None':
-        # Recorded episodes and rigs that predate the folded status carry 1 for an arm its driver has taken
-        return cls.BUSY if value == 1 else None
 
 
 class State(ABC):
