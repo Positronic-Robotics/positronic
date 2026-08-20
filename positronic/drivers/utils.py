@@ -130,16 +130,11 @@ def grip_setpoint(
     """The width to command the fingers this tick, or ``None`` to leave the last one standing.
 
     A move in flight owns the fingers, so neither the calls nor the stream is read until it settles. One
-    that gives up hands back the width the fingers stopped at, so they stop pushing at a width they could
-    not reach.
-
-    ``grip`` is the width the driver has already emitted this tick, so a settled move is answered here: the
-    reading that says the fingers arrived is out before its asker learns they did.
+    that gives up hands back the width the fingers stopped at; the driver writes that width and then calls
+    ``PendingMove.answer``, so the fingers stop pushing before their asker hears the move failed.
     """
     if move.active:
-        settled = move.settle(grip, now)
-        move.answer()
-        return grip if settled is MoveStatus.GAVE_UP else None
+        return grip if move.settle(grip, now) is MoveStatus.GAVE_UP else None
     if (call := next(calls.incoming(), None)) is not None:
         target = _clamped(call.request)
         move.accept(call, target, now, _GRIP_TIMEOUT_S)

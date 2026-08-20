@@ -138,11 +138,13 @@ def test_a_grip_call_takes_the_fingers_until_it_arrives(asking):
     assert grip_setpoint(move, calls, stream, grip=0.3, now=0.1) is None, 'commanded again mid-travel'
     assert grip_setpoint(move, calls, stream, grip=0.7, now=0.2) is None
     assert not move.active
+    move.answer()
     assert answer.result() is None
 
 
 def test_a_grip_that_gives_up_hands_back_the_width_the_fingers_stopped_at(asking):
-    """A caller told its move failed must not be left with fingers still pushing at a width they missed."""
+    """A caller told its move failed must not be left with fingers still pushing at a width they missed, so
+    the answer waits for the driver to have written the width handed back here."""
     ask, calls = asking
     move, stream = PendingMove(TOL), ManualCommandReceiver()
     answer = ask(1.0)
@@ -150,6 +152,9 @@ def test_a_grip_that_gives_up_hands_back_the_width_the_fingers_stopped_at(asking
 
     assert grip_setpoint(move, calls, stream, grip=0.42, now=_GRIP_TIMEOUT_S) == 0.42
     assert not move.active and move.errored
+    assert not answer.done(), 'the fingers are still on the width they missed'
+
+    move.answer()
     with pytest.raises(TimeoutError, match='stopped at 0.42'):
         answer.result()
 
@@ -162,6 +167,7 @@ def test_a_grip_asked_for_past_the_range_is_tracked_against_a_width_the_fingers_
 
     assert grip_setpoint(move, calls, stream, grip=0.0, now=0.0) == 1.0
     assert grip_setpoint(move, calls, stream, grip=1.0, now=0.1) is None
+    move.answer()
     assert answer.result() is None
 
 
@@ -174,6 +180,7 @@ def test_a_streamed_grip_waits_for_the_call_queue_to_be_empty(asking):
 
     assert grip_setpoint(move, calls, stream, grip=0.0, now=0.0) == 0.9
     assert grip_setpoint(move, calls, stream, grip=0.9, now=0.1) is None  # the call arrives
+    move.answer()
     assert grip_setpoint(move, calls, stream, grip=0.9, now=0.2) == 0.25  # the stream, still waiting
     assert grip_setpoint(move, calls, stream, grip=0.25, now=0.3) is None
 

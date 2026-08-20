@@ -53,6 +53,7 @@ class Robotiq2F(pimm.ControlSystem):
                     frc = int(max(0, min(255, self.force.value)))
 
                     client.write_registers(_REG_CMD, [0x0900, pos, (frc << 8) | spd], device_id=_SLAVE)
+                move.answer()  # the width a settled move is answered with is on the fingers
 
                 yield limiter.wait()
         except Exception as exc:

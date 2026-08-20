@@ -57,6 +57,7 @@ class DHGripper(pimm.ControlSystem):
                 client.write_register(0x103, c_uint16(width).value, slave=1)
                 client.write_register(0x101, c_uint16(self.force.value).value, slave=1)
                 client.write_register(0x104, c_uint16(self.speed.value).value, slave=1)
+                move.answer()  # the width a settled move is answered with is on the fingers
 
                 yield pimm.Sleep(0.001)  # Small delay to prevent busy-waiting
         except Exception as exc:
