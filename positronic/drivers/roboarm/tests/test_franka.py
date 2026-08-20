@@ -159,7 +159,7 @@ def _drive(loop, clock: MockClock | None = None) -> None:
 def _drive_park(driver: franka.Robot, arm: FakeArm) -> MockClock:
     """Park ``arm`` under a clock that moves only by the waits the park itself asks for."""
     clock = MockClock()
-    _drive(driver._park(clock), clock)
+    _drive(driver._arm(StopFlag(), clock).park(), clock)
     return clock
 
 
@@ -188,7 +188,7 @@ def test_the_park_waits_by_yielding_rather_than_blocking():
     """A driver's waits are the world's to honour, teardown included: the park asks for them with Sleep."""
     arm = FakeArm(JOGGED, polls_to_reach=3)
 
-    commands = list(_driver(arm, manage_desk=False)._park(MockClock()))
+    commands = list(_driver(arm, manage_desk=False)._arm(StopFlag(), MockClock()).park())
 
     assert commands and all(isinstance(command, pimm.Sleep) for command in commands)
 

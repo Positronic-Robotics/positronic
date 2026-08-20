@@ -23,7 +23,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers import vendor_import
-from positronic.drivers.common import MoveStatus
+from positronic.drivers.common import DriverRun, MoveStatus
 from positronic.utils import package_assets_path
 
 from . import RobotStatus, State, command
@@ -162,6 +162,132 @@ class _Kinematics:
         return None
 
 
+class _Chain(DriverRun):
+    """The chain the driver drives: the vendor handle, the state published from it, and the moves made with it.
+
+    A move is ramped rather than commanded outright, published as ``RESETTING`` throughout, and judged from
+    the joints the chain reads back.
+    """
+
+    def __init__(
+        self,
+        vendor: Any,
+        out: pimm.SignalEmitter[YamState],
+        home_joints: np.ndarray,
+        base_pose: geom.Transform3D,
+        should_stop: pimm.SignalReceiver,
+        clock: pimm.Clock,
+    ):
+        super().__init__(should_stop, clock, hz=100)
+        self.vendor = vendor
+        self.out = out
+        self.state = YamState()
+        self.home_joints = home_joints
+        self._base_pose = base_pose
+        self._kin = _Kinematics()
+
+    def observations(self) -> dict[str, np.ndarray]:
+        """What the chain reports right now."""
+        return self.vendor.get_observations()
+
+    def encode(self, obs: dict[str, np.ndarray]) -> None:
+        q = obs[_JOINT_POS]
+        self.state.encode(q, obs[_JOINT_VEL], self._base_pose * self._kin.fk(q))
+
+    def publish(self, obs: dict[str, np.ndarray]) -> None:
+        """Ship the chain as it reports itself, marked ERROR while it is not where the driver put it."""
+        self.encode(obs)
+        if self.errored:  # ``encode`` clears the status; the chain is still where it was left
+            self.state._set_error()
+        self.out.emit(self.state)
+
+    def _publish_moving(self) -> None:
+        """Publish the chain mid-move, where its pose is not the one it was commanded to track."""
+        self.encode(self.observations())
+        self.state._start_reset()  # ``encode`` clears RESETTING; the chain has not arrived
+        self.out.emit(self.state)
+
+    def measured_joints(self) -> np.ndarray:
+        """The joints the chain reports, as a target that holds it where it stands."""
+        return np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
+
+    def _ik(self, world_pose: geom.Transform3D, q: np.ndarray) -> np.ndarray:
+        """IK in the arm-base frame."""
+        solution = self._kin.ik(self._base_pose.inv * world_pose, q)
+        if solution is None:
+            raise ValueError(f'{world_pose} is out of reach')
+        return solution
+
+    def target_joints(self, cmd: command.CommandType, q: np.ndarray) -> np.ndarray:
+        """The joints ``cmd`` asks the chain to hold; raises what the chain cannot be asked for."""
+        match cmd:
+            case command.JointPosition(positions):
+                return np.asarray(positions, dtype=np.float64)
+            case command.JointDelta(velocities=delta):
+                return q + np.asarray(delta, dtype=np.float64)
+            case command.CartesianPosition(pose):
+                return self._ik(pose, q)
+            case command.CartesianDelta() as delta_cmd:
+                return self._ik(delta_cmd.apply(self._base_pose * self._kin.fk(q)), q)
+            case other:
+                raise NotImplementedError(f'Unsupported command {other}')
+
+    def move_to(self, target: np.ndarray, grip: float) -> Generator[pimm.Command, None, MoveStatus]:
+        """Ramp the chain to ``target``, yielding until it reads back there.
+
+        Drive with ``yield from``. The vendor's own ``move_joints`` is not used: it blocks the world for the
+        whole ramp and returns without ever reading where the chain got to.
+        """
+        try:
+            start = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
+            started = self.clock.now()
+            while not np.all(np.abs(self.observations()[_JOINT_POS] - target) < _ARRIVED_TOL):
+                if self.should_stop.value:
+                    return MoveStatus.GAVE_UP
+                elapsed = self.clock.now() - started
+                if elapsed > _MOVE_TIME_S + _SETTLE_S:
+                    raise TimeoutError(f'the chain stopped short of {target}')
+                # Ramped rather than commanded outright, so the chain travels at a pace the joints can hold,
+                # and held at the target afterwards while it settles the last of the way in.
+                alpha = min(elapsed / _MOVE_TIME_S, 1.0)
+                self.vendor.command_joint_pos(np.append((1 - alpha) * start + alpha * target, 1.0 - grip))
+                self._publish_moving()
+                yield self.limiter.wait()
+        except Exception:
+            self.errored = True  # wherever the chain stopped, it is not where it was sent
+            raise
+
+        self.errored = False
+        self.encode(self.observations())
+        self.out.emit(self.state)
+        return MoveStatus.ARRIVED
+
+    def home(self, grip: float) -> Generator[pimm.Command, None, np.ndarray]:
+        """Ramp the chain home, and return the joints to hold: home if it got there, where it stopped if not."""
+        home = np.asarray(self.home_joints, dtype=np.float64)
+        try:
+            if (yield from self.move_to(home, grip)) is MoveStatus.ARRIVED:
+                return home
+        # rules-allow: swallowed-error — a chain that will not home reads ERROR; it does not end the run
+        except Exception as exc:
+            logging.error(f'Homing failed, the chain is not where the driver put it: {exc}')
+        return self.measured_joints()
+
+    def serve_sync_move(
+        self, call: pimm.calls.Call[command.CommandType, None], q: np.ndarray, grip: float
+    ) -> Generator[pimm.Command, None, np.ndarray]:
+        """Put the chain where ``call`` asks, answer it, and return the joints it now holds."""
+        request = call.request
+        with pimm.calls.forward_failure(call):
+            target = self.home_joints if isinstance(request, command.Reset) else self.target_joints(request, q)
+            if (yield from self.move_to(target, grip)) is MoveStatus.ARRIVED:
+                call.set_result(None)
+            return np.asarray(target, dtype=np.float64)
+        # The move failed and its asker was told. ``q`` predates the ramp, so holding it would drive the chain
+        # back the way it came; where it stopped is the only posture nobody has to be surprised by.
+        return self.measured_joints()
+
+
 class Robot(pimm.ControlSystem):
     """Drives one YAM chain: FK/IK in the driver, joint-space position-PD on the arm.
 
@@ -201,146 +327,54 @@ class Robot(pimm.ControlSystem):
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
-    def _encode_state(self, obs: dict[str, np.ndarray]) -> None:
-        q = obs[_JOINT_POS]
-        self._state.encode(q, obs[_JOINT_VEL], self._base_pose * self._kin.fk(q))
+    def _chain(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Chain:
+        """The chain this run drives, built from the driver's configuration.
 
-    def _emit_moving(self) -> None:
-        """Publish the chain's state mid-move, where its pose is not the one it was commanded to track."""
-        self._encode_state(self._arm.get_observations())
-        self._state._start_reset()  # ``encode`` clears RESETTING; the chain has not arrived
-        self.state.emit(self._state)
-
-    def _measured_joints(self) -> np.ndarray:
-        """The joints the chain reports, as a target that holds it where it stands."""
-        return np.asarray(self._arm.get_observations()[_JOINT_POS], dtype=np.float64)
-
-    def _ik(self, world_pose: geom.Transform3D, q: np.ndarray) -> np.ndarray:
-        """IK in the arm-base frame."""
-        solution = self._kin.ik(self._base_pose.inv * world_pose, q)
-        if solution is None:
-            raise ValueError(f'{world_pose} is out of reach')
-        return solution
-
-    def _target_joints(self, cmd: command.CommandType, q: np.ndarray) -> np.ndarray:
-        """The joints ``cmd`` asks the chain to hold; raises what the chain cannot be asked for."""
-        match cmd:
-            case command.JointPosition(positions):
-                return np.asarray(positions, dtype=np.float64)
-            case command.JointDelta(velocities=delta):
-                return q + np.asarray(delta, dtype=np.float64)
-            case command.CartesianPosition(pose):
-                return self._ik(pose, q)
-            case command.CartesianDelta() as delta_cmd:
-                return self._ik(delta_cmd.apply(self._base_pose * self._kin.fk(q)), q)
-            case other:
-                raise NotImplementedError(f'Unsupported command {other}')
-
-    def _move_to(self, target: np.ndarray, grip: float) -> Generator[pimm.Command, None, MoveStatus]:
-        """Ramp the chain to ``target``, yielding until it reads back there.
-
-        Drive with ``yield from``. The vendor's own ``move_joints`` is not used: it blocks the world for the
-        whole ramp and returns without ever reading where the chain got to.
+        Built here, not in ``__init__``: a background control system is pickled before it runs, and a live
+        CAN handle does not survive the trip.
         """
-        try:
-            start = np.asarray(self._arm.get_observations()[_JOINT_POS], dtype=np.float64)
-            started = self._clock.now()
-            while not np.all(np.abs(self._arm.get_observations()[_JOINT_POS] - target) < _ARRIVED_TOL):
-                if self._should_stop.value:
-                    return MoveStatus.GAVE_UP
-                elapsed = self._clock.now() - started
-                if elapsed > _MOVE_TIME_S + _SETTLE_S:
-                    raise TimeoutError(f'the chain stopped short of {target}')
-                # Ramped rather than commanded outright, so the chain travels at a pace the joints can hold,
-                # and held at the target afterwards while it settles the last of the way in.
-                alpha = min(elapsed / _MOVE_TIME_S, 1.0)
-                self._arm.command_joint_pos(np.append((1 - alpha) * start + alpha * target, 1.0 - grip))  # 1.0 open
-                self._emit_moving()
-                yield self._limiter.wait()
-        except Exception:
-            self._errored = True  # wherever the chain stopped, it is not where it was sent
-            raise
-
-        self._errored = False
-        self._encode_state(self._arm.get_observations())
-        self.state.emit(self._state)
-        return MoveStatus.ARRIVED
-
-    def _home(self, grip: float) -> Generator[pimm.Command, None, np.ndarray]:
-        """Ramp the chain home, and return the joints to hold: home if it got there, where it stopped if not."""
-        home = np.asarray(self._home_joints, dtype=np.float64)
-        try:
-            if (yield from self._move_to(home, grip)) is MoveStatus.ARRIVED:
-                return home
-        # rules-allow: swallowed-error — a chain that will not home reads ERROR; it does not end the run
-        except Exception as exc:
-            logging.error(f'Homing failed, the chain is not where the driver put it: {exc}')
-        return self._measured_joints()
-
-    def _serve_sync_move(
-        self, call: pimm.calls.Call[command.CommandType, None], q: np.ndarray, grip: float
-    ) -> Generator[pimm.Command, None, np.ndarray]:
-        """Put the chain where ``call`` asks, answer it, and return the joints it now holds."""
-        request = call.request
-        with pimm.calls.forward_failure(call):
-            target = self._home_joints if isinstance(request, command.Reset) else self._target_joints(request, q)
-            if (yield from self._move_to(target, grip)) is MoveStatus.ARRIVED:
-                call.set_result(None)
-            return np.asarray(target, dtype=np.float64)
-        # The move failed and its asker was told. ``q`` predates the ramp, so holding it would drive the chain
-        # back the way it came; where it stopped is the only posture nobody has to be surprised by.
-        return self._measured_joints()
+        vendor = self._connect(self._channel, self._sim)
+        return _Chain(vendor, self.state, self._home_joints, self._base_pose, should_stop, clock)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        # Set up here, not in ``__init__``: a background control system is pickled before it runs
-        self._arm = self._connect(self._channel, self._sim)
-        self._should_stop = should_stop
-        self._clock = clock
-        self._limiter = pimm.RateLimiter(clock, hz=100)
-        # Set by a move that does not arrive, cleared by the next that does: the chain is not where it was put.
-        self._errored = False
+        chain = self._chain(should_stop, clock)
         try:
-            self._kin = _Kinematics()
-            self._state = YamState()
             meta = {'robot': 'i2rt_yam', keys.JOINT_NAMES: list(_JOINT_NAMES), keys.CONTROL_FRAME: DEFAULT_FRAME}
             self.robot_meta.emit(meta)
 
             grip_target = 0.0
-            q_target = yield from self._home(grip_target)
+            q_target = yield from chain.home(grip_target)
 
             while not should_stop.value:
                 if (grip := pimm.value_updated(self.target_grip)) is not None:
                     grip_target = float(grip)
 
-                q = self._arm.get_observations()[_JOINT_POS]
+                q = chain.observations()[_JOINT_POS]
                 if (call := next(self.sync_move.incoming(), None)) is not None:
                     if isinstance(call.request, command.Reset):
                         grip_target = 0.0  # homing opens the gripper, as a ``Reset`` command does
-                    q_target = yield from self._serve_sync_move(call, q, grip_target)
+                    q_target = yield from chain.serve_sync_move(call, q, grip_target)
                 elif (cmd := pimm.value_updated(self.commands)) is not None:
                     try:
                         if isinstance(cmd, command.Reset):
                             grip_target = 0.0  # homing opens the gripper
-                            q_target = yield from self._home(grip_target)
+                            q_target = yield from chain.home(grip_target)
                         else:
-                            q_target = self._target_joints(cmd, q)
+                            q_target = chain.target_joints(cmd, q)
                     # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
                     except Exception as exc:
                         logging.warning(f'{cmd} not applied: {exc}')
 
-                self._arm.command_joint_pos(np.append(q_target, 1.0 - grip_target))
+                chain.vendor.command_joint_pos(np.append(q_target, 1.0 - grip_target))
 
                 # Read afresh: a move above ran for seconds, so the reading taken before it is long stale.
-                obs = self._arm.get_observations()
-                self._encode_state(obs)
-                if self._errored:  # ``encode`` clears the status; the chain is still where it was left
-                    self._state._set_error()
-                self.state.emit(self._state)
+                obs = chain.observations()
+                chain.publish(obs)
                 self.grip.emit(1.0 - float(obs[_GRIPPER_POS][0]))
-                yield self._limiter.wait()
+                yield chain.limiter.wait()
         finally:
-            self._arm.zero_torque_mode()
-            self._arm.close()
+            chain.vendor.zero_torque_mode()
+            chain.vendor.close()
 
 
 class _FakeYam:
