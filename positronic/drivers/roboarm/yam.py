@@ -154,19 +154,6 @@ class _Kinematics:
         return None
 
 
-@contextlib.contextmanager
-def _opened(connect: Callable[[str, bool], Any], channel: str, sim: bool) -> Iterator[Any]:
-    """The chain, left limp and its handle given back however the run ends — including one that never starts."""
-    vendor = connect(channel, sim)
-    try:
-        yield vendor
-    finally:
-        try:
-            vendor.zero_torque_mode()
-        finally:  # a chain that will not go limp still has a handle to give back
-            vendor.close()
-
-
 class _Chain(DriverRun):
     """The chain the driver drives: the vendor handle, and the state and moves that go with it."""
 
@@ -320,6 +307,19 @@ class _Chain(DriverRun):
         held = self.hold_where_it_stopped()
         call.set_exception(MoveAbandoned())  # the state saying where the chain stopped is out
         return held
+
+
+@contextlib.contextmanager
+def _opened(connect: Callable[[str, bool], Any], channel: str, sim: bool) -> Iterator[Any]:
+    """The chain, left limp and its handle given back however the run ends — including one that never starts."""
+    vendor = connect(channel, sim)
+    try:
+        yield vendor
+    finally:
+        try:
+            vendor.zero_torque_mode()
+        finally:  # a chain that will not go limp still has a handle to give back
+            vendor.close()
 
 
 class Robot(pimm.ControlSystem):
