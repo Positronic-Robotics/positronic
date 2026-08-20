@@ -17,9 +17,7 @@ class DHGripper(pimm.ControlSystem):
     def __init__(self, port: str):
         self.port = port
         self.grip = pimm.ControlSystemEmitter[float](self)
-        # Where the caller wants the grip to be
         self.target_grip = pimm.ControlSystemReceiver[float](self)
-        # The synchronous version of the above
         self.sync_move = pimm.calls.ControlSystemHandler[float, None](self)
         self.force = pimm.DefaultingReceiver(self, default=100)
         self.speed = pimm.DefaultingReceiver(self, default=100)

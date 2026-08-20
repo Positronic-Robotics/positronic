@@ -163,11 +163,7 @@ class _Kinematics:
 
 
 class _Chain(DriverRun):
-    """The chain the driver drives: the vendor handle, the state published from it, and the moves made with it.
-
-    A move is ramped rather than commanded outright, published as ``RESETTING`` throughout, and judged from
-    the joints the chain reads back.
-    """
+    """The chain the driver drives: the vendor handle, the state published from it, and the moves made with it."""
 
     def __init__(
         self,
@@ -254,7 +250,7 @@ class _Chain(DriverRun):
                 self._publish_moving()
                 yield self.limiter.wait()
         except Exception:
-            self.errored = True  # wherever the chain stopped, it is not where it was sent
+            self.errored = True
             raise
 
         self.errored = False
@@ -320,7 +316,6 @@ class Robot(pimm.ControlSystem):
         self._connect = connect
 
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
-        # The synchronous version of the above
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.state = pimm.ControlSystemEmitter[YamState](self)
@@ -357,7 +352,7 @@ class Robot(pimm.ControlSystem):
                 elif (cmd := pimm.value_updated(self.commands)) is not None:
                     try:
                         if isinstance(cmd, command.Reset):
-                            grip_target = 0.0  # homing opens the gripper
+                            grip_target = 0.0
                             q_target = yield from chain.home(grip_target)
                         else:
                             q_target = chain.target_joints(cmd, q)
@@ -468,14 +463,13 @@ if __name__ == '__main__':
             assert abs(fake.last_command[6] - 1.0) < 1e-6, fake.last_command
             assert abs(grip.value) < 0.02, grip.value
 
-        # Unfold toward the workspace with a synchronous move: it answers only once the chain is there.
         reach_q = np.array([0.0, 1.2, 1.2, 0.0, 0.6, 0.0])
         answer = sync_move(command.JointPosition(reach_q))
         for _ in range(100):
             if answer.done():
                 break
             pump(0.1)
-        answer.result()  # raises if the chain never arrived
+        answer.result()
         if fake is not None:
             assert np.allclose(state.value.q, reach_q, atol=_ARRIVED_TOL), state.value.q
 

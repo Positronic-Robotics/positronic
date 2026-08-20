@@ -145,7 +145,7 @@ def desk(monkeypatch) -> FakeDesk:
 
 def _driver(arm: FakeArm, *, variation: list[float] | None = None, **kwargs) -> franka.Robot:
     robot = franka.Robot('192.0.2.1', home_joints=list(HOME), home_joints_variation=variation or [0.0] * 7, **kwargs)
-    robot._robot = arm  # `_arm` hands back an already-set handle, which is how the fake arm gets in
+    robot._robot = arm  # `_vendor` hands back an already-set handle, which is how the fake arm gets in
     return robot
 
 
@@ -322,7 +322,7 @@ def test_an_arm_that_will_not_home_reads_error_rather_than_ending_the_run():
     loop = driver.run(stop, clock)
 
     for _ in range(5):
-        next(loop)  # the run goes on past the failed homing
+        next(loop)
 
     assert states.emitted, 'the driver published nothing'
     assert states.emitted[-1][1].status == RobotStatus.ERROR
@@ -348,7 +348,7 @@ def test_a_sync_move_answers_once_the_arm_is_there(world):
             break
         next(loop)
 
-    answer.result()  # raises if the move failed
+    answer.result()
     np.testing.assert_allclose(arm.targets[-1], JOGGED)
     np.testing.assert_allclose(arm.q, JOGGED)
 
@@ -460,7 +460,6 @@ def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stoppe
 
     with pytest.raises(TimeoutError, match='stopped short'):
         answer.result()
-    # The last thing said to the arm is where it stands, not where it was sent
     np.testing.assert_allclose(arm.targets[-1], HOME)
     np.testing.assert_allclose(arm.targets[-2], JOGGED)
     next(loop)

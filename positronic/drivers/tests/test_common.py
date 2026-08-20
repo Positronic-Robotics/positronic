@@ -158,4 +158,4 @@ def test_a_streamed_grip_waits_for_the_call_queue_to_be_empty(asking):
     assert grip_setpoint(move, calls, stream, grip=0.0, now=0.0) == 0.9
     assert grip_setpoint(move, calls, stream, grip=0.9, now=0.1) is None  # the call arrives
     assert grip_setpoint(move, calls, stream, grip=0.9, now=0.2) == 0.25  # the stream, still waiting
-    assert grip_setpoint(move, calls, stream, grip=0.25, now=0.3) is None  # nothing new to command
+    assert grip_setpoint(move, calls, stream, grip=0.25, now=0.3) is None

@@ -113,11 +113,7 @@ _MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collisio
 
 
 class _Arm(DriverRun):
-    """The arm the driver drives: the libfranka handle, the state published from it, and the moves made with it.
-
-    Every move is published as ``RESETTING`` and answered from what the arm reads back, so a caller that is
-    told a move landed can trust the pose that comes with it.
-    """
+    """The arm the driver drives: the libfranka handle, the state published from it, and the moves made with it."""
 
     def __init__(
         self,
@@ -192,7 +188,7 @@ class _Arm(DriverRun):
                 self.vendor.set_target_joints(self.vendor.state().q)
                 raise TimeoutError(f'the arm stopped short of {target}')
         except Exception:
-            self.errored = True  # wherever the arm stopped, it is not where it was sent
+            self.errored = True
             raise
 
         if self.should_stop.value:  # the travel gave up on the stop rather than on arrival
@@ -293,7 +289,6 @@ class Robot(pimm.ControlSystem):
             home_joints_variation if home_joints_variation is not None else [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
         )
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
-        # The synchronous version of the above
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state = pimm.ControlSystemEmitter[FrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
@@ -442,7 +437,6 @@ class Robot(pimm.ControlSystem):
                         logging.warning(f'Robot error: {st.error_message}')
 
                     if in_error:
-                        # The driver clears a recoverable error itself.
                         vendor.recover_from_errors()
                         yield arm.limiter.wait()
                         continue

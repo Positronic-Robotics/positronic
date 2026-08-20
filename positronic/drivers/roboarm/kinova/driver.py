@@ -73,7 +73,6 @@ class Robot(pimm.ControlSystem):
         self.solver = KinematicsSolver()
         self.home_joints = home_joints if home_joints is not None else [0.0, -0, 0.5, -1.5, 0.0, -0.5, 1.57079633]
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
-        # The synchronous version of the above
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state: pimm.SignalEmitter[KinovaState] = pimm.ControlSystemEmitter(self)
 
@@ -109,8 +108,6 @@ class Robot(pimm.ControlSystem):
             current_command = np.zeros(api.actuator_count, dtype=np.float32)
 
             # The arm is torque-controlled, so it only travels while this loop runs: it cannot be held for a move
-            # ``joint_controller.finished`` says the reference trajectory ran out, not that the arm tracked it,
-            # so arrival is judged from the joints the arm reports.
             move = PendingMove(_ARRIVED_TOL)
 
             while not should_stop.value:

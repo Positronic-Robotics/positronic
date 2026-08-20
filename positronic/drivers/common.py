@@ -15,17 +15,14 @@ ARRIVAL_TIMEOUT_S = 3.0
 class DriverRun:
     """What a driver has only while it runs: the clock it reads, the rate it ticks at, the stop it watches.
 
-    ``World.start`` pickles a background control system before it runs, so a live connection cannot be built
-    in ``__init__``. A driver whose helpers suspend inside a move cannot hold these in a local either, since
-    a local does not survive a ``yield from`` into a sibling — so it subclasses this with whatever it drives,
-    and its helpers become methods with nothing to discover.
+    ``World.start`` pickles a background control system before it runs, so none of this can be built in
+    ``__init__``, and a helper that suspends inside a move cannot hold it in a local either.
     """
 
     def __init__(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock, hz: float):
         self.should_stop = should_stop
         self.clock = clock
         self.limiter = pimm.RateLimiter(clock, hz=hz)
-        # Set by a move that does not arrive, cleared by the next that does: the device is not where it was put
         self.errored = False
 
 
