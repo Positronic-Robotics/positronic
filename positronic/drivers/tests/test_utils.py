@@ -113,6 +113,27 @@ def asking():
         yield caller, handler
 
 
+def test_a_grip_target_that_is_no_width_is_refused_rather_than_saturated(asking):
+    """``min``/``max`` turn NaN into a bound, so an unchecked target would close the fingers at full force."""
+    ask, calls = asking
+    move, stream = PendingMove(TOL, calls), ManualCommandReceiver()
+    answer = ask(float('nan'))
+
+    assert grip_setpoint(move, stream, grip=0.0, now=0.0) is None
+    assert not move.active
+    with pytest.raises(ValueError, match='not a grip width'):
+        answer.result()
+
+
+def test_a_streamed_grip_target_that_is_no_width_leaves_the_fingers_alone(asking):
+    """A command stream cannot end the run, so a malformed target is dropped and the last one stands."""
+    _, calls = asking
+    move, stream = PendingMove(TOL, calls), ManualCommandReceiver()
+    stream.push(float('inf'))
+
+    assert grip_setpoint(move, stream, grip=0.4, now=0.0) is None
+
+
 def test_a_grip_call_takes_the_fingers_until_it_arrives(asking):
     ask, calls = asking
     move, stream = PendingMove(TOL, calls), ManualCommandReceiver()

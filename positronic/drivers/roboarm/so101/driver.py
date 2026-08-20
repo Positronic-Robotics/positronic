@@ -226,7 +226,6 @@ class Robot(pimm.ControlSystem):
 
     def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
-        self.motor_bus.connect()
         return _Arm(self.motor_bus, self.sync_move, self.state, self.grip, self.home_joints, should_stop, clock)
 
     @staticmethod
@@ -240,7 +239,8 @@ class Robot(pimm.ControlSystem):
         }
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        with self._arm(should_stop, clock) as arm:
+        # The bus opens first and closes last, so a failure building the arm still gives the port back
+        with self.motor_bus, self._arm(should_stop, clock) as arm:
             self.robot_meta.emit(Robot._build_robot_meta())
 
             while not should_stop.value:

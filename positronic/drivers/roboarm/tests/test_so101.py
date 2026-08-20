@@ -63,6 +63,9 @@ class FakeBus(MotorBus):
     def connect(self) -> None:
         self.connected = True
 
+    def disconnect(self) -> None:
+        self.connected = False
+
     @property
     def position(self) -> np.ndarray:
         if self.raises is not None:
@@ -353,6 +356,22 @@ def test_a_bus_that_dies_as_the_run_ends_still_answers_the_move(world):
 
     with pytest.raises(MoveAbandoned):
         answer.result()
+
+
+def test_a_run_that_ends_gives_the_bus_back(world):
+    """The port is held for the run, so an arm that never builds must not keep it."""
+    bus = FakeBus()
+    stop = StopFlag()
+    _, _, loop = _driven(bus, stop=stop)
+
+    next(loop)
+    assert bus.connected
+
+    stop.stopped = True
+    with pytest.raises(StopIteration):
+        next(loop)
+
+    assert not bus.connected
 
 
 def test_a_run_that_dies_mid_move_hands_what_killed_it_to_the_asker(world):

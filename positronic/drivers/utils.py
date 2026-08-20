@@ -1,5 +1,7 @@
 """Shared by the drivers: the handles a run owns, and the synchronous move a driver carries."""
 
+import logging
+import math
 from enum import Enum, auto
 from typing import Generic, TypeVar
 
@@ -132,8 +134,14 @@ _GRIP_TIMEOUT_S = 3.0
 
 
 def _clamped(grip: float) -> float:
-    """``grip`` saturated to the range the fingers report back."""
-    return max(0.0, min(1.0, float(grip)))
+    """``grip`` saturated to the range the fingers report back; raises what is no width at all.
+
+    ``min``/``max`` order NaN by whichever side it lands on, so saturating it silently yields a width.
+    """
+    grip = float(grip)
+    if not math.isfinite(grip):
+        raise ValueError(f'{grip} is not a grip width')
+    return max(0.0, min(1.0, grip))
 
 
 def grip_setpoint(
@@ -147,9 +155,14 @@ def grip_setpoint(
     if move.active:
         return grip if move.settle(grip, now) is MoveStatus.GAVE_UP else None
     if (call := move.take()) is not None:
-        target = _clamped(call.request)
-        move.accept(call, target, now, _GRIP_TIMEOUT_S)
-        return target
-    if (streamed := pimm.value_updated(stream)) is not None:
-        return _clamped(streamed)
+        with pimm.calls.raise_to(call):  # a width the fingers cannot be put at is the asker's to hear about
+            target = _clamped(call.request)
+            move.accept(call, target, now, _GRIP_TIMEOUT_S)
+            return target
+    elif (streamed := pimm.value_updated(stream)) is not None:
+        try:
+            return _clamped(streamed)
+        # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
+        except ValueError as exc:
+            logging.warning(f'grip target not applied: {exc}')
     return None

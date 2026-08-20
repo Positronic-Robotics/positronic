@@ -13,6 +13,7 @@ polarity and joint-range check, mount pose survey (``base_pose``), teleop latenc
 on close (``zero_torque_mode``).
 """
 
+import contextlib
 import logging
 from collections.abc import Callable, Generator, Iterator
 from typing import Any
@@ -153,6 +154,19 @@ class _Kinematics:
         return None
 
 
+@contextlib.contextmanager
+def _opened(connect: Callable[[str, bool], Any], channel: str, sim: bool) -> Iterator[Any]:
+    """The chain, left limp and its handle given back however the run ends — including one that never starts."""
+    vendor = connect(channel, sim)
+    try:
+        yield vendor
+    finally:
+        try:
+            vendor.zero_torque_mode()
+        finally:  # a chain that will not go limp still has a handle to give back
+            vendor.close()
+
+
 class _Chain(DriverRun):
     """The chain the driver drives: the vendor handle, and the state and moves that go with it."""
 
@@ -184,13 +198,6 @@ class _Chain(DriverRun):
 
     def __enter__(self) -> '_Chain':
         return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        """Let the chain go limp."""
-        try:
-            self.vendor.zero_torque_mode()
-        finally:  # a chain that will not go limp still has a handle to give back
-            self.vendor.close()
 
     def take_sync_move(self) -> pimm.calls.Call[command.CommandType, None] | None:
         """The next move asked for."""
@@ -353,15 +360,15 @@ class Robot(pimm.ControlSystem):
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
-    def _chain(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Chain:
+    def _chain(self, vendor: Any, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Chain:
         """The chain this run drives, built from the driver's configuration."""
-        vendor = self._connect(self._channel, self._sim)
         return _Chain(
             vendor, self.sync_move, self.state, self.grip, self._home_joints, self._base_pose, should_stop, clock
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        with self._chain(should_stop, clock) as chain:
+        with _opened(self._connect, self._channel, self._sim) as vendor:
+            chain = self._chain(vendor, should_stop, clock)
             meta = {'robot': 'i2rt_yam', keys.JOINT_NAMES: list(_JOINT_NAMES), keys.CONTROL_FRAME: DEFAULT_FRAME}
             self.robot_meta.emit(meta)
 
