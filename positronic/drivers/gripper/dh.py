@@ -36,6 +36,17 @@ class DHGripper(pimm.ControlSystem):
             while _state_g() != 1 and _state_r() != 1:
                 yield pimm.Sleep(0.1)
 
+    @staticmethod
+    def _width(client) -> float:
+        """How closed the fingers read back."""
+        return 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
+
+    def _command(self, client, grip: float) -> None:
+        """Put ``grip`` on the fingers, at the force and speed asked for."""
+        client.write_register(0x103, c_uint16(round((1 - grip) * 1000)).value, slave=1)
+        client.write_register(0x101, c_uint16(self.force.value).value, slave=1)
+        client.write_register(0x104, c_uint16(self.speed.value).value, slave=1)
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         client = ModbusClient.ModbusSerialClient(port=self.port, baudrate=115200, bytesize=8, parity='N', stopbits=1)
         client.connect()
@@ -47,19 +58,19 @@ class DHGripper(pimm.ControlSystem):
         try:
             with PendingMove(self._ARRIVED_TOL, self.sync_move) as move:
                 while not should_stop.value:
-                    current_grip = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
+                    current_grip = self._width(client)
                     self.grip.emit(current_grip)
 
                     target = grip_setpoint(move, self.target_grip, current_grip, clock.now())
                     if target is not None:
                         last_grip = target
-                    width = round((1 - last_grip) * 1000)
-                    client.write_register(0x103, c_uint16(width).value, slave=1)
-                    client.write_register(0x101, c_uint16(self.force.value).value, slave=1)
-                    client.write_register(0x104, c_uint16(self.speed.value).value, slave=1)
+                    self._command(client, last_grip)
                     move.answer()  # the width a settled move is answered with is on the fingers
 
                     yield pimm.Sleep(0.001)  # Small delay to prevent busy-waiting
+
+                if move.active:  # the fingers push at the last width written to them, run or no run
+                    self._command(client, self._width(client))
         finally:
             client.close()
 
