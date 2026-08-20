@@ -34,8 +34,9 @@ class MoveStatus(Enum):
 class MoveAbandoned(RuntimeError):
     """A move the world came down under."""
 
-    def __init__(self):
-        super().__init__('the world stopped before the move arrived')
+    # Defaulted rather than fixed: an exception crossing a process boundary is rebuilt from its ``args``
+    def __init__(self, message: str = 'the world stopped before the move arrived'):
+        super().__init__(message)
 
 
 class PendingMove(Generic[Req]):

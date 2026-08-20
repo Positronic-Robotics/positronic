@@ -1,4 +1,5 @@
 import multiprocessing as mp
+import pickle
 from itertools import islice
 
 import pytest
@@ -211,6 +212,10 @@ class TestWorldConnect:
             world.connect(client.add, deaf.add)
             world.run([client, deaf])
         assert isinstance(client.results[0], HandlerStopped)
+
+    def test_a_stopped_handler_survives_the_trip_to_another_process(self):
+        """A reply crosses a pipe as pickle, and an exception is rebuilt by calling its class with its args."""
+        assert isinstance(pickle.loads(pickle.dumps(HandlerStopped())), HandlerStopped)
 
     def test_caller_in_background_process(self):
         total = mp.get_context('spawn').Value('i', 0)

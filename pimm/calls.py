@@ -59,8 +59,9 @@ class Call(ABC, Generic[Req, Res]):
 class HandlerStopped(RuntimeError):
     """The control system serving a call ended before reaching it."""
 
-    def __init__(self):
-        super().__init__('the control system serving this call stopped')
+    # Defaulted rather than fixed: an exception crossing a process boundary is rebuilt from its ``args``
+    def __init__(self, message: str = 'the control system serving this call stopped'):
+        super().__init__(message)
 
 
 @contextmanager

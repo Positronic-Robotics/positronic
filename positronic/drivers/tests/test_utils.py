@@ -1,11 +1,13 @@
 """When a device counts as arrived, and what a caller waiting on it hears."""
 
+import pickle
+
 import numpy as np
 import pytest
 
 import pimm
 from pimm.tests.testing import FakeCall, Passive, wire_call
-from positronic.drivers.utils import _GRIP_TIMEOUT_S, MoveStatus, PendingMove, grip_setpoint
+from positronic.drivers.utils import _GRIP_TIMEOUT_S, MoveAbandoned, MoveStatus, PendingMove, grip_setpoint
 from positronic.tests.testing_coutils import ManualCommandReceiver
 
 TOL = 0.05
@@ -18,6 +20,11 @@ def _accepted(
     call = FakeCall[float, None](0.0)
     move.accept(call, target, now=0.0, timeout_s=timeout_s)
     return move, call
+
+
+def test_an_abandoned_move_survives_the_trip_to_another_process():
+    """A driver in a background process answers over a pipe, and an exception is rebuilt from its args."""
+    assert isinstance(pickle.loads(pickle.dumps(MoveAbandoned())), MoveAbandoned)
 
 
 def test_a_device_within_tolerance_has_arrived():
