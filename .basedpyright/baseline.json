@@ -4068,22 +4068,6 @@
                     "endColumn": 65,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportCallIssue",
-                "range": {
-                    "startColumn": 30,
-                    "endColumn": 76,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 39,
-                    "endColumn": 57,
-                    "lineCount": 1
-                }
             }
         ],
         "./positronic/drivers/roboarm/models.py": [
