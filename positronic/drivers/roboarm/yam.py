@@ -193,8 +193,10 @@ class _Chain(DriverRun):
 
     def __exit__(self, exc_type, exc, tb) -> None:
         """Let the chain go limp."""
-        self.vendor.zero_torque_mode()
-        self.vendor.close()
+        try:
+            self.vendor.zero_torque_mode()
+        finally:  # a chain that will not go limp still has a handle to give back
+            self.vendor.close()
 
     def take_sync_move(self) -> pimm.calls.Call[command.CommandType, None] | None:
         """The next move asked for."""

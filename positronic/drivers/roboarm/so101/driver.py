@@ -199,10 +199,12 @@ class _Arm(DriverRun):
 
     def __exit__(self, exc_type, exc: BaseException | None, tb) -> None:
         """Leave the arm holding where the bus reads it, then answer whatever was waiting on the move."""
-        if self._move.active:  # the servos chase the goal they were last given, run or no run
-            self._qpos, self._unsent = np.asarray(self.q_norm[:-1]), True
-            self.write()
-        self._move.abandon(exc)
+        try:
+            if self._move.active:  # the servos chase the goal they were last given, run or no run
+                self._qpos, self._unsent = np.asarray(self.q_norm[:-1]), True
+                self.write()
+        finally:  # a bus that will not take the hold is the asker's to hear about, not a reason to go quiet
+            self._move.abandon(exc)
 
 
 class Robot(pimm.ControlSystem):

@@ -76,6 +76,8 @@ class FakeBus(MotorBus):
         return np.zeros_like(self._position)
 
     def set_target_position(self, positions: np.ndarray) -> None:
+        if self.raises is not None:
+            raise self.raises
         self.targets.append(np.asarray(positions, dtype=np.float64))
 
 
@@ -333,6 +335,24 @@ def test_a_move_the_world_stops_under_leaves_the_bus_holding_where_the_arm_is(wo
 
     np.testing.assert_allclose(bus.targets[-1][:-1], MIDDLE[:-1])
     assert answer.done()
+
+
+def test_a_bus_that_dies_as_the_run_ends_still_answers_the_move(world):
+    """The hold is the last thing the arm is asked for; a bus that refuses it must not swallow the answer."""
+    bus = FakeBus()
+    bus.blocked = True
+    stop = StopFlag()
+    driver, _, loop = _driven(bus, stop=stop)
+    answer = _mover(world, driver)(command.JointPosition(JOGGED))
+
+    next(loop)
+    stop.stopped = True
+    bus.raises = RuntimeError('the bus went away')
+    with pytest.raises(RuntimeError, match='the bus went away'):
+        next(loop)
+
+    with pytest.raises(MoveAbandoned):
+        answer.result()
 
 
 def test_a_run_that_dies_mid_move_hands_what_killed_it_to_the_asker(world):
