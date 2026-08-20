@@ -8,18 +8,18 @@ Policies and sessions:
 - A session is cancellable from outside at any moment, and lives until it is cancelled.
 
 The control loop:
-- One pass: `(observations, time) -> (commands, due)` — the current observations and time in, the
+- One tick: `(observations, time) -> (commands, due)` — the current observations and time in, the
   commands to execute now (possibly none) out.
-- The `time` argument is the only clock a session has.
+- The `time` argument is the only clock a session has; the framework sets it.
 - Observations and commands may carry domain types (a robot command, an image).
-- Returned commands are emitted towards the robot driver in the same pass.
+- Returned commands are emitted towards the robot driver in the same tick.
 - `due` is when the session wants control back: an absolute instant on the clock of `time`, strictly in
   the future.
 - The framework returns control best-effort at `due`: it may be earlier or later.
 
 Pure functions:
 - A policy may define pure functions that are available to sessions via the framework.
-- Invoking one starts the work off the control pass and returns a handle at once.
+- Invoking one starts the work off the tick and returns a handle at once.
 - The session may read the handle when it next has control.
 - A function's inputs and outputs are types the framework can serialize: plain types and numpy, selected domain classes.
   An unsupported type fails at the call.
@@ -35,16 +35,24 @@ Composability:
 - Chain order fully determines behavior.
 - A session communicates only through the observations and commands flowing through it; it knows
   nothing of its neighbours or its position.
-- What an inner session sees is its outer's choice.
+- What an inner session sees is its outer's choice — except `time`: one value per tick, the same at
+  every depth, not the chain's to alter.
 - A `Codec` is a data transform written once and applicable to both: around a pure function, its
   inputs and outputs; as a trivial layer, observations down and commands up, `due` untouched.
 - Any policy fits the API as it stands: implement a session directly, or compose it from layers and
   pure functions. Neither ever requires a framework change.
 
 Logging:
-- The framework records the top-level exchange — observations in, commands out — on its own.
-- A session can log named data of its own; the framework records it with the control session, on the
-  same clock.
+- A log is a set of named series per control session; a sample is a value stamped on 3 timelines:
+  the tick number, control time, and wall time.
+- If requested, the framework logs the timelines' correspondence: one sample per tick.
+- If requested, the framework logs every function call: its identity, submit time, and answer time.
+- If requested, the framework logs every session's invocations in a chain it assembled.
+- A session may append a value to a named series of its own; the framework stamps it.
+- A session names its series locally; the framework keeps the full names distinct across sessions and
+  stable across runs.
+- A function may attach records to the call it is answering, stored where the function runs and joined
+  to the log by call identity.
 - Logging never affects control: it adds no waiting and no failure path to the loop.
 
 Remote policies:
@@ -55,11 +63,12 @@ Remote policies:
   policy does.
 - A declaration the rig cannot honor is refused at the handshake.
 
-TODO: the Python shape of the pass — an object protocol, with generators as a supported authoring style
-  the framework adapts.
-TODO: how a session logs — a handle given at construction, or part of the return value.
-TODO: the shape of the robot description, and a server's ability to refuse one.
-TODO: the protocol delivering the declared stack to the rig — versioning and compatibility.
+TODO: the Python shape of the tick, the function handles, and the logging conduit — an object protocol,
+  with generators as a supported authoring style the framework adapts.
+
+Deferred, not to decide now:
+- The shape of the robot description, and a server's ability to refuse one.
+- The protocol delivering the declared stack to the rig — versioning and compatibility.
 """
 
 from __future__ import annotations
