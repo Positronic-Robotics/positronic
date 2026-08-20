@@ -69,7 +69,7 @@ def _obs(now_sec=0.0, status=RobotStatus.AVAILABLE):
 
 
 class TestStopOnFault:
-    @pytest.mark.parametrize('unsound', [RobotStatus.ERROR, RobotStatus.MOVING])
+    @pytest.mark.parametrize('unsound', [RobotStatus.ERROR, RobotStatus.BUSY])
     def test_an_unsound_arm_stops_what_is_executing(self, unsound):
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().wrap_session(inner, None, None)

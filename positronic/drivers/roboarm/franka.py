@@ -88,8 +88,8 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
     def status(self) -> RobotStatus:
         return RobotStatus(int(self.array[FrankaState.STATUS_OFFSET]))
 
-    def _set_moving(self):
-        self.array[FrankaState.STATUS_OFFSET] = RobotStatus.MOVING.value
+    def _set_busy(self):
+        self.array[FrankaState.STATUS_OFFSET] = RobotStatus.BUSY.value
 
     def _set_available(self):
         self.array[FrankaState.STATUS_OFFSET] = RobotStatus.AVAILABLE.value
@@ -181,7 +181,7 @@ class _Arm(DriverRun):
         """Travel to ``target``, yielding until it arrives."""
         # The first emit must not ship an unfilled state.
         self.state.encode(self.vendor.state())
-        self.state._set_moving()
+        self.state._set_busy()
         self.out.emit(self.state)
 
         deadline = self.clock.now() + self._travel_s(self.state.q, target)
@@ -189,7 +189,7 @@ class _Arm(DriverRun):
             for _ in self.await_goal(target, lambda: self.should_stop.value or self.clock.now() >= deadline):
                 st = self.vendor.state()
                 self.state.encode(st)
-                self.state._set_moving()  # `encode` clears the status; the arm has not arrived
+                self.state._set_busy()  # `encode` clears the status; the arm has not arrived
                 self.out.emit(self.state)
                 if st.error != 0:
                     self.vendor.recover_from_errors()
@@ -496,7 +496,7 @@ if __name__ == '__main__':
             ([0.03, 0.03, 0.03], 12.0),
         ]
 
-        while not world.should_stop and (state.read() is None or state.value.status == RobotStatus.MOVING):
+        while not world.should_stop and (state.read() is None or state.value.status == RobotStatus.BUSY):
             time.sleep(0.01)
 
         origin = state.value.ee_pose

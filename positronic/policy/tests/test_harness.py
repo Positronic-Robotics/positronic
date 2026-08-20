@@ -1250,7 +1250,7 @@ def test_harness_clears_trajectory_on_run(world):
 
 
 @pytest.mark.timeout(3.0)
-@pytest.mark.parametrize('unsound', [RobotStatus.MOVING, RobotStatus.ERROR])
+@pytest.mark.parametrize('unsound', [RobotStatus.BUSY, RobotStatus.ERROR])
 def test_the_stack_keeps_the_model_away_from_an_unsound_arm(world, unsound):
     """An unsound arm is not tracking the plan it was given, so ``StopOnFault`` answers its observation itself
     rather than let the model plan against it. Once the arm is sound the model is asked again, on a fresh
@@ -1823,7 +1823,7 @@ def test_harness_keeps_playing_while_a_call_is_in_flight(world):
 
 
 @pytest.mark.timeout(3.0)
-@pytest.mark.parametrize('unsound', [RobotStatus.MOVING, RobotStatus.ERROR])
+@pytest.mark.parametrize('unsound', [RobotStatus.BUSY, RobotStatus.ERROR])
 def test_an_unsound_arm_reaches_the_policy_with_its_pose(world, unsound):
     """An unsound arm is not swallowed as "no observation": its measurements reach the policy beside the status.
     The harness here runs no ``StopOnFault``, so nothing filters it on the way."""
@@ -1856,7 +1856,7 @@ def test_an_unsound_arm_reaches_the_policy_with_its_pose(world, unsound):
 
 @pytest.mark.timeout(3.0)
 def test_every_arm_of_a_bimanual_rig_reports_its_own_status(world):
-    """One arm resetting and the other faulted reach the stack as themselves: neither channel stands in for
+    """One arm busy and the other faulted reach the stack as themselves: neither channel stands in for
     the other, whichever the embodiment happens to list first."""
     left, right = f'{keys.ROBOT_STATE}.left', f'{keys.ROBOT_STATE}.right'
     embodiment = Embodiment(
@@ -1880,7 +1880,7 @@ def test_every_arm_of_a_bimanual_rig_reports_its_own_status(world):
     perform_task = world.pair(harness.perform_task)
 
     def emit_states():
-        left_em.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.MOVING))
+        left_em.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.BUSY))
         right_em.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], status=RobotStatus.ERROR))
         grip_em.emit(0.0)
 
@@ -1894,7 +1894,7 @@ def test_every_arm_of_a_bimanual_rig_reports_its_own_status(world):
 
     assert policy.last_obs is not None, 'neither arm reached the policy'
     assert policy.last_obs[f'{right}.status'] is RobotStatus.ERROR
-    assert policy.last_obs[f'{left}.status'] is RobotStatus.MOVING
+    assert policy.last_obs[f'{left}.status'] is RobotStatus.BUSY
 
 
 @pytest.mark.timeout(20.0)

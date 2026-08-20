@@ -164,7 +164,7 @@ class Robot(pimm.ControlSystem):
                 ee_pose, gripper = self._forward_kinematics(q)
                 position_rad = self.norm_to_rad(q)[:-1]
                 if move.active:  # the driver owns the arm until the move answers, and reads no command meanwhile
-                    status = RobotStatus.MOVING
+                    status = RobotStatus.BUSY
                 else:  # the bus reports position, not whether the arm is where the driver put it
                     status = RobotStatus.ERROR if move.errored else RobotStatus.AVAILABLE
                 state.encode(position_rad, dq, ee_pose, status)

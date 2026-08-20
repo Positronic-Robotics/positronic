@@ -370,8 +370,8 @@ Built‑in serializers (`positronic.dataset.serializers.Serializers`)
 - `transform_3d(pose: Transform3D) -> np.ndarray`
   - Returns `[tx, ty, tz, qw, qx, qy, qz]` (shape `(7,)`).
 - `robot_state(state: roboarm.State) -> dict | None`
-  - Drops samples when `status == RobotStatus.RESETTING`.
-  - Otherwise expands to `{'.q': q, '.dq': dq, '.ee_pose': transform_3d(ee)}`.
+  - Expands to `{'.status': status, '.q': q, '.dq': dq, '.ee_pose': transform_3d(ee)}`; every sample is
+    recorded whatever the status.
 - `robot_command(command) -> dict`
   - `CartesianMove(pose)` -> `{'.pose': transform_3d(pose)}`
   - `JointMove(positions)` -> `{'.joints': positions}`

@@ -41,7 +41,8 @@ def _arms_sound(obs) -> bool:
 class StopOnFault(PolicyWrapper):
     """Stop the arm while it is not sound, and plan afresh once it is.
 
-    An arm that is faulted or resetting is not tracking the plan it was given, so the plan is worthless:
+    An arm that is faulted, or that its driver has taken, is not tracking the plan it was given, so the plan
+    is worthless:
     this answers the empty trajectory — stop what is executing — and resets the sessions below, so the first
     sound observation reaches the model instead of resuming a chunk stamped before. It belongs outside the
     scheduling wrapper, which would otherwise answer "keep playing" without ever seeing the status.

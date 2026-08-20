@@ -15,24 +15,24 @@ from . import command
 
 
 class RobotStatus(IntEnum):
-    """Different statuses that the robot can be in.
-
-    The exact meaning of this statuses currently is defined by the robot driver. But in general:
+    """Whether a command sent to the robot now will reach it.
 
     - AVAILABLE: The robot is tracking whatever it was last commanded, and will take another command.
-    - MOVING: The driver is putting the robot somewhere itself — homing, or serving a synchronous move — and
-      no command stream reaches it until it arrives.
+    - BUSY: The driver is putting the robot somewhere itself — homing, or serving a synchronous move — and
+      leaves the command stream unread until it arrives.
     - ERROR: The robot is in an error state.
+
+    State is published every tick whatever the status; only who is driving the robot changes.
     """
 
     # These numbers are written into recorded datasets
     AVAILABLE = 0
-    MOVING = 2
+    BUSY = 2
     ERROR = 3
 
 
 def is_sound(status: RobotStatus) -> bool:
-    """Whether the arm is tracking the commands it was given and its pose is worth reading."""
+    """Whether the arm is under the commander's control, rather than the driver's or a fault's."""
     return status == RobotStatus.AVAILABLE
 
 

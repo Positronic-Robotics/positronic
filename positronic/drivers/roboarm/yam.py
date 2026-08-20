@@ -95,8 +95,8 @@ class YamState(State, pimm.shared_memory.NumpySMAdapter):
     def status(self) -> RobotStatus:
         return RobotStatus(int(self.array[YamState.STATUS_OFFSET]))
 
-    def _set_moving(self):
-        self.array[YamState.STATUS_OFFSET] = RobotStatus.MOVING.value
+    def _set_busy(self):
+        self.array[YamState.STATUS_OFFSET] = RobotStatus.BUSY.value
 
     def _set_error(self):
         self.array[YamState.STATUS_OFFSET] = RobotStatus.ERROR.value
@@ -226,7 +226,7 @@ class _Chain(DriverRun):
     def _publish_moving(self) -> None:
         """Publish the chain mid-move, where its pose is not the one it was commanded to track."""
         self.encode(self.observations())
-        self.state._set_moving()  # ``encode`` clears the status; the chain has not arrived
+        self.state._set_busy()  # ``encode`` clears the status; the chain has not arrived
         self.out.emit(self.state)
 
     def _arrived(self, target: np.ndarray, grip: float) -> bool:
@@ -449,7 +449,7 @@ if __name__ == '__main__':
                 time.sleep(cmd.seconds if isinstance(cmd, pimm.Sleep) else 0)
 
         pump(0.1)
-        while state.read() is None or state.value.status == RobotStatus.MOVING:
+        while state.read() is None or state.value.status == RobotStatus.BUSY:
             pump(0.1)  # the opening move ramps the chain home over a couple of seconds
         assert state.value.status == RobotStatus.AVAILABLE, state.value.status
 
