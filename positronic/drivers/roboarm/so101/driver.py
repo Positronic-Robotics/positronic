@@ -89,11 +89,8 @@ class _Arm(DriverRun):
         # arm holds where the bus finds it until something asks otherwise
         self.q_norm = bus.position
         self._qpos, self._grip = np.asarray(self.q_norm[:-1]), 0.0
-        self._written = self._setpoint()
-
-    def _setpoint(self) -> np.ndarray:
-        """The arm and the gripper as one vector: they share a bus, and it takes them together."""
-        return np.concatenate([self._qpos, [self._grip]])
+        # Nothing has asked the arm to be anywhere, and the bus holds whatever it was left holding
+        self._unsent = False
 
     def _norm_to_rad(self, qpos: np.ndarray) -> np.ndarray:
         """The bus's normalized 0..1 range mapped onto the joint's own travel, in radians."""
@@ -154,30 +151,33 @@ class _Arm(DriverRun):
         if self._move.settle(self.q_norm[:-1], self.clock.now()) is MoveStatus.GAVE_UP:
             # Holding the target the arm stopped short of would resume the move once whatever blocked
             # it goes away, long after its asker was told it failed.
-            self._qpos = np.asarray(self.q_norm[:-1])
+            self._qpos, self._unsent = np.asarray(self.q_norm[:-1]), True
 
     def hold_grip(self, grip: float) -> None:
         """Hold the fingers at ``grip``."""
-        self._grip = grip
+        self._grip, self._unsent = grip, True
 
     def track(self, cmd: roboarm_command.CommandType) -> None:
         """Hold the arm at the setpoint ``cmd`` asks for, with nobody waiting on it getting there."""
-        self._qpos = self._target_qpos(cmd)
+        self._qpos, self._unsent = self._target_qpos(cmd), True
 
     def serve_sync_move(self, call: pimm.calls.Call[roboarm_command.CommandType, None]) -> None:
         """Hold the arm where ``call`` asks; ``settle`` answers it once the bus reads back there."""
         with pimm.calls.forward_failure(call):
             target = self._target_qpos(call.request)
-            self._qpos = target
+            self._qpos, self._unsent = target, True
             self._move.accept(call, target, self.clock.now(), self._MOVE_TIMEOUT_S)
 
     def write(self) -> None:
-        """Put the setpoint on the bus, unless it is already the one the bus is holding."""
-        setpoint = self._setpoint()
-        if np.array_equal(setpoint, self._written):
+        """Put the setpoint on the bus, if anything has asked for one since it was last written.
+
+        The arm and the gripper are one setpoint on a shared bus, but they arrive as two channels that need
+        not carry a value in the same round, so either one changing rewrites the whole vector.
+        """
+        if not self._unsent:
             return
-        self.bus.set_target_position(setpoint)
-        self._written = setpoint
+        self.bus.set_target_position(np.concatenate([self._qpos, [self._grip]]))
+        self._unsent = False
 
     def publish(self) -> None:
         """Ship the arm as the bus reports it, arm and fingers."""
@@ -208,8 +208,8 @@ class Robot(pimm.ControlSystem):
         self.sync_move = pimm.calls.ControlSystemHandler[roboarm_command.CommandType, None](self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
 
-        self.grip: pimm.SignalEmitter[float] = pimm.ControlSystemEmitter(self)
-        self.state: pimm.SignalEmitter[SO101State] = pimm.ControlSystemEmitter(self)
+        self.grip = pimm.ControlSystemEmitter[float](self)
+        self.state = pimm.ControlSystemEmitter[SO101State](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
 
         print('================================================================')

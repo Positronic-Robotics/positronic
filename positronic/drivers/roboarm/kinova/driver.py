@@ -184,7 +184,7 @@ class Robot(pimm.ControlSystem):
         self.home_joints = home_joints if home_joints is not None else [0.0, -0, 0.5, -1.5, 0.0, -0.5, 1.57079633]
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
-        self.state: pimm.SignalEmitter[KinovaState] = pimm.ControlSystemEmitter(self)
+        self.state = pimm.ControlSystemEmitter[KinovaState](self)
 
     def _arm(self, api: KinovaAPI, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration.

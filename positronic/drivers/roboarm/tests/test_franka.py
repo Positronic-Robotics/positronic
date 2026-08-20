@@ -8,6 +8,7 @@ import pytest
 import pimm
 from pimm.tests.testing import MockClock, wire_call
 from positronic.drivers.roboarm import RobotStatus, command, franka
+from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.tests.testing_coutils import RecordingEmitter
 
 HOME = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
@@ -124,16 +125,6 @@ class FakeDesk:
 
     def prepare(self) -> None:
         self.prepared = True
-
-
-class StopFlag(pimm.SignalReceiver[bool]):
-    """``should_stop`` under the test's control."""
-
-    def __init__(self):
-        self.stopped = False
-
-    def read(self) -> pimm.Message[bool]:
-        return pimm.Message(self.stopped)
 
 
 @pytest.fixture
@@ -304,12 +295,6 @@ def _mover(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[command
     caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
     wire_call(world, caller, driver.sync_move)
     return caller
-
-
-@pytest.fixture
-def world():
-    with pimm.World() as w:
-        yield w
 
 
 def test_an_arm_that_will_not_home_reads_error_rather_than_ending_the_run():
