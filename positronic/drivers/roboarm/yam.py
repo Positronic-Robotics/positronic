@@ -171,6 +171,7 @@ class _Chain(DriverRun):
         self,
         vendor: Any,
         out: pimm.SignalEmitter[YamState],
+        grip_out: pimm.SignalEmitter[float],
         home_joints: np.ndarray,
         base_pose: geom.Transform3D,
         should_stop: pimm.SignalReceiver,
@@ -179,6 +180,7 @@ class _Chain(DriverRun):
         super().__init__(should_stop, clock, hz=100)
         self.vendor = vendor
         self.out = out
+        self.grip_out = grip_out
         self.state = YamState()
         self.home_joints = home_joints
         self._base_pose = base_pose
@@ -188,16 +190,23 @@ class _Chain(DriverRun):
         """What the chain reports right now."""
         return self.vendor.get_observations()
 
+    @staticmethod
+    def _grip(obs: dict[str, np.ndarray]) -> float:
+        """How closed the fingers are, from the width they read back."""
+        return 1.0 - float(obs[_GRIPPER_POS][0])
+
     def encode(self, obs: dict[str, np.ndarray]) -> None:
         q = obs[_JOINT_POS]
         self.state.encode(q, obs[_JOINT_VEL], self._base_pose * self._kin.fk(q))
 
     def publish(self, obs: dict[str, np.ndarray]) -> None:
-        """Ship the chain as it reports itself, marked ERROR while it is not where the driver put it."""
+        """Ship the chain as it reports itself, arm and fingers, marked ERROR while it is not where the
+        driver put it."""
         self.encode(obs)
         if self.errored:  # ``encode`` clears the status; the chain is still where it was left
             self.state._set_error()
         self.out.emit(self.state)
+        self.grip_out.emit(self._grip(obs))
 
     def hold_where_it_stopped(self) -> tuple[np.ndarray, float]:
         """Command the chain to stay where it reads, publish that, and return it as the target to keep holding.
@@ -207,7 +216,7 @@ class _Chain(DriverRun):
         obs = self.observations()
         self.vendor.command_joint_pos(np.append(obs[_JOINT_POS], obs[_GRIPPER_POS][0]))
         self.publish(obs)
-        return np.asarray(obs[_JOINT_POS], dtype=np.float64), 1.0 - float(obs[_GRIPPER_POS][0])
+        return np.asarray(obs[_JOINT_POS], dtype=np.float64), self._grip(obs)
 
     def _ik(self, world_pose: geom.Transform3D, q: np.ndarray) -> np.ndarray:
         """IK in the arm-base frame."""
@@ -234,7 +243,7 @@ class _Chain(DriverRun):
         """Whether ``obs`` reads the chain where it was sent. The fingers count as much as the joints: a
         caller told a move landed may act on the whole chain, gripper included."""
         return bool(np.all(np.abs(obs[_JOINT_POS] - target) < self._ARRIVED_TOL)) and (
-            abs((1.0 - float(obs[_GRIPPER_POS][0])) - grip) < self._GRIP_ARRIVED_TOL
+            abs(self._grip(obs) - grip) < self._GRIP_ARRIVED_TOL
         )
 
     def move_to(self, target: np.ndarray, grip: float) -> Generator[pimm.Command, None, MoveStatus]:
@@ -259,14 +268,14 @@ class _Chain(DriverRun):
                 self.encode(obs)
                 self.state._set_busy()  # ``encode`` clears the status; the chain has not arrived
                 self.out.emit(self.state)
+                self.grip_out.emit(self._grip(obs))
                 yield self.limiter.wait()
         except Exception:
             self.errored = True
             raise
 
         self.errored = False
-        self.encode(self.observations())
-        self.out.emit(self.state)
+        self.publish(self.observations())
         return MoveStatus.ARRIVED
 
     def home(self, grip: float) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
@@ -349,7 +358,7 @@ class Robot(pimm.ControlSystem):
         CAN handle does not survive the trip.
         """
         vendor = self._connect(self._channel, self._sim)
-        return _Chain(vendor, self.state, self._home_joints, self._base_pose, should_stop, clock)
+        return _Chain(vendor, self.state, self.grip, self._home_joints, self._base_pose, should_stop, clock)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         chain = self._chain(should_stop, clock)
@@ -383,9 +392,7 @@ class Robot(pimm.ControlSystem):
                 chain.vendor.command_joint_pos(np.append(q_target, 1.0 - grip_target))
 
                 # Read afresh: a move above ran for seconds, so the reading taken before it is long stale.
-                obs = chain.observations()
-                chain.publish(obs)
-                self.grip.emit(1.0 - float(obs[_GRIPPER_POS][0]))
+                chain.publish(chain.observations())
                 yield chain.limiter.wait()
         finally:
             chain.vendor.zero_torque_mode()

@@ -84,9 +84,6 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
     def _set_busy(self):
         self.array[FrankaState.STATUS_OFFSET] = RobotStatus.BUSY.value
 
-    def _set_available(self):
-        self.array[FrankaState.STATUS_OFFSET] = RobotStatus.AVAILABLE.value
-
     def _set_error(self):
         self.array[FrankaState.STATUS_OFFSET] = RobotStatus.ERROR.value
 
