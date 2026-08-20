@@ -21,9 +21,12 @@ with vendor_import('positronic_franka', 'Franka support', platforms=('linux',)):
     import positronic_franka._franka as pf
     from positronic_franka.desk import Desk, SafetyControllerError
 
-# Seconds an arm may travel to a target before the move is judged failed. The vendor reports a goal it
-# abandons, but a goal it never converges on stays in flight for as long as the arm is pushed off course.
-_MOVE_TIMEOUT_S = 10.0
+# A move needs a deadline at all because the vendor reports a goal it abandons, but a goal it never
+# converges on stays in flight for as long as the arm is pushed off course.
+# FR3 joint velocity limits in rad/s, from the bundled ``fr3.urdf``; ``relative_dynamics_factor`` scales them
+_MAX_JOINT_VELOCITY = np.array([2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26])
+# On top of the travel itself: the vendor controller ramps in and out of its speed cap, and settles late
+_MOVE_GRACE_S = 5.0
 
 
 def _check_error(is_error, was_error):
@@ -122,6 +125,7 @@ class _Arm(DriverRun):
         home_joints: list[float],
         home_joints_variation: list[float],
         park_timeout_s: float,
+        dynamics_factor: float,
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
     ):
@@ -132,6 +136,14 @@ class _Arm(DriverRun):
         self._home_joints = home_joints
         self._home_joints_variation = home_joints_variation
         self._park_timeout_s = park_timeout_s
+        self._dynamics_factor = dynamics_factor
+
+    def _travel_s(self, q: np.ndarray, target: np.ndarray) -> float:
+        """How long the arm may take to reach ``target``, from the speed its dynamics factor allows.
+
+        A conservative factor buys proportionally more time rather than failing a move the arm is tracking.
+        """
+        return _MOVE_GRACE_S + float(np.max(np.abs(target - q) / (_MAX_JOINT_VELOCITY * self._dynamics_factor)))
 
     def publish(self, st: pf.State) -> None:
         """Ship the arm as the vendor reports it, marked ERROR while it is not where the driver put it."""
@@ -172,7 +184,7 @@ class _Arm(DriverRun):
         self.state._start_reset()
         self.out.emit(self.state)
 
-        deadline = self.clock.now() + _MOVE_TIMEOUT_S
+        deadline = self.clock.now() + self._travel_s(self.state.q, target)
         try:
             for _ in self.await_goal(target, lambda: self.should_stop.value or self.clock.now() >= deadline):
                 st = self.vendor.state()
@@ -407,6 +419,7 @@ class Robot(pimm.ControlSystem):
             self._home_joints,
             self._home_joints_variation,
             self._park_timeout_s,
+            self._relative_dynamics_factor,
             should_stop,
             clock,
         )

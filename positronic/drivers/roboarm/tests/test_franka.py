@@ -452,7 +452,7 @@ def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stoppe
         next(loop)
     arm.polls_to_reach = 10**9  # from here the goal stays in flight
     answer = move(command.JointPosition(JOGGED))
-    for _ in range(int(franka._MOVE_TIMEOUT_S) * 2):
+    for _ in range(int(franka._MOVE_GRACE_S) * 4):
         if answer.done():
             break
         clock.advance(1.0)
