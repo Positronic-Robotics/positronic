@@ -83,13 +83,6 @@ class Robot(pimm.ControlSystem):
         """Normalize the five arm joints. ``rad_to_norm`` spans the bus, whose last entry is the gripper."""
         return self.rad_to_norm(np.append(q_rad, 0.0))[:-1]
 
-    def _target_qpos(self, state: SO101State, cmd: roboarm_command.CommandType) -> np.ndarray:
-        """The setpoint ``cmd`` asks the arm to hold, clipped to the calibrated range the bus reports from.
-
-        The bus clips the command anyway, so a target outside it is one the arm can reach but never read back.
-        """
-        return np.clip(self._requested_qpos(state, cmd), 0.0, 1.0)
-
     def _requested_qpos(self, state: SO101State, cmd: roboarm_command.CommandType) -> np.ndarray:
         """The setpoint ``cmd`` asks for, in the bus's normalized units, whether or not the arm can hold it."""
         match cmd:
@@ -104,6 +97,13 @@ class Robot(pimm.ControlSystem):
                 return self._arm_rad_to_norm(np.asarray(qpos, dtype=np.float32))
             case other:
                 raise ValueError(f'Unknown command: {other}')
+
+    def _target_qpos(self, state: SO101State, cmd: roboarm_command.CommandType) -> np.ndarray:
+        """The setpoint ``cmd`` asks the arm to hold, clipped to the calibrated range the bus reports from.
+
+        The bus clips the command anyway, so a target outside it is one the arm can reach but never read back.
+        """
+        return np.clip(self._requested_qpos(state, cmd), 0.0, 1.0)
 
     def _streamed_setpoint(self, state: SO101State) -> np.ndarray | None:
         """The setpoint the command stream asks for, if one arrived and the arm can be put there."""

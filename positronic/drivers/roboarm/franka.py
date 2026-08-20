@@ -194,7 +194,9 @@ class _Arm(DriverRun):
                 if st.error != 0:
                     self.vendor.recover_from_errors()
                 yield self.limiter.wait()
-            if self.clock.now() >= deadline:
+            # The deadline stops the poll loop before it asks, so a goal that landed as it expired has not
+            # been seen yet; reading a timeout off the clock alone would fail a move the arm completed.
+            if self.clock.now() >= deadline and self.vendor.goal().status != pf.GoalStatus.REACHED:
                 # The vendor controller is still tracking the goal it did not reach; left alone it would
                 # resume the move once whatever held the arm back goes away.
                 self.vendor.set_target_joints(self.vendor.state().q)

@@ -436,6 +436,26 @@ def test_the_state_answering_a_sync_move_carries_the_pose_the_arm_reached(world)
     np.testing.assert_allclose(arrived.q, JOGGED)
 
 
+def test_a_move_that_lands_as_its_deadline_expires_is_an_arrival():
+    """The deadline stops the poll loop before it asks again, so a goal that landed just then has not been
+    seen. Reading a timeout off the clock alone would fail a caller whose arm is exactly where it asked."""
+    arm = FakeArm(HOME, polls_to_reach=10**9)  # it never lands on a poll of its own
+    driver = _driver(arm, manage_desk=False)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    travel = driver._arm(StopFlag(), clock).move_to(JOGGED)
+
+    next(travel)  # the first poll: the goal is in flight
+    clock.advance(60.0)  # the deadline expires
+    arm.goal_status = franka.pf.GoalStatus.REACHED  # and the goal lands in the same moment
+
+    with pytest.raises(StopIteration) as done:
+        next(travel)
+    assert done.value.value is franka.MoveStatus.ARRIVED
+    # Only the goal itself was commanded: an arrival is not answered with a hold at where the arm stands
+    assert arm.calls.count(Call.SET_TARGET_JOINTS) == 1
+
+
 def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stopped(world):
     """A goal the controller never converges on is not an error the vendor reports, so without a deadline the
     asker waits for the rest of the run — and the arm keeps chasing a target it was told it failed."""
