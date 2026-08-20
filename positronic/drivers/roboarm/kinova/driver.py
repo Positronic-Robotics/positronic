@@ -7,7 +7,7 @@ from mujoco import Any
 
 import pimm
 from positronic import geom
-from positronic.drivers.arrival import MoveStatus, PendingMove
+from positronic.drivers.common import MoveStatus, PendingMove
 from positronic.drivers.roboarm import RobotStatus, State, command
 from positronic.drivers.roboarm.kinova.api import KinovaAPI
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle

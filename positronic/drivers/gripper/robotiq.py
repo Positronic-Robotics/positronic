@@ -4,7 +4,7 @@ from collections.abc import Iterator
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.arrival import PendingMove
+from positronic.drivers.common import PendingMove
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient

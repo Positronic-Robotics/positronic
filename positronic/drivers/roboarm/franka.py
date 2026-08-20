@@ -12,7 +12,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers import vendor_import
-from positronic.drivers.arrival import MoveStatus
+from positronic.drivers.common import MoveStatus
 
 from . import RobotStatus, State, command
 from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85

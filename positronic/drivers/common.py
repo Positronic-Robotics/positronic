@@ -1,4 +1,4 @@
-"""When a device counts as having arrived, for drivers that answer a synchronous move."""
+"""Helpers shared by the drivers: when a device counts as having arrived where it was sent."""
 
 from enum import Enum, auto
 from typing import Any

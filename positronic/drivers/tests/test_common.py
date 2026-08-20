@@ -3,7 +3,7 @@
 import numpy as np
 
 import pimm
-from positronic.drivers.arrival import MoveStatus, PendingMove
+from positronic.drivers.common import MoveStatus, PendingMove
 
 TOL = 0.05
 

@@ -7,7 +7,7 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
-from positronic.drivers.arrival import MoveStatus, PendingMove
+from positronic.drivers.common import MoveStatus, PendingMove
 from positronic.drivers.motors.feetech import MotorBus
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command

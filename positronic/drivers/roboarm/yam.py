@@ -23,7 +23,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers import vendor_import
-from positronic.drivers.arrival import MoveStatus
+from positronic.drivers.common import MoveStatus
 from positronic.utils import package_assets_path
 
 from . import RobotStatus, State, command
