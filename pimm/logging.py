@@ -16,12 +16,8 @@ LOG_DATEFMT = '%H:%M:%S'
 # The operator's own input, read and never written: a resolved level stored here would be the next
 # `init_logging` call's own input, so a later `init_logging('ERROR')` could not change the threshold.
 LOG_LEVEL_ENV = 'LOG_LEVEL'
-# The level a parent resolved, as a NUMBER, for spawned children, which carry no logging
-# configuration of their own. A number because a name means whatever the reading process's registry
-# says it means, and a spawn starts an empty one: a level an entry point registered with
-# `addLevelName` names nothing in the child. Unset means nothing configured a threshold, and a child
-# then logs at INFO rather than falling silent — an entry point asks for a threshold, a control
-# system has none.
+# The level a parent resolved, for spawned children — a NUMBER, because a name resolves against the
+# reading process's registry and a spawn starts an empty one. Unset, a child logs at INFO.
 RESOLVED_LOG_LEVEL_ENV = 'PIMM_RESOLVED_LOG_LEVEL'
 
 # Third-party loggers the child's root-level INFO would otherwise reach too. Each logs per connection,
