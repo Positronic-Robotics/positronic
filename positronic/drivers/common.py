@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from pimm.calls import Call
+import pimm
 
 # A device stopped by what it is holding never reaches its target
 ARRIVAL_TIMEOUT_S = 3.0
@@ -31,7 +31,7 @@ class PendingMove:
     def __init__(self, tol: float, timeout_s: float = ARRIVAL_TIMEOUT_S):
         self._tol = tol
         self._timeout_s = timeout_s
-        self._call: Call[Any, None] | None = None
+        self._call: pimm.calls.Call[Any, None] | None = None
         self._target: np.ndarray | float = 0.0
         self._deadline = 0.0
         # Set by a move that does not arrive, cleared by the next that does: the device is not where it was put
@@ -47,7 +47,7 @@ class PendingMove:
         assert self._call is not None, 'no move is in flight'
         return self._target
 
-    def accept(self, call: Call[Any, None], target: np.ndarray | float, now: float) -> None:
+    def accept(self, call: pimm.calls.Call[Any, None], target: np.ndarray | float, now: float) -> None:
         """Take `call` as the move in flight, aiming at `target`."""
         self._call, self._target, self._deadline = call, target, now + self._timeout_s
 
@@ -65,3 +65,32 @@ class PendingMove:
             self._call, self.errored = None, True
             return MoveStatus.GAVE_UP
         return MoveStatus.MOVING
+
+
+def _clamped(grip: float) -> float:
+    """``grip`` saturated to the range the fingers report back."""
+    return max(0.0, min(1.0, float(grip)))
+
+
+def grip_setpoint(
+    move: PendingMove,
+    calls: pimm.calls.ControlSystemHandler[float, None],
+    stream: pimm.SignalReceiver[float],
+    grip: float,
+    now: float,
+) -> float | None:
+    """The width to command the fingers this tick, or ``None`` to leave the last one standing.
+
+    A move in flight owns the fingers, so neither the calls nor the stream is read until it answers. One
+    that gives up hands back the width the fingers stopped at, so they stop pushing at a width they could
+    not reach.
+    """
+    if move.active:
+        return grip if move.settle(grip, now) is MoveStatus.GAVE_UP else None
+    if (call := next(calls.incoming(), None)) is not None:
+        target = _clamped(call.request)
+        move.accept(call, target, now)
+        return target
+    if (streamed := pimm.value_updated(stream)) is not None:
+        return _clamped(streamed)
+    return None

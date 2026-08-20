@@ -1,9 +1,12 @@
 """When a device counts as arrived, and what a caller waiting on it hears."""
 
 import numpy as np
+import pytest
 
 import pimm
-from positronic.drivers.common import MoveStatus, PendingMove
+from pimm.tests.testing import wire_call
+from positronic.drivers.common import ARRIVAL_TIMEOUT_S, MoveStatus, PendingMove, grip_setpoint
+from positronic.tests.testing_coutils import ManualCommandReceiver
 
 TOL = 0.05
 
@@ -89,3 +92,70 @@ def test_a_move_that_arrives_clears_the_error_left_by_one_that_did_not():
     move.accept(_Call(0.0), 1.0, now=3.0)
     assert move.settle(1.0, now=3.1) is MoveStatus.ARRIVED
     assert not move.errored
+
+
+class _Idle(pimm.ControlSystem):
+    """An owner for a caller/handler pair that no test schedules."""
+
+    def run(self, should_stop, clock):
+        yield pimm.Sleep(0.0)
+
+
+@pytest.fixture
+def asking():
+    """A caller wired to the handler a gripper polls, so a test asks the way a client does."""
+    caller = pimm.calls.ControlSystemCaller[float, None](_Idle())
+    handler = pimm.calls.ControlSystemHandler[float, None](_Idle())
+    with pimm.World() as world:
+        wire_call(world, caller, handler)
+        yield caller, handler
+
+
+def test_a_grip_call_takes_the_fingers_until_it_arrives(asking):
+    ask, calls = asking
+    move, stream = PendingMove(TOL), ManualCommandReceiver()
+    answer = ask(0.7)
+
+    assert grip_setpoint(move, calls, stream, grip=0.0, now=0.0) == 0.7
+    assert move.active
+    assert grip_setpoint(move, calls, stream, grip=0.3, now=0.1) is None, 'commanded again mid-travel'
+    assert grip_setpoint(move, calls, stream, grip=0.7, now=0.2) is None
+    assert not move.active
+    assert answer.result() is None
+
+
+def test_a_grip_that_gives_up_hands_back_the_width_the_fingers_stopped_at(asking):
+    """A caller told its move failed must not be left with fingers still pushing at a width they missed."""
+    ask, calls = asking
+    move, stream = PendingMove(TOL), ManualCommandReceiver()
+    answer = ask(1.0)
+    grip_setpoint(move, calls, stream, grip=0.0, now=0.0)
+
+    assert grip_setpoint(move, calls, stream, grip=0.42, now=ARRIVAL_TIMEOUT_S) == 0.42
+    assert not move.active and move.errored
+    with pytest.raises(TimeoutError, match='stopped at 0.42'):
+        answer.result()
+
+
+def test_a_grip_asked_for_past_the_range_is_tracked_against_a_width_the_fingers_report(asking):
+    """The fingers read back 0..1, so a move aimed past that would sit at the endpoint until its deadline."""
+    ask, calls = asking
+    move, stream = PendingMove(TOL), ManualCommandReceiver()
+    answer = ask(1.5)
+
+    assert grip_setpoint(move, calls, stream, grip=0.0, now=0.0) == 1.0
+    assert grip_setpoint(move, calls, stream, grip=1.0, now=0.1) is None
+    assert answer.result() is None
+
+
+def test_a_streamed_grip_waits_for_the_call_queue_to_be_empty(asking):
+    """A signal holds only its latest value, so a stream read in the same tick as a call would be lost."""
+    ask, calls = asking
+    move, stream = PendingMove(TOL), ManualCommandReceiver()
+    stream.push(0.25)
+    ask(0.9)
+
+    assert grip_setpoint(move, calls, stream, grip=0.0, now=0.0) == 0.9
+    assert grip_setpoint(move, calls, stream, grip=0.9, now=0.1) is None  # the call arrives
+    assert grip_setpoint(move, calls, stream, grip=0.9, now=0.2) == 0.25  # the stream, still waiting
+    assert grip_setpoint(move, calls, stream, grip=0.25, now=0.3) is None  # nothing new to command

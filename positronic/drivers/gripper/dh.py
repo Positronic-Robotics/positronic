@@ -4,7 +4,7 @@ from ctypes import c_uint16
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.common import PendingMove
+from positronic.drivers.common import PendingMove, grip_setpoint
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -49,25 +49,16 @@ class DHGripper(pimm.ControlSystem):
 
         # TODO: Should we translate these to physical units (N and m/s)?
         while not should_stop.value:
-            if not move.active:
-                # A call first, and the stream only when none came: reading both would consume a streamed
-                # target the call then overwrites, and a signal holds only its latest value.
-                if (call := next(self.sync_move.incoming(), None)) is not None:
-                    last_grip = max(0.0, min(1.0, float(call.request)))
-                    move.accept(call, last_grip, clock.now())
-                elif (grip := pimm.value_updated(self.target_grip)) is not None:
-                    last_grip = max(0.0, min(1.0, float(grip)))
+            current_grip = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
+            self.grip.emit(current_grip)
+
+            target = grip_setpoint(move, self.sync_move, self.target_grip, current_grip, clock.now())
+            if target is not None:
+                last_grip = target
             width = round((1 - last_grip) * 1000)
             client.write_register(0x103, c_uint16(width).value, slave=1)
             client.write_register(0x101, c_uint16(self.force.value).value, slave=1)
             client.write_register(0x104, c_uint16(self.speed.value).value, slave=1)
-
-            current_grip = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
-            self.grip.emit(current_grip)
-            if move.active:
-                # A grasp is a move that times out: the fingers stop on the object. The target stands, so
-                # they keep holding it.
-                move.settle(current_grip, clock.now())
 
             yield pimm.Sleep(0.001)  # Small delay to prevent busy-waiting
 

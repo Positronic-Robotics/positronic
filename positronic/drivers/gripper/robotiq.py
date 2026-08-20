@@ -4,7 +4,7 @@ from collections.abc import Iterator
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.common import PendingMove
+from positronic.drivers.common import PendingMove, grip_setpoint
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -44,29 +44,17 @@ class Robotiq2F(pimm.ControlSystem):
             move = PendingMove(_ARRIVED_TOL)
 
             while not should_stop.value:
-                target = None
-                if not move.active:
-                    # A call first, and the stream only when none came: reading both would consume a streamed
-                    # target the call then overwrites, and a signal holds only its latest value.
-                    if (call := next(self.sync_move.incoming(), None)) is not None:
-                        target = max(0.0, min(1.0, float(call.request)))
-                        move.accept(call, target, clock.now())
-                    elif (streamed := pimm.value_updated(self.target_grip)) is not None:
-                        target = max(0.0, min(1.0, float(streamed)))
+                reg = client.read_input_registers(_REG_IN_POS, count=1, device_id=_SLAVE).registers[0]
+                grip = min(1.0, max(0.0, (reg >> 8) / 255.0))
+                self.grip.emit(grip)
+
+                target = grip_setpoint(move, self.sync_move, self.target_grip, grip, clock.now())
                 if target is not None:
                     pos = int(target * 255)
                     spd = int(max(0, min(255, self.speed.value)))
                     frc = int(max(0, min(255, self.force.value)))
 
                     client.write_registers(_REG_CMD, [0x0900, pos, (frc << 8) | spd], device_id=_SLAVE)
-
-                reg = client.read_input_registers(_REG_IN_POS, count=1, device_id=_SLAVE).registers[0]
-                grip = min(1.0, max(0.0, (reg >> 8) / 255.0))
-                self.grip.emit(grip)
-                if move.active:
-                    # A grasp is a move that times out: the fingers stop on the object. The target stands, so
-                    # they keep holding it.
-                    move.settle(grip, clock.now())
 
                 yield limiter.wait()
         finally:
