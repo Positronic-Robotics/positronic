@@ -114,6 +114,8 @@ class _Arm(DriverRun):
     _MAX_JOINT_VELOCITY = np.array([2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26])
     # On top of the travel itself: the vendor controller ramps in and out of its speed cap, and settles late
     _MOVE_GRACE_S = 5.0
+    # What ``await_goal`` sleeps between polls when the caller driving it has no rate of its own
+    _UNPACED_POLL_S = 0.005
 
     def __init__(
         self,
@@ -155,8 +157,11 @@ class _Arm(DriverRun):
     def await_goal(
         self, target: np.ndarray, should_stop: Callable[[], bool]
     ) -> Generator[pimm.Sleep, None, MoveStatus]:
-        """Command ``target`` and poll the goal until the arm arrives."""
-        POLL_INTERVAL_S = 0.005
+        """Command ``target`` and poll the goal until the arm arrives, once per resume.
+
+        The yielded sleep paces a caller that has no rate of its own. One that does — ``move_to`` ticks at
+        the arm's rate, because it publishes every tick — polls at that rate instead, and drops the sleep.
+        """
         self.vendor.set_target_joints(target)
         while not should_stop():
             goal = self.vendor.goal()
@@ -164,7 +169,7 @@ class _Arm(DriverRun):
                 return MoveStatus.ARRIVED
             if goal.status != pf.GoalStatus.IN_FLIGHT:
                 raise RuntimeError(f'the arm stopped short of its target: {goal.reason or goal.status}')
-            yield pimm.Sleep(POLL_INTERVAL_S)
+            yield pimm.Sleep(self._UNPACED_POLL_S)
         return MoveStatus.GAVE_UP
 
     def _travel_s(self, q: np.ndarray, target: np.ndarray) -> float:
