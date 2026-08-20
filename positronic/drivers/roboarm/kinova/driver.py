@@ -139,9 +139,12 @@ class Robot(pimm.ControlSystem):
                 q, dq, tau = api.apply_current_command(current_command)
                 ee_pose = self.solver.forward(joint_controller.q_s)
 
-                status = RobotStatus.MOVING if not joint_controller.finished else RobotStatus.AVAILABLE
-                if move.errored:  # the controller reports its trajectory, not whether the arm got there
+                if move.active:  # the driver owns the arm until the move answers, and reads no command meanwhile
+                    status = RobotStatus.RESETTING
+                elif move.errored:  # the controller reports its trajectory, not whether the arm got there
                     status = RobotStatus.ERROR
+                else:
+                    status = RobotStatus.AVAILABLE if joint_controller.finished else RobotStatus.MOVING
                 robot_state.encode(q, dq, ee_pose, status)
                 self.state.emit(robot_state)
 
