@@ -2,7 +2,7 @@
 
 Policies and sessions:
 - A `Policy` is the algorithm that controls a robot from observed data.
-- A `Policy` makes one `Session` per control session.
+- Control happens in a `Session`; a `Policy` makes them.
 - Sessions are independent, and several may exist at the same moment.
 - A `Policy` is told which robot it is to control, so the session comes ready for it.
 - A session is cancellable from outside at any moment, and lives until it is cancelled.
