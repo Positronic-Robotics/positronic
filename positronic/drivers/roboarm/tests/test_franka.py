@@ -9,6 +9,7 @@ import pimm
 from pimm.tests.testing import MockClock, wire_call
 from positronic.drivers.roboarm import RobotStatus, command, franka
 from positronic.drivers.roboarm.tests.fakes import StopFlag
+from positronic.drivers.utils import MoveAbandoned
 from positronic.tests.testing_coutils import RecordingEmitter
 
 HOME = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
@@ -338,6 +339,31 @@ def test_a_sync_move_answers_once_the_arm_is_there(world):
     answer.result()
     np.testing.assert_allclose(arm.targets[-1], JOGGED)
     np.testing.assert_allclose(arm.q, JOGGED)
+
+
+def test_a_move_the_world_stops_under_is_handed_back_to_its_asker(world):
+    """A stop ends the travel with no arrival to report, and silence would hold the asker for good."""
+    arm = FakeArm(HOME)
+    driver = _driver(arm, manage_desk=False)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = driver.run(stop, clock)
+
+    for _ in range(2):  # through the opening reset
+        next(loop)
+    arm.polls_to_reach = 1000  # the move is still travelling when the stop lands
+    answer = _mover(world, driver)(command.JointPosition(JOGGED))
+    next(loop)
+    assert not answer.done()
+
+    stop.stopped = True
+    for _ in range(5):
+        if answer.done():
+            break
+        next(loop)
+
+    with pytest.raises(MoveAbandoned):
+        answer.result()
 
 
 def test_a_sync_move_the_arm_cannot_make_fails_the_asker(world):

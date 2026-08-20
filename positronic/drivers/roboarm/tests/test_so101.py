@@ -10,6 +10,7 @@ from positronic.drivers.motors.feetech import MotorBus
 from positronic.drivers.roboarm import RobotStatus, command
 from positronic.drivers.roboarm.so101 import driver as so101
 from positronic.drivers.roboarm.tests.fakes import StopFlag
+from positronic.drivers.utils import MoveAbandoned
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 # Mid-range on every joint: a posture the arm can be commanded away from in either direction. Five arm
@@ -98,12 +99,12 @@ def _mover(world: pimm.World, driver: so101.Robot) -> pimm.calls.Caller[command.
     return caller
 
 
-def _driven(bus: FakeBus, clock: MockClock | None = None):
+def _driven(bus: FakeBus, clock: MockClock | None = None, stop: StopFlag | None = None):
     """A driver over ``bus`` with its state recorded, and its loop ready to pump."""
     driver = so101.Robot(bus)
     states = RecordingEmitter()
     driver.state._bind(states)
-    return driver, states, driver.run(StopFlag(), clock or MockClock())
+    return driver, states, driver.run(stop or StopFlag(), clock or MockClock())
 
 
 def _pump(loop, answer, clock: MockClock | None = None, steps: int = 10) -> None:
@@ -301,6 +302,25 @@ def test_an_arm_that_stopped_short_reads_error_until_a_move_lands(world):
 
     landed.result()
     assert states.emitted[-1][1].status is RobotStatus.AVAILABLE
+
+
+def test_a_move_the_world_stops_under_is_handed_back_to_its_asker(world):
+    """A stop ends the loop with no arrival to report, and silence would hold the asker for good."""
+    bus = FakeBus()
+    bus.blocked = True
+    stop = StopFlag()
+    driver, _, loop = _driven(bus, stop=stop)
+    answer = _mover(world, driver)(command.JointPosition(JOGGED))
+
+    next(loop)
+    assert not answer.done()
+
+    stop.stopped = True
+    with pytest.raises(StopIteration):
+        next(loop)
+
+    with pytest.raises(MoveAbandoned):
+        answer.result()
 
 
 def test_a_run_that_dies_mid_move_hands_what_killed_it_to_the_asker(world):

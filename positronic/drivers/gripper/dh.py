@@ -4,7 +4,7 @@ from ctypes import c_uint16
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import PendingMove, grip_setpoint
+from positronic.drivers.utils import MoveAbandoned, PendingMove, grip_setpoint
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -63,8 +63,9 @@ class DHGripper(pimm.ControlSystem):
         except Exception as exc:
             move.fail(exc)  # a run that dies mid-move must not leave its asker waiting
             raise
-
-        client.close()
+        finally:
+            move.fail(MoveAbandoned())  # a no-op once the move above has been answered
+            client.close()
 
 
 if __name__ == '__main__':

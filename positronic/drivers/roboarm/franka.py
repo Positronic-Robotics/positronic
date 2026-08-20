@@ -12,7 +12,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import DriverRun, MoveStatus
+from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus
 
 from . import RobotStatus, State, command
 from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
@@ -243,11 +243,13 @@ class _Arm(DriverRun):
     def serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
         """Put the arm where ``call`` asks and answer it once the state saying so is out.
 
-        A stop cuts the move short, unanswered.
+        A stop cuts the move short, and the asker hears that rather than waiting on an arm coming down.
         """
         try:
             if (yield from self.move_to(self.target_joints(call.request))) is MoveStatus.ARRIVED:
                 call.set_result(None)
+            else:
+                call.set_exception(MoveAbandoned())
         except Exception as exc:
             try:
                 self.publish(self.vendor.state())

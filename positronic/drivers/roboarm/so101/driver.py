@@ -12,7 +12,7 @@ from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.kinematics import Kinematics
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, add_default_frame
-from positronic.drivers.utils import DriverRun, MoveStatus, PendingMove
+from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, PendingMove
 
 
 class SO101State(State, pimm.shared_memory.NumpySMAdapter):
@@ -263,3 +263,5 @@ class Robot(pimm.ControlSystem):
         except Exception as exc:
             arm.fail(exc)  # a run that dies mid-move must not leave its asker waiting
             raise
+        finally:
+            arm.fail(MoveAbandoned())  # a no-op once the move above has been answered

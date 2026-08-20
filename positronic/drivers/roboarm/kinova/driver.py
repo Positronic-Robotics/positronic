@@ -10,7 +10,7 @@ from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State, command
 from positronic.drivers.roboarm.kinova.api import KinovaAPI
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
-from positronic.drivers.utils import DriverRun, MoveStatus, PendingMove
+from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, PendingMove
 
 
 def _set_realtime_priority():
@@ -219,3 +219,5 @@ class Robot(pimm.ControlSystem):
             except Exception as exc:
                 arm.fail(exc)  # a run that dies mid-move must not leave its asker waiting
                 raise
+            finally:
+                arm.fail(MoveAbandoned())  # a no-op once the move above has been answered

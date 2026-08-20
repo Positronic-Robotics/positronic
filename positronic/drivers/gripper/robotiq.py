@@ -4,7 +4,7 @@ from collections.abc import Iterator
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import PendingMove, grip_setpoint
+from positronic.drivers.utils import MoveAbandoned, PendingMove, grip_setpoint
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -60,6 +60,7 @@ class Robotiq2F(pimm.ControlSystem):
             move.fail(exc)  # a run that dies mid-move must not leave its asker waiting
             raise
         finally:
+            move.fail(MoveAbandoned())  # a no-op once the move above has been answered
             client.close()
 
 

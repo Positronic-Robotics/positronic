@@ -23,7 +23,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import DriverRun, MoveStatus
+from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus
 from positronic.utils import package_assets_path
 
 from . import RobotStatus, State, command
@@ -296,7 +296,8 @@ class _Chain(DriverRun):
         """Put the chain where ``call`` asks, hold it wherever it ends up, and answer it once that is out.
 
         Only an arrival earns the target: commanding it from wherever the ramp got to is the jump the ramp
-        exists to avoid. A stop cuts the move short, unanswered.
+        exists to avoid. A stop cuts the move short, and the asker hears that rather than waiting on a
+        chain coming down.
         """
         request = call.request
         try:
@@ -310,7 +311,9 @@ class _Chain(DriverRun):
             finally:
                 call.set_exception(exc)  # a chain the driver cannot read still leaves nobody waiting
             return held
-        return self.hold_where_it_stopped()
+        held = self.hold_where_it_stopped()
+        call.set_exception(MoveAbandoned())  # the state saying where the chain stopped is out
+        return held
 
 
 class Robot(pimm.ControlSystem):

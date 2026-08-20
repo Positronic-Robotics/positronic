@@ -31,6 +31,13 @@ class MoveStatus(Enum):
     GAVE_UP = auto()
 
 
+class MoveAbandoned(RuntimeError):
+    """A move the world came down under, before the device reached what it was sent to."""
+
+    def __init__(self):
+        super().__init__('the world stopped before the move arrived')
+
+
 class PendingMove:
     """The synchronous move a driver has in flight, if any.
 
