@@ -1,9 +1,8 @@
 """How a pimm process configures logging, at an entry point and in a spawned control system.
 
-`init_logging` is the entry point's call: it resolves a threshold, publishes it, and then
-configures its own process through `configure_process_logging`, which is all a child runs, having
-no entry point of its own. Both processes therefore take the same format, the same threshold and
-the same library pins.
+`init_logging` resolves a threshold, publishes it, and configures its own process through
+`configure_process_logging`, which is all a spawned child runs. Both therefore take the same
+format, threshold and library pins.
 """
 
 import logging
@@ -70,8 +69,7 @@ def configure_process_logging() -> None:
     operator's own, so a requested suppression reaches a control system rather than stopping at the
     parent; the noisy libraries are pinned no lower than WARNING.
 
-    Raises `ValueError` on a value that names no level, which would otherwise configure some other
-    threshold and read as working configuration.
+    Raises `ValueError` on a value that names no level.
     """
     level = _requested_level()
     logging.basicConfig(level=level, format=LOG_FORMAT, datefmt=LOG_DATEFMT, force=True)
