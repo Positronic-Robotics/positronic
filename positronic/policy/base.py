@@ -7,19 +7,22 @@ Policies and sessions:
 - A `Policy` is told which robot it is to control, so the session comes ready for it.
 - The framework may cancel a session at any moment; a session never ends itself.
 
-The control loop:
-- One tick: `(observations, time) -> (commands, due)` — the current observations and time in, the
+Control:
+- Control happens in a cycle between a session and the framework; the session's part of the cycle is a turn.
+- One turn: `(observations, time) -> (commands, resume_at)` — the current observations and time in, the
   commands to execute now (possibly none) out.
 - The `time` argument is the only clock a session has; the framework sets it.
-- Observations and commands may carry domain types (a robot command, an image).
-- Returned commands are emitted towards the robot driver in the same tick.
-- `due` is when the session wants control back: an absolute instant on the clock of `time`, strictly in
-  the future.
-- The framework returns control best-effort at `due`: it may be earlier or later.
+- Observations and commands can be of any type, structured or unstructured (a robot command, an image).
+- Observations are the freshest the framework has when the turn starts.
+- Returned commands are emitted towards the robot driver in the same turn.
+- `resume_at` is when the session wants its next turn: an absolute instant on the clock of `time`,
+  strictly in the future.
+- The framework grants the turn best-effort at `resume_at`: it may be earlier or later.
+- The framework has no pace of its own: turns happen when sessions ask.
 
 Pure functions:
 - A policy may define pure functions that are available to sessions via the framework.
-- Invoking one starts the work off the tick and returns a handle at once.
+- Invoking one starts the work off the turn and returns a handle at once.
 - The session may read the handle when it next has control.
 - A function's inputs and outputs are types the framework can serialize: plain types and numpy, selected domain classes.
   An unsupported type fails at the call.
@@ -35,17 +38,17 @@ Composability:
 - Chain order fully determines behavior.
 - A session communicates only through the observations and commands flowing through it; it knows
   nothing of its neighbours or its position.
-- What an inner session sees is its outer's choice — except `time`: one value per tick, the same at
+- What an inner session sees is its outer's choice — except `time`: one value per turn, the same at
   every depth, not the chain's to alter.
 - A `Codec` is a data transform written once and applicable to both: around a pure function, its
-  inputs and outputs; as a trivial layer, observations down and commands up, `due` untouched.
+  inputs and outputs; as a trivial layer, observations down and commands up, `resume_at` untouched.
 - Any policy fits the API as it stands: implement a session directly, or compose it from layers and
   pure functions. Neither ever requires a framework change.
 
 Logging:
 - A log is a set of named series per control session; a sample is a value stamped on 3 timelines:
-  the tick number, control time, and wall time.
-- If requested, the framework logs the timelines' correspondence: one sample per tick.
+  the turn number, control time, and wall time.
+- If requested, the framework logs the timelines' correspondence: one sample per turn.
 - If requested, the framework logs every function call: its identity, submit time, and answer time.
 - If requested, the framework logs every session's invocations in a chain it assembled.
 - A session may append a value to a named series of its own; the framework stamps it.
@@ -63,7 +66,7 @@ Remote policies:
   policy does.
 - A declaration the rig cannot honor is refused at the handshake.
 
-TODO: the Python shape of the tick, the function handles, and the logging conduit — an object protocol,
+TODO: the Python shape of the turn, the function handles, and the logging conduit — an object protocol,
   with generators as a supported authoring style the framework adapts.
 
 Deferred, not to decide now:
