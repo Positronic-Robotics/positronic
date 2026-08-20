@@ -142,7 +142,7 @@ class _Arm(DriverRun):
 
     def serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
         """Put the controller where ``call`` asks; ``settle`` answers it once the arm reads back there."""
-        with pimm.calls.forward_failure(call):
+        with pimm.calls.raise_to(call):
             target = self._target_qpos(call.request)
             self.controller.set_target_qpos(target)
             # The branch the controller tracks: it wraps the target once, when it is set

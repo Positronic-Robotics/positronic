@@ -3,7 +3,7 @@ from itertools import islice
 
 import pytest
 
-from pimm.calls import Answer, ControlSystemCaller, ControlSystemHandler, forward_failure
+from pimm.calls import Answer, ControlSystemCaller, ControlSystemHandler, raise_to
 from pimm.core import ControlSystem, NoValueException, Sleep
 from pimm.tests.testing import wire_call
 from pimm.world import World
@@ -123,7 +123,7 @@ class TestCallAndAnswer:
         answer = caller(None)
         (call,) = handler.incoming()
 
-        with forward_failure(call):
+        with raise_to(call):
             raise ValueError('boom')
 
         with pytest.raises(ValueError, match='boom'):
@@ -135,7 +135,7 @@ class TestCallAndAnswer:
         answer = caller(None)
         (call,) = handler.incoming()
 
-        with forward_failure(call):
+        with raise_to(call):
             pass
 
         assert not answer.done()

@@ -163,7 +163,7 @@ class _Arm(DriverRun):
 
     def serve_sync_move(self, call: pimm.calls.Call[roboarm_command.CommandType, None]) -> None:
         """Hold the arm where ``call`` asks; ``settle`` answers it once the bus reads back there."""
-        with pimm.calls.forward_failure(call):
+        with pimm.calls.raise_to(call):
             target = self._target_qpos(call.request)
             self._qpos, self._unsent = target, True
             self._move.accept(call, target, self.clock.now(), self._MOVE_TIMEOUT_S)

@@ -56,8 +56,8 @@ class Call(ABC, Generic[Req, Res]):
 
 
 @contextmanager
-def forward_failure(call: Call[Req, Res]) -> Iterator[None]:
-    """Pass whatever the block raises to `call`'s caller; a result, if any, the block sets itself."""
+def raise_to(call: Call[Req, Res]) -> Iterator[None]:
+    """Raise whatever the block raises to `call`'s caller; a result, if any, the block sets itself."""
     try:
         yield
     # rules-allow: swallowed-error — the exception is not dropped but handed to the caller, who raises it
