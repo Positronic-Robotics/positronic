@@ -177,6 +177,20 @@ def test_a_streamed_joint_command_reaches_the_bus():
     np.testing.assert_allclose(bus.targets[-1][:-1], JOGGED)
 
 
+def test_a_streamed_arm_command_leaves_the_fingers_where_the_bus_found_them():
+    """The whole setpoint goes out on every write, so the half nobody has commanded has to carry the width
+    the fingers are already holding."""
+    bus = FakeBus(np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.8]))
+    driver, _, loop = _driven(bus)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+
+    commands.push(command.JointPosition(JOGGED))
+    next(loop)
+
+    assert bus.targets[-1][-1] == pytest.approx(0.8)
+
+
 def test_a_streamed_command_the_arm_cannot_be_put_at_leaves_it_where_it_is():
     """A command stream cannot end the run: the next command supersedes one that could not be applied."""
     bus = FakeBus()

@@ -88,7 +88,7 @@ class _Arm(DriverRun):
         # Read here rather than left empty: every setpoint below is solved from where the arm is now, and the
         # arm holds where the bus finds it until something asks otherwise
         self.q_norm = bus.position
-        self._qpos, self._grip = np.asarray(self.q_norm[:-1]), 0.0
+        self._qpos, self._grip = np.asarray(self.q_norm[:-1]), float(self.q_norm[-1])
         # Nothing has asked the arm to be anywhere, and the bus holds whatever it was left holding
         self._unsent = False
 

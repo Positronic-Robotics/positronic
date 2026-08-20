@@ -30,6 +30,11 @@ class RobotStatus(IntEnum):
     BUSY = 1
     ERROR = 3
 
+    @classmethod
+    def _missing_(cls, value: object) -> 'RobotStatus | None':
+        # The wire protocol also publishes 2, an arm travelling towards a setpoint while still taking commands
+        return cls.AVAILABLE if value == 2 else None
+
 
 class State(ABC):
     """

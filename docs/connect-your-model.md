@@ -101,7 +101,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `robot_state.ee_pose` | float32 | (7,) | End-effector pose: `x, y, z, qw, qx, qy, qz` (quaternion is **wxyz**, scalar first) |
 | `robot_state.q` | float32 | (7,) | Joint positions (radians) |
 | `robot_state.dq` | float32 | (7,) | Joint velocities (radians/s) |
-| `robot_state.status` | int | scalar | The arm's status: `0` available, `2` busy, `3` error. The measurements above come on every sample whatever the status; this is what says whether a command you send will reach the arm |
+| `robot_state.status` | int | scalar | The arm's status: `0` available, `1` busy, `3` error. `2` is also accepted and read as available — an arm travelling towards a setpoint still takes commands. The measurements above come on every sample whatever the status; this is what says whether a command you send will reach the arm |
 | `grip` | float32 | scalar | Gripper closure in `[0, 1]`: 0 = open, 1 = closed |
 | `image.<name>` | uint8 | (H, W, 3) | Camera RGB. Every eval target — PhAIL and each sim — sends `image.exterior` and `image.wrist`, whatever the underlying benchmark calls those cameras, so one codec reads them all; a target with more views adds its own names beside them (the MuJoCo sim adds `image.agent_view`) |
 | `obs_time_ns` | int | scalar | Harness-clock timestamp of this observation (ns) |

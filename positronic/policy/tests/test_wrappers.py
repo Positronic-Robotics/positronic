@@ -116,6 +116,14 @@ class TestStopOnFault:
         assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 1}) == []
         assert inner.call_count == 0
 
+    def test_the_status_published_for_a_travelling_arm_reaches_the_model(self):
+        """The wire protocol publishes 2 for an arm on its way to a setpoint, which is one taking commands."""
+        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        session = StopOnFault().wrap_session(inner, None, None)
+
+        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 2}) is not None
+        assert inner.call_count == 1
+
     def test_a_status_no_arm_answers_to_raises(self):
         """A number outside ``RobotStatus`` is the rig and the server disagreeing about the protocol, which
         is not something to drive an arm through."""
