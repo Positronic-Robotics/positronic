@@ -2,59 +2,59 @@
 
 Policies and sessions:
 - A `Policy` is the algorithm that controls a robot from observed data.
-- A `Policy` makes one `Session` per control session. Sessions are independent, and several may exist at
-  the same moment.
+- A `Policy` makes one `Session` per control session.
+- Sessions are independent, and several may exist at the same moment.
 - A `Policy` is told which robot it is to control, so the session comes ready for it.
 - A session is cancellable from outside at any moment, and lives until it is cancelled.
 
 The control loop:
-- The framework calls the session with the current observation; the session returns what to execute and
-  when it wants control back.
-- A returned command is emitted towards the robot driver in the same control pass.
-- The framework does its best to return control at the moment asked, or earlier — when a call's answer
-  is ready.
-- A session has no clock of its own: time reaches it as data.
-- Observations and commands carry domain types (a robot command, an image).
+- One pass: `(observations, time) -> (commands, due)` — the current observations and time in, the
+  commands to execute now (possibly none) out.
+- The `time` argument is the only clock a session has.
+- Observations and commands may carry domain types (a robot command, an image).
+- Returned commands are emitted towards the robot driver in the same pass.
+- `due` is when the session wants control back: an absolute instant on the clock of `time`, strictly in
+  the future.
+- The framework returns control best-effort at `due`: it may be earlier or later.
 
 Pure functions:
-- A policy may define pure functions that are available to sessions.
-- The framework serves these functions through a future-like API: invoking one starts the work and returns
-  a handle the session reads when it next has control.
-- A function's inputs and outputs are plain types including numpy; domain types may be supported.
-- A session computes only while in control or inside a served call; it runs no work of its own beside
-  them.
+- A policy may define pure functions that are available to sessions via the framework.
+- Invoking one starts the work off the control pass and returns a handle at once.
+- The session may read the handle when it next has control.
+- A function's inputs and outputs are types the framework can serialize: plain types and numpy, selected domain classes.
+  An unsupported type fails at the call.
+- A session computes only while in control or inside a served call.
 - The framework makes no stateful guarantees: a function may cache, but dropping the cache must not
   change what it computes.
 
 Composability:
 - A session is a chain of layers; the innermost answers on its own, with or without pure functions.
-- A layer's runtime instance is itself a session: an outer layer drives its inner one exactly as the
-  framework drives the whole chain.
+- Every link of the chain speaks the session protocol.
 - Layers are the toolbox: a serving algorithm is built by chaining them, without touching the framework.
 - A chain of layers is a layer.
-- Layers communicate only through the observations and commands flowing through them — no other channel
-  exists between layers. A layer knows nothing of its neighbours or its position.
-- Chaining hides nothing: every layer sees every observation, whether or not it acts on one.
+- Layers communicate only through the observations and commands flowing through them.
+- A layer knows nothing of its neighbours or its position.
+- What an inner layer sees is its outer's choice.
 - Chain order fully determines behavior.
-- A `Codec` transforms data at any joint: around a pure function, its inputs and outputs; around a
-  layer, observations down and commands up — never when control returns.
+- A `Codec` transforms data at a link: a pure function's inputs and outputs, or a layer's observations
+  down and commands up. It never touches `due`.
 
 Logging:
 - The framework records the top-level exchange — observations in, commands out — on its own.
-- A layer can log named data of its own; the framework records it with the control session, on the
-  same clock.
+- A layer can log named data of its own; the framework records it with the control session, on the same
+  clock.
 - Logging never affects control: it adds no waiting and no failure path to the loop.
 
 Remote policies:
-- Framework natively supports remote policies: a server describes the full policy: the pure functions it serves
-  and the stack around them.
+- The framework natively supports remote policies: the whole policy lives on a server.
+- The server describes the full policy: the pure functions it serves and the stack around them.
 - One URL is enough to fully specify the policy, given that the server returns a proper declaration.
 - Declarations are backward compatible: the framework evolves without changing what an already-served
   policy does.
 - A declaration the rig cannot honor is refused at the handshake.
 
-TODO: the session protocol is a plain call — observation in, (command, control-back time) out; a
-  generator is a supported authoring style the framework adapts. Details of both are open.
+TODO: the Python shape of the pass — an object protocol, with generators as a supported authoring style
+  the framework adapts.
 TODO: how a layer logs — a handle given at construction, or part of the return value.
 TODO: the shape of the robot description, and a server's ability to refuse one.
 TODO: the protocol delivering the declared stack to the rig — versioning and compatibility.
