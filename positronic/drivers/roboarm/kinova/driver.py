@@ -18,15 +18,6 @@ _ARRIVED_TOL = 0.02
 _MOVE_GRACE_S = 3.0
 
 
-def _travel_s(joint_controller, q: np.ndarray, target: np.ndarray) -> float:
-    """How long the arm may take to reach ``target``, from the speed its controller is capped at.
-
-    ``relative_dynamics_factor`` scales that cap, so a conservative factor buys proportionally more time
-    rather than failing moves the arm is tracking perfectly well.
-    """
-    return _MOVE_GRACE_S + float(np.max(np.abs(target - q)) / np.min(joint_controller.max_velocity))
-
-
 def _set_realtime_priority():
     try:
         # Set realtime scheduling priority
@@ -79,6 +70,8 @@ class KinovaState(State, pimm.shared_memory.NumpySMAdapter):
 
 class Robot(pimm.ControlSystem):
     def __init__(self, ip: str, relative_dynamics_factor=0.2, home_joints: list[float] | None = None) -> None:
+        # A zero factor caps every joint at zero speed: the arm would never travel and no move could land
+        assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
         self.ip = ip
         self.relative_dynamics_factor = relative_dynamics_factor
         self.solver = KinematicsSolver()
@@ -101,6 +94,15 @@ class Robot(pimm.ControlSystem):
                 return np.array(positions, dtype=np.float32)
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
+
+    @staticmethod
+    def _travel_s(joint_controller, q: np.ndarray, target: np.ndarray) -> float:
+        """How long the arm may take to reach ``target``, from the speed its controller is capped at.
+
+        ``relative_dynamics_factor`` scales that cap, so a conservative factor buys proportionally more time
+        rather than failing moves the arm is tracking perfectly well.
+        """
+        return _MOVE_GRACE_S + float(np.max(np.abs(target - q)) / np.min(joint_controller.max_velocity))
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         _set_realtime_priority()
@@ -136,7 +138,7 @@ class Robot(pimm.ControlSystem):
                                 joint_controller.set_target_qpos(target)
                                 # The branch the controller tracks: it wraps the target once, when it is set
                                 wrapped = wrap_joint_angle(target, q)
-                                move.accept(call, wrapped, clock.now(), _travel_s(joint_controller, q, wrapped))
+                                move.accept(call, wrapped, clock.now(), self._travel_s(joint_controller, q, wrapped))
                         elif (cmd := pimm.value_updated(self.commands)) is not None:
                             try:
                                 joint_controller.set_target_qpos(self._target_qpos(joint_controller, robot_state, cmd))

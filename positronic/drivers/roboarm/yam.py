@@ -197,12 +197,6 @@ class _Chain(DriverRun):
             self.state._set_error()
         self.out.emit(self.state)
 
-    def _publish_moving(self) -> None:
-        """Publish the chain mid-move, where its pose is not the one it was commanded to track."""
-        self.encode(self.observations())
-        self.state._start_reset()  # ``encode`` clears RESETTING; the chain has not arrived
-        self.out.emit(self.state)
-
     def measured_joints(self) -> np.ndarray:
         """The joints the chain reports, as a target that holds it where it stands."""
         return np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
@@ -227,6 +221,12 @@ class _Chain(DriverRun):
                 return self._ik(delta_cmd.apply(self._base_pose * self._kin.fk(q)), q)
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
+
+    def _publish_moving(self) -> None:
+        """Publish the chain mid-move, where its pose is not the one it was commanded to track."""
+        self.encode(self.observations())
+        self.state._start_reset()  # ``encode`` clears RESETTING; the chain has not arrived
+        self.out.emit(self.state)
 
     def move_to(self, target: np.ndarray, grip: float) -> Generator[pimm.Command, None, MoveStatus]:
         """Ramp the chain to ``target``, yielding until it reads back there.

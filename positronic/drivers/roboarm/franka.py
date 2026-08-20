@@ -138,13 +138,6 @@ class _Arm(DriverRun):
         self._park_timeout_s = park_timeout_s
         self._dynamics_factor = dynamics_factor
 
-    def _travel_s(self, q: np.ndarray, target: np.ndarray) -> float:
-        """How long the arm may take to reach ``target``, from the speed its dynamics factor allows.
-
-        A conservative factor buys proportionally more time rather than failing a move the arm is tracking.
-        """
-        return _MOVE_GRACE_S + float(np.max(np.abs(target - q) / (_MAX_JOINT_VELOCITY * self._dynamics_factor)))
-
     def publish(self, st: pf.State) -> None:
         """Ship the arm as the vendor reports it, marked ERROR while it is not where the driver put it."""
         self.state.encode(st)
@@ -176,6 +169,13 @@ class _Arm(DriverRun):
                 raise RuntimeError(f'the arm stopped short of its target: {goal.reason or goal.status}')
             yield pimm.Sleep(POLL_INTERVAL_S)
         return MoveStatus.GAVE_UP
+
+    def _travel_s(self, q: np.ndarray, target: np.ndarray) -> float:
+        """How long the arm may take to reach ``target``, from the speed its dynamics factor allows.
+
+        A conservative factor buys proportionally more time rather than failing a move the arm is tracking.
+        """
+        return _MOVE_GRACE_S + float(np.max(np.abs(target - q) / (_MAX_JOINT_VELOCITY * self._dynamics_factor)))
 
     def move_to(self, target: np.ndarray) -> Generator[pimm.Command, None, MoveStatus]:
         """Travel to ``target``, yielding until it arrives."""
@@ -282,7 +282,7 @@ class Robot(pimm.ControlSystem):
     ) -> None:
         """
         :param ip: IP address of the robot.
-        :param relative_dynamics_factor: Relative dynamics factor in [0, 1]. Smaller values are more conservative.
+        :param relative_dynamics_factor: Relative dynamics factor in (0, 1]. Smaller values are more conservative.
         :param home_joints: Joints of "reset" position, and the pose the arm is parked at when the run ends.
         :param home_joints_variation: Max random deviation per joint in radians. Set to [0]*7 to disable.
         :param collision_coeff: Multiplier for collision thresholds. Higher = more tolerant.
@@ -296,6 +296,8 @@ class Robot(pimm.ControlSystem):
         :param park_timeout_s: How long the arm may travel back to ``home_joints`` when the run ends before the
             driver gives up and stops control where it stands. It is spent inside the world's teardown budget.
         """
+        # A zero factor caps every joint at zero speed: the arm would never travel and no move could land
+        assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
         self._home_joints = home_joints if home_joints is not None else [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
