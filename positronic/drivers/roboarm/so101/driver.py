@@ -12,7 +12,7 @@ from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.kinematics import Kinematics
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, add_default_frame
-from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, PendingMove
+from positronic.drivers.utils import DriverRun, MoveStatus, PendingMove
 
 
 class SO101State(State, pimm.shared_memory.NumpySMAdapter):
@@ -69,6 +69,7 @@ class _Arm(DriverRun):
     def __init__(
         self,
         bus: MotorBus,
+        calls: pimm.calls.ControlSystemHandler[roboarm_command.CommandType, None],
         out: pimm.SignalEmitter[SO101State],
         grip_out: pimm.SignalEmitter[float],
         home_joints: list[float],
@@ -83,7 +84,7 @@ class _Arm(DriverRun):
         self.kinematic = Kinematics(_SO101_URDF_PATH, _SO101_EE_JOINT)
         self._joint_limits = self.kinematic.joint_limits
         self._home_joints = home_joints
-        self._move = PendingMove(self._ARRIVED_TOL)
+        self._move = PendingMove(self._ARRIVED_TOL, calls)
         # Read here rather than left empty: every setpoint below is solved from where the arm is now, and the
         # arm holds where the bus finds it until something asks otherwise
         self.q_norm = bus.position
@@ -134,6 +135,10 @@ class _Arm(DriverRun):
     def takes_commands(self) -> bool:
         """Whether the arm will take a setpoint: a move owns it until it is answered."""
         return not (self._move.active or self._move.settled)
+
+    def take_sync_move(self) -> pimm.calls.Call[roboarm_command.CommandType, None] | None:
+        """The next move asked for, if the arm is free to take one."""
+        return self._move.take()
 
     def read(self) -> None:
         """Take the arm off the bus, once a tick: every step below wants the same instant."""
@@ -189,9 +194,15 @@ class _Arm(DriverRun):
         """Hand a move settled this tick its outcome, now that the state saying so is out."""
         self._move.answer()
 
-    def fail(self, exc: BaseException) -> None:
-        """Hand `exc` to a move the run died under."""
-        self._move.fail(exc)
+    def __enter__(self) -> '_Arm':
+        return self
+
+    def __exit__(self, exc_type, exc: BaseException | None, tb) -> None:
+        """Leave the arm holding where the bus reads it, then answer whatever was waiting on the move."""
+        if self._move.active:  # the servos chase the goal they were last given, run or no run
+            self._qpos, self._unsent = np.asarray(self.q_norm[:-1]), True
+            self.write()
+        self._move.abandon(exc)
 
 
 class Robot(pimm.ControlSystem):
@@ -214,7 +225,7 @@ class Robot(pimm.ControlSystem):
     def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
         self.motor_bus.connect()
-        return _Arm(self.motor_bus, self.state, self.grip, self.home_joints, should_stop, clock)
+        return _Arm(self.motor_bus, self.sync_move, self.state, self.grip, self.home_joints, should_stop, clock)
 
     @staticmethod
     def _build_robot_meta() -> dict:
@@ -227,17 +238,16 @@ class Robot(pimm.ControlSystem):
         }
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        arm = self._arm(should_stop, clock)
-        self.robot_meta.emit(Robot._build_robot_meta())
+        with self._arm(should_stop, clock) as arm:
+            self.robot_meta.emit(Robot._build_robot_meta())
 
-        try:
             while not should_stop.value:
                 arm.read()
                 if (grip := pimm.value_updated(self.target_grip)) is not None:
                     arm.hold_grip(grip)
                 arm.settle()
                 if arm.takes_commands:
-                    if (call := next(self.sync_move.incoming(), None)) is not None:
+                    if (call := arm.take_sync_move()) is not None:
                         arm.serve_sync_move(call)
                     elif (cmd := pimm.value_updated(self.commands)) is not None:
                         try:
@@ -251,8 +261,3 @@ class Robot(pimm.ControlSystem):
                 arm.answer()  # the state a settled move is answered with is out
 
                 yield arm.limiter.wait()
-        except Exception as exc:
-            arm.fail(exc)  # a run that dies mid-move must not leave its asker waiting
-            raise
-        finally:
-            arm.fail(MoveAbandoned())  # a no-op once the move above has been answered

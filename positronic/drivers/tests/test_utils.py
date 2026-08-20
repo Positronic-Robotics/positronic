@@ -32,7 +32,7 @@ class _Call(pimm.calls.Call[float, None]):
 
 
 def _accepted(target: float | np.ndarray, tol: float = TOL, timeout_s: float = 3.0) -> tuple[PendingMove, _Call]:
-    move = PendingMove(tol)
+    move = PendingMove(tol, _unasked())
     call = _Call(0.0)
     move.accept(call, target, now=0.0, timeout_s=timeout_s)
     return move, call
@@ -116,6 +116,11 @@ class _Idle(pimm.ControlSystem):
         yield pimm.Sleep(0.0)
 
 
+def _unasked() -> pimm.calls.ControlSystemHandler[float, None]:
+    """A handler no caller is bound to, for a move driven by hand rather than asked for."""
+    return pimm.calls.ControlSystemHandler[float, None](_Idle())
+
+
 @pytest.fixture
 def asking():
     """A caller wired to the handler a gripper polls, so a test asks the way a client does."""
@@ -128,13 +133,13 @@ def asking():
 
 def test_a_grip_call_takes_the_fingers_until_it_arrives(asking):
     ask, calls = asking
-    move, stream = PendingMove(TOL), ManualCommandReceiver()
+    move, stream = PendingMove(TOL, calls), ManualCommandReceiver()
     answer = ask(0.7)
 
-    assert grip_setpoint(move, calls, stream, grip=0.0, now=0.0) == 0.7
+    assert grip_setpoint(move, stream, grip=0.0, now=0.0) == 0.7
     assert move.active
-    assert grip_setpoint(move, calls, stream, grip=0.3, now=0.1) is None, 'commanded again mid-travel'
-    assert grip_setpoint(move, calls, stream, grip=0.7, now=0.2) is None
+    assert grip_setpoint(move, stream, grip=0.3, now=0.1) is None, 'commanded again mid-travel'
+    assert grip_setpoint(move, stream, grip=0.7, now=0.2) is None
     assert not move.active
     move.answer()
     assert answer.result() is None
@@ -143,11 +148,11 @@ def test_a_grip_call_takes_the_fingers_until_it_arrives(asking):
 def test_a_grip_that_gives_up_hands_back_the_width_the_fingers_stopped_at(asking):
     """The answer waits for the driver to write the width handed back here, so the fingers stop first."""
     ask, calls = asking
-    move, stream = PendingMove(TOL), ManualCommandReceiver()
+    move, stream = PendingMove(TOL, calls), ManualCommandReceiver()
     answer = ask(1.0)
-    grip_setpoint(move, calls, stream, grip=0.0, now=0.0)
+    grip_setpoint(move, stream, grip=0.0, now=0.0)
 
-    assert grip_setpoint(move, calls, stream, grip=0.42, now=_GRIP_TIMEOUT_S) == 0.42
+    assert grip_setpoint(move, stream, grip=0.42, now=_GRIP_TIMEOUT_S) == 0.42
     assert not move.active and move.errored
     assert not answer.done(), 'the fingers are still on the width they missed'
 
@@ -159,11 +164,11 @@ def test_a_grip_that_gives_up_hands_back_the_width_the_fingers_stopped_at(asking
 def test_a_grip_asked_for_past_the_range_is_tracked_against_a_width_the_fingers_report(asking):
     """The fingers read back 0..1, so a move aimed past that would sit at the endpoint until its deadline."""
     ask, calls = asking
-    move, stream = PendingMove(TOL), ManualCommandReceiver()
+    move, stream = PendingMove(TOL, calls), ManualCommandReceiver()
     answer = ask(1.5)
 
-    assert grip_setpoint(move, calls, stream, grip=0.0, now=0.0) == 1.0
-    assert grip_setpoint(move, calls, stream, grip=1.0, now=0.1) is None
+    assert grip_setpoint(move, stream, grip=0.0, now=0.0) == 1.0
+    assert grip_setpoint(move, stream, grip=1.0, now=0.1) is None
     move.answer()
     assert answer.result() is None
 
@@ -171,15 +176,15 @@ def test_a_grip_asked_for_past_the_range_is_tracked_against_a_width_the_fingers_
 def test_a_streamed_grip_waits_for_the_call_queue_to_be_empty(asking):
     """A signal holds only its latest value, so a stream read in the same tick as a call would be lost."""
     ask, calls = asking
-    move, stream = PendingMove(TOL), ManualCommandReceiver()
+    move, stream = PendingMove(TOL, calls), ManualCommandReceiver()
     stream.push(0.25)
     ask(0.9)
 
-    assert grip_setpoint(move, calls, stream, grip=0.0, now=0.0) == 0.9
-    assert grip_setpoint(move, calls, stream, grip=0.9, now=0.1) is None  # the call arrives
+    assert grip_setpoint(move, stream, grip=0.0, now=0.0) == 0.9
+    assert grip_setpoint(move, stream, grip=0.9, now=0.1) is None  # the call arrives
     move.answer()
-    assert grip_setpoint(move, calls, stream, grip=0.9, now=0.2) == 0.25  # the stream, still waiting
-    assert grip_setpoint(move, calls, stream, grip=0.25, now=0.3) is None
+    assert grip_setpoint(move, stream, grip=0.9, now=0.2) == 0.25  # the stream, still waiting
+    assert grip_setpoint(move, stream, grip=0.25, now=0.3) is None
 
 
 def test_how_long_a_move_gets_is_the_driver_s_to_say():
@@ -205,7 +210,7 @@ def test_a_run_that_dies_hands_what_killed_it_to_the_move_in_flight():
 
 
 def test_a_run_that_dies_with_nothing_in_flight_has_nobody_to_tell():
-    move = PendingMove(TOL)
+    move = PendingMove(TOL, _unasked())
 
     move.fail(RuntimeError('the bus went away'))
 

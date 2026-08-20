@@ -10,7 +10,7 @@ from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State, command
 from positronic.drivers.roboarm.kinova.api import KinovaAPI
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
-from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, PendingMove
+from positronic.drivers.utils import DriverRun, MoveStatus, PendingMove
 
 
 def _set_realtime_priority():
@@ -73,6 +73,7 @@ class _Arm(DriverRun):
     def __init__(
         self,
         api: KinovaAPI,
+        calls: pimm.calls.ControlSystemHandler[command.CommandType, None],
         out: pimm.SignalEmitter[KinovaState],
         home_joints: list[float],
         dynamics_factor: float,
@@ -88,7 +89,7 @@ class _Arm(DriverRun):
         self.solver = KinematicsSolver()
         self.controller = JointCompliantController(actuator_count=actuators, relative_dynamics_factor=dynamics_factor)
         self._home_joints = home_joints
-        self._move = PendingMove(self._ARRIVED_TOL)
+        self._move = PendingMove(self._ARRIVED_TOL, calls)
         self._current = np.zeros(actuators, dtype=np.float32)
         # Read here rather than left empty: every setpoint below is solved from where the arm is now
         self.q, self.dq, self.tau = api.apply_current_command(None)
@@ -98,6 +99,10 @@ class _Arm(DriverRun):
     def takes_commands(self) -> bool:
         """Whether the arm will take a setpoint: a move owns it until it is answered."""
         return not (self._move.active or self._move.settled)
+
+    def take_sync_move(self) -> pimm.calls.Call[command.CommandType, None] | None:
+        """The next move asked for, if the arm is free to take one."""
+        return self._move.take()
 
     def settle(self) -> None:
         """Judge a move in flight against the joints the arm reads."""
@@ -164,9 +169,12 @@ class _Arm(DriverRun):
         """Hand a move settled this tick its outcome, now that the state saying so is out."""
         self._move.answer()
 
-    def fail(self, exc: BaseException) -> None:
-        """Hand `exc` to a move the run died under."""
-        self._move.fail(exc)
+    def __enter__(self) -> '_Arm':
+        return self
+
+    def __exit__(self, exc_type, exc: BaseException | None, tb) -> None:
+        """The loop stepping the arm is what makes it travel, so a stop halts it; answer what was waiting."""
+        self._move.abandon(exc)
 
 
 class Robot(pimm.ControlSystem):
@@ -182,17 +190,18 @@ class Robot(pimm.ControlSystem):
 
     def _arm(self, api: KinovaAPI, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
-        return _Arm(api, self.state, self.home_joints, self.relative_dynamics_factor, should_stop, clock)
+        return _Arm(
+            api, self.sync_move, self.state, self.home_joints, self.relative_dynamics_factor, should_stop, clock
+        )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         _set_realtime_priority()
         with KinovaAPI(self.ip) as api:
-            arm = self._arm(api, should_stop, clock)
-            try:
+            with self._arm(api, should_stop, clock) as arm:
                 while not should_stop.value:
                     arm.settle()
                     if arm.takes_commands:
-                        if (call := next(self.sync_move.incoming(), None)) is not None:
+                        if (call := arm.take_sync_move()) is not None:
                             arm.serve_sync_move(call)
                         elif (cmd := pimm.value_updated(self.commands)) is not None:
                             try:
@@ -206,8 +215,3 @@ class Robot(pimm.ControlSystem):
                     arm.answer()  # the state a settled move is answered with is out
 
                     yield arm.limiter.wait()
-            except Exception as exc:
-                arm.fail(exc)  # a run that dies mid-move must not leave its asker waiting
-                raise
-            finally:
-                arm.fail(MoveAbandoned())  # a no-op once the move above has been answered

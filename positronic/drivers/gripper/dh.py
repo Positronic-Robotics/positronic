@@ -4,7 +4,7 @@ from ctypes import c_uint16
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import MoveAbandoned, PendingMove, grip_setpoint
+from positronic.drivers.utils import PendingMove, grip_setpoint
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -42,29 +42,25 @@ class DHGripper(pimm.ControlSystem):
         yield from self._initialize(client)
 
         last_grip = 0.0
-        move = PendingMove(self._ARRIVED_TOL)
 
         # TODO: Should we translate these to physical units (N and m/s)?
         try:
-            while not should_stop.value:
-                current_grip = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
-                self.grip.emit(current_grip)
+            with PendingMove(self._ARRIVED_TOL, self.sync_move) as move:
+                while not should_stop.value:
+                    current_grip = 1 - client.read_holding_registers(0x202, count=1, slave=1).registers[0] / 1000
+                    self.grip.emit(current_grip)
 
-                target = grip_setpoint(move, self.sync_move, self.target_grip, current_grip, clock.now())
-                if target is not None:
-                    last_grip = target
-                width = round((1 - last_grip) * 1000)
-                client.write_register(0x103, c_uint16(width).value, slave=1)
-                client.write_register(0x101, c_uint16(self.force.value).value, slave=1)
-                client.write_register(0x104, c_uint16(self.speed.value).value, slave=1)
-                move.answer()  # the width a settled move is answered with is on the fingers
+                    target = grip_setpoint(move, self.target_grip, current_grip, clock.now())
+                    if target is not None:
+                        last_grip = target
+                    width = round((1 - last_grip) * 1000)
+                    client.write_register(0x103, c_uint16(width).value, slave=1)
+                    client.write_register(0x101, c_uint16(self.force.value).value, slave=1)
+                    client.write_register(0x104, c_uint16(self.speed.value).value, slave=1)
+                    move.answer()  # the width a settled move is answered with is on the fingers
 
-                yield pimm.Sleep(0.001)  # Small delay to prevent busy-waiting
-        except Exception as exc:
-            move.fail(exc)  # a run that dies mid-move must not leave its asker waiting
-            raise
+                    yield pimm.Sleep(0.001)  # Small delay to prevent busy-waiting
         finally:
-            move.fail(MoveAbandoned())  # a no-op once the move above has been answered
             client.close()
 
 

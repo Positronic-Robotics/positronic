@@ -23,7 +23,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus
+from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, abandon_queued
 from positronic.utils import package_assets_path
 
 from . import RobotStatus, State, command
@@ -170,6 +170,7 @@ class _Chain(DriverRun):
     def __init__(
         self,
         vendor: Any,
+        calls: pimm.calls.ControlSystemHandler[command.CommandType, None],
         out: pimm.SignalEmitter[YamState],
         grip_out: pimm.SignalEmitter[float],
         home_joints: np.ndarray,
@@ -179,12 +180,26 @@ class _Chain(DriverRun):
     ):
         super().__init__(should_stop, clock, hz=100)
         self.vendor = vendor
+        self._calls = calls
         self.out = out
         self.grip_out = grip_out
         self.state = YamState()
         self.home_joints = home_joints
         self._base_pose = base_pose
         self._kin = _Kinematics()
+
+    def __enter__(self) -> '_Chain':
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        """Let the chain go limp, and answer every move nothing is left to serve."""
+        self.vendor.zero_torque_mode()
+        self.vendor.close()
+        abandon_queued(self._calls)
+
+    def take_sync_move(self) -> pimm.calls.Call[command.CommandType, None] | None:
+        """The next move asked for."""
+        return next(self._calls.incoming(), None)
 
     def observations(self) -> dict[str, np.ndarray]:
         """What the chain reports right now."""
@@ -349,11 +364,12 @@ class Robot(pimm.ControlSystem):
     def _chain(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Chain:
         """The chain this run drives, built from the driver's configuration."""
         vendor = self._connect(self._channel, self._sim)
-        return _Chain(vendor, self.state, self.grip, self._home_joints, self._base_pose, should_stop, clock)
+        return _Chain(
+            vendor, self.sync_move, self.state, self.grip, self._home_joints, self._base_pose, should_stop, clock
+        )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        chain = self._chain(should_stop, clock)
-        try:
+        with self._chain(should_stop, clock) as chain:
             meta = {'robot': 'i2rt_yam', keys.JOINT_NAMES: list(_JOINT_NAMES), keys.CONTROL_FRAME: DEFAULT_FRAME}
             self.robot_meta.emit(meta)
 
@@ -365,7 +381,7 @@ class Robot(pimm.ControlSystem):
                     grip_target = float(grip)
 
                 q = chain.observations()[_JOINT_POS]
-                if (call := next(self.sync_move.incoming(), None)) is not None:
+                if (call := chain.take_sync_move()) is not None:
                     if isinstance(call.request, command.Reset):
                         grip_target = 0.0  # homing opens the gripper, as a ``Reset`` command does
                     q_target, grip_target = yield from chain.serve_sync_move(call, q, grip_target)
@@ -385,9 +401,6 @@ class Robot(pimm.ControlSystem):
                 # Read afresh: a move above ran for seconds, so the reading taken before it is long stale.
                 chain.publish(chain.observations())
                 yield chain.limiter.wait()
-        finally:
-            chain.vendor.zero_torque_mode()
-            chain.vendor.close()
 
 
 class _FakeYam:

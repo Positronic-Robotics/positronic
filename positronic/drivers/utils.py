@@ -1,11 +1,13 @@
 """Shared by the drivers: the handles a run owns, and the synchronous move a driver carries."""
 
 from enum import Enum, auto
-from typing import Any
+from typing import Generic, TypeVar
 
 import numpy as np
 
 import pimm
+
+Req = TypeVar('Req')
 
 
 class DriverRun:
@@ -36,22 +38,35 @@ class MoveAbandoned(RuntimeError):
         super().__init__('the world stopped before the move arrived')
 
 
-class PendingMove:
+def abandon_queued(calls: pimm.calls.ControlSystemHandler[Req, None]) -> None:
+    """Answer every call still queued on ``calls``, because nothing is left to serve them."""
+    for call in calls.incoming():
+        call.set_exception(MoveAbandoned())
+
+
+class PendingMove(Generic[Req]):
     """The synchronous move a driver has in flight, for a device whose loop cannot be held for its duration.
 
     The driver carries one across ticks and settles it against what the device reads back. A move owns the
     device until it settles: a driver leaves its command stream unread while ``active``.
     """
 
-    def __init__(self, tol: float):
+    def __init__(self, tol: float, calls: pimm.calls.ControlSystemHandler[Req, None]):
         self._tol = tol
-        self._call: pimm.calls.Call[Any, None] | None = None
+        self._calls = calls
+        self._call: pimm.calls.Call[Req, None] | None = None
         self._target: np.ndarray | float = 0.0
         self._deadline = 0.0
         # A move settled but not yet answered, with what to answer it with: None for an arrival
-        self._settled: tuple[pimm.calls.Call[Any, None], TimeoutError | None] | None = None
+        self._settled: tuple[pimm.calls.Call[Req, None], TimeoutError | None] | None = None
         # Set by a move that does not arrive, cleared by the next that does: the device is not where it was put
         self.errored = False
+
+    def __enter__(self) -> 'PendingMove[Req]':
+        return self
+
+    def __exit__(self, exc_type, exc: BaseException | None, tb) -> None:
+        self.abandon(exc)
 
     @property
     def active(self) -> bool:
@@ -68,8 +83,12 @@ class PendingMove:
         assert self._call is not None, 'no move is in flight'
         return self._target
 
+    def take(self) -> pimm.calls.Call[Req, None] | None:
+        """The next move asked for, if the device is free to take one."""
+        return None if self.active or self.settled else next(self._calls.incoming(), None)
+
     def accept(
-        self, call: pimm.calls.Call[Any, None], target: np.ndarray | float, now: float, timeout_s: float
+        self, call: pimm.calls.Call[Req, None], target: np.ndarray | float, now: float, timeout_s: float
     ) -> None:
         """Take `call` as the move in flight, aiming at `target`, with `timeout_s` to get there."""
         self._call, self._target, self._deadline = call, target, now + timeout_s
@@ -81,6 +100,12 @@ class PendingMove:
             return
         self._call.set_exception(exc)
         self._call, self.errored = None, True
+
+    def abandon(self, exc: BaseException | None) -> None:
+        """Answer everything outstanding — in flight, settled, still queued — because nothing will serve it."""
+        self.fail(exc or MoveAbandoned())
+        for call in self._calls.incoming():
+            call.set_exception(MoveAbandoned())
 
     def settle(self, position: np.ndarray | float, now: float) -> MoveStatus:
         """Where the move in flight stands, once the device reads back at ``position``.
@@ -119,11 +144,7 @@ def _clamped(grip: float) -> float:
 
 
 def grip_setpoint(
-    move: PendingMove,
-    calls: pimm.calls.ControlSystemHandler[float, None],
-    stream: pimm.SignalReceiver[float],
-    grip: float,
-    now: float,
+    move: PendingMove[float], stream: pimm.SignalReceiver[float], grip: float, now: float
 ) -> float | None:
     """The width to command the fingers this tick, or ``None`` to leave the last one standing.
 
@@ -132,7 +153,7 @@ def grip_setpoint(
     """
     if move.active:
         return grip if move.settle(grip, now) is MoveStatus.GAVE_UP else None
-    if (call := next(calls.incoming(), None)) is not None:
+    if (call := move.take()) is not None:
         target = _clamped(call.request)
         move.accept(call, target, now, _GRIP_TIMEOUT_S)
         return target

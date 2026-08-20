@@ -315,6 +315,47 @@ def test_a_move_the_world_stops_under_is_handed_back_to_its_asker(world):
         answer.result()
 
 
+def test_a_move_the_world_stops_under_leaves_the_bus_holding_where_the_arm_is(world):
+    """The servos chase the goal they were last given, so a move cut short must not leave the far end on
+    the bus for them to keep driving at once the world is gone."""
+    bus = FakeBus()
+    bus.blocked = True
+    stop = StopFlag()
+    driver, _, loop = _driven(bus, stop=stop)
+    answer = _mover(world, driver)(command.JointPosition(JOGGED))
+
+    next(loop)
+    np.testing.assert_allclose(bus.targets[-1][:-1], JOGGED)  # the move is on the bus
+
+    stop.stopped = True
+    with pytest.raises(StopIteration):
+        next(loop)
+
+    np.testing.assert_allclose(bus.targets[-1][:-1], MIDDLE[:-1])
+    assert answer.done()
+
+
+def test_moves_still_queued_when_the_world_stops_are_answered_too(world):
+    """Only the first reaches the arm; the rest sit on the handler, and nothing will serve them now."""
+    bus = FakeBus()
+    bus.blocked = True
+    stop = StopFlag()
+    driver, _, loop = _driven(bus, stop=stop)
+    ask = _mover(world, driver)
+    first, second = ask(command.JointPosition(JOGGED)), ask(command.JointPosition(np.full(5, 0.6)))
+
+    next(loop)
+    assert not second.done(), 'a move owns the arm, so the second waits'
+
+    stop.stopped = True
+    with pytest.raises(StopIteration):
+        next(loop)
+
+    for answer in (first, second):
+        with pytest.raises(MoveAbandoned):
+            answer.result()
+
+
 def test_a_run_that_dies_mid_move_hands_what_killed_it_to_the_asker(world):
     """The asker is blocked on an answer, and a driver that stops looping will never produce one."""
     bus = FakeBus()

@@ -12,7 +12,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus
+from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, abandon_queued
 
 from . import RobotStatus, State, command
 from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
@@ -120,6 +120,7 @@ class _Arm(DriverRun):
     def __init__(
         self,
         vendor: pf.Robot,
+        calls: pimm.calls.ControlSystemHandler[command.CommandType, None],
         out: pimm.SignalEmitter[FrankaState],
         home_joints: list[float],
         home_joints_variation: list[float],
@@ -130,12 +131,27 @@ class _Arm(DriverRun):
     ):
         super().__init__(should_stop, clock, hz=2000)
         self.vendor = vendor
+        self._calls = calls
         self.out = out
         self.state = FrankaState()
         self._home_joints = home_joints
         self._home_joints_variation = home_joints_variation
         self._park_timeout_s = park_timeout_s
         self._dynamics_factor = dynamics_factor
+
+    def __enter__(self) -> '_Arm':
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        """Halt the control thread, and answer every move nothing is left to serve."""
+        # Before ``_desk_session`` deactivates FCI, or the thread dies mid-control with
+        # "TCP connection got interrupted".
+        self.vendor.stop()
+        abandon_queued(self._calls)
+
+    def take_sync_move(self) -> pimm.calls.Call[command.CommandType, None] | None:
+        """The next move asked for."""
+        return next(self._calls.incoming(), None)
 
     def publish(self, st: pf.State) -> None:
         """Ship the arm as the vendor reports it, marked ERROR while it is not where the driver put it."""
@@ -251,14 +267,9 @@ class _Arm(DriverRun):
     def park(self) -> Iterator[pimm.Command]:
         """Move the arm to the home pose, giving up after ``park_timeout_s``. Drive with ``yield from``.
 
-        Runs after the control loop rather than in its ``finally``, so that only a stop request earns it.
-        Answering a setup or control fault with a recovery and a fresh joint target would be autonomous
-        motion in response to something going wrong.
-
-        The motion itself is bounded: at the configured dynamics factor, to the configured ``home_joints``
-        and nowhere else. An arm already there arrives immediately, so arrival is the controller's to
-        report rather than something to pre-check. Every failure — including a goal that stops advancing —
-        reaches the log and no further.
+        Only a stop gets here: a run that ends by raising skips the park, because moving an arm in answer to
+        a fault is the driver deciding on its own to move. Where it goes is fixed — ``home_joints``, at the
+        configured dynamics factor. Nothing here can fail the shutdown; failures are logged and no more.
         """
         target = np.asarray(self._home_joints, dtype=np.float64)
         try:
@@ -305,7 +316,6 @@ class Robot(pimm.ControlSystem):
         :param park_timeout_s: How long the arm may travel back to ``home_joints`` when the run ends before the
             driver gives up and stops control where it stands. It is spent inside the world's teardown budget.
         """
-        # A zero factor caps every joint at zero speed: the arm would never travel and no move could land
         assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
@@ -424,6 +434,7 @@ class Robot(pimm.ControlSystem):
         """The arm this run drives, built from the driver's configuration."""
         return _Arm(
             self._vendor,
+            self.sync_move,
             self.state,
             self._home_joints,
             self._home_joints_variation,
@@ -434,54 +445,48 @@ class Robot(pimm.ControlSystem):
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        with self._desk_session():
-            arm = self._arm(should_stop, clock)
+        with self._desk_session(), self._arm(should_stop, clock) as arm:
             vendor = arm.vendor
+            self._init_robot(vendor)
+            self.robot_meta.emit(Robot._build_robot_meta(vendor))
+            vendor.recover_from_errors()
+
             try:
-                self._init_robot(vendor)
-                self.robot_meta.emit(Robot._build_robot_meta(vendor))
-                vendor.recover_from_errors()
+                yield from arm.move_to(arm.home_target())
+            # rules-allow: swallowed-error — an arm that will not home reads ERROR; it does not end the run
+            except Exception as exc:
+                logging.error(f'Homing failed, the arm is not where the driver put it: {exc}')
 
-                try:
-                    yield from arm.move_to(arm.home_target())
-                # rules-allow: swallowed-error — an arm that will not home reads ERROR; it does not end the run
-                except Exception as exc:
-                    logging.error(f'Homing failed, the arm is not where the driver put it: {exc}')
+            in_error = False
 
-                in_error = False
+            while not should_stop.value:
+                st = vendor.state()
+                arm.publish(st)
 
-                while not should_stop.value:
-                    st = vendor.state()
-                    arm.publish(st)
+                in_error, entered_error = _check_error(st.error != 0, in_error)
+                if entered_error:
+                    logging.warning(f'Robot error: {st.error_message}')
 
-                    in_error, entered_error = _check_error(st.error != 0, in_error)
-                    if entered_error:
-                        logging.warning(f'Robot error: {st.error_message}')
-
-                    if in_error:
-                        vendor.recover_from_errors()
-                        yield arm.limiter.wait()
-                        continue
-
-                    if (call := next(self.sync_move.incoming(), None)) is not None:
-                        yield from arm.serve_sync_move(call)
-                    elif (cmd := pimm.value_updated(self.commands)) is not None:
-                        try:
-                            if isinstance(cmd, command.Reset):
-                                yield from arm.move_to(arm.home_target())
-                            else:
-                                vendor.set_target_joints(arm.target_joints(cmd))
-                        # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
-                        except Exception as exc:
-                            logging.warning(f'{cmd} not applied: {exc}')
-
+                if in_error:
+                    vendor.recover_from_errors()
                     yield arm.limiter.wait()
+                    continue
 
-                yield from arm.park()
-            finally:
-                # Halt the driver's control thread before _desk_session deactivates FCI, or it dies mid-control
-                # with "TCP connection got interrupted".
-                vendor.stop()
+                if (call := arm.take_sync_move()) is not None:
+                    yield from arm.serve_sync_move(call)
+                elif (cmd := pimm.value_updated(self.commands)) is not None:
+                    try:
+                        if isinstance(cmd, command.Reset):
+                            yield from arm.move_to(arm.home_target())
+                        else:
+                            vendor.set_target_joints(arm.target_joints(cmd))
+                    # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
+                    except Exception as exc:
+                        logging.warning(f'{cmd} not applied: {exc}')
+
+                yield arm.limiter.wait()
+
+            yield from arm.park()
 
 
 if __name__ == '__main__':
