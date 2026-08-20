@@ -123,7 +123,7 @@ class TestRequestedLevel:
         assert logging.root.level == CUSTOM_LEVEL
 
     def test_the_resolved_level_outranks_the_operators_own(self, monkeypatch):
-        """`init_logging` resolved its level having already read `LOG_LEVEL`, so it is the informed one."""
+        """`init_logging` resolved its level having already read `LOG_LEVEL`."""
         monkeypatch.setenv(LOG_LEVEL_ENV, 'DEBUG')
         monkeypatch.setenv(RESOLVED_LOG_LEVEL_ENV, str(logging.ERROR))
 

@@ -40,8 +40,8 @@ _NOISY_LIBRARY_LOGGERS = (
 def level_number(name: str, source: str) -> int:
     """The number `name` stands for in this process, raising when it names no level.
 
-    `source` is what carried the name, and naming it is most of the error's value: a threshold that
-    quietly became something else reads as working configuration.
+    The error names `source`, the variable that carried the name: a threshold that quietly became
+    something else reads as working configuration.
     """
     levels = logging.getLevelNamesMapping()
     if name.upper() not in levels:
