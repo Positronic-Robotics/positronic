@@ -5,7 +5,7 @@ import pytest
 
 import pimm
 from pimm.tests.testing import wire_call
-from positronic.drivers.common import ARRIVAL_TIMEOUT_S, MoveStatus, PendingMove, grip_setpoint
+from positronic.drivers.utils import ARRIVAL_TIMEOUT_S, MoveStatus, PendingMove, grip_setpoint
 from positronic.tests.testing_coutils import ManualCommandReceiver
 
 TOL = 0.05

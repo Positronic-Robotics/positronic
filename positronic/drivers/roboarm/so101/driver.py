@@ -7,12 +7,12 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
-from positronic.drivers.common import MoveStatus, PendingMove
 from positronic.drivers.motors.feetech import MotorBus
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.kinematics import Kinematics
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, add_default_frame
+from positronic.drivers.utils import MoveStatus, PendingMove
 
 
 class SO101State(State, pimm.shared_memory.NumpySMAdapter):

@@ -7,10 +7,10 @@ from mujoco import Any
 
 import pimm
 from positronic import geom
-from positronic.drivers.common import MoveStatus, PendingMove
 from positronic.drivers.roboarm import RobotStatus, State, command
 from positronic.drivers.roboarm.kinova.api import KinovaAPI
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
+from positronic.drivers.utils import MoveStatus, PendingMove
 
 # Radians; the arm reports joints but no goal, so arrival is judged from the joints it reads
 _ARRIVED_TOL = 0.02
