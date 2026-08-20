@@ -978,22 +978,6 @@
                 }
             },
             {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 38,
-                    "endColumn": 41,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 36,
-                    "endColumn": 39,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportFunctionMemberAccess",
                 "range": {
                     "startColumn": 34,

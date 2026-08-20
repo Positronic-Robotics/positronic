@@ -3,7 +3,7 @@ from itertools import islice
 
 import pytest
 
-from pimm.calls import Answer, ControlSystemCaller, ControlSystemHandler, raise_to
+from pimm.calls import Answer, ControlSystemCaller, ControlSystemHandler, HandlerStopped, raise_to
 from pimm.core import ControlSystem, NoValueException, Sleep
 from pimm.tests.testing import Passive, wire_call
 from pimm.world import World
@@ -52,12 +52,12 @@ class Client(ControlSystem):
 
     def run(self, should_stop, clock):
         answers = [self.add(pair) for pair in self._calls]
-        while not all(a.done() for a in answers):
+        while not all(a.done() for a in answers) and not should_stop.value:
             yield Sleep(0.001)
         for answer in answers:
             try:
                 self.results.append(answer.result())
-            except ValueError as e:
+            except Exception as e:
                 self.results.append(e)
         if self._total is not None:
             self._total.value = sum(r for r in self.results if isinstance(r, int))
@@ -157,6 +157,16 @@ class TestCallAndAnswer:
         assert list(ControlSystemHandler(Passive()).incoming()) == []
 
 
+class Deaf(ControlSystem):
+    """Ends without reading, so every call made to it is one it never reached."""
+
+    def __init__(self):
+        self.add = ControlSystemHandler[tuple[int, int], int](self)
+
+    def run(self, should_stop, clock):
+        yield Sleep(0.001)
+
+
 class TestWorldConnect:
     def test_handler_serves_one_caller(self):
         handler = ControlSystemHandler(Passive())
@@ -193,6 +203,14 @@ class TestWorldConnect:
             world.connect(client.add, adder.add)
             world.run(client, background=adder)
         assert client.results == [3, 7]
+
+    def test_a_handler_whose_system_ends_answers_the_calls_it_never_reached(self):
+        """A caller blocked on an answer would wait for the rest of the run, and the answer is never coming."""
+        client, deaf = Client([(1, 2)]), Deaf()
+        with World(virtual_time=True) as world:
+            world.connect(client.add, deaf.add)
+            world.run([client, deaf])
+        assert isinstance(client.results[0], HandlerStopped)
 
     def test_caller_in_background_process(self):
         total = mp.get_context('spawn').Value('i', 0)

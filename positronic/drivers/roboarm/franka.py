@@ -12,7 +12,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, abandon_queued
+from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus
 
 from . import RobotStatus, State, command
 from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
@@ -143,11 +143,10 @@ class _Arm(DriverRun):
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        """Halt the control thread, and answer every move nothing is left to serve."""
+        """Halt the control thread."""
         # Before ``_desk_session`` deactivates FCI, or the thread dies mid-control with
         # "TCP connection got interrupted".
         self.vendor.stop()
-        abandon_queued(self._calls)
 
     def take_sync_move(self) -> pimm.calls.Call[command.CommandType, None] | None:
         """The next move asked for."""

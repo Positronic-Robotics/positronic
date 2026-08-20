@@ -23,7 +23,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, abandon_queued
+from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus
 from positronic.utils import package_assets_path
 
 from . import RobotStatus, State, command
@@ -192,10 +192,9 @@ class _Chain(DriverRun):
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        """Let the chain go limp, and answer every move nothing is left to serve."""
+        """Let the chain go limp."""
         self.vendor.zero_torque_mode()
         self.vendor.close()
-        abandon_queued(self._calls)
 
     def take_sync_move(self) -> pimm.calls.Call[command.CommandType, None] | None:
         """The next move asked for."""

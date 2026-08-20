@@ -38,12 +38,6 @@ class MoveAbandoned(RuntimeError):
         super().__init__('the world stopped before the move arrived')
 
 
-def abandon_queued(calls: pimm.calls.ControlSystemHandler[Req, None]) -> None:
-    """Answer every call still queued on ``calls``, because nothing is left to serve them."""
-    for call in calls.incoming():
-        call.set_exception(MoveAbandoned())
-
-
 class PendingMove(Generic[Req]):
     """The synchronous move a driver has in flight, for a device whose loop cannot be held for its duration.
 
@@ -102,10 +96,8 @@ class PendingMove(Generic[Req]):
         self._call, self.errored = None, True
 
     def abandon(self, exc: BaseException | None) -> None:
-        """Answer everything outstanding — in flight, settled, still queued — because nothing will serve it."""
+        """Answer the move this device took; the world answers what it never reached."""
         self.fail(exc or MoveAbandoned())
-        for call in self._calls.incoming():
-            call.set_exception(MoveAbandoned())
 
     def settle(self, position: np.ndarray | float, now: float) -> MoveStatus:
         """Where the move in flight stands, once the device reads back at ``position``.

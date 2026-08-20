@@ -19,7 +19,7 @@ from multiprocessing.synchronize import Event as EventClass
 from queue import Empty, Full
 from typing import TypeVar, overload
 
-from .calls import ControlSystemCaller, ControlSystemHandler
+from .calls import ControlSystemCaller, ControlSystemHandler, handlers_of
 from .core import (
     Clock,
     Command,
@@ -442,6 +442,24 @@ class VirtualClock(Clock):
         self._time_ns = max(self._time_ns, target_ns)
 
 
+class _CallAnsweringLoop:
+    """A control system's loop, answering the calls its handlers never reached once it ends.
+
+    A class rather than a closure: a background system is pickled into the subprocess that runs it.
+    """
+
+    def __init__(self, cs: ControlSystem):
+        self.cs = cs
+        self.__name__ = f'{type(cs).__name__}.run'
+
+    def __call__(self, should_stop: SignalReceiver, clock: Clock) -> Iterator[Command]:
+        try:
+            yield from self.cs.run(should_stop, clock)
+        finally:
+            for handler in handlers_of(self.cs):
+                handler.fail_queued()
+
+
 def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str):
     try:
         for command in run_func(EventReceiver(stop_event, clock), clock):
@@ -751,20 +769,19 @@ class World:
         A control system may appear only once across ``main_process`` and ``background``.
         """
         main_process = main_process if isinstance(main_process, list) else [main_process]
-        main_process = [m for m in main_process if m is not None]
-        background = background or []
         background = background if isinstance(background, list) else [background]
-        background = [b for b in background if b is not None]
+        in_process = [cs for cs in main_process if cs is not None]
+        spawned = [cs for cs in background if cs is not None]
 
-        dupes = [cs for cs, n in Counter(main_process + background).items() if n > 1]
+        dupes = [cs for cs, n in Counter(in_process + spawned).items() if n > 1]
         if dupes:
             raise ValueError(
                 f'Control systems listed more than once: {[type(cs).__name__ for cs in dupes]}. '
                 'A control system owns its ports and runs exactly once — if one device fills two roles, list it once.'
             )
 
-        local_cs = set(main_process)
-        all_cs = local_cs | set(background)
+        local_cs = set(in_process)
+        all_cs = local_cs | set(spawned)
 
         system_clock = SystemClock()
         local_connections, mp_connections = [], []
@@ -818,8 +835,8 @@ class World:
                 # Wrap the underlying transport receiver before binding it into the logical receiver.
                 logical._bind(receiver_wrp(physical))
 
-        self.start_in_subprocess(*[cs.run for cs in background])
-        return self.interleave(*[cs.run for cs in main_process])
+        self.start_in_subprocess(*[_CallAnsweringLoop(cs) for cs in spawned])
+        return self.interleave(*[_CallAnsweringLoop(cs) for cs in in_process])
 
     def run(
         self,

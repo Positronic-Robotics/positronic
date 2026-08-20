@@ -12,6 +12,7 @@ invocations. `World.connect` binds a caller to a handler wherever the two run.
 - `incoming()` yields calls one at a time as it is advanced; each call is yielded once, and one it has not
   reached is yielded by a later `incoming()`.
 - Each `Call` is answered once, with `set_result` or `set_exception`; answering again raises in the handler.
+- A handler whose control system ends answers what it never reached with `HandlerStopped`.
 - `__call__` returns an `Answer` completed by the handler's answer and by nothing else.
 - An `Answer` never waits: `done()` and `result()` return at once; `result()` on an unanswered call raises
   `NoValueException`.
@@ -53,6 +54,13 @@ class Call(ABC, Generic[Req, Res]):
 
     @abstractmethod
     def set_exception(self, exc: BaseException) -> None: ...
+
+
+class HandlerStopped(RuntimeError):
+    """The control system serving a call ended before reaching it."""
+
+    def __init__(self):
+        super().__init__('the control system serving this call stopped')
 
 
 @contextmanager
@@ -146,6 +154,16 @@ class ControlSystemHandler(Handler[Req, Res]):
     def incoming(self) -> Iterator[Call[Req, Res]]:
         for request in _drain(self.requests):
             yield _ControlSystemCall(request, self.replies)
+
+    def fail_queued(self) -> None:
+        """Answer every call this handler never reached, because it never will."""
+        for call in self.incoming():
+            call.set_exception(HandlerStopped())
+
+
+def handlers_of(cs: ControlSystem) -> list[ControlSystemHandler]:
+    """Every handler a control system serves on."""
+    return [port for port in vars(cs).values() if isinstance(port, ControlSystemHandler)]
 
 
 class _ControlSystemAnswer(Answer[Res]):

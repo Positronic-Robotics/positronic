@@ -556,7 +556,7 @@ class TestWorldControlSystems:
             assert result.data == 'payload'
 
             assert captured_clocks and isinstance(captured_clocks[0], SystemClock)
-            assert started_background == [(background_cs.run,)]
+            assert [loop.cs for (loop,) in started_background] == [background_cs]
             assert background_cs.invocations == []
 
             sleeps = list(scheduler)
@@ -597,7 +597,7 @@ class TestWorldControlSystems:
             assert result.ts == 11_000
 
             assert captured_clocks == [None]
-            assert started_background == [(background_cs.run,)]
+            assert [loop.cs for (loop,) in started_background] == [background_cs]
 
             sleeps = list(scheduler)
             assert sleeps == [Yield()]
@@ -619,7 +619,7 @@ class TestWorldControlSystems:
         with World(virtual_time=True) as world:
             scheduler = world.start([], background=background_cs)
 
-            assert started_background == [(background_cs.run,)]
+            assert [loop.cs for (loop,) in started_background] == [background_cs]
             assert list(scheduler) == []
 
     def test_start_requires_known_emitter_owner(self):
