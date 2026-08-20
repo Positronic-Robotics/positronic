@@ -128,6 +128,10 @@ class _Arm(DriverRun):
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
 
+    def track(self, cmd: command.CommandType) -> None:
+        """Put the controller on the setpoint ``cmd`` asks for, with nobody waiting on the arm getting there."""
+        self.controller.set_target_qpos(self._target_qpos(cmd))
+
     def _travel_s(self, target: np.ndarray) -> float:
         """How long the arm may take to reach ``target``, from the speed its controller is capped at.
 
@@ -135,10 +139,6 @@ class _Arm(DriverRun):
         rather than failing moves the arm is tracking perfectly well.
         """
         return self._MOVE_GRACE_S + float(np.max(np.abs(target - self.q)) / np.min(self.controller.max_velocity))
-
-    def track(self, cmd: command.CommandType) -> None:
-        """Put the controller on the setpoint ``cmd`` asks for, with nobody waiting on the arm getting there."""
-        self.controller.set_target_qpos(self._target_qpos(cmd))
 
     def serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
         """Put the controller where ``call`` asks; ``settle`` answers it once the arm reads back there."""

@@ -366,17 +366,6 @@ class Robot(pimm.ControlSystem):
             'gripper': gripper,
         }
 
-    @property
-    def _vendor(self) -> pf.Robot:
-        """The libfranka handle, connected on first use."""
-        if self._robot is None:
-            self._robot = pf.Robot(
-                self._ip,
-                realtime_config=pf.RealtimeConfig.Ignore,
-                relative_dynamics_factor=self._relative_dynamics_factor,
-            )
-        return self._robot
-
     def _init_robot(self, robot):
         coeff = self._collision_coeff
         torque_threshold_acceleration = np.array([20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0])
@@ -425,6 +414,17 @@ class Robot(pimm.ControlSystem):
                         logging.info('Control box recovered after reboot')
                     yield desk
                     return
+
+    @property
+    def _vendor(self) -> pf.Robot:
+        """The libfranka handle, connected on first use."""
+        if self._robot is None:
+            self._robot = pf.Robot(
+                self._ip,
+                realtime_config=pf.RealtimeConfig.Ignore,
+                relative_dynamics_factor=self._relative_dynamics_factor,
+            )
+        return self._robot
 
     def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration.

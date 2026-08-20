@@ -100,10 +100,6 @@ class _Arm(DriverRun):
         """Radians mapped back onto the bus's normalized 0..1 range."""
         return (qpos - self._joint_limits[:, 0]) / (self._joint_limits[:, 1] - self._joint_limits[:, 0])
 
-    def _arm_rad_to_norm(self, q_rad: np.ndarray) -> np.ndarray:
-        """Normalize the five arm joints. ``_rad_to_norm`` spans the bus, whose last entry is the gripper."""
-        return self._rad_to_norm(np.append(q_rad, 0.0))[:-1]
-
     def _forward_kinematics(self, q_norm: np.ndarray) -> tuple[geom.Transform3D, float]:
         return self.kinematic.forward(self._norm_to_rad(q_norm)), q_norm[-1]
 
@@ -111,6 +107,10 @@ class _Arm(DriverRun):
         q = self._norm_to_rad(self.q_norm).tolist()
         q[-1] = 0.0  # ignore gripper in ik
         return self._rad_to_norm(self.kinematic.inverse(q, pose, n_iter=10))[:-1]
+
+    def _arm_rad_to_norm(self, q_rad: np.ndarray) -> np.ndarray:
+        """Normalize the five arm joints. ``_rad_to_norm`` spans the bus, whose last entry is the gripper."""
+        return self._rad_to_norm(np.append(q_rad, 0.0))[:-1]
 
     def _requested_qpos(self, cmd: roboarm_command.CommandType) -> np.ndarray:
         """The setpoint ``cmd`` asks for, in the bus's normalized units, whether or not the arm can hold it."""
@@ -216,6 +216,15 @@ class Robot(pimm.ControlSystem):
         print('Warning: Proper dq units is not implemented for SO101!')
         print('================================================================')
 
+    def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
+        """The arm this run drives, built from the driver's configuration.
+
+        Built here, not in ``__init__``: a background control system is pickled before it runs, and an open
+        serial port does not survive the trip.
+        """
+        self.motor_bus.connect()
+        return _Arm(self.motor_bus, self.state, self.grip, self.home_joints, should_stop, clock)
+
     @staticmethod
     def _build_robot_meta() -> dict:
         urdf = ET.fromstring(Path(_SO101_URDF_PATH).read_text())
@@ -225,15 +234,6 @@ class Robot(pimm.ControlSystem):
             keys.JOINT_NAMES: _SO101_JOINT_NAMES,
             keys.CONTROL_FRAME: DEFAULT_FRAME,
         }
-
-    def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
-        """The arm this run drives, built from the driver's configuration.
-
-        Built here, not in ``__init__``: a background control system is pickled before it runs, and an open
-        serial port does not survive the trip.
-        """
-        self.motor_bus.connect()
-        return _Arm(self.motor_bus, self.state, self.grip, self.home_joints, should_stop, clock)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         arm = self._arm(should_stop, clock)
