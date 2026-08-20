@@ -47,6 +47,7 @@ _IK_ROT_TOL = 1e-2  # radians
 _MOVE_TIME_S = 2.0  # seconds the commanded position is ramped over on the way to a target
 _SETTLE_S = 1.0  # seconds the chain is given to reach the last waypoint before the move gives up
 _ARRIVED_TOL = 0.02  # radians; the chain has no goal to report, so arrival is judged from the joints it reads
+_GRIP_ARRIVED_TOL = 0.05  # normalized; the fingers report width, so arrival is judged from that reading
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
 
@@ -228,6 +229,14 @@ class _Chain(DriverRun):
         self.state._start_reset()  # ``encode`` clears RESETTING; the chain has not arrived
         self.out.emit(self.state)
 
+    def _arrived(self, target: np.ndarray, grip: float) -> bool:
+        """Whether the chain is where it was sent. The fingers count as much as the joints: a caller told a
+        move landed may act on the whole chain, gripper included."""
+        obs = self.observations()
+        return bool(np.all(np.abs(obs[_JOINT_POS] - target) < _ARRIVED_TOL)) and (
+            abs((1.0 - float(obs[_GRIPPER_POS][0])) - grip) < _GRIP_ARRIVED_TOL
+        )
+
     def move_to(self, target: np.ndarray, grip: float) -> Generator[pimm.Command, None, MoveStatus]:
         """Ramp the chain to ``target``, yielding until it reads back there.
 
@@ -237,12 +246,12 @@ class _Chain(DriverRun):
         try:
             start = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
             started = self.clock.now()
-            while not np.all(np.abs(self.observations()[_JOINT_POS] - target) < _ARRIVED_TOL):
+            while not self._arrived(target, grip):
                 if self.should_stop.value:
                     return MoveStatus.GAVE_UP
                 elapsed = self.clock.now() - started
                 if elapsed > _MOVE_TIME_S + _SETTLE_S:
-                    raise TimeoutError(f'the chain stopped short of {target}')
+                    raise TimeoutError(f'the chain stopped short of {target} at grip {grip}')
                 # Ramped rather than commanded outright, so the chain travels at a pace the joints can hold,
                 # and held at the target afterwards while it settles the last of the way in.
                 alpha = min(elapsed / _MOVE_TIME_S, 1.0)
