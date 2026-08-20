@@ -285,10 +285,10 @@ class _Chain(DriverRun):
             target = self.home_joints if isinstance(request, command.Reset) else self.target_joints(request, q)
             if (yield from self.move_to(target, grip)) is MoveStatus.ARRIVED:
                 call.set_result(None)
-            return np.asarray(target, dtype=np.float64), grip
-        # The move failed and its asker was told. ``q`` predates the ramp, so holding it would drive the chain
-        # back the way it came; where it stopped is the only posture nobody has to be surprised by. The fingers
-        # go with it: a grip they could not reach is one they would keep pushing for.
+                return np.asarray(target, dtype=np.float64), grip
+        # Only an arrival earns the target: commanding it from wherever the ramp got to is the jump the ramp
+        # exists to avoid. ``q`` predates the ramp, so it would drive the chain back the way it came. Where it
+        # stopped is the posture nobody has to be surprised by — fingers included, or they keep pushing.
         return self.measured_chain()
 
 
