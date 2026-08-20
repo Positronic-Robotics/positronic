@@ -247,6 +247,13 @@ class MotorBus:
         self.port_handler = None
         self.packet_handler = None
 
+    def __enter__(self) -> 'MotorBus':
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.disconnect()
+
     def connect(self):
         assert self.port_handler is None and self.packet_handler is None, 'Already connected'
         self.port_handler = scs.PortHandler(self.port)

@@ -101,7 +101,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `robot_state.ee_pose` | float32 | (7,) | End-effector pose: `x, y, z, qw, qx, qy, qz` (quaternion is **wxyz**, scalar first) |
 | `robot_state.q` | float32 | (7,) | Joint positions (radians) |
 | `robot_state.dq` | float32 | (7,) | Joint velocities (radians/s) |
-| `robot_state.status` | int | scalar | The arm's status: `0` available, `1` resetting, `2` moving, `3` error. The measurements above come on every sample whatever the status; this is what says whether the arm is tracking the commands it was given |
+| `robot_state.status` | int | scalar | The arm's status: `0` available, `1` busy, `3` error. `2` is also accepted and read as available — an arm travelling towards a setpoint still takes commands. The measurements above come on every sample whatever the status; this is what says whether a command you send will reach the arm |
 | `grip` | float32 | scalar | Gripper closure in `[0, 1]`: 0 = open, 1 = closed |
 | `image.<name>` | uint8 | (H, W, 3) | Camera RGB. Every eval target — PhAIL and each sim — sends `image.exterior` and `image.wrist`, whatever the underlying benchmark calls those cameras, so one codec reads them all; a target with more views adds its own names beside them (the MuJoCo sim adds `image.agent_view`) |
 | `obs_time_ns` | int | scalar | Harness-clock timestamp of this observation (ns) |
@@ -109,7 +109,7 @@ The client sends the full raw robot state as a dict. Keys are flat strings (the 
 | `task` | str | — | Language instruction for the episode |
 | `descriptor` | str | — | Embodiment the observation came from (e.g. `mujoco.franka`); empty string when unset. Lets a multi-embodiment policy adapt to the current robot |
 
-Your server receives every key each step. An arm that is faulted or resetting still reports where it is and says so in `robot_state.status`; the standard stack puts `StopOnFault` ahead of the model, which answers such a step itself rather than plan against an arm that is not tracking it. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm.
+Your server receives every key each step. An arm that is faulted or busy still reports where it is and says so in `robot_state.status`; the standard stack puts `StopOnFault` ahead of the model, which answers such a step itself rather than plan against an arm that will not take its commands. Use what your model needs and ignore the rest. Image stream names are configuration-driven, so key off the names your deployment uses rather than assuming fixed ones. The table above is a single-arm rig; a multi-arm one names its state and grip channels per arm.
 
 ### Actions (server → client)
 
@@ -207,7 +207,7 @@ PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()
 
 The pipeline reads left to right: everything left of the `remote` marker is the client-side stack the server declares in its handshake (here the standard `StopOnFault` and `ChunkedSchedule`); everything right of it runs on the server. `PolicySource` is the pipeline's terminal — a model source that serves one already-built policy.
 
-The left side is not optional: a pipeline with nothing there is refused when the server starts, and a rig refuses a handshake that declares nothing. It needs a scheduler in particular, and `StopOnFault` outside that scheduler — an arm that is faulted or resetting is not tracking the plan it was given, so the wrapper answers the empty trajectory and the rig stops rather than resuming a chunk stamped before. Actions come back timestamped relative to their chunk, and `ChunkedSchedule` is what turns those into times on the rig's clock; a stack that leaves them relative — or anchors them twice — makes the harness reject the chunk at the first inference, since it schedules nothing more than `MAX_ACTION_SKEW_SEC` from now.
+The left side is not optional: a pipeline with nothing there is refused when the server starts, and a rig refuses a handshake that declares nothing. It needs a scheduler in particular, and `StopOnFault` outside that scheduler — an arm that is faulted or busy is not taking the plan it was given, so the wrapper answers the empty trajectory and the rig stops rather than resuming a chunk stamped before. Actions come back timestamped relative to their chunk, and `ChunkedSchedule` is what turns those into times on the rig's clock; a stack that leaves them relative — or anchors them twice — makes the harness reject the chunk at the first inference, since it schedules nothing more than `MAX_ACTION_SKEW_SEC` from now.
 
 `new_session`'s `now` argument is the runtime clock that wrappers scheduling against live time read; a policy that does no scheduling of its own just accepts and ignores it (server-side it is `None`).
 

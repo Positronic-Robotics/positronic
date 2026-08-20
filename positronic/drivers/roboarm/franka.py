@@ -12,6 +12,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers import vendor_import
+from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus
 
 from . import RobotStatus, State, command
 from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
@@ -80,20 +81,12 @@ class FrankaState(State, pimm.shared_memory.NumpySMAdapter):
     def status(self) -> RobotStatus:
         return RobotStatus(int(self.array[FrankaState.STATUS_OFFSET]))
 
-    def _start_reset(self):
-        self.array[FrankaState.STATUS_OFFSET] = RobotStatus.RESETTING.value
-
-    def _finish_reset(self):
-        self.array[FrankaState.STATUS_OFFSET] = RobotStatus.AVAILABLE.value
-
-    def encode(self, state: pf.State):
+    def encode(self, state: pf.State, status: RobotStatus):
         self.array[FrankaState.Q_OFFSET : FrankaState.Q_OFFSET + 7] = state.q
         self.array[FrankaState.DQ_OFFSET : FrankaState.DQ_OFFSET + 7] = state.dq
         self.array[FrankaState.EE_POSE_OFFSET : FrankaState.EE_POSE_OFFSET + 7] = state.end_effector_pose
         self.array[FrankaState.EE_WRENCH_OFFSET : FrankaState.EE_WRENCH_OFFSET + 6] = state.ee_wrench
-        self.array[FrankaState.STATUS_OFFSET] = (
-            RobotStatus.AVAILABLE.value if state.error == 0 else RobotStatus.ERROR.value
-        )
+        self.array[FrankaState.STATUS_OFFSET] = status.value
 
 
 def _revolute_joint_names(urdf_xml):
@@ -102,6 +95,183 @@ def _revolute_joint_names(urdf_xml):
 
 
 _MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collision'
+
+
+class _Arm(DriverRun):
+    """The arm the driver drives: the vendor handle, and the state and moves that go with it."""
+
+    # A move needs a deadline at all because the vendor reports a goal it abandons, but a goal it never
+    # converges on stays in flight for as long as the arm is pushed off course.
+    # FR3 joint velocity limits in rad/s, from the bundled ``fr3.urdf``; ``relative_dynamics_factor`` scales them
+    _MAX_JOINT_VELOCITY = np.array([2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26])
+    # On top of the travel itself: the vendor controller ramps in and out of its speed cap, and settles late
+    _MOVE_GRACE_S = 5.0
+    # Parking publishes nothing, so it comes back only as often as it needs to ask again
+    _PARK_POLL_S = 0.005
+
+    def __init__(
+        self,
+        vendor: pf.Robot,
+        calls: pimm.calls.ControlSystemHandler[command.CommandType, None],
+        out: pimm.SignalEmitter[FrankaState],
+        home_joints: list[float],
+        home_joints_variation: list[float],
+        park_timeout_s: float,
+        dynamics_factor: float,
+        should_stop: pimm.SignalReceiver,
+        clock: pimm.Clock,
+    ):
+        super().__init__(should_stop, clock, hz=2000)
+        self.vendor = vendor
+        self._calls = calls
+        self.out = out
+        self.state = FrankaState()
+        self._home_joints = home_joints
+        self._home_joints_variation = home_joints_variation
+        self._park_timeout_s = park_timeout_s
+        self._dynamics_factor = dynamics_factor
+
+    def __enter__(self) -> '_Arm':
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        """Halt the control thread."""
+        # Before ``_desk_session`` deactivates FCI, or the thread dies mid-control with
+        # "TCP connection got interrupted".
+        self.vendor.stop()
+
+    def take_sync_move(self) -> pimm.calls.Call[command.CommandType, None] | None:
+        """The next move asked for."""
+        return next(self._calls.incoming(), None)
+
+    def publish(self, st: pf.State) -> None:
+        """Ship the arm as the vendor reports it, marked ERROR while it is not where the driver put it."""
+        faulted = self.errored or st.error != 0  # the vendor reports its own faults; a stall is not one
+        self.state.encode(st, RobotStatus.ERROR if faulted else RobotStatus.AVAILABLE)
+        self.out.emit(self.state)
+
+    def home_target(self) -> np.ndarray:
+        """The home joints this trip aims for, drawn afresh from the spread each time."""
+        target = np.asarray(self._home_joints, dtype=np.float64)
+        if any(v > 0 for v in self._home_joints_variation):
+            variation = np.random.uniform(
+                -np.asarray(self._home_joints_variation), np.asarray(self._home_joints_variation)
+            )
+            target = target + variation
+        return target
+
+    def await_goal(
+        self, target: np.ndarray, should_stop: Callable[[], bool], pace: Callable[[], pimm.Command]
+    ) -> Generator[pimm.Command, None, MoveStatus]:
+        """Command ``target`` and poll the goal until the arm arrives, one poll per resume.
+
+        ``pace`` is what to wait between polls, and so how often the goal is asked about.
+        """
+        self.vendor.set_target_joints(target)
+        while not should_stop():
+            goal = self.vendor.goal()
+            if goal.status == pf.GoalStatus.REACHED:
+                return MoveStatus.ARRIVED
+            if goal.status != pf.GoalStatus.IN_FLIGHT:
+                raise RuntimeError(f'the arm stopped short of its target: {goal.reason or goal.status}')
+            yield pace()
+        return MoveStatus.GAVE_UP
+
+    def _travel_s(self, q: np.ndarray, target: np.ndarray) -> float:
+        """How long the arm may take to reach ``target``, from the speed its dynamics factor allows."""
+        cap = self._MAX_JOINT_VELOCITY * self._dynamics_factor
+        return self._MOVE_GRACE_S + float(np.max(np.abs(target - q) / cap))
+
+    def move_to(self, target: np.ndarray) -> Generator[pimm.Command, None, MoveStatus]:
+        """Travel to ``target``, yielding until it arrives."""
+        # The first emit must not ship an unfilled state.
+        self.state.encode(self.vendor.state(), RobotStatus.BUSY)
+        self.out.emit(self.state)
+
+        deadline = self.clock.now() + self._travel_s(self.state.q, target)
+        try:
+            # The arm's own rate: this loop publishes every pass, so the goal is asked about that often too
+            for wait in self.await_goal(
+                target, lambda: self.should_stop.value or self.clock.now() >= deadline, self.limiter.wait
+            ):
+                st = self.vendor.state()
+                self.state.encode(st, RobotStatus.BUSY)  # the driver owns the arm until it arrives
+                self.out.emit(self.state)
+                if st.error != 0:
+                    self.vendor.recover_from_errors()
+                yield wait
+            # The deadline stops the poll loop before it asks, so a goal that landed as it expired has not
+            # been seen yet; reading a timeout off the clock alone would fail a move the arm completed.
+            if self.clock.now() >= deadline and self.vendor.goal().status != pf.GoalStatus.REACHED:
+                # The vendor controller is still tracking the goal it did not reach; left alone it would
+                # resume the move once whatever held the arm back goes away.
+                self.vendor.set_target_joints(self.vendor.state().q)
+                raise TimeoutError(f'the arm stopped short of {target}')
+        except Exception:
+            self.errored = True
+            raise
+
+        if self.should_stop.value:  # the travel gave up on the stop rather than on arrival
+            return MoveStatus.GAVE_UP
+        self.errored = False
+        # The poll that reports arrival ends the loop, so the sample before it was taken mid-travel
+        self.publish(self.vendor.state())
+        return MoveStatus.ARRIVED
+
+    def target_joints(self, cmd: command.CommandType) -> np.ndarray:
+        """The joints ``cmd`` asks the arm to hold."""
+        match cmd:
+            case command.Reset():
+                return self.home_target()
+            case command.CartesianPosition(pose):
+                return self.vendor.inverse_kinematics_with_limits(
+                    np.asarray([*pose.translation, *pose.rotation.as_quat])
+                )
+            case command.CartesianDelta() as delta_cmd:
+                target = delta_cmd.apply(self.state.ee_pose)
+                return self.vendor.inverse_kinematics_with_limits(
+                    np.asarray([*target.translation, *target.rotation.as_quat])
+                )
+            case command.JointPosition(positions):
+                return np.asarray(positions, dtype=np.float64)
+            case command.JointDelta(velocities=joint_delta):
+                return self.state.q + joint_delta
+            case other:
+                raise NotImplementedError(f'Unsupported command {other}')
+
+    def serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
+        """Put the arm where ``call`` asks and answer it once the state saying so is out."""
+        try:
+            if (yield from self.move_to(self.target_joints(call.request))) is MoveStatus.ARRIVED:
+                call.set_result(None)
+            else:
+                call.set_exception(MoveAbandoned())
+        except Exception as exc:
+            try:
+                self.publish(self.vendor.state())
+            finally:
+                call.set_exception(exc)  # an arm the driver cannot read still leaves nobody waiting
+
+    def park(self) -> Iterator[pimm.Command]:
+        """Move the arm to the home pose, giving up after ``park_timeout_s``. Drive with ``yield from``.
+
+        Only a stop gets here: a run that ends by raising skips the park, because moving an arm in answer to
+        a fault is the driver deciding on its own to move. Where it goes is fixed — ``home_joints``, at the
+        configured dynamics factor. Nothing here can fail the shutdown; failures are logged and no more.
+        """
+        target = np.asarray(self._home_joints, dtype=np.float64)
+        try:
+            logging.info('Parking the arm at the home pose')
+            self.vendor.recover_from_errors()  # once, before the move: a reflex during the move ends the park
+            deadline = self.clock.now() + self._park_timeout_s
+            outcome = yield from self.await_goal(
+                target, lambda: self.clock.now() >= deadline, lambda: pimm.Sleep(self._PARK_POLL_S)
+            )
+            if outcome is MoveStatus.GAVE_UP:
+                logging.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
+        # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
+        except Exception:
+            logging.exception('Parking failed, the arm stays where it stands')
 
 
 class Robot(pimm.ControlSystem):
@@ -120,7 +290,7 @@ class Robot(pimm.ControlSystem):
     ) -> None:
         """
         :param ip: IP address of the robot.
-        :param relative_dynamics_factor: Relative dynamics factor in [0, 1]. Smaller values are more conservative.
+        :param relative_dynamics_factor: Relative dynamics factor in (0, 1]. Smaller values are more conservative.
         :param home_joints: Joints of "reset" position, and the pose the arm is parked at when the run ends.
         :param home_joints_variation: Max random deviation per joint in radians. Set to [0]*7 to disable.
         :param collision_coeff: Multiplier for collision thresholds. Higher = more tolerant.
@@ -134,6 +304,7 @@ class Robot(pimm.ControlSystem):
         :param park_timeout_s: How long the arm may travel back to ``home_joints`` when the run ends before the
             driver gives up and stops control where it stands. It is spent inside the world's teardown budget.
         """
+        assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
         self._home_joints = home_joints if home_joints is not None else [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
@@ -141,6 +312,7 @@ class Robot(pimm.ControlSystem):
             home_joints_variation if home_joints_variation is not None else [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
         )
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
+        self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state = pimm.ControlSystemEmitter[FrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self._load = load
@@ -186,15 +358,6 @@ class Robot(pimm.ControlSystem):
             'gripper': gripper,
         }
 
-    def _ensure_robot(self) -> pf.Robot:
-        if self._robot is None:
-            self._robot = pf.Robot(
-                self._ip,
-                realtime_config=pf.RealtimeConfig.Ignore,
-                relative_dynamics_factor=self._relative_dynamics_factor,
-            )
-        return self._robot
-
     def _init_robot(self, robot):
         coeff = self._collision_coeff
         torque_threshold_acceleration = np.array([20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0])
@@ -217,53 +380,6 @@ class Robot(pimm.ControlSystem):
             robot.set_load(*self._load)
         else:
             robot.set_load(0.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
-
-    @staticmethod
-    def _travel(robot, target, should_stop: Callable[[], bool]) -> Generator[pimm.Sleep, None, bool]:
-        """Command ``target`` and poll the goal until the arm arrives; raise if the goal stops advancing.
-
-        Returns whether the arm arrived: ``False`` means ``should_stop`` ended the wait first. It is asked
-        before each poll and never after one, so a caller that gives up never reads a goal it has already
-        given up on.
-        """
-        POLL_INTERVAL_S = 0.005
-        robot.set_target_joints(target)
-        while not should_stop():
-            goal = robot.goal()
-            if goal.status == pf.GoalStatus.REACHED:
-                return True
-            if goal.status != pf.GoalStatus.IN_FLIGHT:
-                raise RuntimeError(f'homing failed: {goal.reason or goal.status}')
-            yield pimm.Sleep(POLL_INTERVAL_S)
-        return False
-
-    def _reset(self, robot, robot_state: FrankaState, rate_limiter, should_stop) -> Iterator[pimm.Sleep]:
-        """Home the arm, yielding until it arrives. Drive with ``yield from``."""
-        # The first emit must not ship an unfilled state.
-        robot_state.encode(robot.state())
-        robot_state._start_reset()
-        self.state.emit(robot_state)
-
-        target = np.asarray(self._home_joints, dtype=np.float64)
-        if any(v > 0 for v in self._home_joints_variation):
-            variation = np.random.uniform(
-                -np.asarray(self._home_joints_variation), np.asarray(self._home_joints_variation)
-            )
-            target = target + variation
-
-        for _ in self._travel(robot, target, lambda: should_stop.value):
-            st = robot.state()
-            robot_state.encode(st)
-            robot_state._start_reset()  # `encode` clears RESETTING; the arm has not arrived
-            self.state.emit(robot_state)
-            if st.error != 0:
-                robot.recover_from_errors()
-            yield rate_limiter.wait()
-
-        if should_stop.value:  # the travel gave up on the stop rather than on arrival
-            return
-        robot_state._finish_reset()
-        self.state.emit(robot_state)
 
     @contextlib.contextmanager
     def _desk_session(self):
@@ -291,91 +407,74 @@ class Robot(pimm.ControlSystem):
                     yield desk
                     return
 
-    def _park(self, robot, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        """Move the arm to the home pose, giving up after ``park_timeout_s``. Drive with ``yield from``.
+    @property
+    def _vendor(self) -> pf.Robot:
+        """The libfranka handle, connected on first use."""
+        if self._robot is None:
+            self._robot = pf.Robot(
+                self._ip,
+                realtime_config=pf.RealtimeConfig.Ignore,
+                relative_dynamics_factor=self._relative_dynamics_factor,
+            )
+        return self._robot
 
-        Runs after the control loop rather than in its ``finally``, so that only a stop request earns it.
-        Answering a setup or control fault with a recovery and a fresh joint target would be autonomous
-        motion in response to something going wrong.
+    def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
+        """The arm this run drives, built from the driver's configuration."""
+        return _Arm(
+            self._vendor,
+            self.sync_move,
+            self.state,
+            self._home_joints,
+            self._home_joints_variation,
+            self._park_timeout_s,
+            self._relative_dynamics_factor,
+            should_stop,
+            clock,
+        )
 
-        The motion itself is bounded: at the configured dynamics factor, to the configured ``home_joints``
-        and nowhere else. An arm already there arrives immediately, so arrival is the controller's to
-        report rather than something to pre-check. Every failure — including a goal that stops advancing —
-        reaches the log and no further.
-        """
-        target = np.asarray(self._home_joints, dtype=np.float64)
-        try:
-            logging.info('Parking the arm at the home pose')
-            robot.recover_from_errors()  # once, before the move: a reflex during the move ends the park
-            deadline = clock.now() + self._park_timeout_s
-            arrived = yield from self._travel(robot, target, lambda: clock.now() >= deadline)
-            if not arrived:
-                logging.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
-        # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
-        except Exception:
-            logging.exception('Parking failed, the arm stays where it stands')
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
+        with self._desk_session(), self._arm(should_stop, clock) as arm:
+            vendor = arm.vendor
+            self._init_robot(vendor)
+            self.robot_meta.emit(Robot._build_robot_meta(vendor))
+            vendor.recover_from_errors()
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        with self._desk_session():
-            robot = self._ensure_robot()
             try:
-                self._init_robot(robot)
-                self.robot_meta.emit(Robot._build_robot_meta(robot))
-                robot.recover_from_errors()
+                yield from arm.move_to(arm.home_target())
+            # rules-allow: swallowed-error — an arm that will not home reads ERROR; it does not end the run
+            except Exception as exc:
+                logging.error(f'Homing failed, the arm is not where the driver put it: {exc}')
 
-                robot_state = FrankaState()
-                rate_limiter = pimm.RateLimiter(clock, hz=2000)
+            in_error = False
 
-                yield from self._reset(robot, robot_state, rate_limiter, should_stop)
+            while not should_stop.value:
+                st = vendor.state()
+                arm.publish(st)
 
-                in_error = False
+                in_error, entered_error = _check_error(st.error != 0, in_error)
+                if entered_error:
+                    logging.warning(f'Robot error: {st.error_message}')
 
-                while not should_stop.value:
-                    st = robot.state()
-                    robot_state.encode(st)
-                    self.state.emit(robot_state)
+                if in_error:
+                    vendor.recover_from_errors()
+                    yield arm.limiter.wait()
+                    continue
 
-                    in_error, entered_error = _check_error(st.error != 0, in_error)
-                    if entered_error:
-                        logging.warning(f'Robot error: {st.error_message}')
+                if (call := arm.take_sync_move()) is not None:
+                    yield from arm.serve_sync_move(call)
+                elif (cmd := pimm.value_updated(self.commands)) is not None:
+                    try:
+                        if isinstance(cmd, command.Reset):
+                            yield from arm.move_to(arm.home_target())
+                        else:
+                            vendor.set_target_joints(arm.target_joints(cmd))
+                    # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
+                    except Exception as exc:
+                        logging.warning(f'{cmd} not applied: {exc}')
 
-                    cmd = pimm.value_updated(self.commands)
+                yield arm.limiter.wait()
 
-                    if in_error:
-                        # The driver always clears a recoverable error itself; making it optional (hold in
-                        # ERROR for out-of-band recovery instead) is a config knob to add when an embodiment
-                        # needs it.
-                        robot.recover_from_errors()
-                        yield rate_limiter.wait()
-                        continue
-
-                    if cmd is not None:
-                        match cmd:
-                            case command.Reset():
-                                yield from self._reset(robot, robot_state, rate_limiter, should_stop)
-                            case command.CartesianPosition(pose):
-                                target_pose_wxyz = np.asarray([*pose.translation, *pose.rotation.as_quat])
-                                ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
-                                robot.set_target_joints(ik_solution)
-                            case command.CartesianDelta() as delta_cmd:
-                                target = delta_cmd.apply(robot_state.ee_pose)
-                                target_pose_wxyz = np.asarray([*target.translation, *target.rotation.as_quat])
-                                ik_solution = robot.inverse_kinematics_with_limits(target_pose_wxyz)
-                                robot.set_target_joints(ik_solution)
-                            case command.JointPosition(positions):
-                                robot.set_target_joints(positions)
-                            case command.JointDelta(velocities=joint_delta):
-                                robot.set_target_joints(st.q + joint_delta)
-                            case other:
-                                raise NotImplementedError(f'Unsupported command {other}')
-
-                    yield rate_limiter.wait()
-
-                yield from self._park(robot, clock)
-            finally:
-                # Halt the driver's control thread before _desk_session deactivates FCI, or it dies mid-control
-                # with "TCP connection got interrupted".
-                robot.stop()
+            yield from arm.park()
 
 
 if __name__ == '__main__':
@@ -395,7 +494,7 @@ if __name__ == '__main__':
             ([0.03, 0.03, 0.03], 12.0),
         ]
 
-        while not world.should_stop and (state.read() is None or state.value.status == RobotStatus.RESETTING):
+        while not world.should_stop and (state.read() is None or state.value.status == RobotStatus.BUSY):
             time.sleep(0.01)
 
         origin = state.value.ee_pose

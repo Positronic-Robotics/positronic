@@ -15,25 +15,24 @@ from . import command
 
 
 class RobotStatus(IntEnum):
-    """Different statuses that the robot can be in.
+    """Whether a command sent to the robot now will reach it.
 
-    The exact meaning of this statuses currently is defined by the robot driver. But in general:
+    - AVAILABLE: tracking what it was last commanded, and will take another command.
+    - BUSY: the driver is putting it somewhere itself, and leaves the command stream unread until it arrives.
+    - ERROR: the robot is in an error state.
 
-    - AVAILABLE: The robot is available to accept new commands.
-    - RESETTING: The robot is resetting.
-    - MOVING: The robot is moving to a new position, but is not yet at the new position.
-    - ERROR: The robot is in an error state.
+    State is published every tick whatever the status; only who is driving the robot changes.
     """
 
+    # These numbers are written into recorded datasets and sent over the wire
     AVAILABLE = 0
-    RESETTING = 1
-    MOVING = 2
+    BUSY = 1
     ERROR = 3
 
-
-def is_sound(status: RobotStatus) -> bool:
-    """Whether the arm is tracking the commands it was given and its pose is worth reading."""
-    return status in (RobotStatus.AVAILABLE, RobotStatus.MOVING)
+    @classmethod
+    def _missing_(cls, value: object) -> 'RobotStatus | None':
+        # The wire protocol also publishes 2, an arm travelling towards a setpoint while still taking commands
+        return cls.AVAILABLE if value == 2 else None
 
 
 class State(ABC):
@@ -71,4 +70,4 @@ class State(ABC):
         return None
 
 
-__all__ = ['RobotStatus', 'State', 'command', 'is_sound']
+__all__ = ['RobotStatus', 'State', 'command']
