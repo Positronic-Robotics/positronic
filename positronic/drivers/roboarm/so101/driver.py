@@ -168,8 +168,11 @@ class Robot(pimm.ControlSystem):
                     # it goes away, long after its asker was told it failed.
                     self._last_qpos, setpoint_changed = np.asarray(q_norm[:-1]), True
 
-                if not move.active and (target := self._take_setpoint(q_norm, move, clock)) is not None:
-                    self._last_qpos, setpoint_changed = target, True
+                # A move settled this tick is answered at the end of it; taking another first would
+                # publish BUSY over the arrival its asker is about to be told about.
+                if not (move.active or move.settled):
+                    if (target := self._take_setpoint(q_norm, move, clock)) is not None:
+                        self._last_qpos, setpoint_changed = target, True
 
                 if setpoint_changed:
                     self.motor_bus.set_target_position(np.concatenate([self._last_qpos, [self._last_grip]]))

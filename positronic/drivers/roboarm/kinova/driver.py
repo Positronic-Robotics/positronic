@@ -140,7 +140,9 @@ class Robot(pimm.ControlSystem):
                         # Leaving the controller on the target the arm stopped short of would resume the move
                         # once whatever blocked it goes away, long after its asker was told it failed.
                         joint_controller.set_target_qpos(q)
-                    if not move.active:
+                    # A move settled this tick is answered at the end of it; taking another first would
+                    # publish BUSY over the arrival its asker is about to be told about.
+                    if not (move.active or move.settled):
                         self._take_setpoint(joint_controller, move, q, clock)
 
                     torque_command = joint_controller.compute_torque(q, dq, tau)

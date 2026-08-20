@@ -208,6 +208,32 @@ def test_a_run_that_dies_with_nothing_in_flight_has_nobody_to_tell():
     assert not move.active and not move.errored
 
 
+def test_a_settled_move_holds_the_device_against_the_next_one():
+    """The driver publishes the arrival and answers at the end of the tick. Taking another move before that
+    would put BUSY over the state its asker is about to be handed."""
+    move, _ = _accepted(0.0)
+
+    assert move.settle(TOL / 2, now=0.1) is MoveStatus.ARRIVED
+    assert not move.active and move.settled
+
+    move.answer()
+    assert not move.settled
+
+
+def test_a_run_that_dies_with_one_move_settled_and_another_in_flight_answers_both():
+    """One outcome each: the settled move earned its answer before the run died, and the one still
+    travelling is owed whatever killed it."""
+    move, landed = _accepted(0.0)
+    move.settle(TOL / 2, now=0.1)
+    travelling = _Call(0.0)
+    move.accept(travelling, 1.0, now=0.1, timeout_s=3.0)
+
+    move.fail(RuntimeError('the bus went away'))
+
+    assert landed.answered and landed.exception is None
+    assert isinstance(travelling.exception, RuntimeError)
+
+
 def test_a_run_that_dies_after_a_move_settled_still_hands_over_the_outcome():
     """The move is over and the device is where it ended up; what killed the run afterwards did not change
     that, and an asker left unanswered waits for the rest of the run."""

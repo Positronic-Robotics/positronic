@@ -501,5 +501,5 @@ def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stoppe
         answer.result()
     np.testing.assert_allclose(arm.targets[-1], HOME)
     np.testing.assert_allclose(arm.targets[-2], JOGGED)
-    next(loop)
+    # Published before the asker heard: a caller that starts recovering must not read the arm as available
     assert states.emitted[-1][1].status == RobotStatus.ERROR

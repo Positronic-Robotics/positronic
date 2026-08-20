@@ -235,10 +235,18 @@ class _Arm(DriverRun):
                 raise NotImplementedError(f'Unsupported command {other}')
 
     def serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
-        """Put the arm where ``call`` asks and answer it once it is there; a stop cuts it short unanswered."""
-        with pimm.calls.forward_failure(call):
+        """Put the arm where ``call`` asks and answer it once the state saying so is out.
+
+        A stop cuts the move short, unanswered.
+        """
+        try:
             if (yield from self.move_to(self.target_joints(call.request))) is MoveStatus.ARRIVED:
                 call.set_result(None)
+        except Exception as exc:
+            try:
+                self.publish(self.vendor.state())
+            finally:
+                call.set_exception(exc)  # an arm the driver cannot read still leaves nobody waiting
 
     def park(self) -> Iterator[pimm.Sleep]:
         """Move the arm to the home pose, giving up after ``park_timeout_s``. Drive with ``yield from``.

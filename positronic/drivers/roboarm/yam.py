@@ -199,9 +199,14 @@ class _Chain(DriverRun):
             self.state._set_error()
         self.out.emit(self.state)
 
-    def measured_chain(self) -> tuple[np.ndarray, float]:
-        """The joints and grip the chain reports, as a target that holds it where it stands."""
+    def hold_where_it_stopped(self) -> tuple[np.ndarray, float]:
+        """Command the chain to stay where it reads, publish that, and return it as the target to keep holding.
+
+        A move that did not land leaves the chain part-way along its ramp, still commanded at the far end.
+        """
         obs = self.observations()
+        self.vendor.command_joint_pos(np.append(obs[_JOINT_POS], obs[_GRIPPER_POS][0]))
+        self.publish(obs)
         return np.asarray(obs[_JOINT_POS], dtype=np.float64), 1.0 - float(obs[_GRIPPER_POS][0])
 
     def _ik(self, world_pose: geom.Transform3D, q: np.ndarray) -> np.ndarray:
@@ -274,22 +279,29 @@ class _Chain(DriverRun):
         # rules-allow: swallowed-error — a chain that will not home reads ERROR; it does not end the run
         except Exception as exc:
             logging.error(f'Homing failed, the chain is not where the driver put it: {exc}')
-        return self.measured_chain()
+        return self.hold_where_it_stopped()
 
     def serve_sync_move(
         self, call: pimm.calls.Call[command.CommandType, None], q: np.ndarray, grip: float
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
-        """Put the chain where ``call`` asks, answer it, and return the joints and grip it now holds."""
+        """Put the chain where ``call`` asks, hold it wherever it ends up, and answer it once that is out.
+
+        Only an arrival earns the target: commanding it from wherever the ramp got to is the jump the ramp
+        exists to avoid. A stop cuts the move short, unanswered.
+        """
         request = call.request
-        with pimm.calls.forward_failure(call):
+        try:
             target = self.home_joints if isinstance(request, command.Reset) else self.target_joints(request, q)
             if (yield from self.move_to(target, grip)) is MoveStatus.ARRIVED:
                 call.set_result(None)
                 return np.asarray(target, dtype=np.float64), grip
-        # Only an arrival earns the target: commanding it from wherever the ramp got to is the jump the ramp
-        # exists to avoid. ``q`` predates the ramp, so it would drive the chain back the way it came. Where it
-        # stopped is the posture nobody has to be surprised by — fingers included, or they keep pushing.
-        return self.measured_chain()
+        except Exception as exc:
+            try:
+                held = self.hold_where_it_stopped()
+            finally:
+                call.set_exception(exc)  # a chain the driver cannot read still leaves nobody waiting
+            return held
+        return self.hold_where_it_stopped()
 
 
 class Robot(pimm.ControlSystem):

@@ -55,6 +55,11 @@ class PendingMove:
         return self._call is not None
 
     @property
+    def settled(self) -> bool:
+        """A move is over but its asker has not been told: nothing new may be taken until ``answer``."""
+        return self._settled is not None
+
+    @property
     def target(self) -> np.ndarray | float:
         """What the move in flight asked for, for a device that must put its reading in the same terms."""
         assert self._call is not None, 'no move is in flight'
@@ -71,10 +76,8 @@ class PendingMove:
         self._call, self._target, self._deadline = call, target, now + timeout_s
 
     def fail(self, exc: BaseException) -> None:
-        """Hand `exc` to the move in flight, or its own outcome to one already settled."""
-        if self._settled is not None:
-            self.answer()
-            return
+        """Hand a settled move its own outcome, and `exc` to one still in flight. Both, if there are both."""
+        self.answer()
         if self._call is None:
             return
         self._call.set_exception(exc)
