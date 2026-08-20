@@ -53,11 +53,11 @@ class DHGripper(pimm.ControlSystem):
                 # A call first, and the stream only when none came: reading both would consume a streamed
                 # target the call then overwrites, and a signal holds only its latest value.
                 if (call := next(self.sync_move.incoming(), None)) is not None:
-                    last_grip = float(call.request)
+                    last_grip = max(0.0, min(1.0, float(call.request)))
                     move.accept(call, last_grip, clock.now())
                 elif (grip := pimm.value_updated(self.target_grip)) is not None:
-                    last_grip = grip
-            width = round((1 - max(0, min(last_grip, 1))) * 1000)
+                    last_grip = max(0.0, min(1.0, float(grip)))
+            width = round((1 - last_grip) * 1000)
             client.write_register(0x103, c_uint16(width).value, slave=1)
             client.write_register(0x101, c_uint16(self.force.value).value, slave=1)
             client.write_register(0x104, c_uint16(self.speed.value).value, slave=1)

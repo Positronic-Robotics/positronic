@@ -49,12 +49,12 @@ class Robotiq2F(pimm.ControlSystem):
                     # A call first, and the stream only when none came: reading both would consume a streamed
                     # target the call then overwrites, and a signal holds only its latest value.
                     if (call := next(self.sync_move.incoming(), None)) is not None:
-                        target = float(call.request)
+                        target = max(0.0, min(1.0, float(call.request)))
                         move.accept(call, target, clock.now())
-                    else:
-                        target = pimm.value_updated(self.target_grip)
+                    elif (streamed := pimm.value_updated(self.target_grip)) is not None:
+                        target = max(0.0, min(1.0, float(streamed)))
                 if target is not None:
-                    pos = int(max(0, min(1, target)) * 255)
+                    pos = int(target * 255)
                     spd = int(max(0, min(255, self.speed.value)))
                     frc = int(max(0, min(255, self.force.value)))
 

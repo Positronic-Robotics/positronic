@@ -20,7 +20,8 @@ class RobotStatus(IntEnum):
     The exact meaning of this statuses currently is defined by the robot driver. But in general:
 
     - AVAILABLE: The robot is available to accept new commands.
-    - RESETTING: The robot is resetting.
+    - RESETTING: The driver is putting the robot somewhere itself — homing, or serving a synchronous move —
+      and no command stream reaches it until it arrives.
     - MOVING: The robot is moving to a new position, but is not yet at the new position.
     - ERROR: The robot is in an error state.
     """
