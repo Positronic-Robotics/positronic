@@ -42,8 +42,22 @@ def test_a_device_within_tolerance_has_arrived():
     move, call = _accepted(0.0)
 
     assert move.settle(TOL / 2, now=0.1) is MoveStatus.ARRIVED
-    assert call.answered and call.exception is None
     assert not move.active and not move.errored
+    move.answer()
+    assert call.answered and call.exception is None
+
+
+def test_a_settled_move_waits_for_the_driver_to_publish_before_it_is_answered():
+    """A caller that learns its move landed reads the arm next. Answering before the state that says so is
+    out hands it the sample from mid-travel."""
+    move, call = _accepted(0.0)
+
+    assert move.settle(TOL / 2, now=0.1) is MoveStatus.ARRIVED
+    assert not call.answered, 'settling is not answering'
+    assert not move.active, 'the device is free, whatever its asker has been told'
+
+    move.answer()
+    assert call.answered
 
 
 def test_a_device_still_moving_keeps_the_caller_waiting():
@@ -60,6 +74,7 @@ def test_a_device_that_never_arrives_fails_the_caller_rather_than_holding_it():
     move, call = _accepted(1.0)
 
     assert move.settle(0.4, now=3.0) is MoveStatus.GAVE_UP
+    move.answer()
     assert isinstance(call.exception, TimeoutError)
     assert 'stopped at 0.4' in str(call.exception)
     assert not move.active and move.errored
@@ -70,6 +85,7 @@ def test_a_device_out_of_time_but_at_its_target_has_arrived():
     move, call = _accepted(1.0)
 
     assert move.settle(1.0, now=3.0) is MoveStatus.ARRIVED
+    move.answer()
     assert call.exception is None
     assert not move.errored
 
@@ -80,6 +96,7 @@ def test_an_arm_arrives_only_once_every_joint_is_within_tolerance():
 
     assert move.settle(np.array([0.0, 0.0, 0.0, 0.0, 0.5]), now=0.1) is MoveStatus.MOVING
     assert move.settle(np.full(5, 0.01), now=0.2) is MoveStatus.ARRIVED
+    move.answer()
     assert call.answered and call.exception is None
 
 
@@ -167,6 +184,7 @@ def test_how_long_a_move_gets_is_the_driver_s_to_say():
     patient, patient_call = _accepted(1.0, timeout_s=10.0)
 
     assert brief.settle(0.0, now=2.0) is MoveStatus.GAVE_UP
+    brief.answer()
     assert isinstance(brief_call.exception, TimeoutError)
     assert patient.settle(0.0, now=2.0) is MoveStatus.MOVING
     assert not patient_call.answered
@@ -188,3 +206,14 @@ def test_a_run_that_dies_with_nothing_in_flight_has_nobody_to_tell():
     move.fail(RuntimeError('the bus went away'))
 
     assert not move.active and not move.errored
+
+
+def test_a_run_that_dies_after_a_move_settled_still_hands_over_the_outcome():
+    """The move is over and the device is where it ended up; what killed the run afterwards did not change
+    that, and an asker left unanswered waits for the rest of the run."""
+    move, call = _accepted(0.0)
+    move.settle(TOL / 2, now=0.1)
+
+    move.fail(RuntimeError('the bus went away'))
+
+    assert call.answered and call.exception is None

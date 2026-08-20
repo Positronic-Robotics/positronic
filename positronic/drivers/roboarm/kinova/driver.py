@@ -148,7 +148,7 @@ class Robot(pimm.ControlSystem):
                     q, dq, tau = api.apply_current_command(current_command)
                     ee_pose = self.solver.forward(joint_controller.q_s)
 
-                    if move.active:  # the driver owns the arm until the move answers, and reads no command meanwhile
+                    if move.active:  # the driver owns the arm until the move settles, and reads no command meanwhile
                         status = RobotStatus.BUSY
                     elif move.errored:  # the controller reports its trajectory, not whether the arm got there
                         status = RobotStatus.ERROR
@@ -156,6 +156,7 @@ class Robot(pimm.ControlSystem):
                         status = RobotStatus.AVAILABLE
                     robot_state.encode(q, dq, ee_pose, status)
                     self.state.emit(robot_state)
+                    move.answer()  # the state a settled move is answered with is out
 
                     yield rate_limiter.wait()
             except Exception as exc:

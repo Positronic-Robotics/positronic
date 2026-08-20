@@ -177,7 +177,7 @@ class Robot(pimm.ControlSystem):
                 dq = self.motor_bus.velocity[:-1]
                 ee_pose, gripper = self._forward_kinematics(q_norm)
                 position_rad = self.norm_to_rad(q_norm)[:-1]
-                if move.active:  # the driver owns the arm until the move answers, and reads no command meanwhile
+                if move.active:  # the driver owns the arm until the move settles, and reads no command meanwhile
                     status = RobotStatus.BUSY
                 else:  # the bus reports position, not whether the arm is where the driver put it
                     status = RobotStatus.ERROR if move.errored else RobotStatus.AVAILABLE
@@ -185,6 +185,7 @@ class Robot(pimm.ControlSystem):
 
                 self.state.emit(state)
                 self.grip.emit(gripper)
+                move.answer()  # the state a settled move is answered with is out
                 yield rate_limit.wait()
         except Exception as exc:
             move.fail(exc)  # a run that dies mid-move must not leave its asker waiting
