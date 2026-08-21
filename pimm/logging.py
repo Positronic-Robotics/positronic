@@ -112,9 +112,8 @@ def configure_process_logging(component_levels: Mapping[str, int] | None = None)
     for logger_name in _NOISY_LIBRARY_LOGGERS:
         logger = logging.getLogger(logger_name)
         pinned = _pins.get(logger_name)
-        # A level this module did not install is the application's own; under one it did, the
-        # application's own is what it recorded then. NOTSET is 0, so a library nobody set takes
-        # the floor.
+        # A level this module did not install is the application's own; under one it did, what it
+        # recorded is. NOTSET is 0, so a library nobody set takes the floor.
         theirs = pinned.theirs if pinned is not None and logger.level == pinned.ours else logger.level
         pin = max(level, logging.WARNING, theirs)
         logger.setLevel(pin)

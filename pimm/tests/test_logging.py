@@ -127,8 +127,8 @@ class TestRequestedLevel:
             configure_process_logging()
 
     def test_a_number_this_process_cannot_name_is_a_level(self, monkeypatch):
-        """The boundary against the refusal above: an unnamed number is what a parent's custom level
-        arrives as, so refusing it would end a World over configuration that is entirely valid."""
+        """An unnamed number is what a parent's custom level arrives as, so refusing it would end a
+        World over configuration that is entirely valid."""
         monkeypatch.setenv(RESOLVED_LOG_LEVEL_ENV, str(CUSTOM_LEVEL))
         assert CUSTOM_LEVEL not in logging.getLevelNamesMapping().values(), 'pick an unnameable number'
 
@@ -174,7 +174,7 @@ class TestTheThresholdHoldsAgainstAComponentsOwnLevel:
         assert CHILD_LINE not in capfd.readouterr().err
 
     def test_a_record_at_the_threshold_still_reaches_the_stream(self, monkeypatch, capfd):
-        """The boundary: a handler taking more than the threshold would drop the run's own errors."""
+        """A handler taking more than the threshold would drop the run's own errors."""
         monkeypatch.setenv(LOG_LEVEL_ENV, 'ERROR')
         configure_process_logging()
 
@@ -195,8 +195,8 @@ class TestTheLibraryPins:
             assert logging.getLogger(A_NOISY_LIBRARY).level == logging.ERROR
 
     def test_a_library_nobody_pinned_takes_the_floor(self):
-        """The boundary: keeping a stricter level must not turn the floor off for NOTSET, which is
-        every one of these libraries until something says otherwise."""
+        """Keeping a stricter level must not turn the floor off for NOTSET, which is every one of
+        these libraries until something says otherwise."""
         with _level(A_NOISY_LIBRARY, logging.NOTSET):
             configure_process_logging()
 
@@ -228,8 +228,8 @@ class TestTheLibraryPins:
             assert logging.getLogger(A_NOISY_LIBRARY).level == logging.ERROR
 
     def test_a_level_set_between_two_calls_is_kept(self):
-        """The boundary: recomputing past our own pin must not discard a setting that arrived after
-        the first call, since being independent of that ordering is what the floor is for."""
+        """Recomputing past our own pin must not discard a setting that arrived after the first
+        call, since being independent of that ordering is what the floor is for."""
         init_logging('DEBUG')
 
         with _level(A_NOISY_LIBRARY, logging.ERROR):
@@ -305,7 +305,7 @@ class TestALevelTheChildCannotName:
         assert CHILD_LINE in err, err
 
     def test_a_name_that_is_not_a_level_is_still_refused(self):
-        """The boundary: carrying numbers must not stop the operator's own typo being rejected."""
+        """Carrying numbers must not stop the operator's own typo being rejected."""
         with pytest.raises(ValueError, match='EROR'):
             init_logging('EROR')
 
@@ -322,7 +322,7 @@ class TestPerComponentLevelsCrossASpawn:
         assert CHILD_LINE not in err, err
 
     def test_a_component_nobody_set_a_level_on_still_logs_in_the_child(self, capfd):
-        """The boundary: carrying the levels a parent has must not silence one it never set."""
+        """Carrying the levels a parent has must not silence one it never set."""
         init_logging('INFO')
 
         err = _stderr_of_a_logging_child(capfd, component_loop)
@@ -347,7 +347,7 @@ class TestPerComponentLevels:
         with _level('pimm.utils', logging.WARNING):
             _emit_one_info_line_from_each_component()
 
-        # The boundary: a threshold that reached past `pimm.utils` would take this line with it.
+        # A threshold that reached past `pimm.utils` would take this line with it.
         assert _world_lines(caplog) == [WORLD_LINE], caplog.text
 
     def test_both_components_log_at_a_shared_threshold(self, caplog):
