@@ -182,6 +182,24 @@ class TestTheThresholdHoldsAgainstAComponentsOwnLevel:
 
         assert CHILD_LINE in capfd.readouterr().err
 
+    def test_the_entry_points_own_handler_carries_the_threshold(self, capfd):
+        """`coloredlogs.install` replaces the handler `configure_process_logging` had capped, so the
+        entry point keeps this ceiling only while the handler it installs carries the level too."""
+        init_logging('ERROR')
+
+        with _level(A_SELF_LEVELLED_COMPONENT, logging.INFO):
+            logging.getLogger(A_SELF_LEVELLED_COMPONENT).info(CHILD_LINE)
+
+        assert CHILD_LINE not in capfd.readouterr().err
+
+    def test_the_entry_point_still_passes_a_record_at_the_threshold(self, capfd):
+        """A colour handler taking more than the threshold would drop the run's own errors."""
+        init_logging('ERROR')
+
+        logging.getLogger(A_SELF_LEVELLED_COMPONENT).error(CHILD_LINE)
+
+        assert CHILD_LINE in capfd.readouterr().err
+
 
 class TestTheLibraryPins:
     """WARNING is a floor under a noisy library, not the level it is assigned."""
