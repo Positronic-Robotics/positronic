@@ -1,9 +1,11 @@
 """A FastAPI web server for visualizing Positronic LocalDatasets using Rerun."""
 
 import atexit
+import ipaddress
 import logging
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 import threading
@@ -17,6 +19,7 @@ from typing import Any
 
 import configuronic as cfn
 import pos3
+import psutil
 import rerun as rr
 import uvicorn
 from fastapi import FastAPI, HTTPException, Response
@@ -27,7 +30,7 @@ from starlette.requests import Request
 
 import positronic.cfg.ds
 from pimm.logging import init_logging
-from positronic import keys, utils
+from positronic import keys
 from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import get_dataset_root, get_episodes_list, stream_episode_rrd
@@ -525,7 +528,76 @@ def default_table() -> TableConfig:
     }
 
 
-def _generate_self_signed_cert(host: str) -> dict[str, str]:
+_WILDCARD_HOSTS = frozenset({'0.0.0.0', '::', ''})
+
+
+def _as_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """The host parsed as an IP literal, or None when it is a name."""
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
+def _local_ip_addresses() -> list[str]:
+    """Every routable IP address on a local interface.
+
+    Link-local addresses are left out: they carry a zone that no URL a browser is given can name.
+    """
+    addresses: list[str] = []
+    for interface in psutil.net_if_addrs().values():
+        for addr in interface:
+            if addr.family not in (socket.AF_INET, socket.AF_INET6):
+                continue
+            ip = _as_ip(addr.address.split('%')[0])
+            if ip is not None and not ip.is_link_local and str(ip) not in addresses:
+                addresses.append(str(ip))
+    return addresses
+
+
+def _served_addresses(host: str) -> list[str]:
+    """The addresses a server bound to `host` answers on.
+
+    A wildcard bind answers on every local address, so the caller cannot know which one a browser
+    will use; naming them all is what keeps the certificate and the advertised URL true of the bind.
+    """
+    return _local_ip_addresses() if host in _WILDCARD_HOSTS else [host]
+
+
+def _is_loopback(host: str) -> bool:
+    ip = _as_ip(host)
+    return ip.is_loopback if ip is not None else host == 'localhost'
+
+
+def _access_url(scheme: str, host: str, port: int) -> str:
+    ip = _as_ip(host)
+    literal = f'[{host}]' if ip is not None and ip.version == 6 else host
+    return f'{scheme}://{literal}:{port}'
+
+
+def _insecure_context_warning(hosts: list[str], https: bool) -> str | None:
+    """The warning for a bind a browser denies WebCodecs on, or None when it grants them."""
+    if https:
+        return None
+    exposed = [host for host in hosts if not _is_loopback(host)]
+    if not exposed:
+        return None
+    return (
+        f'Serving plain HTTP on {", ".join(exposed)}. A browser exposes WebCodecs only to a secure context, so '
+        f'video panels fail to decode there with "VideoDecoder is not defined". Serve over HTTPS, or reach the '
+        f'server on a loopback address.'
+    )
+
+
+def _subject_alt_names(hosts: list[str]) -> str:
+    """The certificate's subjectAltName over the addresses the server answers on."""
+    sans = [f'IP:{host}' if _as_ip(host) is not None else f'DNS:{host}' for host in hosts]
+    if any(_is_loopback(host) for host in hosts):
+        sans.append('DNS:localhost')
+    return ','.join(sans)
+
+
+def _generate_self_signed_cert(hosts: list[str]) -> dict[str, str]:
     ssl_dir = tempfile.mkdtemp(prefix='positronic-ssl-')
     keyfile = os.path.join(ssl_dir, 'key.pem')
     certfile = os.path.join(ssl_dir, 'cert.pem')
@@ -544,15 +616,25 @@ def _generate_self_signed_cert(host: str) -> dict[str, str]:
             '365',
             '-nodes',
             '-subj',
-            f'/CN={host}',
+            f'/CN={hosts[0]}',
             '-addext',
-            f'subjectAltName=DNS:localhost,IP:{host}',
+            f'subjectAltName={_subject_alt_names(hosts)}',
         ],
         check=True,
         capture_output=True,
     )
     atexit.register(shutil.rmtree, ssl_dir, ignore_errors=True)
     return {'ssl_keyfile': keyfile, 'ssl_certfile': certfile}
+
+
+def _ssl_kwargs(https: bool, hosts: list[str], certfile: str | None, keyfile: str | None) -> dict[str, str]:
+    if not https:
+        return {}
+    if certfile is not None and keyfile is not None:
+        return {'ssl_certfile': certfile, 'ssl_keyfile': keyfile}
+    if certfile is not None or keyfile is not None:
+        raise ValueError('ssl_certfile and ssl_keyfile must be given together')
+    return _generate_self_signed_cert(hosts)
 
 
 @cfn.config(dataset=positronic.cfg.ds.local_all, ep_table_cfg=default_table, max_resolution=640, group_tables=None)
@@ -565,6 +647,8 @@ def main(
     port: int = 8400,
     debug: bool = False,
     https: bool = True,
+    ssl_certfile: str | None = None,
+    ssl_keyfile: str | None = None,
     reset_cache: bool = False,
     group_tables: dict[str, GroupTableConfig] | None = None,
     home_page: str | None = None,
@@ -581,6 +665,8 @@ def main(
         host: Server host
         port: Server port
         debug: Enable debug logging
+        ssl_certfile: Certificate to serve, given with ssl_keyfile. A self-signed one is generated when absent
+        ssl_keyfile: Private key for ssl_certfile
         reset_cache: If True, clear cache_dir at startup
         ep_table_cfg: Mapping of episode static data keys to display in episode list,
             where the value is either:
@@ -650,10 +736,14 @@ def main(
     t = threading.Thread(target=load_dataset, daemon=True)
     t.start()
 
-    primary_host = utils.resolve_host_ip()
-    ssl_kwargs = _generate_self_signed_cert(primary_host) if https else {}
+    served = _served_addresses(host)
+    ssl_kwargs = _ssl_kwargs(https, served, ssl_certfile, ssl_keyfile)
     scheme = 'https' if https else 'http'
-    logging.info(f'Starting server on {scheme}://{primary_host}:{port}')
+
+    warning = _insecure_context_warning(served, https)
+    if warning is not None:
+        logging.warning(warning)
+    logging.info(f'Starting server on {", ".join(_access_url(scheme, address, port) for address in served)}')
 
     uvicorn.run(app, host=host, port=port, log_level='debug' if debug else 'info', **ssl_kwargs)
 
