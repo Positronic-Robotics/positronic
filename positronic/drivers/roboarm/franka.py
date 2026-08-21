@@ -110,8 +110,8 @@ class _Arm(DriverRun[command.CommandType]):
     _MOVE_GRACE_S = 5.0
     # Parking publishes nothing, so it comes back only as often as it needs to ask again
     _PARK_POLL_S = 0.005
-    # How many times a move the vendor aborted is commanded again. A reflex clears and the arm goes on; an arm
-    # held against something spends the attempts instead of driving at it for as long as the deadline allows.
+    # How many times a move the vendor aborted is commanded again — a bound a deadline cannot give, since a
+    # reflex trips in milliseconds
     _MOVE_ATTEMPTS = 3
 
     def __init__(
@@ -204,8 +204,7 @@ class _Arm(DriverRun[command.CommandType]):
                 stopped_short = f'the arm stopped short of its target: {goal.reason or goal.status}'
                 if attempts_left == 0:
                     raise RuntimeError(f'{stopped_short}, on all {self._MOVE_ATTEMPTS} attempts')
-                # A target commanded while the arm holds an error is refused outright, and the vendor leaves
-                # the clearing to the caller: only the caller knows whether going again is safe.
+                # A target commanded while the arm holds an error is refused outright
                 if not self.vendor.recover_from_errors():
                     raise RuntimeError(f'{stopped_short}, and its error will not clear')
                 logger.warning(f'{stopped_short}; cleared it, commanding again with {attempts_left} attempts left')
@@ -313,8 +312,6 @@ class _Arm(DriverRun[command.CommandType]):
         target = np.asarray(self._home_joints, dtype=np.float64)
         try:
             logger.info('Parking the arm at the home pose')
-            # Clears an error the run ended in, so the first attempt is a move rather than a refusal
-            self.vendor.recover_from_errors()
             deadline = self.clock.now() + self._park_timeout_s
             # The home pose is a long way off, and only the native law shapes the reference on the way there.
             outcome = yield from self.await_goal(

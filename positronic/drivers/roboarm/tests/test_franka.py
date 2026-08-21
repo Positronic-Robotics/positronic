@@ -362,7 +362,7 @@ def test_teardown_stops_control_and_releases_desk_when_parking_fails(desk):
     _drive(loop, clock)
 
     # the park was attempted, and its failure went no further
-    assert arm.calls[mark:] == [Call.RECOVER_FROM_ERRORS, Call.STOP]
+    assert arm.calls[mark:] == [Call.SET_CONTROL_MODE, Call.STOP]
     assert desk.released
 
 
