@@ -464,12 +464,12 @@ class _CallAnsweringLoop:
 
 
 def _bg_wrapper(
-    run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str, component_levels: Mapping[str, int]
+    run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str, parent_component_levels: Mapping[str, int]
 ):
     try:
         # A freshly spawned subprocess carries no logging configuration, so set one up.
         # Not outside the try: an exception in the setup must end the run loop too.
-        configure_process_logging(component_levels)
+        configure_process_logging(parent_component_levels)
         for command in run_func(EventReceiver(stop_event, clock), clock):
             match command:
                 case Sleep(seconds):
@@ -873,9 +873,7 @@ class World:
 
         Use `start` whenever possible, as this method is internal.
         """
-        # Read here rather than in the child: a spawn starts an empty logger registry, so a level the
-        # application set on a component reaches the child only by being carried to it.
-        component_levels = component_log_levels()
+        parent_component_levels = component_log_levels()
         for bg_loop in background_loops:
             if hasattr(bg_loop, '__self__'):
                 name = f'{bg_loop.__self__.__class__.__name__}.{bg_loop.__name__}'
@@ -884,7 +882,7 @@ class World:
             # TODO: now we allow only real clock, change clock to a Emitter?
             p = self._mp_ctx.Process(
                 target=_bg_wrapper,
-                args=(bg_loop, self._stop_event, SystemClock(), name, component_levels),
+                args=(bg_loop, self._stop_event, SystemClock(), name, parent_component_levels),
                 daemon=True,
                 name=name,
             )
