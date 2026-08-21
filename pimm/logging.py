@@ -24,6 +24,19 @@ LOG_LEVEL_ENV = 'LOG_LEVEL'
 # reading process's registry and a spawn starts an empty one. Unset, a child logs at INFO.
 RESOLVED_LOG_LEVEL_ENV = 'PIMM_RESOLVED_LOG_LEVEL'
 
+# Third-party loggers the child's root-level INFO would otherwise reach too. Each logs per connection,
+# request or retry rather than per event, so pinning them keeps the level change ours.
+_NOISY_LIBRARY_LOGGERS = (
+    'websockets',  # per connection at INFO, per frame at DEBUG
+    'httpx',  # per request, at INFO
+    'httpcore',  # per connection-pool operation
+    'urllib3',  # per connection
+    'botocore',  # per API call, and again per retry
+    'boto3',
+    's3transfer',  # per part of a multipart upload
+    'asyncio',  # per selector event, under its debug mode
+)
+
 
 def level_number(name: str, source: str) -> int:
     """The number `name` stands for in this process, raising when it names no level.
@@ -52,18 +65,16 @@ def _requested_level() -> int:
     return level_number(name, LOG_LEVEL_ENV) if name is not None else logging.INFO
 
 
-# Third-party loggers the child's root-level INFO would otherwise reach too. Each logs per connection,
-# request or retry rather than per event, so pinning them keeps the level change ours.
-_NOISY_LIBRARY_LOGGERS = (
-    'websockets',  # per connection at INFO, per frame at DEBUG
-    'httpx',  # per request, at INFO
-    'httpcore',  # per connection-pool operation
-    'urllib3',  # per connection
-    'botocore',  # per API call, and again per retry
-    'boto3',
-    's3transfer',  # per part of a multipart upload
-    'asyncio',  # per selector event, under its debug mode
-)
+def component_log_levels() -> dict[str, int]:
+    """Every logger this process has a level of its own, for a spawn to carry.
+
+    The root logger is absent: its level is the threshold, which crosses as `RESOLVED_LOG_LEVEL_ENV`.
+    """
+    return {
+        name: logger.level
+        for name, logger in list(logging.Logger.manager.loggerDict.items())
+        if isinstance(logger, logging.Logger) and logger.level != logging.NOTSET
+    }
 
 
 class _Pin(NamedTuple):
@@ -76,18 +87,6 @@ class _Pin(NamedTuple):
 # Both levels, because a pin often equals the application's own: told apart by value alone, a pin
 # would survive as a setting and a second `init_logging` could not lower it.
 _pins: dict[str, _Pin] = {}
-
-
-def component_log_levels() -> dict[str, int]:
-    """Every logger this process has a level of its own, for a spawn to carry.
-
-    The root logger is absent: its level is the threshold, which crosses as `RESOLVED_LOG_LEVEL_ENV`.
-    """
-    return {
-        name: logger.level
-        for name, logger in list(logging.Logger.manager.loggerDict.items())
-        if isinstance(logger, logging.Logger) and logger.level != logging.NOTSET
-    }
 
 
 def configure_process_logging(component_levels: Mapping[str, int] | None = None) -> None:
