@@ -73,10 +73,8 @@ class _Pin(NamedTuple):
     ours: int
 
 
-# Both levels are kept because the pin often equals the application's own — the threshold is usually
-# the level the application asked for. Told apart only by value, a pin would be read back as a
-# setting to preserve, making it the next call's input so a second `init_logging` could not lower it
-# — the trap `RESOLVED_LOG_LEVEL_ENV` keeps the threshold out of.
+# Both levels, because a pin often equals the application's own: told apart by value alone, a pin
+# would survive as a setting and a second `init_logging` could not lower it.
 _pins: dict[str, _Pin] = {}
 
 
@@ -96,10 +94,8 @@ def configure_process_logging(component_levels: Mapping[str, int] | None = None)
     """Configure this process's root logger, per-component levels and library pins.
 
     A process nothing else configures — a spawned control system — would otherwise sit at the stdlib
-    default and drop every line it emits. The threshold is the level a parent resolved, else the
-    operator's own, and it holds against a module that set its own; `component_levels` is what the
-    spawning process had set per logger, which a fresh interpreter starts with none of; the noisy
-    libraries are pinned no lower than WARNING, and never below a level already set on them.
+    default and drop every line it emits. `component_levels` is what the spawning process had set
+    per logger, which a fresh interpreter starts with none of.
 
     Raises `ValueError` on a value that names no level.
     """
