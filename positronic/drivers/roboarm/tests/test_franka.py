@@ -17,8 +17,6 @@ from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmi
 HOME = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 JOGGED = HOME + np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 IMPEDANCE = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
-# What libfranka calls a collision reflex, as it reaches the driver in an aborted goal's reason
-REFLEX = 'libfranka: Move command aborted: motion aborted by reflex! ["cartesian_reflex"]'
 
 
 class Call(StrEnum):
@@ -60,6 +58,9 @@ class FakeArm:
     is the vendor fault flag every state carries.
     """
 
+    # What libfranka calls a collision reflex, as it reaches the driver in an aborted goal's reason
+    REFLEX = 'libfranka: Move command aborted: motion aborted by reflex! ["cartesian_reflex"]'
+
     def __init__(
         self, q, *, polls_to_reach: int = 2, goal_status: 'franka.pf.GoalStatus | None' = None, aborts: int = 0
     ):
@@ -98,7 +99,7 @@ class FakeArm:
         if self.aborts:
             self.aborts -= 1
             self.error = 1
-            return _Goal(franka.pf.GoalStatus.ABORTED, REFLEX)
+            return _Goal(franka.pf.GoalStatus.ABORTED, self.REFLEX)
         if self._polls >= self.polls_to_reach:
             self.q = self.targets[-1].copy()
             return _Goal(franka.pf.GoalStatus.REACHED, None)
