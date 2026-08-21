@@ -22,19 +22,6 @@ LOG_LEVEL_ENV = 'LOG_LEVEL'
 # reading process's registry and a spawn starts an empty one. Unset, a child logs at INFO.
 RESOLVED_LOG_LEVEL_ENV = 'PIMM_RESOLVED_LOG_LEVEL'
 
-# Third-party loggers the child's root-level INFO would otherwise reach too. Each logs per connection,
-# request or retry rather than per event, so pinning them keeps the level change ours.
-_NOISY_LIBRARY_LOGGERS = (
-    'websockets',  # per connection at INFO, per frame at DEBUG
-    'httpx',  # per request, at INFO
-    'httpcore',  # per connection-pool operation
-    'urllib3',  # per connection
-    'botocore',  # per API call, and again per retry
-    'boto3',
-    's3transfer',  # per part of a multipart upload
-    'asyncio',  # per selector event, under its debug mode
-)
-
 
 def level_number(name: str, source: str) -> int:
     """The number `name` stands for in this process, raising when it names no level.
@@ -50,15 +37,31 @@ def level_number(name: str, source: str) -> int:
 
 def _requested_level() -> int:
     """The threshold: the level a parent resolved, else the operator's own, else INFO."""
+    # Presence, not truth: an empty variable is a value the operator set, and reading it as INFO
+    # would make one input mean two things across a spawn, since `init_logging` raises on it.
     resolved = os.getenv(RESOLVED_LOG_LEVEL_ENV)
-    if resolved:
+    if resolved is not None:
         # Ours to write and ours to read, so a value that is not a number is a broken handoff rather
         # than an operator's typo. It raises either way; the message says which.
         if not resolved.lstrip('-').isdigit():
             raise ValueError(f'{RESOLVED_LOG_LEVEL_ENV}={resolved!r} is not a numeric logging level')
         return int(resolved)
     name = os.getenv(LOG_LEVEL_ENV)
-    return level_number(name, LOG_LEVEL_ENV) if name else logging.INFO
+    return level_number(name, LOG_LEVEL_ENV) if name is not None else logging.INFO
+
+
+# Third-party loggers the child's root-level INFO would otherwise reach too. Each logs per connection,
+# request or retry rather than per event, so pinning them keeps the level change ours.
+_NOISY_LIBRARY_LOGGERS = (
+    'websockets',  # per connection at INFO, per frame at DEBUG
+    'httpx',  # per request, at INFO
+    'httpcore',  # per connection-pool operation
+    'urllib3',  # per connection
+    'botocore',  # per API call, and again per retry
+    'boto3',
+    's3transfer',  # per part of a multipart upload
+    'asyncio',  # per selector event, under its debug mode
+)
 
 
 def configure_process_logging() -> None:
@@ -66,15 +69,22 @@ def configure_process_logging() -> None:
 
     A process nothing else configures — a spawned control system — would otherwise sit at the stdlib
     default and drop every line it emits. The threshold is the level a parent resolved, else the
-    operator's own, so a requested suppression reaches a control system rather than stopping at the
-    parent; the noisy libraries are pinned no lower than WARNING.
+    operator's own, and it holds against a module that set its own; the noisy libraries are pinned no
+    lower than WARNING, and never below a level already set on them.
 
     Raises `ValueError` on a value that names no level.
     """
     level = _requested_level()
     logging.basicConfig(level=level, format=LOG_FORMAT, datefmt=LOG_DATEFMT, force=True)
+    # A record clears its own logger's level, and an ancestor's does not filter it again — only a
+    # handler's does, and `basicConfig` leaves that at NOTSET. `positronic.dataset.ds_writer_agent`
+    # sets itself to INFO at import, so its lifecycle lines outlived `LOG_LEVEL=ERROR` without this.
+    for handler in logging.getLogger().handlers:
+        handler.setLevel(level)
     for logger_name in _NOISY_LIBRARY_LOGGERS:
-        logging.getLogger(logger_name).setLevel(max(level, logging.WARNING))
+        logger = logging.getLogger(logger_name)
+        # NOTSET is 0, so a library nobody pinned takes the floor and a stricter one keeps its own.
+        logger.setLevel(max(level, logging.WARNING, logger.level))
 
 
 def init_logging(level: str | int = 'INFO') -> None:

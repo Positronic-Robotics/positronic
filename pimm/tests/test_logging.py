@@ -18,6 +18,9 @@ CHILD_LINE = 'init-logging-child-line'
 CUSTOM_LEVEL, CUSTOM_LEVEL_NAME = 15, 'PIMMTRACE'
 # One of the loggers `pimm.logging` pins, named here so the test does not reach for a private tuple.
 A_NOISY_LIBRARY = 'websockets'
+# Stands for a module that sets its own level at import, as `positronic.dataset.ds_writer_agent`
+# does: its records clear its own logger, so only a handler's threshold can stop them.
+A_SELF_LEVELLED_COMPONENT = 'pimm.tests.a-self-levelled-component'
 
 
 # Module scope because `start_in_subprocess` pickles the loop.
@@ -136,6 +139,63 @@ class TestRequestedLevel:
         configure_process_logging()
 
         assert logging.root.level == logging.INFO
+
+    @pytest.mark.parametrize('variable', [LOG_LEVEL_ENV, RESOLVED_LOG_LEVEL_ENV])
+    def test_an_empty_value_is_refused(self, monkeypatch, variable):
+        """Set-but-empty is a value the operator gave, not a variable they left alone, and
+        `init_logging` raises on it. Reading it as INFO here would make one input mean two things."""
+        monkeypatch.setenv(variable, '')
+
+        with pytest.raises(ValueError, match=variable):
+            configure_process_logging()
+
+
+class TestTheThresholdHoldsAgainstAComponentsOwnLevel:
+    """A logger's own level admits a record; past that only a handler's threshold can stop it."""
+
+    def test_a_component_that_set_its_own_level_does_not_outvoice_the_threshold(self, monkeypatch, capfd):
+        monkeypatch.setenv(LOG_LEVEL_ENV, 'ERROR')
+        configure_process_logging()
+
+        with _level(A_SELF_LEVELLED_COMPONENT, logging.INFO):
+            logging.getLogger(A_SELF_LEVELLED_COMPONENT).info(CHILD_LINE)
+
+        assert CHILD_LINE not in capfd.readouterr().err
+
+    def test_a_record_at_the_threshold_still_reaches_the_stream(self, monkeypatch, capfd):
+        """The boundary: a handler taking more than the threshold would drop the run's own errors."""
+        monkeypatch.setenv(LOG_LEVEL_ENV, 'ERROR')
+        configure_process_logging()
+
+        logging.getLogger(A_SELF_LEVELLED_COMPONENT).error(CHILD_LINE)
+
+        assert CHILD_LINE in capfd.readouterr().err
+
+
+class TestTheLibraryPins:
+    """WARNING is a floor under a noisy library, not the level it is assigned."""
+
+    def test_a_stricter_level_already_set_is_kept(self):
+        """Lowering it would start a library the application had silenced, and would do so only when
+        the silencing ran before initialization rather than after."""
+        with _level(A_NOISY_LIBRARY, logging.ERROR):
+            configure_process_logging()
+
+            assert logging.getLogger(A_NOISY_LIBRARY).level == logging.ERROR
+
+    def test_a_library_nobody_pinned_takes_the_floor(self):
+        """The boundary: keeping a stricter level must not turn the floor off for NOTSET, which is
+        every one of these libraries until something says otherwise."""
+        with _level(A_NOISY_LIBRARY, logging.NOTSET):
+            configure_process_logging()
+
+            assert logging.getLogger(A_NOISY_LIBRARY).level == logging.WARNING
+
+    def test_a_looser_level_is_raised_to_the_floor(self):
+        with _level(A_NOISY_LIBRARY, logging.DEBUG):
+            configure_process_logging()
+
+            assert logging.getLogger(A_NOISY_LIBRARY).level == logging.WARNING
 
 
 class TestASecondCallCanStillChangeTheThreshold:
