@@ -76,15 +76,13 @@ def configure_process_logging() -> None:
     """
     level = _requested_level()
     logging.basicConfig(level=level, format=LOG_FORMAT, datefmt=LOG_DATEFMT, force=True)
-    # A record clears its own logger's level, and an ancestor's does not filter it again — only a
-    # handler's does, and `basicConfig` leaves that at NOTSET. `positronic.dataset.ds_writer_agent`
-    # sets itself to INFO at import, so its lifecycle lines outlived `LOG_LEVEL=ERROR` without this.
+    # An ancestor's level does not filter a record its own logger admitted — only a handler's does,
+    # and `basicConfig` leaves that at NOTSET.
     for handler in logging.getLogger().handlers:
         handler.setLevel(level)
     for logger_name in _NOISY_LIBRARY_LOGGERS:
         logger = logging.getLogger(logger_name)
-        # NOTSET is 0, so a library nobody pinned takes the floor and a stricter one keeps its own.
-        logger.setLevel(max(level, logging.WARNING, logger.level))
+        logger.setLevel(max(level, logging.WARNING, logger.level))  # NOTSET is 0, so an unpinned one takes the floor
 
 
 def init_logging(level: str | int = 'INFO') -> None:
