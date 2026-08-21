@@ -22,6 +22,8 @@ A_NOISY_LIBRARY = 'websockets'
 # Stands for a module that sets its own level at import, as `positronic.dataset.ds_writer_agent`
 # does: its records clear its own logger, so only a handler's threshold can stop them.
 A_SELF_LEVELLED_COMPONENT = 'pimm.tests.a-self-levelled-component'
+# Stands for a driver an operator addresses by name, logged from a child under that same name.
+A_COMPONENT = 'pimm.tests.a-component'
 
 
 # Module scope because `start_in_subprocess` pickles the loop.
@@ -34,6 +36,12 @@ def logging_loop(stop_reader, clock):
 def custom_level_loop(stop_reader, clock):
     """A control loop logging one line at a level whose name only the parent registered."""
     logging.log(CUSTOM_LEVEL, CHILD_LINE)
+    yield pimm.Sleep(0.001)
+
+
+def component_loop(stop_reader, clock):
+    """A control loop logging one line at INFO under a component logger of its own."""
+    logging.getLogger(A_COMPONENT).info(CHILD_LINE)
     yield pimm.Sleep(0.001)
 
 
@@ -50,9 +58,9 @@ def _clean_environment_and_root(monkeypatch):
     noisy = logging.getLogger(A_NOISY_LIBRARY)
     noisy_level = noisy.level
     names, numbers = logging.getLevelNamesMapping(), {**logging._levelToName}
-    pimm.logging._installed_pins.clear()
+    pimm.logging._pins.clear()
     yield
-    pimm.logging._installed_pins.clear()
+    pimm.logging._pins.clear()
     logging.root.handlers[:] = handlers
     logging.root.setLevel(level)
     noisy.setLevel(noisy_level)
@@ -210,6 +218,15 @@ class TestTheLibraryPins:
 
         assert logging.getLogger(A_NOISY_LIBRARY).level == logging.WARNING
 
+    def test_a_level_equal_to_the_pin_it_received_is_still_the_applications_own(self):
+        """The two coincide whenever the threshold is the level the application asked for, so a pin
+        told from a setting by value alone would discard the setting on the next call."""
+        with _level(A_NOISY_LIBRARY, logging.ERROR):
+            init_logging('ERROR')
+            init_logging('DEBUG')
+
+            assert logging.getLogger(A_NOISY_LIBRARY).level == logging.ERROR
+
     def test_a_level_set_between_two_calls_is_kept(self):
         """The boundary: recomputing past our own pin must not discard a setting that arrived after
         the first call, since being independent of that ordering is what the floor is for."""
@@ -291,6 +308,26 @@ class TestALevelTheChildCannotName:
         """The boundary: carrying numbers must not stop the operator's own typo being rejected."""
         with pytest.raises(ValueError, match='EROR'):
             init_logging('EROR')
+
+
+class TestPerComponentLevelsCrossASpawn:
+    """A spawn starts an empty registry, so a level set on a component reaches a child only carried."""
+
+    def test_a_component_silenced_in_the_parent_is_silent_in_the_child(self, capfd):
+        init_logging('INFO')
+
+        with _level(A_COMPONENT, logging.ERROR):
+            err = _stderr_of_a_logging_child(capfd, component_loop)
+
+        assert CHILD_LINE not in err, err
+
+    def test_a_component_nobody_set_a_level_on_still_logs_in_the_child(self, capfd):
+        """The boundary: carrying the levels a parent has must not silence one it never set."""
+        init_logging('INFO')
+
+        err = _stderr_of_a_logging_child(capfd, component_loop)
+
+        assert CHILD_LINE in err, err
 
 
 class TestPerComponentLevels:

@@ -7,6 +7,8 @@ format, threshold and library pins.
 
 import logging
 import os
+from collections.abc import Mapping
+from typing import NamedTuple
 
 import coloredlogs
 
@@ -63,19 +65,41 @@ _NOISY_LIBRARY_LOGGERS = (
     'asyncio',  # per selector event, under its debug mode
 )
 
-# What this module last pinned each of them to. Read back as an application's own setting, a pin
-# would be the next call's input and a second `init_logging` could not lower it — the trap
-# `RESOLVED_LOG_LEVEL_ENV` keeps the threshold out of.
-_installed_pins: dict[str, int] = {}
+
+class _Pin(NamedTuple):
+    """A noisy library's two levels: the application's own, and what this module installed over it."""
+
+    theirs: int
+    ours: int
 
 
-def configure_process_logging() -> None:
-    """Configure this process's root logger and its library pins from the environment.
+# Both levels are kept because the pin often equals the application's own — the threshold is usually
+# the level the application asked for. Told apart only by value, a pin would be read back as a
+# setting to preserve, making it the next call's input so a second `init_logging` could not lower it
+# — the trap `RESOLVED_LOG_LEVEL_ENV` keeps the threshold out of.
+_pins: dict[str, _Pin] = {}
+
+
+def component_log_levels() -> dict[str, int]:
+    """Every logger this process has a level of its own, for a spawn to carry.
+
+    The root logger is absent: its level is the threshold, which crosses as `RESOLVED_LOG_LEVEL_ENV`.
+    """
+    return {
+        name: logger.level
+        for name, logger in list(logging.Logger.manager.loggerDict.items())
+        if isinstance(logger, logging.Logger) and logger.level != logging.NOTSET
+    }
+
+
+def configure_process_logging(component_levels: Mapping[str, int] | None = None) -> None:
+    """Configure this process's root logger, per-component levels and library pins.
 
     A process nothing else configures — a spawned control system — would otherwise sit at the stdlib
     default and drop every line it emits. The threshold is the level a parent resolved, else the
-    operator's own, and it holds against a module that set its own; the noisy libraries are pinned no
-    lower than WARNING, and never below a level already set on them.
+    operator's own, and it holds against a module that set its own; `component_levels` is what the
+    spawning process had set per logger, which a fresh interpreter starts with none of; the noisy
+    libraries are pinned no lower than WARNING, and never below a level already set on them.
 
     Raises `ValueError` on a value that names no level.
     """
@@ -85,13 +109,20 @@ def configure_process_logging() -> None:
     # and `basicConfig` leaves that at NOTSET.
     for handler in logging.getLogger().handlers:
         handler.setLevel(level)
+    # Before the pins, so a noisy library the spawning application had raised is read below as that
+    # application's setting rather than as one of ours.
+    for name, component_level in (component_levels or {}).items():
+        logging.getLogger(name).setLevel(component_level)
     for logger_name in _NOISY_LIBRARY_LOGGERS:
         logger = logging.getLogger(logger_name)
-        # NOTSET is 0, so a library nobody set takes the floor and our own last pin does not survive.
-        theirs = 0 if logger.level == _installed_pins.get(logger_name) else logger.level
+        pinned = _pins.get(logger_name)
+        # A level this module did not install is the application's own; under one it did, the
+        # application's own is what it recorded then. NOTSET is 0, so a library nobody set takes
+        # the floor.
+        theirs = pinned.theirs if pinned is not None and logger.level == pinned.ours else logger.level
         pin = max(level, logging.WARNING, theirs)
         logger.setLevel(pin)
-        _installed_pins[logger_name] = pin
+        _pins[logger_name] = _Pin(theirs, pin)
 
 
 def init_logging(level: str | int = 'INFO') -> None:

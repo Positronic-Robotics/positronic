@@ -10,7 +10,7 @@ import sys
 import time
 import traceback
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from enum import IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.managers import ValueProxy
@@ -35,7 +35,7 @@ from .core import (
     Sleep,
     Yield,
 )
-from .logging import configure_process_logging
+from .logging import component_log_levels, configure_process_logging
 from .shared_memory import SMCompliant
 from .utils import identity
 
@@ -463,11 +463,13 @@ class _CallAnsweringLoop:
                 handler.fail_queued()
 
 
-def _bg_wrapper(run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str):
+def _bg_wrapper(
+    run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str, component_levels: Mapping[str, int]
+):
     try:
         # A freshly spawned subprocess carries no logging configuration, so set one up.
         # Not outside the try: an exception in the setup must end the run loop too.
-        configure_process_logging()
+        configure_process_logging(component_levels)
         for command in run_func(EventReceiver(stop_event, clock), clock):
             match command:
                 case Sleep(seconds):
@@ -871,6 +873,9 @@ class World:
 
         Use `start` whenever possible, as this method is internal.
         """
+        # Read here rather than in the child: a spawn starts an empty logger registry, so a level the
+        # application set on a component reaches the child only by being carried to it.
+        component_levels = component_log_levels()
         for bg_loop in background_loops:
             if hasattr(bg_loop, '__self__'):
                 name = f'{bg_loop.__self__.__class__.__name__}.{bg_loop.__name__}'
@@ -878,7 +883,10 @@ class World:
                 name = getattr(bg_loop, '__name__', 'anonymous')
             # TODO: now we allow only real clock, change clock to a Emitter?
             p = self._mp_ctx.Process(
-                target=_bg_wrapper, args=(bg_loop, self._stop_event, SystemClock(), name), daemon=True, name=name
+                target=_bg_wrapper,
+                args=(bg_loop, self._stop_event, SystemClock(), name, component_levels),
+                daemon=True,
+                name=name,
             )
             try:
                 p.start()
