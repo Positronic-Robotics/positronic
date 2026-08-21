@@ -37,8 +37,8 @@ def level_number(name: str, source: str) -> int:
 
 def _requested_level() -> int:
     """The threshold: the level a parent resolved, else the operator's own, else INFO."""
-    # Presence, not truth: an empty variable is a value the operator set, and reading it as INFO
-    # would make one input mean two things across a spawn, since `init_logging` raises on it.
+    # An empty variable is a value the operator set, and `init_logging` raises on it: read as INFO
+    # here, one operator input would mean two things across a spawn.
     resolved = os.getenv(RESOLVED_LOG_LEVEL_ENV)
     if resolved is not None:
         # Ours to write and ours to read, so a value that is not a number is a broken handoff rather
