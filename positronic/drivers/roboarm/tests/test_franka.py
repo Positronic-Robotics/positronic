@@ -11,12 +11,14 @@ from pimm.tests.testing import MockClock, wire_call
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, command, franka
 from positronic.drivers.roboarm.tests.fakes import StopFlag
-from positronic.drivers.utils import MoveAbandoned
+from positronic.drivers.utils import MoveAbandoned, MoveStatus
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 HOME = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 JOGGED = HOME + np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 IMPEDANCE = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+# What libfranka calls a collision reflex, as it reaches the driver in an aborted goal's reason
+REFLEX = 'libfranka: Move command aborted: motion aborted by reflex! ["cartesian_reflex"]'
 
 
 class Call(StrEnum):
@@ -52,12 +54,15 @@ class _ArmState:
 class FakeArm:
     """In-memory ``pf.Robot``: a commanded joint target is reached after ``polls_to_reach`` reads of ``goal``.
 
-    ``goal_status`` pins the reported status, so a move that never lands can be scripted; ``raises``, once
-    set, is what every call but ``stop`` raises, and ``ik_raises`` what only the solver raises; ``error`` is
-    the vendor fault flag every state carries.
+    ``goal_status`` pins the reported status, so a move that never lands can be scripted; ``aborts`` is how
+    many polls report a reflex before the arm behaves; ``recovers`` is whether its error clears; ``raises``,
+    once set, is what every call but ``stop`` raises, and ``ik_raises`` what only the solver raises; ``error``
+    is the vendor fault flag every state carries.
     """
 
-    def __init__(self, q, *, polls_to_reach: int = 2, goal_status: 'franka.pf.GoalStatus | None' = None):
+    def __init__(
+        self, q, *, polls_to_reach: int = 2, goal_status: 'franka.pf.GoalStatus | None' = None, aborts: int = 0
+    ):
         self.q = np.asarray(q, dtype=np.float64)
         self.error = 0
         self.calls: list[Call] = []
@@ -69,6 +74,8 @@ class FakeArm:
         self.polls_to_reach = polls_to_reach
         self._polls = 0
         self.goal_status = goal_status
+        self.aborts = aborts
+        self.recovers = True
 
     def _record(self, call: Call) -> None:
         self.calls.append(call)
@@ -88,6 +95,10 @@ class FakeArm:
         self._polls += 1
         if self.goal_status is not None:
             return _Goal(self.goal_status, 'scripted')
+        if self.aborts:
+            self.aborts -= 1
+            self.error = 1
+            return _Goal(franka.pf.GoalStatus.ABORTED, REFLEX)
         if self._polls >= self.polls_to_reach:
             self.q = self.targets[-1].copy()
             return _Goal(franka.pf.GoalStatus.REACHED, None)
@@ -98,8 +109,11 @@ class FakeArm:
         self.targets.append(np.asarray(target, dtype=np.float64))
         self._polls = 0
 
-    def recover_from_errors(self) -> None:
+    def recover_from_errors(self) -> bool:
         self._record(Call.RECOVER_FROM_ERRORS)
+        if self.recovers:
+            self.error = 0
+        return self.recovers
 
     def stop(self) -> None:
         self.calls.append(Call.STOP)
@@ -157,11 +171,17 @@ def _driver(arm: FakeArm, *, variation: list[float] | None = None, **kwargs) -> 
     return robot
 
 
-def _drive(loop, clock: MockClock | None = None) -> None:
-    """Pump a driver loop to exhaustion, standing in for the world by advancing ``clock`` through each Sleep."""
+def _drive(loop, clock: MockClock | None = None) -> MoveStatus | None:
+    """Pump a driver loop to exhaustion, standing in for the world by advancing ``clock`` through each Sleep,
+    and hand back what it returned."""
     clock = clock or MockClock()
-    for sleep in loop:
-        clock.advance(sleep.seconds)
+    while True:
+        try:
+            wait = next(loop)
+        except StopIteration as end:
+            return end.value
+        if isinstance(wait, pimm.Sleep):
+            clock.advance(wait.seconds)
 
 
 def _drive_park(driver: franka.Robot, arm: FakeArm) -> MockClock:
@@ -206,7 +226,7 @@ def test_park_gives_up_when_the_goal_stops_advancing():
 
     _drive_park(_driver(arm, manage_desk=False), arm)
 
-    assert arm.calls.count(Call.GOAL) == 1
+    assert arm.calls.count(Call.GOAL) == franka._Arm._MOVE_ATTEMPTS  # one poll each, and no waiting between
     np.testing.assert_allclose(arm.q, JOGGED)
 
 
@@ -404,6 +424,45 @@ def test_an_arm_that_will_not_home_reads_error_rather_than_ending_the_run():
 
     assert states.emitted, 'the driver published nothing'
     assert states.emitted[-1][1].status == RobotStatus.ERROR
+
+
+def test_a_reflex_during_the_opening_home_is_cleared_and_the_arm_sent_again(desk):
+    """A reflex aborts the goal and leaves the arm in error, so the home it cut short has to be commanded
+    again to happen at all."""
+    arm = FakeArm(JOGGED, aborts=1)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = _driver(arm).run(stop, clock)
+
+    for _ in range(4):
+        next(loop)
+
+    np.testing.assert_allclose(arm.q, HOME)
+    commanded = [i for i, call in enumerate(arm.calls) if call is Call.SET_TARGET_JOINTS]
+    assert len(commanded) == 2, 'the home was commanded once and never again'
+    assert Call.RECOVER_FROM_ERRORS in arm.calls[commanded[0] : commanded[1]]
+
+
+def test_a_move_that_keeps_aborting_gives_up_rather_than_driving_at_it_again():
+    arm = FakeArm(JOGGED, goal_status=franka.pf.GoalStatus.ABORTED)
+    clock = MockClock()
+
+    with pytest.raises(RuntimeError, match='on all 3 attempts'):
+        _drive(_driver(arm, manage_desk=False)._arm(StopFlag(), clock).move_to(HOME, None), clock)
+
+    assert arm.calls.count(Call.SET_TARGET_JOINTS) == franka._Arm._MOVE_ATTEMPTS
+
+
+def test_a_move_gives_up_at_once_on_an_error_the_arm_will_not_clear():
+    """An arm that cannot be cleared cannot be commanded either, so the attempts left are worth nothing."""
+    arm = FakeArm(JOGGED, aborts=1)
+    arm.recovers = False
+    clock = MockClock()
+
+    with pytest.raises(RuntimeError, match='will not clear'):
+        _drive(_driver(arm, manage_desk=False)._arm(StopFlag(), clock).move_to(HOME, None), clock)
+
+    assert arm.calls.count(Call.SET_TARGET_JOINTS) == 1
 
 
 def test_a_sync_move_answers_once_the_arm_is_there(world):
