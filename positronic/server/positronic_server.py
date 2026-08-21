@@ -528,9 +528,6 @@ def default_table() -> TableConfig:
     }
 
 
-_WILDCARD_HOSTS = frozenset({'0.0.0.0', '::', ''})
-
-
 def _as_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     """The host parsed as an IP literal, or None when it is a name."""
     try:
@@ -555,12 +552,11 @@ def _local_ip_addresses() -> list[str]:
     return addresses
 
 
-def _served_addresses(host: str) -> list[str]:
-    """The addresses a server bound to `host` answers on.
+_WILDCARD_HOSTS = frozenset({'0.0.0.0', '::', ''})
 
-    A wildcard bind answers on every local address, so the caller cannot know which one a browser
-    will use; naming them all is what keeps the certificate and the advertised URL true of the bind.
-    """
+
+def _served_addresses(host: str) -> list[str]:
+    """The addresses a server bound to `host` answers on."""
     return _local_ip_addresses() if host in _WILDCARD_HOSTS else [host]
 
 
