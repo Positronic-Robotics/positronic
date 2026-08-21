@@ -63,6 +63,11 @@ _NOISY_LIBRARY_LOGGERS = (
     'asyncio',  # per selector event, under its debug mode
 )
 
+# What this module last pinned each of them to. Read back as an application's own setting, a pin
+# would be the next call's input and a second `init_logging` could not lower it — the trap
+# `RESOLVED_LOG_LEVEL_ENV` keeps the threshold out of.
+_installed_pins: dict[str, int] = {}
+
 
 def configure_process_logging() -> None:
     """Configure this process's root logger and its library pins from the environment.
@@ -82,7 +87,11 @@ def configure_process_logging() -> None:
         handler.setLevel(level)
     for logger_name in _NOISY_LIBRARY_LOGGERS:
         logger = logging.getLogger(logger_name)
-        logger.setLevel(max(level, logging.WARNING, logger.level))  # NOTSET is 0, so an unpinned one takes the floor
+        # NOTSET is 0, so a library nobody set takes the floor and our own last pin does not survive.
+        theirs = 0 if logger.level == _installed_pins.get(logger_name) else logger.level
+        pin = max(level, logging.WARNING, theirs)
+        logger.setLevel(pin)
+        _installed_pins[logger_name] = pin
 
 
 def init_logging(level: str | int = 'INFO') -> None:

@@ -5,6 +5,7 @@ import os
 import pytest
 
 import pimm
+import pimm.logging
 from pimm.logging import LOG_LEVEL_ENV, RESOLVED_LOG_LEVEL_ENV, configure_process_logging, init_logging
 from pimm.utils import RateCounter
 
@@ -49,7 +50,9 @@ def _clean_environment_and_root(monkeypatch):
     noisy = logging.getLogger(A_NOISY_LIBRARY)
     noisy_level = noisy.level
     names, numbers = logging.getLevelNamesMapping(), {**logging._levelToName}
+    pimm.logging._installed_pins.clear()
     yield
+    pimm.logging._installed_pins.clear()
     logging.root.handlers[:] = handlers
     logging.root.setLevel(level)
     noisy.setLevel(noisy_level)
@@ -196,6 +199,26 @@ class TestTheLibraryPins:
             configure_process_logging()
 
             assert logging.getLogger(A_NOISY_LIBRARY).level == logging.WARNING
+
+    def test_a_second_call_at_a_lower_level_lowers_the_pin(self):
+        """A pin is this module's own output, so reading it back as a setting to preserve would make
+        it the next call's input — what `RESOLVED_LOG_LEVEL_ENV` keeps the threshold out of."""
+        init_logging('ERROR')
+        assert logging.getLogger(A_NOISY_LIBRARY).level == logging.ERROR
+
+        init_logging('DEBUG')
+
+        assert logging.getLogger(A_NOISY_LIBRARY).level == logging.WARNING
+
+    def test_a_level_set_between_two_calls_is_kept(self):
+        """The boundary: recomputing past our own pin must not discard a setting that arrived after
+        the first call, since being independent of that ordering is what the floor is for."""
+        init_logging('DEBUG')
+
+        with _level(A_NOISY_LIBRARY, logging.ERROR):
+            init_logging('DEBUG')
+
+            assert logging.getLogger(A_NOISY_LIBRARY).level == logging.ERROR
 
 
 class TestASecondCallCanStillChangeTheThreshold:
