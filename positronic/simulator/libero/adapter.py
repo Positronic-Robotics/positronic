@@ -12,6 +12,7 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 
@@ -57,4 +58,4 @@ class LiberoAdapter(WireCommandAdapter):
 
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
         # ``done`` is LIBERO's success check rather than a step limit, so reaching it is the success.
-        return {keys.EVAL_SUCCESS: True} if result['done'] else None
+        return {keys.EVAL_SUCCESS: True} if result[protocol.FRAME_DONE] else None

@@ -126,7 +126,9 @@ EVAL_TRIAL_COUNT = 'eval.trial_count'
 
 # The scene a trial runs, named by its eval config in the trial's params and read back by the benchmark's
 # adapter to build the env's reset token. LIBERO names a task inside a suite plus the render and control
-# settings its server caches an env by; RoboLab names a task and the phrasing of its instruction.
+# settings its server caches an env by; RoboLab names a task and the phrasing of its instruction; MolmoSpaces
+# names an episode of the benchmark it was pointed at.
+EVAL_EPISODE_INDEX = 'eval.episode_index'
 EVAL_SUITE = 'eval.suite'
 EVAL_TASK_ID = 'eval.task_id'
 EVAL_CAMERA_RESOLUTION = 'eval.camera_resolution'

@@ -17,6 +17,7 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
 
@@ -77,7 +78,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         for _, receiver in self.commands.items():
             receiver.read()
         self._frame = self._conn.reset(self._adapter.reset_token(params))
-        self._meta = self._frame['meta']
+        self._meta = self._frame[protocol.FRAME_META]
         self._reset_pending = True
         self._active = True
         # Clear any terminal the previous trial left on the wire: the env can reach ``done`` while the proxy
@@ -97,7 +98,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                 # The proxy is the eval's sole time-master: it sleeps one control period every turn —
                 # stepping, publishing frame-0, or idle between trials alike. Before the first reset the
                 # env's ``control_dt`` is unknown, so it paces at ``_IDLE_DT`` until reset reports the real one.
-                yield pimm.Sleep(self._frame['control_dt'] if self._frame is not None else _IDLE_DT)
+                yield pimm.Sleep(self._frame[protocol.FRAME_CONTROL_DT] if self._frame is not None else _IDLE_DT)
                 if self._reset_pending:
                     # The reset is this turn's step: publish the env's frame-0 (no step) and clear the prior
                     # terminal, so the recorder samples it before any step advances the env.
@@ -105,12 +106,12 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     self._reset_pending = False
                     # The robot model identity the env reports at reset (URDF / joint names), distinct from
                     # the scene ``meta``.
-                    self.robot_meta.emit(self._frame['robot_meta'])
+                    self.robot_meta.emit(self._frame[protocol.FRAME_ROBOT_META])
                     # Materialising frame-0 (allocating shared-memory image buffers, copying each camera
                     # frame) is reset cost: it is work the reset asked for, and left untimed it would land in
                     # overhead.
                     with telemetry.span(telemetry_keys.SPAN_RESET):
-                        self._emit_payload(self._frame['obs'])
+                        self._emit_payload(self._frame[protocol.FRAME_OBS])
                     self.done.emit({})
                 elif (call := next(self.env_reset.incoming(), None)) is not None:
                     with pimm.calls.raise_to(call):
@@ -126,13 +127,15 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
                         self._frame = self._step_env()
                         with telemetry.span(telemetry_keys.SPAN_MATERIALIZE):
-                            self._emit_payload(self._frame['obs'])
+                            self._emit_payload(self._frame[protocol.FRAME_OBS])
         finally:
             # Closes the connection then the server, in that order (reverse of acquisition); a no-op if no reset
             # ever connected.
             self._cleanup.close()
 
     def _step_env(self) -> dict[str, Any]:
+        # Stepping is reachable only while ``_active``, which ``reset`` sets once the connection is up.
+        assert self._conn is not None, 'stepped before the first reset connected'
         reads = ((name, receiver.read()) for name, receiver in self.commands.items())
         commands = {name: msg for name, msg in reads if msg is not None}
         result = self._conn.step(self._adapter.action(commands))
