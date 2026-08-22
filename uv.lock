@@ -4867,6 +4867,7 @@ dependencies = [
     { name = "plotly" },
     { name = "pos3" },
     { name = "positronic-platform-client" },
+    { name = "psutil" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pyturbojpeg" },
@@ -4929,7 +4930,6 @@ telemetry = [
     { name = "nvidia-ml-py" },
     { name = "opentelemetry-exporter-otlp-json-file" },
     { name = "opentelemetry-sdk" },
-    { name = "psutil" },
 ]
 yam = [
     { name = "i2rt" },
@@ -4988,7 +4988,7 @@ requires-dist = [
     { name = "positronic-franka", marker = "sys_platform == 'linux' and extra == 'hardware'", specifier = ">=0.7.0" },
     { name = "positronic-platform-client", editable = "client" },
     { name = "protobuf", marker = "extra == 'molmoact2'" },
-    { name = "psutil", marker = "extra == 'telemetry'" },
+    { name = "psutil" },
     { name = "pyarrow" },
     { name = "pyaudio", marker = "sys_platform == 'linux' and extra == 'hardware'" },
     { name = "pydantic" },
