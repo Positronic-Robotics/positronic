@@ -282,6 +282,8 @@ class Harness(pimm.ControlSystem):
 
     def _prepare(self, should_stop: pimm.SignalReceiver, task: Task) -> Generator[pimm.Command, None, None]:
         """Ask everything the trial readies — scene, devices, operator — and come back once all have."""
+        unknown = sorted(set(task.prepare_args) - set(self.prepare))
+        assert not unknown, f'{unknown} is not something this embodiment readies, so nothing would be asked'
         ready = pimm.calls.all_of([ask(task.prepare_args.get(name)) for name, ask in self.prepare.items()])
         while not ready.done() and not should_stop.value:
             yield pimm.Yield() if self._embodiment.simulated else pimm.Sleep(POLL_PERIOD_SEC)

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Collection, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Generic, TypeVar, final
 
@@ -228,7 +228,7 @@ class PortDict(dict[str, P], ABC):
     """Ports owned by a control system. ``names`` fixes the set it has; without it, a key allocates its
     port on first access."""
 
-    def __init__(self, owner: ControlSystem, *, names: Iterable[str] | None = None):
+    def __init__(self, owner: ControlSystem, *, names: Collection[str] | None = None):
         super().__init__()
         self._owner = owner
         self._fixed = names is not None
@@ -248,7 +248,7 @@ class PortDict(dict[str, P], ABC):
         return port
 
 
-def _fake_keys(fake: bool | Iterable[str], names: Iterable[str] | None) -> set[str]:
+def _fake_keys(fake: bool | Iterable[str], names: Collection[str] | None) -> set[str]:
     """The keys whose port carries no signal. Naming one the dict has no port for is a typo, not a no-op."""
     keys = set() if isinstance(fake, bool) else set(fake)
     assert names is None or keys <= set(names), f'{sorted(keys - set(names))} is not among the ports'
@@ -261,7 +261,9 @@ class ReceiverDict(PortDict[ControlSystemReceiver[U]]):
     Pass fake=True for all fake receivers, or fake={'key1', 'key2'} for specific keys.
     """
 
-    def __init__(self, owner: ControlSystem, *, names: Iterable[str] | None = None, fake: bool | Iterable[str] = False):
+    def __init__(
+        self, owner: ControlSystem, *, names: Collection[str] | None = None, fake: bool | Iterable[str] = False
+    ):
         self._fake = _fake_keys(fake, names)
         self._all_fake = fake is True
         super().__init__(owner, names=names)
@@ -277,7 +279,9 @@ class EmitterDict(PortDict[ControlSystemEmitter[U]]):
     Pass fake=True for all fake emitters, or fake={'key1', 'key2'} for specific keys.
     """
 
-    def __init__(self, owner: ControlSystem, *, names: Iterable[str] | None = None, fake: bool | Iterable[str] = False):
+    def __init__(
+        self, owner: ControlSystem, *, names: Collection[str] | None = None, fake: bool | Iterable[str] = False
+    ):
         self._fake = _fake_keys(fake, names)
         self._all_fake = fake is True
         super().__init__(owner, names=names)

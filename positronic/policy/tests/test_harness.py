@@ -887,6 +887,24 @@ def test_done_after_deadline_is_a_timeout(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_a_trial_asking_to_ready_what_the_rig_has_not_got_fails_loudly(world):
+    """The args are read per handler, so a name matching none of them would be dropped and the device would
+    silently get its own default instead of what the trial asked for."""
+    scene = _Scene(lambda _params: None)
+    harness = Harness(StubPolicy(), make_embodiment(prepare_handlers={keys.SCENE: scene.env_reset}))
+    p = _pair_all(world, harness)
+    wire_call(world, harness.prepare[keys.SCENE], scene.env_reset)
+
+    scheduler = world.start([harness, scene])
+    answer = p['perform_task'](Task(instruction_source='stack', timeout_sec=0.05, prepare_args={keys.ARM: None}))
+
+    with pytest.raises(AssertionError, match='not something this embodiment readies'):
+        drive_scheduler(scheduler, steps=50)
+    with pytest.raises(AssertionError):
+        answer.result()  # and whoever asked for the trial hears it, rather than reading a clean episode
+
+
+@pytest.mark.timeout(3.0)
 def test_trial_seed_reaches_task_reset_and_meta(world):
     """A trial's params draw its scene and identify it: the scene prepare is asked with them, and they land
     in episode meta beside the instruction. A real rig records that it charged inference time, whatever the
