@@ -12,16 +12,18 @@ from positronic.drivers.roboarm.kinova.api import KinovaAPI
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
 from positronic.drivers.utils import DriverRun, MoveStatus, PendingMove
 
+logger = logging.getLogger(__name__)
+
 
 def _set_realtime_priority():
     try:
         # Set realtime scheduling priority
         os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(os.sched_get_priority_max(os.SCHED_FIFO)))
-        logging.info('Successfully set realtime scheduling priority')
+        logger.info('Successfully set realtime scheduling priority')
     except (OSError, PermissionError) as e:
-        logging.warning(f'Warning: Could not set realtime scheduling priority: {e}')
-        logging.warning("Run `sudo setcap 'cap_sys_nice=eip' $(which python3)` to enable this")
-        logging.warning('Control loop will run with normal scheduling')
+        logger.warning(f'Warning: Could not set realtime scheduling priority: {e}')
+        logger.warning("Run `sudo setcap 'cap_sys_nice=eip' $(which python3)` to enable this")
+        logger.warning('Control loop will run with normal scheduling')
 
 
 class KinovaState(State, pimm.shared_memory.NumpySMAdapter):
@@ -208,7 +210,7 @@ class Robot(pimm.ControlSystem):
                                 arm.track(cmd)
                             # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
                             except Exception as exc:
-                                logging.warning(f'{cmd} not applied: {exc}')
+                                logger.warning(f'{cmd} not applied: {exc}')
 
                     arm.step()
                     arm.publish()

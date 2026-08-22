@@ -29,9 +29,9 @@ from lerobot.constants import ACTION, CHECKPOINTS_DIR, OBS_IMAGE, OBS_STATE, PRE
 from lerobot.envs.configs import EnvConfig, FeatureType, PolicyFeature
 from lerobot.scripts import train as lerobot_train
 
+from pimm.logging import init_logging
 from positronic import utils
 from positronic.policy import Codec
-from positronic.utils.logging import init_logging
 from positronic.vendors.lerobot_0_3_3 import codecs as lerobot_codecs
 from positronic.vendors.lerobot_0_3_3.backbone import BACKBONES
 

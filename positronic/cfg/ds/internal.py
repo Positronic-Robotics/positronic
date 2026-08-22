@@ -15,6 +15,7 @@ import configuronic as cfn
 import numpy as np
 import pos3
 
+from pimm.logging import init_logging
 from positronic import keys
 from positronic.cfg.eval.real.tasks import BATTERIES_TASK, SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK
 from positronic.dataset.dataset import ConcatDataset, FilterDataset
@@ -25,7 +26,6 @@ from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_ma
 from positronic.drivers.roboarm.models import bundled_franka_model, bundled_panda_model
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import main as server_main
-from positronic.utils.logging import init_logging
 
 from . import concat_ds, local, transform
 

@@ -34,9 +34,9 @@ from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig  # noqa
 from lerobot.scripts.lerobot_train import train as lerobot_train
 from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_STATE
 
+from pimm.logging import init_logging
 from positronic import utils
 from positronic.policy import Codec
-from positronic.utils.logging import init_logging
 from positronic.vendors.lerobot import codecs as lerobot_codecs
 
 # Workaround: HubMixin.save_pretrained unconditionally deletes config.json before

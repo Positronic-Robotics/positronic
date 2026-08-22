@@ -36,6 +36,8 @@ with vendor_import('i2rt', 'YAM support', hint='Re-run with the yam extra:\n  uv
     from i2rt.robots.get_robot import get_yam_robot  # pyright: ignore[reportMissingImports]
     from i2rt.robots.utils import GripperType  # pyright: ignore[reportMissingImports]
 
+logger = logging.getLogger(__name__)
+
 # The driver solves FK/IK itself, so its joint order and control frame must match the YAM sim's.
 # TODO(#517): centralise driver kinematics so driver and sim share one module.
 _JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
@@ -282,7 +284,7 @@ class _Chain(DriverRun):
                 return home, grip
         # rules-allow: swallowed-error — a chain that will not home reads ERROR; it does not end the run
         except Exception as exc:
-            logging.error(f'Homing failed, the chain is not where the driver put it: {exc}')
+            logger.error(f'Homing failed, the chain is not where the driver put it: {exc}')
         return self.hold_where_it_stopped()
 
     def serve_sync_move(
@@ -393,7 +395,7 @@ class Robot(pimm.ControlSystem):
                             q_target = chain.target_joints(cmd, q)
                     # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
                     except Exception as exc:
-                        logging.warning(f'{cmd} not applied: {exc}')
+                        logger.warning(f'{cmd} not applied: {exc}')
 
                 chain.vendor.command_joint_pos(np.append(q_target, 1.0 - grip_target))
 

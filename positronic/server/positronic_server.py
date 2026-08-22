@@ -26,11 +26,11 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 import positronic.cfg.ds
+from pimm.logging import init_logging
 from positronic import keys, utils
 from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import get_dataset_root, get_episodes_list, stream_episode_rrd
-from positronic.utils.logging import init_logging
 
 # Response cache for api_groups and api_episodes (dataset is immutable once loaded)
 _api_cache: dict[tuple, dict] = {}
