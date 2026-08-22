@@ -99,7 +99,7 @@ class _AllAnswers(Answer[tuple[Res, ...]]):
 
 
 def all_of(answers: Iterable[Answer[Res]]) -> Answer[tuple[Res, ...]]:
-    """One answer for many: done once every one is, and its result theirs in order, the first failure raising."""
+    """One answer for many: done once every one of them is, and its result is their results in order."""
     return _AllAnswers(answers)
 
 

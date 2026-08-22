@@ -225,8 +225,8 @@ class FakeReceiver(ControlSystemReceiver[T]):
 
 
 class PortDict(dict[str, P], ABC):
-    """Ports owned by a control system, ``names`` fixing the set it has; without it, keys allocate on
-    first access."""
+    """Ports owned by a control system. ``names`` fixes the set it has; without it, a key allocates its
+    port on first access."""
 
     def __init__(self, owner: ControlSystem, names: Iterable[str] | None = None):
         super().__init__()

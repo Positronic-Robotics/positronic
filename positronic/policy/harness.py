@@ -358,7 +358,7 @@ class Harness(pimm.ControlSystem):
         self._reap_worker()
         self._awaiting_obs = set(self._embodiment.observations)
         self._rollout_started = False
-        # Before the prepare, so it and the rollout's other phase spans parent to the episode span.
+        # The episode span opens first, so the prepare and the rollout's other phase spans parent to it.
         self._telemetry.begin(self._task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
             yield from self._prepare(should_stop, self._task)

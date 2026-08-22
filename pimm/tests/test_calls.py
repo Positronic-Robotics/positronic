@@ -155,7 +155,8 @@ class TestCallAndAnswer:
             ControlSystemCaller(Passive())(None)
 
     def test_a_caller_says_whether_anything_will_answer_it(self, bound):
-        """A caller nobody serves is how an optional handler reads, and calling it raises rather than waits."""
+        """A caller with no handler bound says so, and calling it raises rather than waiting for an answer
+        that cannot come."""
         caller, _ = bound
         assert caller.connected
         assert not ControlSystemCaller(Passive()).connected
@@ -199,7 +200,7 @@ class TestAllOf:
             both.result()
 
     def test_nothing_to_wait_for_is_answered(self):
-        """An embodiment with no device to ready leaves a caller with nothing to wait on, not a wait forever."""
+        """An ``all_of`` over no answers is done at once, so asking for nothing goes straight through."""
         assert all_of([]).done()
         assert all_of([]).result() == ()
 

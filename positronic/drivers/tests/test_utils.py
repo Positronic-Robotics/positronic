@@ -107,8 +107,8 @@ def _unasked() -> Moves[float]:
 
 @pytest.fixture
 def asking():
-    """The two ways a gripper is asked for a width: a caller wired to the moves it serves, so a test asks the
-    way a client does, and the stream it reads setpoints off."""
+    """The two ways a gripper is asked for a width: a caller wired to the moves it serves, so a test asks
+    the way a client does, and the stream its setpoints arrive on."""
     caller = pimm.calls.ControlSystemCaller[float | None, None](Passive())
     handler = pimm.calls.ControlSystemHandler[float | None, None](Passive())
     stream = ManualCommandReceiver()

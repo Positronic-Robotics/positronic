@@ -30,10 +30,8 @@ class Observation:
 
 @dataclass
 class Command:
-    """A policy action channel: where its waypoints go and how it records.
-
-    ``serializer`` serializes the channel's values, recorded under the channel's own key.
-    """
+    """A policy action channel: where its waypoints go, and the serializer that records them under the
+    channel's own key."""
 
     dest: pimm.SignalReceiver
     serializer: Serializer | None

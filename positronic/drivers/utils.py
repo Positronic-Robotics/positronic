@@ -36,9 +36,8 @@ class Moves(Generic[T]):
     """Both ways a device is asked to move, and the move it has in flight.
 
     A synchronous move is a call: its asker waits to hear the device arrive, and owns the device until it
-    does. An asynchronous one is a setpoint streamed at the device that nobody waits on. A driver whose loop
-    can be held for the whole travel answers a call within the tick it takes it, and so never has one in
-    flight.
+    does. An asynchronous move is a streamed setpoint nobody waits on. A driver whose loop can be held for
+    the whole travel answers a call within the tick it takes it, and so never has one in flight.
     """
 
     def __init__(self, sync_move: pimm.calls.ControlSystemHandler[T | None, None], async_move: pimm.SignalReceiver[T]):
@@ -166,7 +165,7 @@ class DriverRun(Generic[T]):
 
 @contextmanager
 def log_failure(request: object) -> Iterator[None]:
-    """Log whatever the block raises against ``request``, the counterpart of `pimm.calls.raise_to` for a
+    """Log whatever the block raises against ``request``, the counterpart of ``pimm.calls.raise_to`` for a
     setpoint nobody is waiting on."""
     try:
         yield
@@ -175,10 +174,8 @@ def log_failure(request: object) -> Iterator[None]:
         logger.warning(f'{request} not applied: {exc}')
 
 
-# Fingers stopped by what they are holding never reach their target
-_GRIP_TIMEOUT_S = 3.0
-# The fingers report width, so arrival is judged from the reading
-_GRIP_TOL = 0.05
+_GRIP_TIMEOUT_S = 3.0  # fingers stopped by what they are holding never reach their target
+_GRIP_TOL = 0.05  # the fingers report width, so arrival is judged from the reading
 
 
 def _clamped(grip: float) -> float:

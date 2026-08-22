@@ -128,8 +128,8 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
 def mujoco_franka(sim, camera_dict):
     """Mujoco single-arm Franka + gripper over a given sim.
 
-    Maps the sim's arm, gripper and camera ports into an embodiment, and its scene draw into the prepare
-    every trial opens on. Which scene it draws (the loaders) and the privileged ground-truth are the eval's
+    Maps the sim's arm, gripper and camera ports into an embodiment, and its scene draw into the prepare a
+    trial opens on. Which scene it draws (the loaders) and the privileged ground-truth are the eval's
     concern. 3 cameras because Mujoco does not render the second image when using only 2 cameras.
     """
     observations = {

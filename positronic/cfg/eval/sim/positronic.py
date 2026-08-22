@@ -23,13 +23,14 @@ from positronic.utils import package_assets_path
     trial_count=1,
 )
 def _mujoco_franka_eval(mujoco_model_path, loaders, camera_fps, camera_dict, instruction, timeout, seed, trial_count):
-    """A Mujoco Franka sim eval: the sim is the embodiment's, the eval holds what a trial runs.
+    """A Mujoco Franka sim eval: the embodiment owns the sim, the eval the trials run on it.
 
     The task carries the instruction and the per-trial ``timeout``; the eval carries the privileged
     sim-state ground truth, recorded but never fed to the policy. The scene (``loaders``) is
-    embodiment-specific and wired here, not a generic Task field; the loaders carry no seeds of their
-    own — the per-trial seed the scene prepare is asked with drives the whole scene draw. ``trial_count``
-    seeds (from ``seed``) make the trial sweep; this eval has no task axis, so each is a fresh scene draw.
+    embodiment-specific and wired here rather than being a generic Task field; the loaders carry no seeds
+    of their own, so the per-trial seed the scene prepare is asked with drives the whole scene draw.
+    ``trial_count`` seeds (from ``seed``) make the trial sweep; this eval has no task axis, so each trial
+    is a fresh scene draw.
     """
     sim = MujocoSim(mujoco_model_path, loaders, camera_fps=camera_fps)
     embodiment = mujoco_franka(sim, camera_dict)

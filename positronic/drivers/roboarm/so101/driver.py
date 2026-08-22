@@ -112,10 +112,8 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
         return self._rad_to_norm(np.append(q_rad, 0.0))[:-1]
 
     def _requested_qpos(self, cmd: roboarm_command.CommandType | None) -> np.ndarray:
-        """The setpoint ``cmd`` asks for, in the bus's normalized units, whether or not the arm can hold it.
-
-        Asking for nothing asks for home.
-        """
+        """The setpoint ``cmd`` asks for, in the bus's normalized units, whether or not the arm can hold it;
+        asking for nothing asks for home."""
         match cmd:
             case None | roboarm_command.Reset():
                 return self._arm_rad_to_norm(np.asarray(self._home_joints, dtype=np.float32))
