@@ -55,9 +55,12 @@ API itself.
   policy saw, what it decided, and what it asked of its model — even when
   those happened on different machines.
 
-## Requirements
+## Design
 
 ### Policies and sessions
+
+Controlling a robot is stateful work, and one algorithm may drive several
+robots at once.
 
 - A `Policy` is the algorithm that controls a robot from observed data.
 - Control happens in a `Session`; a `Policy` makes them.
