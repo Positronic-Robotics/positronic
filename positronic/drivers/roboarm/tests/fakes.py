@@ -2,8 +2,19 @@
 
 import numpy as np
 
+import pimm
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State
+
+
+class StopFlag(pimm.SignalReceiver[bool]):
+    """``should_stop`` under the test's control."""
+
+    def __init__(self):
+        self.stopped = False
+
+    def read(self) -> pimm.Message[bool]:
+        return pimm.Message(self.stopped)
 
 
 class FakeRobotState(State):

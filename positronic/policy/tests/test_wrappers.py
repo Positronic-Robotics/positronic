@@ -7,6 +7,7 @@ import pytest
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.drivers.roboarm.command import Impedance, JointDelta, Reset
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
 from positronic.policy.action import (
@@ -26,6 +27,7 @@ from positronic.policy.codec import (
     Codec,
     FlipGrip,
     RestrictImageSize,
+    SetControlMode,
 )
 from positronic.policy.observation import ObservationCodec
 from positronic.policy.wrappers import ChunkedSchedule, StopOnFault, TemporalStack
@@ -69,20 +71,19 @@ def _obs(now_sec=0.0, status=RobotStatus.AVAILABLE):
 
 
 class TestStopOnFault:
-    @pytest.mark.parametrize('unsound', [RobotStatus.ERROR, RobotStatus.RESETTING])
-    def test_an_unsound_arm_stops_what_is_executing(self, unsound):
+    @pytest.mark.parametrize('unavailable', [RobotStatus.ERROR, RobotStatus.BUSY])
+    def test_an_unavailable_arm_stops_what_is_executing(self, unavailable):
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().wrap_session(inner, None, None)
 
-        assert session(_obs(0.0, unsound)) == []
+        assert session(_obs(0.0, unavailable)) == []
         assert inner.call_count == 0, 'the model was asked about an arm that is not tracking it'
 
-    @pytest.mark.parametrize('sound', [RobotStatus.AVAILABLE, RobotStatus.MOVING])
-    def test_a_sound_arm_reaches_the_model(self, sound):
+    def test_an_available_arm_reaches_the_model(self):
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().wrap_session(inner, None, None)
 
-        assert session(_obs(0.0, sound)) is not None
+        assert session(_obs(0.0, RobotStatus.AVAILABLE)) is not None
         assert inner.call_count == 1
 
     def test_an_observation_with_no_arm_status_reaches_the_model(self):
@@ -94,7 +95,7 @@ class TestStopOnFault:
         assert inner.call_count == 1
 
     def test_either_arm_of_a_bimanual_rig_stops_the_pair(self):
-        """Whichever arm is unsound stops the pair, and the status counts as its number: a server-side stack
+        """Whichever arm is unavailable stops the pair, and the status counts as its number: a server-side stack
         reads it off a wire with no enum to carry."""
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().wrap_session(inner, None, None)
@@ -107,6 +108,23 @@ class TestStopOnFault:
         assert session(obs) == []
         assert inner.call_count == 0
 
+    def test_the_status_a_recording_carries_for_a_taken_arm_stops_the_policy(self):
+        """The numbers are the contract between a rig and a server: 1 is an arm its driver has taken."""
+        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        session = StopOnFault().wrap_session(inner, None, None)
+
+        assert (RobotStatus.AVAILABLE, RobotStatus.BUSY, RobotStatus.ERROR) == (0, 1, 3)
+        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 1}) == []
+        assert inner.call_count == 0
+
+    def test_the_status_published_for_a_travelling_arm_reaches_the_model(self):
+        """The wire protocol publishes 2 for an arm on its way to a setpoint, which is one taking commands."""
+        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        session = StopOnFault().wrap_session(inner, None, None)
+
+        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 2}) is not None
+        assert inner.call_count == 1
+
     def test_a_status_no_arm_answers_to_raises(self):
         """A number outside ``RobotStatus`` is the rig and the server disagreeing about the protocol, which
         is not something to drive an arm through."""
@@ -116,8 +134,8 @@ class TestStopOnFault:
             session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 99})
 
     def test_recovery_plans_afresh_instead_of_resuming(self):
-        """The stop resets the scheduler below it, so the first sound observation infers again rather than
-        waiting out the chunk stamped before."""
+        """The stop resets the scheduler below it, so the first observation from an available arm infers
+        again rather than waiting out the chunk stamped before."""
         inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 1.0}])
         session = (StopOnFault() | ChunkedSchedule()).wrap(inner).new_session(now=_FakeClock(t=0.0).now)
 
@@ -297,6 +315,49 @@ class _CapturePolicy(Policy):
 
 def _stack_obs(now_sec, value):
     return {keys.OBS_TIME_NS: int(now_sec * 1e9), 'v': np.array([value])}
+
+
+IMPEDANCE = Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+
+
+class TestSetControlMode:
+    def test_every_command_in_a_chunk_carries_the_mode(self):
+        chunk = [
+            {keys.ROBOT_COMMAND: JointDelta(velocities=np.zeros(7)), keys.ACTION_TIMESTAMP: 0.0},
+            {keys.ROBOT_COMMAND: JointDelta(velocities=np.ones(7)), keys.ACTION_TIMESTAMP: 0.1},
+            {keys.ACTION_TIMESTAMP: 0.2},  # the horizon sentinel carries no command
+        ]
+        decoded = SetControlMode(IMPEDANCE).decode(chunk)
+        assert isinstance(decoded, list)
+        for action in decoded[:2]:
+            assert isinstance(action, dict)
+            assert action[keys.ROBOT_COMMAND].mode == IMPEDANCE
+        assert keys.ROBOT_COMMAND not in decoded[2]
+
+    def test_a_single_action_carries_the_mode(self):
+        decoded = SetControlMode(IMPEDANCE).decode({keys.ROBOT_COMMAND: JointDelta(velocities=np.zeros(7))})
+        assert isinstance(decoded, dict)
+        assert decoded[keys.ROBOT_COMMAND].mode == IMPEDANCE
+
+    def test_every_arm_channel_is_stamped(self):
+        """A bimanual action names a channel per arm, and both execute under the mode."""
+        action = {
+            f'{keys.ROBOT_COMMAND}.left': JointDelta(velocities=np.zeros(7)),
+            f'{keys.ROBOT_COMMAND}.right': JointDelta(velocities=np.ones(7)),
+            keys.TARGET_JOINTS: np.zeros(7),  # in the command family by name, but a vector
+            'target_grip': 0.5,
+        }
+        decoded = SetControlMode(IMPEDANCE).decode(action)
+        assert isinstance(decoded, dict)
+        assert decoded[f'{keys.ROBOT_COMMAND}.left'].mode == IMPEDANCE
+        assert decoded[f'{keys.ROBOT_COMMAND}.right'].mode == IMPEDANCE
+        np.testing.assert_array_equal(decoded[keys.TARGET_JOINTS], np.zeros(7))
+
+    def test_a_reset_passes_through_unchanged(self):
+        """A reset names no mode: how the arm travels home is the driver's."""
+        decoded = SetControlMode(IMPEDANCE).decode({keys.ROBOT_COMMAND: Reset()})
+        assert isinstance(decoded, dict)
+        assert decoded[keys.ROBOT_COMMAND] == Reset()
 
 
 class TestTemporalStack:

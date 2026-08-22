@@ -13,6 +13,7 @@ from datetime import datetime
 import configuronic as cfn
 import pos3
 
+from pimm.logging import init_logging
 from positronic import keys
 from positronic.cfg.ds import group, local_all, transform
 from positronic.cfg.ds.internal import REAL_ROBOT_TRANSFORM, ROBOT_SIGNAL_POINTERS
@@ -22,7 +23,6 @@ from positronic.dataset.transforms.episode import Derive, FromValue, Identity
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig
 from positronic.server.positronic_server import main as server_main
-from positronic.utils.logging import init_logging
 
 # The PUBLIC@ profile selector resolves to anonymous (unsigned) access, so these URLs work
 # with no AWS credentials — a reader can pass a model URL straight to an inference server's

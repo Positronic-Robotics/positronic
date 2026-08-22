@@ -1,10 +1,18 @@
 import numpy as np
 
 from positronic import keys
+from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import Policy, Session
-from positronic.policy.recording import Recorder, _build_blueprint, _squeeze_batch, _stack_numeric
+from positronic.policy.recording import (
+    Recorder,
+    _build_blueprint,
+    _command_field_arrays,
+    _flat_wire,
+    _squeeze_batch,
+    _stack_numeric,
+)
 
 
 class _TrackingSession(Session):
@@ -80,6 +88,65 @@ def test_stack_numeric():
     assert _stack_numeric(['a', 'b']) is None
     # Ragged fields can't form a homogeneous tensor.
     assert _stack_numeric([np.zeros(7), np.ones(3)]) is None
+
+
+_GAINS = ('kq', 'kqd', 'kx', 'kxd')
+
+
+def test_flat_wire_unfolds_a_nested_control_mode():
+    """The mode is a mapping inside the wire; a recording plots numeric leaves, so it has to come apart."""
+    mode = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+    flat = _flat_wire(command.to_wire(command.JointPosition(np.zeros(7), mode=mode)))
+
+    assert set(flat) == {'positions'} | {f'mode.impedance.{k}' for k in _GAINS}
+    np.testing.assert_allclose(flat['mode.impedance.kq'], mode.kq)
+
+
+def test_flat_wire_marks_a_mode_that_names_no_gains():
+    """`PositionControl()` names no gains, so it has no numeric leaf to plot; the marker is what shows it."""
+    flat = _flat_wire(command.to_wire(command.JointPosition(np.zeros(7), mode=command.PositionControl())))
+
+    assert flat == {'positions': flat['positions'], 'mode.position_control': 1}
+
+
+def test_a_cartesian_chunk_records_the_mode_beside_its_trajectory(tmp_path):
+    """A pose is drawn as a 3D path rather than a field series, so a mode pinned on it has nowhere else to go."""
+    mode = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+    pose = Transform3D(translation=np.array([0.1, 0.2, 0.3], dtype=np.float32), rotation=Rotation.identity)
+    actions = [{keys.ROBOT_COMMAND: CartesianPosition(pose=pose, mode=mode), 'timestamp': 0.0}]
+
+    rec = Recorder(tmp_path)
+    rec.tap('t').wrap(_TrackingPolicy(actions)).new_session()({'x': 1.0, keys.WALL_TIME_NS: 1})
+
+    assert any('mode.impedance.kq' in path for path in rec._series_paths), rec._series_paths
+    assert not any(path.endswith('cartesian_pos/pose') for path in rec._series_paths), 'the pose is the trajectory'
+
+
+def test_a_field_only_some_commands_carry_is_stacked_over_those():
+    """A chunk may pin a mode on one command and not the next, and the pinned one is still worth plotting."""
+    mode = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+    cmds = [command.JointPosition(np.zeros(7), mode=mode), command.JointPosition(np.ones(7))]
+
+    out = {name: (arr, horizon) for name, arr, horizon in _command_field_arrays('cmd', cmds, np.array([0.0, 0.1]))}
+
+    assert set(out) == {'cmd/joint_pos/positions'} | {f'cmd/joint_pos/mode.impedance.{k}' for k in _GAINS}
+    kq, kq_horizon = out['cmd/joint_pos/mode.impedance.kq']
+    assert kq.shape == (1, 7), 'the unpinned command has no gains to stack'
+    np.testing.assert_allclose(kq_horizon, [0.0])  # stacked against the command that carries it, not both
+
+
+def test_a_chunk_that_switches_law_records_both():
+    """Two commands pinning different laws share no mode field, and dropping what they disagree on loses both."""
+    impedance = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+    cmds = [
+        command.JointPosition(np.zeros(7), mode=command.PositionControl()),
+        command.JointPosition(np.ones(7), mode=impedance),
+    ]
+
+    names = {name for name, _, _ in _command_field_arrays('cmd', cmds, np.array([0.0, 0.1]))}
+
+    assert 'cmd/joint_pos/mode.position_control' in names
+    assert {f'cmd/joint_pos/mode.impedance.{k}' for k in _GAINS} <= names
 
 
 def test_single_tap_file_per_episode(tmp_path):

@@ -12,6 +12,8 @@ from positronic.drivers import vendor_import
 with vendor_import('pyaudio', 'Sound support', platforms=('linux',)):
     import pyaudio
 
+logger = logging.getLogger(__name__)
+
 
 class SoundSystem(pimm.ControlSystem):
     def __init__(
@@ -83,7 +85,7 @@ class SoundSystem(pimm.ControlSystem):
 
         while not should_stop.value:
             if (wav_path := pimm.value_updated(self.wav_path)) is not None:
-                logging.info('Playing %s', wav_path)
+                logger.info('Playing %s', wav_path)
                 # wave.open takes a filename or an already-open file, never a Path. Handing it the name
                 # keeps wave the opener, so its close() closes the file.
                 audio_files[file_idx] = wave.open(str(wav_path), 'rb')

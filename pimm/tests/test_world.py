@@ -1,5 +1,6 @@
 import logging
 import multiprocessing as mp
+import re
 import struct
 import time
 from functools import partial
@@ -22,6 +23,7 @@ from pimm.core import (
     Sleep,
     Yield,
 )
+from pimm.logging import LOG_LEVEL_ENV
 from pimm.shared_memory import SMCompliant
 from pimm.tests.testing import MockClock
 from pimm.world import EventReceiver, LocalQueueEmitter, QueueEmitter, SystemClock, VirtualClock, World
@@ -556,7 +558,7 @@ class TestWorldControlSystems:
             assert result.data == 'payload'
 
             assert captured_clocks and isinstance(captured_clocks[0], SystemClock)
-            assert started_background == [(background_cs.run,)]
+            assert [loop.cs for (loop,) in started_background] == [background_cs]
             assert background_cs.invocations == []
 
             sleeps = list(scheduler)
@@ -597,7 +599,7 @@ class TestWorldControlSystems:
             assert result.ts == 11_000
 
             assert captured_clocks == [None]
-            assert started_background == [(background_cs.run,)]
+            assert [loop.cs for (loop,) in started_background] == [background_cs]
 
             sleeps = list(scheduler)
             assert sleeps == [Yield()]
@@ -619,7 +621,7 @@ class TestWorldControlSystems:
         with World(virtual_time=True) as world:
             scheduler = world.start([], background=background_cs)
 
-            assert started_background == [(background_cs.run,)]
+            assert [loop.cs for (loop,) in started_background] == [background_cs]
             assert list(scheduler) == []
 
     def test_start_requires_known_emitter_owner(self):
@@ -1135,6 +1137,26 @@ class TestReceiverDict:
             # Connection should be ignored
             assert len(world._connections) == 0
 
+    def test_names_fix_the_ports_the_dict_has(self):
+        """A control system that knows its channels up front has no use for a key it was never built with."""
+        receivers = ReceiverDict(DummyControlSystem('test'), names=['a', 'b'])
+
+        assert sorted(receivers) == ['a', 'b']
+        assert all(isinstance(receiver, ControlSystemReceiver) for receiver in receivers.values())
+        with pytest.raises(KeyError):
+            receivers['c']
+
+    def test_named_ports_are_fake_where_asked_for(self):
+        receivers = ReceiverDict(DummyControlSystem('test'), names=['a', 'b'], fake={'b'})
+
+        assert not isinstance(receivers['a'], FakeReceiver)
+        assert isinstance(receivers['b'], FakeReceiver)
+
+    def test_a_fake_port_the_dict_does_not_have_is_refused(self):
+        """The fixed set puts the port out of reach, so the fake spec would sit there doing nothing."""
+        with pytest.raises(AssertionError, match='not among the ports'):
+            ReceiverDict(DummyControlSystem('test'), names=['a', 'b'], fake={'c'})
+
 
 class TestEmitterDict:
     """Test EmitterDict lazy allocation with fake emitter support."""
@@ -1246,3 +1268,105 @@ class TestEmitterDict:
 
             # Fake connection should not deliver data
             assert consumer1.receiver.read() is None
+
+    def test_names_fix_the_ports_the_dict_has(self):
+        """A control system that knows its channels up front has no use for a key it was never built with."""
+        emitters = EmitterDict(DummyControlSystem('test'), names=['a', 'b'])
+
+        assert sorted(emitters) == ['a', 'b']
+        assert all(isinstance(emitter, ControlSystemEmitter) for emitter in emitters.values())
+        with pytest.raises(KeyError):
+            emitters['c']
+
+    def test_named_ports_are_fake_where_asked_for(self):
+        emitters = EmitterDict(DummyControlSystem('test'), names=['a', 'b'], fake={'b'})
+
+        assert not isinstance(emitters['a'], FakeEmitter)
+        assert isinstance(emitters['b'], FakeEmitter)
+
+    def test_a_fake_port_the_dict_does_not_have_is_refused(self):
+        """The fixed set puts the port out of reach, so the fake spec would sit there doing nothing."""
+        with pytest.raises(AssertionError, match='not among the ports'):
+            EmitterDict(DummyControlSystem('test'), names=['a', 'b'], fake={'c'})
+
+
+# Enough iterations that a per-cycle line would be unmistakable against the handful of event lines.
+LOGGING_LOOP_ITERATIONS = 200
+# What `logging_loop` emits and the assertions look for, on the child's root logger and on a library's.
+CHILD_LINE = 'child-own-info-line'
+LIBRARY_LINE = 'library-info-line'
+
+
+# Module scope for the same reason as `heartbeat_loop`: `start_in_subprocess` pickles the loop.
+def logging_loop(stop_reader, clock):
+    """Control loop logging two lines up front and none per cycle, then spinning."""
+    logging.info(CHILD_LINE)
+    logging.getLogger('websockets.client').info(LIBRARY_LINE)
+    for _ in range(LOGGING_LOOP_ITERATIONS):
+        yield Sleep(0.001)
+
+
+# What `pimm.world` logs for this loop when it ends the World, spelled once for the assertions.
+STOP_LINE = f'Stopping background process by {logging_loop.__name__}'
+
+
+class TestChildLogging:
+    """Nothing calls `init_logging` in a spawned child, so `_bg_wrapper` is the only thing that
+    configures it."""
+
+    @staticmethod
+    def _stderr_of_a_logging_child_at(capfd, monkeypatch, level: str) -> str:
+        """The child's stderr with `LOG_LEVEL` set to `level` for the spawn."""
+        monkeypatch.setenv(LOG_LEVEL_ENV, level)
+        return TestChildLogging._stderr_of_a_logging_child(capfd)
+
+    @staticmethod
+    def _stderr_of_a_logging_child(capfd) -> str:
+        with World() as world:
+            world.start_in_subprocess(logging_loop)
+            process = world.background_processes[0]
+            process.join(timeout=30)
+            assert not process.is_alive(), 'the logging child never exited'
+        # The parent's own records go to pytest's logging handler, so what reaches fd 2 is the child's.
+        return capfd.readouterr().err
+
+    def test_child_info_reaches_stderr_in_the_shared_format(self, capfd):
+        err = self._stderr_of_a_logging_child(capfd)
+
+        assert CHILD_LINE in err
+        # The line naming which control system ended the World. A child at the stdlib default drops it.
+        assert STOP_LINE in err
+        # `[INFO] (world.py:NNN)` is `LOG_FORMAT`; the stdlib fallback would render `INFO:root:`.
+        assert re.search(rf'\[INFO] \(world\.py:\d+\) {re.escape(STOP_LINE)}', err), err
+
+    def test_child_log_volume_counts_events_not_cycles(self, capfd):
+        err = self._stderr_of_a_logging_child(capfd)
+
+        # The child logged twice and stopped once, over `LOGGING_LOOP_ITERATIONS` iterations. A line
+        # whose rate followed the control loop rather than the events would land two orders of
+        # magnitude above this bound.
+        lines = [line for line in err.splitlines() if line.strip()]
+        assert len(lines) <= 4, f'{len(lines)} lines over {LOGGING_LOOP_ITERATIONS} iterations:\n{err}'
+
+    def test_noisy_library_stays_at_warning_in_the_child(self, capfd):
+        err = self._stderr_of_a_logging_child(capfd)
+
+        # Pins the noisy-library boundary: a blanket `basicConfig(level=INFO)` would let this through.
+        assert CHILD_LINE in err, 'the child never logged at all, so this proves nothing'
+        assert LIBRARY_LINE not in err
+
+    def test_a_requested_suppression_reaches_the_child(self, capfd, monkeypatch):
+        """`LOG_LEVEL` reaches a control system: a child that fixed its own level would go on
+        emitting INFO through a requested suppression."""
+        err = self._stderr_of_a_logging_child_at(capfd, monkeypatch, 'ERROR')
+
+        assert CHILD_LINE not in err, err
+        assert STOP_LINE not in err, err
+
+    def test_a_lower_threshold_does_not_pull_the_noisy_libraries_down_with_it(self, capfd, monkeypatch):
+        """The library pin is a floor, so lowering the root threshold must not un-pin the noisy
+        libraries."""
+        err = self._stderr_of_a_logging_child_at(capfd, monkeypatch, 'DEBUG')
+
+        assert CHILD_LINE in err, err
+        assert LIBRARY_LINE not in err, err

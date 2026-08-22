@@ -1,10 +1,11 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Collection, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Generic, TypeVar, final
 
 T = TypeVar('T')
 U = TypeVar('U')
+P = TypeVar('P')
 
 
 class NoValueException(Exception):
@@ -223,39 +224,68 @@ class FakeReceiver(ControlSystemReceiver[T]):
         raise RuntimeError('FakeReceiver._bind() is not supposed to be called')
 
 
-class ReceiverDict(dict[str, ControlSystemReceiver[U]]):
-    """Dictionary that lazily allocates receivers owned by a control system.
+class PortDict(dict[str, P], ABC):
+    """Ports owned by a control system. ``names`` fixes the set it has; without it, a key allocates its
+    port on first access."""
+
+    def __init__(self, owner: ControlSystem, *, names: Collection[str] | None = None):
+        super().__init__()
+        self._owner = owner
+        self._fixed = names is not None
+        # The named ports are built here, so a subclass whose ``_port`` reads its own state must set that
+        # state before calling this.
+        for name in names or ():
+            self[name] = self._port(name)
+
+    @abstractmethod
+    def _port(self, key: str) -> P:
+        """The port to serve ``key`` with."""
+
+    def __missing__(self, key: str) -> P:
+        if self._fixed:
+            raise KeyError(f'{key} is not one of the ports this control system was built with')
+        self[key] = port = self._port(key)
+        return port
+
+
+def _fake_keys(fake: bool | Iterable[str], names: Collection[str] | None) -> set[str]:
+    """The keys whose port carries no signal. Naming one the dict has no port for is a typo, not a no-op."""
+    keys = set() if isinstance(fake, bool) else set(fake)
+    assert names is None or keys <= set(names), f'{sorted(keys - set(names))} is not among the ports'
+    return keys
+
+
+class ReceiverDict(PortDict[ControlSystemReceiver[U]]):
+    """Receivers owned by a control system.
 
     Pass fake=True for all fake receivers, or fake={'key1', 'key2'} for specific keys.
     """
 
-    def __init__(self, owner: ControlSystem, *, fake: bool | Iterable[str] = False):
-        super().__init__()
-        self._owner = owner
-        self._fake = set(fake) if isinstance(fake, Iterable) else set()
+    def __init__(
+        self, owner: ControlSystem, *, names: Collection[str] | None = None, fake: bool | Iterable[str] = False
+    ):
+        self._fake = _fake_keys(fake, names)
         self._all_fake = fake is True
+        super().__init__(owner, names=names)
 
-    def __missing__(self, key: str) -> ControlSystemReceiver[U]:
+    def _port(self, key: str) -> ControlSystemReceiver[U]:
         fake = self._all_fake or key in self._fake
-        receiver = FakeReceiver(self._owner) if fake else ControlSystemReceiver(self._owner)
-        self[key] = receiver
-        return receiver
+        return FakeReceiver(self._owner) if fake else ControlSystemReceiver(self._owner)
 
 
-class EmitterDict(dict[str, ControlSystemEmitter[U]]):
-    """Dictionary that lazily allocates emitters owned by a control system.
+class EmitterDict(PortDict[ControlSystemEmitter[U]]):
+    """Emitters owned by a control system.
 
     Pass fake=True for all fake emitters, or fake={'key1', 'key2'} for specific keys.
     """
 
-    def __init__(self, owner: ControlSystem, fake: bool | Iterable[str] = False):
-        super().__init__()
-        self._owner = owner
-        self._fake = set(fake) if isinstance(fake, Iterable) else set()
+    def __init__(
+        self, owner: ControlSystem, *, names: Collection[str] | None = None, fake: bool | Iterable[str] = False
+    ):
+        self._fake = _fake_keys(fake, names)
         self._all_fake = fake is True
+        super().__init__(owner, names=names)
 
-    def __missing__(self, key: str) -> ControlSystemEmitter[U]:
+    def _port(self, key: str) -> ControlSystemEmitter[U]:
         fake = self._all_fake or key in self._fake
-        emitter = FakeEmitter(self._owner) if fake else ControlSystemEmitter(self._owner)
-        self[key] = emitter
-        return emitter
+        return FakeEmitter(self._owner) if fake else ControlSystemEmitter(self._owner)

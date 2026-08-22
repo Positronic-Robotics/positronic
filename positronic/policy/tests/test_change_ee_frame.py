@@ -47,6 +47,21 @@ def test_decode_maps_action_back_to_canonical():
     assert decoded['target_grip'] == 1.0
 
 
+def test_decode_keeps_the_control_mode_a_command_pinned():
+    """Re-expressing a pose does not change what law drives to it."""
+    mode = cmd_module.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+    pose = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
+    action = {
+        keys.ROBOT_COMMAND: cmd_module.CartesianPosition(pose=pose, mode=mode),
+        'other': cmd_module.CartesianDelta(delta=pose, mode=mode),
+    }
+
+    decoded = ChangeEEFrame(TO_DROID, keys=(keys.ROBOT_COMMAND, 'other'))._decode_single(action, context=None)
+
+    assert decoded[keys.ROBOT_COMMAND].mode == mode
+    assert decoded['other'].mode == mode
+
+
 def test_decode_hands_a_delta_the_frame_it_was_meant_for():
     """A delta has no anchor to convert against, so it travels with its frame for the driver to apply."""
     delta = _pose([0.01, 0.0, -0.02], [0.0, 0.0, 0.1])

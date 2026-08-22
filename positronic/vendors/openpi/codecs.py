@@ -142,6 +142,7 @@ droid_obs = cfn.Config(
 )
 
 ee = codecs.compose.override(obs=ee_obs, action=codecs.absolute_pos_action)
+phail_v1 = ee.override(action=codecs.phail_v1_execution.override(action=codecs.absolute_pos_action))
 ee_joints = ee.override(obs=ee_joints_obs)
 
 ee_traj = ee.override(action=codecs.traj_ee_action, binarize_grip=(keys.GRIP,))
@@ -161,7 +162,9 @@ joints_ik_sim = joints_ik.override(**{'action.solver': 'lm'})
 
 # DROID re-queries after its 8-step open-loop horizon; truncate the served chunk to match (8/15 s
 # at 15 fps) so the client re-queries every 8 steps instead of playing the full chunk open-loop.
-droid = codecs.compose.override(obs=droid_obs, action=codecs.joint_delta_action, horizon=8 / 15)
+droid = codecs.compose.override(
+    obs=droid_obs, action=codecs.droid_execution.override(action=codecs.joint_delta_action), horizon=8 / 15
+)
 
 # The DROID jointpos models (openpi `*_droid_jointpos` configs — the RoboLab leaderboard policies): the
 # server returns absolute joint-position chunks ``(action_horizon, 8)`` and RoboLab's client
@@ -171,7 +174,9 @@ droid = codecs.compose.override(obs=droid_obs, action=codecs.joint_delta_action,
 # after the full chunk executes, whatever each variant's length.
 droid_jointpos = codecs.compose.override(
     obs=droid_obs,
-    action=codecs.absolute_joints_action.override(tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP),
+    action=codecs.droid_execution.override(
+        action=codecs.absolute_joints_action.override(tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP)
+    ),
     binarize_grip=(keys.GRIP,),
 )
 

@@ -6,6 +6,8 @@ import cv2
 
 import pimm
 
+logger = logging.getLogger(__name__)
+
 
 class OpenCVCamera(pimm.ControlSystem):
     def __init__(self, camera_id: int, resolution: tuple[int, int], fps: int):
@@ -53,7 +55,7 @@ if __name__ == '__main__':
             self.frame = pimm.ControlSystemReceiver[pimm.shared_memory.NumpySMAdapter](self)
 
         def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-            logging.info(f'Writing to {self.filename}')
+            logger.info(f'Writing to {self.filename}')
             fps_counter = pimm.utils.RateCounter('VideoWriter')
             with av.open(self.filename, mode='w', format='mp4') as container:
                 stream = container.add_stream(self.codec, rate=self.fps)

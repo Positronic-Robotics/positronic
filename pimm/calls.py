@@ -12,6 +12,9 @@ invocations. `World.connect` binds a caller to a handler wherever the two run.
 - `incoming()` yields calls one at a time as it is advanced; each call is yielded once, and one it has not
   reached is yielded by a later `incoming()`.
 - Each `Call` is answered once, with `set_result` or `set_exception`; answering again raises in the handler.
+- A handler whose control system ends answers what it never reached with `HandlerStopped`. A call made
+  after it has ended is not answered at all, so a caller waiting on an answer must also watch
+  `should_stop`.
 - `__call__` returns an `Answer` completed by the handler's answer and by nothing else.
 - An `Answer` never waits: `done()` and `result()` return at once; `result()` on an unanswered call raises
   `NoValueException`.
@@ -22,7 +25,8 @@ invocations. `World.connect` binds a caller to a handler wherever the two run.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
@@ -31,6 +35,7 @@ from .core import (
     ControlSystemEmitter,
     ControlSystemReceiver,
     NoValueException,
+    PortDict,
     SignalEmitter,
     SignalReceiver,
 )
@@ -54,6 +59,24 @@ class Call(ABC, Generic[Req, Res]):
     def set_exception(self, exc: BaseException) -> None: ...
 
 
+class HandlerStopped(RuntimeError):
+    """The control system serving a call ended before reaching it."""
+
+    # Defaulted rather than fixed: an exception crossing a process boundary is rebuilt from its ``args``
+    def __init__(self, message: str = 'the control system serving this call stopped'):
+        super().__init__(message)
+
+
+@contextmanager
+def raise_to(call: Call[Req, Res]) -> Iterator[None]:
+    """Raise whatever the block raises to `call`'s caller; a result, if any, the block sets itself."""
+    try:
+        yield
+    # rules-allow: swallowed-error — the exception is not dropped but handed to the caller, who raises it
+    except Exception as exc:
+        call.set_exception(exc)
+
+
 class Answer(ABC, Generic[Res]):
     """The caller's handle on one call: `done()` once the handler has answered, then `result()`."""
 
@@ -62,6 +85,22 @@ class Answer(ABC, Generic[Res]):
 
     @abstractmethod
     def result(self) -> Res: ...
+
+
+class _AllAnswers(Answer[tuple[Res, ...]]):
+    def __init__(self, answers: Iterable[Answer[Res]]):
+        self._answers = tuple(answers)
+
+    def done(self) -> bool:
+        return all(answer.done() for answer in self._answers)
+
+    def result(self) -> tuple[Res, ...]:
+        return tuple(answer.result() for answer in self._answers)
+
+
+def all_of(answers: Iterable[Answer[Res]]) -> Answer[tuple[Res, ...]]:
+    """One answer for many: done once every one of them is, and its result is their results in order."""
+    return _AllAnswers(answers)
 
 
 class Caller(ABC, Generic[Req, Res]):
@@ -136,6 +175,16 @@ class ControlSystemHandler(Handler[Req, Res]):
         for request in _drain(self.requests):
             yield _ControlSystemCall(request, self.replies)
 
+    def fail_queued(self) -> None:
+        """Answer every call this handler never reached, because it never will."""
+        for call in self.incoming():
+            call.set_exception(HandlerStopped())
+
+
+def handlers_of(cs: ControlSystem) -> list[ControlSystemHandler]:
+    """Every handler a control system serves on."""
+    return [port for port in vars(cs).values() if isinstance(port, ControlSystemHandler)]
+
 
 class _ControlSystemAnswer(Answer[Res]):
     """Pulls its reply from the caller's replies on inspection."""
@@ -175,8 +224,13 @@ class ControlSystemCaller(Caller[Req, Res]):
     def owner(self) -> ControlSystem:
         return self.requests.owner
 
+    @property
+    def connected(self) -> bool:
+        """Whether a handler is on the other end to answer."""
+        return self.requests.num_bound > 0
+
     def __call__(self, request: Req) -> Answer[Res]:
-        if self.requests.num_bound == 0:
+        if not self.connected:
             raise RuntimeError('Caller is not connected to a handler')
         envelope = _Request(self._next_id, request)
         self._next_id += 1
@@ -188,3 +242,10 @@ class ControlSystemCaller(Caller[Req, Res]):
     def _deliver_replies(self) -> None:
         for reply in _drain(self.replies):
             self._pending.pop(reply.id)._reply = reply
+
+
+class CallerDict(PortDict[ControlSystemCaller[Req, Res]]):
+    """Callers owned by a control system."""
+
+    def _port(self, key: str) -> ControlSystemCaller[Req, Res]:
+        return ControlSystemCaller[Req, Res](self._owner)

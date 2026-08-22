@@ -17,6 +17,14 @@ TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
 # The gripper's command channel: a scalar target beside the arm's ``ROBOT_COMMAND``.
 TARGET_GRIP = 'target_grip'
 
+# The names of what a trial readies before it opens. ``Embodiment.prepare_handlers`` is keyed by them, and so
+# is whatever a ``Task`` asks each of them for. A rig with two arms names its arms ``arm.{side}``. ``SCENE``
+# names the env that draws the world a trial runs in, ``HUMAN`` the operator who sets a real rig up by hand.
+ARM = 'arm'
+GRIPPER = 'gripper'
+SCENE = 'scene'
+HUMAN = 'human'
+
 
 def is_robot_command(name: str) -> bool:
     """Whether ``name`` is in the robot-command family: ``robot_command``, or an arm's ``robot_command.{side}``.

@@ -4,13 +4,13 @@ from typing import Any
 
 import configuronic as cfn
 
+from pimm.logging import init_logging
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import warmup
 from positronic.policy import Codec, Policy
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
-from positronic.utils.logging import init_logging
 from positronic.vendors.molmoact2 import codecs as molmoact2_codecs
 from positronic.vendors.molmoact2.policy import MolmoAct2Policy, warm_observation
 

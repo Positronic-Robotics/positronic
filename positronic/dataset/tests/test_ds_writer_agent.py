@@ -351,7 +351,7 @@ def test_transform_3d_serializer(world):
     np.testing.assert_allclose(names_vals[0][1][3:], q.as_quat)
 
 
-def test_robot_state_serializer_records_a_resetting_arm_beside_its_pose(world):
+def test_robot_state_serializer_records_a_busy_arm_beside_its_pose(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({keys.ROBOT_STATE: Serializers.robot_state}, ds, world)
 
@@ -362,7 +362,7 @@ def test_robot_state_serializer_records_a_resetting_arm_beside_its_pose(world):
 
     script = [
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
-        (lambda: emitters[keys.ROBOT_STATE].emit(FakeRobotState(q, dq, pose, RobotStatus.RESETTING)), 0.001),
+        (lambda: emitters[keys.ROBOT_STATE].emit(FakeRobotState(q, dq, pose, RobotStatus.BUSY)), 0.001),
         (lambda: emitters[keys.ROBOT_STATE].emit(FakeRobotState(q, dq, pose, RobotStatus.AVAILABLE)), 0.001),
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
@@ -375,7 +375,7 @@ def test_robot_state_serializer_records_a_resetting_arm_beside_its_pose(world):
         by_name.setdefault(name, []).append(val)
     expected = {keys.JOINTS: q, keys.JOINT_VEL: dq, keys.EE_POSE: np.concatenate([t, geom.Rotation.identity.as_quat])}
     assert set(by_name) == {keys.ROBOT_STATUS, *expected}
-    assert by_name[keys.ROBOT_STATUS] == [RobotStatus.RESETTING, RobotStatus.AVAILABLE]
+    assert by_name[keys.ROBOT_STATUS] == [RobotStatus.BUSY, RobotStatus.AVAILABLE]
     for name, value in expected.items():
         assert len(by_name[name]) == 2, name
         np.testing.assert_allclose(by_name[name][0], value)
@@ -389,12 +389,16 @@ def test_robot_command_serializer_variants(world):
     delta = geom.Transform3D(translation=np.array([0.01, -0.02, 0.03]), rotation=geom.Rotation.identity)
     delta_frame = geom.Transform3D(translation=np.array([0.0, 0.0, 0.05]), rotation=geom.Rotation.identity)
     joints = np.arange(7, dtype=np.float32) * 0.1
+    impedance = rcmd.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
 
     script = [
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE)), 0.001),
         (lambda: emitters['cmd'].emit(rcmd.CartesianPosition(pose)), 0.001),
         (lambda: emitters['cmd'].emit(rcmd.CartesianDelta(delta, delta_frame)), 0.001),
         (lambda: emitters['cmd'].emit(rcmd.JointPosition(joints)), 0.001),
+        (lambda: emitters['cmd'].emit(rcmd.JointPosition(joints, mode=impedance)), 0.001),
+        (lambda: emitters['cmd'].emit(rcmd.JointPosition(joints, mode=rcmd.PositionControl())), 0.001),
+        (lambda: emitters['cmd'].emit(rcmd.JointPosition(joints, mode=rcmd.PositionControl((100.0,) * 7))), 0.001),
         (lambda: emitters['cmd'].emit(rcmd.Reset()), 0.001),
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
@@ -410,6 +414,13 @@ def test_robot_command_serializer_variants(world):
     )
     np.testing.assert_allclose(items['cmd.joints'], joints)
     assert items['cmd.reset'] == 1
+    np.testing.assert_allclose(items['cmd.mode.impedance.kq'], impedance.kq)
+    # A pin naming no stiffness is a marker: a vector would fix the signal's shape, and what a mode does not
+    # name has no shape to fix it at.
+    assert items['cmd.mode.position_control'] == 1
+    np.testing.assert_allclose(items['cmd.mode.position_control.stiffness'], [100.0] * 7)
+    mode_appends = [name for (name, _, _, _) in w.appends if '.mode' in name]
+    assert len(mode_appends) == 6, 'a command pinning nothing records no mode'
 
 
 def test_multiple_timelines_recorded(world):

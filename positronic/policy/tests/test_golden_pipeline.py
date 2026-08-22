@@ -207,9 +207,10 @@ def _run_pipeline(tmp_path: Path) -> dict:
                 keys.GRIP: Observation(gripper.grip, None),
             },
             commands={
-                keys.ROBOT_COMMAND: Command(robot.commands, Reset(), Serializers.robot_command),
-                'target_grip': Command(gripper.target_grip, 0.0, None),
+                keys.ROBOT_COMMAND: Command(robot.commands, Serializers.robot_command),
+                'target_grip': Command(gripper.target_grip, None),
             },
+            prepare_handlers={},
             static_meta=dict(ROBOT_STATIC_META),
             meta_source=robot.robot_meta,
             # The fake robot's control-period sleep is this world's sole time-master — the shape a sim eval

@@ -6,6 +6,7 @@ from typing import Any
 import configuronic as cfn
 import pos3
 
+from pimm.logging import init_logging
 from positronic import keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
@@ -14,7 +15,6 @@ from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, Pipeline, remote
 from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.utils.checkpoints import list_checkpoints, resolve_checkpoint
-from positronic.utils.logging import init_logging
 from positronic.vendors.lerobot import codecs as lerobot_codecs
 from positronic.vendors.lerobot.policy import LerobotPolicy, _detect_device, warm_observation
 
@@ -78,7 +78,10 @@ COMMANDS = {
     'joints_ik': serve.override(pipeline=joints_ik),
     'joints_ik_sim': serve.override(pipeline=joints_ik_sim),
     'phail': serve.override(
-        pipeline=ee.override(**{'source.checkpoints_dir': 's3://checkpoints/phail_unified/smolvla/170316_ee/'}),
+        pipeline=ee.override(
+            codec=lerobot_codecs.phail_v1,
+            **{'source.checkpoints_dir': 's3://checkpoints/phail_unified/smolvla/170316_ee/'},
+        ),
         recording_dir='s3://inference/phail_unified/server_recordings/smolvla/170316_ee/',
     ),
 }

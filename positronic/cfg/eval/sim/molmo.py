@@ -130,7 +130,7 @@ def _molmo_eval(
         for i in indices
         for t in range(trial_count)
     ]
-    return Eval(embodiment, number_trials(task, params), privileged=privileged, reset=proxy.reset, done=proxy.done)
+    return Eval(embodiment, number_trials(task, params), privileged=privileged, done=proxy.done)
 
 
 # The whole benchmark in one run (every episode in ``--eval.benchmark_dir``'s benchmark.json).

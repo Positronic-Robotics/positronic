@@ -13,6 +13,7 @@ from websockets.sync.server import serve as websocket_serve
 
 import pimm
 from positronic import geom, keys
+from positronic.cfg.eval import number_trials
 from positronic.cfg.eval.sim import libero as libero_cfg
 from positronic.cfg.eval.sim import positronic as native_cfg
 from positronic.cfg.eval.sim import robolab as robolab_cfg
@@ -178,6 +179,14 @@ def _settle(env, action: dict, steps: int) -> np.ndarray:
     return np.asarray(out[protocol.FRAME_OBS]['ee_pos'])
 
 
+def test_a_pinned_control_mode_rides_the_wire():
+    """Honoring a mode is the env's, so the adapter delivers it rather than deciding for every env."""
+    mode = roboarm_command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+    wired = _wire_command(roboarm_command.JointPosition(np.zeros(7), mode=mode))
+    assert wired[protocol.COMMAND_MODE] == roboarm_command.to_wire(mode)
+    assert protocol.COMMAND_MODE not in _wire_command(roboarm_command.JointPosition(np.zeros(7)))
+
+
 class TestEnvControlFrame:
     """An env measuring somewhere other than the embodiment's ``default`` gets commands re-expressed for it.
 
@@ -198,6 +207,15 @@ class TestEnvControlFrame:
         cmd = roboarm_command.CartesianDelta(delta, frame=self.frame)
         wired = _wire_command(_in_env_control_frame(cmd, self.frame))
         np.testing.assert_allclose(wired[protocol.COMMAND_DELTA], delta.as_vector(self.rotmat), atol=1e-12)
+
+    def test_a_command_re_expressed_for_the_env_keeps_its_mode(self):
+        """The frame a command is measured in has nothing to do with the law that drives to it."""
+        mode = roboarm_command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+        pose = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.identity)
+        moved = _in_env_control_frame(roboarm_command.CartesianPosition(pose, mode=mode), self.frame)
+        assert moved.mode == mode
+        delta = _in_env_control_frame(roboarm_command.CartesianDelta(pose, mode=mode), self.frame)
+        assert delta.mode == mode
 
     def test_a_delta_outside_the_env_frame_is_refused(self):
         """The env anchors on its own measured pose, so a delta meant for another frame has no wire form."""
@@ -373,7 +391,7 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     host, port = env_server
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        trial = replace(ev.tasks[0], timeout_sec=0.1, params={keys.EVAL_TRIAL_INDEX: 0, keys.EVAL_SEED: 100})
+        trial = number_trials(replace(ev.tasks[0], timeout_sec=0.1), [{keys.EVAL_SEED: 100}])[0]
         policy = StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
         main(policy=ChunkedSchedule().wrap(policy), evals=[replace(ev, tasks=[trial])], output_dir=str(tmp_path))
 
@@ -443,9 +461,7 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     policy = (ChunkedSchedule() | ActionTimestamp(fps=1.0 / control_dt)).wrap(raw)
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        trial = replace(
-            ev.tasks[0], timeout_sec=20 * control_dt, params={keys.EVAL_TRIAL_INDEX: 0, keys.EVAL_SEED: 100}
-        )
+        trial = number_trials(replace(ev.tasks[0], timeout_sec=20 * control_dt), [{keys.EVAL_SEED: 100}])[0]
         main(policy=policy, evals=[replace(ev, tasks=[trial])], output_dir=str(tmp_path))
 
     grip = LocalDataset(tmp_path)[0].signals['target_grip']

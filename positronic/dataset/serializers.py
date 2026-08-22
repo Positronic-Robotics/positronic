@@ -10,8 +10,11 @@ from positronic.drivers.roboarm.command import (
     CartesianDelta,
     CartesianPosition,
     CommandType,
+    ControlModeType,
+    Impedance,
     JointDelta,
     JointPosition,
+    PositionControl,
     Reset,
 )
 
@@ -96,21 +99,45 @@ class Serializers:
         }
 
     @staticmethod
-    def robot_command(command: CommandType) -> dict[str, np.ndarray | int] | None:
+    def _mode_entries(mode: ControlModeType) -> dict[str, np.ndarray | int]:
+        match mode:
+            case PositionControl(stiffness=None):
+                return {'.mode.position_control': 1}
+            case PositionControl(stiffness=stiffness):
+                return {'.mode.position_control.stiffness': np.asarray(stiffness)}
+            case Impedance(kq=kq, kqd=kqd, kx=kx, kxd=kxd):
+                return {
+                    '.mode.impedance.kq': np.asarray(kq),
+                    '.mode.impedance.kqd': np.asarray(kqd),
+                    '.mode.impedance.kx': np.asarray(kx),
+                    '.mode.impedance.kxd': np.asarray(kxd),
+                }
+
+    # TODO: a command writes only the entries its own form has, so a signal here is sparse — `.reset` and
+    # `.mode.*` have samples at some commands and none at others. Which command a sample belongs to is
+    # then a timestamp alignment against a signal every command writes, and a reader taking the last
+    # value as still standing ascribes a pinned mode to commands that pinned none. A serializer cannot
+    # say which of its entries are sparse, and nothing downstream asks.
+    @staticmethod
+    def robot_command(command: CommandType) -> dict[str, np.ndarray | int]:
+        entries: dict[str, np.ndarray | int]
         match command:
             case CartesianPosition(pose):
-                return {'.pose': Serializers.transform_3d(pose)}
+                entries = {'.pose': Serializers.transform_3d(pose)}
             case CartesianDelta(delta, frame):
-                return {
+                entries = {
                     '.pose_delta': Serializers.transform_3d(delta),
                     '.pose_delta_frame': Serializers.transform_3d(frame),
                 }
             case JointPosition(positions):
-                return {'.joints': positions}
+                entries = {'.joints': positions}
             case JointDelta(delta):
-                return {'.joint_deltas': delta}
+                entries = {'.joint_deltas': delta}
             case Reset():
                 return {'.reset': 1}
+        if command.mode is not None:
+            entries.update(Serializers._mode_entries(command.mode))
+        return entries
 
     @staticmethod
     def camera_images(data: pimm.shared_memory.NumpySMAdapter) -> np.ndarray:

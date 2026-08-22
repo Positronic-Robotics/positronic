@@ -16,6 +16,7 @@ import websockets.sync.client
 from huggingface_hub import snapshot_download
 from websockets.exceptions import ConnectionClosed
 
+from pimm.logging import init_logging
 from positronic import keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
@@ -23,7 +24,6 @@ from positronic.policy import Codec, Policy, PolicyWrapper, Session
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import list_checkpoints
-from positronic.utils.logging import init_logging
 from positronic.utils.serialization import deserialize, serialize
 from positronic.vendors.dreamzero import codecs, roboarena
 
@@ -399,7 +399,7 @@ COMMANDS = {
     # TODO: publish this checkpoint to positronic-public and point here, as the other PhAIL models are
     # (`utilities/release_phail.py`, `positronic.cfg.phail.v1_0.models`). Reading it needs credentials until then.
     'phail': serve.override(
-        pipeline=joints,
+        pipeline=joints.override(codec=codecs.phail_v1),
         recording_dir='s3://inference/phail_unified/server_recordings/dreamzero/w22f1_100k_200626/',
         **{
             'pipeline.source.model_path': 's3://checkpoints/phail/dreamzero/w22f1_100k_200626/',

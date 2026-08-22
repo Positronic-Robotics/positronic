@@ -7,7 +7,7 @@ import mujoco as mj
 import numpy as np
 
 import pimm
-from positronic import geom, telemetry, telemetry_keys
+from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.ik import qpos_from_site_pose
@@ -145,7 +145,8 @@ class MujocoSim(pimm.ControlSystem):
         self._reset_pending = False
 
         self.commands = pimm.ControlSystemReceiver[roboarm_command.CommandType](self)
-        self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
+        self.env_reset = pimm.calls.ControlSystemHandler[Any, None](self)
+        self.state = pimm.ControlSystemEmitter[MujocoFrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
@@ -154,7 +155,7 @@ class MujocoSim(pimm.ControlSystem):
         # writer expands them into ``<signal>.<spec>`` signals. Scoring is computed downstream, not
         # live: it rebuilds the episode's model from the ``scene_xml`` in its static meta and
         # replays these states through it (``mj_setState`` + ``mj_forward``).
-        self.sim_state: pimm.SignalEmitter[dict[str, np.ndarray]] = pimm.ControlSystemEmitter(self)
+        self.sim_state = pimm.ControlSystemEmitter[dict[str, np.ndarray]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self._emit_robot_meta()
@@ -176,26 +177,33 @@ class MujocoSim(pimm.ControlSystem):
                 # land in overhead.
                 with telemetry.span(telemetry_keys.SPAN_RESET):
                     self._publish_frame()
-                continue
-            now = clock.now()
-            cmd = pimm.value_updated(self.commands)
-            if self._error:
-                self._error = False
-            elif cmd is not None:
-                self._apply_command(cmd)
-            if (grip := pimm.value_updated(self.target_grip)) is not None:
-                self._last_grip = grip
-            self._apply_grip(self._last_grip)
+            elif (call := next(self.env_reset.incoming(), None)) is not None:
+                with pimm.calls.raise_to(call):
+                    self.reset(dict(call.request or {}).get(keys.EVAL_SEED))
+                    # Answered before frame-0 goes out: the recorder opens on this answer and drains its
+                    # channels as it opens, so a frame published first would be dropped. Frame-0 itself is
+                    # the next turn's, so no step comes between it and the reset.
+                    call.set_result(None)
+            else:
+                now = clock.now()
+                cmd = pimm.value_updated(self.commands)
+                if self._error:
+                    self._error = False
+                elif cmd is not None:
+                    self._apply_command(cmd)
+                if (grip := pimm.value_updated(self.target_grip)) is not None:
+                    self._last_grip = grip
+                self._apply_grip(self._last_grip)
 
-            # An env step is the sim advance plus the observations it produces, rendering included
-            # (``_emit_cameras``): on an image-heavy scene the rendering is most of the step, and outside this
-            # span the wall split reads it as overhead.
-            with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
-                self.step()
-                self.fps_counter.tick()
-                for due, emit in streams:
-                    if due(now):
-                        emit()
+                # An env step is the sim advance plus the observations it produces, rendering included
+                # (``_emit_cameras``): on an image-heavy scene the rendering is most of the step, and outside
+                # this span the wall split reads it as overhead.
+                with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
+                    self.step()
+                    self.fps_counter.tick()
+                    for due, emit in streams:
+                        if due(now):
+                            emit()
 
         if self._renderer is not None:
             self._renderer.close()
@@ -208,8 +216,8 @@ class MujocoSim(pimm.ControlSystem):
         colors, cameras) re-randomize too; the renderer and IK physics rebind lazily. The run loop
         publishes the prepared scene as frame-0 on its next turn — in sequence, before any step — so the
         first inference reads the reset state and the recorder logs it. Stale commands queued while idle
-        (e.g. the inter-episode home) are dropped and the held grip is cleared, so the first step does not
-        apply a queued command on the freshly reset scene.
+        are dropped and the held grip is cleared, so the first step does not apply a queued command on the
+        freshly reset scene.
         """
         self._load_scene(seed)
         self._home()
@@ -313,6 +321,7 @@ class MujocoSim(pimm.ControlSystem):
             mj.mj_step(self.model, self.data)
 
     def _apply_command(self, cmd):
+        """Drive the actuators to the setpoint ``cmd`` asks for; a control mode it pins is not honored."""
         match cmd:
             case roboarm_command.CartesianPosition(pose=pose):
                 q = self._recalculate_ik(pose)

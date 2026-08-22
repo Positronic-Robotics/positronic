@@ -13,9 +13,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import positronic.cfg.ds
+from pimm.logging import init_logging
 from positronic.dataset import Dataset
 from positronic.dataset.signal import SupportsEncodedRepresentation
-from positronic.utils.logging import init_logging
 from positronic.utils.serialization import serialize
 
 _dataset: Dataset | None = None

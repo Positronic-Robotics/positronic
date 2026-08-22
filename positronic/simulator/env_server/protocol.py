@@ -31,12 +31,14 @@ CANONICAL_COMMAND_TYPES = (CARTESIAN, CARTESIAN_DELTA, JOINT_POS, JOINT_VEL, HOL
 ACTION_COMMAND = 'command'
 ACTION_GRIP = 'grip'
 
-# The tagged command's own fields: the tag, and the one value each tag carries (``hold`` carries none).
+# The tagged command's own fields: the tag, the one value each tag carries (``hold`` carries none), and the
+# control law the command pins.
 COMMAND_TYPE = 'type'
 COMMAND_POSE = 'pose'  # CARTESIAN — an absolute pose, [t(3), R(9)]
 COMMAND_DELTA = 'delta'  # CARTESIAN_DELTA — a relative pose, same encoding
 COMMAND_JOINT_POS = 'q'  # JOINT_POS — absolute joint targets
 COMMAND_JOINT_VEL = 'dq'  # JOINT_VEL — per-step joint deltas
+COMMAND_MODE = 'mode'  # any tag — the pinned control mode, absent when the command pins none
 
 # The frames an env reports back. ``reset`` carries the observation, the scene meta, the robot model identity
 # and the control period; ``step`` carries the observation, the terminal, the control period, and — where the

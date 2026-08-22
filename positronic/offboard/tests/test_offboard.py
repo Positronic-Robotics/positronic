@@ -1,9 +1,18 @@
 from types import MappingProxyType
 
 import numpy as np
+import pytest
 
 from positronic import keys
-from positronic.drivers.roboarm.command import CartesianPosition, JointDelta, JointPosition, Reset
+from positronic.drivers.roboarm.command import (
+    CartesianPosition,
+    Impedance,
+    JointDelta,
+    JointPosition,
+    PositionControl,
+    Reset,
+    to_wire,
+)
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.protocol import deserialise, serialise, typed_commands
@@ -132,6 +141,40 @@ class TestCommandEnvelope:
         result = deserialise(serialise(JointDelta(velocities=velocities)))
         assert isinstance(result, JointDelta)
         np.testing.assert_allclose(result.velocities, velocities)
+
+    def test_control_modes(self):
+        zeros = np.zeros(3)
+        impedance = Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+        assert deserialise(serialise(JointDelta(velocities=zeros))).mode is None
+        pinned = PositionControl()
+        assert deserialise(serialise(JointDelta(velocities=zeros, mode=pinned))).mode == pinned
+        assert deserialise(serialise(JointDelta(velocities=zeros, mode=impedance))).mode == impedance
+        custom = Impedance(kq=(20.0,) * 7, kqd=(2.0,) * 7, kx=(0.0,) * 6, kxd=(0.0,) * 6)
+        assert deserialise(serialise(JointDelta(velocities=zeros, mode=custom))).mode == custom
+        stiff = PositionControl(stiffness=(100.0,) * 7)
+        assert deserialise(serialise(JointDelta(velocities=zeros, mode=stiff))).mode == stiff
+
+    def test_a_stiffness_the_mode_does_not_name_is_absent_from_the_wire(self):
+        """Naming no gains is `None`, as pinning no mode is: neither is a value with a width."""
+        with pytest.raises(ValueError, match='at least one joint'):
+            PositionControl(stiffness=())
+        assert 'stiffness' not in to_wire(PositionControl())
+        assert deserialise(serialise(JointDelta(velocities=np.zeros(3), mode=PositionControl()))).mode.stiffness is None
+
+    def test_an_impedance_half_is_disabled_by_zeroing_it(self):
+        """An empty half would record as a zero-width vector, which no later gain vector could follow."""
+        with pytest.raises(ValueError, match='at least one axis'):
+            Impedance(kq=(), kqd=(), kx=(750.0,) * 6, kxd=(37.0,) * 6)
+        cartesian_only = Impedance(kq=(0.0,) * 7, kqd=(0.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+        assert deserialise(serialise(JointDelta(velocities=np.zeros(3), mode=cartesian_only))).mode == cartesian_only
+
+    def test_a_bare_wire_mapping_carries_a_nested_mode(self):
+        """A server built on another stack sends plain data, mode included, and it types like any other."""
+        impedance = Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+        wire = to_wire(JointDelta(velocities=np.zeros(7), mode=impedance))
+        typed = typed_commands({keys.ROBOT_COMMAND: wire})[keys.ROBOT_COMMAND]
+        assert isinstance(typed, JointDelta)
+        assert typed.mode == impedance
 
     def test_action_trajectory_payload(self):
         """The actual server→client payload: a list of action dicts with embedded Commands."""
