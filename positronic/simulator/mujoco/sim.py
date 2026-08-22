@@ -157,17 +157,6 @@ class MujocoSim(pimm.ControlSystem):
         # replays these states through it (``mj_setState`` + ``mj_forward``).
         self.sim_state: pimm.SignalEmitter[dict[str, np.ndarray]] = pimm.ControlSystemEmitter(self)
 
-    def _serve_calls(self) -> bool:
-        """Draw a fresh scene for a reset; whether one was drawn."""
-        if (call := next(self.env_reset.incoming(), None)) is not None:
-            with pimm.calls.raise_to(call):
-                self.reset(dict(call.request or {}).get(keys.EVAL_SEED))
-                # Answered before frame-0 goes out: the recorder opens on this answer and drains its channels
-                # as it opens, so a frame published first would be dropped
-                call.set_result(None)
-                return True
-        return False
-
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self._emit_robot_meta()
         streams = [
@@ -188,28 +177,33 @@ class MujocoSim(pimm.ControlSystem):
                 # land in overhead.
                 with telemetry.span(telemetry_keys.SPAN_RESET):
                     self._publish_frame()
-                continue
-            if self._serve_calls():  # frame-0 is the next turn's, so no step comes between it and the reset
-                continue
-            now = clock.now()
-            cmd = pimm.value_updated(self.commands)
-            if self._error:
-                self._error = False
-            elif cmd is not None:
-                self._apply_command(cmd)
-            if (grip := pimm.value_updated(self.target_grip)) is not None:
-                self._last_grip = grip
-            self._apply_grip(self._last_grip)
+            elif (call := next(self.env_reset.incoming(), None)) is not None:
+                with pimm.calls.raise_to(call):
+                    self.reset(dict(call.request or {}).get(keys.EVAL_SEED))
+                    # Answered before frame-0 goes out: the recorder opens on this answer and drains its
+                    # channels as it opens, so a frame published first would be dropped. Frame-0 itself is
+                    # the next turn's, so no step comes between it and the reset.
+                    call.set_result(None)
+            else:
+                now = clock.now()
+                cmd = pimm.value_updated(self.commands)
+                if self._error:
+                    self._error = False
+                elif cmd is not None:
+                    self._apply_command(cmd)
+                if (grip := pimm.value_updated(self.target_grip)) is not None:
+                    self._last_grip = grip
+                self._apply_grip(self._last_grip)
 
-            # An env step is the sim advance plus the observations it produces, rendering included
-            # (``_emit_cameras``): on an image-heavy scene the rendering is most of the step, and outside this
-            # span the wall split reads it as overhead.
-            with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
-                self.step()
-                self.fps_counter.tick()
-                for due, emit in streams:
-                    if due(now):
-                        emit()
+                # An env step is the sim advance plus the observations it produces, rendering included
+                # (``_emit_cameras``): on an image-heavy scene the rendering is most of the step, and outside
+                # this span the wall split reads it as overhead.
+                with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
+                    self.step()
+                    self.fps_counter.tick()
+                    for due, emit in streams:
+                        if due(now):
+                            emit()
 
         if self._renderer is not None:
             self._renderer.close()
