@@ -20,30 +20,29 @@ Control:
 - The framework grants the turn best-effort at `resume_at`: it may be earlier or later.
 - The framework has no pace of its own: turns happen when sessions ask.
 
-Pure functions:
-- A policy may define pure functions that are available to sessions via the framework.
+Served functions:
+- A policy's heavy work (model inference) lives in functions it defines and the framework serves —
+  in-process or on a server; the session cannot tell.
 - Invoking one starts the work off the turn and returns a handle at once.
 - The session may read the handle when it next has control.
 - A function's inputs and outputs are types the framework can serialize: plain types and numpy, selected domain classes.
   An unsupported type fails at the call.
 - A session computes only while in control or inside a served call.
-- The framework makes no stateful guarantees: a function may cache, but dropping the cache must not
-  change what it computes.
+- Served functions are pure: one may cache, but dropping the cache must not change what it computes.
 
 Composability:
 - A `Layer` is a config-time recipe: per control session it makes a session wrapping the inner session
   it is given.
 - A chain of layers is a layer.
-- The innermost session answers on its own, with or without pure functions.
 - Chain order fully determines behavior.
 - A session communicates only through the observations and commands flowing through it; it knows
   nothing of its neighbours or its position.
 - What an inner session sees is its outer's choice — except `time`: one value per turn, the same at
   every depth, not the chain's to alter.
-- A `Codec` is a data transform written once and applicable to both: around a pure function, its
+- A `Codec` is a data transform written once and applicable to both: around a served function, its
   inputs and outputs; as a trivial layer, observations down and commands up, `resume_at` untouched.
 - Any policy fits the API as it stands: implement a session directly, or compose it from layers and
-  pure functions. Neither ever requires a framework change.
+  served functions. Neither ever requires a framework change.
 
 Logging:
 - A log is a set of named series per control session; a sample is a value stamped on 3 timelines:
@@ -60,7 +59,7 @@ Logging:
 
 Remote policies:
 - The framework natively supports remote policies: the whole policy lives on a server.
-- The server describes the full policy: the pure functions it serves and the stack around them.
+- The server describes the full policy: the functions it serves and the stack around them.
 - One URL is enough to fully specify the policy, given that the server returns a proper declaration.
 - Declarations are backward compatible: the framework evolves without changing what an already-served
   policy does.
