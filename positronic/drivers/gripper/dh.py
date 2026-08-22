@@ -4,20 +4,19 @@ from ctypes import c_uint16
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import PendingMove, grip_setpoint
+from positronic.drivers.utils import Moves, grip_setpoint
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
 
 
 class DHGripper(pimm.ControlSystem):
-    _ARRIVED_TOL = 0.05  # the fingers report width, so arrival is judged from the reading
-
-    def __init__(self, port: str):
+    def __init__(self, port: str, home_grip: float = 0.0):
         self.port = port
+        self._home_grip = home_grip
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
-        self.sync_move = pimm.calls.ControlSystemHandler[float, None](self)
+        self.sync_move = pimm.calls.ControlSystemHandler[float | None, None](self)
         self.force = pimm.DefaultingReceiver(self, default=100)
         self.speed = pimm.DefaultingReceiver(self, default=100)
 
@@ -56,20 +55,20 @@ class DHGripper(pimm.ControlSystem):
 
         # TODO: Should we translate these to physical units (N and m/s)?
         try:
-            with PendingMove(self._ARRIVED_TOL, self.sync_move) as move:
+            with Moves[float](self.sync_move, self.target_grip) as moves:
                 while not should_stop.value:
                     current_grip = self._width(client)
                     self.grip.emit(current_grip)
 
-                    target = grip_setpoint(move, self.target_grip, current_grip, clock.now())
+                    target = grip_setpoint(moves, self._home_grip, current_grip, clock.now())
                     if target is not None:
                         last_grip = target
                     self._command(client, last_grip)
-                    move.answer()  # the width a settled move is answered with is on the fingers
+                    moves.answer()  # the width a settled move is answered with is on the fingers
 
                     yield pimm.Sleep(0.001)  # Small delay to prevent busy-waiting
 
-                if move.active:  # the fingers push at the last width written to them, run or no run
+                if moves.active:  # the fingers push at the last width written to them, run or no run
                     self._command(client, self._width(client))
         finally:
             client.close()

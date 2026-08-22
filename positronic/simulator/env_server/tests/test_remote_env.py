@@ -10,6 +10,7 @@ from websockets.sync.server import serve as websocket_serve
 
 import pimm
 from positronic import geom, keys
+from positronic.cfg.eval import number_trials
 from positronic.cfg.eval.sim import libero as libero_cfg
 from positronic.cfg.eval.sim import positronic as native_cfg
 from positronic.cfg.eval.sim import robolab as robolab_cfg
@@ -309,7 +310,7 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     host, port = env_server
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        trial = replace(ev.tasks[0], timeout_sec=0.1, params={keys.EVAL_TRIAL_INDEX: 0, keys.EVAL_SEED: 100})
+        trial = number_trials(replace(ev.tasks[0], timeout_sec=0.1), [{keys.EVAL_SEED: 100}])[0]
         policy = StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
         main(policy=ChunkedSchedule().wrap(policy), evals=[replace(ev, tasks=[trial])], output_dir=str(tmp_path))
 
@@ -379,9 +380,7 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     policy = (ChunkedSchedule() | ActionTimestamp(fps=1.0 / control_dt)).wrap(raw)
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        trial = replace(
-            ev.tasks[0], timeout_sec=20 * control_dt, params={keys.EVAL_TRIAL_INDEX: 0, keys.EVAL_SEED: 100}
-        )
+        trial = number_trials(replace(ev.tasks[0], timeout_sec=20 * control_dt), [{keys.EVAL_SEED: 100}])[0]
         main(policy=policy, evals=[replace(ev, tasks=[trial])], output_dir=str(tmp_path))
 
     grip = LocalDataset(tmp_path)[0].signals['target_grip']

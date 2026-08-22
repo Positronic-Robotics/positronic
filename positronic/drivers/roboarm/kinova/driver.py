@@ -1,16 +1,16 @@
 import logging
 import os
 from collections.abc import Iterator
+from typing import Any
 
 import numpy as np
-from mujoco import Any
 
 import pimm
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State, command
 from positronic.drivers.roboarm.kinova.api import KinovaAPI
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
-from positronic.drivers.utils import DriverRun, MoveStatus, PendingMove
+from positronic.drivers.utils import DriverRun, MoveStatus, log_failure
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ class KinovaState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[14 + 7] = status.value
 
 
-class _Arm(DriverRun):
+class _Arm(DriverRun[command.CommandType]):
     """The arm the driver drives: the API it commands current through, and the controller that decides it.
 
     Torque-controlled, so the arm only travels while the loop steps it and cannot be held for a move.
@@ -75,14 +75,15 @@ class _Arm(DriverRun):
     def __init__(
         self,
         api: KinovaAPI,
-        calls: pimm.calls.ControlSystemHandler[command.CommandType, None],
+        sync_move: pimm.calls.ControlSystemHandler[command.CommandType | None, None],
+        async_move: pimm.SignalReceiver[command.CommandType],
         out: pimm.SignalEmitter[KinovaState],
         home_joints: list[float],
         dynamics_factor: float,
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
     ):
-        super().__init__(should_stop, clock, hz=1000)
+        super().__init__(sync_move, async_move, should_stop, clock, hz=1000)
         actuators = api.actuator_count
         assert actuators is not None, 'the arm counts its actuators on connect, and this one is not connected'
         self.api = api
@@ -91,37 +92,27 @@ class _Arm(DriverRun):
         self.solver = KinematicsSolver()
         self.controller = JointCompliantController(actuator_count=actuators, relative_dynamics_factor=dynamics_factor)
         self._home_joints = home_joints
-        self._move = PendingMove(self._ARRIVED_TOL, calls)
         self._current = np.zeros(actuators, dtype=np.float32)
         # Read here rather than left empty: every setpoint below is solved from where the arm is now
         self.q, self.dq, self.tau = api.apply_current_command(None)
         self.controller.compute_torque(self.q, self.dq, self.tau)
 
-    @property
-    def takes_commands(self) -> bool:
-        """Whether the arm will take a setpoint: a move owns it until it is answered."""
-        return not (self._move.active or self._move.settled)
-
-    def take_sync_move(self) -> pimm.calls.Call[command.CommandType, None] | None:
-        """The next move asked for, if the arm is free to take one."""
-        return self._move.take()
-
     def settle(self) -> None:
         """Judge a move in flight against the joints the arm reads."""
-        if not self._move.active:
+        if not self.moves.active:
             return
         # The actuators report 0..2pi, so a move across the boundary reads a turn from its target
         # until the reading is put on the same branch the controller tracks.
-        settled = self._move.settle(wrap_joint_angle(self.q, self._move.target), self.clock.now())
+        settled = self.moves.settle(wrap_joint_angle(self.q, self.moves.target), self.clock.now())
         if settled is MoveStatus.GAVE_UP:
             # Leaving the controller on the target the arm stopped short of would resume the move
             # once whatever blocked it goes away, long after its asker was told it failed.
             self.controller.set_target_qpos(self.q)
 
-    def _target_qpos(self, cmd: command.CommandType) -> np.ndarray:
-        """The joints ``cmd`` asks the arm to hold, solved from the joints it reports now."""
+    def _target_qpos(self, cmd: command.CommandType | None) -> np.ndarray:
+        """The joints ``cmd`` asks the arm to hold, solved from the joints it reports now; nothing asks for home."""
         match cmd:
-            case command.Reset():
+            case None | command.Reset():
                 return np.asarray(self._home_joints, dtype=np.float32)
             case command.CartesianPosition(pose):
                 return self.solver.inverse(pose, self.q)
@@ -133,7 +124,7 @@ class _Arm(DriverRun):
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
 
-    def track(self, cmd: command.CommandType) -> None:
+    def track(self, cmd: command.CommandType | None) -> None:
         """Put the controller on the setpoint ``cmd`` asks for, with nobody waiting on the arrival."""
         self.controller.set_target_qpos(self._target_qpos(cmd))
 
@@ -141,14 +132,14 @@ class _Arm(DriverRun):
         """How long the arm may take to reach ``target``, from the speed its controller is capped at."""
         return self._MOVE_GRACE_S + float(np.max(np.abs(target - self.q)) / np.min(self.controller.max_velocity))
 
-    def serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
+    def serve_sync_move(self, call: pimm.calls.Call[command.CommandType | None, None]) -> None:
         """Put the controller where ``call`` asks; ``settle`` answers it once the arm reads back there."""
         with pimm.calls.raise_to(call):
             target = self._target_qpos(call.request)
             self.controller.set_target_qpos(target)
             # The branch the controller tracks: it wraps the target once, when it is set
             wrapped = wrap_joint_angle(target, self.q)
-            self._move.accept(call, wrapped, self.clock.now(), self._travel_s(wrapped))
+            self.moves.accept(call, wrapped, self._ARRIVED_TOL, self.clock.now(), self._travel_s(wrapped))
 
     def step(self) -> None:
         """Drive one cycle: the controller's torque as current, and what the actuators report back."""
@@ -158,25 +149,21 @@ class _Arm(DriverRun):
 
     def publish(self) -> None:
         """Ship the arm as it reads now."""
-        if self._move.active:  # the driver owns the arm until the move settles, and reads no command meanwhile
+        if self.moves.active:  # the driver owns the arm until the move settles, and reads no command meanwhile
             status = RobotStatus.BUSY
-        elif self._move.errored:  # the controller reports its trajectory, not whether the arm got there
+        elif self.moves.errored:  # the controller reports its trajectory, not whether the arm got there
             status = RobotStatus.ERROR
         else:  # a streamed setpoint still in flight is one the arm is tracking, not one it owns
             status = RobotStatus.AVAILABLE
         self.state.encode(self.q, self.dq, self.solver.forward(self.controller.q_s), status)
         self.out.emit(self.state)
 
-    def answer(self) -> None:
-        """Hand a move settled this tick its outcome, now that the state saying so is out."""
-        self._move.answer()
-
     def __enter__(self) -> '_Arm':
         return self
 
     def __exit__(self, exc_type, exc: BaseException | None, tb) -> None:
         """The loop stepping the arm is what makes it travel, so a stop halts it; answer what was waiting."""
-        self._move.abandon(exc)
+        self.moves.abandon(exc)
 
 
 class Robot(pimm.ControlSystem):
@@ -187,13 +174,20 @@ class Robot(pimm.ControlSystem):
         self.relative_dynamics_factor = relative_dynamics_factor
         self.home_joints = home_joints if home_joints is not None else [0.0, -0, 0.5, -1.5, 0.0, -0.5, 1.57079633]
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
-        self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
+        self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType | None, None](self)
         self.state = pimm.ControlSystemEmitter[KinovaState](self)
 
     def _arm(self, api: KinovaAPI, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
         return _Arm(
-            api, self.sync_move, self.state, self.home_joints, self.relative_dynamics_factor, should_stop, clock
+            api,
+            self.sync_move,
+            self.commands,
+            self.state,
+            self.home_joints,
+            self.relative_dynamics_factor,
+            should_stop,
+            clock,
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
@@ -202,18 +196,15 @@ class Robot(pimm.ControlSystem):
             with self._arm(api, should_stop, clock) as arm:
                 while not should_stop.value:
                     arm.settle()
-                    if arm.takes_commands:
-                        if (call := arm.take_sync_move()) is not None:
-                            arm.serve_sync_move(call)
-                        elif (cmd := pimm.value_updated(self.commands)) is not None:
-                            try:
-                                arm.track(cmd)
-                            # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
-                            except Exception as exc:
-                                logger.warning(f'{cmd} not applied: {exc}')
+                    asked = arm.moves.next_request()
+                    if isinstance(asked, pimm.calls.Call):
+                        arm.serve_sync_move(asked)
+                    elif asked is not None:
+                        with log_failure(asked):
+                            arm.track(asked)
 
                     arm.step()
                     arm.publish()
-                    arm.answer()  # the state a settled move is answered with is out
+                    arm.moves.answer()  # the state a settled move is answered with is out
 
                     yield arm.limiter.wait()

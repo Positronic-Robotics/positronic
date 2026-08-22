@@ -4,7 +4,7 @@ from itertools import islice
 
 import pytest
 
-from pimm.calls import Answer, ControlSystemCaller, ControlSystemHandler, HandlerStopped, raise_to
+from pimm.calls import Answer, CallerDict, ControlSystemCaller, ControlSystemHandler, HandlerStopped, all_of, raise_to
 from pimm.core import ControlSystem, NoValueException, Sleep
 from pimm.tests.testing import Passive, wire_call
 from pimm.world import World
@@ -154,6 +154,13 @@ class TestCallAndAnswer:
         with pytest.raises(RuntimeError):
             ControlSystemCaller(Passive())(None)
 
+    def test_a_caller_says_whether_anything_will_answer_it(self, bound):
+        """A caller with no handler bound says so, and calling it raises rather than waiting for an answer
+        that cannot come."""
+        caller, _ = bound
+        assert caller.connected
+        assert not ControlSystemCaller(Passive()).connected
+
     def test_unbound_handler_yields_nothing(self):
         assert list(ControlSystemHandler(Passive()).incoming()) == []
 
@@ -166,6 +173,53 @@ class Deaf(ControlSystem):
 
     def run(self, should_stop, clock):
         yield Sleep(0.001)
+
+
+class TestAllOf:
+    def test_one_answer_stands_for_many(self, bound):
+        caller, handler = bound
+        both = all_of([caller(1), caller(2)])
+        first, second = handler.incoming()
+
+        first.set_result('one')
+        assert not both.done(), 'a caller waits for the slowest of them'
+
+        second.set_result('two')
+        assert both.done()
+        assert both.result() == ('one', 'two')
+
+    def test_a_single_failure_is_what_the_caller_hears(self, bound):
+        caller, handler = bound
+        both = all_of([caller(1), caller(2)])
+        first, second = handler.incoming()
+        first.set_result('one')
+        second.set_exception(ValueError('boom'))
+
+        assert both.done()
+        with pytest.raises(ValueError, match='boom'):
+            both.result()
+
+    def test_nothing_to_wait_for_is_answered(self):
+        """An ``all_of`` over no answers is done at once, so asking for nothing goes straight through."""
+        assert all_of([]).done()
+        assert all_of([]).result() == ()
+
+
+class TestCallerDict:
+    def test_names_fix_the_ports_the_dict_has(self):
+        """A control system that knows who it calls up front has no use for a key it was never built with."""
+        callers = CallerDict(Passive(), names=['a', 'b'])
+
+        assert sorted(callers) == ['a', 'b']
+        assert all(isinstance(caller, ControlSystemCaller) for caller in callers.values())
+        with pytest.raises(KeyError):
+            callers['c']
+
+    def test_without_names_a_key_allocates_on_first_use(self):
+        callers = CallerDict(Passive())
+
+        assert callers['a'] is callers['a']
+        assert callers['a'].owner is not None
 
 
 class TestWorldConnect:

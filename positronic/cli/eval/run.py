@@ -75,7 +75,7 @@ def _run_world(policy, ev: Eval, output_dir: Path | None):
     The driver walks ``ev.tasks``; the shared ``policy``'s lifetime stays with ``main``.
     """
     embodiment = ev.embodiment
-    harness = Harness(policy, embodiment, reset=ev.reset)
+    harness = Harness(policy, embodiment)
     driver = TaskDriver(ev.tasks)
 
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK

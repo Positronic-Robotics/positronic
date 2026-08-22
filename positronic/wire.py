@@ -6,6 +6,7 @@ from positronic.dataset import DatasetWriter
 from positronic.dataset.ds_writer_agent import DsWriterAgent, TimeMode
 from positronic.dataset.serializers import Serializers, StatefulSerializer
 from positronic.eval import ROBOT_STATIC_META, Embodiment, Observation
+from positronic.policy.harness import Harness
 
 __all__ = ['ROBOT_STATIC_META', 'wire', 'wire_embodiment']
 
@@ -66,9 +67,38 @@ def wire(  # noqa: C901
     return ds_agent
 
 
+def _recorder(
+    world: pimm.World,
+    harness: Harness,
+    embodiment: Embodiment,
+    dataset_writer: DatasetWriter,
+    time_mode: TimeMode,
+    privileged: dict[str, Observation],
+) -> DsWriterAgent:
+    """An embodiment's observations, command chunks and privileged ground-truth, recorded into a dataset."""
+    ds_agent = DsWriterAgent(
+        dataset_writer,
+        time_mode=time_mode,
+        virtual_time=embodiment.simulated,
+        telemetry_span=functools.partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
+    )
+    for name, obs in embodiment.observations.items():
+        if isinstance(obs.serializer, StatefulSerializer):
+            raise TypeError(f"observation '{name}': stateful serializer can't be shared by policy and record paths")
+        ds_agent.add_signal(name, obs.serializer)
+        world.connect(obs.source, ds_agent.inputs[name])
+    for name, cmd in embodiment.commands.items():
+        ds_agent.add_signal(name, cmd.serializer)
+        world.connect(harness.commands[name], ds_agent.inputs[name])
+    for name, priv in privileged.items():
+        ds_agent.add_signal(name, priv.serializer)
+        world.connect(priv.source, ds_agent.inputs[name])
+    return ds_agent
+
+
 def wire_embodiment(
     world: pimm.World,
-    harness: pimm.ControlSystem,
+    harness: Harness,
     embodiment: Embodiment,
     dataset_writer: DatasetWriter | None,
     time_mode: TimeMode = TimeMode.CLOCK,
@@ -77,40 +107,24 @@ def wire_embodiment(
 ):
     """Wire an embodiment to the Harness for the inference path.
 
-    Connects device observation sources -> ``harness.observations`` and
-    ``harness.commands`` -> device receivers, and records observations, command
-    chunks, and the eval's privileged ground-truth into the dataset. The ``done``
-    terminating signal, when present, is connected to ``harness.done``. GUI camera wiring
-    stays with the caller — it is a presentation concern, not part of the embodiment contract.
+    Connects device observation sources -> ``harness.observations``, ``harness.commands`` -> device
+    receivers, ``harness.prepare`` -> everything a trial readies, and records observations, command chunks,
+    and the eval's privileged ground-truth into the dataset. The ``done`` terminating signal, when present,
+    is connected to ``harness.done``. GUI camera wiring stays with the caller — it is a presentation
+    concern, not part of the embodiment contract.
     """
     privileged = privileged or {}
     for name, obs in embodiment.observations.items():
         world.connect(obs.source, harness.observations[name])
     for name, cmd in embodiment.commands.items():
         world.connect(harness.commands[name], cmd.dest)
+    for name, handler in embodiment.prepare_handlers.items():
+        world.connect(harness.prepare[name], handler)
     if embodiment.meta_source is not None:
         world.connect(embodiment.meta_source, harness.robot_meta_in)
     if done is not None:
         world.connect(done, harness.done)
 
-    ds_agent = None
-    if dataset_writer is not None:
-        ds_agent = DsWriterAgent(
-            dataset_writer,
-            time_mode=time_mode,
-            virtual_time=embodiment.simulated,
-            telemetry_span=functools.partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
-        )
-        for name, obs in embodiment.observations.items():
-            if isinstance(obs.serializer, StatefulSerializer):
-                raise TypeError(f"observation '{name}': stateful serializer can't be shared by policy and record paths")
-            ds_agent.add_signal(name, obs.serializer)
-            world.connect(obs.source, ds_agent.inputs[name])
-        for name, cmd in embodiment.commands.items():
-            ds_agent.add_signal(name, cmd.serializer)
-            world.connect(harness.commands[name], ds_agent.inputs[name])
-        for name, priv in privileged.items():
-            ds_agent.add_signal(name, priv.serializer)
-            world.connect(priv.source, ds_agent.inputs[name])
-
-    return ds_agent
+    if dataset_writer is None:
+        return None
+    return _recorder(world, harness, embodiment, dataset_writer, time_mode, privileged)

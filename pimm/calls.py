@@ -25,7 +25,7 @@ invocations. `World.connect` binds a caller to a handler wherever the two run.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Generic, TypeVar
@@ -35,6 +35,7 @@ from .core import (
     ControlSystemEmitter,
     ControlSystemReceiver,
     NoValueException,
+    PortDict,
     SignalEmitter,
     SignalReceiver,
 )
@@ -84,6 +85,22 @@ class Answer(ABC, Generic[Res]):
 
     @abstractmethod
     def result(self) -> Res: ...
+
+
+class _AllAnswers(Answer[tuple[Res, ...]]):
+    def __init__(self, answers: Iterable[Answer[Res]]):
+        self._answers = tuple(answers)
+
+    def done(self) -> bool:
+        return all(answer.done() for answer in self._answers)
+
+    def result(self) -> tuple[Res, ...]:
+        return tuple(answer.result() for answer in self._answers)
+
+
+def all_of(answers: Iterable[Answer[Res]]) -> Answer[tuple[Res, ...]]:
+    """One answer for many: done once every one of them is, and its result is their results in order."""
+    return _AllAnswers(answers)
 
 
 class Caller(ABC, Generic[Req, Res]):
@@ -207,8 +224,13 @@ class ControlSystemCaller(Caller[Req, Res]):
     def owner(self) -> ControlSystem:
         return self.requests.owner
 
+    @property
+    def connected(self) -> bool:
+        """Whether a handler is on the other end to answer."""
+        return self.requests.num_bound > 0
+
     def __call__(self, request: Req) -> Answer[Res]:
-        if self.requests.num_bound == 0:
+        if not self.connected:
             raise RuntimeError('Caller is not connected to a handler')
         envelope = _Request(self._next_id, request)
         self._next_id += 1
@@ -220,3 +242,10 @@ class ControlSystemCaller(Caller[Req, Res]):
     def _deliver_replies(self) -> None:
         for reply in _drain(self.replies):
             self._pending.pop(reply.id)._reply = reply
+
+
+class CallerDict(PortDict[ControlSystemCaller[Req, Res]]):
+    """Callers owned by a control system."""
+
+    def _port(self, key: str) -> ControlSystemCaller[Req, Res]:
+        return ControlSystemCaller[Req, Res](self._owner)

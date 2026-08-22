@@ -1,6 +1,7 @@
 import os
 import xml.etree.ElementTree as ET
 from dataclasses import replace
+from typing import Any
 
 import mujoco as mj
 import numpy as np
@@ -11,6 +12,7 @@ import tqdm
 import pimm
 import positronic.cfg.simulator
 from positronic import keys, telemetry, telemetry_keys
+from positronic.cfg.eval import number_trials
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import main
 from positronic.dataset.local_dataset import LocalDataset
@@ -77,7 +79,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
             instruction='integration-test',
             timeout=0.4,
         )
-        trials = [replace(ev.tasks[0], params={keys.EVAL_TRIAL_INDEX: i, keys.EVAL_SEED: 100 + i}) for i in range(2)]
+        trials = number_trials(ev.tasks[0], [{keys.EVAL_SEED: 100 + i} for i in range(2)])
         main(policy=ChunkedSchedule().wrap(policy), evals=[replace(ev, tasks=trials)], output_dir=str(tmp_path))
 
     ds = LocalDataset(tmp_path)
@@ -164,11 +166,7 @@ class _CountdownProducer(pimm.ControlSystem):
         self.commands = pimm.ReceiverDict(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self.done = pimm.ControlSystemEmitter(self)
-
-    def reset(self, _context: dict | None = None) -> None:
-        self._steps = 0
-        self._reset_pending = True
-        self._active = True
+        self.env_reset = pimm.calls.ControlSystemHandler[Any, None](self)
 
     def _emit_obs(self) -> None:
         self.observations['value'].emit(np.full(7, self._steps, dtype=np.float64))
@@ -176,7 +174,10 @@ class _CountdownProducer(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         while not should_stop.value:
             yield pimm.Sleep(self._control_dt)
-            if self._reset_pending:
+            if (call := next(self.env_reset.incoming(), None)) is not None:
+                self._steps, self._reset_pending, self._active = 0, True, True
+                call.set_result(None)  # before frame-0, so the episode is open when it lands
+            elif self._reset_pending:
                 self._reset_pending = False
                 self.robot_meta.emit({})
                 self._emit_obs()  # frame-0 (step 0), before any step advances the env
@@ -193,19 +194,14 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
     embodiment = Embodiment(
         descriptor='test.countdown',
         observations={'value': Observation(producer.observations['value'], None)},
-        commands={
-            keys.ROBOT_COMMAND: Command(
-                producer.commands[keys.ROBOT_COMMAND], roboarm_command.Reset(), Serializers.robot_command
-            )
-        },
+        commands={keys.ROBOT_COMMAND: Command(producer.commands[keys.ROBOT_COMMAND], Serializers.robot_command)},
+        prepare_handlers={keys.SCENE: producer.env_reset},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=producer.robot_meta,
         control_systems=(producer,),
         simulated=True,
     )
-    return Eval(
-        embodiment, [Task(instruction_source='count', timeout_sec=timeout)], done=producer.done, reset=producer.reset
-    )
+    return Eval(embodiment, [Task(instruction_source='count', timeout_sec=timeout)], done=producer.done)
 
 
 @pytest.mark.timeout(30.0)
@@ -216,10 +212,10 @@ def test_countdown_records_frame0_every_trial(tmp_path):
     the producer quickly between trials, so a stray step would overwrite frame-0 if it weren't published in
     the producer's own turn."""
     ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.35)
-    trials = [replace(ev.tasks[0], params={keys.EVAL_TRIAL_INDEX: i, keys.EVAL_SEED: i}) for i in range(2)]
+    trials = number_trials(ev.tasks[0], [{keys.EVAL_SEED: i} for i in range(2)])
     with pos3.mirror():
         main(
-            policy=StubPolicy(command=ev.embodiment.commands[keys.ROBOT_COMMAND].home, target_grip=0.0),
+            policy=StubPolicy(command=roboarm_command.Reset(), target_grip=0.0),
             evals=[replace(ev, tasks=trials)],
             # the degenerate obs is not Franka-shaped, so run the policy unwrapped
             output_dir=str(tmp_path),
@@ -239,12 +235,10 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     and the machine-load stats stream records at least one sample. record.io parenting proves the episode span
     stays in flight while the recorder commits STOP."""
     ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2)
-    trials = [replace(ev.tasks[0], params={keys.EVAL_TRIAL_INDEX: i}) for i in range(2)]
+    trials = number_trials(ev.tasks[0], [{}, {}])
     with pos3.mirror():
         main(
-            policy=ChunkedSchedule().wrap(
-                RemoteStubPolicy(command=ev.embodiment.commands['robot_command'].home, target_grip=0.0)
-            ),
+            policy=ChunkedSchedule().wrap(RemoteStubPolicy(command=roboarm_command.Reset(), target_grip=0.0)),
             evals=[replace(ev, tasks=trials)],
             output_dir=str(tmp_path),
             timing=True,
@@ -287,10 +281,10 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     """[harness + recorder + sim] with no MuJoCo: a trial ends early when the producer's ``done`` fires,
     recording ``eval.terminated`` True and the delivered payload into the episode's static data."""
     ev = _countdown_eval(_CountdownProducer(done_after=4), timeout=15.0)
-    trial = replace(ev.tasks[0], params={keys.EVAL_TRIAL_INDEX: 0, keys.EVAL_SEED: 100})
+    trial = number_trials(ev.tasks[0], [{keys.EVAL_SEED: 100}])[0]
     with pos3.mirror():
         main(
-            policy=StubPolicy(command=ev.embodiment.commands[keys.ROBOT_COMMAND].home, target_grip=0.0),
+            policy=StubPolicy(command=roboarm_command.Reset(), target_grip=0.0),
             evals=[replace(ev, tasks=[trial])],
             output_dir=str(tmp_path),
         )

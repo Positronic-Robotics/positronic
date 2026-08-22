@@ -37,7 +37,13 @@ class _IdlePolicy:
 def test_an_exhausted_trial_plan_ends_the_sweep():
     """How an unattended run finishes: the driver runs out of tasks, the world stops, ``main`` returns."""
     embodiment = Embodiment(
-        descriptor='stub', observations={}, commands={}, static_meta={}, meta_source=None, simulated=True
+        descriptor='stub',
+        observations={},
+        commands={},
+        prepare_handlers={},
+        static_meta={},
+        meta_source=None,
+        simulated=True,
     )
     main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=[])])
 
@@ -63,7 +69,7 @@ class _EpisodeStub(pimm.ControlSystem):
 def test_the_driver_asks_for_its_tasks_one_at_a_time():
     """The plan belongs to the driver: it asks for each task in turn, and only once the running episode has
     answered."""
-    tasks = [Task(instruction_source='stack', timeout_sec=0.05, params={keys.EVAL_TRIAL_INDEX: i}) for i in range(2)]
+    tasks = [Task(instruction_source='stack', timeout_sec=0.05, meta={keys.EVAL_TRIAL_INDEX: i}) for i in range(2)]
     stub = _EpisodeStub()
     driver = TaskDriver(tasks)
     with pimm.World(virtual_time=True) as world:
