@@ -39,12 +39,21 @@ API itself.
   into the motion underway, choosing when to re-plan — is where policies
   differ most. New schemes appear constantly and each must fit without a
   framework change.
-- **Embodiment-agnostic.** The API assumes nothing about the robot; what a
+- **Embodiment-agnostic.** The API assumes nothing about the robot: what a
   policy must know about its body reaches it as data, so a new robot is new
   data, not a new API.
 - **Interchangeable.** To a policy, simulation and the real robot are the
   same world: the same code runs in both, behaves the same, and pays for its
   model calls in both.
+- **Composable.** Building a new policy must be easy: a policy is assembled
+  from parts written once, so a developer writes only what is new.
+- **Remote-native.** Heavy computation wants its own machine, while control
+  runs best close to the sensors and the robot. A policy therefore spans
+  machines, and the API and the framework must make that split easy.
+- **Debuggable.** An episode cannot be re-run, so understanding it relies on
+  what was recorded. From the records alone one can reconstruct what the
+  policy saw, what it decided, and what it asked of its model — even when
+  those happened on different machines.
 
 ## Requirements
 
