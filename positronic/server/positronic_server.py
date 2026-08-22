@@ -536,10 +536,11 @@ def _as_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
         return None
 
 
-def _local_ip_addresses() -> list[str]:
-    """Every routable IP address on a local interface.
+def _local_ip_addresses(version: int | None = None) -> list[str]:
+    """Every routable IP address on a local interface, of `version` when one is named.
 
-    Link-local addresses are left out: they carry a zone that no URL a browser is given can name.
+    An IPv6 link-local address is left out: it carries a zone that no URL a browser is given can
+    name. An IPv4 one (169.254/16) carries no zone and is a URL like any other, so it stays.
     """
     addresses: list[str] = []
     for interface in psutil.net_if_addrs().values():
@@ -547,17 +548,32 @@ def _local_ip_addresses() -> list[str]:
             if addr.family not in (socket.AF_INET, socket.AF_INET6):
                 continue
             ip = _as_ip(addr.address.split('%')[0])
-            if ip is not None and not ip.is_link_local and str(ip) not in addresses:
+            if ip is None or (version is not None and ip.version != version):
+                continue
+            if ip.version == 6 and ip.is_link_local:
+                continue
+            if str(ip) not in addresses:
                 addresses.append(str(ip))
     return addresses
 
 
-_WILDCARD_HOSTS = frozenset({'0.0.0.0', '::', ''})
-
-
 def _served_addresses(host: str) -> list[str]:
-    """The addresses a server bound to `host` answers on."""
-    return _local_ip_addresses() if host in _WILDCARD_HOSTS else [host]
+    """The addresses a server bound to `host` answers on.
+
+    A concrete host answers on itself. A wildcard answers on the local interfaces of the family it
+    binds, and the family is the point: `0.0.0.0` is an AF_INET listener, so an IPv6 URL built from
+    it names an address nothing is listening on, while `::` on a dual-stack host accepts IPv4 too.
+    An empty host is the AF_INET wildcard the socket layer reads it as.
+
+    Judged by value rather than by spelling, so `0:0:0:0:0:0:0:0` is the wildcard the bind
+    normalizes it to rather than an address to certify.
+    """
+    if host == '':
+        return _local_ip_addresses(version=4)
+    ip = _as_ip(host)
+    if ip is None or not ip.is_unspecified:
+        return [host]
+    return _local_ip_addresses() if ip.version == 6 else _local_ip_addresses(version=4)
 
 
 def _is_loopback(host: str) -> bool:
@@ -567,7 +583,8 @@ def _is_loopback(host: str) -> bool:
 
 def _access_url(scheme: str, host: str, port: int) -> str:
     ip = _as_ip(host)
-    literal = f'[{host}]' if ip is not None and ip.version == 6 else host
+    # A zone is written `%25<zone>` inside a URL (RFC 6874); a bare `%` is not a URL a browser takes.
+    literal = f'[{host.replace("%", "%25")}]' if ip is not None and ip.version == 6 else host
     return f'{scheme}://{literal}:{port}'
 
 
@@ -586,8 +603,12 @@ def _insecure_context_warning(hosts: list[str], https: bool) -> str | None:
 
 
 def _subject_alt_names(hosts: list[str]) -> str:
-    """The certificate's subjectAltName over the addresses the server answers on."""
-    sans = [f'IP:{host}' if _as_ip(host) is not None else f'DNS:{host}' for host in hosts]
+    """The certificate's subjectAltName over the addresses the server answers on.
+
+    A scope is dropped from an IP entry: `fe80::1%eth0` is a host the socket layer binds, and
+    OpenSSL refuses the same string as a bad IP address, which fails the server before it starts.
+    """
+    sans = [f'IP:{host.split("%")[0]}' if _as_ip(host) is not None else f'DNS:{host}' for host in hosts]
     if any(_is_loopback(host) for host in hosts):
         sans.append('DNS:localhost')
     return ','.join(sans)
