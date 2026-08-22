@@ -163,8 +163,9 @@ class MujocoSim(pimm.ControlSystem):
         self.sim_state = pimm.ControlSystemEmitter[dict[str, np.ndarray]](self)
 
         self._moves = Moves[roboarm_command.CommandType](self.sync_move, self.commands)
+        # The state has a second reason to go out — a move that ended — so it is not one of ``_streams``.
+        self._state_due = _Cadence(self._state_fps)
         self._streams = [
-            (_Cadence(self._state_fps), self._emit_state),
             (_Cadence(self._grip_fps), self._emit_grip),
             (_Cadence(self._sim_state_fps), self._emit_sim_state),
             (_Cadence(self._camera_fps), self._emit_cameras),
@@ -218,8 +219,12 @@ class MujocoSim(pimm.ControlSystem):
         with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
             self.step()
             self.fps_counter.tick()
-            if self._moves.active and self._moves.settle(self._q, now) is MoveStatus.GAVE_UP:
+            ended = self._moves.active and self._moves.settle(self._q, now) is not MoveStatus.MOVING
+            if ended and self._moves.errored:
                 self._error = True  # the arm is not where the move sent it
+            # A move that ended says where the arm got to, whatever rate the state stream runs at
+            if self._state_due(now) or ended:
+                self._emit_state()
             for due, emit in self._streams:
                 if due(now):
                     emit()

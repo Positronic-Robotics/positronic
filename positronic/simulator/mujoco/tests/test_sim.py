@@ -86,6 +86,22 @@ def test_a_streamed_command_leaves_the_arm_alone_while_a_move_is_in_flight():
         np.testing.assert_allclose(state.value.q, home + 0.2, atol=sim._MOVE_TOL)
 
 
+def test_a_move_that_ends_publishes_the_arm_before_it_answers():
+    """The state stream can run slower than the physics, and its asker still reads where the arm got to."""
+    sim = MujocoSim(MODEL, loaders=(), state_fps=1.0)
+
+    with pimm.World(virtual_time=True) as world:
+        move = world.pair(sim.sync_move)
+        state = world.pair(sim.state)
+        scheduler = world.start([sim])
+        target = _at_rest(scheduler, state, sim) + 0.2
+
+        answer = move(roboarm_command.JointPosition(target))
+
+        _answered(scheduler, answer, _turns(sim, 5.0)).result()
+        np.testing.assert_allclose(state.value.q, target, atol=sim._MOVE_TOL)
+
+
 def test_a_move_the_arm_never_finishes_hands_its_asker_the_timeout():
     """The joints stop at their limits, so a target beyond them is one the arm can be held short of forever."""
     sim = MujocoSim(MODEL, loaders=())
