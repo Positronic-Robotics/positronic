@@ -82,14 +82,7 @@ def _run_world(policy, ev: Eval, output_dir: Path | None):
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(virtual_time=embodiment.simulated) as world:
         ds_agent = wire.wire_embodiment(
-            world,
-            harness,
-            embodiment,
-            dataset_writer,
-            time_mode,
-            privileged=ev.privileged,
-            done=ev.done,
-            env_reset=ev.env_reset,
+            world, harness, embodiment, dataset_writer, time_mode, privileged=ev.privileged, done=ev.done
         )
         world.connect(driver.perform_task, harness.perform_task)
         if ds_agent is not None:

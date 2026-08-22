@@ -47,7 +47,9 @@ CAM = 'image.cam'
 OPERATOR_DONE = {keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR}
 
 
-def make_embodiment(descriptor: str = '', cameras=(CAM,), static_meta=None, simulated=False) -> Embodiment:
+def make_embodiment(
+    descriptor: str = '', cameras=(CAM,), static_meta=None, simulated=False, prepare_funcs=None
+) -> Embodiment:
     """Minimal Franka-shaped embodiment for harness unit tests.
 
     The sources/dests are no-ops: these tests pair the harness ports directly
@@ -68,7 +70,7 @@ def make_embodiment(descriptor: str = '', cameras=(CAM,), static_meta=None, simu
         descriptor=descriptor,
         observations=observations,
         commands=commands,
-        prepare_funcs={},
+        prepare_funcs=prepare_funcs or {},
         static_meta=static_meta or {},
         meta_source=pimm.NoOpEmitter(),
         simulated=simulated,
@@ -792,7 +794,7 @@ def test_policy_first_obs_is_frame0(world):
         descriptor='',
         observations={'frame': Observation(device.state, None)},
         commands={keys.ROBOT_COMMAND: Command(device.cmd, None)},
-        prepare_funcs={},
+        prepare_funcs={keys.SCENE: device.env_reset},
         static_meta={},
         meta_source=device.meta,
         control_systems=(device,),
@@ -801,7 +803,7 @@ def test_policy_first_obs_is_frame0(world):
     policy = StubPolicy()
     harness = Harness(policy, embodiment)
     perform_task = world.pair(harness.perform_task)
-    wire.wire_embodiment(world, harness, embodiment, None, env_reset=device.env_reset)
+    wire.wire_embodiment(world, harness, embodiment, None)
 
     scheduler = world.start([harness, device])
     perform_task(Task(instruction_source='t', timeout_sec=100.0))
@@ -886,9 +888,9 @@ def test_done_after_deadline_is_a_timeout(world):
 
 @pytest.mark.timeout(3.0)
 def test_trial_seed_reaches_task_reset_and_meta(world):
-    """Each trial hands its ``params`` to the scene reset; they land in episode meta with the
-    eval-identity block and the instruction. A real rig records that it charged inference time, whatever
-    the task asked."""
+    """A trial's params draw its scene and identify it: the scene prepare is asked with them, and they land
+    in episode meta beside the instruction. A real rig records that it charged inference time, whatever the
+    task asked."""
     policy = StubPolicy()
     seeds = []
 
@@ -896,14 +898,17 @@ def test_trial_seed_reaches_task_reset_and_meta(world):
         seeds.append(params.get(keys.EVAL_SEED))
         p['meta_em'].emit({})  # the producer publishes fresh scene meta, recorded into the episode at finalize
 
-    harness = Harness(policy, make_embodiment())
     scene = _Scene(reset)
+    harness = Harness(policy, make_embodiment(prepare_funcs={keys.SCENE: scene.env_reset}))
     p = _pair_all(world, harness)
-    wire_call(world, harness.env_reset, scene.env_reset)
+    wire_call(world, harness.prepare[keys.SCENE], scene.env_reset)
 
     scheduler = world.start([harness, scene])
     for i in range(2):
-        p['perform_task'](Task(instruction_source='stack', timeout_sec=0.05, reset_args={keys.EVAL_SEED: 7 + i}))
+        seed = {keys.EVAL_SEED: 7 + i}
+        p['perform_task'](
+            Task(instruction_source='stack', timeout_sec=0.05, prepare_args={keys.SCENE: seed}, meta=seed)
+        )
         drive_scheduler(scheduler, steps=200)
 
     assert seeds == [7, 8]
@@ -1123,10 +1128,10 @@ def test_task_instruction_reaches_session_context_after_reset(world):
     def reset(_params):
         scene['task'] = 'resolved-on-reset'  # the env reports its task only here
 
-    harness = Harness(policy, make_embodiment())
     drawing = _Scene(reset)
+    harness = Harness(policy, make_embodiment(prepare_funcs={keys.SCENE: drawing.env_reset}))
     p = _pair_all(world, harness)
-    wire_call(world, harness.env_reset, drawing.env_reset)
+    wire_call(world, harness.prepare[keys.SCENE], drawing.env_reset)
 
     scheduler = world.start([harness, drawing])
     p['perform_task'](Task(instruction_source=lambda: scene['task'], timeout_sec=0.05))
@@ -1411,7 +1416,7 @@ def test_stop_mid_episode_keeps_episode_open_for_recorder_flush(world, tmp_path)
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
     # Never ends within the drive: the stop, not the deadline, is what winds this episode down.
-    _ask(world, harness, Task(instruction_source='stack', timeout_sec=10.0, reset_args={keys.EVAL_TRIAL_INDEX: 0}))
+    _ask(world, harness, Task(instruction_source='stack', timeout_sec=10.0, meta={keys.EVAL_TRIAL_INDEX: 0}))
     stop = SimpleNamespace(value=False)
     clock = _ManualClock()
 
@@ -1462,7 +1467,7 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
 
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-taxonomy'), _eval_pass('run-taxonomy'):
         scheduler = world.start([harness, producer])
-        p['perform_task'](Task(instruction_source='stack', timeout_sec=0.05, reset_args={keys.EVAL_TRIAL_INDEX: 0}))
+        p['perform_task'](Task(instruction_source='stack', timeout_sec=0.05, meta={keys.EVAL_TRIAL_INDEX: 0}))
         drive_scheduler(scheduler, steps=400)
 
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
@@ -1527,11 +1532,11 @@ def test_failed_pass_seals_open_episode_span(world, tmp_path):
     so the reduce keeps it and its phases attribute."""
 
     policy = StubPolicy()
-    harness = Harness(policy, make_embodiment())
     scene = pimm.calls.ControlSystemHandler[Any, None](Passive())
-    wire_call(world, harness.env_reset, scene)
+    harness = Harness(policy, make_embodiment(prepare_funcs={keys.SCENE: scene}))
+    wire_call(world, harness.prepare[keys.SCENE], scene)
     harness.ds_command._bind(RecordingEmitter())
-    _ask(world, harness, Task(instruction_source='stack', timeout_sec=10.0, reset_args={keys.EVAL_TRIAL_INDEX: 0}))
+    _ask(world, harness, Task(instruction_source='stack', timeout_sec=10.0, meta={keys.EVAL_TRIAL_INDEX: 0}))
     stop = SimpleNamespace(value=False)
     clock = _ManualClock()
 

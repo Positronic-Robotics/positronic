@@ -171,7 +171,7 @@ def remote_franka_embodiment(
         observations=observations,
         commands=commands,
         # A remote env readies its own robot when it draws the scene; the proxy has no lever of its own
-        prepare_funcs={},
+        prepare_funcs={keys.SCENE: proxy.env_reset},
         static_meta={**ROBOT_STATIC_META, **(static_meta or {})},
         meta_source=proxy.robot_meta,
         control_systems=(proxy,),

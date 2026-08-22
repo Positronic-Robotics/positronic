@@ -1,5 +1,4 @@
 import functools
-from typing import Any
 
 import pimm
 from positronic import keys, telemetry, telemetry_keys
@@ -105,16 +104,14 @@ def wire_embodiment(
     time_mode: TimeMode = TimeMode.CLOCK,
     privileged: dict[str, Observation] | None = None,
     done: pimm.SignalEmitter | None = None,
-    env_reset: pimm.calls.ControlSystemHandler[Any, None] | None = None,
 ):
     """Wire an embodiment to the Harness for the inference path.
 
-    Connects device observation sources -> ``harness.observations``,
-    ``harness.commands`` -> device receivers, ``harness.prepare`` -> every device
-    that readies itself and ``harness.env_reset`` -> the scene, and records observations, command
-    chunks, and the eval's privileged ground-truth into the dataset. The ``done``
-    terminating signal, when present, is connected to ``harness.done``. GUI camera wiring
-    stays with the caller — it is a presentation concern, not part of the embodiment contract.
+    Connects device observation sources -> ``harness.observations``, ``harness.commands`` -> device
+    receivers, ``harness.prepare`` -> everything a trial readies, and records observations, command chunks,
+    and the eval's privileged ground-truth into the dataset. The ``done`` terminating signal, when present,
+    is connected to ``harness.done``. GUI camera wiring stays with the caller — it is a presentation
+    concern, not part of the embodiment contract.
     """
     privileged = privileged or {}
     for name, obs in embodiment.observations.items():
@@ -123,8 +120,6 @@ def wire_embodiment(
         world.connect(harness.commands[name], cmd.dest)
     for name, device in embodiment.prepare_funcs.items():
         world.connect(harness.prepare[name], device)
-    if env_reset is not None:
-        world.connect(harness.env_reset, env_reset)
     if embodiment.meta_source is not None:
         world.connect(embodiment.meta_source, harness.robot_meta_in)
     if done is not None:

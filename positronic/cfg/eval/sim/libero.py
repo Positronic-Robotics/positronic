@@ -79,7 +79,6 @@ def _libero_eval(
         ),
         privileged=privileged,
         done=proxy.done,
-        env_reset=proxy.env_reset,
     )
 
 

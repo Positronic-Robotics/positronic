@@ -3,6 +3,7 @@ aliases over ``cli.eval.run``."""
 
 from collections import Counter
 from contextlib import nullcontext
+from dataclasses import replace
 from typing import Any
 
 import configuronic as cfn
@@ -24,14 +25,15 @@ from positronic.policy.harness import Harness
 class KeyboardOperator(pimm.ControlSystem):
     """Turns keystrokes into episodes: ``s`` asks for one through ``perform_task``, ``p`` ends the live one.
 
-    It holds the pending answers because that is where an episode's terminal — and any refused ask —
-    arrives; both are printed as they land.
+    It serves the trial's ``human`` prepare, and holds the pending answers because that is where an
+    episode's terminal — and any refused ask — arrives; both are printed as they land.
     """
 
     def __init__(self, task: Task):
         self._task = task
         self.keystrokes = pimm.ControlSystemReceiver[str](self)
         self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
+        self.ready = pimm.calls.ControlSystemHandler[Any, None](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
@@ -43,6 +45,8 @@ class KeyboardOperator(pimm.ControlSystem):
                         pending.append(self.perform_task(self._task))
                     case 'p':
                         self.done.emit({keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR})
+            for call in self.ready.incoming():
+                call.set_result(None)  # the operator set the rig up before asking for the trial at all
             running = []
             for answer in pending:
                 if answer.done():
@@ -86,10 +90,12 @@ def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
 def _run_attended(policy, embodiment: Embodiment, task: str | None, output_dir) -> None:
     """Record from a warmed policy until the keyboard returns. The caller owns the policy."""
     output_dir = prepare_output_dir(output_dir)
-    harness = Harness(policy, embodiment)
     keyboard = KeyboardControl(quit_key='q')
     # An attended episode has no budget: the operator ends it, so nothing but ``done`` can.
     operator = KeyboardOperator(Task(instruction_source=task or '', timeout_sec=None))
+    # The rig a human sets up by hand readies like any device: it is the operator who answers for it.
+    embodiment = replace(embodiment, prepare_funcs={**embodiment.prepare_funcs, keys.HUMAN: operator.ready})
+    harness = Harness(policy, embodiment)
     print('Keyboard controls: [s]tart, sto[p], [q]uit')
 
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)

@@ -126,11 +126,11 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
 
 
 def mujoco_franka(sim, camera_dict):
-    """Mujoco single-arm Franka + gripper over a given sim — pure robot, no scene.
+    """Mujoco single-arm Franka + gripper over a given sim.
 
-    The scene (loaders) and privileged ground-truth are the eval's concern; this maps
-    the sim's arm, gripper, and camera ports into an embodiment. 3 cameras because
-    Mujoco does not render the second image when using only 2 cameras.
+    Maps the sim's arm, gripper and camera ports into an embodiment, and its scene draw into the prepare
+    every trial opens on. Which scene it draws (the loaders) and the privileged ground-truth are the eval's
+    concern. 3 cameras because Mujoco does not render the second image when using only 2 cameras.
     """
     observations = {
         keys.ROBOT_STATE: Observation(sim.state, Serializers.robot_state),
@@ -145,8 +145,8 @@ def mujoco_franka(sim, camera_dict):
         descriptor='mujoco.franka',
         observations=observations,
         commands=commands,
-        # The sim has no synchronous move of its own; its reset puts the arm at the scene's start pose
-        prepare_funcs={},
+        # The sim has no synchronous move of its own: drawing the scene is what puts the arm at its start pose
+        prepare_funcs={keys.SCENE: sim.env_reset},
         static_meta={**ROBOT_STATIC_META, 'simulation.mujoco_model_path': sim.mujoco_model_path},
         meta_source=sim.robot_meta,
         control_systems=(sim,),

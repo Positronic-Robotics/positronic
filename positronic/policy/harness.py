@@ -234,7 +234,6 @@ class Harness(pimm.ControlSystem):
         self.observations = pimm.ReceiverDict(self, embodiment.observations)
         self.commands = pimm.EmitterDict(self, embodiment.commands)
         self.prepare = pimm.calls.CallerDict[Any, None](self, embodiment.prepare_funcs)
-        self.env_reset = pimm.calls.ControlSystemCaller[Any, None](self)
         # Each channel's waypoints not yet played, stamped with absolute clock ns and ascending.
         self._schedules: dict[str, deque[tuple[int, Any]]] = {name: deque() for name in embodiment.commands}
 
@@ -273,7 +272,7 @@ class Harness(pimm.ControlSystem):
         session_meta = self.policy.meta | (self._worker.meta if self._worker else {})
         for k, v in flatten_dict(session_meta).items():
             meta[f'{keys.POLICY_META}.{k}'] = v
-        meta.update(self._task.reset_args)
+        meta.update(self._task.meta)
         meta[keys.TASK] = self._task.instruction
         return meta
 
@@ -282,11 +281,8 @@ class Harness(pimm.ControlSystem):
             self.commands[name].emit(value)
 
     def _prepare(self, should_stop: pimm.SignalReceiver, task: Task) -> Generator[pimm.Command, None, None]:
-        """Ask the devices to ready themselves and the env to draw the scene, and come back once all have."""
-        asked = [ask(task.prepare_args.get(name)) for name, ask in self.prepare.items()]
-        if self.env_reset.connected:  # an eval whose scene a human sets up has nothing to ask
-            asked.append(self.env_reset(task.reset_args))
-        ready = pimm.calls.all_of(asked)
+        """Ask everything the trial readies — scene, devices, operator — and come back once all have."""
+        ready = pimm.calls.all_of([ask(task.prepare_args.get(name)) for name, ask in self.prepare.items()])
         while not ready.done() and not should_stop.value:
             yield pimm.Yield() if self._embodiment.simulated else pimm.Sleep(POLL_PERIOD_SEC)
         # An episode must not open on a rig that never got ready, and its asker must hear that rather than wait
@@ -363,7 +359,7 @@ class Harness(pimm.ControlSystem):
         self._awaiting_obs = set(self._embodiment.observations)
         self._rollout_started = False
         # Before the prepare, so it and the rollout's other phase spans parent to the episode span.
-        self._telemetry.begin(self._task.reset_args)
+        self._telemetry.begin(self._task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
             yield from self._prepare(should_stop, self._task)
         # Read after the reset: an embodiment that learns its task from the scene reports it only once the

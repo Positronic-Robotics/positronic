@@ -69,9 +69,7 @@ class _EpisodeStub(pimm.ControlSystem):
 def test_the_driver_asks_for_its_tasks_one_at_a_time():
     """The plan belongs to the driver: it asks for each task in turn, and only once the running episode has
     answered."""
-    tasks = [
-        Task(instruction_source='stack', timeout_sec=0.05, reset_args={keys.EVAL_TRIAL_INDEX: i}) for i in range(2)
-    ]
+    tasks = [Task(instruction_source='stack', timeout_sec=0.05, meta={keys.EVAL_TRIAL_INDEX: i}) for i in range(2)]
     stub = _EpisodeStub()
     driver = TaskDriver(tasks)
     with pimm.World(virtual_time=True) as world:

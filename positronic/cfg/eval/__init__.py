@@ -17,9 +17,17 @@ def placeholder():
 
 
 def number_trials(task: Task, params: list[dict]) -> list[Task]:
-    """One copy of ``task`` per entry in ``params``, each also carrying its place in the sweep."""
+    """One copy of ``task`` per entry in ``params``, each also carrying its place in the sweep.
+
+    A trial's params draw its scene and identify it: the scene prepare is asked with them, and the episode
+    records them alongside the place in the sweep that only the recording cares about.
+    """
     return [
-        replace(task, reset_args={**p, keys.EVAL_TRIAL_INDEX: i, keys.EVAL_TRIAL_COUNT: len(params)})
+        replace(
+            task,
+            prepare_args={**task.prepare_args, keys.SCENE: p},
+            meta={**p, keys.EVAL_TRIAL_INDEX: i, keys.EVAL_TRIAL_COUNT: len(params)},
+        )
         for i, p in enumerate(params)
     ]
 
