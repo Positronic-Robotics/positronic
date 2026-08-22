@@ -47,8 +47,8 @@ def test_an_ipv4_wildcard_advertises_no_address_its_listener_cannot_answer(multi
 
 
 def test_every_spelling_of_the_wildcard_is_one(multi_homed):
-    # The bind normalizes these; a string set does not, so the expanded form was certified and
-    # advertised as an address of its own.
+    # The bind normalizes an address, so two spellings of one wildcard serve the same set. A
+    # spelling read as an address of its own is certified and advertised as one.
     assert _served_addresses('0:0:0:0:0:0:0:0') == _served_addresses('::')
     assert _served_addresses('') == _served_addresses('0.0.0.0')
 
@@ -78,8 +78,8 @@ def test_certificate_names_no_address_beyond_the_bind():
 
 
 def test_certificate_drops_a_zone_from_an_ip_it_names():
-    # The socket layer binds `fe80::1%eth0`; OpenSSL refuses the same string as a bad IP address,
-    # so the whole default-HTTPS path died before uvicorn started.
+    # The socket layer binds `fe80::1%eth0`; OpenSSL refuses the same string as a bad IP address, so
+    # a SAN carrying the zone fails certificate generation and the server never reaches uvicorn.
     assert _subject_alt_names(['fe80::1%eth0']) == 'IP:fe80::1'
 
 
