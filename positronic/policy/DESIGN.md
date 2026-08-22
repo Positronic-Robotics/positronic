@@ -96,16 +96,26 @@ itself is called synchronously — a plain function call, repeated:
 
 ### Served functions
 
-- A policy's heavy work (model inference) lives in functions it defines and
-  the framework serves — in-process or on a server; the session cannot tell.
-- Invoking one starts the work off the turn and returns a handle at once.
-- The session may read the handle when it next has control.
+The remote-native goal splits a policy in two: heavy computation on its own
+machine, control close to the robot. Served functions are that split in the
+API. The policy defines its heavy work as functions, and the framework runs
+every call. The session stays plain synchronous code, and control keeps
+running while a call is in flight. The same function may run in-process
+today and on a GPU server tomorrow: placement is a deployment choice, and
+the plumbing — serialization, the wire — is the framework's job. This also
+allows the framework to charge the call to the right clock in simulation and
+to log it for the record.
+
+- The session cannot tell where a function runs.
+- Between calls the framework promises nothing: not the same process, not
+  surviving state, not order, not exactly-once delivery. A function answers
+  from its arguments alone; a cache is a speed-up, never a dependency.
+- Invoking a function starts the work and returns a handle at once, never
+  waiting. The session reads the handle when it next has control.
 - A function's inputs and outputs are types the framework can serialize:
   plain types and numpy, selected domain classes. An unsupported type fails
   at the call.
-- A session computes only while in control or inside a served call.
-- Served functions are pure: one may cache, but dropping the cache must not
-  change what it computes.
+- A session computes only inside its own call or inside a served function.
 
 ### Composability
 
