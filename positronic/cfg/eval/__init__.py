@@ -23,7 +23,7 @@ def number_trials(task: Task, params: list[dict]) -> list[Task]:
         replace(
             task,
             prepare_args={**task.prepare_args, keys.SCENE: p},
-            meta={**p, keys.EVAL_TRIAL_INDEX: i, keys.EVAL_TRIAL_COUNT: len(params)},
+            meta={**task.meta, **p, keys.EVAL_TRIAL_INDEX: i, keys.EVAL_TRIAL_COUNT: len(params)},
         )
         for i, p in enumerate(params)
     ]
