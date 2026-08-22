@@ -119,20 +119,31 @@ to log it for the record.
 
 ### Composability
 
-- A `Layer` is a config-time recipe: per control session it makes a session
-  wrapping the inner session it is given.
-- A chain of layers is a layer.
-- Chain order fully determines behavior.
-- A session communicates only through the observations and commands flowing
-  through it; it knows nothing of its neighbours or its position.
-- What an inner session sees is its outer's choice — except `time`: one value
-  per turn, the same at every depth, not the chain's to alter.
-- A `Codec` is a data transform written once and applicable to both: around a
-  served function, its inputs and outputs; as a trivial layer, observations
-  down and commands up, `resume_at` untouched.
-- Any policy fits the API as it stands: implement a session directly, or
-  compose it from layers and served functions. Neither ever requires a
-  framework change.
+A neural policy is never just the model. Around it sit data transforms —
+normalize, change frames, encode actions — the pre- and post-processing
+every ML pipeline has. Physical AI adds a second kind of part, one that
+works in time: decide when to call the model, execute the chunk it
+returned, blend a late plan into the motion underway. The API gives each
+kind its own shape. A `Codec` transforms data and knows nothing of time. A
+`Layer` wraps a session and lives on the same clock it does.
+
+- A `Layer` is a recipe fixed at configuration time. When a policy session
+  is created, each layer makes its session, wrapping the one inside it.
+- A chain of layers is a layer, and its order fully determines behavior.
+- Each session in the chain communicates only through the observations and
+  commands flowing through it. It knows nothing of its neighbours or its
+  position.
+- What an inner session sees is its outer's choice — except `time`. The
+  framework sets `time` once per outermost call, and every session in the
+  chain sees that same value.
+- A `Codec` is a pair of transforms — encode and decode, as in a video
+  codec. Around a served function, encode converts the arguments and decode
+  converts the answer. As a trivial layer, encode converts the observations
+  going down and decode converts the commands coming up, with `resume_at`
+  untouched.
+
+Layers and codecs are offered, not imposed: a policy may always implement
+its session directly against the call itself.
 
 ### Logging
 
