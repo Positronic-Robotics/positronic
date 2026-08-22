@@ -99,10 +99,10 @@ class MujocoSim(pimm.ControlSystem):
     """The MuJoCo embodiment in one control system: scene, Franka arm, gripper, and cameras.
 
     ``reset`` rebuilds the scene and ``sync_move`` puts the arm where the trial starts it; the run loop
-    publishes the readied scene as frame-0 once both have answered, so the first inference reads it and the
-    recorder logs it. Every other turn applies whatever command has just arrived, steps once, and emits the
-    due streams (post-step, Gym-style). The sim sleeps one control period each turn, so it is the eval's
-    sole time-master. Each stream has an independent rate (``*_fps``, ``None`` = every physics tick).
+    publishes the readied scene as frame-0 once both have answered, before any step advances it. Every other
+    turn applies whatever command has just arrived, steps once, and emits the due streams (post-step,
+    Gym-style). The sim sleeps one control period each turn, so it is the eval's sole time-master. Each
+    stream has an independent rate (``*_fps``, ``None`` = every physics tick).
     """
 
     _MOVE_TOL = 0.05  # radians; the position actuators hold the arm a few hundredths short of their ctrl
@@ -177,7 +177,8 @@ class MujocoSim(pimm.ControlSystem):
             while not should_stop.value:
                 yield pimm.Sleep(self.model.opt.timestep)
                 now = clock.now()
-                # The scene is drawn and the arm readied in one turn, so a trial answers everything at once.
+                # The scene is drawn before the arm is asked for anything, so a move's target is computed
+                # against the model the redraw just built.
                 redraw = next(self.env_reset.incoming(), None)
                 if redraw is not None:
                     with pimm.calls.raise_to(redraw):
@@ -204,8 +205,10 @@ class MujocoSim(pimm.ControlSystem):
             target = self._target_joints(call.request)
             self._set_actuator_values(target)
             self._moves.accept(call, target, self._MOVE_TOL, now, self._MOVE_TIMEOUT_S)
-            # Already there: no travel to publish before the answer, and no step before frame-0.
+            # Already there: answered on the spot, after its state and without a step, so the scene a
+            # redraw just built reaches frame-0 untouched.
             if self._moves.settle(self._q, now) is MoveStatus.ARRIVED:
+                self._emit_state()
                 self._moves.answer()
 
     def _step_and_emit(self, now: float) -> None:
@@ -249,10 +252,9 @@ class MujocoSim(pimm.ControlSystem):
 
         The model and data are rebuilt wholesale, so model-level loader effects (fixed-body poses,
         colors, cameras) re-randomize too; the renderer and IK physics rebind lazily. The run loop
-        publishes the prepared scene as frame-0 — in sequence, before any step — so the first inference
-        reads the readied state and the recorder logs it. Stale commands queued while idle are dropped and
-        the held grip is cleared, so the first step does not apply a queued command on the freshly reset
-        scene.
+        publishes the prepared scene as frame-0 — in sequence, before any step advances it. Stale commands
+        queued while idle are dropped and the held grip is cleared, so the first step does not apply a
+        queued command on the freshly reset scene.
         """
         self._load_scene(seed)
         self._home()
@@ -406,8 +408,10 @@ class MujocoSim(pimm.ControlSystem):
             raise ValueError(f'{target} is out of reach')
         return qpos[self._joint_qpos_ids]
 
-    def _set_actuator_values(self, values: np.ndarray):
-        for name, value in zip(self._actuator_names, values, strict=True):
+    def _set_actuator_values(self, values: np.ndarray) -> None:
+        """Aim every arm actuator at ``values``; one that does not name them all leaves the arm alone."""
+        # Paired up front, so a refused target is refused before any actuator has been retargeted
+        for name, value in list(zip(self._actuator_names, values, strict=True)):
             self.data.actuator(name).ctrl = value
 
     def _apply_grip(self, target: float):

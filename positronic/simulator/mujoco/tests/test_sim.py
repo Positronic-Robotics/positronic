@@ -102,6 +102,41 @@ def test_a_move_that_ends_publishes_the_arm_before_it_answers():
         np.testing.assert_allclose(state.value.q, target, atol=sim._MOVE_TOL)
 
 
+def test_a_move_that_is_already_there_publishes_before_it_answers():
+    """The immediate answer owes its asker a state as much as one that travelled does."""
+    sim = MujocoSim(MODEL, loaders=(), state_fps=1.0)
+
+    with pimm.World(virtual_time=True) as world:
+        move = world.pair(sim.sync_move)
+        state = world.pair(sim.state)
+        scheduler = world.start([sim])
+        home = _at_rest(scheduler, state, sim)
+        pimm.value_updated(state)  # drained, so what is read below is what the move published
+
+        answer = move(roboarm_command.JointPosition(home))
+
+        _answered(scheduler, answer, _turns(sim, 0.05)).result()
+        assert pimm.value_updated(state) is not None
+
+
+def test_a_move_naming_the_wrong_joints_leaves_the_arm_alone():
+    """The vector is paired with the actuators before any is written, so a refused move retargets none."""
+    sim = MujocoSim(MODEL, loaders=())
+
+    with pimm.World(virtual_time=True) as world:
+        move = world.pair(sim.sync_move)
+        state = world.pair(sim.state)
+        scheduler = world.start([sim])
+        home = _at_rest(scheduler, state, sim)
+
+        answer = move(roboarm_command.JointPosition(np.full(6, 1.0)))
+
+        with pytest.raises(ValueError):
+            _answered(scheduler, answer, _turns(sim, 1.0)).result()
+        drive_scheduler(scheduler, steps=_turns(sim, 1.0))
+        np.testing.assert_allclose(state.value.q, home, atol=sim._MOVE_TOL)
+
+
 def test_a_move_the_arm_never_finishes_hands_its_asker_the_timeout():
     """The joints stop at their limits, so a target beyond them is one the arm can be held short of forever."""
     sim = MujocoSim(MODEL, loaders=())
@@ -132,7 +167,7 @@ def test_a_move_to_a_pose_the_arm_cannot_reach_hands_its_asker_the_reason():
 
 
 def test_frame_zero_waits_for_the_arm_a_trial_readies():
-    """The recorder opens on the last prepare's answer and drains as it opens, so frame-0 comes after it."""
+    """Frame-0 follows both prepare answers, so it is the first thing an episode opening on them can see."""
     sim = MujocoSim(MODEL, loaders=())
 
     with pimm.World(virtual_time=True) as world:
