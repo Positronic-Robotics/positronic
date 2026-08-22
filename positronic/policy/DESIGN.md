@@ -72,20 +72,27 @@ robots at once.
 
 ### Control
 
-- Control happens in a cycle between a session and the framework; the
-  session's part of the cycle is a turn.
-- One turn: `(observations, time) -> (commands, resume_at)` — the current
+The robot moves continuously, but code acts in moments. The framework bridges
+the two with signals, a concept it takes from
+[pimm](../../pimm/README.md), Positronic's runtime. A
+signal is a single value that its owner updates at its own rate. A reader
+takes the latest value whenever it looks. Nothing queues and nothing waits.
+
+The policy session lives in this world as a reader of observations and a
+writer of commands. Everything around it is asynchronous, but the session
+itself is called synchronously — a plain function call, repeated:
+
+- One call: `(observations, time) -> (commands, resume_at)` — the current
   observations and time in, the commands to execute now (possibly none) out.
-- The `time` argument is the only clock a session has; the framework sets it.
+- Observations are the freshest the framework has at the moment of the call.
+- Returned commands are emitted towards the robot driver immediately.
 - Observations and commands can be of any type, structured or unstructured (a
   robot command, an image).
-- Observations are the freshest the framework has when the turn starts.
-- Returned commands are emitted towards the robot driver in the same turn.
-- `resume_at` is when the session wants its next turn: an absolute instant on
-  the clock of `time`, strictly in the future.
-- The framework grants the turn best-effort at `resume_at`: it may be earlier
-  or later.
-- The framework has no pace of its own: turns happen when sessions ask.
+- The `time` argument is the only clock a session has; the framework sets it.
+- `resume_at` is how the session paces itself: the instant at which it wants
+  to be called next, absolute on the clock of `time`, strictly in the future.
+- The framework calls best-effort at `resume_at`: it may be earlier or later,
+  and the session reads the actual moment from `time`.
 
 ### Served functions
 
