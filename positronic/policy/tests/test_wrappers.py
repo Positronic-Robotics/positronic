@@ -7,6 +7,7 @@ import pytest
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.drivers.roboarm.command import Impedance, JointDelta, Reset
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
 from positronic.policy.action import (
@@ -26,6 +27,7 @@ from positronic.policy.codec import (
     Codec,
     FlipGrip,
     RestrictImageSize,
+    SetControlMode,
 )
 from positronic.policy.observation import ObservationCodec
 from positronic.policy.wrappers import ChunkedSchedule, StopOnFault, TemporalStack
@@ -313,6 +315,49 @@ class _CapturePolicy(Policy):
 
 def _stack_obs(now_sec, value):
     return {keys.OBS_TIME_NS: int(now_sec * 1e9), 'v': np.array([value])}
+
+
+IMPEDANCE = Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+
+
+class TestSetControlMode:
+    def test_every_command_in_a_chunk_carries_the_mode(self):
+        chunk = [
+            {keys.ROBOT_COMMAND: JointDelta(velocities=np.zeros(7)), keys.ACTION_TIMESTAMP: 0.0},
+            {keys.ROBOT_COMMAND: JointDelta(velocities=np.ones(7)), keys.ACTION_TIMESTAMP: 0.1},
+            {keys.ACTION_TIMESTAMP: 0.2},  # the horizon sentinel carries no command
+        ]
+        decoded = SetControlMode(IMPEDANCE).decode(chunk)
+        assert isinstance(decoded, list)
+        for action in decoded[:2]:
+            assert isinstance(action, dict)
+            assert action[keys.ROBOT_COMMAND].mode == IMPEDANCE
+        assert keys.ROBOT_COMMAND not in decoded[2]
+
+    def test_a_single_action_carries_the_mode(self):
+        decoded = SetControlMode(IMPEDANCE).decode({keys.ROBOT_COMMAND: JointDelta(velocities=np.zeros(7))})
+        assert isinstance(decoded, dict)
+        assert decoded[keys.ROBOT_COMMAND].mode == IMPEDANCE
+
+    def test_every_arm_channel_is_stamped(self):
+        """A bimanual action names a channel per arm, and both execute under the mode."""
+        action = {
+            f'{keys.ROBOT_COMMAND}.left': JointDelta(velocities=np.zeros(7)),
+            f'{keys.ROBOT_COMMAND}.right': JointDelta(velocities=np.ones(7)),
+            keys.TARGET_JOINTS: np.zeros(7),  # in the command family by name, but a vector
+            'target_grip': 0.5,
+        }
+        decoded = SetControlMode(IMPEDANCE).decode(action)
+        assert isinstance(decoded, dict)
+        assert decoded[f'{keys.ROBOT_COMMAND}.left'].mode == IMPEDANCE
+        assert decoded[f'{keys.ROBOT_COMMAND}.right'].mode == IMPEDANCE
+        np.testing.assert_array_equal(decoded[keys.TARGET_JOINTS], np.zeros(7))
+
+    def test_a_reset_passes_through_unchanged(self):
+        """A reset names no mode: how the arm travels home is the driver's."""
+        decoded = SetControlMode(IMPEDANCE).decode({keys.ROBOT_COMMAND: Reset()})
+        assert isinstance(decoded, dict)
+        assert decoded[keys.ROBOT_COMMAND] == Reset()
 
 
 class TestTemporalStack:

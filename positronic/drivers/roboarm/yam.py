@@ -293,6 +293,9 @@ class _Chain(DriverRun[command.CommandType]):
         """
         request = call.request
         try:
+            # TODO: accept the modes the chain can run instead of leaving them to what a command omits. Its
+            # joints are position-servoed, so `PositionControl` names the rule already running.
+            command.require_native_mode(request, 'YAM')
             if request is None or isinstance(request, command.Reset):
                 target = self.home_joints
             else:
@@ -397,6 +400,7 @@ class Robot(pimm.ControlSystem):
                     q_target, grip_target = yield from chain.serve_sync_move(asked, q, grip_target)
                 elif asked is not None:
                     with log_failure(asked):
+                        command.require_native_mode(asked, 'YAM')
                         if isinstance(asked, command.Reset):
                             grip_target = 0.0
                             q_target, grip_target = yield from chain.home(grip_target)

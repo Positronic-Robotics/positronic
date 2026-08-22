@@ -129,7 +129,7 @@ The normal response is a list of action dicts — a short trajectory. (A single 
 | `target_grip` | float | Target gripper closure in `[0, 1]`: 0 = open, 1 = closed |
 | `timestamp` | float | Execution time in seconds from the start of the returned trajectory (e.g. `i / action_fps` for the i-th action). The client runs each action at `now + timestamp`, where `now` is when the prediction arrived. A single action dict returned *outside* a list is auto-stamped `0.0`; give every action in a list its own `timestamp`, or they all collapse onto one instant and fire at once. |
 
-The `robot_command` field selects the control mode. Build one of the commands in
+The `robot_command` field says what the arm is asked to do. Build one of the commands in
 [`positronic.drivers.roboarm.command`](../positronic/drivers/roboarm/command.py):
 
 | Command | Fields | Description |
@@ -139,6 +139,11 @@ The `robot_command` field selects the control mode. Build one of the commands in
 | `JointDelta` | `velocities`: float32 (7,) | Joint velocity command |
 | `CartesianDelta` | `delta`, `frame`: `geom.Transform3D` | Relative motion, composed onto the pose the arm is at when it lands; `frame` is the frame `delta` is expressed in |
 | `Reset` | — | Return the arm to its home position |
+
+Every command but `Reset` also takes an optional `mode`, the control law it asks to execute under:
+`PositionControl(stiffness=...)` for a position servo, or `Impedance(kq, kqd, kx, kxd)` for the hybrid
+joint/Cartesian law. Omit it — the default — and the arm runs its native law. What a pinned mode does is the
+driver's: a simulator runs its own law regardless, and a driver that cannot execute the mode raises.
 
 Which command your model produces is decided by its codec.
 

@@ -57,12 +57,18 @@ def serialise(obj: Any) -> bytes:
 deserialise = functools.partial(msgpack.unpackb, object_hook=_unpack)
 
 
+def _as_wire(value: Any) -> Any:
+    """A wire field as ``from_wire`` reads it: vectors as arrays, strings and nested mappings as they are."""
+    if isinstance(value, cabc.Mapping):
+        return {k: _as_wire(v) for k, v in value.items()}
+    return value if isinstance(value, str) else np.asarray(value)
+
+
 def _typed(value: Any) -> Any:
     """One command channel's value, typed."""
     if not isinstance(value, cabc.Mapping):
         return value
-    # ``from_wire`` reads the vectors as arrays; the wire carries sequences, and ``type`` is its one string.
-    return command.from_wire({k: v if isinstance(v, str) else np.asarray(v) for k, v in value.items()})
+    return command.from_wire(_as_wire(value))
 
 
 def typed_commands(result: Any) -> Any:

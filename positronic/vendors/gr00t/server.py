@@ -380,9 +380,10 @@ COMMANDS = {
     'ee_rot6d_rel': serve.override(pipeline=ee_rot6d_rel),
     'ee_rot6d_joints_rel': serve.override(pipeline=ee_rot6d_joints_rel),
     'phail': serve.override(
-        pipeline=ee_rot6d_rel.override(**{
-            'source.checkpoints_dir': 's3://checkpoints/phail_unified/groot/270226-ee_rot6d_rel/'
-        }),
+        pipeline=ee_rot6d_rel.override(
+            codec=codecs.phail_v1,
+            **{'source.checkpoints_dir': 's3://checkpoints/phail_unified/groot/270226-ee_rot6d_rel/'},
+        ),
         recording_dir='s3://inference/phail_unified/server_recordings/groot/270226-ee_rot6d_rel/',
     ),
     'sim_stack': serve.override(

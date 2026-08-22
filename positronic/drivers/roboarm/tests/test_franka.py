@@ -1,19 +1,22 @@
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
 
 import pimm
 from pimm.tests.testing import MockClock, wire_call
+from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, command, franka
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import MoveAbandoned
-from positronic.tests.testing_coutils import RecordingEmitter
+from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 HOME = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 JOGGED = HOME + np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+IMPEDANCE = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
 
 
 class Call(StrEnum):
@@ -26,6 +29,7 @@ class Call(StrEnum):
     STOP = 'stop'
     SET_COLLISION_BEHAVIOR = 'set_collision_behavior'
     SET_CONTROL_MODE = 'set_control_mode'
+    INVERSE_KINEMATICS = 'inverse_kinematics'
     SET_LOAD = 'set_load'
 
 
@@ -49,7 +53,8 @@ class FakeArm:
     """In-memory ``pf.Robot``: a commanded joint target is reached after ``polls_to_reach`` reads of ``goal``.
 
     ``goal_status`` pins the reported status, so a move that never lands can be scripted; ``raises``, once
-    set, is what every call but ``stop`` raises; ``error`` is the vendor fault flag every state carries.
+    set, is what every call but ``stop`` raises, and ``ik_raises`` what only the solver raises; ``error`` is
+    the vendor fault flag every state carries.
     """
 
     def __init__(self, q, *, polls_to_reach: int = 2, goal_status: 'franka.pf.GoalStatus | None' = None):
@@ -57,8 +62,10 @@ class FakeArm:
         self.error = 0
         self.calls: list[Call] = []
         self.targets: list[np.ndarray] = []
+        self.modes: list[Any] = []
         self.raises: Exception | None = None
         self.raises_once: Exception | None = None
+        self.ik_raises: Exception | None = None
         self.polls_to_reach = polls_to_reach
         self._polls = 0
         self.goal_status = goal_status
@@ -103,8 +110,15 @@ class FakeArm:
     def set_collision_behavior(self, **thresholds) -> None:
         self._record(Call.SET_COLLISION_BEHAVIOR)
 
+    def inverse_kinematics_with_limits(self, pose) -> np.ndarray:
+        self._record(Call.INVERSE_KINEMATICS)
+        if self.ik_raises is not None:
+            raise self.ik_raises
+        return self.q.copy()
+
     def set_control_mode(self, mode) -> None:
         self._record(Call.SET_CONTROL_MODE)
+        self.modes.append(mode)
 
     def set_load(self, *load) -> None:
         self._record(Call.SET_LOAD)
@@ -214,6 +228,82 @@ def test_park_swallows_a_robot_that_fails_mid_move():
     _drive_park(_driver(arm, manage_desk=False), arm)
 
     np.testing.assert_allclose(arm.q, JOGGED)
+
+
+def test_a_command_the_arm_cannot_reach_leaves_the_running_law_alone(desk):
+    """A rejected command must not half-apply: the arm would hold its old target under new dynamics."""
+    arm = FakeArm(HOME)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = driver.run(stop, clock)
+
+    for _ in range(3):
+        next(loop)
+    mark = len(arm.modes)
+    arm.ik_raises = ValueError('out of reach')
+    feed.push(command.CartesianPosition(pose=geom.Transform3D.identity, mode=IMPEDANCE))
+    for _ in range(2):
+        next(loop)
+
+    assert arm.modes[mark:] == [], 'the arm changed law for a command it never executed'
+
+
+def test_the_law_changes_only_where_the_target_is_published(desk):
+    """A switch with anything between it and the target can leave the arm holding its last one under it."""
+    arm = FakeArm(HOME)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = driver.run(stop, clock)
+
+    for _ in range(3):
+        next(loop)  # init + opening reset
+    mark = len(arm.calls)
+    feed.push(command.JointPosition(positions=JOGGED, mode=IMPEDANCE))
+    for _ in range(2):
+        next(loop)
+    feed.push(command.Reset())
+    for _ in range(6):
+        next(loop)
+
+    switches = [i for i, c in enumerate(arm.calls[mark:], start=mark) if c is Call.SET_CONTROL_MODE]
+    assert switches, 'the commands applied no mode at all'
+    assert all(arm.calls[i + 1] is Call.SET_TARGET_JOINTS for i in switches), arm.calls[mark:]
+
+
+def test_a_joint_target_the_vendor_would_refuse_leaves_the_running_law_alone(desk):
+    """A joint command is passed straight through, so what the vendor rejects has to be caught here."""
+    arm = FakeArm(HOME)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = driver.run(stop, clock)
+
+    for _ in range(3):
+        next(loop)
+    mark = len(arm.modes)
+    feed.push(command.JointPosition(positions=np.full(7, np.nan), mode=IMPEDANCE))
+    for _ in range(2):
+        next(loop)
+
+    assert arm.modes[mark:] == [], 'the arm changed law for a target it never held'
+    assert not any(np.isnan(t).any() for t in arm.targets), 'a NaN target reached the arm'
+
+
+def test_park_puts_the_arm_under_its_native_law():
+    """The home pose is far off, and only the native law shapes the reference on the way there."""
+    arm = FakeArm(JOGGED)
+
+    _drive_park(_driver(arm, manage_desk=False), arm)
+
+    assert isinstance(arm.modes[0], franka.pf.InternalImpedance)
 
 
 def test_teardown_parks_the_arm_before_stopping_control(desk):
@@ -453,7 +543,7 @@ def test_a_move_that_lands_as_its_deadline_expires_is_an_arrival():
     driver = _driver(arm, manage_desk=False)
     driver.state._bind(RecordingEmitter())
     clock = MockClock()
-    travel = driver._arm(StopFlag(), clock).move_to(JOGGED)
+    travel = driver._arm(StopFlag(), clock).move_to(JOGGED, None)
 
     next(travel)  # the first poll: the goal is in flight
     clock.advance(60.0)  # the deadline expires
@@ -472,7 +562,7 @@ def test_a_fault_that_lands_with_the_arrival_reads_error_rather_than_available()
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
     driver.state._bind(states)
-    travel = driver._arm(StopFlag(), MockClock()).move_to(JOGGED)
+    travel = driver._arm(StopFlag(), MockClock()).move_to(JOGGED, None)
 
     arm.error = 1
     with pytest.raises(StopIteration) as done:
@@ -510,3 +600,51 @@ def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stoppe
     np.testing.assert_allclose(arm.targets[-2], JOGGED)
     # Published before the asker heard: a caller that starts recovering must not read the arm as available
     assert states.emitted[-1][1].status == RobotStatus.ERROR
+
+
+def test_a_commands_mode_reaches_the_arm_with_the_gains_it_named(desk):
+    """Skipping a mode already running is the vendor's, so the driver hands over every command's."""
+    arm = FakeArm(HOME)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = driver.run(stop, clock)
+
+    for _ in range(3):
+        next(loop)  # init + opening reset
+    feed.push(command.JointPosition(positions=JOGGED, mode=IMPEDANCE))
+    for _ in range(2):
+        next(loop)
+    stop.stopped = True
+    _drive(loop, clock)
+
+    assert isinstance(arm.modes[0], franka.pf.InternalImpedance), 'the arm did not start in its native law'
+    applied = [m for m in arm.modes if isinstance(m, franka.pf.SoftwareImpedance)]
+    assert applied, 'the command named a mode the arm was never put under'
+    assert applied[-1].kq == list(IMPEDANCE.kq), 'the gains the command named did not reach the arm'
+
+
+def test_homing_returns_the_arm_to_its_native_law(desk):
+    arm = FakeArm(HOME)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    stop = StopFlag()
+    clock = MockClock()
+    loop = driver.run(stop, clock)
+
+    for _ in range(3):
+        next(loop)
+    feed.push(command.JointPosition(positions=JOGGED, mode=IMPEDANCE))
+    for _ in range(2):
+        next(loop)
+    mark = len(arm.modes)
+    feed.push(command.Reset())
+    for _ in range(6):
+        next(loop)
+    stop.stopped = True
+    _drive(loop, clock)
+
+    assert isinstance(arm.modes[mark], franka.pf.InternalImpedance)
