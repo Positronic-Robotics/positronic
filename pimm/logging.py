@@ -1,8 +1,15 @@
-"""How a pimm process configures logging, at an entry point and in a spawned control system.
+"""Logging for a pimm program, whose control systems may run in a subprocess of their own.
 
-`init_logging` resolves a threshold, publishes it, and configures its own process through
-`configure_process_logging`, which is all a spawned child runs. Both therefore take the same
-format, threshold and library pins.
+A subprocess is spawned, not forked: it starts a fresh interpreter holding none of the main
+process's logging configuration, and the stdlib default drops most of what a control system emits.
+This module carries the configuration across that boundary, so one `LOG_LEVEL` in the environment
+covers the main process and every subprocess it spawns.
+
+`init_logging` is the one call an application makes: it resolves the threshold and leaves it in the
+environment subprocesses inherit. Every process is then configured by `configure_process_logging` —
+`init_logging` runs it on the main process, and each spawned subprocess runs it before its control
+system starts, adding the per-logger levels `component_log_levels` collected before the spawn. One
+function configures them all, so a line looks the same wherever it came from.
 """
 
 import logging
@@ -12,20 +19,19 @@ from typing import NamedTuple
 
 import coloredlogs
 
-# A matched pair: `LOG_DATEFMT` renders the `asctime` that `LOG_FORMAT` places, so the two change
-# together.
+# `LOG_DATEFMT` renders the `asctime` in `LOG_FORMAT`, so the two change together.
 LOG_FORMAT = '%(asctime)s.%(msecs)03d [%(levelname)s] (%(filename)s:%(lineno)s) %(message)-80s'
 LOG_DATEFMT = '%H:%M:%S'
 
-# The operator's own input, read and never written: a resolved level stored here would be the next
-# `init_logging` call's own input, so a later `init_logging('ERROR')` could not change the threshold.
+# The environment variable that sets the threshold for the whole program. It is read-only: it takes
+# precedence over `init_logging`'s `level`, so a value written back would beat the argument of every
+# later call.
 LOG_LEVEL_ENV = 'LOG_LEVEL'
-# The level a parent resolved, for spawned children — a NUMBER, because a name resolves against the
-# reading process's registry and a spawn starts an empty one. Unset, a child logs at INFO.
+# How the main process hands the resolved threshold to a subprocess. It carries a number, not a
+# level name: names resolve through `logging.getLevelNamesMapping()`, which is per-process, and a
+# fresh interpreter holds only the standard ones — anything `addLevelName` added is gone.
 RESOLVED_LOG_LEVEL_ENV = 'PIMM_RESOLVED_LOG_LEVEL'
-
-# Third-party loggers the child's root-level INFO would otherwise reach too. Each logs per connection,
-# request or retry rather than per event, so pinning them keeps the level change ours.
+# Each of these logs per connection, request or retry, so a lowered threshold would flood the output.
 _NOISY_LIBRARY_LOGGERS = (
     'websockets',  # per connection at INFO, per frame at DEBUG
     'httpx',  # per request, at INFO
@@ -38,31 +44,24 @@ _NOISY_LIBRARY_LOGGERS = (
 )
 
 
-def level_number(name: str, source: str) -> int:
-    """The number `name` stands for in this process, raising when it names no level.
-
-    The error names `source`, the variable that carried the name: a threshold that quietly became
-    something else reads as working configuration.
-    """
+def level_number(level_name: str, source: str) -> int:
+    """The number `level_name` stands for in this process, raising when it names no level."""
     levels = logging.getLevelNamesMapping()
-    if name.upper() not in levels:
-        raise ValueError(f'{source}={name!r} is not a logging level (one of {", ".join(sorted(levels))})')
-    return levels[name.upper()]
+    if level_name.upper() not in levels:
+        raise ValueError(f'{source}={level_name!r} is not a logging level (one of {", ".join(sorted(levels))})')
+    return levels[level_name.upper()]
 
 
 def _requested_level() -> int:
-    """The threshold: the level a parent resolved, else the operator's own, else INFO."""
-    # An empty variable is a value the operator set, and `init_logging` raises on it: read as INFO
-    # here, one operator input would mean two things across a spawn.
+    """The level this process logs at."""
+    # An empty `LOG_LEVEL` or `PIMM_RESOLVED_LOG_LEVEL` raises rather than falling back to INFO.
     resolved = os.getenv(RESOLVED_LOG_LEVEL_ENV)
     if resolved is not None:
-        # Ours to write and ours to read, so a value that is not a number is a broken handoff rather
-        # than an operator's typo. It raises either way; the message says which.
         if not resolved.lstrip('-').isdigit():
             raise ValueError(f'{RESOLVED_LOG_LEVEL_ENV}={resolved!r} is not a numeric logging level')
         return int(resolved)
-    name = os.getenv(LOG_LEVEL_ENV)
-    return level_number(name, LOG_LEVEL_ENV) if name is not None else logging.INFO
+    level_name = os.getenv(LOG_LEVEL_ENV)
+    return level_number(level_name, LOG_LEVEL_ENV) if level_name is not None else logging.INFO
 
 
 def component_log_levels() -> dict[str, int]:
@@ -77,6 +76,8 @@ def component_log_levels() -> dict[str, int]:
     }
 
 
+# Two levels, not just ours: a pin often equals the level the application itself set, so a pin
+# recognised by value alone would read as that setting and a second `init_logging` could not lower it.
 class _Pin(NamedTuple):
     """A noisy library's two levels: the application's own, and what this module installed over it."""
 
@@ -84,46 +85,42 @@ class _Pin(NamedTuple):
     ours: int
 
 
-# Both levels, because a pin often equals the application's own: told apart by value alone, a pin
-# would survive as a setting and a second `init_logging` could not lower it.
 _pins: dict[str, _Pin] = {}
 
 
 def configure_process_logging(component_levels: Mapping[str, int] | None = None) -> None:
     """Configure this process's root logger, per-component levels and library pins.
 
-    A process nothing else configures — a spawned control system — would otherwise sit at the stdlib
-    default and drop every line it emits. `component_levels` is what the spawning process had set
-    per logger, which a fresh interpreter starts with none of.
+    `component_levels` holds the per-logger levels the main process had set. A fresh interpreter has
+    none of them, so a subprocess is given them here.
 
     Raises `ValueError` on a value that names no level.
     """
     level = _requested_level()
     logging.basicConfig(level=level, format=LOG_FORMAT, datefmt=LOG_DATEFMT, force=True)
-    # An ancestor's level does not filter a record its own logger admitted — only a handler's does,
-    # and `basicConfig` leaves that at NOTSET.
+    # A component logger admits a record on its own level. The root logger's level is not consulted
+    # after that, so only its handler's level can still filter the record, and `basicConfig` leaves
+    # that at NOTSET.
     for handler in logging.getLogger().handlers:
         handler.setLevel(level)
-    # Before the pins, so a noisy library the spawning application had raised is read below as that
-    # application's setting rather than as one of ours.
+    # The application's own levels go on first. The pin loop below reads each library logger's
+    # current level to work out what it asked for.
     for name, component_level in (component_levels or {}).items():
         logging.getLogger(name).setLevel(component_level)
     for logger_name in _NOISY_LIBRARY_LOGGERS:
         logger = logging.getLogger(logger_name)
         pinned = _pins.get(logger_name)
-        # A level this module did not install is the application's own; under one it did, what it
-        # recorded is. NOTSET is 0, so a library nobody set takes the floor.
         theirs = pinned.theirs if pinned is not None and logger.level == pinned.ours else logger.level
-        pin = max(level, logging.WARNING, theirs)
+        pin = max(level, logging.WARNING, theirs)  # NOTSET is 0, so a library nobody set takes the floor
         logger.setLevel(pin)
         _pins[logger_name] = _Pin(theirs, pin)
 
 
 def init_logging(level: str | int = 'INFO') -> None:
-    """Configure the entry point's own process, and publish the threshold its children read.
+    """Configure the main process and publish the threshold its subprocesses read.
 
-    `level` is what the program asks for; the operator's own `LOG_LEVEL` outranks it. Colour is the
-    one thing an entry point does that a child does not: a child's output is a pipe.
+    `level` is what the program asks for, and `LOG_LEVEL` takes precedence over it. The main process
+    also gets colour, which a subprocess does not: its output is a pipe.
     """
     requested = os.getenv(LOG_LEVEL_ENV)
     if requested is not None:
@@ -131,8 +128,6 @@ def init_logging(level: str | int = 'INFO') -> None:
     else:
         log_level = level_number(level, 'level') if isinstance(level, str) else level
 
-    # A number, and in its own variable: a name resolves against the reading process's registry, and
-    # `LOG_LEVEL` is the operator's, so writing there makes this call's output its own next input.
     os.environ[RESOLVED_LOG_LEVEL_ENV] = str(log_level)
-    configure_process_logging()  # reads the number just written, so a parent configures as its children do
+    configure_process_logging()  # reads the number just written, so the main process configures as its subprocesses do
     coloredlogs.install(level=log_level, fmt=LOG_FORMAT, datefmt=LOG_DATEFMT)
