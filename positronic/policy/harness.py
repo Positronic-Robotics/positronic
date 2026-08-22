@@ -353,15 +353,16 @@ class Harness(pimm.ControlSystem):
         """
         # Before anything that can raise, so an episode that fails to open still answers whoever asked for it.
         self._call = call
-        # Before the span opens, so the wait for a call the last episode abandoned is inter-episode wall
-        # rather than overhead the timing reducer attributes to this one.
-        self._reap_worker()
         self._awaiting_obs = set(self._embodiment.observations)
         self._rollout_started = False
         # The episode span opens first, so the prepare and the rollout's other phase spans parent to it.
         self._telemetry.begin(self._task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
             yield from self._prepare(should_stop, self._task)
+        # The join waits on the call the last episode abandoned, so the rig is readied before it: a model
+        # that hangs must not leave the devices standing at the setpoint the policy left them. It runs
+        # before the session below, which is what makes closing the abandoned one safe.
+        self._reap_worker()
         # Read after the reset: an embodiment that learns its task from the scene reports it only once the
         # scene is set up.
         self._worker = _InferenceWorker(
