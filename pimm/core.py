@@ -246,6 +246,13 @@ class PortDict(dict[str, P], ABC):
         return port
 
 
+def _fake_keys(fake: bool | Iterable[str], names: Iterable[str] | None) -> set[str]:
+    """The keys whose port carries no signal. Naming one the dict has no port for is a typo, not a no-op."""
+    keys = set() if isinstance(fake, bool) else set(fake)
+    assert names is None or keys <= set(names), f'{sorted(keys - set(names))} is not among the ports'
+    return keys
+
+
 class ReceiverDict(PortDict[ControlSystemReceiver[U]]):
     """Receivers owned by a control system.
 
@@ -253,7 +260,7 @@ class ReceiverDict(PortDict[ControlSystemReceiver[U]]):
     """
 
     def __init__(self, owner: ControlSystem, names: Iterable[str] | None = None, *, fake: bool | Iterable[str] = False):
-        self._fake = set(fake) if isinstance(fake, Iterable) else set()
+        self._fake = _fake_keys(fake, names)
         self._all_fake = fake is True
         super().__init__(owner, names)
 
@@ -269,7 +276,7 @@ class EmitterDict(PortDict[ControlSystemEmitter[U]]):
     """
 
     def __init__(self, owner: ControlSystem, names: Iterable[str] | None = None, *, fake: bool | Iterable[str] = False):
-        self._fake = set(fake) if isinstance(fake, Iterable) else set()
+        self._fake = _fake_keys(fake, names)
         self._all_fake = fake is True
         super().__init__(owner, names)
 

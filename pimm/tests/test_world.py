@@ -1152,6 +1152,11 @@ class TestReceiverDict:
         assert not isinstance(receivers['a'], FakeReceiver)
         assert isinstance(receivers['b'], FakeReceiver)
 
+    def test_a_fake_port_the_dict_does_not_have_is_refused(self):
+        """The fixed set puts the port out of reach, so the fake spec would sit there doing nothing."""
+        with pytest.raises(AssertionError, match='not among the ports'):
+            ReceiverDict(DummyControlSystem('test'), ['a', 'b'], fake={'c'})
+
 
 class TestEmitterDict:
     """Test EmitterDict lazy allocation with fake emitter support."""
@@ -1278,6 +1283,11 @@ class TestEmitterDict:
 
         assert not isinstance(emitters['a'], FakeEmitter)
         assert isinstance(emitters['b'], FakeEmitter)
+
+    def test_a_fake_port_the_dict_does_not_have_is_refused(self):
+        """The fixed set puts the port out of reach, so the fake spec would sit there doing nothing."""
+        with pytest.raises(AssertionError, match='not among the ports'):
+            EmitterDict(DummyControlSystem('test'), ['a', 'b'], fake={'c'})
 
 
 # Enough iterations that a per-cycle line would be unmistakable against the handful of event lines.
