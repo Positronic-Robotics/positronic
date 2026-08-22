@@ -1252,7 +1252,7 @@ class TestEmitterDict:
 
 # Enough iterations that a per-cycle line would be unmistakable against the handful of event lines.
 LOGGING_LOOP_ITERATIONS = 200
-# What `logging_loop` emits and the assertions below look for, on the child's root and on a library's.
+# What `logging_loop` emits and the assertions look for, on the child's root logger and on a library's.
 CHILD_LINE = 'child-own-info-line'
 LIBRARY_LINE = 'library-info-line'
 
@@ -1266,12 +1266,13 @@ def logging_loop(stop_reader, clock):
         yield Sleep(0.001)
 
 
-# What `pimm.world` logs for this loop when it ends the World, spelled once for the assertions below.
+# What `pimm.world` logs for this loop when it ends the World, spelled once for the assertions.
 STOP_LINE = f'Stopping background process by {logging_loop.__name__}'
 
 
 class TestChildLogging:
-    """A spawned child runs no entry point, so `_bg_wrapper` is the only thing that configures it."""
+    """Nothing calls `init_logging` in a spawned child, so `_bg_wrapper` is the only thing that
+    configures it."""
 
     @staticmethod
     def _stderr_of_a_logging_child_at(capfd, monkeypatch, level: str) -> str:
@@ -1301,8 +1302,9 @@ class TestChildLogging:
     def test_child_log_volume_counts_events_not_cycles(self, capfd):
         err = self._stderr_of_a_logging_child(capfd)
 
-        # The child logged twice and stopped once, over 200 iterations. A line whose rate followed the
-        # control loop rather than the events would land two orders of magnitude above this bound.
+        # The child logged twice and stopped once, over `LOGGING_LOOP_ITERATIONS` iterations. A line
+        # whose rate followed the control loop rather than the events would land two orders of
+        # magnitude above this bound.
         lines = [line for line in err.splitlines() if line.strip()]
         assert len(lines) <= 4, f'{len(lines)} lines over {LOGGING_LOOP_ITERATIONS} iterations:\n{err}'
 
@@ -1314,15 +1316,16 @@ class TestChildLogging:
         assert LIBRARY_LINE not in err
 
     def test_a_requested_suppression_reaches_the_child(self, capfd, monkeypatch):
-        """The operator's threshold reaches a control system: a child that fixed its own level would
-        go on emitting INFO through a requested suppression."""
+        """`LOG_LEVEL` reaches a control system: a child that fixed its own level would go on
+        emitting INFO through a requested suppression."""
         err = self._stderr_of_a_logging_child_at(capfd, monkeypatch, 'ERROR')
 
         assert CHILD_LINE not in err, err
         assert STOP_LINE not in err, err
 
     def test_a_lower_threshold_does_not_pull_the_noisy_libraries_down_with_it(self, capfd, monkeypatch):
-        """The library pin is a floor, not an assignment — lowering the root must not un-pin them."""
+        """The library pin is a floor, so lowering the root threshold must not un-pin the noisy
+        libraries."""
         err = self._stderr_of_a_logging_child_at(capfd, monkeypatch, 'DEBUG')
 
         assert CHILD_LINE in err, err

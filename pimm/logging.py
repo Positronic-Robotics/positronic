@@ -1,15 +1,14 @@
 """Logging for a pimm program, whose control systems may run in a subprocess of their own.
 
-A subprocess is spawned, not forked: it starts a fresh interpreter holding none of the main
-process's logging configuration, and the stdlib default drops most of what a control system emits.
-This module carries the configuration across that boundary, so one `LOG_LEVEL` in the environment
-covers the main process and every subprocess it spawns.
+Control systems are spawned rather than forked, so a subprocess starts a fresh interpreter holding
+none of the main process's logging configuration, and the stdlib default drops most of what a
+control system emits. This module carries the configuration across that boundary, so one
+`LOG_LEVEL` in the environment covers the main process and every subprocess it spawns.
 
 `init_logging` is the one call an application makes: it resolves the threshold and leaves it in the
-environment subprocesses inherit. Every process is then configured by `configure_process_logging` —
-`init_logging` runs it on the main process, and each spawned subprocess runs it before its control
-system starts, adding the per-logger levels `component_log_levels` collected before the spawn. One
-function configures them all, so a line looks the same wherever it came from.
+environment subprocesses inherit. `configure_process_logging` then configures every process —
+`init_logging` runs it on the main process, and a spawned subprocess runs it before its control
+system starts, with the per-logger levels `component_log_levels` collected before the spawn.
 """
 
 import logging
@@ -19,9 +18,8 @@ from typing import NamedTuple
 
 import coloredlogs
 
-# `LOG_DATEFMT` renders the `asctime` in `LOG_FORMAT`, so the two change together.
 LOG_FORMAT = '%(asctime)s.%(msecs)03d [%(levelname)s] (%(filename)s:%(lineno)s) %(message)-80s'
-LOG_DATEFMT = '%H:%M:%S'
+LOG_DATEFMT = '%H:%M:%S'  # renders the `asctime` in `LOG_FORMAT`, so changing either alone breaks the timestamp
 
 # The environment variable that sets the threshold for the whole program. It is read-only: it takes
 # precedence over `init_logging`'s `level`, so a value written back would beat the argument of every
@@ -31,7 +29,7 @@ LOG_LEVEL_ENV = 'LOG_LEVEL'
 # level name: names resolve through `logging.getLevelNamesMapping()`, which is per-process, and a
 # fresh interpreter holds only the standard ones — anything `addLevelName` added is gone.
 RESOLVED_LOG_LEVEL_ENV = 'PIMM_RESOLVED_LOG_LEVEL'
-# Each of these logs per connection, request or retry, so a lowered threshold would flood the output.
+# These libraries log per connection, request or retry, so a lowered threshold would flood the output.
 _NOISY_LIBRARY_LOGGERS = (
     'websockets',  # per connection at INFO, per frame at DEBUG
     'httpx',  # per request, at INFO
@@ -65,7 +63,7 @@ def _requested_level() -> int:
 
 
 def component_log_levels() -> dict[str, int]:
-    """Every logger this process has a level of its own, for a spawn to carry.
+    """The level of every logger this process set one on, for a spawn to carry.
 
     The root logger is absent: its level is the threshold, which crosses as `RESOLVED_LOG_LEVEL_ENV`.
     """
@@ -76,10 +74,12 @@ def component_log_levels() -> dict[str, int]:
     }
 
 
-# Two levels, not just ours: a pin often equals the level the application itself set, so a pin
-# recognised by value alone would read as that setting and a second `init_logging` could not lower it.
 class _Pin(NamedTuple):
-    """A noisy library's two levels: the application's own, and what this module installed over it."""
+    """A noisy library's two levels: the application's own, and what this module installed over it.
+
+    A pin often equals the level the application itself set. Recording only the pin would read that
+    setting as this module's own, and a second `init_logging` could not lower it.
+    """
 
     theirs: int
     ours: int

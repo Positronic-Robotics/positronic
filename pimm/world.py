@@ -467,8 +467,8 @@ def _bg_wrapper(
     run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str, parent_component_levels: Mapping[str, int]
 ):
     try:
-        # A freshly spawned subprocess carries no logging configuration, so set one up.
-        # Not outside the try: an exception in the setup must end the run loop too.
+        # A freshly spawned subprocess carries no logging configuration, so set one up. It is inside
+        # the `try` because a failure here must still reach the `finally` that stops the World.
         configure_process_logging(parent_component_levels)
         for command in run_func(EventReceiver(stop_event, clock), clock):
             match command:
