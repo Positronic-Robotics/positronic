@@ -30,14 +30,12 @@ class Observation:
 
 @dataclass
 class Command:
-    """A policy action channel: where its waypoints go and how it homes/records.
+    """A policy action channel: where its waypoints go and how it records.
 
-    ``home`` is the value emitted to send this channel to its safe state; ``serializer``
-    serializes the channel's values, recorded under the channel's own key.
+    ``serializer`` serializes the channel's values, recorded under the channel's own key.
     """
 
     dest: pimm.SignalReceiver
-    home: Any
     serializer: Serializer | None
 
 
@@ -45,25 +43,23 @@ class Command:
 class Embodiment:
     """The signal-dict contract the Harness drives, produced by a factory.
 
-    Backed by 1 or N device control systems (not fused). Holds the observation
-    serializers (which own the canonical key names), command channels, and home
-    action; the Harness reads these to assemble policy inputs and demux actions.
-    ``control_systems`` lists those devices for the runner to schedule, and
-    ``simulated`` marks a sim embodiment (virtual clock, in-process scheduling).
+    Backed by 1 or N device control systems. Holds the observation
+    serializers (which own the canonical key names), command channels, and the
+    devices that prepare; the Harness reads these to assemble policy inputs and
+    demux actions. ``control_systems`` lists those devices for the runner to
+    schedule, and ``simulated`` marks a sim embodiment (virtual clock, in-process
+    scheduling).
     """
 
     descriptor: str
     observations: dict[str, Observation]
     commands: dict[str, Command]
+    # A device serves one handler and backs as many command channels as it has, so this is keyed by device
+    prepare_funcs: dict[str, pimm.calls.ControlSystemHandler[Any, None]]
     static_meta: dict[str, Any]
     meta_source: pimm.SignalEmitter | None
     control_systems: tuple[pimm.ControlSystem, ...] = ()
     simulated: bool = False
-
-    @property
-    def home(self) -> dict[str, Any]:
-        """The home action: ``{command_name: home_value}`` for every channel."""
-        return {name: cmd.home for name, cmd in self.commands.items()}
 
 
 @dataclass
@@ -73,8 +69,10 @@ class Task:
     instruction_source: str | Callable[[], str]
     # Time budget for a rollout; ``None`` ends on ``Eval.done`` alone.
     timeout_sec: float | None
-    # What ``Eval.reset`` is called with, and what the episode records as the trial's identity.
-    params: dict[str, Any] = field(default_factory=dict)
+    # What each of the embodiment's ``prepare_funcs`` is asked with, keyed the same way
+    prepare_args: dict[str, Any] = field(default_factory=dict)
+    # What the env's reset is asked with, and what the episode records as the trial's identity
+    reset_args: Any = field(default_factory=dict)
     # Sim-only: a real rig cannot pretend the time is paused when inference is run.
     charge_inference_time: bool = False
 
@@ -94,14 +92,14 @@ class Task:
 # [✓] A driver walks the list and calls ``perform_task(task)``; the Harness keeps no plan.
 # [✓] ``charge_inference_time`` is a ``Task`` field, not a context key.
 # [✓] Split the reset token from the policy input: the instruction is all a trial gives the policy.
-# [ ] Homing becomes a ``prepare`` call the arm and gripper answer once in place; ``Command.home`` goes with it.
+# [✓] Homing becomes a ``prepare`` call the arm and gripper answer once in place; ``Command.home`` goes with it.
 # [ ] A trial's reset is every ``prepare`` it asks for — scene, arm, gripper, human — and it opens once all answer.
 # [ ] One runner builds the world for both.
 @dataclass
 class Eval:
     """An eval = embodiment + the tasks to run on it, produced by a single config.
 
-    ``privileged``, ``done`` and ``reset`` are per-run, not per-task: the World wires the signals once,
+    ``privileged``, ``done`` and ``env_reset`` are per-run, not per-task: the World wires the signals once,
     before it runs. ``tasks`` is the sweep — one entry per (scenario, seed) the config expands.
     """
 
@@ -109,4 +107,5 @@ class Eval:
     tasks: list[Task]
     privileged: dict[str, Observation] = field(default_factory=dict)
     done: pimm.SignalEmitter | None = None
-    reset: Callable[[dict[str, Any]], None] | None = None
+    # The scene a trial runs in, drawn afresh from the task's ``reset_args``; ``None`` where a human sets it up
+    env_reset: pimm.calls.ControlSystemHandler[Any, None] | None = None

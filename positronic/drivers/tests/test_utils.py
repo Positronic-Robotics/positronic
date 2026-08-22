@@ -7,7 +7,14 @@ import pytest
 
 import pimm
 from pimm.tests.testing import FakeCall, Passive, wire_call
-from positronic.drivers.utils import _GRIP_TIMEOUT_S, MoveAbandoned, MoveStatus, PendingMove, grip_setpoint
+from positronic.drivers.utils import (
+    _GRIP_TIMEOUT_S,
+    MoveAbandoned,
+    MoveStatus,
+    PendingMove,
+    grip_setpoint,
+    prepare_setpoint,
+)
 from positronic.tests.testing_coutils import ManualCommandReceiver
 
 TOL = 0.05
@@ -16,7 +23,7 @@ TOL = 0.05
 def _accepted(
     target: float | np.ndarray, tol: float = TOL, timeout_s: float = 3.0
 ) -> tuple[PendingMove[float], FakeCall[float, None]]:
-    move = PendingMove(tol, _unasked())
+    move = PendingMove[float](tol)
     call = FakeCall[float, None](0.0)
     move.accept(call, target, now=0.0, timeout_s=timeout_s)
     return move, call
@@ -98,11 +105,6 @@ def test_a_move_that_arrives_clears_the_error_left_by_one_that_did_not():
     assert not move.errored
 
 
-def _unasked() -> pimm.calls.ControlSystemHandler[float, None]:
-    """A handler no caller is bound to, for a move driven by hand rather than asked for."""
-    return pimm.calls.ControlSystemHandler[float, None](Passive())
-
-
 @pytest.fixture
 def asking():
     """A caller wired to the handler a gripper polls, so a test asks the way a client does."""
@@ -116,10 +118,10 @@ def asking():
 def test_a_grip_target_that_is_no_width_is_refused_rather_than_saturated(asking):
     """``min``/``max`` turn NaN into a bound, so an unchecked target would close the fingers at full force."""
     ask, calls = asking
-    move, stream = PendingMove(TOL, calls), ManualCommandReceiver()
+    move, stream = PendingMove[float](TOL), ManualCommandReceiver()
     answer = ask(float('nan'))
 
-    assert grip_setpoint(move, stream, grip=0.0, now=0.0) is None
+    assert grip_setpoint(move, calls, stream, grip=0.0, now=0.0) is None
     assert not move.active
     with pytest.raises(ValueError, match='not a grip width'):
         answer.result()
@@ -128,21 +130,21 @@ def test_a_grip_target_that_is_no_width_is_refused_rather_than_saturated(asking)
 def test_a_streamed_grip_target_that_is_no_width_leaves_the_fingers_alone(asking):
     """A command stream cannot end the run, so a malformed target is dropped and the last one stands."""
     _, calls = asking
-    move, stream = PendingMove(TOL, calls), ManualCommandReceiver()
+    move, stream = PendingMove[float](TOL), ManualCommandReceiver()
     stream.push(float('inf'))
 
-    assert grip_setpoint(move, stream, grip=0.4, now=0.0) is None
+    assert grip_setpoint(move, calls, stream, grip=0.4, now=0.0) is None
 
 
 def test_a_grip_call_takes_the_fingers_until_it_arrives(asking):
     ask, calls = asking
-    move, stream = PendingMove(TOL, calls), ManualCommandReceiver()
+    move, stream = PendingMove[float](TOL), ManualCommandReceiver()
     answer = ask(0.7)
 
-    assert grip_setpoint(move, stream, grip=0.0, now=0.0) == 0.7
+    assert grip_setpoint(move, calls, stream, grip=0.0, now=0.0) == 0.7
     assert move.active
-    assert grip_setpoint(move, stream, grip=0.3, now=0.1) is None, 'commanded again mid-travel'
-    assert grip_setpoint(move, stream, grip=0.7, now=0.2) is None
+    assert grip_setpoint(move, calls, stream, grip=0.3, now=0.1) is None, 'commanded again mid-travel'
+    assert grip_setpoint(move, calls, stream, grip=0.7, now=0.2) is None
     assert not move.active
     move.answer()
     assert answer.result() is None
@@ -151,11 +153,11 @@ def test_a_grip_call_takes_the_fingers_until_it_arrives(asking):
 def test_a_grip_that_gives_up_hands_back_the_width_the_fingers_stopped_at(asking):
     """The answer waits for the driver to write the width handed back here, so the fingers stop first."""
     ask, calls = asking
-    move, stream = PendingMove(TOL, calls), ManualCommandReceiver()
+    move, stream = PendingMove[float](TOL), ManualCommandReceiver()
     answer = ask(1.0)
-    grip_setpoint(move, stream, grip=0.0, now=0.0)
+    grip_setpoint(move, calls, stream, grip=0.0, now=0.0)
 
-    assert grip_setpoint(move, stream, grip=0.42, now=_GRIP_TIMEOUT_S) == 0.42
+    assert grip_setpoint(move, calls, stream, grip=0.42, now=_GRIP_TIMEOUT_S) == 0.42
     assert not move.active and move.errored
     assert not answer.done(), 'the fingers are still on the width they missed'
 
@@ -167,11 +169,11 @@ def test_a_grip_that_gives_up_hands_back_the_width_the_fingers_stopped_at(asking
 def test_a_grip_asked_for_past_the_range_is_tracked_against_a_width_the_fingers_report(asking):
     """The fingers read back 0..1, so a move aimed past that would sit at the endpoint until its deadline."""
     ask, calls = asking
-    move, stream = PendingMove(TOL, calls), ManualCommandReceiver()
+    move, stream = PendingMove[float](TOL), ManualCommandReceiver()
     answer = ask(1.5)
 
-    assert grip_setpoint(move, stream, grip=0.0, now=0.0) == 1.0
-    assert grip_setpoint(move, stream, grip=1.0, now=0.1) is None
+    assert grip_setpoint(move, calls, stream, grip=0.0, now=0.0) == 1.0
+    assert grip_setpoint(move, calls, stream, grip=1.0, now=0.1) is None
     move.answer()
     assert answer.result() is None
 
@@ -179,15 +181,33 @@ def test_a_grip_asked_for_past_the_range_is_tracked_against_a_width_the_fingers_
 def test_a_streamed_grip_waits_for_the_call_queue_to_be_empty(asking):
     """A signal holds only its latest value, so a stream read in the same tick as a call would be lost."""
     ask, calls = asking
-    move, stream = PendingMove(TOL, calls), ManualCommandReceiver()
+    move, stream = PendingMove[float](TOL), ManualCommandReceiver()
     stream.push(0.25)
     ask(0.9)
 
-    assert grip_setpoint(move, stream, grip=0.0, now=0.0) == 0.9
-    assert grip_setpoint(move, stream, grip=0.9, now=0.1) is None  # the call arrives
+    assert grip_setpoint(move, calls, stream, grip=0.0, now=0.0) == 0.9
+    assert grip_setpoint(move, calls, stream, grip=0.9, now=0.1) is None  # the call arrives
     move.answer()
-    assert grip_setpoint(move, stream, grip=0.9, now=0.2) == 0.25  # the stream, still waiting
-    assert grip_setpoint(move, stream, grip=0.25, now=0.3) is None
+    assert grip_setpoint(move, calls, stream, grip=0.9, now=0.2) == 0.25  # the stream, still waiting
+    assert grip_setpoint(move, calls, stream, grip=0.25, now=0.3) is None
+
+
+def test_a_prepare_takes_the_fingers_to_the_width_the_driver_calls_home():
+    """A gripper has no home in the eval config to be told: the width it opens to is the driver's own."""
+    move = PendingMove[float](TOL)
+    caller = pimm.calls.ControlSystemCaller[object, None](Passive())
+    prepare = pimm.calls.ControlSystemHandler[object, None](Passive())
+    with pimm.World() as world:
+        wire_call(world, caller, prepare)
+        answer = caller(None)
+
+        assert prepare_setpoint(move, prepare, home=0.3, now=0.0) == 0.3
+        assert move.active
+        assert prepare_setpoint(move, prepare, home=0.3, now=0.1) is None, 'the fingers are already taken'
+
+        assert move.settle(0.3, now=0.2) is MoveStatus.ARRIVED
+        move.answer()
+        assert answer.result() is None
 
 
 def test_how_long_a_move_gets_is_the_driver_s_to_say():
@@ -213,7 +233,7 @@ def test_a_run_that_dies_hands_what_killed_it_to_the_move_in_flight():
 
 
 def test_a_run_that_dies_with_nothing_in_flight_has_nobody_to_tell():
-    move = PendingMove(TOL, _unasked())
+    move = PendingMove[float](TOL)
 
     move.fail(RuntimeError('the bus went away'))
 

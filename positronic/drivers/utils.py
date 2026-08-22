@@ -3,7 +3,7 @@
 import logging
 import math
 from enum import Enum, auto
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 import numpy as np
 
@@ -50,9 +50,8 @@ class PendingMove(Generic[Req]):
     device until it settles: a driver leaves its command stream unread while ``active``.
     """
 
-    def __init__(self, tol: float, calls: pimm.calls.ControlSystemHandler[Req, None]):
+    def __init__(self, tol: float):
         self._tol = tol
-        self._calls = calls
         self._call: pimm.calls.Call[Req, None] | None = None
         self._target: np.ndarray | float = 0.0
         self._deadline = 0.0
@@ -82,9 +81,9 @@ class PendingMove(Generic[Req]):
         assert self._call is not None, 'no move is in flight'
         return self._target
 
-    def take(self) -> pimm.calls.Call[Req, None] | None:
-        """The next move asked for, if the device is free to take one."""
-        return None if self.active or self.settled else next(self._calls.incoming(), None)
+    def take(self, calls: pimm.calls.ControlSystemHandler[Req, None]) -> pimm.calls.Call[Req, None] | None:
+        """The next move ``calls`` asks for, if the device is free to take one."""
+        return None if self.active or self.settled else next(calls.incoming(), None)
 
     def accept(
         self, call: pimm.calls.Call[Req, None], target: np.ndarray | float, now: float, timeout_s: float
@@ -146,8 +145,22 @@ def _clamped(grip: float) -> float:
     return max(0.0, min(1.0, grip))
 
 
+def prepare_setpoint(
+    move: PendingMove[Any], prepare: pimm.calls.ControlSystemHandler[Any, None], home: float, now: float
+) -> float | None:
+    """The width a prepare asks for, taken as the move in flight, or ``None`` where none was asked for."""
+    if (call := move.take(prepare)) is None:
+        return None
+    move.accept(call, home, now, _GRIP_TIMEOUT_S)
+    return home
+
+
 def grip_setpoint(
-    move: PendingMove[float], stream: pimm.SignalReceiver[float], grip: float, now: float
+    move: PendingMove[float],
+    calls: pimm.calls.ControlSystemHandler[float, None],
+    stream: pimm.SignalReceiver[float],
+    grip: float,
+    now: float,
 ) -> float | None:
     """The width to command the fingers this tick, or ``None`` to leave the last one standing.
 
@@ -156,7 +169,7 @@ def grip_setpoint(
     """
     if move.active:
         return grip if move.settle(grip, now) is MoveStatus.GAVE_UP else None
-    if (call := move.take()) is not None:
+    if (call := move.take(calls)) is not None:
         with pimm.calls.raise_to(call):  # a width the fingers cannot be put at is the asker's to hear about
             target = _clamped(call.request)
             move.accept(call, target, now, _GRIP_TIMEOUT_S)

@@ -1,10 +1,11 @@
 """Robotiq 2F-85 (and 2F-140) Modbus RTU driver (RS-485)."""
 
 from collections.abc import Iterator
+from typing import Any
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import PendingMove, grip_setpoint
+from positronic.drivers.utils import PendingMove, grip_setpoint, prepare_setpoint
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -21,11 +22,13 @@ _STOPBITS = 1
 class Robotiq2F(pimm.ControlSystem):
     _ARRIVED_TOL = 0.05  # the fingers report width, so arrival is judged from the reading
 
-    def __init__(self, port: str):
+    def __init__(self, port: str, home_grip: float = 0.0):
         self._port = port
+        self._home_grip = home_grip
         self.grip = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.sync_move = pimm.calls.ControlSystemHandler[float, None](self)
+        self.prepare = pimm.calls.ControlSystemHandler[Any, None](self)
         self.force = pimm.DefaultingReceiver(self, default=255)  # device scale 0..255
         self.speed = pimm.DefaultingReceiver(self, default=255)  # device scale 0..255
 
@@ -52,12 +55,15 @@ class Robotiq2F(pimm.ControlSystem):
             client.write_registers(_REG_CMD, [0x0000, 0x0000, 0x0000], device_id=_SLAVE)
             client.write_registers(_REG_CMD, [0x0100, 0x0000, 0x0000], device_id=_SLAVE)
 
-            with PendingMove(self._ARRIVED_TOL, self.sync_move) as move:
+            with PendingMove[float](self._ARRIVED_TOL) as move:
                 while not should_stop.value:
                     grip = self._width(client)
                     self.grip.emit(grip)
 
-                    target = grip_setpoint(move, self.target_grip, grip, clock.now())
+                    now = clock.now()
+                    target = prepare_setpoint(move, self.prepare, self._home_grip, now)
+                    if target is None:
+                        target = grip_setpoint(move, self.sync_move, self.target_grip, grip, now)
                     if target is not None:
                         self._command(client, target)
                     move.answer()  # the width a settled move is answered with is on the fingers

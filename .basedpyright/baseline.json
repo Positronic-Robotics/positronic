@@ -7370,18 +7370,18 @@
                 }
             },
             {
-                "code": "reportAttributeAccessIssue",
+                "code": "reportArgumentType",
                 "range": {
-                    "startColumn": 42,
-                    "endColumn": 54,
+                    "startColumn": 22,
+                    "endColumn": 33,
                     "lineCount": 1
                 }
             },
             {
-                "code": "reportAttributeAccessIssue",
+                "code": "reportArgumentType",
                 "range": {
-                    "startColumn": 30,
-                    "endColumn": 38,
+                    "startColumn": 22,
+                    "endColumn": 32,
                     "lineCount": 1
                 }
             },
@@ -7402,50 +7402,10 @@
                 }
             },
             {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 54,
-                    "endColumn": 67,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportArgumentType",
                 "range": {
                     "startColumn": 22,
                     "endColumn": 26,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 36,
-                    "endColumn": 40,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 26,
-                    "endColumn": 36,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 34,
-                    "endColumn": 42,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 26,
-                    "endColumn": 37,
                     "lineCount": 1
                 }
             }

@@ -3,7 +3,7 @@ import contextvars
 import logging
 import time
 from collections import deque
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Generator, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
@@ -207,17 +207,8 @@ class Harness(pimm.ControlSystem):
     and in what order, belongs to whoever makes the calls.
     """
 
-    def __init__(
-        self,
-        policy: Policy,
-        embodiment: Embodiment,
-        *,
-        reset: Callable[[dict[str, Any]], None] | None = None,
-        static_meta: dict[str, Any] | None = None,
-    ):
+    def __init__(self, policy: Policy, embodiment: Embodiment, *, static_meta: dict[str, Any] | None = None):
         self._embodiment = embodiment
-        # Re-randomizes the scene from the task's ``params``; ``None`` where reset is physical/human.
-        self._reset = reset
         self.policy: Policy = policy
         self._static_meta = static_meta or {}
         # This episode's session and the thread it runs on. ``None`` while no episode is live: while one is,
@@ -240,12 +231,10 @@ class Harness(pimm.ControlSystem):
         # stamp ``ts`` on their own clock.
         self._awaiting_obs: set[str] = set()
 
-        self.observations = pimm.ReceiverDict(self)
-        self.commands = pimm.EmitterDict(self)
-        for name in embodiment.observations:
-            self.observations[name]  # touch to allocate the port
-        for name in embodiment.commands:
-            self.commands[name]
+        self.observations = pimm.ReceiverDict(self, embodiment.observations)
+        self.commands = pimm.EmitterDict(self, embodiment.commands)
+        self.prepare = pimm.calls.CallerDict[Any, None](self, embodiment.prepare_funcs)
+        self.env_reset = pimm.calls.ControlSystemCaller[Any, None](self)
         # Each channel's waypoints not yet played, stamped with absolute clock ns and ascending.
         self._schedules: dict[str, deque[tuple[int, Any]]] = {name: deque() for name in embodiment.commands}
 
@@ -284,7 +273,7 @@ class Harness(pimm.ControlSystem):
         session_meta = self.policy.meta | (self._worker.meta if self._worker else {})
         for k, v in flatten_dict(session_meta).items():
             meta[f'{keys.POLICY_META}.{k}'] = v
-        meta.update(self._task.params)
+        meta.update(self._task.reset_args)
         meta[keys.TASK] = self._task.instruction
         return meta
 
@@ -292,8 +281,18 @@ class Harness(pimm.ControlSystem):
         for name, value in action.items():
             self.commands[name].emit(value)
 
-    def _home(self) -> None:
-        self._emit(self._embodiment.home)
+    def _prepare(self, should_stop: pimm.SignalReceiver, task: Task) -> Generator[pimm.Command, None, None]:
+        """Ask the devices to ready themselves and the env to draw the scene, and come back once all have."""
+        asked = [ask(task.prepare_args.get(name)) for name, ask in self.prepare.items()]
+        if self.env_reset.connected:  # an eval whose scene a human sets up has nothing to ask
+            asked.append(self.env_reset(task.reset_args))
+        ready = pimm.calls.all_of(asked)
+        while not ready.done() and not should_stop.value:
+            yield pimm.Yield() if self._embodiment.simulated else pimm.Sleep(POLL_PERIOD_SEC)
+        # An episode must not open on a rig that never got ready, and its asker must hear that rather than wait
+        if not ready.done():
+            raise RuntimeError('The world stopped before every device was ready')
+        ready.result()
 
     def _pace(self, clock: pimm.Clock) -> pimm.Command:
         """Sim: yield, so the simulator's control-period sleep is the sole time-master and the policy reads
@@ -346,12 +345,15 @@ class Harness(pimm.ControlSystem):
         # producer stepping in that shared round charges ≤ one control period to the closing episode.
         self._telemetry.end(virtual_now)
 
-    def _begin_episode(self, clock: pimm.Clock, call: pimm.calls.Call[Task, dict[str, Any]]) -> None:
-        """Open a fresh episode: reset the scene, read the instruction, open the session and the recording.
+    def _begin_episode(
+        self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, call: pimm.calls.Call[Task, dict[str, Any]]
+    ) -> Generator[pimm.Command, None, None]:
+        """Open a fresh episode: ready the rig and the scene, read the instruction, open the session and
+        the recording.
 
-        ``reset`` only arms the producer; the first observation lands a later round. The recorder drains its
-        channels the turn it opens, so the pre-reset frame and the inter-episode home command drop out. The
-        deadline is armed here and moved to that first observation once it lands.
+        A prepare that answers only arms the producer; the first observation lands a later round. The
+        recorder drains its channels the turn it opens, so the frame from before drops out. The deadline is
+        armed here and moved to that first observation once it lands.
         """
         # Before anything that can raise, so an episode that fails to open still answers whoever asked for it.
         self._call = call
@@ -360,11 +362,10 @@ class Harness(pimm.ControlSystem):
         self._reap_worker()
         self._awaiting_obs = set(self._embodiment.observations)
         self._rollout_started = False
-        # Before the reset, so the reset and the rollout's other phase spans parent to the episode span.
-        self._telemetry.begin(self._task.params)
-        if self._reset is not None:
-            with telemetry.span(telemetry_keys.SPAN_RESET):
-                self._reset(self._task.params)
+        # Before the prepare, so it and the rollout's other phase spans parent to the episode span.
+        self._telemetry.begin(self._task.reset_args)
+        with telemetry.span(telemetry_keys.SPAN_RESET):
+            yield from self._prepare(should_stop, self._task)
         # Read after the reset: an embodiment that learns its task from the scene reports it only once the
         # scene is set up.
         self._worker = _InferenceWorker(
@@ -375,14 +376,13 @@ class Harness(pimm.ControlSystem):
         self.ds_command.emit(DsWriterCommand.START())
 
     def _end_episode(self, clock: pimm.Clock, payload: dict[str, Any]) -> Generator[pimm.Command, None, None]:
-        """Close the live episode: finalize the recording, retire the session, home devices, hand the terminal
-        back to whoever asked for the episode.
+        """Close the live episode: finalize the recording, retire the session, hand the terminal back to
+        whoever asked for the episode.
 
         The worker is retired rather than joined here, so a ``RemoteSession``'s websocket outlives the call
         still using it.
         """
         yield from self._finalize_recording(clock, payload)
-        self._home()
         assert self._call is not None, 'an episode exists only for the call that asked for it'
         self._call.set_result(payload)
         self._call = None
@@ -514,10 +514,6 @@ class Harness(pimm.ControlSystem):
         return None
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        # Home the embodiment before the first episode; each ``_end_episode`` re-homes for the next one, so
-        # every episode begins from the home pose (a real arm gets the inter-episode gap to reach it).
-        self._home()
-
         try:
             yield from self._run(should_stop, clock)
         except BaseException as exc:
@@ -549,7 +545,7 @@ class Harness(pimm.ControlSystem):
                     call.set_exception(RuntimeError('An episode is already running'))
                 yield from self._advance_episode(self._worker, done, clock)
             elif call is not None:
-                self._begin_episode(clock, call)
+                yield from self._begin_episode(clock, should_stop, call)
             elif manual is not None:
                 self._emit(manual)
             self._play(clock)

@@ -309,7 +309,7 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     host, port = env_server
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        trial = replace(ev.tasks[0], timeout_sec=0.1, params={keys.EVAL_TRIAL_INDEX: 0, keys.EVAL_SEED: 100})
+        trial = replace(ev.tasks[0], timeout_sec=0.1, reset_args={keys.EVAL_TRIAL_INDEX: 0, keys.EVAL_SEED: 100})
         policy = StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
         main(policy=ChunkedSchedule().wrap(policy), evals=[replace(ev, tasks=[trial])], output_dir=str(tmp_path))
 
@@ -380,7 +380,7 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
         trial = replace(
-            ev.tasks[0], timeout_sec=20 * control_dt, params={keys.EVAL_TRIAL_INDEX: 0, keys.EVAL_SEED: 100}
+            ev.tasks[0], timeout_sec=20 * control_dt, reset_args={keys.EVAL_TRIAL_INDEX: 0, keys.EVAL_SEED: 100}
         )
         main(policy=policy, evals=[replace(ev, tasks=[trial])], output_dir=str(tmp_path))
 

@@ -75,14 +75,21 @@ def _run_world(policy, ev: Eval, output_dir: Path | None):
     The driver walks ``ev.tasks``; the shared ``policy``'s lifetime stays with ``main``.
     """
     embodiment = ev.embodiment
-    harness = Harness(policy, embodiment, reset=ev.reset)
+    harness = Harness(policy, embodiment)
     driver = TaskDriver(ev.tasks)
 
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(virtual_time=embodiment.simulated) as world:
         ds_agent = wire.wire_embodiment(
-            world, harness, embodiment, dataset_writer, time_mode, privileged=ev.privileged, done=ev.done
+            world,
+            harness,
+            embodiment,
+            dataset_writer,
+            time_mode,
+            privileged=ev.privileged,
+            done=ev.done,
+            env_reset=ev.env_reset,
         )
         world.connect(driver.perform_task, harness.perform_task)
         if ds_agent is not None:

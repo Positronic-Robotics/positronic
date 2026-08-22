@@ -1,9 +1,9 @@
 import logging
 import os
 from collections.abc import Iterator
+from typing import Any
 
 import numpy as np
-from mujoco import Any
 
 import pimm
 from positronic import geom
@@ -76,6 +76,7 @@ class _Arm(DriverRun):
         self,
         api: KinovaAPI,
         calls: pimm.calls.ControlSystemHandler[command.CommandType, None],
+        prepare: pimm.calls.ControlSystemHandler[Any, None],
         out: pimm.SignalEmitter[KinovaState],
         home_joints: list[float],
         dynamics_factor: float,
@@ -91,7 +92,9 @@ class _Arm(DriverRun):
         self.solver = KinematicsSolver()
         self.controller = JointCompliantController(actuator_count=actuators, relative_dynamics_factor=dynamics_factor)
         self._home_joints = home_joints
-        self._move = PendingMove(self._ARRIVED_TOL, calls)
+        self._calls = calls
+        self._prepare = prepare
+        self._move = PendingMove[command.CommandType](self._ARRIVED_TOL)
         self._current = np.zeros(actuators, dtype=np.float32)
         # Read here rather than left empty: every setpoint below is solved from where the arm is now
         self.q, self.dq, self.tau = api.apply_current_command(None)
@@ -102,9 +105,13 @@ class _Arm(DriverRun):
         """Whether the arm will take a setpoint: a move owns it until it is answered."""
         return not (self._move.active or self._move.settled)
 
+    def take_prepare(self) -> pimm.calls.Call[Any, None] | None:
+        """The next prepare asked for, if the arm is free to take one."""
+        return self._move.take(self._prepare)
+
     def take_sync_move(self) -> pimm.calls.Call[command.CommandType, None] | None:
         """The next move asked for, if the arm is free to take one."""
-        return self._move.take()
+        return self._move.take(self._calls)
 
     def settle(self) -> None:
         """Judge a move in flight against the joints the arm reads."""
@@ -144,11 +151,18 @@ class _Arm(DriverRun):
     def serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
         """Put the controller where ``call`` asks; ``settle`` answers it once the arm reads back there."""
         with pimm.calls.raise_to(call):
-            target = self._target_qpos(call.request)
-            self.controller.set_target_qpos(target)
-            # The branch the controller tracks: it wraps the target once, when it is set
-            wrapped = wrap_joint_angle(target, self.q)
-            self._move.accept(call, wrapped, self.clock.now(), self._travel_s(wrapped))
+            self._hold_for(call, self._target_qpos(call.request))
+
+    def serve_prepare(self, call: pimm.calls.Call[Any, None]) -> None:
+        """Put the controller at home; ``settle`` answers ``call`` once the arm reads back there."""
+        with pimm.calls.raise_to(call):
+            self._hold_for(call, self._target_qpos(command.Reset()))
+
+    def _hold_for(self, call: pimm.calls.Call[Any, None], target: np.ndarray) -> None:
+        self.controller.set_target_qpos(target)
+        # The branch the controller tracks: it wraps the target once, when it is set
+        wrapped = wrap_joint_angle(target, self.q)
+        self._move.accept(call, wrapped, self.clock.now(), self._travel_s(wrapped))
 
     def step(self) -> None:
         """Drive one cycle: the controller's torque as current, and what the actuators report back."""
@@ -188,12 +202,20 @@ class Robot(pimm.ControlSystem):
         self.home_joints = home_joints if home_joints is not None else [0.0, -0, 0.5, -1.5, 0.0, -0.5, 1.57079633]
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
+        self.prepare = pimm.calls.ControlSystemHandler[Any, None](self)
         self.state = pimm.ControlSystemEmitter[KinovaState](self)
 
     def _arm(self, api: KinovaAPI, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
         return _Arm(
-            api, self.sync_move, self.state, self.home_joints, self.relative_dynamics_factor, should_stop, clock
+            api,
+            self.sync_move,
+            self.prepare,
+            self.state,
+            self.home_joints,
+            self.relative_dynamics_factor,
+            should_stop,
+            clock,
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
@@ -203,7 +225,9 @@ class Robot(pimm.ControlSystem):
                 while not should_stop.value:
                     arm.settle()
                     if arm.takes_commands:
-                        if (call := arm.take_sync_move()) is not None:
+                        if (call := arm.take_prepare()) is not None:
+                            arm.serve_prepare(call)
+                        elif (call := arm.take_sync_move()) is not None:
                             arm.serve_sync_move(call)
                         elif (cmd := pimm.value_updated(self.commands)) is not None:
                             try:

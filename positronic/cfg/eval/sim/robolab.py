@@ -196,7 +196,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
         number_trials(Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout), params),
         privileged={'subtask': Observation(proxy.privileged['subtask'], None)},
         done=proxy.done,
-        reset=proxy.reset,
+        env_reset=proxy.env_reset,
     )
 
 

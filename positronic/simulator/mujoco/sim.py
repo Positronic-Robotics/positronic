@@ -7,7 +7,7 @@ import mujoco as mj
 import numpy as np
 
 import pimm
-from positronic import geom, telemetry, telemetry_keys
+from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.ik import qpos_from_site_pose
@@ -145,6 +145,8 @@ class MujocoSim(pimm.ControlSystem):
         self._reset_pending = False
 
         self.commands = pimm.ControlSystemReceiver[roboarm_command.CommandType](self)
+        self.prepare = pimm.calls.ControlSystemHandler[Any, None](self)
+        self.env_reset = pimm.calls.ControlSystemHandler[Any, None](self)
         self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
@@ -155,6 +157,21 @@ class MujocoSim(pimm.ControlSystem):
         # live: it rebuilds the episode's model from the ``scene_xml`` in its static meta and
         # replays these states through it (``mj_setState`` + ``mj_forward``).
         self.sim_state: pimm.SignalEmitter[dict[str, np.ndarray]] = pimm.ControlSystemEmitter(self)
+
+    def _serve_calls(self) -> bool:
+        """Home the arm for a prepare, and draw a fresh scene for a reset. Whether a scene was drawn."""
+        if (call := next(self.prepare.incoming(), None)) is not None:
+            with pimm.calls.raise_to(call):  # ``_home`` steps the settling transient, so the arm is there
+                self._home()
+                call.set_result(None)
+        if (call := next(self.env_reset.incoming(), None)) is not None:
+            with pimm.calls.raise_to(call):
+                self.reset(dict(call.request or {}).get(keys.EVAL_SEED))
+                # Answered before frame-0 goes out: the recorder opens on this answer and drains its channels
+                # as it opens, so a frame published first would be dropped
+                call.set_result(None)
+                return True
+        return False
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self._emit_robot_meta()
@@ -176,6 +193,8 @@ class MujocoSim(pimm.ControlSystem):
                 # land in overhead.
                 with telemetry.span(telemetry_keys.SPAN_RESET):
                     self._publish_frame()
+                continue
+            if self._serve_calls():  # frame-0 is the next turn's, so no step comes between it and the reset
                 continue
             now = clock.now()
             cmd = pimm.value_updated(self.commands)
@@ -208,8 +227,8 @@ class MujocoSim(pimm.ControlSystem):
         colors, cameras) re-randomize too; the renderer and IK physics rebind lazily. The run loop
         publishes the prepared scene as frame-0 on its next turn — in sequence, before any step — so the
         first inference reads the reset state and the recorder logs it. Stale commands queued while idle
-        (e.g. the inter-episode home) are dropped and the held grip is cleared, so the first step does not
-        apply a queued command on the freshly reset scene.
+        are dropped and the held grip is cleared, so the first step does not apply a queued command on the
+        freshly reset scene.
         """
         self._load_scene(seed)
         self._home()

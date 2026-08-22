@@ -2,6 +2,7 @@ import logging
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -72,6 +73,7 @@ class _Arm(DriverRun):
         self,
         bus: MotorBus,
         calls: pimm.calls.ControlSystemHandler[roboarm_command.CommandType, None],
+        prepare: pimm.calls.ControlSystemHandler[Any, None],
         out: pimm.SignalEmitter[SO101State],
         grip_out: pimm.SignalEmitter[float],
         home_joints: list[float],
@@ -86,7 +88,9 @@ class _Arm(DriverRun):
         self.kinematic = Kinematics(_SO101_URDF_PATH, _SO101_EE_JOINT)
         self._joint_limits = self.kinematic.joint_limits
         self._home_joints = home_joints
-        self._move = PendingMove(self._ARRIVED_TOL, calls)
+        self._calls = calls
+        self._prepare = prepare
+        self._move = PendingMove[roboarm_command.CommandType](self._ARRIVED_TOL)
         # Read here rather than left empty: every setpoint below is solved from where the arm is now, and the
         # arm holds where the bus finds it until something asks otherwise
         self.q_norm = bus.position
@@ -138,9 +142,13 @@ class _Arm(DriverRun):
         """Whether the arm will take a setpoint: a move owns it until it is answered."""
         return not (self._move.active or self._move.settled)
 
+    def take_prepare(self) -> pimm.calls.Call[Any, None] | None:
+        """The next prepare asked for, if the arm is free to take one."""
+        return self._move.take(self._prepare)
+
     def take_sync_move(self) -> pimm.calls.Call[roboarm_command.CommandType, None] | None:
         """The next move asked for, if the arm is free to take one."""
-        return self._move.take()
+        return self._move.take(self._calls)
 
     def read(self) -> None:
         """Take the arm off the bus, once a tick: every step below wants the same instant."""
@@ -166,9 +174,16 @@ class _Arm(DriverRun):
     def serve_sync_move(self, call: pimm.calls.Call[roboarm_command.CommandType, None]) -> None:
         """Hold the arm where ``call`` asks; ``settle`` answers it once the bus reads back there."""
         with pimm.calls.raise_to(call):
-            target = self._target_qpos(call.request)
-            self._qpos, self._unsent = target, True
-            self._move.accept(call, target, self.clock.now(), self._MOVE_TIMEOUT_S)
+            self._hold_for(call, self._target_qpos(call.request))
+
+    def serve_prepare(self, call: pimm.calls.Call[Any, None]) -> None:
+        """Hold the arm at home; ``settle`` answers ``call`` once the bus reads back there."""
+        with pimm.calls.raise_to(call):
+            self._hold_for(call, self._target_qpos(roboarm_command.Reset()))
+
+    def _hold_for(self, call: pimm.calls.Call[Any, None], target: np.ndarray) -> None:
+        self._qpos, self._unsent = target, True
+        self._move.accept(call, target, self.clock.now(), self._MOVE_TIMEOUT_S)
 
     def write(self) -> None:
         """Put the setpoint on the bus, if anything has asked for one since it was last written.
@@ -216,6 +231,7 @@ class Robot(pimm.ControlSystem):
         self.home_joints = home_joints if home_joints is not None else [0.0, 0.0, 0.0, 0.0, 0.0]
         self.commands = pimm.ControlSystemReceiver[roboarm_command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[roboarm_command.CommandType, None](self)
+        self.prepare = pimm.calls.ControlSystemHandler[Any, None](self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
 
         self.grip = pimm.ControlSystemEmitter[float](self)
@@ -228,7 +244,9 @@ class Robot(pimm.ControlSystem):
 
     def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
-        return _Arm(self.motor_bus, self.sync_move, self.state, self.grip, self.home_joints, should_stop, clock)
+        return _Arm(
+            self.motor_bus, self.sync_move, self.prepare, self.state, self.grip, self.home_joints, should_stop, clock
+        )
 
     @staticmethod
     def _build_robot_meta() -> dict:
@@ -251,7 +269,9 @@ class Robot(pimm.ControlSystem):
                     arm.hold_grip(grip)
                 arm.settle()
                 if arm.takes_commands:
-                    if (call := arm.take_sync_move()) is not None:
+                    if (call := arm.take_prepare()) is not None:
+                        arm.serve_prepare(call)
+                    elif (call := arm.take_sync_move()) is not None:
                         arm.serve_sync_move(call)
                     elif (cmd := pimm.value_updated(self.commands)) is not None:
                         try:

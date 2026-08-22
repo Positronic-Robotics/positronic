@@ -115,6 +115,7 @@ class _Arm(DriverRun):
         self,
         vendor: pf.Robot,
         calls: pimm.calls.ControlSystemHandler[command.CommandType, None],
+        prepare: pimm.calls.ControlSystemHandler[Any, None],
         out: pimm.SignalEmitter[FrankaState],
         home_joints: list[float],
         home_joints_variation: list[float],
@@ -126,6 +127,7 @@ class _Arm(DriverRun):
         super().__init__(should_stop, clock, hz=2000)
         self.vendor = vendor
         self._calls = calls
+        self._prepare = prepare
         self.out = out
         self.state = FrankaState()
         self._home_joints = home_joints
@@ -141,6 +143,10 @@ class _Arm(DriverRun):
         # Before ``_desk_session`` deactivates FCI, or the thread dies mid-control with
         # "TCP connection got interrupted".
         self.vendor.stop()
+
+    def take_prepare(self) -> pimm.calls.Call[Any, None] | None:
+        """The next prepare asked for."""
+        return next(self._prepare.incoming(), None)
 
     def take_sync_move(self) -> pimm.calls.Call[command.CommandType, None] | None:
         """The next move asked for."""
@@ -243,8 +249,17 @@ class _Arm(DriverRun):
 
     def serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
         """Put the arm where ``call`` asks and answer it once the state saying so is out."""
+        yield from self._answer_with_move(call, lambda: self.target_joints(call.request))
+
+    def serve_prepare(self, call: pimm.calls.Call[Any, None]) -> Iterator[pimm.Command]:
+        """Put the arm at home and answer ``call`` once the state saying so is out."""
+        yield from self._answer_with_move(call, self.home_target)
+
+    def _answer_with_move(
+        self, call: pimm.calls.Call[Any, None], target: Callable[[], np.ndarray]
+    ) -> Iterator[pimm.Command]:
         try:
-            if (yield from self.move_to(self.target_joints(call.request))) is MoveStatus.ARRIVED:
+            if (yield from self.move_to(target())) is MoveStatus.ARRIVED:
                 call.set_result(None)
             else:
                 call.set_exception(MoveAbandoned())
@@ -315,6 +330,7 @@ class Robot(pimm.ControlSystem):
         )
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
+        self.prepare = pimm.calls.ControlSystemHandler[Any, None](self)
         self.state = pimm.ControlSystemEmitter[FrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self._load = load
@@ -425,6 +441,7 @@ class Robot(pimm.ControlSystem):
         return _Arm(
             self._vendor,
             self.sync_move,
+            self.prepare,
             self.state,
             self._home_joints,
             self._home_joints_variation,
@@ -462,7 +479,9 @@ class Robot(pimm.ControlSystem):
                     yield arm.limiter.wait()
                     continue
 
-                if (call := arm.take_sync_move()) is not None:
+                if (call := arm.take_prepare()) is not None:
+                    yield from arm.serve_prepare(call)
+                elif (call := arm.take_sync_move()) is not None:
                     yield from arm.serve_sync_move(call)
                 elif (cmd := pimm.value_updated(self.commands)) is not None:
                     try:

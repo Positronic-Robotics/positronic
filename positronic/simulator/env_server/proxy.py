@@ -16,7 +16,6 @@ from typing import Any
 import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
-from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
@@ -41,6 +40,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self.privileged: pimm.EmitterDict = pimm.EmitterDict(self)
         self.robot_meta = pimm.ControlSystemEmitter[dict](self)
         self.done = pimm.ControlSystemEmitter[dict](self)
+        self.env_reset = pimm.calls.ControlSystemHandler[Any, None](self)
 
         # A trial is live between reset and the env's done. The proxy steps only then — not before the
         # first reset (Gym envs reject step-before-reset), not after done. It sleeps every turn regardless.
@@ -112,6 +112,13 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     with telemetry.span(telemetry_keys.SPAN_RESET):
                         self._emit_payload(self._frame['obs'])
                     self.done.emit({})
+                elif (call := next(self.env_reset.incoming(), None)) is not None:
+                    with pimm.calls.raise_to(call):
+                        self.reset(dict(call.request or {}))
+                        # Answered before frame-0 goes out: the recorder opens on this answer and drains its
+                        # channels as it opens, so a frame published first would be dropped. Frame-0 itself is
+                        # the next turn's, so no step comes between it and the reset.
+                        call.set_result(None)
                 elif self._active:
                     # ``env.step`` spans the whole client-observed step; ``materialize`` nests the client-side
                     # observation assembly (shared-memory image allocation + camera copies) inside it, so the
@@ -156,15 +163,15 @@ def remote_franka_embodiment(
         **{logical: Observation(proxy.observations[logical], Serializers.camera_images) for logical in camera_dict},
     }
     commands = {
-        keys.ROBOT_COMMAND: Command(
-            proxy.commands[keys.ROBOT_COMMAND], roboarm_command.Reset(), Serializers.robot_command
-        ),
-        keys.TARGET_GRIP: Command(proxy.commands[keys.TARGET_GRIP], 0.0, None),
+        keys.ROBOT_COMMAND: Command(proxy.commands[keys.ROBOT_COMMAND], Serializers.robot_command),
+        keys.TARGET_GRIP: Command(proxy.commands[keys.TARGET_GRIP], None),
     }
     return Embodiment(
         descriptor=descriptor,
         observations=observations,
         commands=commands,
+        # A remote env readies its own robot when it draws the scene; the proxy has no lever of its own
+        prepare_funcs={},
         static_meta={**ROBOT_STATIC_META, **(static_meta or {})},
         meta_source=proxy.robot_meta,
         control_systems=(proxy,),

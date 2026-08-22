@@ -1137,6 +1137,21 @@ class TestReceiverDict:
             # Connection should be ignored
             assert len(world._connections) == 0
 
+    def test_names_fix_the_ports_the_dict_has(self):
+        """A control system that knows its channels up front has no use for a key it was never built with."""
+        receivers = ReceiverDict(DummyControlSystem('test'), ['a', 'b'])
+
+        assert sorted(receivers) == ['a', 'b']
+        assert all(isinstance(receiver, ControlSystemReceiver) for receiver in receivers.values())
+        with pytest.raises(KeyError):
+            receivers['c']
+
+    def test_named_ports_are_fake_where_asked_for(self):
+        receivers = ReceiverDict(DummyControlSystem('test'), ['a', 'b'], fake={'b'})
+
+        assert not isinstance(receivers['a'], FakeReceiver)
+        assert isinstance(receivers['b'], FakeReceiver)
+
 
 class TestEmitterDict:
     """Test EmitterDict lazy allocation with fake emitter support."""
@@ -1248,6 +1263,21 @@ class TestEmitterDict:
 
             # Fake connection should not deliver data
             assert consumer1.receiver.read() is None
+
+    def test_names_fix_the_ports_the_dict_has(self):
+        """A control system that knows its channels up front has no use for a key it was never built with."""
+        emitters = EmitterDict(DummyControlSystem('test'), ['a', 'b'])
+
+        assert sorted(emitters) == ['a', 'b']
+        assert all(isinstance(emitter, ControlSystemEmitter) for emitter in emitters.values())
+        with pytest.raises(KeyError):
+            emitters['c']
+
+    def test_named_ports_are_fake_where_asked_for(self):
+        emitters = EmitterDict(DummyControlSystem('test'), ['a', 'b'], fake={'b'})
+
+        assert not isinstance(emitters['a'], FakeEmitter)
+        assert isinstance(emitters['b'], FakeEmitter)
 
 
 # Enough iterations that a per-cycle line would be unmistakable against the handful of event lines.

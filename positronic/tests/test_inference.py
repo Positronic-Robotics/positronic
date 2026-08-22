@@ -28,7 +28,13 @@ class _IdlePolicy:
 
 def _embodiment(simulated: bool = False) -> Embodiment:
     return Embodiment(
-        descriptor='stub', observations={}, commands={}, static_meta={}, meta_source=None, simulated=simulated
+        descriptor='stub',
+        observations={},
+        commands={},
+        prepare_funcs={},
+        static_meta={},
+        meta_source=None,
+        simulated=simulated,
     )
 
 

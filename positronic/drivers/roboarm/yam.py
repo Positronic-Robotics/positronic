@@ -168,6 +168,7 @@ class _Chain(DriverRun):
         self,
         vendor: Any,
         calls: pimm.calls.ControlSystemHandler[command.CommandType, None],
+        prepare: pimm.calls.ControlSystemHandler[Any, None],
         out: pimm.SignalEmitter[YamState],
         grip_out: pimm.SignalEmitter[float],
         home_joints: np.ndarray,
@@ -178,6 +179,7 @@ class _Chain(DriverRun):
         super().__init__(should_stop, clock, hz=100)
         self.vendor = vendor
         self._calls = calls
+        self._prepare = prepare
         self.out = out
         self.grip_out = grip_out
         self.state = YamState()
@@ -187,6 +189,10 @@ class _Chain(DriverRun):
 
     def __enter__(self) -> '_Chain':
         return self
+
+    def take_prepare(self) -> pimm.calls.Call[Any, None] | None:
+        """The next prepare asked for."""
+        return next(self._prepare.incoming(), None)
 
     def take_sync_move(self) -> pimm.calls.Call[command.CommandType, None] | None:
         """The next move asked for."""
@@ -294,9 +300,24 @@ class _Chain(DriverRun):
 
         Only an arrival earns the target: commanding it part-way is the jump the ramp exists to avoid.
         """
-        request = call.request
+
+        def target_of() -> np.ndarray:
+            request = call.request
+            return self.home_joints if isinstance(request, command.Reset) else self.target_joints(request, q)
+
+        return (yield from self._answer_with_move(call, target_of, grip))
+
+    def serve_prepare(
+        self, call: pimm.calls.Call[Any, None], grip: float
+    ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
+        """Put the chain at home, hold it wherever it ends up, and answer ``call`` once that is out."""
+        return (yield from self._answer_with_move(call, lambda: self.home_joints, grip))
+
+    def _answer_with_move(
+        self, call: pimm.calls.Call[Any, None], target_of: Callable[[], np.ndarray], grip: float
+    ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
         try:
-            target = self.home_joints if isinstance(request, command.Reset) else self.target_joints(request, q)
+            target = target_of()
             if (yield from self.move_to(target, grip)) is MoveStatus.ARRIVED:
                 call.set_result(None)
                 return np.asarray(target, dtype=np.float64), grip
@@ -357,6 +378,7 @@ class Robot(pimm.ControlSystem):
 
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
+        self.prepare = pimm.calls.ControlSystemHandler[Any, None](self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
@@ -365,7 +387,15 @@ class Robot(pimm.ControlSystem):
     def _chain(self, vendor: Any, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Chain:
         """The chain this run drives, built from the driver's configuration."""
         return _Chain(
-            vendor, self.sync_move, self.state, self.grip, self._home_joints, self._base_pose, should_stop, clock
+            vendor,
+            self.sync_move,
+            self.prepare,
+            self.state,
+            self.grip,
+            self._home_joints,
+            self._base_pose,
+            should_stop,
+            clock,
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
@@ -382,7 +412,10 @@ class Robot(pimm.ControlSystem):
                     grip_target = float(grip)
 
                 q = chain.observations()[_JOINT_POS]
-                if (call := chain.take_sync_move()) is not None:
+                if (call := chain.take_prepare()) is not None:
+                    grip_target = 0.0  # homing opens the gripper, as a ``Reset`` command does
+                    q_target, grip_target = yield from chain.serve_prepare(call, grip_target)
+                elif (call := chain.take_sync_move()) is not None:
                     if isinstance(call.request, command.Reset):
                         grip_target = 0.0  # homing opens the gripper, as a ``Reset`` command does
                     q_target, grip_target = yield from chain.serve_sync_move(call, q, grip_target)

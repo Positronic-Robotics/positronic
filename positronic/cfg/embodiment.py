@@ -1,12 +1,10 @@
 import configuronic as cfn
-import numpy as np
 
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
 from positronic import keys
 from positronic.dataset.serializers import Serializers
-from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 
 
@@ -30,13 +28,14 @@ def droid(robot_arm, gripper, cameras):
         **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
     }
     commands = {
-        keys.ROBOT_COMMAND: Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
-        keys.TARGET_GRIP: Command(gripper.target_grip, 0.0, None),
+        keys.ROBOT_COMMAND: Command(robot_arm.commands, Serializers.robot_command),
+        keys.TARGET_GRIP: Command(gripper.target_grip, None),
     }
     return Embodiment(
         descriptor='',
         observations=observations,
         commands=commands,
+        prepare_funcs={keys.ARM: robot_arm.prepare, keys.GRIPPER: gripper.prepare},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
         control_systems=(*cameras.values(), robot_arm, gripper),
@@ -53,13 +52,15 @@ def yam(robot_arm, cameras):
         **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
     }
     commands = {
-        keys.ROBOT_COMMAND: Command(robot_arm.commands, roboarm_command.Reset(), Serializers.robot_command),
-        keys.TARGET_GRIP: Command(robot_arm.target_grip, 0.0, None),
+        keys.ROBOT_COMMAND: Command(robot_arm.commands, Serializers.robot_command),
+        keys.TARGET_GRIP: Command(robot_arm.target_grip, None),
     }
     return Embodiment(
         descriptor='yam',
         observations=observations,
         commands=commands,
+        # One driver, one handler: the YAM chain carries its own fingers
+        prepare_funcs={keys.ARM: robot_arm.prepare},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
         control_systems=(*cameras.values(), robot_arm),
@@ -101,11 +102,8 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
         **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
     }
     commands = {
-        **{
-            f'{keys.ROBOT_COMMAND}.{s}': Command(arm.commands, roboarm_command.Reset(), Serializers.robot_command)
-            for s, arm in arms.items()
-        },
-        **{f'{keys.TARGET_GRIP}.{s}': Command(arm.target_grip, 0.0, None) for s, arm in arms.items()},
+        **{f'{keys.ROBOT_COMMAND}.{s}': Command(arm.commands, Serializers.robot_command) for s, arm in arms.items()},
+        **{f'{keys.TARGET_GRIP}.{s}': Command(arm.target_grip, None) for s, arm in arms.items()},
     }
     joint_signals = {side: f'{keys.ROBOT_STATE}.{side}.q' for side in arms}
     static_meta = {
@@ -118,6 +116,7 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
         descriptor='yam_bimanual',
         observations=observations,
         commands=commands,
+        prepare_funcs={f'{keys.ARM}.{s}': arm.prepare for s, arm in arms.items()},
         static_meta=static_meta,
         # Both drivers emit the identical per-arm meta; record one copy.
         meta_source=arms['left'].robot_meta,
@@ -138,17 +137,16 @@ def mujoco_franka(sim, camera_dict):
         keys.GRIP: Observation(sim.grip, None),
         **{name: Observation(sim.cameras[orig], Serializers.camera_images) for name, orig in camera_dict.items()},
     }
-    # Home to the scene's initial pose, not `Reset()`: in MujocoSim `Reset()` rebuilds the whole scene, wiping the
-    # trial's end state right when the operator reviews it.
-    home = roboarm_command.JointPosition(np.array(sim.initial_ctrl[:7]))
     commands = {
-        keys.ROBOT_COMMAND: Command(sim.commands, home, Serializers.robot_command),
-        keys.TARGET_GRIP: Command(sim.target_grip, 0.0, None),
+        keys.ROBOT_COMMAND: Command(sim.commands, Serializers.robot_command),
+        keys.TARGET_GRIP: Command(sim.target_grip, None),
     }
     return Embodiment(
         descriptor='mujoco.franka',
         observations=observations,
         commands=commands,
+        # The sim drives the arm and the fingers alike, and knows the pose its scene starts from
+        prepare_funcs={keys.ARM: sim.prepare},
         static_meta={**ROBOT_STATIC_META, 'simulation.mujoco_model_path': sim.mujoco_model_path},
         meta_source=sim.robot_meta,
         control_systems=(sim,),

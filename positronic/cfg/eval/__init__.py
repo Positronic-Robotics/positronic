@@ -19,7 +19,7 @@ def placeholder():
 def number_trials(task: Task, params: list[dict]) -> list[Task]:
     """One copy of ``task`` per entry in ``params``, each also carrying its place in the sweep."""
     return [
-        replace(task, params={**p, keys.EVAL_TRIAL_INDEX: i, keys.EVAL_TRIAL_COUNT: len(params)})
+        replace(task, reset_args={**p, keys.EVAL_TRIAL_INDEX: i, keys.EVAL_TRIAL_COUNT: len(params)})
         for i, p in enumerate(params)
     ]
 

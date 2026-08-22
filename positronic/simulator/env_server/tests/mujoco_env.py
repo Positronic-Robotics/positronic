@@ -196,5 +196,5 @@ def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]
         [Task(instruction_source='Pick up the green cube and place it on the red cube.', timeout_sec=15.0)],
         privileged={'sim_state': Observation(proxy.privileged['sim_state'], None)},
         done=proxy.done,
-        reset=proxy.reset,
+        env_reset=proxy.env_reset,
     )
