@@ -1,4 +1,3 @@
-import logging
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from pathlib import Path
@@ -12,9 +11,7 @@ from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.kinematics import Kinematics
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, add_default_frame
-from positronic.drivers.utils import DriverRun, MoveStatus, PendingMove
-
-logger = logging.getLogger(__name__)
+from positronic.drivers.utils import DriverRun, MoveStatus, log_failure
 
 
 class SO101State(State, pimm.shared_memory.NumpySMAdapter):
@@ -56,7 +53,7 @@ _SO101_EE_LINK = 'gripper_frame_link'
 _SO101_EE_JOINT = 'gripper_frame_joint'
 
 
-class _Arm(DriverRun):
+class _Arm(DriverRun[roboarm_command.CommandType]):
     """The arm the driver drives: the bus it reads and writes, and the setpoint it holds the arm at.
 
     The bus reports position only while the loop reads it, so the arm cannot be held for a move.
@@ -71,14 +68,15 @@ class _Arm(DriverRun):
     def __init__(
         self,
         bus: MotorBus,
-        calls: pimm.calls.ControlSystemHandler[roboarm_command.CommandType | None, None],
+        sync_move: pimm.calls.ControlSystemHandler[roboarm_command.CommandType | None, None],
+        async_move: pimm.SignalReceiver[roboarm_command.CommandType],
         out: pimm.SignalEmitter[SO101State],
         grip_out: pimm.SignalEmitter[float],
         home_joints: list[float],
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
     ):
-        super().__init__(should_stop, clock, hz=1000)
+        super().__init__(sync_move, async_move, should_stop, clock, hz=1000)
         self.bus = bus
         self.out = out
         self.grip_out = grip_out
@@ -86,7 +84,6 @@ class _Arm(DriverRun):
         self.kinematic = Kinematics(_SO101_URDF_PATH, _SO101_EE_JOINT)
         self._joint_limits = self.kinematic.joint_limits
         self._home_joints = home_joints
-        self._move = PendingMove[roboarm_command.CommandType | None](self._ARRIVED_TOL, calls)
         # Read here rather than left empty: every setpoint below is solved from where the arm is now, and the
         # arm holds where the bus finds it until something asks otherwise
         self.q_norm = bus.position
@@ -136,24 +133,15 @@ class _Arm(DriverRun):
         """The setpoint ``cmd`` asks the arm to hold, clipped to the calibrated range the bus reports from."""
         return np.clip(self._requested_qpos(cmd), 0.0, 1.0)
 
-    @property
-    def takes_commands(self) -> bool:
-        """Whether the arm will take a setpoint: a move owns it until it is answered."""
-        return not (self._move.active or self._move.settled)
-
-    def take_sync_move(self) -> pimm.calls.Call[roboarm_command.CommandType | None, None] | None:
-        """The next move asked for, if the arm is free to take one."""
-        return self._move.take()
-
     def read(self) -> None:
         """Take the arm off the bus, once a tick: every step below wants the same instant."""
         self.q_norm = self.bus.position
 
     def settle(self) -> None:
         """Judge a move in flight against what the bus reports."""
-        if not self._move.active:
+        if not self.moves.active:
             return
-        if self._move.settle(self.q_norm[:-1], self.clock.now()) is MoveStatus.GAVE_UP:
+        if self.moves.settle(self.q_norm[:-1], self.clock.now()) is MoveStatus.GAVE_UP:
             # Holding the target the arm stopped short of would resume the move once whatever blocked
             # it goes away, long after its asker was told it failed.
             self._qpos, self._unsent = np.asarray(self.q_norm[:-1]), True
@@ -171,7 +159,7 @@ class _Arm(DriverRun):
         with pimm.calls.raise_to(call):
             target = self._target_qpos(call.request)
             self._qpos, self._unsent = target, True
-            self._move.accept(call, target, self.clock.now(), self._MOVE_TIMEOUT_S)
+            self.moves.accept(call, target, self._ARRIVED_TOL, self.clock.now(), self._MOVE_TIMEOUT_S)
 
     def write(self) -> None:
         """Put the setpoint on the bus, if anything has asked for one since it was last written.
@@ -187,17 +175,13 @@ class _Arm(DriverRun):
     def publish(self) -> None:
         """Ship the arm as the bus reports it, arm and fingers."""
         ee_pose, gripper = self._forward_kinematics(self.q_norm)
-        if self._move.active:  # the driver owns the arm until the move settles, and reads no command meanwhile
+        if self.moves.active:  # the driver owns the arm until the move settles, and reads no command meanwhile
             status = RobotStatus.BUSY
         else:  # the bus reports position, not whether the arm is where the driver put it
-            status = RobotStatus.ERROR if self._move.errored else RobotStatus.AVAILABLE
+            status = RobotStatus.ERROR if self.moves.errored else RobotStatus.AVAILABLE
         self.state.encode(self._norm_to_rad(self.q_norm)[:-1], self.bus.velocity[:-1], ee_pose, status)
         self.out.emit(self.state)
         self.grip_out.emit(gripper)
-
-    def answer(self) -> None:
-        """Hand a move settled this tick its outcome, now that the state saying so is out."""
-        self._move.answer()
 
     def __enter__(self) -> '_Arm':
         return self
@@ -205,11 +189,11 @@ class _Arm(DriverRun):
     def __exit__(self, exc_type, exc: BaseException | None, tb) -> None:
         """Leave the arm holding where the bus reads it, then answer whatever was waiting on the move."""
         try:
-            if self._move.active:  # the servos chase the goal they were last given, run or no run
+            if self.moves.active:  # the servos chase the goal they were last given, run or no run
                 self._qpos, self._unsent = np.asarray(self.q_norm[:-1]), True
                 self.write()
         finally:  # a bus that will not take the hold is the asker's to hear about, not a reason to go quiet
-            self._move.abandon(exc)
+            self.moves.abandon(exc)
 
 
 class Robot(pimm.ControlSystem):
@@ -231,7 +215,9 @@ class Robot(pimm.ControlSystem):
 
     def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
-        return _Arm(self.motor_bus, self.sync_move, self.state, self.grip, self.home_joints, should_stop, clock)
+        return _Arm(
+            self.motor_bus, self.sync_move, self.commands, self.state, self.grip, self.home_joints, should_stop, clock
+        )
 
     @staticmethod
     def _build_robot_meta() -> dict:
@@ -253,18 +239,15 @@ class Robot(pimm.ControlSystem):
                 if (grip := pimm.value_updated(self.target_grip)) is not None:
                     arm.hold_grip(grip)
                 arm.settle()
-                if arm.takes_commands:
-                    if (call := arm.take_sync_move()) is not None:
-                        arm.serve_sync_move(call)
-                    elif (cmd := pimm.value_updated(self.commands)) is not None:
-                        try:
-                            arm.track(cmd)
-                        # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
-                        except Exception as exc:
-                            logger.warning(f'{cmd} not applied: {exc}')
+                asked = arm.moves.next_request()
+                if isinstance(asked, pimm.calls.Call):
+                    arm.serve_sync_move(asked)
+                elif asked is not None:
+                    with log_failure(asked):
+                        arm.track(asked)
 
                 arm.write()
                 arm.publish()
-                arm.answer()  # the state a settled move is answered with is out
+                arm.moves.answer()  # the state a settled move is answered with is out
 
                 yield arm.limiter.wait()

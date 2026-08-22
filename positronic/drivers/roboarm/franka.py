@@ -12,7 +12,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus
+from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, log_failure
 
 from . import RobotStatus, State, command
 from .models import DEFAULT_FRAME, EE_LINK, add_default_frame, attach_robotiq_2f85
@@ -99,7 +99,7 @@ def _revolute_joint_names(urdf_xml):
 _MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collision'
 
 
-class _Arm(DriverRun):
+class _Arm(DriverRun[command.CommandType]):
     """The arm the driver drives: the vendor handle, and the state and moves that go with it."""
 
     # A move needs a deadline at all because the vendor reports a goal it abandons, but a goal it never
@@ -114,7 +114,8 @@ class _Arm(DriverRun):
     def __init__(
         self,
         vendor: pf.Robot,
-        calls: pimm.calls.ControlSystemHandler[command.CommandType | None, None],
+        sync_move: pimm.calls.ControlSystemHandler[command.CommandType | None, None],
+        async_move: pimm.SignalReceiver[command.CommandType],
         out: pimm.SignalEmitter[FrankaState],
         home_joints: list[float],
         home_joints_variation: list[float],
@@ -123,9 +124,8 @@ class _Arm(DriverRun):
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
     ):
-        super().__init__(should_stop, clock, hz=2000)
+        super().__init__(sync_move, async_move, should_stop, clock, hz=2000)
         self.vendor = vendor
-        self._calls = calls
         self.out = out
         self.state = FrankaState()
         self._home_joints = home_joints
@@ -142,13 +142,9 @@ class _Arm(DriverRun):
         # "TCP connection got interrupted".
         self.vendor.stop()
 
-    def take_sync_move(self) -> pimm.calls.Call[command.CommandType | None, None] | None:
-        """The next move asked for."""
-        return next(self._calls.incoming(), None)
-
     def publish(self, st: pf.State) -> None:
         """Ship the arm as the vendor reports it, marked ERROR while it is not where the driver put it."""
-        faulted = self.errored or st.error != 0  # the vendor reports its own faults; a stall is not one
+        faulted = self.moves.errored or st.error != 0  # the vendor reports its own faults; a stall is not one
         self.state.encode(st, RobotStatus.ERROR if faulted else RobotStatus.AVAILABLE)
         self.out.emit(self.state)
 
@@ -210,12 +206,12 @@ class _Arm(DriverRun):
                 self.vendor.set_target_joints(self.vendor.state().q)
                 raise TimeoutError(f'the arm stopped short of {target}')
         except Exception:
-            self.errored = True
+            self.moves.errored = True
             raise
 
         if self.should_stop.value:  # the travel gave up on the stop rather than on arrival
             return MoveStatus.GAVE_UP
-        self.errored = False
+        self.moves.errored = False
         # The poll that reports arrival ends the loop, so the sample before it was taken mid-travel
         self.publish(self.vendor.state())
         return MoveStatus.ARRIVED
@@ -425,6 +421,7 @@ class Robot(pimm.ControlSystem):
         return _Arm(
             self._vendor,
             self.sync_move,
+            self.commands,
             self.state,
             self._home_joints,
             self._home_joints_variation,
@@ -462,17 +459,15 @@ class Robot(pimm.ControlSystem):
                     yield arm.limiter.wait()
                     continue
 
-                if (call := arm.take_sync_move()) is not None:
-                    yield from arm.serve_sync_move(call)
-                elif (cmd := pimm.value_updated(self.commands)) is not None:
-                    try:
-                        if isinstance(cmd, command.Reset):
+                asked = arm.moves.next_request()
+                if isinstance(asked, pimm.calls.Call):
+                    yield from arm.serve_sync_move(asked)
+                elif asked is not None:
+                    with log_failure(asked):
+                        if isinstance(asked, command.Reset):
                             yield from arm.move_to(arm.home_target())
                         else:
-                            vendor.set_target_joints(arm.target_joints(cmd))
-                    # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
-                    except Exception as exc:
-                        logger.warning(f'{cmd} not applied: {exc}')
+                            vendor.set_target_joints(arm.target_joints(asked))
 
                 yield arm.limiter.wait()
 

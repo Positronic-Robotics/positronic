@@ -24,7 +24,7 @@ import numpy as np
 import pimm
 from positronic import geom, keys
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus
+from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, log_failure
 from positronic.utils import package_assets_path
 
 from . import RobotStatus, State, command
@@ -156,7 +156,7 @@ class _Kinematics:
         return None
 
 
-class _Chain(DriverRun):
+class _Chain(DriverRun[command.CommandType]):
     """The chain the driver drives: the vendor handle, and the state and moves that go with it."""
 
     _MOVE_TIME_S = 2.0  # seconds the commanded position is ramped over on the way to a target
@@ -167,7 +167,8 @@ class _Chain(DriverRun):
     def __init__(
         self,
         vendor: Any,
-        calls: pimm.calls.ControlSystemHandler[command.CommandType | None, None],
+        sync_move: pimm.calls.ControlSystemHandler[command.CommandType | None, None],
+        async_move: pimm.SignalReceiver[command.CommandType],
         out: pimm.SignalEmitter[YamState],
         grip_out: pimm.SignalEmitter[float],
         home_joints: np.ndarray,
@@ -175,9 +176,8 @@ class _Chain(DriverRun):
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
     ):
-        super().__init__(should_stop, clock, hz=100)
+        super().__init__(sync_move, async_move, should_stop, clock, hz=100)
         self.vendor = vendor
-        self._calls = calls
         self.out = out
         self.grip_out = grip_out
         self.state = YamState()
@@ -187,10 +187,6 @@ class _Chain(DriverRun):
 
     def __enter__(self) -> '_Chain':
         return self
-
-    def take_sync_move(self) -> pimm.calls.Call[command.CommandType | None, None] | None:
-        """The next move asked for."""
-        return next(self._calls.incoming(), None)
 
     def observations(self) -> dict[str, np.ndarray]:
         """What the chain reports right now."""
@@ -208,7 +204,7 @@ class _Chain(DriverRun):
     def publish(self, obs: dict[str, np.ndarray]) -> None:
         """Ship the chain as it reports itself, arm and fingers, marked ERROR while it is not where the
         driver put it."""
-        self.encode(obs, RobotStatus.ERROR if self.errored else RobotStatus.AVAILABLE)
+        self.encode(obs, RobotStatus.ERROR if self.moves.errored else RobotStatus.AVAILABLE)
         self.out.emit(self.state)
         self.grip_out.emit(self._grip(obs))
 
@@ -269,10 +265,10 @@ class _Chain(DriverRun):
                 self.grip_out.emit(self._grip(obs))
                 yield self.limiter.wait()
         except Exception:
-            self.errored = True
+            self.moves.errored = True
             raise
 
-        self.errored = False
+        self.moves.errored = False
         self.publish(self.observations())
         return MoveStatus.ARRIVED
 
@@ -369,7 +365,15 @@ class Robot(pimm.ControlSystem):
     def _chain(self, vendor: Any, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Chain:
         """The chain this run drives, built from the driver's configuration."""
         return _Chain(
-            vendor, self.sync_move, self.state, self.grip, self._home_joints, self._base_pose, should_stop, clock
+            vendor,
+            self.sync_move,
+            self.commands,
+            self.state,
+            self.grip,
+            self._home_joints,
+            self._base_pose,
+            should_stop,
+            clock,
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
@@ -386,20 +390,18 @@ class Robot(pimm.ControlSystem):
                     grip_target = float(grip)
 
                 q = chain.observations()[_JOINT_POS]
-                if (call := chain.take_sync_move()) is not None:
-                    if call.request is None or isinstance(call.request, command.Reset):
+                asked = chain.moves.next_request()
+                if isinstance(asked, pimm.calls.Call):
+                    if asked.request is None or isinstance(asked.request, command.Reset):
                         grip_target = 0.0  # homing opens the gripper, as a ``Reset`` command does
-                    q_target, grip_target = yield from chain.serve_sync_move(call, q, grip_target)
-                elif (cmd := pimm.value_updated(self.commands)) is not None:
-                    try:
-                        if isinstance(cmd, command.Reset):
+                    q_target, grip_target = yield from chain.serve_sync_move(asked, q, grip_target)
+                elif asked is not None:
+                    with log_failure(asked):
+                        if isinstance(asked, command.Reset):
                             grip_target = 0.0
                             q_target, grip_target = yield from chain.home(grip_target)
                         else:
-                            q_target = chain.target_joints(cmd, q)
-                    # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
-                    except Exception as exc:
-                        logger.warning(f'{cmd} not applied: {exc}')
+                            q_target = chain.target_joints(asked, q)
 
                 chain.vendor.command_joint_pos(np.append(q_target, 1.0 - grip_target))
 

@@ -1,7 +1,9 @@
-"""Shared by the drivers: the handles a run owns, and the synchronous move a driver carries."""
+"""Shared by the drivers: the handles a run owns, and the moves a device is asked to make."""
 
 import logging
 import math
+from collections.abc import Iterator
+from contextlib import contextmanager
 from enum import Enum, auto
 from typing import Generic, TypeVar
 
@@ -11,20 +13,7 @@ import pimm
 
 logger = logging.getLogger(__name__)
 
-Req = TypeVar('Req')
-
-
-class DriverRun:
-    """What a driver has only while it runs: the clock it reads, the rate it ticks at, the stop it watches.
-
-    ``World.start`` pickles a background control system, so none of it survives being built in ``__init__``.
-    """
-
-    def __init__(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock, hz: float):
-        self.should_stop = should_stop
-        self.clock = clock
-        self.limiter = pimm.RateLimiter(clock, hz=hz)
-        self.errored = False
+T = TypeVar('T')
 
 
 class MoveStatus(Enum):
@@ -43,25 +32,28 @@ class MoveAbandoned(RuntimeError):
         super().__init__(message)
 
 
-class PendingMove(Generic[Req]):
-    """The synchronous move a driver has in flight, for a device whose loop cannot be held for its duration.
+class Moves(Generic[T]):
+    """Both ways a device is asked to move, and the move it has in flight.
 
-    The driver carries one across ticks and settles it against what the device reads back. A move owns the
-    device until it settles: a driver leaves its command stream unread while ``active``.
+    A synchronous move is a call: its asker waits to hear the device arrive, and owns the device until it
+    does. An asynchronous one is a setpoint streamed at the device that nobody waits on. A driver whose loop
+    can be held for the whole travel answers a call within the tick it takes it, and so never has one in
+    flight.
     """
 
-    def __init__(self, tol: float, call_handler: pimm.calls.ControlSystemHandler[Req, None]):
-        self._tol = tol
-        self._call_handler = call_handler
-        self._call: pimm.calls.Call[Req, None] | None = None
+    def __init__(self, sync_move: pimm.calls.ControlSystemHandler[T | None, None], async_move: pimm.SignalReceiver[T]):
+        self._sync_move = sync_move
+        self._async_move = async_move
+        self._call: pimm.calls.Call[T | None, None] | None = None
         self._target: np.ndarray | float = 0.0
+        self._tol = 0.0
         self._deadline = 0.0
         # A move settled but not yet answered, with what to answer it with: None for an arrival
-        self._settled: tuple[pimm.calls.Call[Req, None], TimeoutError | None] | None = None
+        self._settled: tuple[pimm.calls.Call[T | None, None], TimeoutError | None] | None = None
         # Set by a move that does not arrive, cleared by the next that does: the device is not where it was put
         self.errored = False
 
-    def __enter__(self) -> 'PendingMove[Req]':
+    def __enter__(self) -> 'Moves[T]':
         return self
 
     def __exit__(self, exc_type, exc: BaseException | None, tb) -> None:
@@ -77,20 +69,40 @@ class PendingMove(Generic[Req]):
         return self._settled is not None
 
     @property
+    def busy(self) -> bool:
+        """A move owns the device: one is in flight, or one has settled and its asker is still owed the news."""
+        return self.active or self.settled
+
+    @property
     def target(self) -> np.ndarray | float:
         """What the move in flight asked for."""
         assert self._call is not None, 'no move is in flight'
         return self._target
 
-    def take(self) -> pimm.calls.Call[Req, None] | None:
-        """The next move asked for, if the device is free to take one."""
-        return None if self.active or self.settled else next(self._call_handler.incoming(), None)
+    def next_request(self) -> pimm.calls.Call[T | None, None] | T | None:
+        """What the device is asked for now: a call whose asker waits to hear it arrive, a streamed setpoint
+        nobody waits on, or nothing.
+
+        A call comes first, because a signal holds only its latest value and a setpoint read in the same tick
+        would be lost. A device a move already owns is asked for nothing.
+        """
+        if self.busy:
+            return None
+        if (call := next(self._sync_move.incoming(), None)) is not None:
+            return call
+        return pimm.value_updated(self._async_move)
 
     def accept(
-        self, call: pimm.calls.Call[Req, None], target: np.ndarray | float, now: float, timeout_s: float
+        self,
+        call: pimm.calls.Call[T | None, None],
+        target: np.ndarray | float,
+        tol: float,
+        now: float,
+        timeout_s: float,
     ) -> None:
-        """Take `call` as the move in flight, aiming at `target`, with `timeout_s` to get there."""
-        self._call, self._target, self._deadline = call, target, now + timeout_s
+        """Take `call` as the move in flight, aiming at `target` within `tol`, with `timeout_s` to get there."""
+        self._call, self._target, self._tol = call, target, tol
+        self._deadline = now + timeout_s
 
     def fail(self, exc: BaseException) -> None:
         """Hand a settled move its own outcome, and `exc` to one still in flight. Both, if there are both."""
@@ -131,8 +143,42 @@ class PendingMove(Generic[Req]):
             call.set_exception(short)
 
 
+class DriverRun(Generic[T]):
+    """What a driver has only while it runs: the clock it reads, the rate it ticks at, the stop it watches,
+    and the moves it is asked to make.
+
+    ``World.start`` pickles a background control system, so none of it survives being built in ``__init__``.
+    """
+
+    def __init__(
+        self,
+        sync_move: pimm.calls.ControlSystemHandler[T | None, None],
+        async_move: pimm.SignalReceiver[T],
+        should_stop: pimm.SignalReceiver,
+        clock: pimm.Clock,
+        hz: float,
+    ):
+        self.should_stop = should_stop
+        self.clock = clock
+        self.limiter = pimm.RateLimiter(clock, hz=hz)
+        self.moves = Moves[T](sync_move, async_move)
+
+
+@contextmanager
+def log_failure(request: object) -> Iterator[None]:
+    """Log whatever the block raises against ``request``, the counterpart of `pimm.calls.raise_to` for a
+    setpoint nobody is waiting on."""
+    try:
+        yield
+    # rules-allow: swallowed-error — a command stream cannot end the run; the next setpoint supersedes
+    except Exception as exc:
+        logger.warning(f'{request} not applied: {exc}')
+
+
 # Fingers stopped by what they are holding never reach their target
 _GRIP_TIMEOUT_S = 3.0
+# The fingers report width, so arrival is judged from the reading
+_GRIP_TOL = 0.05
 
 
 def _clamped(grip: float) -> float:
@@ -146,25 +192,21 @@ def _clamped(grip: float) -> float:
     return max(0.0, min(1.0, grip))
 
 
-def grip_setpoint(
-    move: PendingMove[float | None], home: float, stream: pimm.SignalReceiver[float], grip: float, now: float
-) -> float | None:
+def grip_setpoint(moves: Moves[float], home: float, grip: float, now: float) -> float | None:
     """The width to command the fingers this tick, or ``None`` to leave the last one standing.
 
     A move in flight owns the fingers; one that gives up hands back the width they stopped at, which the
-    driver writes before calling ``PendingMove.answer``. A move that asks for no width asks for ``home``.
+    driver writes before calling ``Moves.answer``. A move that asks for no width asks for ``home``.
     """
-    if move.active:
-        return grip if move.settle(grip, now) is MoveStatus.GAVE_UP else None
-    if (call := move.take()) is not None:
-        with pimm.calls.raise_to(call):  # a width the fingers cannot be put at is the asker's to hear about
-            target = _clamped(home if call.request is None else call.request)
-            move.accept(call, target, now, _GRIP_TIMEOUT_S)
+    if moves.active:
+        return grip if moves.settle(grip, now) is MoveStatus.GAVE_UP else None
+    asked = moves.next_request()
+    if isinstance(asked, pimm.calls.Call):
+        with pimm.calls.raise_to(asked):  # a width the fingers cannot be put at is the asker's to hear about
+            target = _clamped(home if asked.request is None else asked.request)
+            moves.accept(asked, target, _GRIP_TOL, now, _GRIP_TIMEOUT_S)
             return target
-    elif (streamed := pimm.value_updated(stream)) is not None:
-        try:
-            return _clamped(streamed)
-        # rules-allow: swallowed-error — a command stream cannot end the run; the next supersedes
-        except ValueError as exc:
-            logger.warning(f'grip target not applied: {exc}')
+    elif asked is not None:
+        with log_failure(asked):
+            return _clamped(asked)
     return None
