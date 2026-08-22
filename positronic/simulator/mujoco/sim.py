@@ -321,6 +321,7 @@ class MujocoSim(pimm.ControlSystem):
             mj.mj_step(self.model, self.data)
 
     def _apply_command(self, cmd):
+        """Drive the actuators to the setpoint ``cmd`` asks for; a control mode it pins is not honored."""
         match cmd:
             case roboarm_command.CartesianPosition(pose=pose):
                 q = self._recalculate_ik(pose)

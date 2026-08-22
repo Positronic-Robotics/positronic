@@ -4,6 +4,7 @@ from positronic import keys
 from positronic.cfg import codecs
 
 ee = codecs.compose.override(obs=codecs.eepose_obs, action=codecs.absolute_pos_action, horizon=1.0)
+phail_v1 = ee.override(action=codecs.phail_v1_execution.override(action=codecs.absolute_pos_action))
 joints = ee.override(obs=codecs.joints_obs)
 
 # Trajectory variants: use actual robot trajectory as action target instead of commanded targets

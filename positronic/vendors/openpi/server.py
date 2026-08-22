@@ -297,6 +297,7 @@ COMMANDS = {
     # TODO(#550): that rig's ``default`` moves to the flange, so this checkpoint will need a transform here.
     'phail': serve.override(
         pipeline=ee.override(
+            codec=codecs.phail_v1,
             ee_frame=None,
             **{'source.checkpoints_dir': 's3://checkpoints/phail_unified/openpi/pi05_positronic_lowmem/270226-ee/'},
         ),

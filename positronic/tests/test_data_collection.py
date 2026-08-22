@@ -11,6 +11,7 @@ from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, D
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.roboarm import command as roboarm_command
 from positronic.geom import Rotation, Transform3D
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
@@ -235,6 +236,30 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
 
     for name in [keys.JOINTS, keys.JOINT_VEL, keys.GRIP]:
         assert_strictly_increasing(ep[name])
+
+
+@pytest.mark.parametrize(
+    'mode',
+    [
+        roboarm_command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6),
+        roboarm_command.PositionControl(),
+    ],
+    ids=['impedance', 'position_control'],
+)
+def test_mujoco_runs_a_command_that_pins_a_control_mode(mode):
+    """The actuators run their own law, so what a command pins makes no difference to what it does."""
+    sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
+    target = np.asarray(sim.initial_ctrl[:7], dtype=np.float64).copy()
+    target[0] += 0.1
+    cmd = roboarm_command.JointPosition(positions=target, mode=mode)
+
+    with pimm.World(virtual_time=True) as world:
+        commands = world.pair(sim.commands)
+        driver = ManualDriver([(lambda: commands.emit(cmd), 0.1)])
+        scheduler = world.start([sim, driver])
+        drive_scheduler(scheduler, steps=50)
+
+    np.testing.assert_allclose(sim.data.ctrl[:7], target)
 
 
 def test_mujoco_grip_one_is_closed():

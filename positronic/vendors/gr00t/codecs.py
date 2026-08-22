@@ -202,6 +202,7 @@ _rot6d_action = _ee_action.override(**{'base.rotation_rep': 'rot6d', 'action_dim
 ee_quat = codecs.compose.override(obs=groot_obs, action=_ee_action)
 ee_quat_joints = ee_quat.override(**{'obs.include_joints': True})
 ee_rot6d = codecs.compose.override(obs=_rot6d_obs, action=_rot6d_action)
+phail_v1 = ee_rot6d.override(action=codecs.phail_v1_execution.override(action=_rot6d_action))
 ee_rot6d_joints = ee_rot6d.override(**{'obs.include_joints': True})
 
 _traj_action = _ee_action.override(base=codecs.traj_ee_action)

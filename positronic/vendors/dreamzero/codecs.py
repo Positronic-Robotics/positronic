@@ -215,10 +215,15 @@ def dreamzero_action(tgt_joints_key: str, tgt_grip_key: str, num_joints: int):
 # frame-stack window.
 _action = dreamzero_action.override(tgt_joints_key=keys.TARGET_JOINTS, tgt_grip_key=keys.TARGET_GRIP)
 joints = codecs.compose.override(obs=dreamzero_obs, action=_action, fps=15.0)
+phail_v1 = joints.override(action=codecs.phail_v1_execution.override(action=_action))
 
 # The pretrained DROID model (wan2.1) asserts exactly 320x180 frames; the wan2.2 fine-tunes resize the
 # 176-tall codec output at load, so only the DROID-serving codec needs the taller image.
-droid = codecs.compose.override(obs=dreamzero_obs.override(image_size=(IMAGE_WIDTH, 180)), action=_action, fps=15.0)
+droid = codecs.compose.override(
+    obs=dreamzero_obs.override(image_size=(IMAGE_WIDTH, 180)),
+    action=codecs.droid_execution.override(action=_action),
+    fps=15.0,
+)
 
 _traj_action = dreamzero_action.override(tgt_joints_key=keys.JOINTS, tgt_grip_key=keys.GRIP)
 joints_traj = codecs.compose.override(obs=dreamzero_obs, action=_traj_action, fps=15.0)

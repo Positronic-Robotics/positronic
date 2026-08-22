@@ -111,6 +111,12 @@ class _Arm(DriverRun[command.CommandType]):
 
     def _target_qpos(self, cmd: command.CommandType | None) -> np.ndarray:
         """The joints ``cmd`` asks the arm to hold, solved from the joints it reports now; nothing asks for home."""
+        # `JointCompliantController` is a compliance law, not a position servo: `PositionControl` would pin
+        # a rule the arm does not run.
+        # TODO: a joint-only `Impedance` is refused for want of plumbing, not capability: the controller runs
+        # at the fixed `K_p`/`K_d` in `base.py` off Ruckig-shaped references; accepting one means feeding
+        # `kq`/`kqd` through and stepping the references.
+        command.require_native_mode(cmd, 'Kinova')
         match cmd:
             case None | command.Reset():
                 return np.asarray(self._home_joints, dtype=np.float32)

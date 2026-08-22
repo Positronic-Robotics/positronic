@@ -10,6 +10,7 @@ Two composition operators:
 """
 
 import collections.abc as cabc
+from dataclasses import replace
 from functools import partial
 from typing import Any, final
 
@@ -509,10 +510,10 @@ class ChangeEEFrame(Codec):
     def _move(value: Any, transform: geom.Transform3D) -> Any:
         """A pose vector or an arm command, re-expressed through ``transform``."""
         match value:
-            case command.CartesianPosition(pose):
-                return command.CartesianPosition(pose=pose * transform)
-            case command.CartesianDelta(delta, frame):
-                return command.CartesianDelta(delta=delta, frame=transform.inv * frame)
+            case command.CartesianPosition(pose, mode):
+                return command.CartesianPosition(pose=pose * transform, mode=mode)
+            case command.CartesianDelta(delta, frame, mode):
+                return command.CartesianDelta(delta=delta, frame=transform.inv * frame, mode=mode)
             case command.Reset() | command.JointPosition() | command.JointDelta():
                 return value
             case _:
@@ -582,3 +583,30 @@ class ChangeEEFrame(Codec):
             'name': self.WIRE_NAME,
             'args': {'transform': self._transform.as_vector(_QUAT).tolist(), 'keys': list(self._keys)},
         }
+
+
+class SetControlMode(Codec):
+    """Sets the control mode a chunk executes under on every robot command it carries (inference only).
+
+    Composes left of an action decoder (``SetControlMode(mode) | action``). Every command of every arm
+    carries the mode, not only the first of the unsuffixed channel; a ``Reset`` pins none and passes
+    through untouched.
+    """
+
+    def __init__(self, mode: command.ControlModeType):
+        self._mode = mode
+
+    def encode(self, data):
+        return data
+
+    def _decode_single(self, data: dict, context: dict | None) -> dict:
+        # The command family also holds the pose/joint vectors a recording unfolds into, so what carries a
+        # mode is decided by type rather than by name.
+        stamped = {
+            key: replace(cmd, mode=self._mode)
+            for key, cmd in data.items()
+            if obs_keys.is_robot_command(key)
+            and isinstance(cmd, command.CommandType)
+            and not isinstance(cmd, command.Reset)
+        }
+        return {**data, **stamped} if stamped else data

@@ -62,33 +62,41 @@ class EnvAdapter(ABC):
 def _in_env_control_frame(cmd: Any, env_control_frame: geom.Transform3D) -> Any:
     """A command against the embodiment's ``default``, re-expressed in the frame the env measures and drives."""
     match cmd:
-        case roboarm_command.CartesianPosition(pose):
-            return roboarm_command.CartesianPosition(pose=pose * env_control_frame)
-        case roboarm_command.CartesianDelta(delta, frame):
-            return roboarm_command.CartesianDelta(delta, env_control_frame.inv * frame)
+        case roboarm_command.CartesianPosition(pose, mode):
+            return roboarm_command.CartesianPosition(pose=pose * env_control_frame, mode=mode)
+        case roboarm_command.CartesianDelta(delta, frame, mode):
+            return roboarm_command.CartesianDelta(delta, env_control_frame.inv * frame, mode)
         case _:
             return cmd
 
 
 def _wire_command(cmd: Any) -> dict[str, Any]:
-    """The held command as a positronic-free payload the server decodes (no ``geom``/``roboarm`` on its side)."""
+    """The held command as a positronic-free payload the server decodes (no ``geom``/``roboarm`` on its side).
+
+    A pinned control mode rides along under ``mode``; whether the env honors it is the env's.
+    """
+    wire: dict[str, Any]
+    rep = geom.Rotation.Representation.ROTATION_MATRIX
     match cmd:
         case roboarm_command.CartesianPosition(pose):
-            return {'type': 'cartesian', 'pose': pose.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
+            wire = {'type': 'cartesian', 'pose': pose.as_vector(rep)}
         case roboarm_command.JointPosition(positions):
-            return {'type': 'joint_pos', 'q': positions}
+            wire = {'type': 'joint_pos', 'q': positions}
         case roboarm_command.JointDelta(velocities):
-            return {'type': 'joint_vel', 'dq': velocities}
+            wire = {'type': 'joint_vel', 'dq': velocities}
         case roboarm_command.CartesianDelta(delta, frame):
             # The env anchors a delta on the pose it measures, which is its control frame and nowhere else, so
             # a delta still expressed somewhere else has no faithful wire form.
             if not np.allclose(frame.as_matrix, np.eye(4)):
                 raise ValueError('CartesianDelta outside the env control frame cannot be sent to a remote env')
-            return {'type': 'cartesian_delta', 'delta': delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
+            wire = {'type': 'cartesian_delta', 'delta': delta.as_vector(rep)}
         case None:
             return {'type': 'hold'}
         case other:
             raise ValueError(f'no wire encoding for robot_command {type(other).__name__}')
+    if cmd.mode is not None:
+        wire['mode'] = roboarm_command.to_wire(cmd.mode)
+    return wire
 
 
 class WireCommandAdapter(EnvAdapter):

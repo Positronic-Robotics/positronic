@@ -1,5 +1,14 @@
-"""Collection of commands that can be sent to the robot."""
+"""Collection of commands that can be sent to the robot.
 
+A command may pin the control mode it executes under; ``mode=None`` pins nothing, and the arm runs
+its native law. What a pinned mode does is the driver's: a simulator runs its own law and ignores it,
+a robot driver that cannot execute it raises.
+
+TODO: have an embodiment state the modes it supports, so a policy selects one it works with instead of
+pinning a mode the driver may not run.
+"""
+
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -9,12 +18,72 @@ from positronic import geom
 
 
 @dataclass
+class PositionControl:
+    """Arm control mode: a position servo tracking shaped references.
+
+    ``stiffness`` biases the servo's joint-space stiffness on an arm that exposes it; ``None`` names none
+    and the arm keeps its own, as damping always does.
+    """
+
+    TYPE = 'position_control'
+    stiffness: tuple[float, ...] | None = None
+
+    def __post_init__(self):
+        if self.stiffness is None:
+            return
+        self.stiffness = tuple(self.stiffness)
+        if not self.stiffness:
+            raise ValueError('stiffness must name at least one joint; naming none is None, not an empty vector')
+        if not all(math.isfinite(v) and v > 0 for v in self.stiffness):
+            raise ValueError('stiffness must be finite and strictly positive')
+
+
+@dataclass
+class Impedance:
+    """Arm control mode: the hybrid joint/Cartesian impedance law with instantly-stepped references.
+
+    ``tau = (J^T Kx J + Kq)(q_d - q) - (J^T Kxd J + Kqd) dq + coriolis``.
+    """
+
+    TYPE = 'impedance'
+    kq: tuple[float, ...]
+    kqd: tuple[float, ...]
+    kx: tuple[float, ...]
+    kxd: tuple[float, ...]
+
+    @staticmethod
+    def _validate_gains(name: str, k: tuple[float, ...], kd: tuple[float, ...]) -> None:
+        """Check one half's stiffness against its damping."""
+        if len(k) != len(kd):
+            raise ValueError(f'{name} stiffness and damping must have the same length')
+        if not k:
+            raise ValueError(f'{name} must name at least one axis; a half is disabled by zeroing it, not emptying it')
+        disabled = all(v == 0 for v in k) and all(v == 0 for v in kd)
+        active = all(math.isfinite(v) and v > 0 for v in k) and all(math.isfinite(v) and v > 0 for v in kd)
+        if not (disabled or active):
+            raise ValueError(
+                f'{name} stiffness and damping must be either all zero (half disabled) or strictly positive'
+            )
+
+    def __post_init__(self):
+        self.kq, self.kqd = tuple(self.kq), tuple(self.kqd)
+        self.kx, self.kxd = tuple(self.kx), tuple(self.kxd)
+        if len(self.kx) != 6:
+            raise ValueError('Cartesian (kx/kxd) gains must have length 6')
+        self._validate_gains('joint (kq/kqd)', self.kq, self.kqd)
+        self._validate_gains('Cartesian (kx/kxd)', self.kx, self.kxd)
+        if all(v == 0 for v in self.kq) and all(v == 0 for v in self.kx):
+            raise ValueError('at least one of the joint or Cartesian halves must be active')
+
+
+ControlModeType = PositionControl | Impedance
+
+
+@dataclass
 class Reset:
     """Reset the robot to the home position."""
 
     TYPE = 'reset'
-
-    pass
 
 
 @dataclass
@@ -23,6 +92,7 @@ class CartesianPosition:
 
     TYPE = 'cartesian_pos'
     pose: geom.Transform3D
+    mode: ControlModeType | None = None
 
 
 @dataclass
@@ -31,6 +101,7 @@ class JointPosition:
 
     TYPE = 'joint_pos'
     positions: np.ndarray
+    mode: ControlModeType | None = None
 
 
 @dataclass
@@ -39,6 +110,7 @@ class JointDelta:
 
     TYPE = 'joint_delta'
     velocities: np.ndarray
+    mode: ControlModeType | None = None
 
 
 def _compose_delta(base: geom.Transform3D, delta: geom.Transform3D) -> geom.Transform3D:
@@ -68,6 +140,7 @@ class CartesianDelta:
     # Per-command, not a shared class-level default: ``Transform3D`` attributes are writable, so one instance
     # across every frameless delta means adjusting one silently relabels the rest.
     frame: geom.Transform3D = field(default_factory=lambda: geom.Transform3D.identity)
+    mode: ControlModeType | None = None
 
     def apply(self, current: geom.Transform3D) -> geom.Transform3D:
         """The absolute target to drive to, given the pose measured at the receiver's ``default`` frame.
@@ -81,41 +154,57 @@ class CartesianDelta:
 CommandType = Reset | CartesianPosition | JointPosition | JointDelta | CartesianDelta
 
 
-def to_wire(command: CommandType) -> dict[str, Any]:
+def to_wire(command: CommandType | ControlModeType) -> dict[str, Any]:
+    wire: dict[str, Any]
+    rep = geom.Rotation.Representation.ROTATION_MATRIX
     match command:
+        case PositionControl(stiffness=stiffness):
+            return {'type': command.TYPE} if stiffness is None else {'type': command.TYPE, 'stiffness': list(stiffness)}
+        case Impedance(kq=kq, kqd=kqd, kx=kx, kxd=kxd):
+            return {'type': command.TYPE, 'kq': list(kq), 'kqd': list(kqd), 'kx': list(kx), 'kxd': list(kxd)}
         case Reset():
             return {'type': command.TYPE}
         case CartesianPosition(pose):
-            return {'type': command.TYPE, 'pose': pose.as_vector(geom.Rotation.Representation.ROTATION_MATRIX)}
+            wire = {'type': command.TYPE, 'pose': pose.as_vector(rep)}
         case JointPosition(positions):
-            return {'type': command.TYPE, 'positions': positions}
+            wire = {'type': command.TYPE, 'positions': positions}
         case JointDelta(velocities):
-            return {'type': command.TYPE, 'velocities': velocities}
+            wire = {'type': command.TYPE, 'velocities': velocities}
         case CartesianDelta(delta, frame):
-            return {
-                'type': command.TYPE,
-                'delta': delta.as_vector(geom.Rotation.Representation.ROTATION_MATRIX),
-                'frame': frame.as_vector(geom.Rotation.Representation.ROTATION_MATRIX),
-            }
+            wire = {'type': command.TYPE, 'delta': delta.as_vector(rep), 'frame': frame.as_vector(rep)}
+    if command.mode is not None:
+        wire['mode'] = to_wire(command.mode)
+    return wire
 
 
-def from_wire(wire: dict[str, Any]) -> CommandType:
+def from_wire(wire: dict[str, Any]) -> CommandType | ControlModeType:
+    mode = from_wire(wire['mode']) if 'mode' in wire else None
+    assert mode is None or isinstance(mode, PositionControl | Impedance)
+    rep = geom.Rotation.Representation.ROTATION_MATRIX
     match wire['type']:
-        case 'reset':
+        case PositionControl.TYPE:
+            return PositionControl(stiffness=wire.get('stiffness'))
+        case Impedance.TYPE:
+            return Impedance(kq=wire['kq'], kqd=wire['kqd'], kx=wire['kx'], kxd=wire['kxd'])
+        case Reset.TYPE:
             return Reset()
-        case 'cartesian_pos':
-            return CartesianPosition(
-                pose=geom.Transform3D.from_vector(wire['pose'], geom.Rotation.Representation.ROTATION_MATRIX)
-            )
-        case 'joint_pos':
-            return JointPosition(positions=wire['positions'])
-        case 'joint_delta':
-            return JointDelta(velocities=wire['velocities'])
-        case 'cartesian_delta':
-            rep = geom.Rotation.Representation.ROTATION_MATRIX
+        case CartesianPosition.TYPE:
+            return CartesianPosition(pose=geom.Transform3D.from_vector(wire['pose'], rep), mode=mode)
+        case JointPosition.TYPE:
+            return JointPosition(positions=wire['positions'], mode=mode)
+        case JointDelta.TYPE:
+            return JointDelta(velocities=wire['velocities'], mode=mode)
+        case CartesianDelta.TYPE:
             return CartesianDelta(
                 delta=geom.Transform3D.from_vector(wire['delta'], rep),
                 frame=geom.Transform3D.from_vector(wire['frame'], rep),
+                mode=mode,
             )
         case _:
             raise ValueError(f'Unknown command type: {wire["type"]}')
+
+
+def require_native_mode(cmd: CommandType | None, embodiment: str) -> None:
+    """Raises on a command that pins a control mode: ``embodiment`` runs only its native law."""
+    if not isinstance(cmd, Reset | None) and cmd.mode is not None:
+        raise NotImplementedError(f'{embodiment} cannot execute control mode {cmd.mode}')

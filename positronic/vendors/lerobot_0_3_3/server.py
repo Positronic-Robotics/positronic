@@ -109,7 +109,10 @@ COMMANDS = {
     'joints_ik_sim': serve.override(pipeline=joints_ik_sim),
     'ee_flip': serve.override(pipeline=ee_flip),
     'phail': serve.override(
-        pipeline=ee.override(**{'source.checkpoints_dir': 's3://checkpoints/phail_unified/lerobot/270226-ee/'}),
+        pipeline=ee.override(
+            codec=lerobot_codecs.phail_v1,
+            **{'source.checkpoints_dir': 's3://checkpoints/phail_unified/lerobot/270226-ee/'},
+        ),
         recording_dir='s3://inference/phail_unified/server_recordings/lerobot/270226-ee/',
     ),
     'sim_stack': serve.override(

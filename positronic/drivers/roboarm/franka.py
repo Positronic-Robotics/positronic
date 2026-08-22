@@ -158,14 +158,38 @@ class _Arm(DriverRun[command.CommandType]):
             target = target + variation
         return target
 
+    @staticmethod
+    def _to_pf_mode(mode: command.ControlModeType | None) -> pf.InternalImpedance | pf.SoftwareImpedance:
+        """The pf mode carrying ``mode``'s gains; ``None`` — no pin — and a bare ``PositionControl`` take pf's own."""
+        match mode:
+            case None:
+                return pf.InternalImpedance()
+            case command.PositionControl(stiffness=stiffness):
+                return pf.InternalImpedance() if stiffness is None else pf.InternalImpedance(k_theta=list(stiffness))
+            case command.Impedance(kq=kq, kqd=kqd, kx=kx, kxd=kxd):
+                return pf.SoftwareImpedance(kq=list(kq), kqd=list(kqd), kx=list(kx), kxd=list(kxd))
+
+    def command_target(self, target: np.ndarray, mode: command.ControlModeType | None) -> None:
+        """Put the arm under ``mode`` and publish ``target`` to it, in that order with nothing in between.
+
+        Together, because either alone is a half-applied command: a law changed for a target that never
+        arrives leaves the arm holding its last one under dynamics nobody asked for.
+        """
+        self.vendor.set_control_mode(self._to_pf_mode(mode))  # the vendor no-ops a mode already running
+        self.vendor.set_target_joints(target)
+
     def await_goal(
-        self, target: np.ndarray, should_stop: Callable[[], bool], pace: Callable[[], pimm.Command]
+        self,
+        target: np.ndarray,
+        should_stop: Callable[[], bool],
+        pace: Callable[[], pimm.Command],
+        mode: command.ControlModeType | None,
     ) -> Generator[pimm.Command, None, MoveStatus]:
-        """Command ``target`` and poll the goal until the arm arrives, one poll per resume.
+        """Command ``target`` under ``mode`` and poll the goal until the arm arrives, one poll per resume.
 
         ``pace`` is what to wait between polls, and so how often the goal is asked about.
         """
-        self.vendor.set_target_joints(target)
+        self.command_target(target, mode)
         while not should_stop():
             goal = self.vendor.goal()
             if goal.status == pf.GoalStatus.REACHED:
@@ -180,8 +204,10 @@ class _Arm(DriverRun[command.CommandType]):
         cap = self._MAX_JOINT_VELOCITY * self._dynamics_factor
         return self._MOVE_GRACE_S + float(np.max(np.abs(target - q) / cap))
 
-    def move_to(self, target: np.ndarray) -> Generator[pimm.Command, None, MoveStatus]:
-        """Travel to ``target``, yielding until it arrives."""
+    def move_to(
+        self, target: np.ndarray, mode: command.ControlModeType | None
+    ) -> Generator[pimm.Command, None, MoveStatus]:
+        """Travel to ``target`` under ``mode``, yielding until it arrives."""
         # The first emit must not ship an unfilled state.
         self.state.encode(self.vendor.state(), RobotStatus.BUSY)
         self.out.emit(self.state)
@@ -190,7 +216,7 @@ class _Arm(DriverRun[command.CommandType]):
         try:
             # The arm's own rate: this loop publishes every pass, so the goal is asked about that often too
             for wait in self.await_goal(
-                target, lambda: self.should_stop.value or self.clock.now() >= deadline, self.limiter.wait
+                target, lambda: self.should_stop.value or self.clock.now() >= deadline, self.limiter.wait, mode
             ):
                 st = self.vendor.state()
                 self.state.encode(st, RobotStatus.BUSY)  # the driver owns the arm until it arrives
@@ -237,10 +263,23 @@ class _Arm(DriverRun[command.CommandType]):
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
 
+    def accept(self, cmd: command.CommandType | None) -> tuple[np.ndarray, command.ControlModeType | None]:
+        """The joints ``cmd`` asks for and the law it pins, neither applied yet.
+
+        Solved here so that a command the arm cannot hold raises before anything changes; ``command_target``
+        is what applies the pair. Asking for nothing, and a ``Reset``, travel home under the native law.
+        """
+        target = self.target_joints(cmd)
+        # The vendor takes a fixed-width finite vector and raises on anything else, too late to be caught
+        # alongside the rest of what makes a command unusable.
+        if np.shape(target) != np.shape(self._home_joints) or not np.all(np.isfinite(target)):
+            raise ValueError(f'{cmd} does not name a joint target this arm can hold: {target}')
+        return target, None if isinstance(cmd, command.Reset | None) else cmd.mode
+
     def serve_sync_move(self, call: pimm.calls.Call[command.CommandType | None, None]) -> Iterator[pimm.Command]:
         """Put the arm where ``call`` asks and answer it once the state saying so is out."""
         try:
-            if (yield from self.move_to(self.target_joints(call.request))) is MoveStatus.ARRIVED:
+            if (yield from self.move_to(*self.accept(call.request))) is MoveStatus.ARRIVED:
                 call.set_result(None)
             else:
                 call.set_exception(MoveAbandoned())
@@ -262,8 +301,9 @@ class _Arm(DriverRun[command.CommandType]):
             logger.info('Parking the arm at the home pose')
             self.vendor.recover_from_errors()  # once, before the move: a reflex during the move ends the park
             deadline = self.clock.now() + self._park_timeout_s
+            # The home pose is a long way off, and only the native law shapes the reference on the way there.
             outcome = yield from self.await_goal(
-                target, lambda: self.clock.now() >= deadline, lambda: pimm.Sleep(self._PARK_POLL_S)
+                target, lambda: self.clock.now() >= deadline, lambda: pimm.Sleep(self._PARK_POLL_S), None
             )
             if outcome is MoveStatus.GAVE_UP:
                 logger.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
@@ -372,7 +412,7 @@ class Robot(pimm.ControlSystem):
             lower_force_threshold_nominal=(coeff * force_threshold_nominal).tolist(),
             upper_force_threshold_nominal=(coeff * force_threshold_nominal * 2).tolist(),
         )
-        robot.set_control_mode(pf.InternalImpedance([3000, 3000, 3000, 2500, 2500, 2000, 2000]))
+        robot.set_control_mode(_Arm._to_pf_mode(None))
         if self._load is not None:
             logger.info(f'Setting load to {self._load}')
             robot.set_load(*self._load)
@@ -439,7 +479,7 @@ class Robot(pimm.ControlSystem):
             vendor.recover_from_errors()
 
             try:
-                yield from arm.move_to(arm.home_target())
+                yield from arm.move_to(arm.home_target(), None)
             # rules-allow: swallowed-error — an arm that will not home reads ERROR; it does not end the run
             except Exception as exc:
                 logger.error(f'Homing failed, the arm is not where the driver put it: {exc}')
@@ -464,10 +504,11 @@ class Robot(pimm.ControlSystem):
                     yield from arm.serve_sync_move(asked)
                 elif asked is not None:
                     with log_failure(asked):
+                        target, mode = arm.accept(asked)
                         if isinstance(asked, command.Reset):
-                            yield from arm.move_to(arm.home_target())
+                            yield from arm.move_to(target, mode)
                         else:
-                            vendor.set_target_joints(arm.target_joints(asked))
+                            arm.command_target(target, mode)
 
                 yield arm.limiter.wait()
 

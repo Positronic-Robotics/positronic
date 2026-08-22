@@ -147,6 +147,14 @@ def _settle(env, action: dict, steps: int) -> np.ndarray:
     return np.asarray(out['obs']['ee_pos'])
 
 
+def test_a_pinned_control_mode_rides_the_wire():
+    """Honoring a mode is the env's, so the adapter delivers it rather than deciding for every env."""
+    mode = roboarm_command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+    wired = _wire_command(roboarm_command.JointPosition(np.zeros(7), mode=mode))
+    assert wired['mode'] == roboarm_command.to_wire(mode)
+    assert 'mode' not in _wire_command(roboarm_command.JointPosition(np.zeros(7)))
+
+
 class TestEnvControlFrame:
     """An env measuring somewhere other than the embodiment's ``default`` gets commands re-expressed for it.
 
@@ -167,6 +175,15 @@ class TestEnvControlFrame:
         cmd = roboarm_command.CartesianDelta(delta, frame=self.frame)
         wired = _wire_command(_in_env_control_frame(cmd, self.frame))
         np.testing.assert_allclose(wired['delta'], delta.as_vector(self.rotmat), atol=1e-12)
+
+    def test_a_command_re_expressed_for_the_env_keeps_its_mode(self):
+        """The frame a command is measured in has nothing to do with the law that drives to it."""
+        mode = roboarm_command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
+        pose = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.identity)
+        moved = _in_env_control_frame(roboarm_command.CartesianPosition(pose, mode=mode), self.frame)
+        assert moved.mode == mode
+        delta = _in_env_control_frame(roboarm_command.CartesianDelta(pose, mode=mode), self.frame)
+        assert delta.mode == mode
 
     def test_a_delta_outside_the_env_frame_is_refused(self):
         """The env anchors on its own measured pose, so a delta meant for another frame has no wire form."""

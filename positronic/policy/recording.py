@@ -147,6 +147,19 @@ def _build_blueprint(
     return rrb.Blueprint(rrb.Grid(*grids)) if grids else None
 
 
+def _flat_wire(wire: dict) -> dict:
+    """A command wire as numeric leaves, its type dropped: a nested control mode becomes ``mode.<type>.<gain>``."""
+    flat = {}
+    for name, value in wire.items():
+        if isinstance(value, dict):
+            gains = {f'{name}.{value["type"]}.{k}': v for k, v in value.items() if k != 'type' and len(v)}
+            # A mode naming no gains has no numeric leaf to plot, so the marker is what says it was pinned.
+            flat.update(gains or {f'{name}.{value["type"]}': 1})
+        elif name != 'type':
+            flat[name] = value
+    return flat
+
+
 def _command_field_arrays(key: str, commands: list, horizons: np.ndarray) -> list[tuple[str, np.ndarray, np.ndarray]]:
     """Stack robot commands grouped by type, each group's fields and horizons as arrays."""
     groups: dict[str, list] = {}
@@ -154,12 +167,16 @@ def _command_field_arrays(key: str, commands: list, horizons: np.ndarray) -> lis
         groups.setdefault(cmd.TYPE, []).append((cmd, h))
     out: list[tuple[str, np.ndarray, np.ndarray]] = []
     for type_name, group in groups.items():
-        wires = [roboarm_command.to_wire(c) for c, _ in group]
-        group_horizon = np.array([h for _, h in group], dtype=np.float64)
-        for field in (k for k in wires[0] if k != 'type'):
-            arr = _stack_numeric([w[field] for w in wires])
+        wires = [_flat_wire(roboarm_command.to_wire(c)) for c, _ in group]
+        group_horizons = [h for _, h in group]
+        # Commands of one type still differ in what they carry — an unpinned mode beside a pinned one, or two
+        # commands pinning different laws — so each field is stacked over the commands that have it.
+        for field in dict.fromkeys(name for wire in wires for name in wire):
+            present = [(wire[field], h) for wire, h in zip(wires, group_horizons, strict=True) if field in wire]
+            arr = _stack_numeric([value for value, _ in present])
             if arr is not None:
-                out.append((f'{key}/{type_name}/{field}', arr, group_horizon))
+                field_horizon = np.array([h for _, h in present], dtype=np.float64)
+                out.append((f'{key}/{type_name}/{field}', arr, field_horizon))
     return out
 
 
@@ -413,19 +430,23 @@ class _RecordingTapSession(DelegatingSession):
             h = horizon[idx]
             path = f'{prefix}/{key}'
             series_path = f'{prefix}/series/{key}'
+            fields: list[tuple[str, np.ndarray, np.ndarray]] = []
             if all(isinstance(v, roboarm_command.CartesianPosition) for v in values):
                 grip_sub = grip[idx] if grip is not None else None
                 pose = _log_ee_pose_chunk(path, values, h, grip_sub, actual_pos, actual_g)
                 _log_action_series(series_path, pose, h, base_ns, names=_POSE_LABELS)
                 self._rec._path3d_paths.append(f'{path}/trajectory')
                 self._rec._series_paths.append(series_path)
+                # The pose is the trajectory drawn above; what is left of the command is the mode it pins.
+                fields = [f for f in _command_field_arrays(key, values, h) if not f[0].endswith('/pose')]
             elif all(isinstance(v, roboarm_command.CommandType) for v in values):
-                for suffix, arr, group_h in _command_field_arrays(key, values, h):
-                    _log_action_series(f'{prefix}/series/{suffix}', arr, group_h, base_ns, names=None)
-                    self._rec._series_paths.append(f'{prefix}/series/{suffix}')
+                fields = _command_field_arrays(key, values, h)
             elif (arr := _stack_numeric(values)) is not None:
                 _log_action_series(series_path, arr, h, base_ns, names=[key])
                 self._rec._series_paths.append(series_path)
+            for suffix, field_arr, group_h in fields:
+                _log_action_series(f'{prefix}/series/{suffix}', field_arr, group_h, base_ns, names=None)
+                self._rec._series_paths.append(f'{prefix}/series/{suffix}')
 
     def _send_blueprint(self) -> None:
         rec = self._rec

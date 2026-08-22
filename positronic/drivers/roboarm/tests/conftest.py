@@ -17,26 +17,41 @@ import pytest
 
 import pimm
 
-
-class GoalStatus(Enum):
-    REACHED = 'reached'
-    IN_FLIGHT = 'in_flight'
-    ABORTED = 'aborted'
-
-
 PACKAGE = 'positronic_franka'
 VENDOR = f'{PACKAGE}._franka'
 DESK = f'{PACKAGE}.desk'
 
 
 def _install_vendor_stub() -> None:
+    """Bind the names ``positronic_franka`` gives the Franka driver. Reached as ``franka.pf.*``, never imported."""
+
+    class GoalStatus(Enum):
+        REACHED = 'reached'
+        IN_FLIGHT = 'in_flight'
+        ABORTED = 'aborted'
+
+    class InternalImpedance:
+        def __init__(self, k_theta=(3000.0, 3000.0, 3000.0, 2500.0, 2500.0, 2000.0, 2000.0)):
+            self.k_theta = list(k_theta)
+
+    class SoftwareImpedance:
+        def __init__(
+            self,
+            kq=(40.0, 30.0, 50.0, 25.0, 35.0, 25.0, 10.0),
+            kqd=(4.0, 6.0, 5.0, 5.0, 3.0, 2.0, 1.0),
+            kx=(750.0, 750.0, 750.0, 15.0, 15.0, 15.0),
+            kxd=(37.0, 37.0, 37.0, 2.0, 2.0, 2.0),
+        ):
+            self.kq, self.kqd, self.kx, self.kxd = list(kq), list(kqd), list(kx), list(kxd)
+
     vendor = types.ModuleType(VENDOR)
     vendor.__dict__.update(
         GoalStatus=GoalStatus,
         State=object,
         Robot=object,
         RealtimeConfig=types.SimpleNamespace(Ignore=object()),
-        InternalImpedance=lambda stiffness: ('internal_impedance', stiffness),
+        InternalImpedance=InternalImpedance,
+        SoftwareImpedance=SoftwareImpedance,
     )
 
     desk = types.ModuleType(DESK)
