@@ -36,6 +36,11 @@ uv run positronic eval list
 uv run positronic eval cancel --submission-id=<hex id>
 ```
 
+The image is pulled as given, when the run starts, and evaluated as found. You keep it pullable, and
+keep it holding what you want evaluated, until the run finishes: one that has gone away by then
+fails the run, and one whose tag moved is scored as it stands at pull time. Pin a digest for a fixed
+image.
+
 `positronic/cli/examples/` runs the whole flow end to end.
 
 ## Configuration
