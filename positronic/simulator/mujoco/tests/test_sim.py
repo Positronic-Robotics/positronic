@@ -153,6 +153,44 @@ def test_a_move_the_arm_never_finishes_hands_its_asker_the_timeout():
         assert state.value.status is RobotStatus.ERROR
 
 
+def test_the_arm_reads_busy_while_a_move_owns_it():
+    """BUSY is what an unread command stream looks like, and a move in flight is why it goes unread."""
+    sim = MujocoSim(MODEL, loaders=())
+
+    with pimm.World(virtual_time=True) as world:
+        move = world.pair(sim.sync_move)
+        state = world.pair(sim.state)
+        scheduler = world.start([sim])
+        target = _at_rest(scheduler, state, sim) + 0.3
+
+        answer = move(roboarm_command.JointPosition(target))
+        drive_scheduler(scheduler, steps=5)
+
+        assert state.value.status is RobotStatus.BUSY
+        _answered(scheduler, answer, _turns(sim, 5.0)).result()
+        assert state.value.status is RobotStatus.AVAILABLE
+
+
+def test_a_move_that_gives_up_leaves_the_arm_where_it_stopped():
+    """The actuators keep driving at the last target they were given, so a move that fails hands them back."""
+    sim = MujocoSim(MODEL, loaders=())
+    sim._MOVE_TIMEOUT_S = 0.05  # the arm is still travelling when the move gives up
+
+    with pimm.World(virtual_time=True) as world:
+        move = world.pair(sim.sync_move)
+        state = world.pair(sim.state)
+        scheduler = world.start([sim])
+        target = _at_rest(scheduler, state, sim) + 0.5
+
+        answer = move(roboarm_command.JointPosition(target))
+
+        with pytest.raises(TimeoutError):
+            _answered(scheduler, answer, _turns(sim, 1.0)).result()
+        stopped = state.value.q
+        drive_scheduler(scheduler, steps=_turns(sim, 1.0))
+        np.testing.assert_allclose(state.value.q, stopped, atol=sim._MOVE_TOL)
+
+
 def test_a_move_to_a_pose_the_arm_cannot_reach_hands_its_asker_the_reason():
     sim = MujocoSim(MODEL, loaders=())
 

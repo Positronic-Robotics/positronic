@@ -68,8 +68,8 @@ class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
     def status(self) -> RobotStatus:
         return RobotStatus(int(self.array[14 + 7]))
 
-    def set_error(self):
-        self.array[14 + 7] = RobotStatus.ERROR.value
+    def set_status(self, status: RobotStatus):
+        self.array[14 + 7] = status.value
 
     def encode(self, q, dq, ee_pose):
         self.array[:7] = q
@@ -223,8 +223,12 @@ class MujocoSim(pimm.ControlSystem):
             self.step()
             self.fps_counter.tick()
             ended = self._moves.active and self._moves.settle(self._q, now) is not MoveStatus.MOVING
-            if ended and self._moves.errored:
-                self._error = True  # the arm is not where the move sent it
+            if ended:
+                self._error = self._moves.errored  # a move that lands clears what one that gave up left
+                if self._error:
+                    # The actuators still drive at the target the move never reached; left there, the arm
+                    # would resume it the moment whatever held it back goes away.
+                    self._set_actuator_values(self._q)
             # A move that ended says where the arm got to, whatever rate the state stream runs at
             if self._state_due(now) or ended:
                 self._emit_state()
@@ -288,7 +292,9 @@ class MujocoSim(pimm.ControlSystem):
         state = MujocoFrankaState()
         state.encode(self._q, self._dq, self._ee_pose)
         if self._error:
-            state.set_error()
+            state.set_status(RobotStatus.ERROR)
+        elif self._moves.active:
+            state.set_status(RobotStatus.BUSY)  # a move owns the arm, and the command stream goes unread
         self.state.emit(state)
 
     def _emit_grip(self):
