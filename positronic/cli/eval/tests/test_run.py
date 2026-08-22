@@ -40,7 +40,7 @@ def test_an_exhausted_trial_plan_ends_the_sweep():
         descriptor='stub',
         observations={},
         commands={},
-        prepare_funcs={},
+        prepare_handlers={},
         static_meta={},
         meta_source=None,
         simulated=True,

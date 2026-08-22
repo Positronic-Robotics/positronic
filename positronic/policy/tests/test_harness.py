@@ -48,31 +48,31 @@ OPERATOR_DONE = {keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR}
 
 
 def make_embodiment(
-    descriptor: str = '', cameras=(CAM,), static_meta=None, simulated=False, prepare_funcs=None
+    descriptor: str = '', cameras=(CAM,), static_meta=None, simulated=False, prepare_handlers=None
 ) -> Embodiment:
     """Minimal Franka-shaped embodiment for harness unit tests.
 
-    The sources/dests are no-ops: these tests pair the harness ports directly
+    The sources/dests are unbound: these tests pair the harness ports directly
     (never via ``wire_embodiment``), so only the spec — names, serializers,
-    home values, descriptor — is read by the Harness.
+    descriptor — is read by the Harness.
     """
     observations = {
-        keys.ROBOT_STATE: Observation(pimm.NoOpEmitter(), Serializers.robot_state),
-        keys.GRIP: Observation(pimm.NoOpEmitter(), None),
+        keys.ROBOT_STATE: Observation(pimm.ControlSystemEmitter(Passive()), Serializers.robot_state),
+        keys.GRIP: Observation(pimm.ControlSystemEmitter(Passive()), None),
     }
     for cam in cameras:
-        observations[cam] = Observation(pimm.NoOpEmitter(), Serializers.camera_images)
+        observations[cam] = Observation(pimm.ControlSystemEmitter(Passive()), Serializers.camera_images)
     commands = {
-        keys.ROBOT_COMMAND: Command(pimm.NoOpReceiver(), Serializers.robot_command),
-        'target_grip': Command(pimm.NoOpReceiver(), None),
+        keys.ROBOT_COMMAND: Command(pimm.ControlSystemReceiver(Passive()), Serializers.robot_command),
+        'target_grip': Command(pimm.ControlSystemReceiver(Passive()), None),
     }
     return Embodiment(
         descriptor=descriptor,
         observations=observations,
         commands=commands,
-        prepare_funcs=prepare_funcs or {},
+        prepare_handlers=prepare_handlers or {},
         static_meta=static_meta or {},
-        meta_source=pimm.NoOpEmitter(),
+        meta_source=pimm.ControlSystemEmitter(Passive()),
         simulated=simulated,
     )
 
@@ -674,7 +674,7 @@ def test_trial_budget_starts_at_the_first_usable_observation(world):
     embodiment = make_embodiment()
     usable = iter([None])  # the first camera sample is not ready; every later one is
     embodiment.observations[CAM] = Observation(
-        pimm.NoOpEmitter(), lambda frames: next(usable, Serializers.camera_images(frames))
+        pimm.ControlSystemEmitter(Passive()), lambda frames: next(usable, Serializers.camera_images(frames))
     )
     harness = Harness(policy, embodiment)
     p = _pair_all(world, harness)
@@ -794,7 +794,7 @@ def test_policy_first_obs_is_frame0(world):
         descriptor='',
         observations={'frame': Observation(device.state, None)},
         commands={keys.ROBOT_COMMAND: Command(device.cmd, None)},
-        prepare_funcs={keys.SCENE: device.env_reset},
+        prepare_handlers={keys.SCENE: device.env_reset},
         static_meta={},
         meta_source=device.meta,
         control_systems=(device,),
@@ -839,7 +839,7 @@ def test_task_done_terminates_through_wire_embodiment(world):
         descriptor='',
         observations={'x': Observation(device.state, None)},
         commands={'x': Command(device.cmd, None)},
-        prepare_funcs={},
+        prepare_handlers={},
         static_meta={},
         meta_source=None,
     )
@@ -899,7 +899,7 @@ def test_trial_seed_reaches_task_reset_and_meta(world):
         p['meta_em'].emit({})  # the producer publishes fresh scene meta, recorded into the episode at finalize
 
     scene = _Scene(reset)
-    harness = Harness(policy, make_embodiment(prepare_funcs={keys.SCENE: scene.env_reset}))
+    harness = Harness(policy, make_embodiment(prepare_handlers={keys.SCENE: scene.env_reset}))
     p = _pair_all(world, harness)
     wire_call(world, harness.prepare[keys.SCENE], scene.env_reset)
 
@@ -1129,7 +1129,7 @@ def test_task_instruction_reaches_session_context_after_reset(world):
         scene['task'] = 'resolved-on-reset'  # the env reports its task only here
 
     drawing = _Scene(reset)
-    harness = Harness(policy, make_embodiment(prepare_funcs={keys.SCENE: drawing.env_reset}))
+    harness = Harness(policy, make_embodiment(prepare_handlers={keys.SCENE: drawing.env_reset}))
     p = _pair_all(world, harness)
     wire_call(world, harness.prepare[keys.SCENE], drawing.env_reset)
 
@@ -1533,7 +1533,7 @@ def test_failed_pass_seals_open_episode_span(world, tmp_path):
 
     policy = StubPolicy()
     scene = pimm.calls.ControlSystemHandler[Any, None](Passive())
-    harness = Harness(policy, make_embodiment(prepare_funcs={keys.SCENE: scene}))
+    harness = Harness(policy, make_embodiment(prepare_handlers={keys.SCENE: scene}))
     wire_call(world, harness.prepare[keys.SCENE], scene)
     harness.ds_command._bind(RecordingEmitter())
     _ask(world, harness, Task(instruction_source='stack', timeout_sec=10.0, meta={keys.EVAL_TRIAL_INDEX: 0}))
@@ -1891,14 +1891,14 @@ def test_every_arm_of_a_bimanual_rig_reports_its_own_status(world):
     embodiment = Embodiment(
         '',
         {
-            left: Observation(pimm.NoOpEmitter(), Serializers.robot_state),
-            right: Observation(pimm.NoOpEmitter(), Serializers.robot_state),
-            keys.GRIP: Observation(pimm.NoOpEmitter(), None),
+            left: Observation(pimm.ControlSystemEmitter(Passive()), Serializers.robot_state),
+            right: Observation(pimm.ControlSystemEmitter(Passive()), Serializers.robot_state),
+            keys.GRIP: Observation(pimm.ControlSystemEmitter(Passive()), None),
         },
-        {keys.ROBOT_COMMAND: Command(pimm.NoOpReceiver(), Serializers.robot_command)},
+        {keys.ROBOT_COMMAND: Command(pimm.ControlSystemReceiver(Passive()), Serializers.robot_command)},
         {},
         {},
-        pimm.NoOpEmitter(),
+        pimm.ControlSystemEmitter(Passive()),
     )
     policy = SpyPolicy()
     harness = Harness(policy, embodiment)

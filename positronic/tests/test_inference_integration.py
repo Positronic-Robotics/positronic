@@ -195,7 +195,7 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
         descriptor='test.countdown',
         observations={'value': Observation(producer.observations['value'], None)},
         commands={keys.ROBOT_COMMAND: Command(producer.commands[keys.ROBOT_COMMAND], Serializers.robot_command)},
-        prepare_funcs={keys.SCENE: producer.env_reset},
+        prepare_handlers={keys.SCENE: producer.env_reset},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=producer.robot_meta,
         control_systems=(producer,),

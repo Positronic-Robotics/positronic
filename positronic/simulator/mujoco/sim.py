@@ -146,7 +146,7 @@ class MujocoSim(pimm.ControlSystem):
 
         self.commands = pimm.ControlSystemReceiver[roboarm_command.CommandType](self)
         self.env_reset = pimm.calls.ControlSystemHandler[Any, None](self)
-        self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
+        self.state = pimm.ControlSystemEmitter[MujocoFrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
@@ -155,7 +155,7 @@ class MujocoSim(pimm.ControlSystem):
         # writer expands them into ``<signal>.<spec>`` signals. Scoring is computed downstream, not
         # live: it rebuilds the episode's model from the ``scene_xml`` in its static meta and
         # replays these states through it (``mj_setState`` + ``mj_forward``).
-        self.sim_state: pimm.SignalEmitter[dict[str, np.ndarray]] = pimm.ControlSystemEmitter(self)
+        self.sim_state = pimm.ControlSystemEmitter[dict[str, np.ndarray]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self._emit_robot_meta()

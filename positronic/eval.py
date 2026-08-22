@@ -24,7 +24,7 @@ class Observation:
     dataset-side encoding, so the channel won't carry a serializer at all.
     """
 
-    source: pimm.SignalEmitter
+    source: pimm.ControlSystemEmitter
     serializer: Serializer | None
 
 
@@ -33,7 +33,7 @@ class Command:
     """A policy action channel: where its waypoints go, and the serializer that records them under the
     channel's own key."""
 
-    dest: pimm.SignalReceiver
+    dest: pimm.ControlSystemReceiver
     serializer: Serializer | None
 
 
@@ -54,9 +54,9 @@ class Embodiment:
     commands: dict[str, Command]
     # Everything a trial readies before it opens, keyed by ``keys.ARM``, ``keys.SCENE`` and the like. One
     # handler serves one caller, so a device backing several command channels appears here once.
-    prepare_funcs: dict[str, pimm.calls.ControlSystemHandler[Any, None]]
+    prepare_handlers: dict[str, pimm.calls.ControlSystemHandler[Any, None]]
     static_meta: dict[str, Any]
-    meta_source: pimm.SignalEmitter | None
+    meta_source: pimm.ControlSystemEmitter | None
     control_systems: tuple[pimm.ControlSystem, ...] = ()
     simulated: bool = False
 
@@ -68,7 +68,7 @@ class Task:
     instruction_source: str | Callable[[], str]
     # Time budget for a rollout; ``None`` ends on ``Eval.done`` alone.
     timeout_sec: float | None
-    # What each of the embodiment's ``prepare_funcs`` is asked with, keyed the same way
+    # What each of the embodiment's ``prepare_handlers`` is asked with, keyed the same way
     prepare_args: dict[str, Any] = field(default_factory=dict)
     # What the episode records as this trial's identity: its seed, its place in the sweep, its scene
     meta: dict[str, Any] = field(default_factory=dict)
@@ -106,4 +106,4 @@ class Eval:
     embodiment: Embodiment
     tasks: list[Task]
     privileged: dict[str, Observation] = field(default_factory=dict)
-    done: pimm.SignalEmitter | None = None
+    done: pimm.ControlSystemEmitter | None = None

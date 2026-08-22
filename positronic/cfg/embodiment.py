@@ -35,7 +35,7 @@ def droid(robot_arm, gripper, cameras):
         descriptor='',
         observations=observations,
         commands=commands,
-        prepare_funcs={keys.ARM: robot_arm.sync_move, keys.GRIPPER: gripper.sync_move},
+        prepare_handlers={keys.ARM: robot_arm.sync_move, keys.GRIPPER: gripper.sync_move},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
         control_systems=(*cameras.values(), robot_arm, gripper),
@@ -60,7 +60,7 @@ def yam(robot_arm, cameras):
         observations=observations,
         commands=commands,
         # One driver, one handler: the YAM chain carries its own fingers
-        prepare_funcs={keys.ARM: robot_arm.sync_move},
+        prepare_handlers={keys.ARM: robot_arm.sync_move},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
         control_systems=(*cameras.values(), robot_arm),
@@ -116,7 +116,7 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
         descriptor='yam_bimanual',
         observations=observations,
         commands=commands,
-        prepare_funcs={f'{keys.ARM}.{s}': arm.sync_move for s, arm in arms.items()},
+        prepare_handlers={f'{keys.ARM}.{s}': arm.sync_move for s, arm in arms.items()},
         static_meta=static_meta,
         # Both drivers emit the identical per-arm meta; record one copy.
         meta_source=arms['left'].robot_meta,
@@ -146,7 +146,7 @@ def mujoco_franka(sim, camera_dict):
         observations=observations,
         commands=commands,
         # The sim has no synchronous move of its own: drawing the scene is what puts the arm at its start pose
-        prepare_funcs={keys.SCENE: sim.env_reset},
+        prepare_handlers={keys.SCENE: sim.env_reset},
         static_meta={**ROBOT_STATIC_META, 'simulation.mujoco_model_path': sim.mujoco_model_path},
         meta_source=sim.robot_meta,
         control_systems=(sim,),

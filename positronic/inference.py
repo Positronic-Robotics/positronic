@@ -94,7 +94,7 @@ def _run_attended(policy, embodiment: Embodiment, task: str | None, output_dir) 
     # An attended episode has no budget: the operator ends it, so nothing but ``done`` can.
     operator = KeyboardOperator(Task(instruction_source=task or '', timeout_sec=None))
     # The rig a human sets up by hand readies like any device: it is the operator who answers for it.
-    embodiment = replace(embodiment, prepare_funcs={**embodiment.prepare_funcs, keys.HUMAN: operator.ready})
+    embodiment = replace(embodiment, prepare_handlers={**embodiment.prepare_handlers, keys.HUMAN: operator.ready})
     harness = Harness(policy, embodiment)
     print('Keyboard controls: [s]tart, sto[p], [q]uit')
 

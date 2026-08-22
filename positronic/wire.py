@@ -118,8 +118,8 @@ def wire_embodiment(
         world.connect(obs.source, harness.observations[name])
     for name, cmd in embodiment.commands.items():
         world.connect(harness.commands[name], cmd.dest)
-    for name, device in embodiment.prepare_funcs.items():
-        world.connect(harness.prepare[name], device)
+    for name, handler in embodiment.prepare_handlers.items():
+        world.connect(harness.prepare[name], handler)
     if embodiment.meta_source is not None:
         world.connect(embodiment.meta_source, harness.robot_meta_in)
     if done is not None:

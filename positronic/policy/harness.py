@@ -233,7 +233,7 @@ class Harness(pimm.ControlSystem):
 
         self.observations = pimm.ReceiverDict(self, embodiment.observations)
         self.commands = pimm.EmitterDict(self, embodiment.commands)
-        self.prepare = pimm.calls.CallerDict[Any, None](self, embodiment.prepare_funcs)
+        self.prepare = pimm.calls.CallerDict[Any, None](self, embodiment.prepare_handlers)
         # Each channel's waypoints not yet played, stamped with absolute clock ns and ascending.
         self._schedules: dict[str, deque[tuple[int, Any]]] = {name: deque() for name in embodiment.commands}
 
