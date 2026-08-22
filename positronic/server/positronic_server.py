@@ -561,9 +561,9 @@ def _served_addresses(host: str) -> list[str]:
     """The addresses a server bound to `host` answers on.
 
     A concrete host answers on itself. A wildcard answers on the local interfaces of the family it
-    binds, and the family is the point: `0.0.0.0` is an AF_INET listener, so an IPv6 URL built from
-    it names an address nothing is listening on, while `::` on a dual-stack host accepts IPv4 too.
-    An empty host is the AF_INET wildcard the socket layer reads it as.
+    binds: `0.0.0.0` is an AF_INET listener, so an IPv6 URL built from it names an address nothing
+    is listening on, while `::` on a dual-stack host accepts IPv4 too. An empty host is the AF_INET
+    wildcard the socket layer reads it as.
 
     Judged by value rather than by spelling, so `0:0:0:0:0:0:0:0` is the wildcard the bind
     normalizes it to rather than an address to certify.
