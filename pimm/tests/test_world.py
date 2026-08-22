@@ -1139,7 +1139,7 @@ class TestReceiverDict:
 
     def test_names_fix_the_ports_the_dict_has(self):
         """A control system that knows its channels up front has no use for a key it was never built with."""
-        receivers = ReceiverDict(DummyControlSystem('test'), ['a', 'b'])
+        receivers = ReceiverDict(DummyControlSystem('test'), names=['a', 'b'])
 
         assert sorted(receivers) == ['a', 'b']
         assert all(isinstance(receiver, ControlSystemReceiver) for receiver in receivers.values())
@@ -1147,7 +1147,7 @@ class TestReceiverDict:
             receivers['c']
 
     def test_named_ports_are_fake_where_asked_for(self):
-        receivers = ReceiverDict(DummyControlSystem('test'), ['a', 'b'], fake={'b'})
+        receivers = ReceiverDict(DummyControlSystem('test'), names=['a', 'b'], fake={'b'})
 
         assert not isinstance(receivers['a'], FakeReceiver)
         assert isinstance(receivers['b'], FakeReceiver)
@@ -1155,7 +1155,7 @@ class TestReceiverDict:
     def test_a_fake_port_the_dict_does_not_have_is_refused(self):
         """The fixed set puts the port out of reach, so the fake spec would sit there doing nothing."""
         with pytest.raises(AssertionError, match='not among the ports'):
-            ReceiverDict(DummyControlSystem('test'), ['a', 'b'], fake={'c'})
+            ReceiverDict(DummyControlSystem('test'), names=['a', 'b'], fake={'c'})
 
 
 class TestEmitterDict:
@@ -1271,7 +1271,7 @@ class TestEmitterDict:
 
     def test_names_fix_the_ports_the_dict_has(self):
         """A control system that knows its channels up front has no use for a key it was never built with."""
-        emitters = EmitterDict(DummyControlSystem('test'), ['a', 'b'])
+        emitters = EmitterDict(DummyControlSystem('test'), names=['a', 'b'])
 
         assert sorted(emitters) == ['a', 'b']
         assert all(isinstance(emitter, ControlSystemEmitter) for emitter in emitters.values())
@@ -1279,7 +1279,7 @@ class TestEmitterDict:
             emitters['c']
 
     def test_named_ports_are_fake_where_asked_for(self):
-        emitters = EmitterDict(DummyControlSystem('test'), ['a', 'b'], fake={'b'})
+        emitters = EmitterDict(DummyControlSystem('test'), names=['a', 'b'], fake={'b'})
 
         assert not isinstance(emitters['a'], FakeEmitter)
         assert isinstance(emitters['b'], FakeEmitter)
@@ -1287,7 +1287,7 @@ class TestEmitterDict:
     def test_a_fake_port_the_dict_does_not_have_is_refused(self):
         """The fixed set puts the port out of reach, so the fake spec would sit there doing nothing."""
         with pytest.raises(AssertionError, match='not among the ports'):
-            EmitterDict(DummyControlSystem('test'), ['a', 'b'], fake={'c'})
+            EmitterDict(DummyControlSystem('test'), names=['a', 'b'], fake={'c'})
 
 
 # Enough iterations that a per-cycle line would be unmistakable against the handful of event lines.

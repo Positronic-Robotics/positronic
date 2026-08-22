@@ -231,9 +231,9 @@ class Harness(pimm.ControlSystem):
         # stamp ``ts`` on their own clock.
         self._awaiting_obs: set[str] = set()
 
-        self.observations = pimm.ReceiverDict(self, embodiment.observations)
-        self.commands = pimm.EmitterDict(self, embodiment.commands)
-        self.prepare = pimm.calls.CallerDict[Any, None](self, embodiment.prepare_handlers)
+        self.observations = pimm.ReceiverDict(self, names=embodiment.observations)
+        self.commands = pimm.EmitterDict(self, names=embodiment.commands)
+        self.prepare = pimm.calls.CallerDict[Any, None](self, names=embodiment.prepare_handlers)
         # Each channel's waypoints not yet played, stamped with absolute clock ns and ascending.
         self._schedules: dict[str, deque[tuple[int, Any]]] = {name: deque() for name in embodiment.commands}
 

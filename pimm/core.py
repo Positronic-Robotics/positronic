@@ -228,10 +228,12 @@ class PortDict(dict[str, P], ABC):
     """Ports owned by a control system. ``names`` fixes the set it has; without it, a key allocates its
     port on first access."""
 
-    def __init__(self, owner: ControlSystem, names: Iterable[str] | None = None):
+    def __init__(self, owner: ControlSystem, *, names: Iterable[str] | None = None):
         super().__init__()
         self._owner = owner
         self._fixed = names is not None
+        # The named ports are built here, so a subclass whose ``_port`` reads its own state must set that
+        # state before calling this.
         for name in names or ():
             self[name] = self._port(name)
 
@@ -259,10 +261,10 @@ class ReceiverDict(PortDict[ControlSystemReceiver[U]]):
     Pass fake=True for all fake receivers, or fake={'key1', 'key2'} for specific keys.
     """
 
-    def __init__(self, owner: ControlSystem, names: Iterable[str] | None = None, *, fake: bool | Iterable[str] = False):
+    def __init__(self, owner: ControlSystem, *, names: Iterable[str] | None = None, fake: bool | Iterable[str] = False):
         self._fake = _fake_keys(fake, names)
         self._all_fake = fake is True
-        super().__init__(owner, names)
+        super().__init__(owner, names=names)
 
     def _port(self, key: str) -> ControlSystemReceiver[U]:
         fake = self._all_fake or key in self._fake
@@ -275,10 +277,10 @@ class EmitterDict(PortDict[ControlSystemEmitter[U]]):
     Pass fake=True for all fake emitters, or fake={'key1', 'key2'} for specific keys.
     """
 
-    def __init__(self, owner: ControlSystem, names: Iterable[str] | None = None, *, fake: bool | Iterable[str] = False):
+    def __init__(self, owner: ControlSystem, *, names: Iterable[str] | None = None, fake: bool | Iterable[str] = False):
         self._fake = _fake_keys(fake, names)
         self._all_fake = fake is True
-        super().__init__(owner, names)
+        super().__init__(owner, names=names)
 
     def _port(self, key: str) -> ControlSystemEmitter[U]:
         fake = self._all_fake or key in self._fake

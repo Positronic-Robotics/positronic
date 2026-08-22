@@ -208,7 +208,7 @@ class TestAllOf:
 class TestCallerDict:
     def test_names_fix_the_ports_the_dict_has(self):
         """A control system that knows who it calls up front has no use for a key it was never built with."""
-        callers = CallerDict(Passive(), ['a', 'b'])
+        callers = CallerDict(Passive(), names=['a', 'b'])
 
         assert sorted(callers) == ['a', 'b']
         assert all(isinstance(caller, ControlSystemCaller) for caller in callers.values())
