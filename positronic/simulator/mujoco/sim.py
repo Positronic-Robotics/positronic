@@ -145,7 +145,6 @@ class MujocoSim(pimm.ControlSystem):
         self._reset_pending = False
 
         self.commands = pimm.ControlSystemReceiver[roboarm_command.CommandType](self)
-        self.prepare = pimm.calls.ControlSystemHandler[Any, None](self)
         self.env_reset = pimm.calls.ControlSystemHandler[Any, None](self)
         self.state: pimm.SignalEmitter[MujocoFrankaState] = pimm.ControlSystemEmitter(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
@@ -159,11 +158,7 @@ class MujocoSim(pimm.ControlSystem):
         self.sim_state: pimm.SignalEmitter[dict[str, np.ndarray]] = pimm.ControlSystemEmitter(self)
 
     def _serve_calls(self) -> bool:
-        """Home the arm for a prepare, and draw a fresh scene for a reset. Whether a scene was drawn."""
-        if (call := next(self.prepare.incoming(), None)) is not None:
-            with pimm.calls.raise_to(call):  # ``_home`` steps the settling transient, so the arm is there
-                self._home()
-                call.set_result(None)
+        """Draw a fresh scene for a reset; whether one was drawn."""
         if (call := next(self.env_reset.incoming(), None)) is not None:
             with pimm.calls.raise_to(call):
                 self.reset(dict(call.request or {}).get(keys.EVAL_SEED))

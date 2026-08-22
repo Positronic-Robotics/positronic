@@ -2,7 +2,6 @@ import logging
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
@@ -72,8 +71,7 @@ class _Arm(DriverRun):
     def __init__(
         self,
         bus: MotorBus,
-        calls: pimm.calls.ControlSystemHandler[roboarm_command.CommandType, None],
-        prepare: pimm.calls.ControlSystemHandler[Any, None],
+        calls: pimm.calls.ControlSystemHandler[roboarm_command.CommandType | None, None],
         out: pimm.SignalEmitter[SO101State],
         grip_out: pimm.SignalEmitter[float],
         home_joints: list[float],
@@ -88,9 +86,7 @@ class _Arm(DriverRun):
         self.kinematic = Kinematics(_SO101_URDF_PATH, _SO101_EE_JOINT)
         self._joint_limits = self.kinematic.joint_limits
         self._home_joints = home_joints
-        self._calls = calls
-        self._prepare = prepare
-        self._move = PendingMove[roboarm_command.CommandType](self._ARRIVED_TOL)
+        self._move = PendingMove[roboarm_command.CommandType | None](self._ARRIVED_TOL, calls)
         # Read here rather than left empty: every setpoint below is solved from where the arm is now, and the
         # arm holds where the bus finds it until something asks otherwise
         self.q_norm = bus.position
@@ -118,10 +114,13 @@ class _Arm(DriverRun):
         """Normalize the five arm joints. ``_rad_to_norm`` spans the bus, whose last entry is the gripper."""
         return self._rad_to_norm(np.append(q_rad, 0.0))[:-1]
 
-    def _requested_qpos(self, cmd: roboarm_command.CommandType) -> np.ndarray:
-        """The setpoint ``cmd`` asks for, in the bus's normalized units, whether or not the arm can hold it."""
+    def _requested_qpos(self, cmd: roboarm_command.CommandType | None) -> np.ndarray:
+        """The setpoint ``cmd`` asks for, in the bus's normalized units, whether or not the arm can hold it.
+
+        Asking for nothing asks for home.
+        """
         match cmd:
-            case roboarm_command.Reset():
+            case None | roboarm_command.Reset():
                 return self._arm_rad_to_norm(np.asarray(self._home_joints, dtype=np.float32))
             case roboarm_command.CartesianPosition(pose):
                 return self._solve_ik(pose)
@@ -133,7 +132,7 @@ class _Arm(DriverRun):
             case other:
                 raise ValueError(f'Unknown command: {other}')
 
-    def _target_qpos(self, cmd: roboarm_command.CommandType) -> np.ndarray:
+    def _target_qpos(self, cmd: roboarm_command.CommandType | None) -> np.ndarray:
         """The setpoint ``cmd`` asks the arm to hold, clipped to the calibrated range the bus reports from."""
         return np.clip(self._requested_qpos(cmd), 0.0, 1.0)
 
@@ -142,13 +141,9 @@ class _Arm(DriverRun):
         """Whether the arm will take a setpoint: a move owns it until it is answered."""
         return not (self._move.active or self._move.settled)
 
-    def take_prepare(self) -> pimm.calls.Call[Any, None] | None:
-        """The next prepare asked for, if the arm is free to take one."""
-        return self._move.take(self._prepare)
-
-    def take_sync_move(self) -> pimm.calls.Call[roboarm_command.CommandType, None] | None:
+    def take_sync_move(self) -> pimm.calls.Call[roboarm_command.CommandType | None, None] | None:
         """The next move asked for, if the arm is free to take one."""
-        return self._move.take(self._calls)
+        return self._move.take()
 
     def read(self) -> None:
         """Take the arm off the bus, once a tick: every step below wants the same instant."""
@@ -171,19 +166,12 @@ class _Arm(DriverRun):
         """Hold the arm at the setpoint ``cmd`` asks for, with nobody waiting on the arrival."""
         self._qpos, self._unsent = self._target_qpos(cmd), True
 
-    def serve_sync_move(self, call: pimm.calls.Call[roboarm_command.CommandType, None]) -> None:
+    def serve_sync_move(self, call: pimm.calls.Call[roboarm_command.CommandType | None, None]) -> None:
         """Hold the arm where ``call`` asks; ``settle`` answers it once the bus reads back there."""
         with pimm.calls.raise_to(call):
-            self._hold_for(call, self._target_qpos(call.request))
-
-    def serve_prepare(self, call: pimm.calls.Call[Any, None]) -> None:
-        """Hold the arm at home; ``settle`` answers ``call`` once the bus reads back there."""
-        with pimm.calls.raise_to(call):
-            self._hold_for(call, self._target_qpos(roboarm_command.Reset()))
-
-    def _hold_for(self, call: pimm.calls.Call[Any, None], target: np.ndarray) -> None:
-        self._qpos, self._unsent = target, True
-        self._move.accept(call, target, self.clock.now(), self._MOVE_TIMEOUT_S)
+            target = self._target_qpos(call.request)
+            self._qpos, self._unsent = target, True
+            self._move.accept(call, target, self.clock.now(), self._MOVE_TIMEOUT_S)
 
     def write(self) -> None:
         """Put the setpoint on the bus, if anything has asked for one since it was last written.
@@ -230,8 +218,7 @@ class Robot(pimm.ControlSystem):
         self.mujoco_model_path = 'positronic/drivers/roboarm/so101/so101.xml'
         self.home_joints = home_joints if home_joints is not None else [0.0, 0.0, 0.0, 0.0, 0.0]
         self.commands = pimm.ControlSystemReceiver[roboarm_command.CommandType](self)
-        self.sync_move = pimm.calls.ControlSystemHandler[roboarm_command.CommandType, None](self)
-        self.prepare = pimm.calls.ControlSystemHandler[Any, None](self)
+        self.sync_move = pimm.calls.ControlSystemHandler[roboarm_command.CommandType | None, None](self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
 
         self.grip = pimm.ControlSystemEmitter[float](self)
@@ -244,9 +231,7 @@ class Robot(pimm.ControlSystem):
 
     def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
-        return _Arm(
-            self.motor_bus, self.sync_move, self.prepare, self.state, self.grip, self.home_joints, should_stop, clock
-        )
+        return _Arm(self.motor_bus, self.sync_move, self.state, self.grip, self.home_joints, should_stop, clock)
 
     @staticmethod
     def _build_robot_meta() -> dict:
@@ -269,9 +254,7 @@ class Robot(pimm.ControlSystem):
                     arm.hold_grip(grip)
                 arm.settle()
                 if arm.takes_commands:
-                    if (call := arm.take_prepare()) is not None:
-                        arm.serve_prepare(call)
-                    elif (call := arm.take_sync_move()) is not None:
+                    if (call := arm.take_sync_move()) is not None:
                         arm.serve_sync_move(call)
                     elif (cmd := pimm.value_updated(self.commands)) is not None:
                         try:

@@ -1,11 +1,10 @@
 import time
 from collections.abc import Iterator
 from ctypes import c_uint16
-from typing import Any
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import PendingMove, grip_setpoint, prepare_setpoint
+from positronic.drivers.utils import PendingMove, grip_setpoint
 
 with vendor_import('pymodbus', 'Gripper support'):
     import pymodbus.client as ModbusClient
@@ -19,8 +18,7 @@ class DHGripper(pimm.ControlSystem):
         self._home_grip = home_grip
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
-        self.sync_move = pimm.calls.ControlSystemHandler[float, None](self)
-        self.prepare = pimm.calls.ControlSystemHandler[Any, None](self)
+        self.sync_move = pimm.calls.ControlSystemHandler[float | None, None](self)
         self.force = pimm.DefaultingReceiver(self, default=100)
         self.speed = pimm.DefaultingReceiver(self, default=100)
 
@@ -59,15 +57,12 @@ class DHGripper(pimm.ControlSystem):
 
         # TODO: Should we translate these to physical units (N and m/s)?
         try:
-            with PendingMove[float](self._ARRIVED_TOL) as move:
+            with PendingMove[float | None](self._ARRIVED_TOL, self.sync_move) as move:
                 while not should_stop.value:
                     current_grip = self._width(client)
                     self.grip.emit(current_grip)
 
-                    now = clock.now()
-                    target = prepare_setpoint(move, self.prepare, self._home_grip, now)
-                    if target is None:
-                        target = grip_setpoint(move, self.sync_move, self.target_grip, current_grip, now)
+                    target = grip_setpoint(move, self._home_grip, self.target_grip, current_grip, clock.now())
                     if target is not None:
                         last_grip = target
                     self._command(client, last_grip)
