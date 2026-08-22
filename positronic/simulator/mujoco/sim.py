@@ -207,9 +207,20 @@ class MujocoSim(pimm.ControlSystem):
             self._moves.accept(call, target, self._MOVE_TOL, now, self._MOVE_TIMEOUT_S)
             # Already there: answered on the spot, after its state and without a step, so the scene a
             # redraw just built reaches frame-0 untouched.
-            if self._moves.settle(self._q, now) is MoveStatus.ARRIVED:
+            if self._settle_move(now) is MoveStatus.ARRIVED:
                 self._emit_state()
                 self._moves.answer()
+
+    def _settle_move(self, now: float) -> MoveStatus:
+        """Where the move in flight stands, once the arm it leaves behind is accounted for."""
+        status = self._moves.settle(self._q, now)
+        if status is not MoveStatus.MOVING:
+            self._error = self._moves.errored  # a move that lands clears what one that gave up left
+            if self._error:
+                # The actuators still drive at the target the move never reached; left there, the arm
+                # would resume it the moment whatever held it back goes away.
+                self._set_actuator_values(self._q)
+        return status
 
     def _step_and_emit(self, now: float) -> None:
         if (grip := pimm.value_updated(self.target_grip)) is not None:
@@ -222,13 +233,7 @@ class MujocoSim(pimm.ControlSystem):
         with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
             self.step()
             self.fps_counter.tick()
-            ended = self._moves.active and self._moves.settle(self._q, now) is not MoveStatus.MOVING
-            if ended:
-                self._error = self._moves.errored  # a move that lands clears what one that gave up left
-                if self._error:
-                    # The actuators still drive at the target the move never reached; left there, the arm
-                    # would resume it the moment whatever held it back goes away.
-                    self._set_actuator_values(self._q)
+            ended = self._moves.active and self._settle_move(now) is not MoveStatus.MOVING
             # A move that ended says where the arm got to, whatever rate the state stream runs at
             if self._state_due(now) or ended:
                 self._emit_state()
@@ -375,11 +380,18 @@ class MujocoSim(pimm.ControlSystem):
             case roboarm_command.CartesianDelta() as delta_cmd:
                 return self._ik(delta_cmd.apply(self._ee_pose))
             case roboarm_command.JointPosition(positions=positions):
-                return np.asarray(positions, dtype=np.float64)
+                return self._joints(positions)
             case roboarm_command.JointDelta(velocities=delta):
-                return self._q + delta
+                return self._q + self._joints(delta)
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
+
+    def _joints(self, values: np.ndarray) -> np.ndarray:
+        """``values`` as a joint vector; NumPy would broadcast one that names fewer joints across them all."""
+        joints = np.asarray(values, dtype=np.float64)
+        if joints.shape != (len(self._joint_names),):
+            raise ValueError(f'{joints} does not name every joint')
+        return joints
 
     def _apply_command(self, cmd: roboarm_command.CommandType) -> None:
         """Aim the actuators at what ``cmd`` asks for, leaving the arm where it is if it cannot be met."""
