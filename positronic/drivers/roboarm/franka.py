@@ -110,6 +110,9 @@ class _Arm(DriverRun[command.CommandType]):
     _MOVE_GRACE_S = 5.0
     # Parking publishes nothing, so it comes back only as often as it needs to ask again
     _PARK_POLL_S = 0.005
+    # How many times a move the vendor aborted is commanded again — a bound a deadline cannot give, since a
+    # reflex trips in milliseconds
+    _MOVE_ATTEMPTS = 3
 
     def __init__(
         self,
@@ -185,17 +188,27 @@ class _Arm(DriverRun[command.CommandType]):
         pace: Callable[[], pimm.Command],
         mode: command.ControlModeType | None,
     ) -> Generator[pimm.Command, None, MoveStatus]:
-        """Command ``target`` under ``mode`` and poll the goal until the arm arrives, one poll per resume.
+        """Command ``target`` under ``mode`` and poll the goal until the arm arrives, one poll per resume,
+        clearing the arm and commanding it again over an abort.
 
         ``pace`` is what to wait between polls, and so how often the goal is asked about.
         """
+        attempts_left = self._MOVE_ATTEMPTS
         self.command_target(target, mode)
         while not should_stop():
             goal = self.vendor.goal()
             if goal.status == pf.GoalStatus.REACHED:
                 return MoveStatus.ARRIVED
             if goal.status != pf.GoalStatus.IN_FLIGHT:
-                raise RuntimeError(f'the arm stopped short of its target: {goal.reason or goal.status}')
+                attempts_left -= 1
+                stopped_short = f'the arm stopped short of its target: {goal.reason or goal.status}'
+                if attempts_left == 0:
+                    raise RuntimeError(f'{stopped_short}, on all {self._MOVE_ATTEMPTS} attempts')
+                # A target commanded while the arm holds an error is refused outright
+                if not self.vendor.recover_from_errors():
+                    raise RuntimeError(f'{stopped_short}, and its error will not clear')
+                logger.warning(f'{stopped_short}; cleared it, commanding again with {attempts_left} attempts left')
+                self.command_target(target, mode)
             yield pace()
         return MoveStatus.GAVE_UP
 
@@ -299,7 +312,6 @@ class _Arm(DriverRun[command.CommandType]):
         target = np.asarray(self._home_joints, dtype=np.float64)
         try:
             logger.info('Parking the arm at the home pose')
-            self.vendor.recover_from_errors()  # once, before the move: a reflex during the move ends the park
             deadline = self.clock.now() + self._park_timeout_s
             # The home pose is a long way off, and only the native law shapes the reference on the way there.
             outcome = yield from self.await_goal(
