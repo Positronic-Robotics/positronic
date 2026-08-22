@@ -137,6 +137,24 @@ def test_a_move_naming_the_wrong_joints_leaves_the_arm_alone():
         np.testing.assert_allclose(state.value.q, home, atol=sim._MOVE_TOL)
 
 
+def test_a_move_to_joints_that_are_no_target_is_refused_rather_than_applied():
+    """NaN controls step the sim to NaN, and no comparison against NaN ever reports the arm arrived."""
+    sim = MujocoSim(MODEL, loaders=())
+
+    with pimm.World(virtual_time=True) as world:
+        move = world.pair(sim.sync_move)
+        state = world.pair(sim.state)
+        scheduler = world.start([sim])
+        home = _at_rest(scheduler, state, sim)
+
+        answer = move(roboarm_command.JointPosition(np.full(7, float('nan'))))
+
+        with pytest.raises(ValueError, match='not a joint target'):
+            _answered(scheduler, answer, _turns(sim, 1.0)).result()
+        drive_scheduler(scheduler, steps=_turns(sim, 0.5))
+        np.testing.assert_allclose(state.value.q, home, atol=sim._MOVE_TOL)
+
+
 def test_a_move_the_arm_never_finishes_hands_its_asker_the_timeout():
     """The joints stop at their limits, so a target beyond them is one the arm can be held short of forever."""
     sim = MujocoSim(MODEL, loaders=())

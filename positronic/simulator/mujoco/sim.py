@@ -415,8 +415,11 @@ class MujocoSim(pimm.ControlSystem):
         return qpos[self._joint_qpos_ids]
 
     def _set_actuator_values(self, values: np.ndarray) -> None:
-        """Aim every arm actuator at ``values``; one that does not name them all leaves the arm alone."""
-        # Paired up front, so a refused target is refused before any actuator has been retargeted
+        """Aim every arm actuator at ``values``; a target the arm cannot be put at leaves it alone."""
+        # Checked whole before the first write, so a refused target retargets nothing. A non-finite one
+        # steps the sim to NaN, and no comparison against NaN ever reports the arm arrived.
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f'{np.asarray(values)} is not a joint target')
         for name, value in list(zip(self._actuator_names, values, strict=True)):
             self.data.actuator(name).ctrl = value
 
