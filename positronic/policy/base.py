@@ -1,3 +1,5 @@
+"""Policies, sessions, and the wrappers that compose them. The target design is in DESIGN.md."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
