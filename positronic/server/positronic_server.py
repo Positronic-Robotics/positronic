@@ -565,8 +565,7 @@ def _served_addresses(host: str) -> list[str]:
     is listening on, while `::` on a dual-stack host accepts IPv4 too. An empty host is the AF_INET
     wildcard the socket layer reads it as.
 
-    Judged by value rather than by spelling, so `0:0:0:0:0:0:0:0` is the wildcard the bind
-    normalizes it to rather than an address to certify.
+    The wildcard is judged by value, so `0:0:0:0:0:0:0:0` is the one the bind normalizes it to.
     """
     if host == '':
         return _local_ip_addresses(version=4)
