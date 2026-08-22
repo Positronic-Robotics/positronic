@@ -5,6 +5,7 @@ from typing import Generic, TypeVar, final
 
 T = TypeVar('T')
 U = TypeVar('U')
+P = TypeVar('P')
 
 
 class NoValueException(Exception):
@@ -223,55 +224,55 @@ class FakeReceiver(ControlSystemReceiver[T]):
         raise RuntimeError('FakeReceiver._bind() is not supposed to be called')
 
 
-class ReceiverDict(dict[str, ControlSystemReceiver[U]]):
-    """Receivers owned by a control system, ``names`` fixing the set it has; without it, keys allocate on
-    first access.
+class PortDict(dict[str, P], ABC):
+    """Ports owned by a control system, ``names`` fixing the set it has; without it, keys allocate on
+    first access."""
+
+    def __init__(self, owner: ControlSystem, names: Iterable[str] | None = None):
+        super().__init__()
+        self._owner = owner
+        self._fixed = names is not None
+        for name in names or ():
+            self[name] = self._port(name)
+
+    @abstractmethod
+    def _port(self, key: str) -> P:
+        """The port to serve ``key`` with."""
+
+    def __missing__(self, key: str) -> P:
+        if self._fixed:
+            raise KeyError(f'{key} is not one of the ports this control system was built with')
+        self[key] = port = self._port(key)
+        return port
+
+
+class ReceiverDict(PortDict[ControlSystemReceiver[U]]):
+    """Receivers owned by a control system.
 
     Pass fake=True for all fake receivers, or fake={'key1', 'key2'} for specific keys.
     """
 
     def __init__(self, owner: ControlSystem, names: Iterable[str] | None = None, *, fake: bool | Iterable[str] = False):
-        super().__init__()
-        self._owner = owner
         self._fake = set(fake) if isinstance(fake, Iterable) else set()
         self._all_fake = fake is True
-        self._fixed = names is not None
-        for name in names or ():
-            self[name] = self._port(name)
+        super().__init__(owner, names)
 
     def _port(self, key: str) -> ControlSystemReceiver[U]:
         fake = self._all_fake or key in self._fake
         return FakeReceiver(self._owner) if fake else ControlSystemReceiver(self._owner)
 
-    def __missing__(self, key: str) -> ControlSystemReceiver[U]:
-        if self._fixed:
-            raise KeyError(f'{key} is not one of the ports this control system was built with')
-        self[key] = receiver = self._port(key)
-        return receiver
 
-
-class EmitterDict(dict[str, ControlSystemEmitter[U]]):
-    """Emitters owned by a control system, ``names`` fixing the set it has; without it, keys allocate on
-    first access.
+class EmitterDict(PortDict[ControlSystemEmitter[U]]):
+    """Emitters owned by a control system.
 
     Pass fake=True for all fake emitters, or fake={'key1', 'key2'} for specific keys.
     """
 
     def __init__(self, owner: ControlSystem, names: Iterable[str] | None = None, *, fake: bool | Iterable[str] = False):
-        super().__init__()
-        self._owner = owner
         self._fake = set(fake) if isinstance(fake, Iterable) else set()
         self._all_fake = fake is True
-        self._fixed = names is not None
-        for name in names or ():
-            self[name] = self._port(name)
+        super().__init__(owner, names)
 
     def _port(self, key: str) -> ControlSystemEmitter[U]:
         fake = self._all_fake or key in self._fake
         return FakeEmitter(self._owner) if fake else ControlSystemEmitter(self._owner)
-
-    def __missing__(self, key: str) -> ControlSystemEmitter[U]:
-        if self._fixed:
-            raise KeyError(f'{key} is not one of the ports this control system was built with')
-        self[key] = emitter = self._port(key)
-        return emitter

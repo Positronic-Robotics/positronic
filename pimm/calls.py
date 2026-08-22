@@ -35,6 +35,7 @@ from .core import (
     ControlSystemEmitter,
     ControlSystemReceiver,
     NoValueException,
+    PortDict,
     SignalEmitter,
     SignalReceiver,
 )
@@ -243,19 +244,8 @@ class ControlSystemCaller(Caller[Req, Res]):
             self._pending.pop(reply.id)._reply = reply
 
 
-class CallerDict(dict[str, ControlSystemCaller[Req, Res]]):
-    """Callers owned by a control system, ``names`` fixing the set it has; without it, keys allocate on
-    first access."""
+class CallerDict(PortDict[ControlSystemCaller[Req, Res]]):
+    """Callers owned by a control system."""
 
-    def __init__(self, owner: ControlSystem, names: Iterable[str] | None = None):
-        super().__init__()
-        self._owner = owner
-        self._fixed = names is not None
-        for name in names or ():
-            self[name] = ControlSystemCaller[Req, Res](self._owner)
-
-    def __missing__(self, key: str) -> ControlSystemCaller[Req, Res]:
-        if self._fixed:
-            raise KeyError(f'{key} is not one of the ports this control system was built with')
-        self[key] = caller = ControlSystemCaller[Req, Res](self._owner)
-        return caller
+    def _port(self, key: str) -> ControlSystemCaller[Req, Res]:
+        return ControlSystemCaller[Req, Res](self._owner)
