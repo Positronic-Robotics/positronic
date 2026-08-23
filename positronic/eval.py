@@ -68,7 +68,7 @@ class Task:
     instruction_source: str | Callable[[], str]
     # Time budget for a rollout; ``None`` ends on ``Eval.done`` alone.
     timeout_sec: float | None
-    # What each of the embodiment's ``prepare_handlers`` is asked with, keyed the same way
+    # What to ask for, keyed as ``Embodiment.prepare_handlers`` is; a handler this does not name goes unasked
     prepare_args: dict[str, Any] = field(default_factory=dict)
     # What the episode records as this trial's identity: its seed, its place in the sweep, its scene
     meta: dict[str, Any] = field(default_factory=dict)
@@ -92,8 +92,8 @@ class Task:
 # [✓] ``charge_inference_time`` is a ``Task`` field, not a context key.
 # [✓] Split the reset token from the policy input: the instruction is all a trial gives the policy.
 # [✓] Homing becomes a ``prepare`` call the arm and gripper answer once in place; ``Command.home`` goes with it.
-# [✓] A trial's reset is every ``prepare`` it asks for — scene, arm, gripper, human — and it opens once all answer.
-# [ ] ``command.Reset`` goes: a robot is put home by the ``prepare`` call, not by a command on its stream.
+# [✓] A trial's reset is every ``prepare`` it asks for — scene, arm, gripper — and it opens once all answer.
+# [✓] ``command.Reset`` goes: a robot is moved by a ``prepare`` call that names where to go.
 # [ ] The recorder keeps what is on the wire when it opens, and the sim publishes frame-0 with its prepare answers.
 # [ ] One runner builds the world for both.
 @dataclass

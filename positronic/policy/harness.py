@@ -282,10 +282,10 @@ class Harness(pimm.ControlSystem):
             self.commands[name].emit(value)
 
     def _prepare(self, should_stop: pimm.SignalReceiver, task: Task) -> Generator[pimm.Command, None, None]:
-        """Ask everything the trial readies — scene, devices, operator — and come back once all have."""
+        """Ask everything the task names, and come back once every one of them has answered."""
         unknown = sorted(set(task.prepare_args) - set(self.prepare))
         assert not unknown, f'{unknown} is not something this embodiment readies, so nothing would be asked'
-        ready = pimm.calls.all_of([ask(task.prepare_args.get(name)) for name, ask in self.prepare.items()])
+        ready = pimm.calls.all_of([self.prepare[name](arg) for name, arg in task.prepare_args.items()])
         while not ready.done() and not should_stop.value:
             yield pimm.Yield() if self._embodiment.simulated else pimm.Sleep(POLL_PERIOD_SEC)
         # An episode must not open on a rig that never got ready, and its asker must hear that rather than wait
@@ -308,7 +308,8 @@ class Harness(pimm.ControlSystem):
         """Drop everything the episode has going: the schedule being played, and the call on the worker.
 
         The call is let go of rather than waited for, so a model that hangs cannot hold up the recording's
-        stop or the home. Devices hold their last commanded position; nothing downstream is buffered.
+        stop or the next trial's prepare. Devices hold their last commanded position; nothing downstream is
+        buffered.
         """
         for schedule in self._schedules.values():
             schedule.clear()
@@ -338,7 +339,8 @@ class Harness(pimm.ControlSystem):
         self.ds_command.emit(stop)
         virtual_now = clock.now()  # before the round below, whose sim-clock advance belongs to no rollout
         # Give the recorder a round to commit the STOP before the next START (they share ``ds_command``, where
-        # last-value-wins would drop one) and before the home command, so homing stays out of the recording.
+        # last-value-wins would drop one) and before the next trial's prepare, so the moves it asks for stay
+        # out of the recording.
         yield self._pace(clock)
         # After that round, so the recorder's STOP-time record.io span still parents to the episode. Skew: a
         # producer stepping in that shared round charges ≤ one control period to the closing episode.

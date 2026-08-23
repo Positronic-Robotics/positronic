@@ -134,8 +134,8 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     grip_samples = list(grip_signal)
     assert grip_samples, 'target_grip signal is empty'
     grip_values = [value for value, _ts in grip_samples]
-    # The inter-episode home grip is drained by ``reset``, so the command stream starts with the policy's
-    # first commanded grip (0.33) — consistent with ``robot_command.pose`` above.
+    # Nothing but the policy commands this channel, so the stream starts with its first commanded grip
+    # (0.33) — consistent with ``robot_command.pose`` above.
     assert grip_values[0] == pytest.approx(0.33, rel=1e-2, abs=1e-2)
     assert np.all(np.diff([ts for _, ts in grip_samples]) > 0) or len(grip_samples) == 1
 
@@ -217,7 +217,7 @@ def test_countdown_records_frame0_every_trial(tmp_path):
     trials = number_trials(ev.tasks[0], [{keys.EVAL_SEED: i} for i in range(2)])
     with pos3.mirror():
         main(
-            policy=StubPolicy(command=roboarm_command.Reset(), target_grip=0.0),
+            policy=StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0),
             evals=[replace(ev, tasks=trials)],
             # the degenerate obs is not Franka-shaped, so run the policy unwrapped
             output_dir=str(tmp_path),
@@ -240,7 +240,9 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     trials = number_trials(ev.tasks[0], [{}, {}])
     with pos3.mirror():
         main(
-            policy=ChunkedSchedule().wrap(RemoteStubPolicy(command=roboarm_command.Reset(), target_grip=0.0)),
+            policy=ChunkedSchedule().wrap(
+                RemoteStubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
+            ),
             evals=[replace(ev, tasks=trials)],
             output_dir=str(tmp_path),
             timing=True,
@@ -286,7 +288,7 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     trial = number_trials(ev.tasks[0], [{keys.EVAL_SEED: 100}])[0]
     with pos3.mirror():
         main(
-            policy=StubPolicy(command=roboarm_command.Reset(), target_grip=0.0),
+            policy=StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0),
             evals=[replace(ev, tasks=[trial])],
             output_dir=str(tmp_path),
         )

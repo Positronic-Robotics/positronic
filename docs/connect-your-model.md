@@ -138,9 +138,8 @@ The `robot_command` field says what the arm is asked to do. Build one of the com
 | `JointPosition` | `positions`: float32 (7,) | Target joint angles (radians) |
 | `JointDelta` | `velocities`: float32 (7,) | Joint velocity command |
 | `CartesianDelta` | `delta`, `frame`: `geom.Transform3D` | Relative motion, composed onto the pose the arm is at when it lands; `frame` is the frame `delta` is expressed in |
-| `Reset` | — | Return the arm to its home position |
 
-Every command but `Reset` also takes an optional `mode`, the control law it asks to execute under:
+Every command also takes an optional `mode`, the control law it asks to execute under:
 `PositionControl(stiffness=...)` for a position servo, or `Impedance(kq, kqd, kx, kxd)` for the hybrid
 joint/Cartesian law. Omit it — the default — and the arm runs its native law. What a pinned mode does is the
 driver's: a simulator runs its own law regardless, and a driver that cannot execute the mode raises.

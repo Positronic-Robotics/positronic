@@ -2,8 +2,10 @@
 aliases over ``cli.eval.run``."""
 
 from collections import Counter
+from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from dataclasses import replace
+from functools import partial
 from typing import Any
 
 import configuronic as cfn
@@ -15,9 +17,11 @@ import positronic.cfg.policy as policy_cfg
 from pimm.logging import init_logging
 from positronic import keys, wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
+from positronic.cfg.hardware.roboarm import FRANKA_JOINTS_SPREAD, FRANKA_NOMINAL_JOINTS
 from positronic.cli.eval.run import prepare_output_dir, run
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
+from positronic.drivers.roboarm import command
 from positronic.eval import Embodiment, Task
 from positronic.policy.harness import Harness
 
@@ -25,12 +29,13 @@ from positronic.policy.harness import Harness
 class KeyboardOperator(pimm.ControlSystem):
     """Turns keystrokes into episodes: ``s`` asks for one through ``perform_task``, ``p`` ends the live one.
 
-    It serves the trial's ``human`` prepare, and holds the pending answers because that is where an
-    episode's terminal — and any refused ask — arrives; both are printed as they land.
+    It serves the trial's ``scene`` prepare, and holds the pending answers because that is where an
+    episode's terminal — and any refused ask — arrives; both are printed as they land. ``next_task`` is
+    called per press, so what a trial draws afresh is drawn again for the one after it.
     """
 
-    def __init__(self, task: Task):
-        self._task = task
+    def __init__(self, next_task: Callable[[], Task]):
+        self._next_task = next_task
         self.keystrokes = pimm.ControlSystemReceiver[str](self)
         self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
         self.ready = pimm.calls.ControlSystemHandler[Any, None](self)
@@ -42,10 +47,11 @@ class KeyboardOperator(pimm.ControlSystem):
             if (key := pimm.value_updated(self.keystrokes)) is not None:
                 match key:
                     case 's':
-                        pending.append(self.perform_task(self._task))
+                        pending.append(self.perform_task(self._next_task()))
                     case 'p':
                         self.done.emit({keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR})
             for call in self.ready.incoming():
+                print(f'Set up: {call.request}')
                 call.set_result(None)  # the operator set the rig up before asking for the trial at all
             running = []
             for answer in pending:
@@ -65,9 +71,37 @@ class KeyboardOperator(pimm.ControlSystem):
             print(f'Episode failed: {e}')
 
 
-def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
+def _attended_task(
+    instruction: str, nominal_joints: Sequence[float], joints_spread: Sequence[float], start_grip: float | None
+) -> Task:
+    """The trial one keypress asks for: the rig a person sets up, and each device this run readies put back.
+
+    An attended episode has no budget — the operator ends it, so nothing but ``done`` can. A rig this run
+    readies nothing on names nothing: no joints is no arm to place, and no ``start_grip`` no fingers to open.
+    """
+    prepare_args: dict[str, Any] = {keys.SCENE: instruction}
+    if len(nominal_joints):
+        prepare_args[keys.ARM] = command.sampled_joints(nominal_joints, joints_spread)
+    if start_grip is not None:
+        prepare_args[keys.GRIPPER] = start_grip
+    return Task(instruction_source=instruction, timeout_sec=None, prepare_args=prepare_args)
+
+
+def real(
+    policy,
+    embodiment: Embodiment,
+    task: str | None,
+    nominal_joints: Sequence[float] = (),
+    joints_spread: Sequence[float] = (),
+    start_grip: float | None = None,
+    output_dir=None,
+):
     """Run one hardware embodiment attended and headless, the keyboard deciding when an episode starts and
     finishes.
+
+    What each episode starts from belongs to the rig ``embodiment`` names: ``nominal_joints`` and
+    ``joints_spread`` are the arm's, ``start_grip`` the fingers'. A rig readies only what it is given, so an
+    arm left unnamed here holds where the last episode left it.
 
     The world is composed here rather than by the runner: an attended surface is the binary's own business,
     and the keyboard is the only one this library ships. There is no viewer — a console that shows the
@@ -82,19 +116,27 @@ def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
     # `prepare_output_dir` syncs a directory and snapshots sources into it, and `LocalDatasetWriter`
     # scans the one it is given.
     try:
-        _run_attended(policy, embodiment, task, output_dir)
+        _run_attended(policy, embodiment, task, nominal_joints, joints_spread, start_grip, output_dir)
     finally:
         policy.close()
 
 
-def _run_attended(policy, embodiment: Embodiment, task: str | None, output_dir) -> None:
+def _run_attended(
+    policy,
+    embodiment: Embodiment,
+    task: str | None,
+    nominal_joints: Sequence[float],
+    joints_spread: Sequence[float],
+    start_grip: float | None,
+    output_dir,
+) -> None:
     """Record from a warmed policy until the keyboard returns. The caller owns the policy."""
     output_dir = prepare_output_dir(output_dir)
     keyboard = KeyboardControl(quit_key='q')
-    # An attended episode has no budget: the operator ends it, so nothing but ``done`` can.
-    operator = KeyboardOperator(Task(instruction_source=task or '', timeout_sec=None))
-    # The rig a human sets up by hand readies like any device: it is the operator who answers for it.
-    embodiment = replace(embodiment, prepare_handlers={**embodiment.prepare_handlers, keys.HUMAN: operator.ready})
+    instruction = task or ''
+    operator = KeyboardOperator(partial(_attended_task, instruction, nominal_joints, joints_spread, start_grip))
+    # A world a person sets up by hand readies like any device: it is the operator who answers for it.
+    embodiment = replace(embodiment, prepare_handlers={**embodiment.prepare_handlers, keys.SCENE: operator.ready})
     harness = Harness(policy, embodiment)
     print('Keyboard controls: [s]tart, sto[p], [q]uit')
 
@@ -109,7 +151,14 @@ def _run_attended(policy, embodiment: Embodiment, task: str | None, output_dir) 
         world.run([harness, keyboard, operator], [*producers, ds_agent])
 
 
-real_cfg = cfn.Config(real, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder)
+real_cfg = cfn.Config(
+    real,
+    embodiment=positronic.cfg.embodiment.droid,
+    policy=policy_cfg.placeholder,
+    nominal_joints=FRANKA_NOMINAL_JOINTS,
+    joints_spread=FRANKA_JOINTS_SPREAD,
+    start_grip=0.0,
+)
 
 
 # Console entry point for [project.scripts].

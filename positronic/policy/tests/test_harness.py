@@ -15,7 +15,7 @@ from positronic.dataset.ds_writer_agent import DsWriterCommand, DsWriterCommandT
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, Reset, from_wire, to_wire
+from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, JointPosition, from_wire, to_wire
 from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_LINK, bundled_franka_model
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import Command, Embodiment, Observation, Task
@@ -489,9 +489,8 @@ def test_harness_waits_for_complete_inputs(world):
     robot_state = make_robot_state([0.2, 0.0, -0.1], [0.7, 0.1, -0.2])
 
     def assert_no_inference():
-        # The startup home may have emitted (Reset / grip 0.0); the policy must not have run on partial inputs.
         assert policy.last_obs is None
-        assert all(isinstance(c, Reset) for c in _emitted_commands(cmd_recorder))
+        assert not _emitted_commands(cmd_recorder)
 
     driver = ManualDriver([
         (partial(perform_task, Task(instruction_source='dummy-task', timeout_sec=None)), 0.01),
@@ -641,8 +640,7 @@ def test_the_world_stopping_under_a_live_episode_fails_the_call(world):
 
 @pytest.mark.timeout(3.0)
 def test_trial_ends_at_its_timeout(world):
-    """Nothing ever lands on ``done``, yet the trial still ends at ``task.timeout_sec``: terminated=False,
-    robot homed."""
+    """Nothing ever lands on ``done``, yet the trial still ends at ``task.timeout_sec``: terminated=False."""
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
@@ -697,7 +695,7 @@ def test_trial_budget_starts_at_the_first_usable_observation(world):
 
 @pytest.mark.timeout(3.0)
 def test_trial_stop_signal_terminates(world):
-    """Delivering the privileged ``done`` ends a trial early: terminated=True, payload recorded, homed."""
+    """Delivering the privileged ``done`` ends a trial early: terminated=True, payload recorded."""
     policy = StubPolicy()
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
@@ -806,7 +804,7 @@ def test_policy_first_obs_is_frame0(world):
     wire.wire_embodiment(world, harness, embodiment, None)
 
     scheduler = world.start([harness, device])
-    perform_task(Task(instruction_source='t', timeout_sec=100.0))
+    perform_task(Task(instruction_source='t', timeout_sec=100.0, prepare_args={keys.SCENE: {}}))
     drive_scheduler(scheduler, steps=20)
 
     assert policy.observations, 'policy was never called'
@@ -887,16 +885,37 @@ def test_done_after_deadline_is_a_timeout(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_a_handler_the_trial_does_not_name_is_left_alone(world):
+    """A rig readies more than any one trial wants, so what a trial leaves unnamed it leaves as it stands."""
+    drawn, moved = [], []
+    scene, arm = _Scene(drawn.append), _Scene(moved.append)
+    handlers = {keys.SCENE: scene.env_reset, keys.ARM: arm.env_reset}
+    harness = Harness(StubPolicy(), make_embodiment(prepare_handlers=handlers))
+    p = _pair_all(world, harness)
+    wire_call(world, harness.prepare[keys.SCENE], scene.env_reset)
+    wire_call(world, harness.prepare[keys.ARM], arm.env_reset)
+
+    scheduler = world.start([harness, scene, arm])
+    p['perform_task'](Task(instruction_source='stack', timeout_sec=0.05, prepare_args={keys.SCENE: {}}))
+    drive_scheduler(scheduler, steps=50)
+
+    assert drawn == [{}]
+    assert moved == []
+
+
+@pytest.mark.timeout(3.0)
 def test_a_trial_asking_to_ready_what_the_rig_has_not_got_fails_loudly(world):
-    """The args are read per handler, so a name matching none of them would be dropped and the device would
-    silently get its own default instead of what the trial asked for."""
+    """Only the handlers a task names are asked, so a name matching none of them would go unasked and the
+    trial would open on a rig nothing readied."""
     scene = _Scene(lambda _params: None)
     harness = Harness(StubPolicy(), make_embodiment(prepare_handlers={keys.SCENE: scene.env_reset}))
     p = _pair_all(world, harness)
     wire_call(world, harness.prepare[keys.SCENE], scene.env_reset)
 
     scheduler = world.start([harness, scene])
-    answer = p['perform_task'](Task(instruction_source='stack', timeout_sec=0.05, prepare_args={keys.ARM: None}))
+    answer = p['perform_task'](
+        Task(instruction_source='stack', timeout_sec=0.05, prepare_args={keys.ARM: JointPosition(np.zeros(7))})
+    )
 
     with pytest.raises(AssertionError, match='not something this embodiment readies'):
         drive_scheduler(scheduler, steps=50)
@@ -1152,7 +1171,7 @@ def test_task_instruction_reaches_session_context_after_reset(world):
     wire_call(world, harness.prepare[keys.SCENE], drawing.env_reset)
 
     scheduler = world.start([harness, drawing])
-    p['perform_task'](Task(instruction_source=lambda: scene['task'], timeout_sec=0.05))
+    p['perform_task'](Task(instruction_source=lambda: scene['task'], timeout_sec=0.05, prepare_args={keys.SCENE: {}}))
     drive_scheduler(scheduler, steps=200)
 
     assert policy.last_reset_context is not None
@@ -1173,7 +1192,7 @@ class _LabeledRecorder(pimm.SignalEmitter):
 @pytest.mark.timeout(3.0)
 def test_finish_stops_playing_the_live_chunk(world):
     """Finishing drops the schedule the harness is playing: the chunk's remaining waypoints never reach the
-    devices, and the only command after the recorder's STOP is the home the close emits."""
+    devices, so nothing is emitted past the recorder's STOP."""
     policy = ChunkPolicy()
     wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # 1.8 s chunk — won't drain before the episode ends
     harness = Harness(wrapped, make_embodiment())
@@ -1554,7 +1573,10 @@ def test_failed_pass_seals_open_episode_span(world, tmp_path):
     harness = Harness(policy, make_embodiment(prepare_handlers={keys.SCENE: scene}))
     wire_call(world, harness.prepare[keys.SCENE], scene)
     harness.ds_command._bind(RecordingEmitter())
-    _ask(world, harness, Task(instruction_source='stack', timeout_sec=10.0, meta={keys.EVAL_TRIAL_INDEX: 0}))
+    task = Task(
+        instruction_source='stack', timeout_sec=10.0, prepare_args={keys.SCENE: {}}, meta={keys.EVAL_TRIAL_INDEX: 0}
+    )
+    _ask(world, harness, task)
     stop = SimpleNamespace(value=False)
     clock = _ManualClock()
 
@@ -1783,7 +1805,7 @@ def _run_episode(
     ])
     systems = [harness, driver, _Pacer()] if simulated else [harness, driver]
     drive_scheduler(world.start(systems), steps=steps)
-    return grip_recorder.emitted[1:]  # drop the startup home
+    return grip_recorder.emitted
 
 
 @pytest.mark.timeout(20.0)
@@ -1969,7 +1991,7 @@ def test_a_stop_clears_the_chunk_in_the_round_the_fault_is_seen(world):
     ])
     drive_scheduler(world.start([harness, driver, _Pacer(period)]), steps=4000)
 
-    played = [t for t, _ in grip_recorder.emitted[1:]]  # drop the startup home
+    played = [t for t, _ in grip_recorder.emitted]
     assert [t for t in played if t < fault_at], 'the chunk was not playing when the arm faulted'
     late = [t for t in played if t > fault_at + 3 * period]
     assert not late, f'the faulted arm was still being driven at {late}'
@@ -1977,8 +1999,8 @@ def test_a_stop_clears_the_chunk_in_the_round_the_fault_is_seen(world):
 
 @pytest.mark.timeout(20.0)
 def test_finish_does_not_wait_for_the_call_in_flight():
-    """Finishing ends the episode where it lands: the recording stops and the arm homes while the model is
-    still inside its call, and the failure that call ends in reaches nobody.
+    """Finishing ends the episode where it lands: the recording stops while the model is still inside its
+    call, and the failure that call ends in reaches nobody.
 
     Real time, real rig: a wall-charged call is the only one the harness leaves in flight across rounds.
     """
@@ -2207,4 +2229,4 @@ def test_finishing_discards_a_call_that_is_still_in_flight(world):
     ])
     drive_scheduler(world.start([harness, driver, _Pacer()]), steps=2000)
 
-    assert all(isinstance(c, Reset) for c in _emitted_commands(cmd_recorder))
+    assert not _emitted_commands(cmd_recorder)

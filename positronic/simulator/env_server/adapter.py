@@ -132,16 +132,12 @@ class WireCommandAdapter(EnvAdapter):
         for name, msg in commands.items():
             if msg.updated:
                 self._held[name] = msg.data
-        # The server maps the held command into its controller's action. Reset has no env-side action, so it
-        # forwards as a hold; a delta — Cartesian or joint — is a one-shot relative motion, forwarded once then
-        # dropped. Re-sending a stale delta would re-compose it against the moving arm every tick (the eef
-        # drifts, or the joints walk toward their limits), so after one step the arm holds its measured pose.
+        # The server maps the held command into its controller's action. A delta — Cartesian or joint — is a
+        # one-shot relative motion, forwarded once then dropped: re-sending a stale delta would re-compose it
+        # against the moving arm every tick (the eef drifts, or the joints walk toward their limits), so after
+        # one step the arm holds its measured pose.
         cmd = self._held.get(keys.ROBOT_COMMAND)
-        match cmd:
-            case roboarm_command.Reset():
-                self._held.pop(keys.ROBOT_COMMAND)
-                cmd = None
-            case roboarm_command.CartesianDelta() | roboarm_command.JointDelta():
-                self._held.pop(keys.ROBOT_COMMAND)
+        if isinstance(cmd, roboarm_command.CartesianDelta | roboarm_command.JointDelta):
+            self._held.pop(keys.ROBOT_COMMAND)
         grip = float(self._held.get(keys.TARGET_GRIP, 0.0))
         return {'command': _wire_command(_in_env_control_frame(cmd, self.env_control_frame)), 'grip': grip}

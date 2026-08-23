@@ -75,10 +75,9 @@ class _Arm(DriverRun[command.CommandType]):
     def __init__(
         self,
         api: KinovaAPI,
-        sync_move: pimm.calls.ControlSystemHandler[command.CommandType | None, None],
+        sync_move: pimm.calls.ControlSystemHandler[command.CommandType, None],
         async_move: pimm.SignalReceiver[command.CommandType],
         out: pimm.SignalEmitter[KinovaState],
-        home_joints: list[float],
         dynamics_factor: float,
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
@@ -91,7 +90,6 @@ class _Arm(DriverRun[command.CommandType]):
         self.state = KinovaState()
         self.solver = KinematicsSolver()
         self.controller = JointCompliantController(actuator_count=actuators, relative_dynamics_factor=dynamics_factor)
-        self._home_joints = home_joints
         self._current = np.zeros(actuators, dtype=np.float32)
         # Read here rather than left empty: every setpoint below is solved from where the arm is now
         self.q, self.dq, self.tau = api.apply_current_command(None)
@@ -109,8 +107,8 @@ class _Arm(DriverRun[command.CommandType]):
             # once whatever blocked it goes away, long after its asker was told it failed.
             self.controller.set_target_qpos(self.q)
 
-    def _target_qpos(self, cmd: command.CommandType | None) -> np.ndarray:
-        """The joints ``cmd`` asks the arm to hold, solved from the joints it reports now; nothing asks for home."""
+    def _target_qpos(self, cmd: command.CommandType) -> np.ndarray:
+        """The joints ``cmd`` asks the arm to hold, solved from the joints it reports now."""
         # `JointCompliantController` is a compliance law, not a position servo: `PositionControl` would pin
         # a rule the arm does not run.
         # TODO: a joint-only `Impedance` is refused for want of plumbing, not capability: the controller runs
@@ -118,8 +116,6 @@ class _Arm(DriverRun[command.CommandType]):
         # `kq`/`kqd` through and stepping the references.
         command.require_native_mode(cmd, 'Kinova')
         match cmd:
-            case None | command.Reset():
-                return np.asarray(self._home_joints, dtype=np.float32)
             case command.CartesianPosition(pose):
                 return self.solver.inverse(pose, self.q)
             case command.CartesianDelta() as delta_cmd:
@@ -130,7 +126,7 @@ class _Arm(DriverRun[command.CommandType]):
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
 
-    def track(self, cmd: command.CommandType | None) -> None:
+    def track(self, cmd: command.CommandType) -> None:
         """Put the controller on the setpoint ``cmd`` asks for, with nobody waiting on the arrival."""
         self.controller.set_target_qpos(self._target_qpos(cmd))
 
@@ -138,7 +134,7 @@ class _Arm(DriverRun[command.CommandType]):
         """How long the arm may take to reach ``target``, from the speed its controller is capped at."""
         return self._MOVE_GRACE_S + float(np.max(np.abs(target - self.q)) / np.min(self.controller.max_velocity))
 
-    def serve_sync_move(self, call: pimm.calls.Call[command.CommandType | None, None]) -> None:
+    def serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
         """Put the controller where ``call`` asks; ``settle`` answers it once the arm reads back there."""
         with pimm.calls.raise_to(call):
             target = self._target_qpos(call.request)
@@ -173,28 +169,18 @@ class _Arm(DriverRun[command.CommandType]):
 
 
 class Robot(pimm.ControlSystem):
-    def __init__(self, ip: str, relative_dynamics_factor=0.2, home_joints: list[float] | None = None) -> None:
+    def __init__(self, ip: str, relative_dynamics_factor=0.2) -> None:
         # A zero factor caps every joint at zero speed: the arm would never travel and no move could land
         assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
         self.ip = ip
         self.relative_dynamics_factor = relative_dynamics_factor
-        self.home_joints = home_joints if home_joints is not None else [0.0, -0, 0.5, -1.5, 0.0, -0.5, 1.57079633]
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
-        self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType | None, None](self)
+        self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state = pimm.ControlSystemEmitter[KinovaState](self)
 
     def _arm(self, api: KinovaAPI, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
-        return _Arm(
-            api,
-            self.sync_move,
-            self.commands,
-            self.state,
-            self.home_joints,
-            self.relative_dynamics_factor,
-            should_stop,
-            clock,
-        )
+        return _Arm(api, self.sync_move, self.commands, self.state, self.relative_dynamics_factor, should_stop, clock)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         _set_realtime_priority()

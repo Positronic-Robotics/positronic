@@ -402,13 +402,13 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
 
     grip = LocalDataset(tmp_path)[0].signals['target_grip']
     executed = [(float(v), int(ts)) for v, ts in (grip[i] for i in range(len(grip)))]
-    values = [v for v, _ in executed if v >= 100.0]  # the inter-episode home command emits 0.0
+    values = [v for v, _ in executed]  # every sample is a chunk action: nothing else commands this channel
     complete_chunks = raw.chunks - 1  # the deadline cuts the last chunk short
     assert complete_chunks >= 2
     expected = [c * 100.0 + i for c in range(1, complete_chunks + 1) for i in range(chunk_len)]
     assert values[: len(expected)] == expected
 
-    starts = [ts for v, ts in executed if v >= 100.0 and v % 100 == 0]
+    starts = [ts for v, ts in executed if v % 100 == 0]
     period_ns = chunk_len * control_dt * 1e9
     for earlier, later in zip(starts, starts[1:], strict=False):
         assert later - earlier == pytest.approx(period_ns, abs=period_ns / (2 * chunk_len))

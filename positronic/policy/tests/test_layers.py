@@ -7,7 +7,7 @@ import pytest
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import Impedance, JointDelta, Reset
+from positronic.drivers.roboarm.command import Impedance, JointDelta
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
 from positronic.policy.action import (
@@ -352,12 +352,6 @@ class TestSetControlMode:
         assert decoded[f'{keys.ROBOT_COMMAND}.left'].mode == IMPEDANCE
         assert decoded[f'{keys.ROBOT_COMMAND}.right'].mode == IMPEDANCE
         np.testing.assert_array_equal(decoded[keys.TARGET_JOINTS], np.zeros(7))
-
-    def test_a_reset_passes_through_unchanged(self):
-        """A reset names no mode: how the arm travels home is the driver's."""
-        decoded = SetControlMode(IMPEDANCE).decode({keys.ROBOT_COMMAND: Reset()})
-        assert isinstance(decoded, dict)
-        assert decoded[keys.ROBOT_COMMAND] == Reset()
 
 
 class TestTemporalStack:

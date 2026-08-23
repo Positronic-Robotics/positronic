@@ -10,7 +10,6 @@ from positronic.drivers.roboarm.command import (
     JointDelta,
     JointPosition,
     PositionControl,
-    Reset,
     to_wire,
 )
 from positronic.geom import Rotation, Transform3D
@@ -119,9 +118,6 @@ class TestCommandEnvelope:
     """A ``CommandType`` sitting anywhere in the payload crosses as the ``__cmd__`` envelope and comes back
     typed, without the receiver having to know which channel carries it."""
 
-    def test_reset(self):
-        assert isinstance(deserialise(serialise(Reset())), Reset)
-
     def test_cartesian_position(self):
         pose = Transform3D(translation=np.array([0.1, 0.2, 0.3], dtype=np.float32), rotation=Rotation.identity)
         cmd = CartesianPosition(pose=pose)
@@ -182,17 +178,16 @@ class TestCommandEnvelope:
         joints = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7], dtype=np.float32)
         actions = [
             {keys.ROBOT_COMMAND: CartesianPosition(pose=pose), 'target_grip': 0.5, 'timestamp': 0.0},
-            {keys.ROBOT_COMMAND: Reset(), 'timestamp': 0.1},
-            {keys.ROBOT_COMMAND: JointPosition(positions=joints), 'target_grip': 0.8, 'timestamp': 0.2},
+            # An action need not carry every channel: this one moves the arm and leaves the gripper be.
+            {keys.ROBOT_COMMAND: JointPosition(positions=joints), 'timestamp': 0.1},
         ]
         result = deserialise(serialise({'result': actions}))['result']
-        assert len(result) == 3
+        assert len(result) == 2
         assert isinstance(result[0][keys.ROBOT_COMMAND], CartesianPosition)
-        assert isinstance(result[1][keys.ROBOT_COMMAND], Reset)
-        assert isinstance(result[2][keys.ROBOT_COMMAND], JointPosition)
+        assert isinstance(result[1][keys.ROBOT_COMMAND], JointPosition)
         assert result[0]['target_grip'] == 0.5
         assert result[1]['timestamp'] == 0.1
-        np.testing.assert_allclose(result[2][keys.ROBOT_COMMAND].positions, joints)
+        np.testing.assert_allclose(result[1][keys.ROBOT_COMMAND].positions, joints)
 
     def test_plain_dict_passthrough(self):
         """Dicts without Commands round-trip unchanged."""
@@ -256,7 +251,8 @@ class TestServedCommandDecode:
     def test_a_typed_command_and_a_sentinel_are_left_alone(self):
         """A command the ``__cmd__`` envelope already typed, and a result carrying no command channel at
         all, both come back unchanged."""
-        assert isinstance(typed_commands({keys.ROBOT_COMMAND: Reset()})[keys.ROBOT_COMMAND], Reset)
+        typed = CartesianPosition(pose=Transform3D(translation=np.zeros(3), rotation=Rotation.identity))
+        assert typed_commands({keys.ROBOT_COMMAND: typed})[keys.ROBOT_COMMAND] is typed
         assert typed_commands({'timestamp': 1.6}) == {'timestamp': 1.6}
         assert typed_commands(None) is None
 

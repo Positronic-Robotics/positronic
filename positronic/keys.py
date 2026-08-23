@@ -18,12 +18,11 @@ TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
 TARGET_GRIP = 'target_grip'
 
 # The names of what a trial readies before it opens. ``Embodiment.prepare_handlers`` is keyed by them, and so
-# is whatever a ``Task`` asks each of them for. A rig with two arms names its arms ``arm.{side}``. ``SCENE``
-# names the env that draws the world a trial runs in, ``HUMAN`` the operator who sets a real rig up by hand.
+# is what a ``Task`` asks for. A rig with two arms names its arms ``arm.{side}``. ``SCENE`` means the world
+# this trial runs in is ready, drawn by a sim or set up by a person — whichever handler is bound says which.
 ARM = 'arm'
 GRIPPER = 'gripper'
 SCENE = 'scene'
-HUMAN = 'human'
 
 
 def is_robot_command(name: str) -> bool:

@@ -14,8 +14,8 @@ from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import MoveAbandoned
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
-HOME = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
-JOGGED = HOME + np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+PARK = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
+JOGGED = PARK + np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 IMPEDANCE = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
 
 
@@ -151,8 +151,8 @@ def desk(monkeypatch) -> FakeDesk:
     return session
 
 
-def _driver(arm: FakeArm, *, variation: list[float] | None = None, **kwargs) -> franka.Robot:
-    robot = franka.Robot('192.0.2.1', home_joints=list(HOME), home_joints_variation=variation or [0.0] * 7, **kwargs)
+def _driver(arm: FakeArm, **kwargs) -> franka.Robot:
+    robot = franka.Robot('192.0.2.1', park_joints=list(PARK), **kwargs)
     robot._robot = arm  # `_vendor` hands back an already-set handle, which is how the fake arm gets in
     return robot
 
@@ -171,25 +171,20 @@ def _drive_park(driver: franka.Robot, arm: FakeArm) -> MockClock:
     return clock
 
 
-def test_park_drives_the_arm_to_the_home_pose():
+def _mover(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[command.CommandType, None]:
+    """A caller on ``driver.sync_move``, for a test that pumps its generator rather than running a World."""
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
+    wire_call(world, caller, driver.sync_move)
+    return caller
+
+
+def test_park_drives_the_arm_to_the_park_pose():
     arm = FakeArm(JOGGED)
 
     _drive_park(_driver(arm, manage_desk=False), arm)
 
-    np.testing.assert_allclose(arm.targets, [HOME])
-    np.testing.assert_allclose(arm.q, HOME)
-
-
-def test_park_commands_the_exact_home_pose_from_inside_the_homing_spread():
-    variation = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
-    arm = FakeArm(HOME + np.asarray(variation))
-
-    _drive_park(_driver(arm, variation=variation, manage_desk=False), arm)
-
-    # An arm inside the spread, or travelling through it, is not asked to be judged already home: the
-    # controller reports arrival, and a pose it already holds arrives at once.
-    np.testing.assert_allclose(arm.targets, [HOME])
-    np.testing.assert_allclose(arm.q, HOME)
+    np.testing.assert_allclose(arm.targets, [PARK])
+    np.testing.assert_allclose(arm.q, PARK)
 
 
 def test_the_park_waits_by_yielding_rather_than_blocking():
@@ -230,9 +225,21 @@ def test_park_swallows_a_robot_that_fails_mid_move():
     np.testing.assert_allclose(arm.q, JOGGED)
 
 
+def test_the_driver_puts_the_arm_at_the_park_pose_when_it_takes_control():
+    """Both ends of a run leave the arm at the same pose, so a run starts from where the last one left off."""
+    arm = FakeArm(JOGGED)
+    loop = _driver(arm, manage_desk=False).run(StopFlag(), MockClock())
+
+    for _ in range(2):  # through the opening move
+        next(loop)
+
+    np.testing.assert_allclose(arm.targets, [PARK])
+    np.testing.assert_allclose(arm.q, PARK)
+
+
 def test_a_command_the_arm_cannot_reach_leaves_the_running_law_alone(desk):
     """A rejected command must not half-apply: the arm would hold its old target under new dynamics."""
-    arm = FakeArm(HOME)
+    arm = FakeArm(PARK)
     driver = _driver(arm)
     feed = ManualCommandReceiver()
     driver.commands._bind(feed)
@@ -251,24 +258,27 @@ def test_a_command_the_arm_cannot_reach_leaves_the_running_law_alone(desk):
     assert arm.modes[mark:] == [], 'the arm changed law for a command it never executed'
 
 
-def test_the_law_changes_only_where_the_target_is_published(desk):
+def test_the_law_changes_only_where_the_target_is_published(desk, world):
     """A switch with anything between it and the target can leave the arm holding its last one under it."""
-    arm = FakeArm(HOME)
+    arm = FakeArm(PARK)
     driver = _driver(arm)
     feed = ManualCommandReceiver()
     driver.commands._bind(feed)
+    move = _mover(world, driver)
     stop = StopFlag()
     clock = MockClock()
     loop = driver.run(stop, clock)
 
     for _ in range(3):
-        next(loop)  # init + opening reset
+        next(loop)  # init + the opening move
     mark = len(arm.calls)
     feed.push(command.JointPosition(positions=JOGGED, mode=IMPEDANCE))
     for _ in range(2):
         next(loop)
-    feed.push(command.Reset())
-    for _ in range(6):
+    answer = move(command.JointPosition(positions=PARK))  # a travel switches law too, from inside the driver
+    for _ in range(20):
+        if answer.done():
+            break
         next(loop)
 
     switches = [i for i, c in enumerate(arm.calls[mark:], start=mark) if c is Call.SET_CONTROL_MODE]
@@ -278,7 +288,7 @@ def test_the_law_changes_only_where_the_target_is_published(desk):
 
 def test_a_joint_target_the_vendor_would_refuse_leaves_the_running_law_alone(desk):
     """A joint command is passed straight through, so what the vendor rejects has to be caught here."""
-    arm = FakeArm(HOME)
+    arm = FakeArm(PARK)
     driver = _driver(arm)
     feed = ManualCommandReceiver()
     driver.commands._bind(feed)
@@ -298,7 +308,7 @@ def test_a_joint_target_the_vendor_would_refuse_leaves_the_running_law_alone(des
 
 
 def test_park_puts_the_arm_under_its_native_law():
-    """The home pose is far off, and only the native law shapes the reference on the way there."""
+    """The park pose is far off, and only the native law shapes the reference on the way there."""
     arm = FakeArm(JOGGED)
 
     _drive_park(_driver(arm, manage_desk=False), arm)
@@ -307,7 +317,7 @@ def test_park_puts_the_arm_under_its_native_law():
 
 
 def test_teardown_parks_the_arm_before_stopping_control(desk):
-    arm = FakeArm(HOME)
+    arm = FakeArm(PARK)
     stop = StopFlag()
     clock = MockClock()
     loop = _driver(arm).run(stop, clock)
@@ -321,13 +331,13 @@ def test_teardown_parks_the_arm_before_stopping_control(desk):
 
     teardown = arm.calls[mark:]
     assert teardown.index(Call.SET_TARGET_JOINTS) < teardown.index(Call.STOP)
-    np.testing.assert_allclose(arm.targets[-1], HOME)
-    np.testing.assert_allclose(arm.q, HOME)
+    np.testing.assert_allclose(arm.targets[-1], PARK)
+    np.testing.assert_allclose(arm.q, PARK)
     assert desk.prepared and desk.released
 
 
 def test_teardown_stops_control_and_releases_desk_when_parking_fails(desk):
-    arm = FakeArm(HOME)
+    arm = FakeArm(PARK)
     stop = StopFlag()
     clock = MockClock()
     loop = _driver(arm).run(stop, clock)
@@ -346,7 +356,7 @@ def test_teardown_stops_control_and_releases_desk_when_parking_fails(desk):
 
 
 def test_a_control_fault_stops_the_arm_without_parking_it(desk):
-    arm = FakeArm(HOME)
+    arm = FakeArm(PARK)
     stop = StopFlag()
     clock = MockClock()
     loop = _driver(arm).run(stop, clock)
@@ -364,15 +374,15 @@ def test_a_control_fault_stops_the_arm_without_parking_it(desk):
     assert desk.released
 
 
-def test_a_stop_during_the_reset_ends_the_run_without_a_fault(desk):
+def test_a_stop_during_the_opening_move_ends_the_run_without_a_fault(desk):
     """The event that ends the world also cancels the in-flight goal, so a poll taken after the stop
     reports failure. Reading it would turn a clean shutdown into a control fault — which skips the park."""
-    arm = FakeArm(JOGGED, polls_to_reach=10**9)  # the opening reset never lands on its own
+    arm = FakeArm(JOGGED, polls_to_reach=10**9)  # the opening move never lands on its own
     stop = StopFlag()
     clock = MockClock()
     loop = _driver(arm).run(stop, clock)
 
-    next(loop)  # suspended inside the reset's travel
+    next(loop)  # suspended inside the opening move's travel
     stop.stopped = True
     arm.goal_status = franka.pf.GoalStatus.ABORTED
 
@@ -381,17 +391,10 @@ def test_a_stop_during_the_reset_ends_the_run_without_a_fault(desk):
     assert arm.calls[-1] == Call.STOP
 
 
-def _mover(world: pimm.World, driver: franka.Robot) -> pimm.calls.Caller[command.CommandType, None]:
-    """A caller on ``driver.sync_move``, for a test that pumps its generator rather than running a World."""
-    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
-    wire_call(world, caller, driver.sync_move)
-    return caller
-
-
-def test_an_arm_that_will_not_home_reads_error_rather_than_ending_the_run():
+def test_an_arm_that_will_not_park_reads_error_rather_than_ending_the_run():
     """The driver's own move is the one that can fail before a caller exists to hear about it, so the run
     goes on and the arm reads as it is."""
-    arm = FakeArm(JOGGED, goal_status=franka.pf.GoalStatus.ABORTED)  # the opening homing never lands
+    arm = FakeArm(JOGGED, goal_status=franka.pf.GoalStatus.ABORTED)  # the opening move never lands
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
     driver.state._bind(states)
@@ -408,13 +411,13 @@ def test_an_arm_that_will_not_home_reads_error_rather_than_ending_the_run():
 
 def test_a_sync_move_answers_once_the_arm_is_there(world):
     """What a sync move adds over a command: something to wait on that means the arm is in place."""
-    arm = FakeArm(HOME, polls_to_reach=3)  # more than one poll, so an answer cannot land in the asking round
+    arm = FakeArm(PARK, polls_to_reach=3)  # more than one poll, so an answer cannot land in the asking round
     driver = _driver(arm, manage_desk=False)
     stop = StopFlag()
     clock = MockClock()
     loop = driver.run(stop, clock)
 
-    for _ in range(2):  # through the opening reset
+    for _ in range(2):  # through the opening move
         next(loop)
     answer = _mover(world, driver)(command.JointPosition(JOGGED))
     next(loop)
@@ -432,13 +435,13 @@ def test_a_sync_move_answers_once_the_arm_is_there(world):
 
 def test_a_move_the_world_stops_under_is_handed_back_to_its_asker(world):
     """A stop ends the travel with no arrival to report, and silence would hold the asker for good."""
-    arm = FakeArm(HOME)
+    arm = FakeArm(PARK)
     driver = _driver(arm, manage_desk=False)
     stop = StopFlag()
     clock = MockClock()
     loop = driver.run(stop, clock)
 
-    for _ in range(2):  # through the opening reset
+    for _ in range(2):  # through the opening move
         next(loop)
     arm.polls_to_reach = 1000  # the move is still travelling when the stop lands
     answer = _mover(world, driver)(command.JointPosition(JOGGED))
@@ -457,7 +460,7 @@ def test_a_move_the_world_stops_under_is_handed_back_to_its_asker(world):
 
 def test_a_sync_move_the_arm_cannot_make_fails_the_asker(world):
     """A move that stops advancing is the asker's failure to hear about."""
-    arm = FakeArm(HOME)
+    arm = FakeArm(PARK)
     driver = _driver(arm, manage_desk=False)
     stop = StopFlag()
     clock = MockClock()
@@ -479,7 +482,7 @@ def test_a_sync_move_the_arm_cannot_make_fails_the_asker(world):
 def test_an_arm_that_stopped_short_reads_error_until_a_move_lands(world):
     """A stall is not a fault the vendor reports, so without this the arm reads AVAILABLE at a pose nobody
     asked for."""
-    arm = FakeArm(HOME)
+    arm = FakeArm(PARK)
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
     driver.state._bind(states)
@@ -488,7 +491,7 @@ def test_an_arm_that_stopped_short_reads_error_until_a_move_lands(world):
     clock = MockClock()
     loop = driver.run(stop, clock)
 
-    for _ in range(2):  # through the opening reset
+    for _ in range(2):  # through the opening move
         next(loop)
     arm.goal_status = franka.pf.GoalStatus.ABORTED
     answer = move(command.JointPosition(JOGGED))
@@ -501,7 +504,7 @@ def test_an_arm_that_stopped_short_reads_error_until_a_move_lands(world):
     assert states.emitted[-1][1].status == RobotStatus.ERROR
 
     arm.goal_status = None  # whatever stalled the arm is cleared
-    answer = move(command.JointPosition(HOME))
+    answer = move(command.JointPosition(PARK))
     for _ in range(20):
         if answer.done():
             break
@@ -515,7 +518,7 @@ def test_an_arm_that_stopped_short_reads_error_until_a_move_lands(world):
 def test_the_state_answering_a_sync_move_carries_the_pose_the_arm_reached(world):
     """The sample before the arriving poll was taken mid-travel, and would read AVAILABLE at the pose the
     arm set out from."""
-    arm = FakeArm(HOME, polls_to_reach=3)
+    arm = FakeArm(PARK, polls_to_reach=3)
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
     driver.state._bind(states)
@@ -523,7 +526,7 @@ def test_the_state_answering_a_sync_move_carries_the_pose_the_arm_reached(world)
     clock = MockClock()
     loop = driver.run(stop, clock)
 
-    for _ in range(2):  # through the opening reset
+    for _ in range(2):  # through the opening move
         next(loop)
     answer = _mover(world, driver)(command.JointPosition(JOGGED))
     for _ in range(20):
@@ -539,7 +542,7 @@ def test_the_state_answering_a_sync_move_carries_the_pose_the_arm_reached(world)
 
 def test_a_move_that_lands_as_its_deadline_expires_is_an_arrival():
     """The deadline stops the poll loop before it asks again, so a goal that landed just then is unseen."""
-    arm = FakeArm(HOME, polls_to_reach=10**9)  # it never lands on a poll of its own
+    arm = FakeArm(PARK, polls_to_reach=10**9)  # it never lands on a poll of its own
     driver = _driver(arm, manage_desk=False)
     driver.state._bind(RecordingEmitter())
     clock = MockClock()
@@ -558,7 +561,7 @@ def test_a_move_that_lands_as_its_deadline_expires_is_an_arrival():
 
 def test_a_fault_that_lands_with_the_arrival_reads_error_rather_than_available():
     """The state answering a move reports the arm as the vendor describes it, not as the goal reported."""
-    arm = FakeArm(HOME, polls_to_reach=1)  # the first poll of the goal already reports it reached
+    arm = FakeArm(PARK, polls_to_reach=1)  # the first poll of the goal already reports it reached
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
     driver.state._bind(states)
@@ -575,7 +578,7 @@ def test_a_fault_that_lands_with_the_arrival_reads_error_rather_than_available()
 def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stopped(world):
     """A goal the controller never converges on is not an error the vendor reports, so the deadline is what
     ends the move."""
-    arm = FakeArm(HOME)
+    arm = FakeArm(PARK)
     driver = _driver(arm, manage_desk=False)
     states = RecordingEmitter()
     driver.state._bind(states)
@@ -584,7 +587,7 @@ def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stoppe
     clock = MockClock()
     loop = driver.run(stop, clock)
 
-    for _ in range(2):  # through the opening reset, which still lands
+    for _ in range(2):  # through the opening move, which still lands
         next(loop)
     arm.polls_to_reach = 10**9  # from here the goal stays in flight
     answer = move(command.JointPosition(JOGGED))
@@ -596,7 +599,7 @@ def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stoppe
 
     with pytest.raises(TimeoutError, match='stopped short'):
         answer.result()
-    np.testing.assert_allclose(arm.targets[-1], HOME)
+    np.testing.assert_allclose(arm.targets[-1], PARK)
     np.testing.assert_allclose(arm.targets[-2], JOGGED)
     # Published before the asker heard: a caller that starts recovering must not read the arm as available
     assert states.emitted[-1][1].status == RobotStatus.ERROR
@@ -604,7 +607,7 @@ def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stoppe
 
 def test_a_commands_mode_reaches_the_arm_with_the_gains_it_named(desk):
     """Skipping a mode already running is the vendor's, so the driver hands over every command's."""
-    arm = FakeArm(HOME)
+    arm = FakeArm(PARK)
     driver = _driver(arm)
     feed = ManualCommandReceiver()
     driver.commands._bind(feed)
@@ -613,7 +616,7 @@ def test_a_commands_mode_reaches_the_arm_with_the_gains_it_named(desk):
     loop = driver.run(stop, clock)
 
     for _ in range(3):
-        next(loop)  # init + opening reset
+        next(loop)  # init + the opening move
     feed.push(command.JointPosition(positions=JOGGED, mode=IMPEDANCE))
     for _ in range(2):
         next(loop)
@@ -626,8 +629,9 @@ def test_a_commands_mode_reaches_the_arm_with_the_gains_it_named(desk):
     assert applied[-1].kq == list(IMPEDANCE.kq), 'the gains the command named did not reach the arm'
 
 
-def test_homing_returns_the_arm_to_its_native_law(desk):
-    arm = FakeArm(HOME)
+def test_a_command_pinning_no_mode_returns_the_arm_to_its_native_law(desk):
+    """A mode is pinned per command, so one that names none does not inherit what the last one ran under."""
+    arm = FakeArm(PARK)
     driver = _driver(arm)
     feed = ManualCommandReceiver()
     driver.commands._bind(feed)
@@ -641,8 +645,8 @@ def test_homing_returns_the_arm_to_its_native_law(desk):
     for _ in range(2):
         next(loop)
     mark = len(arm.modes)
-    feed.push(command.Reset())
-    for _ in range(6):
+    feed.push(command.JointPosition(positions=PARK))
+    for _ in range(2):
         next(loop)
     stop.stopped = True
     _drive(loop, clock)

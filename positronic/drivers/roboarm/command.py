@@ -9,6 +9,7 @@ pinning a mode the driver may not run.
 """
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -80,13 +81,6 @@ ControlModeType = PositionControl | Impedance
 
 
 @dataclass
-class Reset:
-    """Reset the robot to the home position."""
-
-    TYPE = 'reset'
-
-
-@dataclass
 class CartesianPosition:
     """Move the robot end-effector to the given pose."""
 
@@ -102,6 +96,16 @@ class JointPosition:
     TYPE = 'joint_pos'
     positions: np.ndarray
     mode: ControlModeType | None = None
+
+
+def sampled_joints(nominal: Sequence[float] | np.ndarray, spread: Sequence[float] | np.ndarray) -> JointPosition:
+    """A joint target drawn uniformly from ``nominal`` ± ``spread``, per joint.
+
+    An empty ``spread`` names no variation, which is how a rig configured without any asks for its nominal.
+    """
+    nominal = np.asarray(nominal, dtype=np.float64)
+    spread = np.zeros_like(nominal) if len(spread) == 0 else np.asarray(spread, dtype=np.float64)
+    return JointPosition(nominal + np.random.uniform(-spread, spread))
 
 
 @dataclass
@@ -151,7 +155,7 @@ class CartesianDelta:
         return _compose_delta(current * self.frame, self.delta) * self.frame.inv
 
 
-CommandType = Reset | CartesianPosition | JointPosition | JointDelta | CartesianDelta
+CommandType = CartesianPosition | JointPosition | JointDelta | CartesianDelta
 
 
 def to_wire(command: CommandType | ControlModeType) -> dict[str, Any]:
@@ -162,8 +166,6 @@ def to_wire(command: CommandType | ControlModeType) -> dict[str, Any]:
             return {'type': command.TYPE} if stiffness is None else {'type': command.TYPE, 'stiffness': list(stiffness)}
         case Impedance(kq=kq, kqd=kqd, kx=kx, kxd=kxd):
             return {'type': command.TYPE, 'kq': list(kq), 'kqd': list(kqd), 'kx': list(kx), 'kxd': list(kxd)}
-        case Reset():
-            return {'type': command.TYPE}
         case CartesianPosition(pose):
             wire = {'type': command.TYPE, 'pose': pose.as_vector(rep)}
         case JointPosition(positions):
@@ -186,8 +188,6 @@ def from_wire(wire: dict[str, Any]) -> CommandType | ControlModeType:
             return PositionControl(stiffness=wire.get('stiffness'))
         case Impedance.TYPE:
             return Impedance(kq=wire['kq'], kqd=wire['kqd'], kx=wire['kx'], kxd=wire['kxd'])
-        case Reset.TYPE:
-            return Reset()
         case CartesianPosition.TYPE:
             return CartesianPosition(pose=geom.Transform3D.from_vector(wire['pose'], rep), mode=mode)
         case JointPosition.TYPE:
@@ -204,7 +204,7 @@ def from_wire(wire: dict[str, Any]) -> CommandType | ControlModeType:
             raise ValueError(f'Unknown command type: {wire["type"]}')
 
 
-def require_native_mode(cmd: CommandType | None, embodiment: str) -> None:
+def require_native_mode(cmd: CommandType, embodiment: str) -> None:
     """Raises on a command that pins a control mode: ``embodiment`` runs only its native law."""
-    if not isinstance(cmd, Reset | None) and cmd.mode is not None:
+    if cmd.mode is not None:
         raise NotImplementedError(f'{embodiment} cannot execute control mode {cmd.mode}')

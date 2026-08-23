@@ -174,8 +174,8 @@ def test_appends_only_on_updates_and_timestamps_from_clock(world):
 
 
 def test_drains_inputs_latched_before_start(world):
-    """The opening turn drains the input channels without recording: a value latched before START — an
-    inter-episode home command or a pre-reset frame — is consumed, not appended, so the first recorded
+    """The opening turn drains the input channels without recording: a value latched before START — the
+    previous episode's last command or a pre-reset frame — is consumed, not appended, so the first recorded
     sample is the next value to arrive (the post-reset scene), never a pre-episode leftover."""
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
@@ -399,7 +399,6 @@ def test_robot_command_serializer_variants(world):
         (lambda: emitters['cmd'].emit(rcmd.JointPosition(joints, mode=impedance)), 0.001),
         (lambda: emitters['cmd'].emit(rcmd.JointPosition(joints, mode=rcmd.PositionControl())), 0.001),
         (lambda: emitters['cmd'].emit(rcmd.JointPosition(joints, mode=rcmd.PositionControl((100.0,) * 7))), 0.001),
-        (lambda: emitters['cmd'].emit(rcmd.Reset()), 0.001),
         (lambda: cmd_em.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE)), 0.001),
     ]
 
@@ -413,7 +412,6 @@ def test_robot_command_serializer_variants(world):
         items['cmd.pose_delta_frame'], np.concatenate([delta_frame.translation, delta_frame.rotation.as_quat])
     )
     np.testing.assert_allclose(items['cmd.joints'], joints)
-    assert items['cmd.reset'] == 1
     np.testing.assert_allclose(items['cmd.mode.impedance.kq'], impedance.kq)
     # A pin naming no stiffness is a marker: a vector would fix the signal's shape, and what a mode does not
     # name has no shape to fix it at.

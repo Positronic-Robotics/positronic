@@ -14,7 +14,7 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.geom import Rotation, Transform3D
 from positronic.simulator.mujoco.sim import MujocoSim
-from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
+from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
 
 # TODO: Move these fixtures into a common module so that others can reuse them.
@@ -48,7 +48,7 @@ class DummyRobot(pimm.ControlSystem):
 
 
 def build_collection(world, out_dir: Path, *, metadata_getter: Callable[[], dict[str, object]] | None = None):
-    dc = DataCollectionController(operator_position=None, metadata_getter=metadata_getter)
+    dc = DataCollectionController(operator_position=None, nominal_joints=(), metadata_getter=metadata_getter)
     robot = DummyRobot()
 
     writer_cm = LocalDatasetWriter(out_dir)
@@ -149,12 +149,87 @@ def test_data_collection_basic_recording(tmp_path, world):
     np.testing.assert_allclose(right_pose_sig[0][0][3:], right_pose.rotation.as_quat)
 
 
+NOMINAL_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
+JOINTS_SPREAD = np.array([0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10])
+
+
+def build_teleop_arm(world):
+    """The controller with the arm side of its ``sync_move`` paired, and recorders on what it emits."""
+    dc = DataCollectionController(OperatorPosition.FRONT.value, NOMINAL_JOINTS, JOINTS_SPREAD)
+    grips, sounds = RecordingEmitter(), RecordingEmitter()
+    dc.target_grip._bind(grips)
+    dc.sound._bind(sounds)
+    return dc, world.pair(dc.sync_move), world.pair(dc.buttons_receiver), grips, sounds
+
+
+def test_the_right_stick_holds_the_session_until_the_arm_is_at_its_start_pose(world):
+    """The right stick asks for a start pose drawn around the nominal joints, and the controller does
+    nothing further until the arm answers that it is there."""
+    dc, arm, buttons, grips, _ = build_teleop_arm(world)
+    asked, marks = [], {}
+
+    driver = ManualDriver([
+        (lambda: buttons.emit(make_buttons(stick=0.0)), 0.01),
+        (lambda: buttons.emit(make_buttons(stick=1.0)), 0.01),
+        (lambda: asked.extend(arm.incoming()), 0.01),
+        (lambda: marks.update(asked=len(grips.emitted)), 0.01),
+        (lambda: marks.update(waited=len(grips.emitted)), 0.01),
+        (lambda: asked[0].set_result(None), 0.01),
+        (lambda: marks.update(arrived=len(grips.emitted)), 0.0),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    assert len(asked) == 1
+    move = asked[0].request
+    assert isinstance(move, roboarm_command.JointPosition)
+    np.testing.assert_array_less(np.abs(np.asarray(move.positions) - NOMINAL_JOINTS), JOINTS_SPREAD)
+    assert marks['asked'] > 0  # the loop was running before the press
+    assert marks['waited'] == marks['asked']  # ... and stood still for the whole move
+    assert marks['arrived'] > marks['waited']
+
+
+def test_a_start_pose_the_arm_refuses_is_sounded_to_the_operator(world):
+    """A move the arm fails is the operator's to hear about and ask for again; the session goes on."""
+    dc, arm, buttons, grips, sounds = build_teleop_arm(world)
+    asked, marks = [], {}
+
+    def refuse_the_move():
+        marks['refused'] = len(grips.emitted)
+        asked[0].set_exception(RuntimeError('joint limit'))
+
+    driver = ManualDriver([
+        (lambda: buttons.emit(make_buttons(stick=0.0)), 0.01),
+        (lambda: buttons.emit(make_buttons(stick=1.0)), 0.01),
+        (lambda: asked.extend(arm.incoming()), 0.01),
+        (refuse_the_move, 0.01),
+        (lambda: marks.update(after=len(grips.emitted)), 0.0),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    assert [path.name for _, path in sounds.emitted] == ['error-occurred.wav']
+    assert marks['after'] > marks['refused']
+
+
+@pytest.mark.parametrize('spread', [np.zeros(7), ()], ids=['zeros', 'unspecified'])
+def test_a_start_pose_without_spread_is_the_nominal(spread):
+    joints = roboarm_command.sampled_joints(NOMINAL_JOINTS, spread).positions
+    np.testing.assert_array_equal(joints, NOMINAL_JOINTS)
+
+
+def test_every_start_pose_is_a_fresh_per_joint_draw_around_the_nominal():
+    draws = [roboarm_command.sampled_joints(NOMINAL_JOINTS, JOINTS_SPREAD).positions for _ in range(64)]
+    offsets = (np.array(draws) - NOMINAL_JOINTS) / JOINTS_SPREAD
+    assert np.all(np.abs(offsets) < 1)  # inside the spread the nominal allows each joint
+    assert np.all(offsets.std(axis=0) > 0)  # a draw of its own each time
+    assert np.all(offsets.std(axis=1) > 0)  # each joint drawn on its own, not one offset for the whole vector
+
+
 def test_data_collection_with_mujoco_robot_gripper(tmp_path):
     sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
 
     # Virtual time: the sim advances the world clock as physics steps
     with pimm.World(virtual_time=True) as world:
-        dc = DataCollectionController(operator_position=OperatorPosition.FRONT.value)
+        dc = DataCollectionController(operator_position=OperatorPosition.FRONT.value, nominal_joints=sim.initial_joints)
 
         writer_cm = LocalDatasetWriter(tmp_path)
         agent = DsWriterAgent(writer_cm.__enter__())
@@ -269,7 +344,7 @@ def test_mujoco_grip_one_is_closed():
         """Physical finger travel: 0 = fingers together (closed), 0.04 m = fully apart (open)."""
         return sim.data.joint('finger_joint1_ph').qpos.item()
 
-    # The home pose leaves the gripper open.
+    # The pose the scene is built in leaves the gripper open.
     assert finger_qpos() > 0.03
 
     snapshots = {}

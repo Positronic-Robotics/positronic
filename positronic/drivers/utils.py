@@ -40,15 +40,15 @@ class Moves(Generic[T]):
     the whole travel answers a call within the tick it takes it, and so never has one in flight.
     """
 
-    def __init__(self, sync_move: pimm.calls.ControlSystemHandler[T | None, None], async_move: pimm.SignalReceiver[T]):
+    def __init__(self, sync_move: pimm.calls.ControlSystemHandler[T, None], async_move: pimm.SignalReceiver[T]):
         self._sync_move = sync_move
         self._async_move = async_move
-        self._call: pimm.calls.Call[T | None, None] | None = None
+        self._call: pimm.calls.Call[T, None] | None = None
         self._target: np.ndarray | float = 0.0
         self._tol = 0.0
         self._deadline = 0.0
         # A move settled but not yet answered, with what to answer it with: None for an arrival
-        self._settled: tuple[pimm.calls.Call[T | None, None], TimeoutError | None] | None = None
+        self._settled: tuple[pimm.calls.Call[T, None], TimeoutError | None] | None = None
         # Set by a move that does not arrive, cleared by the next that does: the device is not where it was put
         self.errored = False
 
@@ -78,7 +78,7 @@ class Moves(Generic[T]):
         assert self._call is not None, 'no move is in flight'
         return self._target
 
-    def next_request(self) -> pimm.calls.Call[T | None, None] | T | None:
+    def next_request(self) -> pimm.calls.Call[T, None] | T | None:
         """What the device is asked for now: a call whose asker waits to hear it arrive, a streamed setpoint
         nobody waits on, or nothing.
 
@@ -92,12 +92,7 @@ class Moves(Generic[T]):
         return pimm.value_updated(self._async_move)
 
     def accept(
-        self,
-        call: pimm.calls.Call[T | None, None],
-        target: np.ndarray | float,
-        tol: float,
-        now: float,
-        timeout_s: float,
+        self, call: pimm.calls.Call[T, None], target: np.ndarray | float, tol: float, now: float, timeout_s: float
     ) -> None:
         """Take `call` as the move in flight, aiming at `target` within `tol`, with `timeout_s` to get there."""
         self._call, self._target, self._tol = call, target, tol
@@ -151,7 +146,7 @@ class DriverRun(Generic[T]):
 
     def __init__(
         self,
-        sync_move: pimm.calls.ControlSystemHandler[T | None, None],
+        sync_move: pimm.calls.ControlSystemHandler[T, None],
         async_move: pimm.SignalReceiver[T],
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
@@ -189,18 +184,18 @@ def _clamped(grip: float) -> float:
     return max(0.0, min(1.0, grip))
 
 
-def grip_setpoint(moves: Moves[float], home: float, grip: float, now: float) -> float | None:
+def grip_setpoint(moves: Moves[float], grip: float, now: float) -> float | None:
     """The width to command the fingers this tick, or ``None`` to leave the last one standing.
 
     A move in flight owns the fingers; one that gives up hands back the width they stopped at, which the
-    driver writes before calling ``Moves.answer``. A move that asks for no width asks for ``home``.
+    driver writes before calling ``Moves.answer``.
     """
     if moves.active:
         return grip if moves.settle(grip, now) is MoveStatus.GAVE_UP else None
     asked = moves.next_request()
     if isinstance(asked, pimm.calls.Call):
         with pimm.calls.raise_to(asked):  # a width the fingers cannot be put at is the asker's to hear about
-            target = _clamped(home if asked.request is None else asked.request)
+            target = _clamped(asked.request)
             moves.accept(asked, target, _GRIP_TOL, now, _GRIP_TIMEOUT_S)
             return target
     elif asked is not None:

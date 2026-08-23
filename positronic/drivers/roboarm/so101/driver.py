@@ -68,11 +68,10 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
     def __init__(
         self,
         bus: MotorBus,
-        sync_move: pimm.calls.ControlSystemHandler[roboarm_command.CommandType | None, None],
+        sync_move: pimm.calls.ControlSystemHandler[roboarm_command.CommandType, None],
         async_move: pimm.SignalReceiver[roboarm_command.CommandType],
         out: pimm.SignalEmitter[SO101State],
         grip_out: pimm.SignalEmitter[float],
-        home_joints: list[float],
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
     ):
@@ -83,7 +82,6 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
         self.state = SO101State()
         self.kinematic = Kinematics(_SO101_URDF_PATH, _SO101_EE_JOINT)
         self._joint_limits = self.kinematic.joint_limits
-        self._home_joints = home_joints
         # Read here rather than left empty: every setpoint below is solved from where the arm is now, and the
         # arm holds where the bus finds it until something asks otherwise
         self.q_norm = bus.position
@@ -111,16 +109,13 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
         """Normalize the five arm joints. ``_rad_to_norm`` spans the bus, whose last entry is the gripper."""
         return self._rad_to_norm(np.append(q_rad, 0.0))[:-1]
 
-    def _requested_qpos(self, cmd: roboarm_command.CommandType | None) -> np.ndarray:
-        """The setpoint ``cmd`` asks for, in the bus's normalized units, whether or not the arm can hold it;
-        asking for nothing asks for home."""
+    def _requested_qpos(self, cmd: roboarm_command.CommandType) -> np.ndarray:
+        """The setpoint ``cmd`` asks for, in the bus's normalized units, whether or not the arm can hold it."""
         # TODO: accept the modes the bus can run instead of leaving them to what a command omits. Its servos
         # are position control, so `PositionControl` names the rule already running, and a named stiffness is
         # their gain registers.
         roboarm_command.require_native_mode(cmd, 'SO101')
         match cmd:
-            case None | roboarm_command.Reset():
-                return self._arm_rad_to_norm(np.asarray(self._home_joints, dtype=np.float32))
             case roboarm_command.CartesianPosition(pose):
                 return self._solve_ik(pose)
             case roboarm_command.CartesianDelta() as delta_cmd:
@@ -131,7 +126,7 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
             case other:
                 raise ValueError(f'Unknown command: {other}')
 
-    def _target_qpos(self, cmd: roboarm_command.CommandType | None) -> np.ndarray:
+    def _target_qpos(self, cmd: roboarm_command.CommandType) -> np.ndarray:
         """The setpoint ``cmd`` asks the arm to hold, clipped to the calibrated range the bus reports from."""
         return np.clip(self._requested_qpos(cmd), 0.0, 1.0)
 
@@ -156,7 +151,7 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
         """Hold the arm at the setpoint ``cmd`` asks for, with nobody waiting on the arrival."""
         self._qpos, self._unsent = self._target_qpos(cmd), True
 
-    def serve_sync_move(self, call: pimm.calls.Call[roboarm_command.CommandType | None, None]) -> None:
+    def serve_sync_move(self, call: pimm.calls.Call[roboarm_command.CommandType, None]) -> None:
         """Hold the arm where ``call`` asks; ``settle`` answers it once the bus reads back there."""
         with pimm.calls.raise_to(call):
             target = self._target_qpos(call.request)
@@ -199,12 +194,11 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
 
 
 class Robot(pimm.ControlSystem):
-    def __init__(self, motor_bus: MotorBus, home_joints: list[float] | None = None):
+    def __init__(self, motor_bus: MotorBus):
         self.motor_bus = motor_bus
         self.mujoco_model_path = 'positronic/drivers/roboarm/so101/so101.xml'
-        self.home_joints = home_joints if home_joints is not None else [0.0, 0.0, 0.0, 0.0, 0.0]
         self.commands = pimm.ControlSystemReceiver[roboarm_command.CommandType](self)
-        self.sync_move = pimm.calls.ControlSystemHandler[roboarm_command.CommandType | None, None](self)
+        self.sync_move = pimm.calls.ControlSystemHandler[roboarm_command.CommandType, None](self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
 
         self.grip = pimm.ControlSystemEmitter[float](self)
@@ -217,9 +211,7 @@ class Robot(pimm.ControlSystem):
 
     def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
-        return _Arm(
-            self.motor_bus, self.sync_move, self.commands, self.state, self.grip, self.home_joints, should_stop, clock
-        )
+        return _Arm(self.motor_bus, self.sync_move, self.commands, self.state, self.grip, should_stop, clock)
 
     @staticmethod
     def _build_robot_meta() -> dict:

@@ -103,11 +103,15 @@ class DataCollectionController(pimm.ControlSystem):
     def __init__(
         self,
         operator_position: geom.Transform3D | None,
+        nominal_joints: Sequence[float] | np.ndarray,
+        joints_spread: Sequence[float] | np.ndarray = (),
         *,
         static_meta: dict | None = None,
         metadata_getter: Callable[[], dict] | None = None,
     ):
         self.operator_position = operator_position
+        self._nominal_joints = nominal_joints
+        self._joints_spread = joints_spread
         self._static_meta = static_meta or {}
         self.metadata_getter = metadata_getter or (lambda: {})
         self.controller_positions = pimm.DefaultingReceiver(self, default={})
@@ -118,10 +122,21 @@ class DataCollectionController(pimm.ControlSystem):
         self.robot_meta_in = pimm.DefaultingReceiver(self, default={})
 
         self.robot_commands = pimm.ControlSystemEmitter(self)
+        self.sync_move = pimm.calls.ControlSystemCaller[roboarm.command.CommandType, None](self)
         self.target_grip = pimm.ControlSystemEmitter(self)
 
         self.ds_agent_commands = pimm.ControlSystemEmitter(self)
         self.sound = pimm.ControlSystemEmitter(self)
+
+    def _move_to_start(self, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
+        """Put the arm at a start pose drawn around the nominal joints, yielding until it is there."""
+        logging.info('Moving the arm to a start pose')
+        answer = self.sync_move(roboarm.command.sampled_joints(self._nominal_joints, self._joints_spread))
+        while not answer.done():
+            if should_stop.value:
+                return
+            yield pimm.Sleep(0.001)
+        answer.result()
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         sounds = Path(package_assets_path('assets/sounds'))
@@ -156,13 +171,18 @@ class DataCollectionController(pimm.ControlSystem):
                     else:
                         tracker.turn_on(self.robot_state.value.ee_pose)
                 elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
-                    logging.info('Resetting robot')
                     if recording:
                         self.ds_agent_commands.emit(DsWriterCommand.ABORT())
                         self.sound.emit(abort_wav_path)
                     tracker.turn_off()
                     recording = False
-                    self.robot_commands.emit(roboarm.command.Reset())
+                    if self.sync_move.connected:
+                        try:
+                            yield from self._move_to_start(should_stop)
+                        # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
+                        except Exception as e:
+                            logging.error(f'The arm did not reach its start pose: {e}')
+                            self.sound.emit(error_wav_path)
 
                 self.target_grip.emit(button_handler.get_value('right_trigger'))
                 cp_msg = self.controller_positions.read()
@@ -211,6 +231,10 @@ def _wire(
     world.connect(webxr.controller_positions, data_collection.controller_positions)
     world.connect(webxr.buttons, data_collection.buttons_receiver)
 
+    if robot_arm is not None:
+        # A driver's ports are its own: ``pimm.ControlSystem`` declares none for the checker to find.
+        world.connect(data_collection.sync_move, robot_arm.sync_move)  # pyright: ignore[reportAttributeAccessIssue]
+
     if sound is not None:
         world.connect(data_collection.sound, sound.wav_path)
         if robot_arm is not None:
@@ -231,6 +255,9 @@ def main(
     webxr: WebXR,
     sound: pimm.ControlSystem | None,
     cameras: dict[str, pimm.ControlSystem] | None,
+    # The start pose the right stick puts the arm at, drawn around the nominal. A station with no arm names none.
+    nominal_joints: Sequence[float] = (),
+    joints_spread: Sequence[float] = (),
     output_dir: str | None = None,
     stream_video_to_webxr: str | None = None,
     operator_position: OperatorPosition = OperatorPosition.FRONT,
@@ -245,7 +272,9 @@ def main(
         static_meta[keys.TASK] = task
     if robot_arm is not None:
         static_meta.update(wire.ROBOT_STATIC_META)
-    data_collection = DataCollectionController(operator_position.value, static_meta=static_meta)
+    data_collection = DataCollectionController(
+        operator_position.value, nominal_joints, joints_spread, static_meta=static_meta
+    )
 
     if output_dir is not None:
         output_dir = pos3.sync(output_dir, sync_on_error=True)
@@ -305,6 +334,7 @@ def main_sim(
 
     data_collection = DataCollectionController(
         operator_position.value,
+        sim.initial_joints,
         static_meta=static_meta,
         metadata_getter=lambda: {k: v.tolist() for k, v in sim.save_state().items()},
     )
@@ -340,6 +370,8 @@ main_cfg = cfn.Config(
     main,
     robot_arm=None,
     gripper=positronic.cfg.hardware.gripper.dh_gripper,
+    nominal_joints=positronic.cfg.hardware.roboarm.FRANKA_NOMINAL_JOINTS,
+    joints_spread=positronic.cfg.hardware.roboarm.FRANKA_JOINTS_SPREAD,
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
     cameras={
@@ -356,6 +388,7 @@ main_cfg = cfn.Config(
     sound=positronic.cfg.sound.sound,
     operator_position=OperatorPosition.BACK,
     cameras={'image.right': positronic.cfg.hardware.camera.arducam_right},
+    nominal_joints=positronic.cfg.hardware.roboarm.SO101_NOMINAL_JOINTS,
 )
 def so101cfg(robot_arm, **kwargs):
     """Runs data collection on SO101 robot"""
@@ -368,6 +401,7 @@ def so101cfg(robot_arm, **kwargs):
     sound=positronic.cfg.sound.sound,
     operator_position=OperatorPosition.BACK,
     cameras={},
+    nominal_joints=positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS,
     # The YAM station records several cameras on a weak CPU; x264's default preset can't keep up with the
     # camera rate, so trade ~2x bitrate for ~2.5x faster encoding.
     video_options={'preset': 'ultrafast', 'tune': 'zerolatency'},
@@ -381,6 +415,8 @@ droid = cfn.Config(
     main,
     robot_arm=positronic.cfg.hardware.roboarm.franka_droid,
     gripper=positronic.cfg.hardware.gripper.robotiq,
+    nominal_joints=positronic.cfg.hardware.roboarm.FRANKA_NOMINAL_JOINTS,
+    joints_spread=positronic.cfg.hardware.roboarm.FRANKA_JOINTS_SPREAD,
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
     cameras={
