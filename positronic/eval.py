@@ -94,6 +94,7 @@ class Task:
 # [✓] Homing becomes a ``prepare`` call the arm and gripper answer once in place; ``Command.home`` goes with it.
 # [✓] A trial's reset is every ``prepare`` it asks for — scene, arm, gripper, human — and it opens once all answer.
 # [ ] ``command.Reset`` goes: a robot is put home by the ``prepare`` call, not by a command on its stream.
+# [ ] The recorder keeps what is on the wire when it opens, and the sim publishes frame-0 with its prepare answers.
 # [ ] One runner builds the world for both.
 @dataclass
 class Eval:

@@ -12,6 +12,7 @@ from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.ik import qpos_from_site_pose
 from positronic.drivers.roboarm.models import bundled_panda_model
+from positronic.drivers.utils import Moves, MoveStatus
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_spec, load_spec_from_file, np_seed
 
 logger = logging.getLogger(__name__)
@@ -67,8 +68,8 @@ class MujocoFrankaState(State, pimm.shared_memory.NumpySMAdapter):
     def status(self) -> RobotStatus:
         return RobotStatus(int(self.array[14 + 7]))
 
-    def set_error(self):
-        self.array[14 + 7] = RobotStatus.ERROR.value
+    def set_status(self, status: RobotStatus):
+        self.array[14 + 7] = status.value
 
     def encode(self, q, dq, ee_pose):
         self.array[:7] = q
@@ -97,12 +98,15 @@ class _Cadence:
 class MujocoSim(pimm.ControlSystem):
     """The MuJoCo embodiment in one control system: scene, Franka arm, gripper, and cameras.
 
-    ``reset`` rebuilds the scene and flags frame-0 publication; the run loop publishes that post-reset
-    scene on its next turn — in sequence, before any step — so the first inference reads it and the
-    recorder logs it. Every other turn applies whatever command has just arrived, steps once, and emits
-    the due streams (post-step, Gym-style). The sim sleeps one control period each turn, so it is the
-    eval's sole time-master. Each stream has an independent rate (``*_fps``, ``None`` = every physics tick).
+    ``reset`` rebuilds the scene and ``sync_move`` puts the arm where the trial starts it; the run loop
+    publishes the readied scene as frame-0 once both have answered, before any step advances it. Every other
+    turn applies whatever command has just arrived, steps once, and emits the due streams (post-step,
+    Gym-style). The sim sleeps one control period each turn, so it is the eval's sole time-master. Each
+    stream has an independent rate (``*_fps``, ``None`` = every physics tick).
     """
+
+    _MOVE_TOL = 0.05  # radians; the position actuators hold the arm a few hundredths short of their ctrl
+    _MOVE_TIMEOUT_S = 5.0  # sim seconds a move gets before it gives up on the arm reaching its target
 
     def __init__(
         self,
@@ -141,10 +145,11 @@ class MujocoSim(pimm.ControlSystem):
         self._error = False
         self._adapters: dict[str, pimm.shared_memory.NumpySMAdapter] | None = None
         self._last_grip = 0.0
-        # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
+        # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) once the trial is readied.
         self._reset_pending = False
 
         self.commands = pimm.ControlSystemReceiver[roboarm_command.CommandType](self)
+        self.sync_move = pimm.calls.ControlSystemHandler[roboarm_command.CommandType | None, None](self)
         self.env_reset = pimm.calls.ControlSystemHandler[Any, None](self)
         self.state = pimm.ControlSystemEmitter[MujocoFrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
@@ -157,67 +162,108 @@ class MujocoSim(pimm.ControlSystem):
         # replays these states through it (``mj_setState`` + ``mj_forward``).
         self.sim_state = pimm.ControlSystemEmitter[dict[str, np.ndarray]](self)
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        self._emit_robot_meta()
-        streams = [
-            (_Cadence(self._state_fps), self._emit_state),
+        self._moves = Moves[roboarm_command.CommandType](self.sync_move, self.commands)
+        # The state has a second reason to go out — a move that ended — so it is not one of ``_streams``.
+        self._state_due = _Cadence(self._state_fps)
+        self._streams = [
             (_Cadence(self._grip_fps), self._emit_grip),
             (_Cadence(self._sim_state_fps), self._emit_sim_state),
             (_Cadence(self._camera_fps), self._emit_cameras),
         ]
 
-        while not should_stop.value:
-            yield pimm.Sleep(self.model.opt.timestep)
-            if self._reset_pending:
-                # The reset is this turn's step: publish the prepared scene as frame-0 (no ``mj_step``), so
-                # the recorder samples it before any step advances the sim. ``reset`` already loaded the scene.
-                self._reset_pending = False
-                self._emit_robot_meta()
-                # Rendering frame-0 is reset cost: it is work the reset asked for, and left untimed it would
-                # land in overhead.
-                with telemetry.span(telemetry_keys.SPAN_RESET):
-                    self._publish_frame()
-            elif (call := next(self.env_reset.incoming(), None)) is not None:
-                with pimm.calls.raise_to(call):
-                    self.reset(dict(call.request or {}).get(keys.EVAL_SEED))
-                    # Answered before frame-0 goes out: the recorder opens on this answer and drains its
-                    # channels as it opens, so a frame published first would be dropped. Frame-0 itself is
-                    # the next turn's, so no step comes between it and the reset.
-                    call.set_result(None)
-            else:
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+        self._emit_robot_meta()
+        with self._moves:
+            while not should_stop.value:
+                yield pimm.Sleep(self.model.opt.timestep)
                 now = clock.now()
-                cmd = pimm.value_updated(self.commands)
-                if self._error:
-                    self._error = False
-                elif cmd is not None:
-                    self._apply_command(cmd)
-                if (grip := pimm.value_updated(self.target_grip)) is not None:
-                    self._last_grip = grip
-                self._apply_grip(self._last_grip)
+                # The scene is drawn before the arm is asked for anything, so a move's target is computed
+                # against the model the redraw just built.
+                redraw = next(self.env_reset.incoming(), None)
+                if redraw is not None:
+                    with pimm.calls.raise_to(redraw):
+                        self.reset(dict(redraw.request or {}).get(keys.EVAL_SEED))
+                        redraw.set_result(None)
 
-                # An env step is the sim advance plus the observations it produces, rendering included
-                # (``_emit_cameras``): on an image-heavy scene the rendering is most of the step, and outside
-                # this span the wall split reads it as overhead.
-                with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
-                    self.step()
-                    self.fps_counter.tick()
-                    for due, emit in streams:
-                        if due(now):
-                            emit()
+                command = self._moves.next_request()
+                if isinstance(command, pimm.calls.Call):
+                    self._accept_move(command, now)
+                elif self._error:
+                    self._error = False
+                elif command is not None:
+                    self._apply_command(command)
+                if redraw is None:  # a redraw is the turn's whole work
+                    self._advance(now)
 
         if self._renderer is not None:
             self._renderer.close()
             self._renderer = None
 
+    def _accept_move(self, call: pimm.calls.Call[roboarm_command.CommandType | None, None], now: float) -> None:
+        """Aim the actuators at what ``call`` asks for; the arm is that move's until it reads back there."""
+        with pimm.calls.raise_to(call):
+            target = self._target_joints(call.request)
+            self._set_actuator_values(target)
+            self._moves.accept(call, target, self._MOVE_TOL, now, self._MOVE_TIMEOUT_S)
+            # Already there: answered on the spot, after its state and without a step, so the scene a
+            # redraw just built reaches frame-0 untouched.
+            if self._settle_move(now) is MoveStatus.ARRIVED:
+                self._emit_state()
+                self._moves.answer()
+
+    def _settle_move(self, now: float) -> MoveStatus:
+        """Where the move in flight stands, once the arm it leaves behind is accounted for."""
+        status = self._moves.settle(self._q, now)
+        if status is not MoveStatus.MOVING:
+            self._error = self._moves.errored  # a move that lands clears what one that gave up left
+            if self._error:
+                # The actuators still drive at the target the move never reached; left there, the arm
+                # would resume it the moment whatever held it back goes away.
+                self._set_actuator_values(self._q)
+        return status
+
+    def _step_and_emit(self, now: float) -> None:
+        if (grip := pimm.value_updated(self.target_grip)) is not None:
+            self._last_grip = grip
+        self._apply_grip(self._last_grip)
+
+        # An env step is the sim advance plus the observations it produces, rendering included
+        # (``_emit_cameras``): on an image-heavy scene the rendering is most of the step, and outside
+        # this span the wall split reads it as overhead.
+        with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
+            self.step()
+            self.fps_counter.tick()
+            ended = self._moves.active and self._settle_move(now) is not MoveStatus.MOVING
+            # A move that ended says where the arm got to, whatever rate the state stream runs at
+            if self._state_due(now) or ended:
+                self._emit_state()
+            for due, emit in self._streams:
+                if due(now):
+                    emit()
+        self._moves.answer()  # after the state that says where the arm got to, never mid-travel
+
+    def _advance(self, now: float) -> None:
+        """Carry the sim through one turn: frame-0 for a scene just redrawn, otherwise a step."""
+        # Frame-0 goes out after the last answer a trial waits on, and before any step: the recorder opens
+        # on that answer and drains its channels as it opens.
+        if self._reset_pending and not self._moves.busy:
+            self._reset_pending = False
+            self._emit_robot_meta()
+            # Rendering frame-0 is reset cost: it is work the reset asked for, and left untimed it would
+            # land in overhead.
+            with telemetry.span(telemetry_keys.SPAN_RESET):
+                self._publish_frame()
+        else:
+            self._step_and_emit(now)
+
     def reset(self, seed: int | None = None):
-        """Re-randomize the scene from ``seed`` and arm frame-0 publication for the next turn.
+        """Re-randomize the scene from ``seed`` and flag frame-0 for publication.
 
         The model and data are rebuilt wholesale, so model-level loader effects (fixed-body poses,
         colors, cameras) re-randomize too; the renderer and IK physics rebind lazily. The run loop
-        publishes the prepared scene as frame-0 on its next turn — in sequence, before any step — so the
-        first inference reads the reset state and the recorder logs it. Stale commands queued while idle
-        are dropped and the held grip is cleared, so the first step does not apply a queued command on the
-        freshly reset scene.
+        publishes the prepared scene as frame-0 — in sequence, before any step advances it. Stale commands
+        queued while idle are dropped and the held grip is cleared, so the first step does not apply a
+        queued command on the freshly reset scene.
         """
         self._load_scene(seed)
         self._home()
@@ -251,7 +297,9 @@ class MujocoSim(pimm.ControlSystem):
         state = MujocoFrankaState()
         state.encode(self._q, self._dq, self._ee_pose)
         if self._error:
-            state.set_error()
+            state.set_status(RobotStatus.ERROR)
+        elif self._moves.active:
+            state.set_status(RobotStatus.BUSY)  # a move owns the arm, and the command stream goes unread
         self.state.emit(state)
 
     def _emit_grip(self):
@@ -271,6 +319,7 @@ class MujocoSim(pimm.ControlSystem):
         """Derive everything that hangs off ``self.model``; runs at construction and on every rebuild."""
         self.data = mj.MjData(self.model)
         self.initial_ctrl = [float(x) for x in self.metadata.get('initial_ctrl').split(',')]
+        self._home_joints = np.array([self.initial_ctrl[self.model.actuator(n).id] for n in self._actuator_names])
         self._joint_qpos_ids = [self.model.joint(name).qposadr.item() for name in self._joint_names]
         min_grip, max_grip = self.model.actuator(self._gripper_actuator).ctrlrange
         self._grip_range = (float(min_grip), float(max_grip))
@@ -320,34 +369,44 @@ class MujocoSim(pimm.ControlSystem):
         while self.data.time < target_time:
             mj.mj_step(self.model, self.data)
 
-    def _apply_command(self, cmd):
-        """Drive the actuators to the setpoint ``cmd`` asks for; a control mode it pins is not honored."""
+    def _target_joints(self, cmd: roboarm_command.CommandType | None) -> np.ndarray:
+        """The joints ``cmd`` asks the arm to hold; asking for nothing asks for home. A control mode it
+        pins is not honored: the sim runs its own law."""
         match cmd:
+            case None | roboarm_command.Reset():
+                return self._home_joints
             case roboarm_command.CartesianPosition(pose=pose):
-                q = self._recalculate_ik(pose)
-                if q is not None:
-                    self._set_actuator_values(q)
-                else:
-                    logger.warning(f'IK failed for ee_pose: {pose}')
-                    self._error = True
+                return self._ik(pose)
             case roboarm_command.CartesianDelta() as delta_cmd:
-                target = delta_cmd.apply(self._ee_pose)
-                q = self._recalculate_ik(target)
-                if q is not None:
-                    self._set_actuator_values(q)
-                else:
-                    logger.warning(f'IK failed for delta target: {target}')
-                    self._error = True
+                return self._ik(delta_cmd.apply(self._ee_pose))
             case roboarm_command.JointPosition(positions=positions):
-                self._set_actuator_values(positions)
+                return self._joints(positions)
             case roboarm_command.JointDelta(velocities=delta):
-                self._set_actuator_values(self._q + delta)
-            case roboarm_command.Reset():
-                self._home()  # the Reset command homes the arm; re-randomizing the scene is ``reset``'s job
-            case _:
-                raise ValueError(f'Unknown command type: {type(cmd)}')
+                return self._q + self._joints(delta)
+            case other:
+                raise NotImplementedError(f'Unsupported command {other}')
 
-    def _recalculate_ik(self, target: geom.Transform3D) -> np.ndarray | None:
+    def _joints(self, values: np.ndarray) -> np.ndarray:
+        """``values`` as a joint vector; NumPy would broadcast one that names fewer joints across them all."""
+        joints = np.asarray(values, dtype=np.float64)
+        if joints.shape != (len(self._joint_names),):
+            raise ValueError(f'{joints} does not name every joint')
+        return joints
+
+    def _apply_command(self, cmd: roboarm_command.CommandType) -> None:
+        """Aim the actuators at what ``cmd`` asks for, leaving the arm where it is if it cannot be met."""
+        if isinstance(cmd, roboarm_command.Reset):
+            self._home()  # the Reset command homes the arm; re-randomizing the scene is ``reset``'s job
+        else:
+            try:
+                self._set_actuator_values(self._target_joints(cmd))
+            # rules-allow: swallowed-error — a command stream cannot end the run; the arm reads ERROR instead
+            except ValueError as exc:
+                logger.warning(f'{cmd} not applied: {exc}')
+                self._error = True
+
+    def _ik(self, target: geom.Transform3D) -> np.ndarray:
+        """The joints that put the end effector at ``target``; raises what the arm cannot reach."""
         if self._ik_data is None:
             self._ik_data = mj.MjData(self.model)
             self._ik_site_id = mj.mj_name2id(self.model, mj.mjtObj.mjOBJ_SITE, self._ee_name)
@@ -363,10 +422,17 @@ class MujocoSim(pimm.ControlSystem):
             target.rotation.as_quat,
             rot_weight=0.5,
         )
-        return qpos[self._joint_qpos_ids] if success else None
+        if not success:
+            raise ValueError(f'{target} is out of reach')
+        return qpos[self._joint_qpos_ids]
 
-    def _set_actuator_values(self, values: np.ndarray):
-        for name, value in zip(self._actuator_names, values, strict=True):
+    def _set_actuator_values(self, values: np.ndarray) -> None:
+        """Aim every arm actuator at ``values``; a target the arm cannot be put at leaves it alone."""
+        # Checked whole before the first write, so a refused target retargets nothing. A non-finite one
+        # steps the sim to NaN, and no comparison against NaN ever reports the arm arrived.
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f'{np.asarray(values)} is not a joint target')
+        for name, value in list(zip(self._actuator_names, values, strict=True)):
             self.data.actuator(name).ctrl = value
 
     def _apply_grip(self, target: float):
