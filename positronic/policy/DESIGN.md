@@ -181,6 +181,36 @@ placed on three timelines: the call number, control time, and wall time.
   their own, joined later.
 - Recording never affects control: it adds no waiting and no failure path.
 
+## Related APIs
+
+Robot policies are already served over the wire. Physical Intelligence's
+openpi server (also behind RoboArena), NVIDIA's GR00T inference service,
+LeRobot's serving stack and academic platforms like XPolicyLab all share
+the same shape - the client sends observations, the server returns a chunk
+of actions, and the client runs the loop. This shape traces back to
+the gym environment loop — `action = policy(obs); obs = env.step(action)` —
+where the world truly waits while the policy thinks. A robot's world keeps
+moving, and the interface cannot express what that demands:
+
+- Act while thinking. Between request and reply the policy cannot see or
+  do anything. A policy that watches the force sensor and freezes the arm
+  while its model computes cannot be written.
+- Choose the next moment. The client asks on a schedule of its own: every
+  k steps, or when the action queue drains. A policy that wants to re-plan
+  early because the object slipped has no way to ask for that.
+- Know the time. Chunks are timestamped by presuming a fixed control
+  period, latency is measured and then only logged, and in simulation
+  thinking is free. The policy never learns how stale its observations are
+  or when its answers take effect.
+
+LeRobot's hand-written inference thread, openpi's blocking chunk client and
+hand-tuned replan constants are all patches around these limits, written
+again at every robot.
+
+This design starts from the moving world instead. A session acts, watches
+and paces itself in it, so the list of expressible schemes has no end: the
+next idea fits without a new interface.
+
 ## TODO
 
 The Python shape of the session call, the function handles, and the
