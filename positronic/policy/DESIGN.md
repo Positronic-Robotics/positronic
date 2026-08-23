@@ -166,14 +166,15 @@ its session directly against the call itself.
 
 ### Remote policies
 
-- The framework natively supports remote policies: the whole policy lives on
-  a server.
-- The server describes the full policy: the functions it serves and the stack
-  around them.
-- One URL is enough to fully specify the policy, given that the server
-  returns a proper declaration.
+Execution splits between the rig and the server. The definition does not:
+the layers and codecs on the rig belong to the same design as the functions
+behind the wire, and halves defined apart drift apart. The server owns the
+whole definition and hands it to the rig as a declaration.
+
+- One URL is enough to use a policy: the declaration carries everything the
+  rig needs to assemble its half.
 - Declarations are backward compatible: the framework evolves without
-  changing what an already-served policy does.
+  changing what an already-served policy does (as much as possible).
 - A declaration the rig cannot honor is refused at the handshake.
 
 ## TODO
