@@ -88,7 +88,8 @@ itself is called synchronously — a plain function call, repeated:
 - Returned commands are emitted towards the robot driver immediately.
 - Observations and commands can be of any type, structured or unstructured (a
   robot command, an image).
-- The `time` argument is the only clock a session has; the framework sets it.
+- The `time` argument is the only clock a session has. The framework sets
+  it, and it strictly grows from call to call.
 - `resume_at` is how the session paces itself: the instant at which it wants
   to be called next, absolute on the clock of `time`, strictly in the future.
 - The framework calls best-effort at `resume_at`: it may be earlier or later,
@@ -145,25 +146,6 @@ kind its own shape. A `Codec` transforms data and knows nothing of time. A
 Layers and codecs are offered, not imposed: a policy may always implement
 its session directly against the call itself.
 
-### Logging
-
-- A log is a set of named series per control session; a sample is a value
-  stamped on 3 timelines: the turn number, control time, and wall time.
-- If requested, the framework logs the timelines' correspondence: one sample
-  per turn.
-- If requested, the framework logs every function call: its identity, submit
-  time, and answer time.
-- If requested, the framework logs every session's invocations in a chain it
-  assembled.
-- A session may append a value to a named series of its own; the framework
-  stamps it.
-- A session names its series locally; the framework keeps the full names
-  distinct across sessions and stable across runs.
-- A function may attach records to the call it is answering, stored where the
-  function runs and joined to the log by call identity.
-- Logging never affects control: it adds no waiting and no failure path to
-  the loop.
-
 ### Remote policies
 
 Execution splits between the rig and the server. The definition does not:
@@ -177,11 +159,33 @@ whole definition and hands it to the rig as a declaration.
   changing what an already-served policy does (as much as possible).
 - A declaration the rig cannot honor is refused at the handshake.
 
+### Recording
+
+A system split between a rig and a server is challenging to debug. Data flows
+in two dimensions — through time and through the layers — and the recording
+exists to reconstruct both flows after the fact.
+
+Each session produces one recording on the rig: a set of named series, where
+a series holds values of one type — arrays, images, numbers. A recording is
+built for a visualizer like [rerun.io](https://rerun.io). Every value is
+placed on three timelines: the call number, control time, and wall time.
+
+- If requested, the framework records the flow at every boundary it carries:
+  what enters and leaves each session in a chain it assembled and each
+  served function, and when.
+- A session may append values to named series of its own. The framework
+  places each value on the timelines.
+- A session names its series locally. The framework keeps the full names
+  distinct across sessions and stable across runs.
+- Served functions record too: into the recording itself, or into storage of
+  their own, joined later.
+- Recording never affects control: it adds no waiting and no failure path.
+
 ## TODO
 
-The Python shape of the turn, the function handles, and the logging conduit —
-an object protocol, with generators as a supported authoring style the
-framework adapts.
+The Python shape of the session call, the function handles, and the
+recording conduit — an object protocol, with generators as a supported
+authoring style the framework adapts.
 
 ## Deferred, not to decide now
 
