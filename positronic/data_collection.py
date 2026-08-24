@@ -112,9 +112,8 @@ class DataCollectionController(pimm.ControlSystem):
         self.operator_position = operator_position
         self._nominal_joints = np.asarray(nominal_joints, dtype=np.float64)
         # A station that measured no jitter sends the arm exactly to its nominal.
-        self._joints_spread = (
-            np.asarray(joints_spread, dtype=np.float64) if len(joints_spread) else np.zeros_like(self._nominal_joints)
-        )
+        spread = joints_spread if len(joints_spread) else np.zeros_like(self._nominal_joints)
+        self._joints_spread = np.asarray(spread, dtype=np.float64)
         self._static_meta = static_meta or {}
         self.metadata_getter = metadata_getter or (lambda: {})
         self.controller_positions = pimm.DefaultingReceiver(self, default={})
@@ -179,7 +178,7 @@ class DataCollectionController(pimm.ControlSystem):
                         self.sound.emit(abort_wav_path)
                     tracker.turn_off()
                     recording = False
-                    if self.sync_move.connected:
+                    if len(self._nominal_joints):  # a station with no arm has none to put anywhere
                         try:
                             yield from self._move_to_start(should_stop)
                         # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
