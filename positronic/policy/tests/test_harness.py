@@ -927,6 +927,40 @@ def test_every_rig_is_put_back_where_the_trial_placed_it(world, simulated):
     assert all(asked is start for asked in placed)
 
 
+class _PlacesOnce(pimm.ControlSystem):
+    """A device that answers the first ask and keeps every one after it in hand."""
+
+    def __init__(self):
+        self.env_reset = pimm.calls.ControlSystemHandler[Any, None](self)
+        self.asks = 0
+
+    def run(self, should_stop, clock):
+        while not should_stop.value:
+            for call in self.env_reset.incoming():
+                self.asks += 1
+                if self.asks == 1:
+                    call.set_result(None)
+            yield pimm.Sleep(0.001)
+
+
+@pytest.mark.timeout(3.0)
+def test_a_trial_does_not_end_until_the_rig_is_back_where_it_started(world):
+    """The terminal waits on the return move. Handed back sooner, the next trial's scene draw goes ahead of a
+    move still travelling and rebuilds the model under it, leaving nothing but its timeout to end it."""
+    arm = _PlacesOnce()
+    harness = Harness(StubPolicy(), make_embodiment(prepare_handlers={keys.ARM: arm.env_reset}))
+    p = _pair_all(world, harness)
+    wire_call(world, harness.prepare[keys.ARM], arm.env_reset)
+
+    scheduler = world.start([harness, arm, _Pacer()])
+    task = Task(instruction_source='stack', timeout_sec=0.05, prepare_args={keys.ARM: JointPosition(np.zeros(7))})
+    answer = p['perform_task'](task)
+    drive_scheduler(scheduler, steps=2000)
+
+    assert arm.asks == 2, 'the rig was never asked to go back'
+    assert not answer.done(), 'the terminal landed while the return move was still in hand'
+
+
 @pytest.mark.timeout(3.0)
 def test_a_trial_asking_to_ready_what_the_rig_has_not_got_fails_loudly(world):
     """Only the handlers a task names are asked, so a name matching none of them would go unasked and the
