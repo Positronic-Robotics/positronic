@@ -1,10 +1,9 @@
 """Composable policy layers — scheduling, fault handling and temporal frame stacking.
 
-Layers are composable serving-time concerns wrapped around a policy with ``|`` (left is
-outermost), exactly like codecs. Most read time from the observation (``obs_time_ns``); only
-``ChunkedSchedule`` needs the live clock — it anchors a chunk to inference *completion*, which the
-pre-inference observation stamp cannot give — so the harness passes ``now`` (a ``Callable[[], float]``
-in seconds) to ``new_session`` and it reaches that one session.
+Layers are serving-time concerns wrapped around a policy with ``|`` (left is outermost). Most read time
+from the observation (``obs_time_ns``); only ``ChunkedSchedule`` needs the live clock — it anchors a chunk
+to inference *completion*, which the pre-inference observation stamp cannot give — so the harness passes
+``now`` (a ``Callable[[], float]`` in seconds) to ``new_session`` and it reaches that one session.
 """
 
 from collections import deque
@@ -64,7 +63,7 @@ class StopOnFault(Layer):
 class ChunkedSchedule(Layer):
     """Wait for the current trajectory to finish before calling the inner policy again.
 
-    Owns relative→absolute time conversion: inner layers (codecs, models) emit relative timestamps;
+    Owns relative→absolute time conversion: the sessions below (codecs, models) emit relative timestamps;
     this layer anchors them to ``now()`` *after* inner inference returns, so execution aligns to
     inference-finish (not inference-start). Returns ``None`` ("keep executing the current trajectory")
     until the last action's timestamp is reached, then calls the inner policy.

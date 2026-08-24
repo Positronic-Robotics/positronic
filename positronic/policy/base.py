@@ -118,7 +118,7 @@ class DelegatingPolicy(Policy):
 
 
 class Layer:
-    """Composable recipe — created without an inner policy, applied via ``wrap()``.
+    """Recipe for wrapping a session, fixed at configuration time and applied to a policy via ``wrap()``.
 
     Layers may be stateful, may control flow (skip the inner call), and have no
     training-time dual. They compose with ``|`` (sequential, left is outermost).
@@ -145,7 +145,7 @@ class Layer:
         return _LayerPolicy(policy, self)
 
     def make_session(self, inner: Session, context: dict[str, Any] | None, now: Now | None) -> Session:
-        """Make this layer's session around ``inner``. Subclasses override this for per-session wrapping."""
+        """Make this layer's session around ``inner``."""
         raise NotImplementedError('Override make_session or wrap')
 
     # The name this layer travels under, set by every deliverable subclass. ``WIRE_LAYERS`` is keyed by
@@ -195,7 +195,7 @@ class _LayerPolicy(DelegatingPolicy):
 
 
 class _ComposedLayer(Layer):
-    """Composed pipeline of layers and codecs. Applies right-to-left."""
+    """Composed pipeline of layers. Applies right-to-left."""
 
     def __init__(self, components: tuple):
         self._components = components
