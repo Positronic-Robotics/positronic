@@ -1,4 +1,3 @@
-import logging
 import sys
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -8,9 +7,9 @@ import pytest
 
 import pimm
 from positronic import keys, telemetry, telemetry_keys
-from positronic.cli.eval.run import TaskDriver, _pass_span, _run_world, main, timed_pass
+from positronic.cli.eval.run import TaskDriver, _pass_span, main, timed_pass
 from positronic.eval import Embodiment, Eval, Task
-from positronic.tests.testing_coutils import IdleSession, drive_scheduler
+from positronic.tests.testing_coutils import drive_scheduler
 
 
 def _eval(simulated: bool) -> Eval:
@@ -25,56 +24,28 @@ def test_timed_sweep_rejects_real_embodiment(tmp_path):
 
 
 class _IdlePolicy:
-    """Enough policy for a trial to open, run and close; it commands nothing."""
-
-    def __init__(self):
-        self.observations: list[dict] = []
+    """Enough policy for ``main`` to warm up and close; it is never asked for an action."""
 
     def new_session(self, *_args, **_kwargs):
-        return IdleSession(self)
-
-    @property
-    def meta(self):
-        return {}
+        return SimpleNamespace(close=lambda: None)
 
     def close(self):
         pass
 
 
-def _embodiment(simulated: bool = True) -> Embodiment:
-    """A rig with nothing on it: no signals to read, nothing to command, and nothing of its own to ready."""
-    return Embodiment(
+@pytest.mark.timeout(30.0)
+def test_an_exhausted_trial_plan_ends_the_sweep():
+    """How an unattended run finishes: the driver runs out of tasks, the world stops, ``main`` returns."""
+    embodiment = Embodiment(
         descriptor='stub',
         observations={},
         commands={},
         prepare_handlers={},
         static_meta={},
         meta_source=None,
-        simulated=simulated,
+        simulated=True,
     )
-
-
-@pytest.mark.timeout(30.0)
-def test_an_exhausted_trial_plan_ends_the_sweep():
-    """How an unattended run finishes: the driver runs out of tasks, the world stops, ``main`` returns."""
-    main(policy=_IdlePolicy(), evals=[Eval(embodiment=_embodiment(), tasks=[])])
-
-
-@pytest.mark.timeout(30.0)
-def test_a_scene_nobody_readies_is_answered_by_the_runner(caplog):
-    """A rig whose scene a person would set up runs unattended: the driver answers for the absent person,
-    so the trial opens, and the setup it asked for is logged for whoever reads the run."""
-    setup = 'Fill the transparent tote with the items to pick.'
-    # A real rig runs on the wall clock and the Harness polls at 0.01s, so the budget has to cover the rounds
-    # the episode takes to open. Trimmed to a few of them, a loaded machine ends the trial before it opens.
-    task = Task(instruction_source='pick', timeout_sec=0.5, prepare_args={keys.SCENE: setup})
-    policy = _IdlePolicy()
-
-    with caplog.at_level(logging.INFO, logger='positronic.cli.eval.run'):
-        _run_world(policy, Eval(embodiment=_embodiment(simulated=False), tasks=[task]), None)
-
-    assert setup in caplog.text
-    assert policy.observations, 'the trial never opened'
+    main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=[])])
 
 
 class _EpisodeStub(pimm.ControlSystem):

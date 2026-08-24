@@ -7,17 +7,13 @@ from positronic.cfg.hardware.roboarm import franka_start_pose
 from positronic.eval import Eval, Task
 
 
-@cfn.config(
-    embodiment=droid,
-    timeout=180,
-    trial_count=1,
-    setup='Fill the transparent tote with the items to pick, and empty the large grey one.',
-)
-def _droid_pick_place(embodiment, instruction, timeout, trial_count, setup):
+@cfn.config(embodiment=droid, timeout=180, trial_count=1)
+def _droid_pick_place(embodiment, instruction, timeout, trial_count):
     """A real droid tote pick-and-place eval: the embodiment is the physical Franka, the task carries the instruction.
 
-    ``setup`` names what a person puts in front of the arm — the rig has no scene of its own to seed. The
-    outcome is the operator's annotation, since real has no ground-truth source to compute one from.
+    The rig has no scene of its own to seed, so nothing asks for one: filling the tote is a person's, and
+    they do it before the sweep starts. The outcome is the operator's annotation, since real has no
+    ground-truth source to compute one from.
     """
     return Eval(
         embodiment,
@@ -25,7 +21,7 @@ def _droid_pick_place(embodiment, instruction, timeout, trial_count, setup):
             Task(
                 instruction_source=instruction,
                 timeout_sec=timeout,
-                prepare_args={keys.ARM: franka_start_pose(), keys.GRIPPER: 0.0, keys.SCENE: setup},
+                prepare_args={keys.ARM: franka_start_pose(), keys.GRIPPER: 0.0},
                 meta={keys.EVAL_TRIAL_INDEX: trial, keys.EVAL_TRIAL_COUNT: trial_count},
             )
             for trial in range(trial_count)

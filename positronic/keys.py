@@ -19,7 +19,7 @@ TARGET_GRIP = 'target_grip'
 
 # The names of what a trial readies before it opens. ``Embodiment.prepare_handlers`` is keyed by them, and so
 # is what a ``Task`` asks for. A rig with two arms names its arms ``arm.{side}``. ``SCENE`` means the world
-# this trial runs in is ready, drawn by a sim or set up by a person — whichever handler is bound says which.
+# this trial runs in is ready, drawn by whichever handler the embodiment binds.
 ARM = 'arm'
 GRIPPER = 'gripper'
 SCENE = 'scene'

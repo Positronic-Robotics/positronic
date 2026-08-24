@@ -13,7 +13,7 @@ from platform_client.responses import SubmissionCreateResponse
 
 import pimm
 import positronic.cfg.policy as policy_cfg
-from positronic import keys, telemetry, telemetry_keys, utils, wire
+from positronic import telemetry, telemetry_keys, utils, wire
 from positronic.cfg.eval import placeholder
 from positronic.cli.eval.submit import submit
 from positronic.dataset.ds_writer_agent import TimeMode
@@ -51,15 +51,11 @@ class TaskDriver(pimm.ControlSystem):
 
     One task is in flight at a time: the next is asked for only when the previous episode's terminal comes
     back, so the plan never overlaps two episodes.
-
-    ``scene_ready`` answers for the operator an unattended run has not got: the setup a trial asks for is
-    logged and answered on the spot.
     """
 
     def __init__(self, tasks: list[Task]):
         self._tasks = tasks
         self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
-        self.scene_ready = pimm.calls.ControlSystemHandler[str, None](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         for task in self._tasks:
@@ -67,10 +63,6 @@ class TaskDriver(pimm.ControlSystem):
             while not answer.done():
                 if should_stop.value:
                     return
-                # The episode being waited on is what asks, so a wait that served nothing would deadlock.
-                for call in self.scene_ready.incoming():
-                    logger.info('Unattended run, so nobody sets this up: %s', call.request)
-                    call.set_result(None)
                 yield pimm.Yield()  # A sleep here would step the virtual clock on the driver's account.
             answer.result()  # raises if the episode failed
         # Let the recorder commit the final episode before this return brings the world down.
@@ -83,14 +75,8 @@ def _run_world(policy, ev: Eval, output_dir: Path | None):
     The driver walks ``ev.tasks``; the shared ``policy``'s lifetime stays with ``main``.
     """
     embodiment = ev.embodiment
-    driver = TaskDriver(ev.tasks)
-    # A real rig's scene is a person's to set up, and there is no person here. A sim draws its own, so one
-    # that reaches this without a scene handler is miswired and must still trip the Harness rather than run
-    # every trial against whatever the last one left standing.
-    if not embodiment.simulated and keys.SCENE not in embodiment.prepare_handlers:
-        handlers = {**embodiment.prepare_handlers, keys.SCENE: driver.scene_ready}
-        embodiment = replace(embodiment, prepare_handlers=handlers)
     harness = Harness(policy, embodiment)
+    driver = TaskDriver(ev.tasks)
 
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
