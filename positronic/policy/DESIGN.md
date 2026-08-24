@@ -29,8 +29,8 @@ reveal which world it runs against, and the framework must be able to charge a
 model call's real duration to simulated time — otherwise inference is free in
 simulation and costly on the robot.
 
-The rest of the document is the design: the goals, the requirements, and the
-API itself.
+The rest of the document is the design: the goals, the design decisions, and
+the API itself.
 
 ## Goals
 
@@ -181,6 +181,96 @@ placed on three timelines: the call number, control time, and wall time.
   their own, joined later.
 - Recording never affects control: it adds no waiting and no failure path.
 
+## API
+
+The design above, as Python protocols.
+
+### The session call
+
+```python
+# Observations and commands are named channels.
+Obs = Mapping[str, Any]
+Commands = Mapping[str, Any]
+
+
+class Session(Protocol):
+    # `time` and the returned `resume_at` are seconds on the same clock.
+    def __call__(self, obs: Obs, time: float) -> tuple[Commands, float]: ...
+
+    # Called by the framework, at any moment. There is no other end.
+    def close(self) -> None: ...
+```
+
+### Served functions
+
+```python
+# This is pimm's `Answer`.
+class Answer(Protocol):
+    def done(self) -> bool: ...
+
+    # The result once done, re-raising what the function raised. Reading it
+    # earlier is an error: a session never waits.
+    def result(self) -> Any: ...
+
+
+# Calling one starts the work and returns the `Answer` at once.
+Fn = Callable[..., Answer]
+```
+
+### The runtime
+
+```python
+# The framework's standing offer to one session. Every session gets its own.
+class Runtime(Protocol):
+    # The served functions, each wrapped into an `Fn`: a worker pool in
+    # process, a stub over the wire.
+    @property
+    def fns(self) -> Mapping[str, Fn]: ...
+
+    # Append `value` to this session's series `name`. The framework places
+    # it on the timelines.
+    def record(self, name: str, value: Any) -> None: ...
+```
+
+### Policies
+
+```python
+class Policy(Protocol):
+    # The policy's heavy work: plain callables, declared by name, served
+    # back as `rt.fns`.
+    @property
+    def functions(self) -> Mapping[str, Callable]: ...
+
+    # `context` carries the robot the session will control, and whatever
+    # else the framework knows about the episode.
+    def new_session(self, context: dict[str, Any], rt: Runtime) -> Session: ...
+```
+
+### Layers and codecs
+
+```python
+# The framework's handle to the next session in. No `time` parameter: the
+# framework stamps the inner call with the outermost call's time, so the
+# whole chain sees one `time`.
+class Inner(Protocol):
+    def __call__(self, obs: Obs) -> tuple[Commands, float]: ...
+
+
+class Layer(Protocol):
+    def make_session(self, inner: Inner, rt: Runtime) -> Session: ...
+
+
+class Codec(Protocol):
+    def encode(self, value: Any) -> Any: ...
+
+    # `context` is the input of the matching `encode` — a decode may need
+    # it (relative commands need the pose the observation carried).
+    def decode(self, value: Any, context: Any) -> Any: ...
+```
+
+`layer_a | layer_b` is a layer. `chain.wrap(policy)` is a policy: its
+sessions are the chained sessions, with a handle between each pair.
+
 ## Related APIs
 
 Robot policies are already served over the wire. Physical Intelligence's
@@ -210,12 +300,6 @@ again at every robot.
 This design starts from the moving world instead. A session acts, watches
 and paces itself in it, so the list of expressible schemes has no end: the
 next idea fits without a new interface.
-
-## TODO
-
-The Python shape of the session call, the function handles, and the
-recording conduit — an object protocol, with generators as a supported
-authoring style the framework adapts.
 
 ## Deferred, not to decide now
 
