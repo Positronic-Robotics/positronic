@@ -61,7 +61,7 @@ class _ConstPolicy(Policy):
         self._actions = actions
         self._session: _ConstSession | None = None
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, rt=None):
         self._session = _ConstSession(self._actions)
         return self._session
 
@@ -144,7 +144,30 @@ class TestStopOnFault:
         assert session(_obs(0.3)) is not None
 
 
+class _ScriptedSession(Session):
+    """Answers each of ``script`` in turn — ``None`` where a session has nothing to place yet."""
+
+    def __init__(self, script):
+        self._script = list(script)
+        self.call_count = 0
+
+    def __call__(self, obs):
+        self.call_count += 1
+        return self._script.pop(0)
+
+
 class TestChunkedSchedule:
+    def test_an_inner_with_no_answer_yet_is_asked_again(self):
+        """A session waiting on a served function answers ``None``, which is no trajectory: the layer passes
+        it on and asks again on the next observation."""
+        inner = _ScriptedSession([None, None, [{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]])
+        session = ChunkedSchedule().make_session(inner, None, _FakeClock(t=1.0).now)
+
+        assert session(_obs(0.0)) is None
+        assert session(_obs(0.1)) is None
+        assert session(_obs(0.2)) == [{'v': 1, keys.ACTION_TIMESTAMP: 1.0}]
+        assert inner.call_count == 3
+
     def test_first_call_runs_inference(self):
         # Relative timestamps: trajectory of duration 0.5s
         clock = _FakeClock(t=1.0)
@@ -309,7 +332,7 @@ class _CapturePolicy(Policy):
     def __init__(self):
         self.session = _CaptureSession()
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, rt=None):
         return self.session
 
 

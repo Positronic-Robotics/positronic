@@ -10,20 +10,37 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, I
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
-from .base import Layer, Policy, Session
+from .base import Answer, Layer, Policy, Runtime, Session
 from .recording import Recorder
 from .spec import from_spec
+
+# The name the wire round-trip is served under; a policy whose sessions are ``RemoteSession``s declares it.
+INFER = 'infer'
+
+
+def round_trip(ws_session: InferenceSession, obs: dict[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
+    """One inference over the wire, timed as the ``policy.infer`` span. ``finally`` times a raising one too."""
+    infer_start_ns = time.time_ns()
+    try:
+        return ws_session.infer(obs)
+    finally:
+        telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns())
 
 
 class RemoteSession(Session):
     """Per-episode session that forwards observations to a remote inference server.
 
+    One round-trip is in flight at a time: the call that starts it, and every call until it answers, return
+    ``None``; the call that finds it answered returns its trajectory.
+
     ``compress_images`` comes from what the server declared (see ``RemoteMarker``).
     """
 
-    def __init__(self, ws_session: InferenceSession, compress_images: bool = False):
+    def __init__(self, ws_session: InferenceSession, rt: Runtime | None, compress_images: bool = False):
         self._session = ws_session
+        self._rt = rt
         self._compress_images = compress_images
+        self._answer: Answer | None = None
 
     def _prepare_obs(self, obs: cabc.Mapping[str, Any]) -> dict[str, Any]:
         if not self._compress_images:
@@ -42,22 +59,31 @@ class RemoteSession(Session):
         return value
 
     def __call__(self, obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | None:
-        """Forwards the observation to the remote server and returns the action trajectory.
+        """Starts a round-trip on ``obs`` when none is in flight, and answers the trajectory of one that
+        has come back.
 
         Single-action server responses are wrapped into a 1-element list to honor
         the ``Session.__call__`` contract (``list[dict] | None``).
         """
-        # Timed from after preparation: JPEG-encoding a stack of HD frames is client-side work, and folding it
-        # into the round-trip would inflate the inference percentiles. ``finally`` times a raising one too.
-        prepared = self._prepare_obs(obs)
-        infer_start_ns = time.time_ns()
-        try:
-            result = self._session.infer(prepared)
-        finally:
-            telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns())
-        if isinstance(result, dict):
-            return [result]
-        return result
+        if self._answer is None:
+            if self._rt is None:
+                raise ValueError(
+                    'RemoteSession needs a runtime to run inference: pass rt to new_session. The harness '
+                    'supplies it; a direct RemotePolicy.new_session() outside the harness must too.'
+                )
+            # Preparation stays the session's own work: JPEG-encoding a stack of HD frames is client-side, and
+            # folding it into the function would inflate the inference percentiles.
+            self._answer = self._rt.fns[INFER](self._session, self._prepare_obs(obs))
+            return None
+        if not self._answer.done():
+            return None
+        answer, self._answer = self._answer, None
+        result = answer.result()
+        return [result] if isinstance(result, dict) else result
+
+    def cancel(self):
+        # The round-trip in flight keeps running; its answer lands nowhere, and so does its failure.
+        self._answer = None
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -87,10 +113,14 @@ class _Endpoint(Policy):
                 ws_session.close()
         return self._server_meta
 
-    def new_session(self, context=None, now=None) -> RemoteSession:
+    def new_session(self, context=None, now=None, rt=None) -> RemoteSession:
         compress = bool(self.server_meta().get(keys.COMPRESS_IMAGES))
         ws_session = self._client.new_session()
-        return RemoteSession(ws_session, compress_images=compress)
+        return RemoteSession(ws_session, rt, compress_images=compress)
+
+    @property
+    def functions(self) -> cabc.Mapping[str, cabc.Callable[..., Any]]:
+        return {INFER: round_trip}
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -151,8 +181,12 @@ class RemotePolicy(Policy):
             self._stacked = stack.wrap(self._endpoint)
         return self._stacked
 
-    def new_session(self, context=None, now=None) -> Session:
-        return self._policy().new_session(context, now)
+    def new_session(self, context=None, now=None, rt=None) -> Session:
+        return self._policy().new_session(context, now, rt)
+
+    @property
+    def functions(self) -> cabc.Mapping[str, cabc.Callable[..., Any]]:
+        return self._policy().functions
 
     @property
     def meta(self) -> dict[str, Any]:

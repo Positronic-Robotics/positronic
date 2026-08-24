@@ -17,6 +17,7 @@ from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy
+from positronic.policy.executor import Executor
 from positronic.utils import flatten_dict, frozen_view
 
 # How far from now an action may be scheduled: past any real chunk, short of the decades a rig-side stack is
@@ -34,20 +35,23 @@ SKIP_REPLY_SEC = 0.001
 
 class _InferenceWorker:
     """One episode's policy session, called one at a time on a thread of its own so the harness keeps
-    playing while the model runs.
+    playing while the model runs, and the runtime serving the policy's functions to it.
 
-    ``charges_wall_time`` says whether a call costs the trial the wall time it really took or nothing —
-    the loop is held for the call, which holds a virtual clock still.
+    A call's work is the session call plus whatever function it starts, and the two are timed as one: the
+    session hands the model to the runtime and returns at once, so what the trial pays for is the function
+    still in flight. ``charges_wall_time`` says whether that costs the trial the wall time it really took or
+    nothing — the loop is held for the work, which holds a virtual clock still.
     """
 
     def __init__(self, policy: Policy, context: dict[str, Any], charges_wall_time: bool, clock: pimm.Clock) -> None:
         self._charges_wall_time = charges_wall_time
         self._clock = clock
-        # World clock and ``time.monotonic()`` at the in-flight call's submit, anchored at the episode's
+        # World clock and ``time.monotonic()`` at the start of the work in flight, anchored at the episode's
         # start so ``effect_time`` reads a trial instant from the moment the session exists.
         self._t0_ns, self._wall_t0 = clock.now_ns(), time.monotonic()
-        self._session = policy.new_session(context, self.effect_time)
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='harness-session')
+        self._runtime = Executor(policy.functions)
+        self._session = policy.new_session(context, self.effect_time, self._runtime)
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='harness-session')
         self._call: Future[list[dict[str, Any]] | None] | None = None
 
     @property
@@ -64,8 +68,8 @@ class _InferenceWorker:
         return self._call is not None and self._call.done()
 
     def effect_time(self) -> float:
-        """The trial instant the in-flight call's output takes effect: its submit, plus its wall duration so
-        far when the trial pays wall time."""
+        """The trial instant the work in flight takes effect: where it started, plus its wall duration so far
+        when the trial pays wall time."""
         wall = time.monotonic() - self._wall_t0 if self._charges_wall_time else 0.0
         return self._t0_ns / 1e9 + wall
 
@@ -82,20 +86,35 @@ class _InferenceWorker:
     def submit(self, obs: dict[str, Any]) -> None:
         """Start a call on ``obs``. The moment's wait lets a layer that skips inference resolve in the round
         it was asked."""
-        self._t0_ns, self._wall_t0 = self._clock.now_ns(), time.monotonic()
+        # A function still in flight is work this call joins rather than begins, so the anchor stays where
+        # that function started and the trial is charged for it once.
+        if not self._runtime.in_flight:
+            self._t0_ns, self._wall_t0 = self._clock.now_ns(), time.monotonic()
         # The call runs under a copy of the loop's context, so the telemetry it records anchors to the episode
         # that asked for it even when it outlives that episode's close.
         context = contextvars.copy_context()
-        self._call = self._executor.submit(context.run, self._session, frozen_view(self._owned(obs)))
+        self._call = self._pool.submit(context.run, self._session, frozen_view(self._owned(obs)))
         concurrent.futures.wait([self._call], timeout=SKIP_REPLY_SEC)
 
+    @staticmethod
+    def _time_left(deadline: float | None) -> float | None:
+        """Seconds until ``deadline``, never negative; ``None`` for a wait with no deadline."""
+        return None if deadline is None else max(deadline - time.monotonic(), 0.0)
+
     def throttle(self) -> None:
-        """Slow the loop for the call in flight as the trial's mode requires: until the call returns when the
-        world is held for it, else only while the world is ahead of the call's own wall clock."""
+        """Slow the loop for the work in flight as the trial's mode requires: until it is done when the world
+        is held for it, else only while the world is ahead of its own wall clock.
+
+        The session call and the function it started share one deadline, being one piece of work seen from
+        the loop thread and from the runtime.
+        """
         assert self._call is not None
-        # Wall time cannot be held still, so the world runs no further ahead of the call's start than it has.
-        timeout = max(self._clock.now() - self.effect_time(), 0.0) if self._charges_wall_time else None
-        concurrent.futures.wait([self._call], timeout=timeout)
+        deadline = None
+        if self._charges_wall_time:
+            # Wall time cannot be held still, so the world runs no further ahead of the work's start than it has.
+            deadline = time.monotonic() + max(self._clock.now() - self.effect_time(), 0.0)
+        concurrent.futures.wait([self._call], timeout=self._time_left(deadline))
+        self._runtime.wait(self._time_left(deadline))
 
     def result(self) -> list[dict[str, Any]] | None:
         """The returned call's trajectory — ``None`` when it had nothing to place — leaving the worker idle."""
@@ -117,16 +136,18 @@ class _InferenceWorker:
         if self._call is not None:
             self._call.add_done_callback(self._report_abandoned)
             self._call = None
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        self._pool.shutdown(wait=False, cancel_futures=True)
 
     def join(self) -> None:
-        """Wait out an abandoned call, then close the session it was inside.
+        """Wait out an abandoned call and the function it left running, then close the session both were
+        inside.
 
-        ``shutdown(cancel_futures=True)`` cancels only what is still queued, so until this returns the call
+        ``shutdown(cancel_futures=True)`` cancels only what is still queued, so until this returns the work
         still holds the session's resources: a ``RemoteSession``'s websocket, or the in-process model every
         session shares.
         """
-        self._executor.shutdown(wait=True)
+        self._pool.shutdown(wait=True)
+        self._runtime.close()
         self._session.close()
 
 
@@ -197,9 +218,10 @@ class Harness(pimm.ControlSystem):
     """Control system that runs the episode lifecycle and plays the policy's trajectory to the drivers.
 
     The layer owns the trajectory, the harness plays it, one command per channel per round. The session call
-    runs on a worker so playing continues while the model does. A call costs the trial either the wall time
-    it took or nothing — the world held still for it — and the ``now`` handed to ``new_session`` reads the
-    instant the call's output takes effect, so layers stamp for it without knowing the mode.
+    runs on a worker, and the functions it starts on the runtime's own, so playing continues while the model
+    does. That work costs the trial either the wall time it took or nothing — the world held still for it —
+    and the ``now`` handed to ``new_session`` reads the instant its output takes effect, so layers stamp for
+    it without knowing the mode.
 
     An episode runs one ``Task``, asked for by a ``perform_task`` call and answered with the terminal
     payload it ended on. The task's ``timeout_sec`` bounds it and a truthy ``done`` within budget ends it

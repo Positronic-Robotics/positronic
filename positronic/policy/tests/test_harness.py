@@ -25,7 +25,7 @@ from positronic.policy.base import DelegatingSession, Layer, Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import Harness, _InferenceWorker
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
-from positronic.policy.remote import RemoteSession
+from positronic.policy.remote import INFER, RemoteSession, round_trip
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
 
@@ -97,7 +97,7 @@ class SpyPolicy(Policy):
         self.reset_calls: int = 0
         self.last_reset_context = None
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, rt=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _SpySession(self)
@@ -142,7 +142,7 @@ class StubPolicy(Policy):
     def meta(self) -> dict[str, object]:
         return self._meta
 
-    def new_session(self, context=None, now=None) -> Session:
+    def new_session(self, context=None, now=None, rt=None) -> Session:
         self.reset_calls += 1
         self.last_reset_context = context
         return _StubSession(self)
@@ -172,7 +172,7 @@ class ChunkPolicy(StubPolicy):
         super().__init__(*args, **kwargs)
         self.counter = 0
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, rt=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _ChunkSession(self)
@@ -213,9 +213,13 @@ class RemoteStubPolicy(Policy):
         self.target_grip = float(target_grip)
         self.wall_sec = wall_sec
 
-    def new_session(self, context=None, now=None) -> RemoteSession:
+    def new_session(self, context=None, now=None, rt=None) -> RemoteSession:
         action = [{'robot_command': self.command, 'target_grip': self.target_grip, 'timestamp': 0.0}]
-        return RemoteSession(_FakeInferenceSession(action, self.wall_sec))
+        return RemoteSession(_FakeInferenceSession(action, self.wall_sec), rt)
+
+    @property
+    def functions(self):
+        return {INFER: round_trip}
 
 
 @pytest.fixture
@@ -560,7 +564,7 @@ def test_episode_meta_includes_policy_static_meta(world):
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             self._command = CartesianPosition(pose=pose)
 
-        def new_session(self, context=None, now=None):
+        def new_session(self, context=None, now=None, rt=None):
             return _StaticMetaSession(self._command)  # Session.meta defaults to {}
 
         @property
@@ -1103,7 +1107,7 @@ class _FrameWatchingPolicy(Policy):
         self._wall_sec = wall_sec
         self.seen: list[tuple[np.ndarray, np.ndarray]] = []
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, rt=None):
         return _FrameWatchingPolicy._Session(self)
 
     class _Session(Session):
@@ -1155,7 +1159,7 @@ class _AbandonedCallPolicy(Policy):
         self._wall_sec = wall_sec
         self.events: list[str] = []
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, rt=None):
         self.events.append('open')
         return _AbandonedCallPolicy._Session(self)
 
@@ -1292,7 +1296,7 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
             return []
 
     class EmptyChunkPolicy(Policy):
-        def new_session(self, context=None, now=None):
+        def new_session(self, context=None, now=None, rt=None):
             return _EmptyChunkSession()
 
     harness = Harness(EmptyChunkPolicy(), make_embodiment())
@@ -1555,10 +1559,12 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    # A latched observation set makes every step's inference fire (the harness reads the latest value).
-    producer = ManualDriver([
-        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.0)
-    ])
+    # A latched observation set makes every step's inference fire (the harness reads the latest value). The
+    # world ends when the script runs out, so it holds open for the rounds an inference takes: one starts the
+    # round-trip, a later one reads its answer.
+    producer = ManualDriver(
+        [(partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.0)] * 4
+    )
 
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-taxonomy'), _eval_pass('run-taxonomy'):
         scheduler = world.start([harness, producer])
@@ -1583,7 +1589,9 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     assert all(r.parent_id == episode.span_id for r in by_name[telemetry_keys.SPAN_POLICY_INFER])
 
     assert episode.attrs[telemetry_keys.ATTR_EPISODE_INDEX] == 0
-    assert episode.attrs[telemetry_keys.ATTR_EPISODE_STEPS] == len(by_name[telemetry_keys.SPAN_POLICY_INFER])
+    # Every answered round-trip is one step, and the trial may end on one still in flight, which has none.
+    infers = len(by_name[telemetry_keys.SPAN_POLICY_INFER])
+    assert infers - 1 <= episode.attrs[telemetry_keys.ATTR_EPISODE_STEPS] <= infers
     assert episode.attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S] >= 0.0
 
 
@@ -1789,7 +1797,7 @@ class SlowPolicy(Policy):
         self._span_sec = span_sec
         self._steps = steps
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, rt=None):
         return _SlowSession(self._wall_sec, self._span_sec, self._steps)
 
 
@@ -1884,6 +1892,26 @@ def test_a_charged_call_costs_its_own_wall_duration(world):
 
     assert played, 'no command was played'
     assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the call took'
+
+
+@pytest.mark.timeout(20.0)
+def test_an_uncharged_function_pauses_the_world(world):
+    """A session that hands its model to the runtime spends the same trial time as one that runs it itself:
+    the world stands still for the round-trip in flight, and nothing advances until it comes back."""
+    played = _run_episode(world, RemoteStubPolicy(wall_sec=0.05), ChunkedSchedule(), charge_inference_time=False)
+
+    assert played, 'no command was played'
+    assert played[0][0] < 0.05, f'the world paid for the round-trip: first command at {played[0][0]}s'
+
+
+@pytest.mark.timeout(20.0)
+def test_a_charged_function_costs_its_own_wall_duration(world):
+    """What a charged trial pays for is the round-trip in flight, not the call that started it and returned
+    at once."""
+    played = _run_episode(world, RemoteStubPolicy(wall_sec=0.2), ChunkedSchedule(), charge_inference_time=True)
+
+    assert played, 'no command was played'
+    assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the round-trip took'
 
 
 @pytest.mark.timeout(20.0)
@@ -2070,7 +2098,7 @@ def test_finish_does_not_wait_for_the_call_in_flight():
             raise RuntimeError('inference boom')
 
     class _HangingPolicy(Policy):
-        def new_session(self, context=None, now=None):
+        def new_session(self, context=None, now=None, rt=None):
             return _HangingSession()
 
     with pimm.World() as world:
@@ -2116,7 +2144,7 @@ def test_the_run_ends_only_once_the_call_it_abandoned_is_out_of_the_policy():
             return None
 
     class _HangingPolicy(Policy):
-        def new_session(self, context=None, now=None):
+        def new_session(self, context=None, now=None, rt=None):
             return _HangingSession()
 
     with pimm.World() as world:
@@ -2165,7 +2193,7 @@ def test_the_session_is_closed_only_once_its_call_has_left_it():
             inside_at_close.append(self.inside)
 
     class _HangingPolicy(Policy):
-        def new_session(self, context=None, now=None):
+        def new_session(self, context=None, now=None, rt=None):
             return _HangingSession()
 
     with pimm.World() as world:
@@ -2215,7 +2243,7 @@ def test_a_rescheduled_trajectory_clears_the_channels_it_omits(world):
             return [{keys.ROBOT_COMMAND: command, keys.ACTION_TIMESTAMP: i * 0.01} for i in range(10)]
 
     class _GripThenArmPolicy(Policy):
-        def new_session(self, context=None, now=None):
+        def new_session(self, context=None, now=None, rt=None):
             return _GripThenArm()
 
     harness = Harness(ChunkedSchedule().wrap(_GripThenArmPolicy()), make_embodiment())

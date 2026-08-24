@@ -1,36 +1,17 @@
-"""Served functions: a call starts the work off the caller's thread and hands back an ``Answer``.
+"""The in-process runtime: a call starts the work off the caller's thread and hands back an ``Answer``."""
 
-``Answer`` is the policy API's own, not pimm's: the two are alike but not interchangeable.
-"""
-
+import concurrent.futures
 import contextvars
-from abc import ABC, abstractmethod
+import threading
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
 from typing import Any
 
-
-class NotAnswered(RuntimeError):
-    """The call has not answered yet, and reading it never waits for one."""
+from positronic.policy.base import Answer, Fn, NotAnswered, Runtime
 
 
-class Answer(ABC):
-    """The caller's handle on one call: ``done()`` once the function has answered, then ``result()``."""
-
-    @abstractmethod
-    def done(self) -> bool: ...
-
-    @abstractmethod
-    def result(self) -> Any:
-        """What the function returned, re-raising what it raised. ``NotAnswered`` before it has answered."""
-
-
-# Calling one starts the work and returns its ``Answer`` at once, never waiting.
-Fn = Callable[..., Answer]
-
-
-class Executor:
+class Executor(Runtime):
     """Serves a set of functions on worker threads of its own, ``max_workers`` calls at a time.
 
     A call runs under a copy of the context it was made in, so telemetry recorded inside it anchors where
@@ -52,14 +33,38 @@ class Executor:
     def __init__(self, functions: Mapping[str, Callable[..., Any]], *, max_workers: int = 1):
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
         self._fns: Mapping[str, Fn] = {name: partial(self._start, fn) for name, fn in functions.items()}
+        # Every call made and not answered yet, read from the caller's thread while the workers answer. The
+        # lock is reentrant because a call that answers before it is registered runs ``_answered`` inline.
+        self._pending: set[Future[Any]] = set()
+        self._lock = threading.RLock()
 
     @property
     def fns(self) -> Mapping[str, Fn]:
         return self._fns
 
+    @property
+    def in_flight(self) -> bool:
+        """Whether any call is still to answer."""
+        with self._lock:
+            return bool(self._pending)
+
+    def wait(self, timeout: float | None = None) -> None:
+        """Block until every call made so far has answered, or until ``timeout`` seconds pass."""
+        with self._lock:
+            pending = set(self._pending)
+        concurrent.futures.wait(pending, timeout=timeout)
+
     def _start(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Answer:
         context = contextvars.copy_context()
-        return self._Answer(self._pool.submit(context.run, fn, *args, **kwargs))
+        call = self._pool.submit(context.run, fn, *args, **kwargs)
+        with self._lock:
+            self._pending.add(call)
+            call.add_done_callback(self._answered)
+        return self._Answer(call)
+
+    def _answered(self, call: Future[Any]) -> None:
+        with self._lock:
+            self._pending.discard(call)
 
     def close(self) -> None:
         """Drop the queued calls and wait out those in flight, which may still hold their caller's resources.

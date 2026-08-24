@@ -17,6 +17,7 @@ from positronic.offboard.client import InferenceClient, InferenceSession, _Conne
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
+from positronic.offboard.tests.conftest import round_trip
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
@@ -244,11 +245,11 @@ class _ScriptedSession(Session):
 class _ScriptedPolicy(Policy):
     """Deterministic base policy: every session returns the same untimestamped chunk."""
 
-    def new_session(self, context=None, now=None) -> Session:
+    def new_session(self, context=None, now=None, rt=None) -> Session:
         return _ScriptedSession()
 
 
-def test_in_process_equals_remote_for_same_pipeline(start_server):
+def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
     """The same pipeline must behave identically served in-process and over the wire."""
 
     def pipeline():
@@ -257,11 +258,12 @@ def test_in_process_equals_remote_for_same_pipeline(start_server):
     clock = [100.0]
 
     host, port, _server = start_server(pipeline())
-    remote_session = RemotePolicy(f'{host}:{port}').new_session(now=lambda: clock[0])
+    remote_session, rt = open_session(RemotePolicy(f'{host}:{port}'), now=lambda: clock[0])
 
-    local_session = inline(pipeline()).new_session(now=lambda: clock[0])
+    local_session, _ = open_session(inline(pipeline()), now=lambda: clock[0])
 
-    remote_actions = remote_session({keys.OBS_TIME_NS: 0})
+    # The wire half answers the call after the one that asked, the in-process half answers the call itself.
+    remote_actions = round_trip(remote_session, rt, {keys.OBS_TIME_NS: 0})
     local_actions = local_session({keys.OBS_TIME_NS: 0})
     assert remote_actions == local_actions
     # Three scripted actions plus the chunk-closing validity sentinel ActionTimestamp appends.

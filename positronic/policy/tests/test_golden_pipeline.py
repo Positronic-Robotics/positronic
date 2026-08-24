@@ -83,7 +83,7 @@ class ScriptedProportionalPolicy(Policy):
     clock, no images. Codec stamps/truncates; the harness anchors/schedules.
     """
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, rt=None):
         return _ScriptedSession()
 
 
@@ -122,11 +122,11 @@ class _SimulatedLatency(DelegatingPolicy):
             self._held = None
             super().cancel()
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, rt=None):
         assert now is not None, 'the harness supplies the clock'
         latency_ns = self._latency_ns
         return _SimulatedLatency._Session(
-            self._inner.new_session(context, lambda: now() + latency_ns / 1e9), now, latency_ns
+            self._inner.new_session(context, lambda: now() + latency_ns / 1e9, rt), now, latency_ns
         )
 
 

@@ -4,10 +4,12 @@ import operator
 import threading
 import time
 from contextvars import ContextVar
+from functools import partial
 
 import pytest
 
-from positronic.policy.executor import Answer, Executor, NotAnswered
+from positronic.policy.base import Answer, NotAnswered
+from positronic.policy.executor import Executor
 
 # How long a test waits for the worker threads before calling the call lost.
 TIMEOUT_SEC = 5.0
@@ -113,6 +115,45 @@ def test_call_runs_under_a_copy_of_the_context_it_was_made_in(serve):
     _marker.set('episode-7')
 
     assert settled(fns['marker']()).result() == 'episode-7'
+
+
+def test_nothing_is_in_flight_before_a_call(serve):
+    assert not serve(add=operator.add).in_flight
+
+
+def test_a_call_is_in_flight_until_it_answers(serve):
+    release = threading.Event()
+    executor = serve(gate=lambda: release.wait(TIMEOUT_SEC))
+
+    answer = executor.fns['gate']()
+    assert executor.in_flight
+
+    release.set()
+    settled(answer)
+    assert not executor.in_flight
+
+
+def test_wait_returns_once_every_call_has_answered(serve):
+    executor = serve(sleep=partial(time.sleep, 0.05), add=operator.add)
+
+    first, second = executor.fns['sleep'](), executor.fns['add'](2, 3)
+    executor.wait(TIMEOUT_SEC)
+
+    assert not executor.in_flight
+    assert first.done() and second.result() == 5
+
+
+def test_wait_gives_up_at_its_timeout(serve):
+    release = threading.Event()
+    executor = serve(gate=lambda: release.wait(TIMEOUT_SEC))
+    executor.fns['gate']()
+
+    started = time.monotonic()
+    executor.wait(0.01)
+
+    assert time.monotonic() - started < TIMEOUT_SEC
+    assert executor.in_flight
+    release.set()
 
 
 def test_close_waits_out_the_call_in_flight(serve):

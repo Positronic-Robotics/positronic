@@ -9,7 +9,8 @@ import pytest
 import uvicorn
 
 from positronic.offboard.server import PolicyServer
-from positronic.policy import Policy
+from positronic.policy import Policy, Session
+from positronic.policy.executor import Executor
 from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.spec import ModelSource, PolicySource, remote
 
@@ -53,6 +54,34 @@ def start_server() -> Generator[StartServer, None, None]:
     for uv_server, thread in running:
         uv_server.should_exit = True
         thread.join(timeout=5.0)
+
+
+@pytest.fixture
+def open_session() -> Generator[Callable[..., tuple[Session, Executor]], None, None]:
+    """Opens a policy's session against a runtime serving its functions, as the harness does, and closes
+    every runtime it opened at teardown."""
+    runtimes: list[Executor] = []
+
+    def make(policy: Policy, now=None) -> tuple[Session, Executor]:
+        runtimes.append(Executor(policy.functions))
+        return policy.new_session(None, now, runtimes[-1]), runtimes[-1]
+
+    yield make
+    for runtime in runtimes:
+        runtime.close()
+
+
+# How long a round-trip against a local server may take before a test calls it lost.
+ANSWER_SEC = 5.0
+
+
+def round_trip(session: Session, rt: Executor, obs) -> list[dict] | None:
+    """What ``session`` answers for ``obs``: the call that starts a round-trip answers ``None``, and the call
+    after it comes back reads what the server returned."""
+    assert session(obs) is None, 'a round-trip was already in flight'
+    rt.wait(ANSWER_SEC)
+    assert not rt.in_flight, 'the round-trip never came back'
+    return session(obs)
 
 
 def _make_mock_policy(action, meta):

@@ -1,3 +1,4 @@
+import threading
 import time
 from http import HTTPStatus
 from unittest.mock import MagicMock, patch
@@ -11,6 +12,7 @@ from websockets.http11 import Response
 from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import command
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, _ConnectRetries
+from positronic.offboard.tests.conftest import ANSWER_SEC, round_trip
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.layers import ChunkedSchedule
@@ -55,14 +57,14 @@ class TestPrepareObs:
     """The border's own settings. Image geometry is the declared stack's business (see RestrictImageSize)."""
 
     def test_images_pass_through_untouched_by_default(self):
-        session = RemoteSession(_mock_ws_session())
+        session = RemoteSession(_mock_ws_session(), None)
         obs = {'cam': _make_image(480, 640), 'state': np.array([1.0])}
         prepared = session._prepare_obs(obs)
         assert prepared.keys() == obs.keys()
         assert all(prepared[key] is value for key, value in obs.items())
 
     def test_compression_reaches_nested_images(self):
-        session = RemoteSession(_mock_ws_session(), compress_images=True)
+        session = RemoteSession(_mock_ws_session(), None, compress_images=True)
         result = session._prepare_obs({
             'cam': _make_image(48, 64),
             'video': {'wrist': _make_image(48, 64)},
@@ -274,7 +276,7 @@ def test_remote_policy_hands_the_url_and_headers_to_the_client():
 
 
 class TestActionHorizonWrapping:
-    def test_truncates_action_chunks(self):
+    def test_truncates_action_chunks(self, open_session):
         actions = [
             {'a': 1, 'timestamp': 0.0},
             {'a': 2, 'timestamp': 0.25},
@@ -282,59 +284,107 @@ class TestActionHorizonWrapping:
             {'a': 4, 'timestamp': 0.75},
         ]
         endpoint, _ = _mock_endpoint(infer_return=actions)
-        wrapped = ActionHorizon(0.5).wrap(endpoint)
+        session, rt = open_session(ActionHorizon(0.5).wrap(endpoint))
 
-        session = wrapped.new_session()
-        actions = session({keys.OBS_TIME_NS: 0})
+        actions = round_trip(session, rt, {keys.OBS_TIME_NS: 0})
         assert actions is not None
         assert len(actions) == 3  # 2 within-horizon actions + horizon sentinel
         assert actions[0]['timestamp'] == 0.0
         assert actions[1]['timestamp'] == 0.25
         assert actions[2] == {'timestamp': 0.5}  # horizon sentinel (timestamp = horizon_sec)
 
-    def test_no_truncation_without_horizon(self):
+    def test_no_truncation_without_horizon(self, open_session):
         endpoint, _ = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}, {'a': 2, 'timestamp': 1.0}])
 
-        session = endpoint.new_session()
-        actions = session({})
+        session, rt = open_session(endpoint)
+
+        actions = round_trip(session, rt, {})
         assert actions is not None
         assert len(actions) == 2
 
 
-def test_remote_session_normalizes_single_dict():
+def test_remote_session_normalizes_single_dict(open_session):
     """Server returning a single action dict is wrapped into a 1-element list."""
     endpoint, _ = _mock_endpoint(infer_return={keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0})
+    session, rt = open_session(endpoint)
 
-    session = endpoint.new_session()
-    actions = session({})
-    assert actions == [{keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0}]
+    assert round_trip(session, rt, {}) == [{keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0}]
 
 
-def test_remote_session_passes_through_none():
+def test_remote_session_passes_through_none(open_session):
     endpoint, mock_ws = _mock_endpoint()
     mock_ws.infer.return_value = None
+    session, rt = open_session(endpoint)
 
-    session = endpoint.new_session()
+    assert round_trip(session, rt, {}) is None
+
+
+def test_a_call_while_a_round_trip_is_in_flight_answers_none(open_session):
+    """A session never waits: while its round-trip is in flight every call answers ``None``, and none of
+    them starts a second one."""
+    chunk = [{'a': 1, 'timestamp': 0.0}]
+    endpoint, mock_ws = _mock_endpoint()
+    started, release = threading.Event(), threading.Event()
+
+    def blocked(obs):
+        started.set()
+        assert release.wait(ANSWER_SEC), 'the test never released the round-trip'
+        return chunk
+
+    mock_ws.infer.side_effect = blocked
+    session, rt = open_session(endpoint)
+
     assert session({}) is None
+    assert started.wait(ANSWER_SEC), 'the round-trip never started'
+    assert session({}) is None
+    assert mock_ws.infer.call_count == 1
+
+    release.set()
+    rt.wait(ANSWER_SEC)
+    assert session({}) == chunk
 
 
-def test_records_infer_span_without_scheduling_layer(tmp_path):
+def test_a_session_without_a_runtime_refuses_to_infer():
+    """Nothing serves the round-trip without a runtime, so a session opened without one says so instead of
+    running it on the caller's thread."""
+    endpoint, _ = _mock_endpoint()
+
+    with pytest.raises(ValueError, match='needs a runtime'):
+        endpoint.new_session()({})
+
+
+def test_cancel_drops_the_round_trip_in_flight(open_session):
+    """A cancelled session lets go of the answer it was waiting for: that chunk was planned on a world the
+    cancel says is gone, and the next call asks afresh."""
+    endpoint, mock_ws = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
+    session, rt = open_session(endpoint)
+
+    assert session({}) is None
+    rt.wait(ANSWER_SEC)
+    session.cancel()
+
+    assert session({}) is None  # a round-trip of its own, not the answer the cancel dropped
+    rt.wait(ANSWER_SEC)
+    assert mock_ws.infer.call_count == 2
+
+
+def test_records_infer_span_without_scheduling_layer(tmp_path, open_session):
     """The ``policy.infer`` span is recorded at the remote inference boundary itself, not by a layer in
     front of it."""
     endpoint, _ = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
-    session = endpoint.new_session()
+    session, rt = open_session(endpoint)
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-span'):
-        assert session({keys.OBS_TIME_NS: 0}) is not None
+        assert round_trip(session, rt, {keys.OBS_TIME_NS: 0}) is not None
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     assert [s.name for s in spans] == [telemetry_keys.SPAN_POLICY_INFER]
 
 
-def test_infer_span_excludes_client_side_image_preparation(tmp_path):
+def test_infer_span_excludes_client_side_image_preparation(tmp_path, open_session):
     """``policy.infer`` is the remote round-trip, so JPEG-encoding the observation stays outside it: folding
     client CPU work into the span would inflate the inference percentiles and the policy-server capacity
     estimate the report derives from them."""
     endpoint, _ = _mock_endpoint({'compress_images': True}, infer_return=[])
-    session = endpoint.new_session()
+    session, rt = open_session(endpoint)
     encoded_at: list[int] = []
 
     def _stamp_encode(image):
@@ -343,7 +393,7 @@ def test_infer_span_excludes_client_side_image_preparation(tmp_path):
 
     with patch('positronic.policy.remote.encode_jpeg', side_effect=_stamp_encode):
         with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-prep'):
-            session({'cam': _make_image(48, 64), keys.OBS_TIME_NS: 0})
+            round_trip(session, rt, {'cam': _make_image(48, 64), keys.OBS_TIME_NS: 0})
 
     (span,) = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
     assert span.name == telemetry_keys.SPAN_POLICY_INFER
@@ -351,15 +401,15 @@ def test_infer_span_excludes_client_side_image_preparation(tmp_path):
     assert span.start_ns >= encoded_at[-1]  # every encode finishes before the span opens, not inside it
 
 
-def test_records_infer_span_when_inference_raises(tmp_path):
+def test_records_infer_span_when_inference_raises(tmp_path, open_session):
     """A raising round-trip (a stalled server surfaces ``TimeoutError``) still records its time-to-failure —
-    the span is timed in a ``finally`` — and the exception propagates."""
+    the span is timed in a ``finally`` — and the answer re-raises it at the call that reads it."""
     endpoint, mock_ws = _mock_endpoint()
     mock_ws.infer.side_effect = TimeoutError('server stalled')
-    session = endpoint.new_session()
+    session, rt = open_session(endpoint)
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-raise'):
         with pytest.raises(TimeoutError):
-            session({keys.OBS_TIME_NS: 0})
+            round_trip(session, rt, {keys.OBS_TIME_NS: 0})
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     assert [s.name for s in spans] == [telemetry_keys.SPAN_POLICY_INFER]
 
@@ -388,13 +438,13 @@ def test_empty_declaration_fails_before_motion():
         policy.new_session()
 
 
-def test_declared_stack_built_at_session_open():
+def test_declared_stack_built_at_session_open(open_session):
     """The server-declared local stack runs in front of the connection."""
     clock = [1.0]
     policy, mock_ws = _mock_remote_policy(CHUNKED_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}])
-    session = policy.new_session(now=lambda: clock[0])
-    actions = session({keys.OBS_TIME_NS: 0})
-    assert actions == [{'a': 1, 'timestamp': 1.0}]
+    session, rt = open_session(policy, now=lambda: clock[0])
+
+    assert round_trip(session, rt, {keys.OBS_TIME_NS: 0}) == [{'a': 1, 'timestamp': 1.0}]
 
 
 def test_unknown_declared_entry_fails_before_motion():
@@ -403,23 +453,27 @@ def test_unknown_declared_entry_fails_before_motion():
         policy.new_session()
 
 
-def test_compression_follows_the_server_declaration():
+def test_compression_follows_the_server_declaration(open_session):
     """A server behind a message-size cap declares ``remote(compress_images=True)`` and the rig obeys."""
     endpoint, mock_ws = _mock_endpoint({'compress_images': True}, infer_return=[])
-    endpoint.new_session()({'cam': _make_image(48, 64)})
+    session, rt = open_session(endpoint)
+
+    round_trip(session, rt, {'cam': _make_image(48, 64)})
     assert isinstance(mock_ws.infer.call_args.args[0]['cam'], dict)
 
 
-def test_frames_stay_raw_where_the_server_declares_no_compression():
+def test_frames_stay_raw_where_the_server_declares_no_compression(open_session):
     endpoint, mock_ws = _mock_endpoint({'compress_images': False}, infer_return=[])
-    endpoint.new_session()({'cam': _make_image(48, 64)})
+    session, rt = open_session(endpoint)
+
+    round_trip(session, rt, {'cam': _make_image(48, 64)})
     assert isinstance(mock_ws.infer.call_args.args[0]['cam'], np.ndarray)
 
 
 # rules-allow: hardcoded-keys — the command mapping below is spelled the way a server sends it. Reading
 # the decoder's own constants would make test and decoder agree whatever those names became, leaving the
 # wire itself unpinned.
-def test_a_command_crossing_a_live_websocket_arrives_typed(start_server, make_mock_policy):
+def test_a_command_crossing_a_live_websocket_arrives_typed(start_server, make_mock_policy, open_session):
     """A command served as a bare mapping — no ``__cmd__`` envelope, the vector a plain sequence — survives a
     real msgpack round trip over the socket and reaches the rig typed, under the stack the handshake declares."""
     pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
@@ -427,7 +481,8 @@ def test_a_command_crossing_a_live_websocket_arrives_typed(start_server, make_mo
     served = make_mock_policy(wire_action, {'model_name': 'm'})
     host, port, _ = start_server(ChunkedSchedule() | remote | PolicySource(served))
 
-    actions = RemotePolicy(f'{host}:{port}').new_session(now=lambda: 0.0)({keys.OBS_TIME_NS: 0})
+    session, rt = open_session(RemotePolicy(f'{host}:{port}'), now=lambda: 0.0)
+    actions = round_trip(session, rt, {keys.OBS_TIME_NS: 0})
 
     assert actions is not None, 'the chunk was swallowed before any command reached a driver'
     decoded = actions[0][keys.ROBOT_COMMAND]
@@ -435,19 +490,18 @@ def test_a_command_crossing_a_live_websocket_arrives_typed(start_server, make_mo
     np.testing.assert_allclose(decoded.pose.translation, [0.4, 0.0, 0.6], atol=1e-6)
 
 
-def test_remote_policy_lifecycle(inference_server, mock_policy):
+def test_remote_policy_lifecycle(inference_server, mock_policy, open_session):
     """RemotePolicy against a live server whose pipeline declares a chunked_schedule local stack."""
     host, port = inference_server
 
     policy = RemotePolicy(f'{host}:{port}')
-    session = policy.new_session(now=lambda: 0.0)
+    session, rt = open_session(policy, now=lambda: 0.0)
 
     meta = session.meta
     assert meta['server.model_name'] == 'test_model'
     assert meta['type'] == 'remote'
 
-    obs = {'dataset': 'test'}
-    action = session(obs)
+    action = round_trip(session, rt, {'dataset': 'test'})
     # Single-dict server response is normalized to a 1-element list (Session contract) and
     # anchored to absolute time by the declared ChunkedSchedule.
     assert action == [{'action_data': [1, 2, 3], 'timestamp': 0.0}]
@@ -455,7 +509,7 @@ def test_remote_policy_lifecycle(inference_server, mock_policy):
     session.close()
 
     # New session
-    session2 = policy.new_session(now=lambda: 0.0)
+    session2, _ = open_session(policy, now=lambda: 0.0)
     session2.close()
 
 
