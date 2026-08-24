@@ -158,10 +158,11 @@ def _driver(arm: FakeArm, **kwargs) -> franka.Robot:
 
 
 def _drive(loop, clock: MockClock | None = None) -> None:
-    """Pump a driver loop to exhaustion, standing in for the world by advancing ``clock`` through each Sleep."""
+    """Pump a driver loop to exhaustion, standing in for the world by advancing ``clock`` through each wait."""
     clock = clock or MockClock()
-    for sleep in loop:
-        clock.advance(sleep.seconds)
+    for wait in loop:
+        if isinstance(wait, pimm.Sleep):
+            clock.advance(wait.seconds)
 
 
 def _drive_park(driver: franka.Robot, arm: FakeArm) -> MockClock:
@@ -188,12 +189,12 @@ def test_park_drives_the_arm_to_the_park_pose():
 
 
 def test_the_park_waits_by_yielding_rather_than_blocking():
-    """A driver's waits are the world's to honour, teardown included: the park asks for them with Sleep."""
+    """A driver's waits are the world's to honour, teardown included: the park asks for them, never sleeps."""
     arm = FakeArm(JOGGED, polls_to_reach=3)
 
     commands = list(_driver(arm, manage_desk=False)._arm(StopFlag(), MockClock()).park())
 
-    assert commands and all(isinstance(command, pimm.Sleep) for command in commands)
+    assert commands and all(isinstance(command, pimm.Sleep | pimm.Yield) for command in commands)
 
 
 def test_park_gives_up_when_the_goal_stops_advancing():
@@ -207,11 +208,14 @@ def test_park_gives_up_when_the_goal_stops_advancing():
 
 def test_park_gives_up_when_the_arm_does_not_arrive_in_time():
     arm = FakeArm(JOGGED, polls_to_reach=10**9)
+    clock = MockClock()
+    parking = _driver(arm, manage_desk=False)._arm(StopFlag(), clock)
+    budget = parking._travel_s(JOGGED, PARK)
 
-    clock = _drive_park(_driver(arm, manage_desk=False), arm)
+    _drive(parking.park(), clock)
 
-    # It waits out the timeout and gives up within one poll interval of it.
-    assert franka._Arm._PARK_TIMEOUT_S <= clock.now() < franka._Arm._PARK_TIMEOUT_S + franka._Arm._PARK_POLL_S
+    # It waits out the travel the pose is worth and gives up within a poll of it.
+    assert budget <= clock.now() < budget + 0.01
     assert arm.calls.count(Call.GOAL) > 1
     np.testing.assert_allclose(arm.q, JOGGED)
 

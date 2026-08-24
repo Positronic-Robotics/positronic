@@ -111,10 +111,6 @@ class _Arm(DriverRun[command.CommandType]):
     _MAX_JOINT_VELOCITY = np.array([2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26])
     # On top of the travel itself: the robot's controller ramps in and out of its speed cap, and settles late
     _MOVE_GRACE_S = 5.0
-    # Parking publishes nothing, so it comes back only as often as it needs to ask again
-    _PARK_POLL_S = 0.005
-    # Spent inside the world's teardown budget; past it the driver stops control where the arm stands
-    _PARK_TIMEOUT_S = 10.0
 
     def __init__(
         self,
@@ -185,9 +181,13 @@ class _Arm(DriverRun[command.CommandType]):
         return self._MOVE_GRACE_S + float(np.max(np.abs(target - q) / cap))
 
     def move_to(
-        self, target: np.ndarray, mode: command.ControlModeType | None
+        self, target: np.ndarray, mode: command.ControlModeType | None, *, at_teardown: bool = False
     ) -> Generator[pimm.Command, None, MoveStatus]:
-        """Travel to ``target`` under ``mode``, yielding until it arrives."""
+        """Travel to ``target`` under ``mode``, yielding until it arrives.
+
+        ``at_teardown`` is for the move the driver makes on its way out. The stop is already set by then, so
+        heeding it would abandon the move before it began, and recovering from a fault cancels the goal.
+        """
         # The first emit must not ship an unfilled state.
         self.state.encode(self.robot.state(), RobotStatus.BUSY)
         self.out.emit(self.state)
@@ -197,8 +197,11 @@ class _Arm(DriverRun[command.CommandType]):
         def expired() -> bool:
             return self.clock.now() >= deadline
 
+        def abandoned() -> bool:
+            return self.should_stop.value and not at_teardown
+
         def should_stop() -> bool:
-            return self.should_stop.value or expired()
+            return abandoned() or expired()
 
         try:
             self.command_target(target, mode)
@@ -206,7 +209,7 @@ class _Arm(DriverRun[command.CommandType]):
                 st = self.robot.state()
                 self.state.encode(st, RobotStatus.BUSY)
                 self.out.emit(self.state)
-                if st.error != 0:
+                if st.error != 0 and not at_teardown:
                     self.robot.recover_from_errors()
                 yield wait
             # The loop exits before it polls again, so a goal that landed as the deadline passed is unseen.
@@ -218,7 +221,7 @@ class _Arm(DriverRun[command.CommandType]):
             self.moves.errored = True
             raise
 
-        if self.should_stop.value:
+        if abandoned():
             return MoveStatus.GAVE_UP
         self.moves.errored = False
         # The poll that reports arrival ends the loop, so the sample before it was taken mid-travel
@@ -266,7 +269,7 @@ class _Arm(DriverRun[command.CommandType]):
                 call.set_exception(exc)  # an arm the driver cannot read still leaves nobody waiting
 
     def park(self) -> Iterator[pimm.Command]:
-        """Move the arm to the park pose, giving up after ``_PARK_TIMEOUT_S``. Drive with ``yield from``.
+        """Move the arm to the park pose. Drive with ``yield from``.
 
         Only a stop gets here: a run that ends by raising skips the park, because moving an arm in answer to
         a fault is the driver deciding on its own to move. Where it goes is fixed — ``_PARK_JOINTS``, at the
@@ -275,14 +278,8 @@ class _Arm(DriverRun[command.CommandType]):
         try:
             logger.info('Parking the arm')
             self.robot.recover_from_errors()  # once, before the move: a reflex during the move ends the park
-            deadline = self.clock.now() + self._PARK_TIMEOUT_S
             # The park pose is a long way off, and only the native law shapes the reference on the way there.
-            self.command_target(_PARK_JOINTS, None)
-            outcome = yield from self.await_goal(
-                lambda: self.clock.now() >= deadline, lambda: pimm.Sleep(self._PARK_POLL_S)
-            )
-            if outcome is MoveStatus.GAVE_UP:
-                logger.error(f'Parking timed out after {self._PARK_TIMEOUT_S}s, the arm stays where it stands')
+            yield from self.move_to(_PARK_JOINTS, None, at_teardown=True)
         # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
         except Exception:
             logger.exception('Parking failed, the arm stays where it stands')
