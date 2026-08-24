@@ -904,6 +904,30 @@ def test_a_handler_the_trial_does_not_name_is_left_alone(world):
 
 
 @pytest.mark.timeout(3.0)
+@pytest.mark.parametrize('simulated', [False, True], ids=['real', 'sim'])
+def test_only_a_real_rig_is_put_back_where_the_trial_placed_it(world, simulated):
+    """A powered arm holds the policy's last setpoint through the gap to the next trial, so a real rig is
+    asked for the trial's start pose again once the recording stops. A sim's arm is placed by the next
+    trial's prepare, so nothing is asked between episodes."""
+    placed = []
+    arm = _Scene(placed.append)
+    handlers = {keys.ARM: arm.env_reset}
+    harness = Harness(StubPolicy(), make_embodiment(simulated=simulated, prepare_handlers=handlers))
+    p = _pair_all(world, harness)
+    wire_call(world, harness.prepare[keys.ARM], arm.env_reset)
+
+    start = JointPosition(np.arange(7, dtype=np.float64))
+    scheduler = world.start([harness, arm, _Pacer()])
+    answer = p['perform_task'](Task(instruction_source='stack', timeout_sec=0.05, prepare_args={keys.ARM: start}))
+    drive_scheduler(scheduler, steps=2000)
+
+    assert answer.done(), 'the episode never ended, so there was no close to be put back by'
+    assert len(placed) == (1 if simulated else 2)
+    # The same object every time: a trial closes on the joints it opened on, never a fresh draw.
+    assert all(asked is start for asked in placed)
+
+
+@pytest.mark.timeout(3.0)
 def test_a_trial_asking_to_ready_what_the_rig_has_not_got_fails_loudly(world):
     """Only the handlers a task names are asked, so a name matching none of them would go unasked and the
     trial would open on a rig nothing readied."""
