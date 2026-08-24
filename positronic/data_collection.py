@@ -125,24 +125,31 @@ class DataCollectionController(pimm.ControlSystem):
 
         self.robot_commands = pimm.ControlSystemEmitter(self)
         self.sync_move = pimm.calls.ControlSystemCaller[roboarm.command.CommandType, None](self)
+        self.redraw_scene = pimm.calls.ControlSystemCaller[Any, None](self)
         self.target_grip = pimm.ControlSystemEmitter(self)
 
         self.ds_agent_commands = pimm.ControlSystemEmitter(self)
         self.sound = pimm.ControlSystemEmitter(self)
 
-    def _move_to_start(self, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
-        """Put the arm at a start pose drawn around the nominal joints, yielding until it is there.
+    def _ready(self, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
+        """Redraw the scene and put the arm at a start pose drawn around the nominal joints, yielding until
+        both are done.
 
-        Raises whatever the arm's driver failed the move with: a call hands its handler's exception back, so
-        the vocabulary is the driver's — a move abandoned, a target it cannot hold, a fault from the vendor.
+        Raises whatever a device failed on: a call hands its handler's exception back, so the vocabulary is
+        the driver's — a move abandoned, a target it cannot hold, a fault from the vendor.
         """
-        logging.info('Moving the arm to a start pose')
-        answer = self.sync_move(roboarm.command.sampled_joints(self._nominal_joints, self._joints_spread))
-        while not answer.done():
+        logging.info('Readying the rig for the next episode')
+        asks = []
+        if self.redraw_scene.connected:  # a real scene is a person's to set up, and nothing here is asked
+            asks.append(self.redraw_scene(None))
+        if len(self._nominal_joints):  # a station with no arm has none to put anywhere
+            asks.append(self.sync_move(roboarm.command.sampled_joints(self._nominal_joints, self._joints_spread)))
+        ready = pimm.calls.all_of(asks)
+        while not ready.done():
             if should_stop.value:
                 return
             yield pimm.Sleep(0.001)
-        answer.result()
+        ready.result()
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
         sounds = Path(package_assets_path('assets/sounds'))
@@ -182,13 +189,12 @@ class DataCollectionController(pimm.ControlSystem):
                         self.sound.emit(abort_wav_path)
                     tracker.turn_off()
                     recording = False
-                    if len(self._nominal_joints):  # a station with no arm has none to put anywhere
-                        try:
-                            yield from self._move_to_start(should_stop)
-                        # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
-                        except Exception as e:
-                            logging.error(f'The arm did not reach its start pose: {e}')
-                            self.sound.emit(error_wav_path)
+                    try:
+                        yield from self._ready(should_stop)
+                    # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
+                    except Exception as e:
+                        logging.error(f'The rig was not readied: {e}')
+                        self.sound.emit(error_wav_path)
 
                 self.target_grip.emit(button_handler.get_value('right_trigger'))
                 cp_msg = self.controller_positions.read()
@@ -363,6 +369,7 @@ def main_sim(
         # The sim carries both the arm and the gripper ports, so it fills both slots.
         ds_agent = wire.wire(world, data_collection, dataset_writer, cameras, sim, sim, gui, TimeMode.MESSAGE)
         _wire(world, ds_agent, data_collection, webxr, sim, sound)
+        world.connect(data_collection.redraw_scene, sim.env_reset)
 
         sim_iter = world.start([sim, data_collection], [webxr, gui, ds_agent, sound])
         sim_iter = iter(sim_iter)

@@ -223,6 +223,30 @@ def test_the_right_stick_holds_the_session_until_the_arm_is_at_its_start_pose(wo
     assert marks['arrived'] > marks['waited']
 
 
+def test_the_right_stick_redraws_the_scene_the_arm_is_put_back_into(world):
+    """One press readies every device the station has: a sim's scene is drawn again alongside the arm's
+    start pose, and the session stays held until both have answered."""
+    dc, arm, buttons, grips, _ = build_teleop_arm(world)
+    scene = world.pair(dc.redraw_scene)
+    asked, marks = [], {}
+
+    driver = ManualDriver([
+        (lambda: buttons.emit(make_buttons(stick=0.0)), 0.01),
+        (lambda: buttons.emit(make_buttons(stick=1.0)), 0.01),
+        (lambda: asked.extend([*scene.incoming(), *arm.incoming()]), 0.01),
+        (lambda: marks.update(asked=len(grips.emitted)), 0.01),
+        (lambda: asked[0].set_result(None), 0.01),
+        (lambda: marks.update(drawn=len(grips.emitted)), 0.01),
+        (lambda: asked[1].set_result(None), 0.01),
+        (lambda: marks.update(placed=len(grips.emitted)), 0.0),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    assert len(asked) == 2, 'the press reached only one of the scene and the arm'
+    assert marks['drawn'] == marks['asked'], 'the session went on with the arm still travelling'
+    assert marks['placed'] > marks['drawn']
+
+
 def test_a_start_pose_the_arm_refuses_is_sounded_to_the_operator(world):
     """A move the arm fails is the operator's to hear about and ask for again; the session goes on."""
     dc, arm, buttons, grips, sounds = build_teleop_arm(world)
