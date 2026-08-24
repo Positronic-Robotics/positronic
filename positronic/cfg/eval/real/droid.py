@@ -3,7 +3,7 @@ import configuronic as cfn
 from positronic import keys
 from positronic.cfg.embodiment import droid
 from positronic.cfg.eval.real.tasks import BATTERIES_TASK, SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK, UNIFIED_TASK
-from positronic.cfg.hardware.roboarm import franka_start_pose
+from positronic.cfg.hardware.roboarm import droid_start_pose
 from positronic.eval import Eval, Task
 
 
@@ -21,7 +21,7 @@ def _droid_pick_place(embodiment, instruction, timeout, trial_count):
             Task(
                 instruction_source=instruction,
                 timeout_sec=timeout,
-                prepare_args={keys.ARM: franka_start_pose(), keys.GRIPPER: 0.0},
+                prepare_args={keys.ARM: droid_start_pose(), keys.GRIPPER: 0.0},
                 meta={keys.EVAL_TRIAL_INDEX: trial, keys.EVAL_TRIAL_COUNT: trial_count},
             )
             for trial in range(trial_count)

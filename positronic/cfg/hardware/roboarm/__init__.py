@@ -18,8 +18,8 @@ DROID_IMPEDANCE = command.Impedance(
 )
 
 
-def franka_start_pose() -> command.JointPosition:
-    """Where a Franka trial puts the arm before it opens, drawn afresh on every call."""
+def droid_start_pose() -> command.JointPosition:
+    """The command a DROID trial opens with: joints drawn afresh around the Franka's nominal, under DROID's gains."""
     return command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD, DROID_IMPEDANCE)
 
 

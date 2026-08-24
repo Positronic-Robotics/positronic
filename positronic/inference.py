@@ -16,7 +16,7 @@ import positronic.cfg.policy as policy_cfg
 from pimm.logging import init_logging
 from positronic import keys, wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
-from positronic.cfg.hardware.roboarm import franka_start_pose
+from positronic.cfg.hardware.roboarm import droid_start_pose
 from positronic.cli.eval.run import prepare_output_dir, run
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
@@ -72,9 +72,7 @@ def _attended_task(instruction: str) -> Task:
     the episode to a budget either — the operator is what ends it.
     """
     return Task(
-        instruction_source=instruction,
-        timeout_sec=None,
-        prepare_args={keys.ARM: franka_start_pose(), keys.GRIPPER: 0.0},
+        instruction_source=instruction, timeout_sec=None, prepare_args={keys.ARM: droid_start_pose(), keys.GRIPPER: 0.0}
     )
 
 
