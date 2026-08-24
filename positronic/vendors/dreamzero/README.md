@@ -52,7 +52,7 @@ The server owns the whole policy pipeline: it runs the codec (raw observations i
 commands out) and declares the rig-side half — the model's autoregressive video context
 (`TemporalStack`, which must run every control tick to record frames) plus chunk scheduling — in its
 handshake. The client builds that declared stack automatically.
-(Server config and defaults: [`server.py`](./server.py); wrappers: [`codecs.py`](./codecs.py);
+(Server config and defaults: [`server.py`](./server.py); layers: [`codecs.py`](./codecs.py);
 remote-policy protocol: [Inference Guide](../../../docs/inference.md).)
 
 ## Full pipeline (fine-tune your own checkpoint)
@@ -209,7 +209,7 @@ protocol details in the [Inference Guide](../../../docs/inference.md).
 - **Observation**: 3 cameras (2 exterior + 1 wrist) + joint state + language prompt. The wan2.2 fine-tunes
   use the `(320, 176)` codec and the trainer resizes to 160 at load; the pretrained DROID model (wan2.1)
   asserts exactly `(320, 180)`, so the `droid` codec (`codecs.droid`) feeds that resolution.
-- **Action horizon**: 24 timesteps per inference; the server-declared `dreamzero_wrappers` re-query
+- **Action horizon**: 24 timesteps per inference; the server-declared `dreamzero_layers` re-query
   aligns the chunk schedule with the AR frame-stack window
 - **Wire protocol**: Positronic's standard WebSocket protocol — see [Connect Your Model](../../../docs/connect-your-model.md)
 - **No Positronic fork**: upstream DreamZero is used unmodified (pinned SHA in [`Dockerfile`](./Dockerfile));

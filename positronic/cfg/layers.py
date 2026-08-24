@@ -1,7 +1,7 @@
 import configuronic as cfn
 
 from positronic import keys as obs_keys
-from positronic.policy.wrappers import ChunkedSchedule, StopOnFault, TemporalStack
+from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
 
 chunked_schedule = cfn.Config(ChunkedSchedule)
 temporal_stack = cfn.Config(TemporalStack)
@@ -28,7 +28,7 @@ def _frame_offsets_sec(history_frames: int, stride: int, fps: float) -> tuple[fl
 @cfn.config(
     keys=(obs_keys.WRIST_IMAGE, obs_keys.EXTERIOR_IMAGE, obs_keys.EE_POSE, obs_keys.GRIP), fps=15.0, pad_start=True
 )
-def video_context_wrappers(history_frames: int, stride: int, keys: tuple[str, ...], fps: float, pad_start: bool):
+def video_context_layers(history_frames: int, stride: int, keys: tuple[str, ...], fps: float, pad_start: bool):
     """The pipeline's local half for video-conditioned policies: strided temporal context, scheduling.
 
     The temporal stack sits outside the scheduler so it records the named ``keys`` every control tick and

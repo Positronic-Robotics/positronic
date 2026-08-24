@@ -4,7 +4,7 @@ Recordings are written with `rerun <https://rerun.io>`_, a logging/visualization
 tool. Each episode becomes one ``.rrd`` file in the recording directory; open it in
 the rerun viewer to inspect what flowed through the policy.
 
-A :class:`Recorder` hands out lightweight ``tap(name)`` wrappers. A tap inserted
+A :class:`Recorder` hands out lightweight ``tap(name)`` layers. A tap inserted
 into a policy pipeline logs the observation passing *down* through it and the action
 chunk coming back *up*, under entity paths prefixed by its ``name``. Placing two
 taps at different points captures both ends of a remote inference round-trip in one
@@ -56,7 +56,7 @@ import rerun.blueprint as rrb
 from positronic import geom
 from positronic import keys as obs_keys
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.policy.base import DelegatingSession, PolicyWrapper, Session
+from positronic.policy.base import DelegatingSession, Layer, Session
 from positronic.policy.codec import is_action
 from positronic.utils.rerun_compat import log_numeric_series, set_timeline_sequence, set_timeline_time
 
@@ -297,7 +297,7 @@ def _log_ee_pose_chunk(
 
 
 class Recorder:
-    """Writes one rerun ``.rrd`` file per episode and hands out ``tap(name)`` wrappers.
+    """Writes one rerun ``.rrd`` file per episode and hands out ``tap(name)`` layers.
 
     Taps share the recorder's current episode stream, so taps placed at different
     points in one pipeline write to the same recording. The episode boundary is
@@ -352,14 +352,14 @@ class Recorder:
         self._live -= 1
 
 
-class _RecordingTap(PolicyWrapper):
+class _RecordingTap(Layer):
     """A named tap. Wraps a single session to log its observations and actions."""
 
     def __init__(self, rec: Recorder, name: str):
         self._rec = rec
         self._name = name
 
-    def wrap_session(self, inner: Session, context, now) -> Session:
+    def make_session(self, inner: Session, context, now) -> Session:
         stream = self._rec._open_stream()
         return _RecordingTapSession(inner, self._rec, self._name, stream)
 

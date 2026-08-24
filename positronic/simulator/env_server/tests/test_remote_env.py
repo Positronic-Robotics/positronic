@@ -21,8 +21,8 @@ from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Task
 from positronic.policy import Policy, Session
 from positronic.policy.codec import ActionTimestamp
+from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.tests.test_harness import StubPolicy
-from positronic.policy.wrappers import ChunkedSchedule
 from positronic.simulator.env_server.adapter import EnvAdapter, _in_env_control_frame, _wire_command
 from positronic.simulator.env_server.client import _CLOSE_ACK_TIMEOUT, EnvConnection
 from positronic.simulator.env_server.launcher import free_port

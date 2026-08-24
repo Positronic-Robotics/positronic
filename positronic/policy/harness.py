@@ -28,7 +28,7 @@ MAX_ACTION_SKEW_SEC = 60.0
 # and with it the granularity every command timestamp is quantized to.
 POLL_PERIOD_SEC = 0.01
 
-# How long a submitted call may take and still resolve within its round: a wrapper that skips inference
+# How long a submitted call may take and still resolve within its round: a layer that skips inference
 # answers in microseconds, a real model call runs far past this and is throttled across rounds.
 SKIP_REPLY_SEC = 0.001
 
@@ -81,7 +81,7 @@ class _InferenceWorker:
         return {name: value.copy() if isinstance(value, np.ndarray) else value for name, value in obs.items()}
 
     def submit(self, obs: dict[str, Any]) -> None:
-        """Start a call on ``obs``. The moment's wait lets a wrapper that skips inference resolve in the round
+        """Start a call on ``obs``. The moment's wait lets a layer that skips inference resolve in the round
         it was asked."""
         self._t0_ns, self._wall_t0 = self._clock.now_ns(), time.monotonic()
         # The call runs under a copy of the loop's context, so the telemetry it records anchors to the episode
@@ -197,10 +197,10 @@ class _EpisodeTelemetry:
 class Harness(pimm.ControlSystem):
     """Control system that runs the episode lifecycle and plays the policy's trajectory to the drivers.
 
-    The wrapper owns the trajectory, the harness plays it, one command per channel per round. The session call
+    The layer owns the trajectory, the harness plays it, one command per channel per round. The session call
     runs on a worker so playing continues while the model does. A call costs the trial either the wall time
     it took or nothing — the world held still for it — and the ``now`` handed to ``new_session`` reads the
-    instant the call's output takes effect, so wrappers stamp for it without knowing the mode.
+    instant the call's output takes effect, so layers stamp for it without knowing the mode.
 
     An episode runs one ``Task``, asked for by a ``perform_task`` call and answered with the terminal
     payload it ended on. The task's ``timeout_sec`` bounds it and a truthy ``done`` within budget ends it
@@ -472,7 +472,7 @@ class Harness(pimm.ControlSystem):
     def _reschedule(self, trajectory: list[dict[str, Any]], clock: pimm.Clock) -> None:
         """Replace the schedule being played with the session's trajectory. Every channel it names gets that
         channel's waypoints; one it omits is cleared and holds. The timestamps are already absolute, stamped
-        by the scheduling wrapper for the instant the call's output takes effect.
+        by the scheduling layer for the instant the call's output takes effect.
         """
         if self._deadline is not None and clock.now() >= self._deadline:
             # The world reached the deadline while the call was in flight, so its chunk is dropped rather than
@@ -480,7 +480,7 @@ class Harness(pimm.ControlSystem):
             return
         self._assert_anchored(trajectory, clock.now())
         self._telemetry.step()
-        # The single explicit seconds->ns seam: wrappers time actions in float seconds, the schedules and
+        # The single explicit seconds->ns seam: layers time actions in float seconds, the schedules and
         # every pimm channel are in ns.
         for name, schedule in self._schedules.items():
             schedule.clear()

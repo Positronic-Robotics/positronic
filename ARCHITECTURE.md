@@ -116,20 +116,20 @@ control system its clock, and no component reads time at point of use. Trajector
 the same time frame the observations carry, so a virtual clock, a slowed sim, or a replayed episode
 changes nothing downstream.
 
-**The wrapper owns the plan, the harness plays it, the driver executes.** A policy speaks in
+**The layer owns the plan, the harness plays it, the driver executes.** A policy speaks in
 trajectories — waypoints with absolute timestamps — because a model predicts a horizon, not an
 instant. But a trajectory on the wire makes every driver buffer the future, and makes the recording
 guess which prefix of that buffer actually ran. So the plan stops at the harness: a command channel
 carries the single command due at the moment it is emitted, the driver executes the latest one and
 holds otherwise, and emission time *is* execution time. Continuous-update schemes (RTC, temporal
-ensembling) therefore need no special mechanism: they are wrappers that hand back a new trajectory
+ensembling) therefore need no special mechanism: they are layers that hand back a new trajectory
 more often, and the harness keeps playing the old one until they do.
 
 **The harness stays thin.** It is the one layer standing between any policy and any embodiment, so
 anything it encodes about either side breaks the any-to-any goal. It assembles the observation
 dict, calls the session, plays the returned trajectory one command per channel per round, and runs
 episode lifecycle — nothing else. Scheduling, blending, history stacking and error recovery live in
-the wrapper stack around the policy; a session returning `None` means "keep executing the current
+the layer stack around the policy; a session returning `None` means "keep executing the current
 trajectory".
 
 **Inference cost is a fact of the trial, owned by the harness.** A call costs the trial either the
@@ -138,7 +138,7 @@ and a real rig pays it regardless. Only the harness reads the flag. Paying nothi
 world for the call, which holds a virtual clock still; paying wall time means letting the world run,
 though no further ahead of the call's start than wall time has. The clock the harness hands the
 policy stack (`now`) reads the instant the in-flight call's output takes effect, so a scheduling
-wrapper stamps its chunk at `now()` and never learns the mode.
+layer stamps its chunk at `now()` and never learns the mode.
 
 **Recordings are canonical; codecs bind the dialect late.** The dataset records every run in the
 canonical conventions (frames, key names, absolute time) — never in a model's dialect. Every

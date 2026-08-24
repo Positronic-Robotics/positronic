@@ -5,8 +5,8 @@ from fastapi import WebSocketDisconnect
 from starlette.datastructures import QueryParams
 
 from positronic.offboard.protocol import deserialise
+from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.spec import remote
-from positronic.policy.wrappers import ChunkedSchedule
 
 pytest.importorskip('torch')
 

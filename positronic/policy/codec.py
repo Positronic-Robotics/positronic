@@ -24,7 +24,7 @@ from positronic.dataset.transforms.episode import Derive, EpisodeTransform, From
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee_frame
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
-from positronic.policy.base import PAR, SEQ, DelegatingSession, PolicyWrapper, Session, _ComposedWrapper
+from positronic.policy.base import PAR, SEQ, DelegatingSession, Layer, Session, _ComposedLayer
 from positronic.utils import merge_dicts
 
 _QUAT = geom.Rotation.Representation.QUAT
@@ -48,7 +48,7 @@ def lerobot_action(dim: int) -> dict[str, Any]:
     return {'shape': (dim,), 'names': ['actions'], 'dtype': 'float32'}
 
 
-class Codec(PolicyWrapper):
+class Codec(Layer):
     """Base class for observation/action codecs.
 
     Subclasses override ``encode`` (observation encoding) and/or ``_decode_single``
@@ -81,16 +81,16 @@ class Codec(PolicyWrapper):
     def meta(self) -> dict:
         return {}
 
-    def wrap_session(self, inner: Session, context, now):
+    def make_session(self, inner: Session, context, now):
         return _CodecSession(inner, self)
 
     @final
     def __or__(self, other):
         if isinstance(other, Codec):
             return _ComposedCodec(self, other)
-        if isinstance(other, PolicyWrapper):
-            # Mixed Codec | non-Codec-wrapper → generic pipeline, not a Codec.
-            return _ComposedWrapper((self, *other._wrappers()))
+        if isinstance(other, Layer):
+            # Mixed Codec | non-Codec layer → generic pipeline, not a Codec.
+            return _ComposedLayer((self, *other._layers()))
         return NotImplemented
 
     @final

@@ -13,9 +13,9 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.policy import Codec, Policy, Session
+from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.observation import TASK_FIELD
 from positronic.policy.spec import PolicySource, inline
-from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot_0_3_3.backbone import register_all
 

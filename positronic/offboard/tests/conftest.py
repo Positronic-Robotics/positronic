@@ -10,8 +10,8 @@ import uvicorn
 
 from positronic.offboard.server import PolicyServer
 from positronic.policy import Policy
+from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.spec import ModelSource, PolicySource, remote
-from positronic.policy.wrappers import ChunkedSchedule
 
 
 def _find_free_port() -> int:

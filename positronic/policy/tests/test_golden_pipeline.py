@@ -44,7 +44,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import DelegatingPolicy, DelegatingSession, Now, Policy, Session
 from positronic.policy.codec import ActionTiming
 from positronic.policy.harness import Harness
-from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
+from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
 
 GOLDEN_FILE = Path(__file__).parent / 'golden_pipeline.json.gz'

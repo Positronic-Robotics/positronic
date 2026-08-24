@@ -12,8 +12,8 @@ from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
 from positronic.policy import Codec, Policy
 from positronic.policy.codec import RestrictImageSize
+from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.spec import ModelSource, Pipeline, remote
-from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.utils.checkpoints import list_checkpoints, resolve_checkpoint
 from positronic.vendors.lerobot import codecs as lerobot_codecs
 from positronic.vendors.lerobot.policy import LerobotPolicy, _detect_device, warm_observation

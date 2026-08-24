@@ -19,8 +19,8 @@ from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer
 from positronic.offboard.server_utils import warmup
 from positronic.policy import Codec, Policy, RemotePolicy, Session
 from positronic.policy.codec import ActionTimestamp
+from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
-from positronic.policy.wrappers import ChunkedSchedule, TemporalStack
 
 
 class _StubSource(ModelSource):
