@@ -97,6 +97,8 @@ def _revolute_joint_names(urdf_xml):
 
 
 _MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collision'
+# Where the driver leaves the arm: taking control it travels here, and handing it back it returns here.
+_PARK_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 
 
 class _Arm(DriverRun[command.CommandType]):
@@ -117,7 +119,6 @@ class _Arm(DriverRun[command.CommandType]):
         sync_move: pimm.calls.ControlSystemHandler[command.CommandType, None],
         async_move: pimm.SignalReceiver[command.CommandType],
         out: pimm.SignalEmitter[FrankaState],
-        park_joints: list[float],
         park_timeout_s: float,
         dynamics_factor: float,
         should_stop: pimm.SignalReceiver,
@@ -127,7 +128,6 @@ class _Arm(DriverRun[command.CommandType]):
         self.vendor = vendor
         self.out = out
         self.state = FrankaState()
-        self.park_joints = np.asarray(park_joints, dtype=np.float64)
         self._park_timeout_s = park_timeout_s
         self._dynamics_factor = dynamics_factor
 
@@ -275,7 +275,7 @@ class _Arm(DriverRun[command.CommandType]):
         """Move the arm to the park pose, giving up after ``park_timeout_s``. Drive with ``yield from``.
 
         Only a stop gets here: a run that ends by raising skips the park, because moving an arm in answer to
-        a fault is the driver deciding on its own to move. Where it goes is fixed — ``park_joints``, at the
+        a fault is the driver deciding on its own to move. Where it goes is fixed — ``_PARK_JOINTS``, at the
         configured dynamics factor. Nothing here can fail the shutdown; failures are logged and no more.
         """
         try:
@@ -284,7 +284,7 @@ class _Arm(DriverRun[command.CommandType]):
             deadline = self.clock.now() + self._park_timeout_s
             # The park pose is a long way off, and only the native law shapes the reference on the way there.
             outcome = yield from self.await_goal(
-                self.park_joints, lambda: self.clock.now() >= deadline, lambda: pimm.Sleep(self._PARK_POLL_S), None
+                _PARK_JOINTS, lambda: self.clock.now() >= deadline, lambda: pimm.Sleep(self._PARK_POLL_S), None
             )
             if outcome is MoveStatus.GAVE_UP:
                 logger.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
@@ -299,7 +299,6 @@ class Robot(pimm.ControlSystem):
         ip: str,
         *,
         relative_dynamics_factor=0.2,
-        park_joints: list[float],
         load: tuple | None = None,
         collision_coeff: float = 2.0,
         manage_desk: bool = True,
@@ -309,7 +308,6 @@ class Robot(pimm.ControlSystem):
         """
         :param ip: IP address of the robot.
         :param relative_dynamics_factor: Relative dynamics factor in (0, 1]. Smaller values are more conservative.
-        :param park_joints: Joints the arm is put at when the driver takes control, and again when it hands it back.
         :param collision_coeff: Multiplier for collision thresholds. Higher = more tolerant.
         :param manage_desk: Run the Desk session from the driver: open the brakes and activate FCI on start, close
             them on stop. Requires ``FRANKA_DESK_USER`` and ``FRANKA_DESK_PASSWORD`` in the environment. Set to
@@ -318,13 +316,12 @@ class Robot(pimm.ControlSystem):
         :param reboot_on_safety_error: When the control box is in an unrecoverable ``SafetyError`` on start, reboot
             it, wait for it to come back, and try once more before giving up. Only applies when ``manage_desk`` is
             set.
-        :param park_timeout_s: How long the arm may travel back to ``park_joints`` when the run ends before the
+        :param park_timeout_s: How long the arm may travel back to its park pose when the run ends before the
             driver gives up and stops control where it stands. It is spent inside the world's teardown budget.
         """
         assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
-        self._park_joints = park_joints
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state = pimm.ControlSystemEmitter[FrankaState](self)
@@ -439,7 +436,6 @@ class Robot(pimm.ControlSystem):
             self.sync_move,
             self.commands,
             self.state,
-            self._park_joints,
             self._park_timeout_s,
             self._relative_dynamics_factor,
             should_stop,
@@ -454,7 +450,7 @@ class Robot(pimm.ControlSystem):
             vendor.recover_from_errors()
 
             try:
-                yield from arm.move_to(arm.park_joints, None)
+                yield from arm.move_to(_PARK_JOINTS, None)
             # rules-allow: swallowed-error — an arm that will not park reads ERROR; it does not end the run
             except Exception as exc:
                 logger.error(f'The arm did not reach the park pose, it is not where the driver put it: {exc}')
@@ -488,9 +484,7 @@ class Robot(pimm.ControlSystem):
 
 if __name__ == '__main__':
     with pimm.World() as world:
-        robot = Robot(
-            '172.168.0.2', relative_dynamics_factor=0.2, park_joints=[0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
-        )
+        robot = Robot('172.168.0.2', relative_dynamics_factor=0.2)
         commands = world.pair(robot.commands)
         state = world.pair(robot.state)
         world.start([], background=robot)

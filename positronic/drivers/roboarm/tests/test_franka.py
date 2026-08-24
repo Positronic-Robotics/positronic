@@ -152,7 +152,7 @@ def desk(monkeypatch) -> FakeDesk:
 
 
 def _driver(arm: FakeArm, **kwargs) -> franka.Robot:
-    robot = franka.Robot('192.0.2.1', park_joints=list(PARK), **kwargs)
+    robot = franka.Robot('192.0.2.1', **kwargs)
     robot._robot = arm  # `_vendor` hands back an already-set handle, which is how the fake arm gets in
     return robot
 

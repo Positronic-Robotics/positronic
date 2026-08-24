@@ -44,6 +44,8 @@ _JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
 _MJCF_PATH = 'assets/mujoco/i2rt_yam/yam.xml'
 _IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limit clamping
 _IK_ROT_TOL = 1e-2  # radians
+# Where the driver leaves the chain when it takes control: the menagerie "home" keyframe, folded up and back.
+_PARK_JOINTS = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
 
@@ -168,7 +170,6 @@ class _Chain(DriverRun[command.CommandType]):
         async_move: pimm.SignalReceiver[command.CommandType],
         out: pimm.SignalEmitter[YamState],
         grip_out: pimm.SignalEmitter[float],
-        park_joints: np.ndarray,
         base_pose: geom.Transform3D,
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
@@ -178,7 +179,6 @@ class _Chain(DriverRun[command.CommandType]):
         self.out = out
         self.grip_out = grip_out
         self.state = YamState()
-        self._park_joints = park_joints
         self._base_pose = base_pose
         self._kin = _Kinematics()
 
@@ -272,8 +272,8 @@ class _Chain(DriverRun[command.CommandType]):
     def park(self, grip: float) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
         """Ramp the chain to the park pose, and return the joints and grip to hold."""
         try:
-            if (yield from self.move_to(self._park_joints, grip)) is MoveStatus.ARRIVED:
-                return self._park_joints, grip
+            if (yield from self.move_to(_PARK_JOINTS, grip)) is MoveStatus.ARRIVED:
+                return _PARK_JOINTS, grip
         # rules-allow: swallowed-error — a chain that will not park reads ERROR; it does not end the run
         except Exception as exc:
             logger.error(f'The chain did not reach the park pose, it is not where the driver put it: {exc}')
@@ -331,20 +331,17 @@ class Robot(pimm.ControlSystem):
         self,
         channel: str = 'can0',
         *,
-        park_joints: list[float],
         base_pose: geom.Transform3D | None = None,
         sim: bool = False,
         connect: Callable = _connect,
     ) -> None:
         """
         :param channel: SocketCAN interface of the chain (e.g. ``can0``). Ignored in sim mode.
-        :param park_joints: Joints the chain is put at when the driver takes control.
         :param base_pose: Arm-base mount pose in the world frame; None keeps everything in the arm-base frame.
         :param sim: Run against i2rt's own MuJoCo sim instead of hardware.
         :param connect: ``(channel, sim) -> i2rt Robot`` factory; the fake-mode smoke injects ``_FakeYam``.
         """
         self._channel = channel
-        self._park_joints = np.asarray(park_joints, dtype=np.float64)
         self._base_pose = base_pose if base_pose is not None else geom.Transform3D.identity
         self._sim = sim
         self._connect = connect
@@ -358,17 +355,7 @@ class Robot(pimm.ControlSystem):
 
     def _chain(self, vendor: Any, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Chain:
         """The chain this run drives, built from the driver's configuration."""
-        return _Chain(
-            vendor,
-            self.sync_move,
-            self.commands,
-            self.state,
-            self.grip,
-            self._park_joints,
-            self._base_pose,
-            should_stop,
-            clock,
-        )
+        return _Chain(vendor, self.sync_move, self.commands, self.state, self.grip, self._base_pose, should_stop, clock)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         with _opened(self._connect, self._channel, self._sim) as vendor:
@@ -446,14 +433,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     fake = _FakeYam() if args.fake else None
-    # The menagerie "home" keyframe: arm folded up and back, out of the workspace.
-    park_q = np.array([0.0, 1.047, 1.047, 0.0, 0.0, 0.0])
-    robot = Robot(
-        args.channel,
-        park_joints=list(park_q),
-        sim=args.sim,
-        connect=(lambda channel, sim: fake) if args.fake else _connect,
-    )
+    robot = Robot(args.channel, sim=args.sim, connect=(lambda channel, sim: fake) if args.fake else _connect)
 
     with pimm.World() as world:
         # `World.pair` cannot express that it returns the counterpart of the port it is given, so the four
@@ -481,8 +461,8 @@ if __name__ == '__main__':
 
         if fake is not None:
             # State round-trip: the parked chain comes back through the driver's FK.
-            assert np.allclose(state.value.q, park_q, atol=_Chain._ARRIVED_TOL), state.value.q
-            park_err = np.linalg.norm(state.value.ee_pose.translation - kin.fk(park_q).translation)
+            assert np.allclose(state.value.q, _PARK_JOINTS, atol=_Chain._ARRIVED_TOL), state.value.q
+            park_err = np.linalg.norm(state.value.ee_pose.translation - kin.fk(_PARK_JOINTS).translation)
             assert park_err < 0.02, park_err  # the chain arrives within `_Chain._ARRIVED_TOL` of it, not onto it
 
             # Grip round-trip: polarity inverted on the way out (command) and on the way back (observation).

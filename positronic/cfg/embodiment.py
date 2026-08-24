@@ -93,11 +93,7 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
     from positronic.drivers.roboarm import yam as yam_driver
 
     arms = {
-        side: yam_driver.Robot(
-            channel,
-            park_joints=positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS,
-            base_pose=geom.Transform3D(mounts[side]),
-        )
+        side: yam_driver.Robot(channel, base_pose=geom.Transform3D(mounts[side]))
         for side, channel in (('left', left_channel), ('right', right_channel))
     }
     observations = {

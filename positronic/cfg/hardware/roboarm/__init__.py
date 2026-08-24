@@ -3,8 +3,7 @@ import configuronic as cfn
 import positronic.cfg.hardware.motors
 from positronic.drivers.roboarm import command
 
-# The pose each arm is drawn around at the start of a trial. An arm whose driver parks is also left here
-# when the driver takes control and again when it hands it back.
+# The pose each arm is drawn around at the start of a trial. Where a driver parks is its own and lives with it.
 FRANKA_NOMINAL_JOINTS = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
 YAM_NOMINAL_JOINTS = [0.0, 1.047, 1.047, 0.0, 0.0, 0.0]
 SO101_NOMINAL_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0]
@@ -45,7 +44,6 @@ def franka(
     return franka.Robot(
         ip=ip,
         relative_dynamics_factor=relative_dynamics_factor,
-        park_joints=FRANKA_NOMINAL_JOINTS,
         load=load,
         collision_coeff=collision_coeff,
         manage_desk=manage_desk,
@@ -74,4 +72,4 @@ def so101(motor_bus):
 def yam(channel: str, sim: bool, base_pose):
     from positronic.drivers.roboarm.yam import Robot
 
-    return Robot(channel, park_joints=YAM_NOMINAL_JOINTS, base_pose=base_pose, sim=sim)
+    return Robot(channel, base_pose=base_pose, sim=sim)
