@@ -62,7 +62,7 @@ def test_a_socket_only_spelling_of_the_wildcard_is_one(multi_homed):
 
 
 def test_a_socket_only_spelling_that_is_not_the_wildcard_names_its_own_address(multi_homed):
-    # The same parser normalizes a CONCRETE short form, which stays the one address it binds.
+    # The same parser normalizes a concrete short form, which stays the one address it binds.
     assert _served_addresses('127.1') == ['127.0.0.1']
     assert _served_addresses('1') == ['0.0.0.1']
     # A name the resolver would happily turn into an address stays a name: the certificate names it
@@ -83,6 +83,27 @@ def test_concrete_bind_serves_only_the_address_it_binds(multi_homed):
     assert _served_addresses('198.51.100.7') == ['198.51.100.7']
     assert _served_addresses('127.0.0.1') == ['127.0.0.1']
     assert _served_addresses('rig.local') == ['rig.local']
+
+
+def test_a_wildcard_bind_with_no_address_of_its_family_refuses_to_certify(monkeypatch):
+    # A namespace whose interfaces carry no address of the bind's family leaves nothing to name, and
+    # `hosts[0]` raised a bare IndexError giving neither the cause nor the way out.
+    monkeypatch.setattr(psutil, 'net_if_addrs', lambda: {'lo': [_Addr(socket.AF_INET6, '::1', None, None, None)]})
+    assert _served_addresses('0.0.0.0') == []
+
+    with pytest.raises(ValueError, match='no local address'):
+        _ssl_kwargs(True, [], None, None)
+
+
+def test_a_wildcard_bind_with_no_address_of_its_family_still_serves_plain_http(monkeypatch):
+    # Only the certificate needs an address to name. The listener answers on the wildcard either
+    # way, so the refusal belongs to the certificate path and must not reach the bind itself.
+    monkeypatch.setattr(psutil, 'net_if_addrs', lambda: {'lo': [_Addr(socket.AF_INET6, '::1', None, None, None)]})
+    assert _ssl_kwargs(False, _served_addresses('0.0.0.0'), None, None) == {}
+    assert _ssl_kwargs(True, [], '/etc/cert.pem', '/etc/key.pem') == {
+        'ssl_certfile': '/etc/cert.pem',
+        'ssl_keyfile': '/etc/key.pem',
+    }
 
 
 def test_certificate_names_every_served_address():
@@ -119,8 +140,6 @@ def test_generated_certificate_subject_is_the_bind_address_when_it_fits():
 
 
 def test_a_bind_name_too_long_for_the_subject_field_still_certifies():
-    # X.509 caps a CN at 64 bytes and OpenSSL aborts on a longer one, so a long DNS bind would fail
-    # to start. `subjectAltName` is what a client matches on, and it still carries the name.
     host = 'a' * 60 + '.example.com'
     assert len(host.encode()) > 64
     assert _certificate_subject([host]) == _FALLBACK_CERTIFICATE_SUBJECT

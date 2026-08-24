@@ -531,9 +531,8 @@ def default_table() -> TableConfig:
 def _as_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     """The host parsed as an IP literal, or None when it is a name.
 
-    The socket layer takes legacy short IPv4 spellings `ipaddress` refuses — `0`, `0.0` and `127.1`
-    each bind an address — so a host is a name only when both parsers refuse it. Only those numeric
-    forms are read here: resolving a name would certify an address in place of the name itself.
+    The socket layer takes short IPv4 spellings `ipaddress` refuses — `0`, `0.0`, `127.1` — so a
+    host is a name only when both parsers refuse it. A name is never resolved here.
     """
     try:
         return ipaddress.ip_address(host)
@@ -627,14 +626,21 @@ _FALLBACK_CERTIFICATE_SUBJECT = 'positronic-server'
 def _certificate_subject(hosts: list[str]) -> str:
     """The certificate's subject CN: the first bind address, or a fixed name when it will not fit.
 
-    X.509 caps a CN at 64 bytes and OpenSSL aborts on a longer one, which would fail the bind before
-    it starts; a client matches on `subjectAltName` (RFC 6125), which names the host either way.
+    X.509 caps a CN at 64 bytes and OpenSSL aborts on a longer one; `subjectAltName` names the host
+    either way, and is what a client matches on (RFC 6125).
     """
     host = hosts[0]
     return host if len(host.encode()) <= _MAX_CERTIFICATE_SUBJECT_BYTES else _FALLBACK_CERTIFICATE_SUBJECT
 
 
 def _generate_self_signed_cert(hosts: list[str]) -> dict[str, str]:
+    # A wildcard bind in a namespace with no address of its family scans to nothing, which certifies
+    # nothing: refuse here, where both the subject and the SANs are derived, rather than at each.
+    if not hosts:
+        raise ValueError(
+            'no local address to certify: the bind matched no interface of its family. Bind a '
+            'concrete host, or pass ssl_certfile and ssl_keyfile.'
+        )
     ssl_dir = tempfile.mkdtemp(prefix='positronic-ssl-')
     keyfile = os.path.join(ssl_dir, 'key.pem')
     certfile = os.path.join(ssl_dir, 'cert.pem')
@@ -780,7 +786,10 @@ def main(
     warning = _insecure_context_warning(served, https)
     if warning is not None:
         logging.warning(warning)
-    logging.info(f'Starting server on {", ".join(_access_url(scheme, address, port) for address in served)}')
+    if served:
+        logging.info(f'Starting server on {", ".join(_access_url(scheme, address, port) for address in served)}')
+    else:
+        logging.warning(f'Binding {host}:{port} with no local address of that family to advertise.')
 
     uvicorn.run(app, host=host, port=port, log_level='debug' if debug else 'info', **ssl_kwargs)
 
