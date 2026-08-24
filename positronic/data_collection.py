@@ -276,6 +276,11 @@ def main(
             '--robot_arm and --nominal_joints are named together or not at all: the right stick puts the arm '
             'a station has at the pose it measured, and either one alone leaves the other with nothing'
         )
+    if len(joints_spread) not in (0, len(nominal_joints)):
+        raise ValueError(
+            f'--joints_spread names {len(joints_spread)} joints and --nominal_joints names {len(nominal_joints)}: '
+            'the spread is jitter measured per joint, so it carries one value for each, or none at all'
+        )
     camera_instances = cameras or {}
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
     static_meta = {}

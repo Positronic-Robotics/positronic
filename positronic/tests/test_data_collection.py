@@ -182,6 +182,21 @@ def test_a_station_naming_an_arm_or_a_start_pose_without_the_other_is_refused(ro
         )
 
 
+def test_a_spread_that_does_not_cover_every_nominal_joint_is_refused():
+    """A spread holds one measurement per joint. Widths that disagree reach numpy on the first right-stick
+    press, where a misconfigured station is indistinguishable from an arm that refused the move."""
+    with pytest.raises(ValueError, match='joints_spread'):
+        data_collection.main(
+            robot_arm=DummyRobot(),
+            gripper=None,
+            webxr=WebXR(port=0),
+            sound=None,
+            cameras=None,
+            nominal_joints=NOMINAL_JOINTS.tolist(),
+            joints_spread=JOINTS_SPREAD[:-1].tolist(),
+        )
+
+
 def test_the_right_stick_holds_the_session_until_the_arm_is_at_its_start_pose(world):
     """The right stick asks for a start pose drawn around the nominal joints, and the controller does
     nothing further until the arm answers that it is there."""
