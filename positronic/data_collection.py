@@ -267,10 +267,10 @@ def main(
     video_options: dict[str, str] | None = None,
 ):
     """Runs data collection in real hardware."""
-    if robot_arm is not None and not len(nominal_joints):
+    if (robot_arm is not None) != (len(nominal_joints) > 0):
         raise ValueError(
-            'an arm needs the joints its start pose is drawn around: pass --nominal_joints alongside '
-            '--robot_arm, or the right stick has nowhere to put it'
+            '--robot_arm and --nominal_joints are named together or not at all: the right stick puts the arm '
+            'a station has at the pose it measured, and either one alone leaves the other with nothing'
         )
     camera_instances = cameras or {}
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}

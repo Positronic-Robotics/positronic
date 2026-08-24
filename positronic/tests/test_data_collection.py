@@ -163,11 +163,23 @@ def build_teleop_arm(world, spread: Sequence[float] | np.ndarray = JOINTS_SPREAD
     return dc, world.pair(dc.sync_move), world.pair(dc.buttons_receiver), grips, sounds
 
 
-def test_a_station_that_names_an_arm_but_no_start_pose_is_refused():
-    """A start pose belongs to the arm it was measured on, so the two are named together or not at all: a
-    station that swaps its arm and keeps the pose would drive the new one to the old one's joints."""
+@pytest.mark.parametrize(
+    ('robot_arm', 'nominal_joints'),
+    [(DummyRobot(), ()), (None, NOMINAL_JOINTS)],
+    ids=['an arm with no pose to put it at', 'a pose with no arm to put there'],
+)
+def test_a_station_naming_an_arm_or_a_start_pose_without_the_other_is_refused(robot_arm, nominal_joints):
+    """A start pose belongs to the arm it was measured on: a station that swaps its arm and keeps the pose
+    would drive the new one to the old one's joints, and one that drops the arm has nothing to move."""
     with pytest.raises(ValueError, match='nominal_joints'):
-        data_collection.main(robot_arm=DummyRobot(), gripper=None, webxr=WebXR(port=0), sound=None, cameras=None)
+        data_collection.main(
+            robot_arm=robot_arm,
+            gripper=None,
+            webxr=WebXR(port=0),
+            sound=None,
+            cameras=None,
+            nominal_joints=nominal_joints,
+        )
 
 
 def test_the_right_stick_holds_the_session_until_the_arm_is_at_its_start_pose(world):
