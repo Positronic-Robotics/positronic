@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -154,9 +154,9 @@ NOMINAL_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 JOINTS_SPREAD = np.array([0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10])
 
 
-def build_teleop_arm(world):
+def build_teleop_arm(world, spread: Sequence[float] | np.ndarray = JOINTS_SPREAD):
     """The controller with the arm side of its ``sync_move`` paired, and recorders on what it emits."""
-    dc = DataCollectionController(OperatorPosition.FRONT.value, NOMINAL_JOINTS, JOINTS_SPREAD)
+    dc = DataCollectionController(OperatorPosition.FRONT.value, NOMINAL_JOINTS, spread)
     grips, sounds = RecordingEmitter(), RecordingEmitter()
     dc.target_grip._bind(grips)
     dc.sound._bind(sounds)
@@ -218,10 +218,20 @@ def test_a_start_pose_the_arm_refuses_is_sounded_to_the_operator(world):
     assert marks['after'] > marks['refused']
 
 
-@pytest.mark.parametrize('spread', [np.zeros(7), ()], ids=['zeros', 'unspecified'])
-def test_a_start_pose_without_spread_is_the_nominal(spread):
-    joints = roboarm_command.sampled_joints(NOMINAL_JOINTS, spread).positions
-    np.testing.assert_array_equal(joints, NOMINAL_JOINTS)
+def test_a_station_that_measured_no_spread_puts_the_arm_at_its_nominal(world):
+    """Jitter is a station's to measure, and the arms that have none named are the ones asked for their
+    nominal joints themselves."""
+    dc, arm, buttons, _, _ = build_teleop_arm(world, spread=())
+    asked = []
+
+    driver = ManualDriver([
+        (lambda: buttons.emit(make_buttons(stick=0.0)), 0.01),
+        (lambda: buttons.emit(make_buttons(stick=1.0)), 0.01),
+        (lambda: asked.extend(arm.incoming()), 0.0),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    np.testing.assert_array_equal(asked[0].request.positions, NOMINAL_JOINTS)
 
 
 def test_every_start_pose_is_a_fresh_per_joint_draw_around_the_nominal():

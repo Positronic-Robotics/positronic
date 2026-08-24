@@ -99,10 +99,9 @@ class JointPosition:
 
 
 def sampled_joints(nominal: Sequence[float] | np.ndarray, spread: Sequence[float] | np.ndarray) -> JointPosition:
-    """A joint target drawn uniformly from ``nominal`` ± ``spread``, per joint. An empty ``spread`` draws
-    the nominal itself."""
+    """A joint target drawn uniformly from ``nominal`` ± ``spread``, per joint."""
     nominal = np.asarray(nominal, dtype=np.float64)
-    spread = np.zeros_like(nominal) if len(spread) == 0 else np.asarray(spread, dtype=np.float64)
+    spread = np.asarray(spread, dtype=np.float64)
     return JointPosition(nominal + np.random.uniform(-spread, spread))
 
 

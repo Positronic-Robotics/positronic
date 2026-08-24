@@ -1,6 +1,7 @@
 import configuronic as cfn
 
 import positronic.cfg.hardware.motors
+from positronic.drivers.roboarm import command
 
 # The pose each arm is drawn around at the start of a trial. An arm whose driver parks is also left here
 # when the driver takes control and again when it hands it back.
@@ -11,10 +12,14 @@ SO101_NOMINAL_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0]
 FRANKA_JOINTS_SPREAD = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
 
 
+def franka_start_pose() -> command.JointPosition:
+    """Where a Franka trial puts the arm before it opens, drawn afresh on every call."""
+    return command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD)
+
+
 @cfn.config(
     ip='172.168.0.2',
     relative_dynamics_factor=0.2,
-    park_joints=FRANKA_NOMINAL_JOINTS,
     load=None,
     collision_coeff=2.0,
     manage_desk=True,
@@ -23,7 +28,6 @@ FRANKA_JOINTS_SPREAD = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
 def franka(
     ip: str,
     relative_dynamics_factor: float,
-    park_joints: list[float],
     load: tuple | None = None,
     collision_coeff: float = 2.0,
     manage_desk: bool = True,
@@ -34,7 +38,7 @@ def franka(
     return franka.Robot(
         ip=ip,
         relative_dynamics_factor=relative_dynamics_factor,
-        park_joints=park_joints,
+        park_joints=FRANKA_NOMINAL_JOINTS,
         load=load,
         collision_coeff=collision_coeff,
         manage_desk=manage_desk,
@@ -59,8 +63,8 @@ def so101(motor_bus):
     return Robot(motor_bus=motor_bus)
 
 
-@cfn.config(channel='can0', park_joints=YAM_NOMINAL_JOINTS, sim=False, base_pose=None)
-def yam(channel: str, park_joints: list[float], sim: bool, base_pose):
+@cfn.config(channel='can0', sim=False, base_pose=None)
+def yam(channel: str, sim: bool, base_pose):
     from positronic.drivers.roboarm.yam import Robot
 
-    return Robot(channel, park_joints=park_joints, base_pose=base_pose, sim=sim)
+    return Robot(channel, park_joints=YAM_NOMINAL_JOINTS, base_pose=base_pose, sim=sim)

@@ -16,11 +16,10 @@ import positronic.cfg.policy as policy_cfg
 from pimm.logging import init_logging
 from positronic import keys, wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
-from positronic.cfg.hardware.roboarm import FRANKA_JOINTS_SPREAD, FRANKA_NOMINAL_JOINTS
+from positronic.cfg.hardware.roboarm import franka_start_pose
 from positronic.cli.eval.run import prepare_output_dir, run
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
-from positronic.drivers.roboarm import command
 from positronic.eval import Embodiment, Task
 from positronic.policy.harness import Harness
 
@@ -75,7 +74,7 @@ def _attended_task(instruction: str) -> Task:
     return Task(
         instruction_source=instruction,
         timeout_sec=None,
-        prepare_args={keys.ARM: command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD), keys.GRIPPER: 0.0},
+        prepare_args={keys.ARM: franka_start_pose(), keys.GRIPPER: 0.0},
     )
 
 
