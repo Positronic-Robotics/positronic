@@ -268,19 +268,18 @@ class _Arm(DriverRun[command.CommandType]):
             finally:
                 call.set_exception(exc)  # an arm the driver cannot read still leaves nobody waiting
 
-    def park(self) -> Iterator[pimm.Command]:
-        """Move the arm to the park pose. Drive with ``yield from``.
+    def park(self, *, at_teardown: bool = False) -> Iterator[pimm.Command]:
+        """Move the arm to ``_PARK_JOINTS``, logging a failure rather than raising it. Drive with ``yield from``.
 
-        Only a stop gets here: a run that ends by raising skips the park, because moving an arm in answer to
-        a fault is the driver deciding on its own to move. Where it goes is fixed — ``_PARK_JOINTS``, at the
-        configured dynamics factor. Nothing here can fail the shutdown; failures are logged and no more.
+        A run that ends by raising skips the park on the way out, because moving an arm in answer to a fault
+        is the driver deciding on its own to move.
         """
         try:
             logger.info('Parking the arm')
             self.robot.recover_from_errors()  # once, before the move: a reflex during the move ends the park
             # The park pose is a long way off, and only the native law shapes the reference on the way there.
-            yield from self.move_to(_PARK_JOINTS, None, at_teardown=True)
-        # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
+            yield from self.move_to(_PARK_JOINTS, None, at_teardown=at_teardown)
+        # rules-allow: swallowed-error — a failed park reads ERROR on the arm and ends neither run nor shutdown
         except Exception:
             logger.exception('Parking failed, the arm stays where it stands')
 
@@ -423,13 +422,8 @@ class Robot(pimm.ControlSystem):
             robot = arm.robot
             self._init_robot(robot)
             self.robot_meta.emit(Robot._build_robot_meta(robot))
-            robot.recover_from_errors()
 
-            try:
-                yield from arm.move_to(_PARK_JOINTS, None)
-            # rules-allow: swallowed-error — an arm that will not park reads ERROR; it does not end the run
-            except Exception as exc:
-                logger.error(f'The arm did not reach the park pose, it is not where the driver put it: {exc}')
+            yield from arm.park()
 
             in_error = False
 
@@ -455,7 +449,7 @@ class Robot(pimm.ControlSystem):
 
                 yield arm.limiter.wait()
 
-            yield from arm.park()
+            yield from arm.park(at_teardown=True)
 
 
 if __name__ == '__main__':
