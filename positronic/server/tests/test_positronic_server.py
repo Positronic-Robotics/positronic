@@ -86,8 +86,7 @@ def test_concrete_bind_serves_only_the_address_it_binds(multi_homed):
 
 
 def test_a_wildcard_bind_with_no_address_of_its_family_refuses_to_certify(monkeypatch):
-    # A namespace whose interfaces carry no address of the bind's family leaves nothing to name, and
-    # `hosts[0]` raised a bare IndexError giving neither the cause nor the way out.
+    # The one interface carries no AF_INET address, so an IPv4 wildcard scans to nothing.
     monkeypatch.setattr(psutil, 'net_if_addrs', lambda: {'lo': [_Addr(socket.AF_INET6, '::1', None, None, None)]})
     assert _served_addresses('0.0.0.0') == []
 
