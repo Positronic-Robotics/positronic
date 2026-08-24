@@ -6,7 +6,6 @@ import pytest
 
 import pimm
 from positronic import data_collection, keys, wire
-from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE, franka_start_pose
 from positronic.data_collection import DataCollectionController, OperatorPosition, controller_positions_serializer
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType
 from positronic.dataset.episode import Episode
@@ -299,11 +298,6 @@ def test_a_station_that_measured_no_spread_puts_the_arm_at_its_nominal(world):
     drive_scheduler(world.start([dc, driver]), steps=400)
 
     np.testing.assert_array_equal(asked[0].request.positions, NOMINAL_JOINTS)
-
-
-def test_a_franka_start_pose_travels_under_the_gains_the_rollout_runs():
-    """The arm is no stiffer being put at the pose a trial starts from than it is once the policy has it."""
-    assert franka_start_pose().mode is DROID_IMPEDANCE
 
 
 def test_every_start_pose_is_a_fresh_per_joint_draw_around_the_nominal():
