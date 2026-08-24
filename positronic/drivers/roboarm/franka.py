@@ -230,24 +230,9 @@ class _Arm(DriverRun[command.CommandType]):
         self.publish(self.vendor.state())
         return MoveStatus.ARRIVED
 
-    def target_joints(self, cmd: command.CommandType) -> np.ndarray:
-        """The joints ``cmd`` asks the arm to hold."""
-        match cmd:
-            case command.CartesianPosition(pose):
-                return self.vendor.inverse_kinematics_with_limits(
-                    np.asarray([*pose.translation, *pose.rotation.as_quat])
-                )
-            case command.CartesianDelta() as delta_cmd:
-                target = delta_cmd.apply(self.state.ee_pose)
-                return self.vendor.inverse_kinematics_with_limits(
-                    np.asarray([*target.translation, *target.rotation.as_quat])
-                )
-            case command.JointPosition(positions):
-                return np.asarray(positions, dtype=np.float64)
-            case command.JointDelta(velocities=joint_delta):
-                return self.state.q + joint_delta
-            case other:
-                raise NotImplementedError(f'Unsupported command {other}')
+    def _joints_at(self, pose: geom.Transform3D) -> np.ndarray:
+        """The joints that put the end effector at ``pose``, within the arm's limits."""
+        return self.vendor.inverse_kinematics_with_limits(np.asarray([*pose.translation, *pose.rotation.as_quat]))
 
     def accept(self, cmd: command.CommandType) -> tuple[np.ndarray, command.ControlModeType | None]:
         """The joints ``cmd`` asks for and the law it pins, neither applied yet.
@@ -255,7 +240,17 @@ class _Arm(DriverRun[command.CommandType]):
         Solved here so that a command the arm cannot hold raises before anything changes; ``command_target``
         is what applies the pair.
         """
-        target = self.target_joints(cmd)
+        match cmd:
+            case command.CartesianPosition(pose):
+                target = self._joints_at(pose)
+            case command.CartesianDelta() as delta_cmd:
+                target = self._joints_at(delta_cmd.apply(self.state.ee_pose))
+            case command.JointPosition(positions):
+                target = np.asarray(positions, dtype=np.float64)
+            case command.JointDelta(velocities=joint_delta):
+                target = self.state.q + joint_delta
+            case other:
+                raise NotImplementedError(f'Unsupported command {other}')
         # The vendor takes a fixed-width finite vector and raises on anything else, too late to be caught
         # alongside the rest of what makes a command unusable. The arm has one velocity limit per joint, so
         # that vector's width is how many joints a target must name.
