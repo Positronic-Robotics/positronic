@@ -164,17 +164,12 @@ class _Arm(DriverRun[command.CommandType]):
         self.robot.set_target_joints(target)
 
     def await_goal(
-        self,
-        target: np.ndarray,
-        should_stop: Callable[[], bool],
-        pace: Callable[[], pimm.Command],
-        mode: command.ControlModeType | None,
+        self, should_stop: Callable[[], bool], pace: Callable[[], pimm.Command]
     ) -> Generator[pimm.Command, None, MoveStatus]:
-        """Command ``target`` under ``mode`` and poll the goal until the arm arrives, one poll per resume.
+        """Poll the goal until the arm arrives, one poll per resume.
 
         ``pace`` is what to wait between polls, and so how often the goal is asked about.
         """
-        self.command_target(target, mode)
         while not should_stop():
             goal = self.robot.goal()
             if goal.status == pf.GoalStatus.REACHED:
@@ -206,7 +201,8 @@ class _Arm(DriverRun[command.CommandType]):
             return self.should_stop.value or expired()
 
         try:
-            for wait in self.await_goal(target, should_stop, self.limiter.wait, mode):
+            self.command_target(target, mode)
+            for wait in self.await_goal(should_stop, self.limiter.wait):
                 st = self.robot.state()
                 self.state.encode(st, RobotStatus.BUSY)
                 self.out.emit(self.state)
@@ -281,8 +277,9 @@ class _Arm(DriverRun[command.CommandType]):
             self.robot.recover_from_errors()  # once, before the move: a reflex during the move ends the park
             deadline = self.clock.now() + self._PARK_TIMEOUT_S
             # The park pose is a long way off, and only the native law shapes the reference on the way there.
+            self.command_target(_PARK_JOINTS, None)
             outcome = yield from self.await_goal(
-                _PARK_JOINTS, lambda: self.clock.now() >= deadline, lambda: pimm.Sleep(self._PARK_POLL_S), None
+                lambda: self.clock.now() >= deadline, lambda: pimm.Sleep(self._PARK_POLL_S)
             )
             if outcome is MoveStatus.GAVE_UP:
                 logger.error(f'Parking timed out after {self._PARK_TIMEOUT_S}s, the arm stays where it stands')
