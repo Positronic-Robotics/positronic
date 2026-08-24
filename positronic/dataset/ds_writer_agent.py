@@ -82,8 +82,8 @@ class DsWriterAgent(pimm.ControlSystem):
     that turn's inputs, so the trial's last frame is recorded before STOP
     finalizes the writer; samples timestamped after STOP — whatever the next
     trial's prepare moves, or sensor data the async real path queues — are
-    dropped, and ABORT discards
-    the episode. Invalid or out-of-order commands are ignored with a log message.
+    dropped, and ABORT discards the episode. Invalid or out-of-order commands
+    are ignored with a log message.
 
     `TimeMode` selects whether timestamps come from the control loop clock
     (`CLOCK`) or from the producing message (`MESSAGE`).

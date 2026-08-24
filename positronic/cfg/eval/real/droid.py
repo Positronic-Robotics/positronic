@@ -17,10 +17,8 @@ from positronic.eval import Eval, Task
 def _droid_pick_place(embodiment, instruction, timeout, trial_count, setup):
     """A real droid tote pick-and-place eval: the embodiment is the physical Franka, the task carries the instruction.
 
-    Every trial starts the arm at a pose drawn around the Franka's nominal joints with the fingers open, and asks
-    whoever runs it for ``setup`` — the rig has no scene of its own to seed. ``timeout`` is the per-trial
-    wall-clock budget the Harness applies; the outcome is the operator's annotation, since real has no
-    ground-truth source to compute one from.
+    ``setup`` names what a person puts in front of the arm — the rig has no scene of its own to seed. The
+    outcome is the operator's annotation, since real has no ground-truth source to compute one from.
     """
     return Eval(
         embodiment,

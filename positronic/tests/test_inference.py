@@ -109,7 +109,7 @@ def test_the_operator_readies_the_scene_an_attended_trial_runs_in(monkeypatch, c
 
 
 def test_each_attended_trial_readies_the_devices_its_rig_was_given():
-    """Only what a trial names is readied, so the arm and fingers of a rig that has them are named per press."""
+    """A rig with an arm and fingers names both every press, and the arm's start pose is drawn afresh each time."""
     nominal, spread = [0.0] * 7, [0.1] * 7
     first = inference._attended_task('pick', nominal, spread, start_grip=0.0)
     second = inference._attended_task('pick', nominal, spread, start_grip=0.0)

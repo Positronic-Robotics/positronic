@@ -255,7 +255,7 @@ def main(
     webxr: WebXR,
     sound: pimm.ControlSystem | None,
     cameras: dict[str, pimm.ControlSystem] | None,
-    # The start pose the right stick puts the arm at, drawn around the nominal. A station with no arm names none.
+    # The start pose the right stick puts the arm at: drawn around ``nominal_joints``, within ``joints_spread``.
     nominal_joints: Sequence[float] = (),
     joints_spread: Sequence[float] = (),
     output_dir: str | None = None,

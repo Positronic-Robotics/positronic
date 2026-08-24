@@ -2,8 +2,8 @@ import configuronic as cfn
 
 import positronic.cfg.hardware.motors
 
-# The pose each arm is drawn around at the start of a trial, and — where its driver parks — the pose it is
-# left at when the driver takes control and hands it back.
+# The pose each arm is drawn around at the start of a trial. An arm whose driver parks is also left here
+# when the driver takes control and again when it hands it back.
 FRANKA_NOMINAL_JOINTS = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
 YAM_NOMINAL_JOINTS = [0.0, 1.047, 1.047, 0.0, 0.0, 0.0]
 SO101_NOMINAL_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0]

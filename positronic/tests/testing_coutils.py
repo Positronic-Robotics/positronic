@@ -117,9 +117,9 @@ def run_scripted_agent(
 
 
 class IdleSession:
-    """A policy session that records what it is shown and places nothing.
+    """A policy session that records what it is shown and commands nothing.
 
-    Its policy owns an ``observations`` list, which is where each one lands.
+    The recording lands on its policy's ``observations`` list.
     """
 
     def __init__(self, policy):

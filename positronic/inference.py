@@ -31,7 +31,7 @@ class KeyboardOperator(pimm.ControlSystem):
 
     It serves the trial's ``scene`` prepare, and holds the pending answers because that is where an
     episode's terminal — and any refused ask — arrives; both are printed as they land. ``next_task`` is
-    called per press, so what a trial draws afresh is drawn again for the one after it.
+    called per press, so each trial draws its own start pose.
     """
 
     def __init__(self, next_task: Callable[[], Task]):
@@ -74,11 +74,7 @@ class KeyboardOperator(pimm.ControlSystem):
 def _attended_task(
     instruction: str, nominal_joints: Sequence[float], joints_spread: Sequence[float], start_grip: float | None
 ) -> Task:
-    """The trial one keypress asks for: the rig a person sets up, and each device this run readies put back.
-
-    An attended episode has no budget — the operator ends it, so nothing but ``done`` can. A rig this run
-    readies nothing on names nothing: no joints is no arm to place, and no ``start_grip`` no fingers to open.
-    """
+    """The trial one keypress asks for. An attended episode has no time budget: the operator is what ends it."""
     prepare_args: dict[str, Any] = {keys.SCENE: instruction}
     if len(nominal_joints):
         prepare_args[keys.ARM] = command.sampled_joints(nominal_joints, joints_spread)
@@ -101,7 +97,8 @@ def real(
 
     What each episode starts from belongs to the rig ``embodiment`` names: ``nominal_joints`` and
     ``joints_spread`` are the arm's, ``start_grip`` the fingers'. A rig readies only what it is given, so an
-    arm left unnamed here holds where the last episode left it.
+    arm left unnamed here holds where the last episode left it, and fingers with no ``start_grip`` stay as
+    they are.
 
     The world is composed here rather than by the runner: an attended surface is the binary's own business,
     and the keyboard is the only one this library ships. There is no viewer — a console that shows the
@@ -112,7 +109,8 @@ def real(
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
     # The operator answers for the scene whatever the rig declares; everything else the rig must have of its
-    # own, and a run configured against one embodiment names what another has not got.
+    # own. Swapping the embodiment on the command line and keeping the start pose is caught here rather than
+    # at the first press.
     asks = set(_attended_task(task or '', nominal_joints, joints_spread, start_grip).prepare_args)
     unknown = sorted(asks - set(embodiment.prepare_handlers) - {keys.SCENE})
     if unknown:
@@ -141,7 +139,6 @@ def _run_attended(
     keyboard = KeyboardControl(quit_key='q')
     instruction = task or ''
     operator = KeyboardOperator(partial(_attended_task, instruction, nominal_joints, joints_spread, start_grip))
-    # A world a person sets up by hand readies like any device: it is the operator who answers for it.
     embodiment = replace(embodiment, prepare_handlers={**embodiment.prepare_handlers, keys.SCENE: operator.ready})
     harness = Harness(policy, embodiment)
     print('Keyboard controls: [s]tart, sto[p], [q]uit')

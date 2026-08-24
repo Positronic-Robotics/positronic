@@ -52,8 +52,8 @@ class TaskDriver(pimm.ControlSystem):
     One task is in flight at a time: the next is asked for only when the previous episode's terminal comes
     back, so the plan never overlaps two episodes.
 
-    ``scene_ready`` answers for a person nobody has: an unattended run has no operator, so the setup a trial
-    asks for is logged and answered on the spot.
+    ``scene_ready`` answers for the operator an unattended run has not got: the setup a trial asks for is
+    logged and answered on the spot.
     """
 
     def __init__(self, tasks: list[Task]):
