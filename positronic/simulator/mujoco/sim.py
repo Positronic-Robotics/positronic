@@ -202,7 +202,7 @@ class MujocoSim(pimm.ControlSystem):
     def _accept_move(self, call: pimm.calls.Call[roboarm_command.CommandType, None], now: float) -> None:
         """Aim the actuators at what ``call`` asks for; the arm is that move's until it reads back there."""
         with pimm.calls.raise_to(call):
-            target = self._target_joints(call.request)
+            target = self._to_joints(call.request)
             self._set_actuator_values(target)
             self._moves.accept(call, target, self._MOVE_TOL, now, self._MOVE_TIMEOUT_S)
             # Already there: answered on the spot, after its state and without a step, so the scene a
@@ -369,7 +369,7 @@ class MujocoSim(pimm.ControlSystem):
         while self.data.time < target_time:
             mj.mj_step(self.model, self.data)
 
-    def _target_joints(self, cmd: roboarm_command.CommandType) -> np.ndarray:
+    def _to_joints(self, cmd: roboarm_command.CommandType) -> np.ndarray:
         """The joints ``cmd`` asks the arm to hold. A control mode it pins is not honored: the sim runs its
         own law."""
         match cmd:
@@ -394,7 +394,7 @@ class MujocoSim(pimm.ControlSystem):
     def _apply_command(self, cmd: roboarm_command.CommandType) -> None:
         """Aim the actuators at what ``cmd`` asks for, leaving the arm where it is if it cannot be met."""
         try:
-            self._set_actuator_values(self._target_joints(cmd))
+            self._set_actuator_values(self._to_joints(cmd))
         # rules-allow: swallowed-error — a command stream cannot end the run; the arm reads ERROR instead
         except ValueError as exc:
             logger.warning(f'{cmd} not applied: {exc}')
