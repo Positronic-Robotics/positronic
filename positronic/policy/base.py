@@ -26,7 +26,7 @@ class Session(ABC):
     (dicts, lists, numpy arrays, scalars). No tensors or custom objects.
 
     **Return contract**: ``list[dict] | None``. ``None`` means "no new
-    trajectory, keep executing the current one" (used by scheduling wrappers).
+    trajectory, keep executing the current one" (used by scheduling layers).
     An empty list means "stop whatever is executing now". A non-empty list is
     a new trajectory. Single-action returns must be wrapped into a 1-element
     list by the producer.
@@ -42,7 +42,7 @@ class Session(ABC):
         return {}
 
     def cancel(self):
-        """Drop any in-flight trajectory state. Wrappers that buffer/schedule a
+        """Drop any in-flight trajectory state. Layers that buffer/schedule a
         trajectory (e.g. ``ChunkedSchedule``) should reset so the next call
         triggers a fresh inference. Override and propagate via ``super().cancel()``.
         """
@@ -117,85 +117,85 @@ class DelegatingPolicy(Policy):
         self._inner.close()
 
 
-class PolicyWrapper:
-    """Composable wrapper recipe — created without an inner policy, applied via ``wrap()``.
+class Layer:
+    """Recipe for wrapping a session, fixed at configuration time and applied to a policy via ``wrap()``.
 
-    PolicyWrappers may be stateful, may control flow (skip the inner call),
-    and have no training-time dual. They compose with ``|`` (sequential, left
-    is outermost). Unlike Codecs, they do NOT support ``&`` (parallel).
+    Layers may be stateful, may control flow (skip the inner call), and have no
+    training-time dual. They compose with ``|`` (sequential, left is outermost).
+    Unlike Codecs, they do NOT support ``&`` (parallel).
 
-    ``|`` works across types: ``wrapper | wrapper``, ``wrapper | codec``,
-    and ``codec | wrapper`` all produce a PolicyWrapper pipeline that
-    ``wrap(policy)`` applies right-to-left::
+    ``|`` works across types: ``layer | layer``, ``layer | codec``, and
+    ``codec | layer`` all produce a Layer pipeline that ``wrap(policy)``
+    applies right-to-left::
 
         pipeline = TemporalStack(...) | ChunkedSchedule() | codec
         wrapped = pipeline.wrap(RemotePolicy(...))
 
-    **Extension points**: subclasses override *one* of ``wrap_session`` (the
+    **Extension points**: subclasses override *one* of ``make_session`` (the
     common case — transform one session's ``__call__``) or ``wrap`` (for
     policy-level state across sessions, like composition).
     """
 
     def wrap(self, policy: Policy) -> Policy:
-        """Apply this wrapper to a policy. Default: wrap every session it creates via ``wrap_session``.
+        """Apply this layer to a policy. Default: wrap every session it creates via ``make_session``.
 
         Composition happens at config time; the runtime clock reaches the wrapped
         sessions through ``new_session``.
         """
-        return _WrapperPolicy(policy, self)
+        return _LayerPolicy(policy, self)
 
-    def wrap_session(self, inner: Session, context: dict[str, Any] | None, now: Now | None) -> Session:
-        """Wrap a single session. Subclasses override this for per-session wrapping."""
-        raise NotImplementedError('Override wrap_session or wrap')
+    def make_session(self, inner: Session, context: dict[str, Any] | None, now: Now | None) -> Session:
+        """Make this layer's session around ``inner``."""
+        raise NotImplementedError('Override make_session or wrap')
 
-    # The name this wrapper travels under, set by every deliverable subclass. ``WIRE_WRAPPERS`` is keyed by
+    # The name this layer travels under, set by every deliverable subclass. ``WIRE_LAYERS`` is keyed by
     # it, so the name is written once and both sides of the wire read the same attribute.
     WIRE_NAME: ClassVar[str]
 
     def to_spec(self) -> dict[str, Any]:
-        """Plain-data wire spec of this wrapper, for a server's local-stack declaration.
+        """Plain-data wire spec of this layer, for a server's local-stack declaration.
 
-        Only wrappers registered in ``positronic.policy.spec.WIRE_WRAPPERS`` are deliverable to a rig.
-        The spec is ``{'name': WIRE_NAME}`` plus ``{'args': {...}}`` when the wrapper takes any;
+        Only layers registered in ``positronic.policy.spec.WIRE_LAYERS`` are deliverable to a rig.
+        The spec is ``{'name': WIRE_NAME}`` plus ``{'args': {...}}`` when the layer takes any;
         ``args`` are constructor keywords, since the rig rebuilds by calling the constructor with them.
         """
         raise NotImplementedError(f'{type(self).__name__} is not deliverable to a rig (no wire spec)')
 
     @property
     def meta(self) -> dict[str, Any]:
-        """Metadata contributed by this wrapper (merged into the wrapped policy's meta)."""
+        """Metadata contributed by this layer (merged into the wrapped policy's meta)."""
         return {}
 
-    def __or__(self, other: PolicyWrapper) -> PolicyWrapper:
-        if isinstance(other, PolicyWrapper):
-            return _ComposedWrapper((*self._wrappers(), *other._wrappers()))
+    def __or__(self, other: Layer) -> Layer:
+        if isinstance(other, Layer):
+            return _ComposedLayer((*self._layers(), *other._layers()))
         return NotImplemented
 
-    # Used for flattening nested | compositions into a single _ComposedWrapper
-    def _wrappers(self) -> tuple:
+    # Used for flattening nested | compositions into a single _ComposedLayer
+    def _layers(self) -> tuple:
         return (self,)
 
 
-class _WrapperPolicy(DelegatingPolicy):
-    """Generic policy wrapper produced by ``PolicyWrapper.wrap()``.
+class _LayerPolicy(DelegatingPolicy):
+    """Policy produced by ``Layer.wrap()``.
 
-    Delegates session creation to the wrapper's ``wrap_session`` and merges meta.
+    Delegates session creation to the layer's ``make_session`` and merges meta.
     """
 
-    def __init__(self, inner: Policy, wrapper: PolicyWrapper):
+    def __init__(self, inner: Policy, layer: Layer):
         super().__init__(inner)
-        self._wrapper = wrapper
+        self._layer = layer
 
     def new_session(self, context=None, now=None):
-        return self._wrapper.wrap_session(self._inner.new_session(context, now), context, now)
+        return self._layer.make_session(self._inner.new_session(context, now), context, now)
 
     @property
     def meta(self):
-        return self._inner.meta | self._wrapper.meta
+        return self._inner.meta | self._layer.meta
 
 
-class _ComposedWrapper(PolicyWrapper):
-    """Composed pipeline of wrappers and codecs. Applies right-to-left."""
+class _ComposedLayer(Layer):
+    """Composed pipeline of layers. Applies right-to-left."""
 
     def __init__(self, components: tuple):
         self._components = components
@@ -208,5 +208,5 @@ class _ComposedWrapper(PolicyWrapper):
     def to_spec(self) -> dict[str, Any]:
         return {SEQ: [component.to_spec() for component in self._components]}
 
-    def _wrappers(self) -> tuple:
+    def _layers(self) -> tuple:
         return self._components

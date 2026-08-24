@@ -13,9 +13,9 @@ from positronic.drivers.roboarm import command
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, _ConnectRetries
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
+from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.remote import RemoteSession
 from positronic.policy.spec import PolicySource, remote
-from positronic.policy.wrappers import ChunkedSchedule
 
 # These fixtures stand in for a server, so they spell the handshake fields rather than importing the
 # ``keys`` constants the client reads: sharing a constant makes the two agree whatever its value, which
@@ -318,8 +318,8 @@ def test_remote_session_passes_through_none():
     assert session({}) is None
 
 
-def test_records_infer_span_without_scheduling_wrapper(tmp_path):
-    """The ``policy.infer`` span is recorded at the remote inference boundary itself, not by a wrapper in
+def test_records_infer_span_without_scheduling_layer(tmp_path):
+    """The ``policy.infer`` span is recorded at the remote inference boundary itself, not by a layer in
     front of it."""
     endpoint, _ = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
     session = endpoint.new_session()

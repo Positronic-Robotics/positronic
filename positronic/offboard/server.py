@@ -19,7 +19,7 @@ from starlette.datastructures import QueryParams
 
 from positronic import keys
 from positronic.policy import Policy, Recorder
-from positronic.policy.base import PolicyWrapper
+from positronic.policy.base import Layer
 from positronic.policy.spec import ModelSource, Pipeline, split
 
 from . import protocol
@@ -168,18 +168,18 @@ def _session_params(query_params: QueryParams) -> dict[str, Any]:
     return {key: _literal_value(raw) for key, raw in items}
 
 
-def _declared_stack(local: PolicyWrapper | None) -> dict[str, Any]:
+def _declared_stack(local: Layer | None) -> dict[str, Any]:
     """The rig-side spec a served pipeline must publish."""
     if local is None:
         raise ValueError(
             'Nothing sits left of the `remote` marker, so the pipeline declares no rig-side stack. Put the '
-            'wrappers the rig runs there, starting with a scheduler such as ChunkedSchedule'
+            'layers the rig runs there, starting with a scheduler such as ChunkedSchedule'
         )
     return local.to_spec()
 
 
 class PolicyServer:
-    """Serves a policy pipeline: one wrapper chain with a ``remote`` marker, closed by a ``ModelSource``
+    """Serves a policy pipeline: one layer chain with a ``remote`` marker, closed by a ``ModelSource``
     (see ``positronic.policy.spec``).
 
     The half right of the marker wraps the model here; the half left of it is published as the

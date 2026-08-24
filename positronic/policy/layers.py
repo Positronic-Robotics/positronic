@@ -1,10 +1,9 @@
-"""Composable policy wrappers — scheduling, fault handling and temporal frame stacking.
+"""Composable policy layers — scheduling, fault handling and temporal frame stacking.
 
-Wrappers are composable serving-time concerns layered around a policy with ``|`` (left is
-outermost), exactly like codecs. Most read time from the observation (``obs_time_ns``); only
-``ChunkedSchedule`` needs the live clock — it anchors a chunk to inference *completion*, which the
-pre-inference observation stamp cannot give — so the harness passes ``now`` (a ``Callable[[], float]``
-in seconds) to ``new_session`` and it reaches that one session.
+Layers are serving-time concerns wrapped around a policy with ``|`` (left is outermost). Most read time
+from the observation (``obs_time_ns``); only ``ChunkedSchedule`` needs the live clock — it anchors a chunk
+to inference *completion*, which the pre-inference observation stamp cannot give — so the harness passes
+``now`` (a ``Callable[[], float]`` in seconds) to ``new_session`` and it reaches that one session.
 """
 
 from collections import deque
@@ -13,7 +12,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.policy.base import DelegatingSession, Now, PolicyWrapper, Session
+from positronic.policy.base import DelegatingSession, Layer, Now, Session
 
 
 def _obs_time(obs) -> float:
@@ -36,11 +35,11 @@ def _arms_available(obs) -> bool:
     return all(RobotStatus(v) is RobotStatus.AVAILABLE for name, v in obs.items() if _is_robot_status(name))
 
 
-class StopOnFault(PolicyWrapper):
+class StopOnFault(Layer):
     """Stop the arm while it will not take a command, and plan afresh once it will.
 
     An arm the driver has taken, or that is faulted, is not tracking the plan it was given: this answers the
-    empty trajectory and resets the sessions below. It goes outside the scheduling wrapper, which would
+    empty trajectory and resets the sessions below. It goes outside the scheduling layer, which would
     otherwise answer "keep playing" without seeing the status. Every arm is checked, so a bimanual rig stops
     on either.
     """
@@ -54,18 +53,18 @@ class StopOnFault(PolicyWrapper):
             self.cancel()
             return []
 
-    def wrap_session(self, inner: Session, context, now: Now | None):
+    def make_session(self, inner: Session, context, now: Now | None):
         return StopOnFault._Session(inner)
 
     def to_spec(self):
         return {'name': self.WIRE_NAME}
 
 
-class ChunkedSchedule(PolicyWrapper):
+class ChunkedSchedule(Layer):
     """Wait for the current trajectory to finish before calling the inner policy again.
 
-    Owns relative→absolute time conversion: inner layers (codecs, models) emit relative timestamps;
-    this wrapper anchors them to ``now()`` *after* inner inference returns, so execution aligns to
+    Owns relative→absolute time conversion: the sessions below (codecs, models) emit relative timestamps;
+    this layer anchors them to ``now()`` *after* inner inference returns, so execution aligns to
     inference-finish (not inference-start). Returns ``None`` ("keep executing the current trajectory")
     until the last action's timestamp is reached, then calls the inner policy.
     """
@@ -107,7 +106,7 @@ class ChunkedSchedule(PolicyWrapper):
             self._trajectory_end = None
             super().cancel()
 
-    def wrap_session(self, inner: Session, context, now: Now | None):
+    def make_session(self, inner: Session, context, now: Now | None):
         return ChunkedSchedule._Session(inner, now)
 
     def to_spec(self):
@@ -157,13 +156,13 @@ class _StackBuffer:
         return max(int(np.searchsorted(times, target, side='right')) - 1, 0)
 
 
-class TemporalStack(PolicyWrapper):
+class TemporalStack(Layer):
     """Replaces each named observation entry with a temporal stack of recent samples.
 
     A model that conditions on a short window of history (e.g. DreamZero's video context) needs several
     samples spanning the just-executed chunk at the cadence seen in training, but the harness only
-    forwards an observation to the policy at re-query boundaries. This wrapper sits outside the
-    scheduling wrapper so it sees every control tick: it records the named ``keys`` and substitutes, for
+    forwards an observation to the policy at re-query boundaries. This layer sits outside the
+    scheduling layer so it sees every control tick: it records the named ``keys`` and substitutes, for
     each, a ``(len(offsets_sec), ...)`` stack sampled at ``offsets_sec`` (ascending negative seconds
     relative to now), so every stacked step carries its own value at that time rather than the current
     one repeated across history.
@@ -203,7 +202,7 @@ class TemporalStack(PolicyWrapper):
             'in-range targets and the stack would be empty'
         )
 
-    def wrap_session(self, inner: Session, context, now: Now | None):
+    def make_session(self, inner: Session, context, now: Now | None):
         return TemporalStack._Session(inner, self._keys, self._offsets_sec, self._pad_start)
 
     def to_spec(self):

@@ -10,7 +10,7 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, I
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
-from .base import Policy, PolicyWrapper, Session
+from .base import Layer, Policy, Session
 from .recording import Recorder
 from .spec import from_spec
 
@@ -109,7 +109,7 @@ class RemotePolicy(Policy):
 
     The server's ``ready`` handshake declares the local half of its policy pipeline (the
     ``local_stack`` spec — see ``positronic.policy.spec``) along with the wire settings of the
-    ``remote`` marker. The declared wrappers are built here, once, and every session runs through
+    ``remote`` marker. The declared layers are built here, once, and every session runs through
     them; a handshake that declares no stack is an error.
 
     ``recording_dir`` taps the raw and wire boundaries around the stack.
@@ -127,7 +127,7 @@ class RemotePolicy(Policy):
         self._recording_dir = pos3.sync(recording_dir) if recording_dir else None
         self._stacked: Policy | None = None
 
-    def _resolve_stack(self) -> PolicyWrapper:
+    def _resolve_stack(self) -> Layer:
         meta = self._endpoint.server_meta()
         version = meta.get(keys.POSITRONIC_VERSION, 'unknown')
         declared = meta.get(keys.LOCAL_STACK)

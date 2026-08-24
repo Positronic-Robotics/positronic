@@ -21,11 +21,11 @@ from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
-from positronic.policy.base import DelegatingSession, Policy, PolicyWrapper, Session
+from positronic.policy.base import DelegatingSession, Layer, Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import Harness, _InferenceWorker
+from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.remote import RemoteSession
-from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
 
@@ -201,7 +201,7 @@ class _FakeInferenceSession(InferenceSession):
 
 class RemoteStubPolicy(Policy):
     """A stub policy served through a real ``RemoteSession`` over a fake inference session, so its inference
-    round-trips ``RemoteSession.__call__`` and records the ``policy.infer`` span independent of any wrapper."""
+    round-trips ``RemoteSession.__call__`` and records the ``policy.infer`` span independent of any layer."""
 
     def __init__(
         self, command: roboarm.command.CommandType | None = None, target_grip: float = 0.33, wall_sec: float = 0.0
@@ -843,7 +843,7 @@ def test_task_done_terminates_through_wire_embodiment(world):
         static_meta={},
         meta_source=None,
     )
-    # Termination is independent of the policy wrappers; the minimal embodiment has no
+    # Termination is independent of the policy layers; the minimal embodiment has no
     # ``robot_state``, so run the stub policy bare.
     harness = Harness(StubPolicy(), embodiment)
     ds_recorder = RecordingEmitter()
@@ -1713,7 +1713,7 @@ class SlowPolicy(Policy):
         return _SlowSession(self._wall_sec, self._span_sec, self._steps)
 
 
-class _ReplanEarly(PolicyWrapper):
+class _ReplanEarly(Layer):
     """Infers on the first observation and again halfway through the chunk it returned.
 
     The re-query-before-exhaustion shape (RTC, temporal ensembling) that the substrate exists for: unlike
@@ -1731,13 +1731,13 @@ class _ReplanEarly(PolicyWrapper):
             if self._replan_at is not None and t0 < self._replan_at:
                 return None
             result = self._inner(obs)
-            assert result is not None, 'the inner policy of this test wrapper always returns a chunk'
+            assert result is not None, 'the inner policy of this test layer always returns a chunk'
             anchor = self._now()
             result = [{**action, keys.ACTION_TIMESTAMP: anchor + action[keys.ACTION_TIMESTAMP]} for action in result]
             self._replan_at = t0 + (result[-1][keys.ACTION_TIMESTAMP] - t0) / 2
             return result
 
-    def wrap_session(self, inner: Session, context, now):
+    def make_session(self, inner: Session, context, now):
         assert now is not None  # the harness always passes its clock
         return _ReplanEarly._Session(inner, now)
 
@@ -1754,11 +1754,11 @@ class _TimedRecorder(pimm.SignalEmitter):
 
 
 def _run_episode(
-    world, policy, wrapper, *, charge_inference_time, simulated=True, steps=4000, run_sec=1.5
+    world, policy, layer, *, charge_inference_time, simulated=True, steps=4000, run_sec=1.5
 ) -> list[tuple[float, Any]]:
     """One trial run with ``charge_inference_time``; returns the grip commands with the world time each went
     out at. A sim trial runs against a pacer, the sole time-master a real rig doesn't need."""
-    harness = Harness(wrapper.wrap(policy), make_embodiment(simulated=simulated))
+    harness = Harness(layer.wrap(policy), make_embodiment(simulated=simulated))
     grip_recorder = _TimedRecorder(world.clock)
     harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
     harness.commands[keys.TARGET_GRIP]._bind(grip_recorder)
@@ -1818,7 +1818,7 @@ def test_a_real_rig_pays_wall_time_whatever_the_trial_asks_for(world):
     assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the call took'
 
 
-class _ObservedTicks(PolicyWrapper):
+class _ObservedTicks(Layer):
     """Records the observation instant of every call that reaches it."""
 
     def __init__(self):
@@ -1833,13 +1833,13 @@ class _ObservedTicks(PolicyWrapper):
             self._seen.append(obs[keys.OBS_TIME_NS] / 1e9)
             return self._inner(obs)
 
-    def wrap_session(self, inner: Session, context, now):
+    def make_session(self, inner: Session, context, now):
         return _ObservedTicks._Session(inner, self.seen)
 
 
 @pytest.mark.timeout(30.0)
-def test_the_wrappers_see_every_tick(world):
-    """What a temporal stack records: nothing keeps an observation from the wrappers above the scheduler —
+def test_the_layers_see_every_tick(world):
+    """What a temporal stack records: nothing keeps an observation from the layers above the scheduler —
     not the machine inside the model call, and not the rounds in between."""
     ticks = _ObservedTicks()
     _run_episode(
@@ -1857,7 +1857,7 @@ def test_the_wrappers_see_every_tick(world):
 
 @pytest.mark.timeout(20.0)
 def test_harness_keeps_playing_while_a_call_is_in_flight(world):
-    """A wrapper that replans before its chunk is exhausted leaves waypoints due during inference, and the
+    """A layer that replans before its chunk is exhausted leaves waypoints due during inference, and the
     harness emits them on time instead of standing still until the model answers."""
     played = _run_episode(
         world, SlowPolicy(wall_sec=0.15, span_sec=0.4, steps=20), _ReplanEarly(), charge_inference_time=True

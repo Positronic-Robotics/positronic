@@ -110,7 +110,7 @@ This metadata tells the client:
 - `local_stack` — the declared local half of the policy pipeline: a spec tree of `{"name", "args"}`
   leaves composed by `"seq"` (the `|` operator) and `"par"` (the `&` operator). `RemotePolicy` builds
   this stack in front of the connection, resolving names only against the closed vocabulary in
-  `positronic.policy.spec.WIRE_WRAPPERS` — an unknown entry fails at connect, before the robot moves.
+  `positronic.policy.spec.WIRE_LAYERS` — an unknown entry fails at connect, before the robot moves.
   Never empty and never absent: a pipeline with nothing left of the marker is refused when the server
   starts, and a handshake declaring nothing is refused by the client. In practice it names at least a
   `chunked_schedule`, which turns the chunk-relative timestamps a codec stamps into times on the rig's
@@ -209,12 +209,12 @@ uv run positronic-inference sim \
 ## Classes
 
 ### `server.PolicyServer`
-The one server implementation behind every vendor. It serves a **policy pipeline** (see `positronic.policy.spec`): a wrapper chain with a `remote` marker, closed by a `ModelSource` terminal. The half right of the marker wraps the model on the server; the half left of it is declared as `local_stack` in the ready handshake for the client to build. The source is the only model loader: `get_models()` backs `/api/v1/models`, `resolve()` maps a requested id (or the default), and `load(model_id, on_progress)` produces the `Policy` — with `on_progress` messages streamed to the connecting client as `loading` status messages.
+The one server implementation behind every vendor. It serves a **policy pipeline** (see `positronic.policy.spec`): a layer chain with a `remote` marker, closed by a `ModelSource` terminal. The half right of the marker wraps the model on the server; the half left of it is declared as `local_stack` in the ready handshake for the client to build. The source is the only model loader: `get_models()` backs `/api/v1/models`, `resolve()` maps a requested id (or the default), and `load(model_id, on_progress)` produces the `Policy` — with `on_progress` messages streamed to the connecting client as `loading` status messages.
 
 ```python
 from positronic.offboard import PolicyServer
 from positronic.policy.spec import PolicySource, remote
-from positronic.policy.wrappers import ChunkedSchedule
+from positronic.policy.layers import ChunkedSchedule
 
 pipeline = ChunkedSchedule() | remote | PolicySource(my_policy)
 PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()

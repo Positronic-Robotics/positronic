@@ -20,8 +20,8 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
+from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.tests.test_harness import RemoteStubPolicy, StubPolicy
-from positronic.policy.wrappers import ChunkedSchedule
 from positronic.simulator.env_server import telemetry as env_telemetry
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import AddBox, SetBodyPosition

@@ -1,4 +1,4 @@
-from .base import DelegatingPolicy, DelegatingSession, Policy, PolicyWrapper, Session
+from .base import DelegatingPolicy, DelegatingSession, Layer, Policy, Session
 from .codec import ActionHorizon, ActionTimestamp, ActionTiming, Codec, is_action
 from .recording import Recorder
 from .remote import RemotePolicy
@@ -8,7 +8,7 @@ __all__ = [
     'Session',
     'DelegatingPolicy',
     'DelegatingSession',
-    'PolicyWrapper',
+    'Layer',
     'RemotePolicy',
     'Codec',
     'ActionTimestamp',

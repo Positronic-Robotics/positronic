@@ -20,7 +20,7 @@ from pimm.logging import init_logging
 from positronic import keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
-from positronic.policy import Codec, Policy, PolicyWrapper, Session
+from positronic.policy import Codec, Layer, Policy, Session
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import list_checkpoints
@@ -370,8 +370,8 @@ class DreamZeroSource(ModelSource):
 dreamzero_source = cfn.Config(DreamZeroSource)
 
 
-@cfn.config(local=codecs.dreamzero_wrappers, codec=codecs.joints, source=dreamzero_source, width=320, height=176)
-def pipeline(local: PolicyWrapper, codec: Codec, source: ModelSource, width: int, height: int):
+@cfn.config(local=codecs.dreamzero_layers, codec=codecs.joints, source=dreamzero_source, width=320, height=176)
+def pipeline(local: Layer, codec: Codec, source: ModelSource, width: int, height: int):
     """One DreamZero serving pipeline: the rig-side AR video context, the codec, the subprocess-backed source.
 
     ``width``/``height`` bound frames on the rig and follow the codec's own geometry.

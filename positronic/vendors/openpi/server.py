@@ -16,8 +16,8 @@ from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
 from positronic.policy import Codec, Policy, Session
 from positronic.policy.codec import ChangeEEFrame, RestrictImageSize
+from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.spec import ModelSource, remote
-from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
 from positronic.utils.checkpoints import get_latest_checkpoint, list_checkpoints
 from positronic.vendors import openpi
 from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer

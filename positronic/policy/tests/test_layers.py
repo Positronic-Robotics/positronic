@@ -1,4 +1,4 @@
-"""Unit tests for PolicyWrapper composition, ChunkedSchedule, TemporalStack, and the policy-pipeline algebra."""
+"""Unit tests for Layer composition, ChunkedSchedule, TemporalStack, and the policy-pipeline algebra."""
 
 from typing import Any
 
@@ -17,7 +17,7 @@ from positronic.policy.action import (
     JointDeltaAction,
     RelativePositionAction,
 )
-from positronic.policy.base import Policy, PolicyWrapper, Session
+from positronic.policy.base import Layer, Policy, Session
 from positronic.policy.codec import (
     ActionHorizon,
     ActionTimestamp,
@@ -29,8 +29,8 @@ from positronic.policy.codec import (
     RestrictImageSize,
     SetControlMode,
 )
+from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
 from positronic.policy.observation import ObservationCodec
-from positronic.policy.wrappers import ChunkedSchedule, StopOnFault, TemporalStack
 
 
 class _FakeClock:
@@ -74,14 +74,14 @@ class TestStopOnFault:
     @pytest.mark.parametrize('unavailable', [RobotStatus.ERROR, RobotStatus.BUSY])
     def test_an_unavailable_arm_stops_what_is_executing(self, unavailable):
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
-        session = StopOnFault().wrap_session(inner, None, None)
+        session = StopOnFault().make_session(inner, None, None)
 
         assert session(_obs(0.0, unavailable)) == []
         assert inner.call_count == 0, 'the model was asked about an arm that is not tracking it'
 
     def test_an_available_arm_reaches_the_model(self):
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
-        session = StopOnFault().wrap_session(inner, None, None)
+        session = StopOnFault().make_session(inner, None, None)
 
         assert session(_obs(0.0, RobotStatus.AVAILABLE)) is not None
         assert inner.call_count == 1
@@ -89,7 +89,7 @@ class TestStopOnFault:
     def test_an_observation_with_no_arm_status_reaches_the_model(self):
         """A probe replaying a recording has no arm to stop for."""
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
-        session = StopOnFault().wrap_session(inner, None, None)
+        session = StopOnFault().make_session(inner, None, None)
 
         assert session({keys.OBS_TIME_NS: 0}) is not None
         assert inner.call_count == 1
@@ -98,7 +98,7 @@ class TestStopOnFault:
         """Whichever arm is unavailable stops the pair, and the status counts as its number: a server-side stack
         reads it off a wire with no enum to carry."""
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
-        session = StopOnFault().wrap_session(inner, None, None)
+        session = StopOnFault().make_session(inner, None, None)
         obs = {
             keys.OBS_TIME_NS: 0,
             f'{keys.ROBOT_STATE}.left.status': int(RobotStatus.AVAILABLE),
@@ -111,7 +111,7 @@ class TestStopOnFault:
     def test_the_status_a_recording_carries_for_a_taken_arm_stops_the_policy(self):
         """The numbers are the contract between a rig and a server: 1 is an arm its driver has taken."""
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
-        session = StopOnFault().wrap_session(inner, None, None)
+        session = StopOnFault().make_session(inner, None, None)
 
         assert (RobotStatus.AVAILABLE, RobotStatus.BUSY, RobotStatus.ERROR) == (0, 1, 3)
         assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 1}) == []
@@ -120,7 +120,7 @@ class TestStopOnFault:
     def test_the_status_published_for_a_travelling_arm_reaches_the_model(self):
         """The wire protocol publishes 2 for an arm on its way to a setpoint, which is one taking commands."""
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
-        session = StopOnFault().wrap_session(inner, None, None)
+        session = StopOnFault().make_session(inner, None, None)
 
         assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 2}) is not None
         assert inner.call_count == 1
@@ -128,7 +128,7 @@ class TestStopOnFault:
     def test_a_status_no_arm_answers_to_raises(self):
         """A number outside ``RobotStatus`` is the rig and the server disagreeing about the protocol, which
         is not something to drive an arm through."""
-        session = StopOnFault().wrap_session(_ConstSession([]), None, None)
+        session = StopOnFault().make_session(_ConstSession([]), None, None)
 
         with pytest.raises(ValueError):
             session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 99})
@@ -201,23 +201,23 @@ class TestChunkedSchedule:
 
 
 class TestPipelineComposition:
-    """Test | operator across PolicyWrapper and Codec types."""
+    """Test | operator across Layer and Codec types."""
 
-    def test_wrapper_pipe_wrapper(self):
+    def test_layer_pipe_layer(self):
         clock = _FakeClock(t=1.0)
         pipeline = TemporalStack(keys=('v',), offsets_sec=(0.0,)) | ChunkedSchedule()
-        assert isinstance(pipeline, PolicyWrapper)
+        assert isinstance(pipeline, Layer)
         policy = pipeline.wrap(_ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]))
         session = policy.new_session(now=clock.now)
         result = session({keys.OBS_TIME_NS: int(1e9), 'v': np.array([5.0])})
         assert result is not None
         assert result[0]['v'] == 1
 
-    def test_codec_pipe_wrapper(self):
+    def test_codec_pipe_layer(self):
         clock = _FakeClock(t=1.0)
         codec = ActionTimestamp(fps=10.0)
         pipeline = codec | ChunkedSchedule()
-        assert isinstance(pipeline, PolicyWrapper)
+        assert isinstance(pipeline, Layer)
         policy = pipeline.wrap(_ConstPolicy([{'action': 'test', keys.ACTION_TIMESTAMP: 0.0}]))
         session = policy.new_session(now=clock.now)
         result = session(_obs())
@@ -227,7 +227,7 @@ class TestPipelineComposition:
         clock = _FakeClock(t=1.0)
         codec = ActionTimestamp(fps=10.0)
         pipeline = ChunkedSchedule() | codec
-        assert isinstance(pipeline, PolicyWrapper)
+        assert isinstance(pipeline, Layer)
         # 5 raw actions → codec stamps relative 0.0, 0.1, 0.2, 0.3, 0.4
         # → ChunkedSchedule shifts to 1.0, 1.1, 1.2, 1.3, 1.4 (clock=1.0).
         policy = pipeline.wrap(_ConstPolicy([{'action': f'a{i}'} for i in range(5)]))
@@ -240,7 +240,7 @@ class TestPipelineComposition:
         assert session(_obs()) is None
 
     def test_codec_and_stays_codec_only(self):
-        """& only works between codecs, not wrappers."""
+        """& only works between codecs, not layers."""
         c1 = ActionTimestamp(fps=10.0)
         c2 = ActionTimestamp(fps=5.0)
         composed = c1 & c2
@@ -375,8 +375,8 @@ class TestTemporalStack:
     def test_no_pad_start_grows_from_one(self):
         clock = _FakeClock(t=0.0)
         inner = _CapturePolicy()
-        wrapper = TemporalStack(keys=('v',), offsets_sec=self.OFFSETS, pad_start=False)
-        session = wrapper.wrap(inner).new_session(now=clock.now)
+        layer = TemporalStack(keys=('v',), offsets_sec=self.OFFSETS, pad_start=False)
+        session = layer.wrap(inner).new_session(now=clock.now)
 
         session(_stack_obs(0.0, 1.0))
         assert inner.session.seen[0]['v'].shape == (1, 1)
@@ -395,8 +395,8 @@ class TestTemporalStack:
         for pad_start in (True, False):
             clock = _FakeClock(t=0.0)
             inner = _CapturePolicy()
-            wrapper = TemporalStack(keys=('v',), offsets_sec=offsets, pad_start=pad_start)
-            session = wrapper.wrap(inner).new_session(now=clock.now)
+            layer = TemporalStack(keys=('v',), offsets_sec=offsets, pad_start=pad_start)
+            session = layer.wrap(inner).new_session(now=clock.now)
             for i in range(4):
                 session(_stack_obs(0.1 * i, float(i)))
             stacks[pad_start] = inner.session.seen[-1]['v']
@@ -412,7 +412,7 @@ class TestPipelineSpec:
         sched = ChunkedSchedule()
         codec = ActionTimestamp(fps=10.0)
         local, border, rem = spec.split(stack | sched | spec.remote | codec)
-        assert local is not None and local._wrappers() == (stack, sched)
+        assert local is not None and local._layers() == (stack, sched)
         assert border is spec.remote
         assert rem is codec
 
@@ -465,7 +465,7 @@ class TestPipelineSpec:
             def to_spec(self):
                 return {'name': 'wire_codec', 'args': {'tag': self._tag}}
 
-        monkeypatch.setitem(spec.WIRE_WRAPPERS, 'wire_codec', _WireCodec)
+        monkeypatch.setitem(spec.WIRE_LAYERS, 'wire_codec', _WireCodec)
         composed = _WireCodec('t') | (_WireCodec('a') & _WireCodec('b'))
         rebuilt = spec.from_spec(composed.to_spec())
         assert rebuilt is not None and rebuilt.to_spec() == composed.to_spec()
@@ -485,13 +485,13 @@ class TestPipelineSpec:
 
     def test_unknown_name_lists_vocabulary(self):
         with pytest.raises(ValueError, match='chunked_schedule'):
-            spec.from_spec({'name': 'not_a_wrapper'})
+            spec.from_spec({'name': 'not_a_layer'})
 
     def test_unknown_arg_fails(self):
         with pytest.raises(TypeError):
             spec.from_spec({'name': 'temporal_stack', 'args': {'keys': ['v'], 'offsets_sec': [0.0], 'bogus': 1}})
 
-    def test_non_deliverable_wrapper_fails_loudly(self):
+    def test_non_deliverable_layer_fails_loudly(self):
         with pytest.raises(NotImplementedError, match='not deliverable'):
             IKJointsAction(solver_cls=None).to_spec()
 
@@ -515,10 +515,10 @@ class TestPipelineSpec:
             'joint_delta_action': JointDeltaAction(),
             'change_ee_frame': ChangeEEFrame(Transform3D.identity),
         }
-        assert set(instances) == set(spec.WIRE_WRAPPERS)
+        assert set(instances) == set(spec.WIRE_LAYERS)
         for name, instance in instances.items():
             assert instance.to_spec()['name'] == name
-            assert type(instance) is spec.WIRE_WRAPPERS[name]
+            assert type(instance) is spec.WIRE_LAYERS[name]
 
 
 class _ListSource(spec.ModelSource):
@@ -533,9 +533,9 @@ class _ListSource(spec.ModelSource):
 
 
 class TestPipe:
-    """The source terminal: ``... | source`` closes a wrapper chain into a Pipeline."""
+    """The source terminal: ``... | source`` closes a layer chain into a Pipeline."""
 
-    def test_wrapper_chain_terminates_into_pipe(self):
+    def test_layer_chain_terminates_into_pipe(self):
         stack = TemporalStack(keys=('v',), offsets_sec=(0.0,))
         sched = ChunkedSchedule()
         codec = ActionTimestamp(fps=10.0)

@@ -86,7 +86,7 @@ Four small concepts make up the API. You meet them whether you use a built-in se
 
 **Codec.** Different models want different inputs: end-effector pose vs joint angles, absolute targets vs deltas, 224×224 vs 512×512 images. A `Codec` translates between the robot's raw data (what is on the wire) and your model's format — `encode` on the way in, `decode` on the way out. The same codec prepares the training data, so a model is served exactly the way it was trained. The full catalog is in the [Codecs Guide](codecs.md).
 
-**Wrapper.** A `PolicyWrapper` is the swappable client-side logic from the previous section — scheduling, error recovery, recording. Wrappers compose with `|` and wrap a policy, so you can change *how* latency is handled without touching the model. A policy pipeline names the wrappers together with the codec as one chain split by the `remote` marker and closed by a *model source* — the server-side terminal that loads the model (`local | remote | codec | source`, see `positronic.policy.spec`). The server declares the local half in its handshake and the client builds it, so both halves ship as one pipeline.
+**Layer.** A `Layer` is the swappable client-side logic from the previous section — scheduling, error recovery, recording. Layers compose with `|` and wrap a policy, so you can change *how* latency is handled without touching the model. A policy pipeline names the layers together with the codec as one chain split by the `remote` marker and closed by a *model source* — the server-side terminal that loads the model (`local | remote | codec | source`, see `positronic.policy.spec`). The server declares the local half in its handshake and the client builds it, so both halves ship as one pipeline.
 
 ## The wire format
 
@@ -113,7 +113,7 @@ Your server receives every key each step. An arm that is faulted or busy still r
 
 ### Actions (server → client)
 
-The normal response is a list of action dicts — a short trajectory. (A single action dict is also valid; what matters is that the client-side wrappers and the server, taken together, produce actions carrying the fields below.)
+The normal response is a list of action dicts — a short trajectory. (A single action dict is also valid; what matters is that the client-side layers and the server, taken together, produce actions carrying the fields below.)
 
 ```python
 {"result": [
@@ -153,7 +153,7 @@ A rig with more than one arm names every channel after the arm that owns it: obs
 
 ## Debugging with recordings
 
-When a run doesn't produce the result you expected, it helps to record exactly what crossed the boundaries between the robot, the codec, and the model. Recording is itself a policy wrapper — `Recorder` in [`positronic/policy/recording.py`](../positronic/policy/recording.py) — that taps into any client pipeline; the built-in servers expose it via `--recording_dir`. It writes one [rerun](https://rerun.io) file per episode with two layers:
+When a run doesn't produce the result you expected, it helps to record exactly what crossed the boundaries between the robot, the codec, and the model. Recording is itself a policy layer — `Recorder` in [`positronic/policy/recording.py`](../positronic/policy/recording.py) — that taps into any client pipeline; the built-in servers expose it via `--recording_dir`. It writes one [rerun](https://rerun.io) file per episode with two layers:
 
 - **`raw`** — the observation and the action as they cross the wire.
 - **`inference`** — the same episode *after* the codec: the encoded observation the model received and the raw actions it produced.
@@ -175,7 +175,7 @@ from positronic.drivers.roboarm import command
 from positronic.offboard import PolicyServer
 from positronic.policy import Policy, Session
 from positronic.policy.spec import PolicySource, remote
-from positronic.policy.wrappers import ChunkedSchedule, StopOnFault
+from positronic.policy.layers import ChunkedSchedule, StopOnFault
 
 
 class MySession(Session):
@@ -212,9 +212,9 @@ PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()
 
 The pipeline reads left to right: everything left of the `remote` marker is the client-side stack the server declares in its handshake (here the standard `StopOnFault` and `ChunkedSchedule`); everything right of it runs on the server. `PolicySource` is the pipeline's terminal — a model source that serves one already-built policy.
 
-The left side is not optional: a pipeline with nothing there is refused when the server starts, and a rig refuses a handshake that declares nothing. It needs a scheduler in particular, and `StopOnFault` outside that scheduler — an arm that is faulted or busy is not taking the plan it was given, so the wrapper answers the empty trajectory and the rig stops rather than resuming a chunk stamped before. Actions come back timestamped relative to their chunk, and `ChunkedSchedule` is what turns those into times on the rig's clock; a stack that leaves them relative — or anchors them twice — makes the harness reject the chunk at the first inference, since it schedules nothing more than `MAX_ACTION_SKEW_SEC` from now.
+The left side is not optional: a pipeline with nothing there is refused when the server starts, and a rig refuses a handshake that declares nothing. It needs a scheduler in particular, and `StopOnFault` outside that scheduler — an arm that is faulted or busy is not taking the plan it was given, so the layer answers the empty trajectory and the rig stops rather than resuming a chunk stamped before. Actions come back timestamped relative to their chunk, and `ChunkedSchedule` is what turns those into times on the rig's clock; a stack that leaves them relative — or anchors them twice — makes the harness reject the chunk at the first inference, since it schedules nothing more than `MAX_ACTION_SKEW_SEC` from now.
 
-`new_session`'s `now` argument is the runtime clock that wrappers scheduling against live time read; a policy that does no scheduling of its own just accepts and ignores it (server-side it is `None`).
+`new_session`'s `now` argument is the runtime clock that layers scheduling against live time read; a policy that does no scheduling of its own just accepts and ignores it (server-side it is `None`).
 
 If you put a `Codec` right of the marker (`ChunkedSchedule() | remote | codec | PolicySource(...)`), your session works entirely in *model space* — it receives encoded observations and returns model-native actions, and the codec handles the wire format. A codec that encodes images should also bound them on the rig, so full-resolution frames never cross the wire — that is what the built-in vendor pipelines do:
 
