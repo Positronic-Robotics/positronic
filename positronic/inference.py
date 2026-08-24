@@ -2,7 +2,7 @@
 aliases over ``cli.eval.run``."""
 
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import replace
 from functools import partial
@@ -71,34 +71,24 @@ class KeyboardOperator(pimm.ControlSystem):
             print(f'Episode failed: {e}')
 
 
-def _attended_task(
-    instruction: str, nominal_joints: Sequence[float], joints_spread: Sequence[float], start_grip: float | None
-) -> Task:
+def _attended_task(instruction: str) -> Task:
     """The trial one keypress asks for. An attended episode has no time budget: the operator is what ends it."""
-    prepare_args: dict[str, Any] = {keys.SCENE: instruction}
-    if len(nominal_joints):
-        prepare_args[keys.ARM] = command.sampled_joints(nominal_joints, joints_spread)
-    if start_grip is not None:
-        prepare_args[keys.GRIPPER] = start_grip
-    return Task(instruction_source=instruction, timeout_sec=None, prepare_args=prepare_args)
+    return Task(
+        instruction_source=instruction,
+        timeout_sec=None,
+        prepare_args={
+            keys.SCENE: instruction,
+            keys.ARM: command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD),
+            keys.GRIPPER: 0.0,
+        },
+    )
 
 
-def real(
-    policy,
-    embodiment: Embodiment,
-    task: str | None,
-    nominal_joints: Sequence[float] = (),
-    joints_spread: Sequence[float] = (),
-    start_grip: float | None = None,
-    output_dir=None,
-):
+def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
     """Run one hardware embodiment attended and headless, the keyboard deciding when an episode starts and
     finishes.
 
-    What each episode starts from belongs to the rig ``embodiment`` names: ``nominal_joints`` and
-    ``joints_spread`` are the arm's, ``start_grip`` the fingers'. A rig readies only what it is given, so an
-    arm left unnamed here holds where the last episode left it, and fingers with no ``start_grip`` stay as
-    they are.
+    Every episode starts the arm at a pose drawn around the Franka's nominal joints, with the fingers open.
 
     The world is composed here rather than by the runner: an attended surface is the binary's own business,
     and the keyboard is the only one this library ships. There is no viewer — a console that shows the
@@ -108,11 +98,10 @@ def real(
     """
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
-    # The operator answers for the scene whatever the rig declares; everything else the rig must have of its
-    # own. Swapping the embodiment on the command line and keeping the start pose is caught here rather than
-    # at the first press.
-    asks = set(_attended_task(task or '', nominal_joints, joints_spread, start_grip).prepare_args)
-    unknown = sorted(asks - set(embodiment.prepare_handlers) - {keys.SCENE})
+    # The operator answers for the scene whatever the rig declares; the arm and the fingers the rig must have
+    # of its own, and a run pointed at an embodiment that readies neither is caught here rather than at the
+    # first press.
+    unknown = sorted(set(_attended_task('').prepare_args) - set(embodiment.prepare_handlers) - {keys.SCENE})
     if unknown:
         raise ValueError(f'{unknown} is not something {embodiment.descriptor or "this rig"} readies')
 
@@ -120,25 +109,16 @@ def real(
     # `prepare_output_dir` syncs a directory and snapshots sources into it, and `LocalDatasetWriter`
     # scans the one it is given.
     try:
-        _run_attended(policy, embodiment, task, nominal_joints, joints_spread, start_grip, output_dir)
+        _run_attended(policy, embodiment, task, output_dir)
     finally:
         policy.close()
 
 
-def _run_attended(
-    policy,
-    embodiment: Embodiment,
-    task: str | None,
-    nominal_joints: Sequence[float],
-    joints_spread: Sequence[float],
-    start_grip: float | None,
-    output_dir,
-) -> None:
+def _run_attended(policy, embodiment: Embodiment, task: str | None, output_dir) -> None:
     """Record from a warmed policy until the keyboard returns. The caller owns the policy."""
     output_dir = prepare_output_dir(output_dir)
     keyboard = KeyboardControl(quit_key='q')
-    instruction = task or ''
-    operator = KeyboardOperator(partial(_attended_task, instruction, nominal_joints, joints_spread, start_grip))
+    operator = KeyboardOperator(partial(_attended_task, task or ''))
     embodiment = replace(embodiment, prepare_handlers={**embodiment.prepare_handlers, keys.SCENE: operator.ready})
     harness = Harness(policy, embodiment)
     print('Keyboard controls: [s]tart, sto[p], [q]uit')
@@ -154,14 +134,7 @@ def _run_attended(
         world.run([harness, keyboard, operator], [*producers, ds_agent])
 
 
-real_cfg = cfn.Config(
-    real,
-    embodiment=positronic.cfg.embodiment.droid,
-    policy=policy_cfg.placeholder,
-    nominal_joints=FRANKA_NOMINAL_JOINTS,
-    joints_spread=FRANKA_JOINTS_SPREAD,
-    start_grip=0.0,
-)
+real_cfg = cfn.Config(real, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder)
 
 
 # Console entry point for [project.scripts].

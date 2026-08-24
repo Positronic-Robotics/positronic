@@ -1,11 +1,15 @@
 import io
 import sys
+from dataclasses import replace
 from functools import partial
+from typing import Any
 
+import numpy as np
 import pytest
 
 import pimm
 from positronic import inference, keys
+from positronic.cfg.hardware.roboarm import FRANKA_JOINTS_SPREAD, FRANKA_NOMINAL_JOINTS
 from positronic.eval import Embodiment, Task
 from positronic.inference import KeyboardOperator, real
 from positronic.tests.testing_coutils import IdleSession, drive_scheduler, scripted_driver
@@ -31,14 +35,31 @@ class _IdlePolicy:
         self.closed = True
 
 
+class _ReadyDevices(pimm.ControlSystem):
+    """The arm and fingers of a rig that is already wherever it is asked to go."""
+
+    def __init__(self):
+        self.arm = pimm.calls.ControlSystemHandler[Any, None](self)
+        self.gripper = pimm.calls.ControlSystemHandler[Any, None](self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        while not should_stop.value:
+            for handler in (self.arm, self.gripper):
+                for call in handler.incoming():
+                    call.set_result(None)
+            yield pimm.Sleep(0.01)
+
+
 def _embodiment(simulated: bool = False) -> Embodiment:
+    devices = _ReadyDevices()
     return Embodiment(
         descriptor='stub',
         observations={},
         commands={},
-        prepare_handlers={},
+        prepare_handlers={keys.ARM: devices.arm, keys.GRIPPER: devices.gripper},
         static_meta={},
         meta_source=None,
+        control_systems=(devices,),
         simulated=simulated,
     )
 
@@ -67,29 +88,33 @@ def test_the_keyboard_path_refuses_a_simulated_embodiment():
         real(policy=_IdlePolicy(), embodiment=_embodiment(simulated=True), task='stub')
 
 
-def test_the_keyboard_path_refuses_a_start_the_rig_cannot_be_put_at():
-    """What an episode starts from belongs to the rig, so swapping the embodiment and keeping the start pose
-    is caught before a run begins rather than at the first press."""
+def test_the_keyboard_path_refuses_a_rig_it_cannot_put_at_a_start_pose():
+    """Every attended episode places the arm and opens the fingers, so a rig that readies neither is caught
+    before a run begins rather than at the first press."""
+    bare = replace(_embodiment(), prepare_handlers={}, control_systems=())
     with pytest.raises(ValueError, match="'gripper'"):
-        real(policy=_IdlePolicy(), embodiment=_embodiment(), task='stub', start_grip=0.0)
+        real(policy=_IdlePolicy(), embodiment=bare, task='stub')
 
 
 class _ScriptedKeyboard(pimm.ControlSystem):
-    """Stands in for ``KeyboardControl``: types each key a beat apart, then returns as ``q`` would.
+    """Stands in for ``KeyboardControl``: starts an episode, stops it once it is running, returns as ``q`` would.
 
-    The beat is wide enough that the episode a key asks for has opened before the next one lands.
+    ``policy`` is what says the episode is running. The rig's devices are spawned, so how long they take to
+    answer the trial's prepare is nothing a beat between keystrokes could name.
     """
 
-    def __init__(self, *keystrokes: str):
-        self._keystrokes = keystrokes
+    def __init__(self, policy):
+        self._policy = policy
         self.keyboard_inputs = pimm.ControlSystemEmitter[str](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        for key in self._keystrokes:
-            yield pimm.Sleep(0.3)
+        yield pimm.Sleep(0.1)
+        self.keyboard_inputs.emit('s')
+        while not self._policy.observations:
             if should_stop.value:
                 return
-            self.keyboard_inputs.emit(key)
+            yield pimm.Sleep(0.01)
+        self.keyboard_inputs.emit('p')
         yield pimm.Sleep(0.3)
 
 
@@ -97,8 +122,8 @@ class _ScriptedKeyboard(pimm.ControlSystem):
 def test_the_operator_readies_the_scene_an_attended_trial_runs_in(monkeypatch, capsys):
     """The rig a person sets up by hand readies like any device: the trial asks for the scene, the operator
     answers for it, and the episode runs from there until they stop it."""
-    monkeypatch.setattr(inference, 'KeyboardControl', lambda quit_key: _ScriptedKeyboard('s', 'p'))
     policy = _IdlePolicy()
+    monkeypatch.setattr(inference, 'KeyboardControl', lambda quit_key: _ScriptedKeyboard(policy))
 
     real(policy=policy, embodiment=_embodiment(), task='pick up the cube')
 
@@ -108,24 +133,15 @@ def test_the_operator_readies_the_scene_an_attended_trial_runs_in(monkeypatch, c
     assert policy.closed
 
 
-def test_each_attended_trial_readies_the_devices_its_rig_was_given():
-    """A rig with an arm and fingers names both every press, and the arm's start pose is drawn afresh each time."""
-    nominal, spread = [0.0] * 7, [0.1] * 7
-    first = inference._attended_task('pick', nominal, spread, start_grip=0.0)
-    second = inference._attended_task('pick', nominal, spread, start_grip=0.0)
+def test_every_attended_trial_draws_its_own_start_pose():
+    """A press readies the scene, the arm and the fingers, and the pose the arm is put at is drawn afresh."""
+    first, second = inference._attended_task('pick'), inference._attended_task('pick')
 
     assert set(first.prepare_args) == {keys.ARM, keys.GRIPPER, keys.SCENE}
     assert first.prepare_args[keys.GRIPPER] == 0.0
     arms = [t.prepare_args[keys.ARM].positions for t in (first, second)]
-    assert all(abs(q) <= 0.1 for q in arms[0]), arms[0]
+    np.testing.assert_array_less(np.abs(arms[0] - np.array(FRANKA_NOMINAL_JOINTS)), FRANKA_JOINTS_SPREAD)
     assert not (arms[0] == arms[1]).all(), 'every trial draws its own start pose'
-
-
-def test_an_attended_trial_names_no_device_its_rig_has_not_got():
-    """A rig with no arm to place holds where the last episode left it rather than being asked for a pose."""
-    task = inference._attended_task('pick', nominal_joints=(), joints_spread=(), start_grip=None)
-
-    assert set(task.prepare_args) == {keys.SCENE}
 
 
 def test_the_operator_reports_an_ask_the_harness_refuses(capsys):
