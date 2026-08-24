@@ -5,12 +5,25 @@ reasoning that shaped it and the API itself.
 
 ## Introduction
 
-Physical AI puts a robot under control of a model, end to end: what the robot
-senses flows in, what it should do flows out. Different sensors do have
-different frequencies, data may lag or come unevenly, and commands are not
-executed instantaneously. Moreover, there are plenty of different "species" of
-robots, and they have different bodies, different sensors, different command
-languages, different control strategies.
+- As AI changed the software, when we evolved from hand written code to general purpose models, we believe that the AI will change the robotics the similar way.
+- Robotics has big difference with software -- the systems are inherently asynchronous, and the world keeps changing every second, whether the AI is ready for it or not.
+- In LLM-based agentic systems, we have three parts - an AI that is responsible for generating actions, software responsible for executing those actions (command line, MCPs, 3rd party services available through API), and a harness that connects the first two.
+- Both interfaces between LLM and harness (completion API) and harness and actions are standardized, which makes both AI and actions interchangeable.
+- Interchangeability is good for end user, the guy who wants to apply AI on a robot to solve a problem. [Horisontal is better than vertical for them, may be we can get some examples of how OS decoupled hardware and software]
+- Agentic frameworks make different models easy to interchange.
+- Agentic frameworks have a standard
+- The other big difference is that there's no defined architecture
+
+In Positronic Robotics our goal is to let any AI model control any robot, in simulation and
+in reality. The two "any"s rule out hand-wiring: nobody writes a control
+loop per model per robot per world. The goal requires a single interface
+between models and robots, and this document designs it.
+
+Different sensors do have different frequencies, data may lag or come
+unevenly, and commands are not executed instantaneously. Moreover, there are
+plenty of different "species" of robots, and they have different bodies,
+different sensors, different command languages, different control
+strategies.
 
 These constraints make the API harder to design than the ones digital AI
 settled on. A completions API is synchronous: the client asks, waits, and the
