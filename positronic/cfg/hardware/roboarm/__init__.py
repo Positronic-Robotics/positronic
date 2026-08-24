@@ -10,11 +10,22 @@ YAM_NOMINAL_JOINTS = [0.0, 1.047, 1.047, 0.0, 0.0, 0.0]
 SO101_NOMINAL_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0]
 # How far, per joint, a start pose drawn around the Franka's nominal may sit from it.
 FRANKA_JOINTS_SPREAD = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
+# The gains DROID's Franka ran, which its pretrained checkpoints were trained under.
+DROID_IMPEDANCE = command.Impedance(
+    kq=(40.0, 30.0, 50.0, 25.0, 35.0, 25.0, 10.0),
+    kqd=(4.0, 6.0, 5.0, 5.0, 3.0, 2.0, 1.0),
+    kx=(750.0, 750.0, 750.0, 15.0, 15.0, 15.0),
+    kxd=(37.0, 37.0, 37.0, 2.0, 2.0, 2.0),
+)
 
 
 def franka_start_pose() -> command.JointPosition:
-    """Where a Franka trial puts the arm before it opens, drawn afresh on every call."""
-    return command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD)
+    """Where a Franka trial puts the arm before it opens, drawn afresh on every call.
+
+    It travels under the same impedance law the rollout runs, so the arm is no stiffer getting to the
+    start pose than it is once the policy has it.
+    """
+    return command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD, DROID_IMPEDANCE)
 
 
 @cfn.config(

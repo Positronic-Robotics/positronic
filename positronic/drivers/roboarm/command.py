@@ -98,11 +98,13 @@ class JointPosition:
     mode: ControlModeType | None = None
 
 
-def sampled_joints(nominal: Sequence[float] | np.ndarray, spread: Sequence[float] | np.ndarray) -> JointPosition:
-    """A joint target drawn uniformly from ``nominal`` ± ``spread``, per joint."""
+def sampled_joints(
+    nominal: Sequence[float] | np.ndarray, spread: Sequence[float] | np.ndarray, mode: ControlModeType | None = None
+) -> JointPosition:
+    """A joint target drawn uniformly from ``nominal`` ± ``spread``, per joint, to run under ``mode``."""
     nominal = np.asarray(nominal, dtype=np.float64)
     spread = np.asarray(spread, dtype=np.float64)
-    return JointPosition(nominal + np.random.uniform(-spread, spread))
+    return JointPosition(nominal + np.random.uniform(-spread, spread), mode)
 
 
 @dataclass
