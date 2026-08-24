@@ -230,7 +230,7 @@ class _Arm(DriverRun[command.CommandType]):
         self.publish(self.vendor.state())
         return MoveStatus.ARRIVED
 
-    def _joints_at(self, pose: geom.Transform3D) -> np.ndarray:
+    def _ik(self, pose: geom.Transform3D) -> np.ndarray:
         """The joints that put the end effector at ``pose``, within the arm's limits."""
         return self.vendor.inverse_kinematics_with_limits(np.asarray([*pose.translation, *pose.rotation.as_quat]))
 
@@ -242,9 +242,9 @@ class _Arm(DriverRun[command.CommandType]):
         """
         match cmd:
             case command.CartesianPosition(pose):
-                target = self._joints_at(pose)
+                target = self._ik(pose)
             case command.CartesianDelta() as delta_cmd:
-                target = self._joints_at(delta_cmd.apply(self.state.ee_pose))
+                target = self._ik(delta_cmd.apply(self.state.ee_pose))
             case command.JointPosition(positions):
                 target = np.asarray(positions, dtype=np.float64)
             case command.JointDelta(velocities=joint_delta):
