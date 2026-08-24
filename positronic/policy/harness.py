@@ -14,6 +14,7 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
+from positronic.drivers.roboarm.command import Reset
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy
@@ -337,7 +338,7 @@ class Harness(pimm.ControlSystem):
         self.ds_command.emit(stop)
         virtual_now = clock.now()  # before the round below, whose sim-clock advance belongs to no rollout
         # Give the recorder a round to commit the STOP before the next START (they share ``ds_command``, where
-        # last-value-wins would drop one) and before the home command, so homing stays out of the recording.
+        # last-value-wins would drop one) and before the reset below, so homing stays out of the recording.
         yield self._pace(clock)
         # After that round, so the recorder's STOP-time record.io span still parents to the episode. Skew: a
         # producer stepping in that shared round charges ≤ one control period to the closing episode.
@@ -374,14 +375,28 @@ class Harness(pimm.ControlSystem):
         self._deadline = clock.now() + budget if budget is not None else None
         self.ds_command.emit(DsWriterCommand.START())
 
+    def _reset_arms(self) -> None:
+        """Send every arm home, on a real rig only.
+
+        A powered arm holds the setpoint the policy left it at until the next trial readies it, a gap of
+        human length with the arm standing in the scene. A sim's arm is placed by the trial's prepare and
+        costs nothing in between.
+        """
+        if self._embodiment.simulated:
+            return
+        for name, emitter in self.commands.items():
+            if keys.is_robot_command(name):
+                emitter.emit(Reset())
+
     def _end_episode(self, clock: pimm.Clock, payload: dict[str, Any]) -> Generator[pimm.Command, None, None]:
-        """Close the live episode: finalize the recording, retire the session, hand the terminal back to
-        whoever asked for the episode.
+        """Close the live episode: finalize the recording, send the arms home, retire the session, hand the
+        terminal back to whoever asked for the episode.
 
         The worker is retired rather than joined here, so a ``RemoteSession``'s websocket outlives the call
         still using it.
         """
         yield from self._finalize_recording(clock, payload)
+        self._reset_arms()
         assert self._call is not None, 'an episode exists only for the call that asked for it'
         self._call.set_result(payload)
         self._call = None
