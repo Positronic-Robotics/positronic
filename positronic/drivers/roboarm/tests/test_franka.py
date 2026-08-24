@@ -208,10 +208,10 @@ def test_park_gives_up_when_the_goal_stops_advancing():
 def test_park_gives_up_when_the_arm_does_not_arrive_in_time():
     arm = FakeArm(JOGGED, polls_to_reach=10**9)
 
-    clock = _drive_park(_driver(arm, manage_desk=False, park_timeout_s=0.05), arm)
+    clock = _drive_park(_driver(arm, manage_desk=False), arm)
 
     # It waits out the timeout and gives up within one poll interval of it.
-    assert 0.05 <= clock.now() < 0.06
+    assert franka._Arm._PARK_TIMEOUT_S <= clock.now() < franka._Arm._PARK_TIMEOUT_S + franka._Arm._PARK_POLL_S
     assert arm.calls.count(Call.GOAL) > 1
     np.testing.assert_allclose(arm.q, JOGGED)
 

@@ -112,6 +112,8 @@ class _Arm(DriverRun[command.CommandType]):
     _MOVE_GRACE_S = 5.0
     # Parking publishes nothing, so it comes back only as often as it needs to ask again
     _PARK_POLL_S = 0.005
+    # Spent inside the world's teardown budget; past it the driver stops control where the arm stands
+    _PARK_TIMEOUT_S = 10.0
 
     def __init__(
         self,
@@ -119,7 +121,6 @@ class _Arm(DriverRun[command.CommandType]):
         sync_move: pimm.calls.ControlSystemHandler[command.CommandType, None],
         async_move: pimm.SignalReceiver[command.CommandType],
         out: pimm.SignalEmitter[FrankaState],
-        park_timeout_s: float,
         dynamics_factor: float,
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
@@ -128,7 +129,6 @@ class _Arm(DriverRun[command.CommandType]):
         self.vendor = vendor
         self.out = out
         self.state = FrankaState()
-        self._park_timeout_s = park_timeout_s
         self._dynamics_factor = dynamics_factor
 
     def __enter__(self) -> '_Arm':
@@ -272,7 +272,7 @@ class _Arm(DriverRun[command.CommandType]):
                 call.set_exception(exc)  # an arm the driver cannot read still leaves nobody waiting
 
     def park(self) -> Iterator[pimm.Command]:
-        """Move the arm to the park pose, giving up after ``park_timeout_s``. Drive with ``yield from``.
+        """Move the arm to the park pose, giving up after ``_PARK_TIMEOUT_S``. Drive with ``yield from``.
 
         Only a stop gets here: a run that ends by raising skips the park, because moving an arm in answer to
         a fault is the driver deciding on its own to move. Where it goes is fixed — ``_PARK_JOINTS``, at the
@@ -281,13 +281,13 @@ class _Arm(DriverRun[command.CommandType]):
         try:
             logger.info('Parking the arm')
             self.vendor.recover_from_errors()  # once, before the move: a reflex during the move ends the park
-            deadline = self.clock.now() + self._park_timeout_s
+            deadline = self.clock.now() + self._PARK_TIMEOUT_S
             # The park pose is a long way off, and only the native law shapes the reference on the way there.
             outcome = yield from self.await_goal(
                 _PARK_JOINTS, lambda: self.clock.now() >= deadline, lambda: pimm.Sleep(self._PARK_POLL_S), None
             )
             if outcome is MoveStatus.GAVE_UP:
-                logger.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
+                logger.error(f'Parking timed out after {self._PARK_TIMEOUT_S}s, the arm stays where it stands')
         # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
         except Exception:
             logger.exception('Parking failed, the arm stays where it stands')
@@ -303,7 +303,6 @@ class Robot(pimm.ControlSystem):
         collision_coeff: float = 2.0,
         manage_desk: bool = True,
         reboot_on_safety_error: bool = False,
-        park_timeout_s: float = 10.0,
     ) -> None:
         """
         :param ip: IP address of the robot.
@@ -316,8 +315,6 @@ class Robot(pimm.ControlSystem):
         :param reboot_on_safety_error: When the control box is in an unrecoverable ``SafetyError`` on start, reboot
             it, wait for it to come back, and try once more before giving up. Only applies when ``manage_desk`` is
             set.
-        :param park_timeout_s: How long the arm may travel back to its park pose when the run ends before the
-            driver gives up and stops control where it stands. It is spent inside the world's teardown budget.
         """
         assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
         self._ip = ip
@@ -331,7 +328,6 @@ class Robot(pimm.ControlSystem):
         self._robot: pf.Robot | None = None
         self._desk_credentials = _read_desk_credentials() if manage_desk else None
         self._reboot_on_safety_error = reboot_on_safety_error
-        self._park_timeout_s = park_timeout_s
 
     @staticmethod
     def _build_robot_meta(robot) -> dict:
@@ -432,14 +428,7 @@ class Robot(pimm.ControlSystem):
     def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
         return _Arm(
-            self._vendor,
-            self.sync_move,
-            self.commands,
-            self.state,
-            self._park_timeout_s,
-            self._relative_dynamics_factor,
-            should_stop,
-            clock,
+            self._vendor, self.sync_move, self.commands, self.state, self._relative_dynamics_factor, should_stop, clock
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
