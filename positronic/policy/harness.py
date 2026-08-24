@@ -14,6 +14,7 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
+from positronic.drivers.roboarm.command import Reset
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy
@@ -382,6 +383,8 @@ class Harness(pimm.ControlSystem):
         still using it.
         """
         yield from self._finalize_recording(clock, payload)
+        if not self._embodiment.simulated:  # a powered arm holds the policy's last setpoint until the next trial
+            self._emit({name: Reset() for name in self.commands if keys.is_robot_command(name)})
         assert self._call is not None, 'an episode exists only for the call that asked for it'
         self._call.set_result(payload)
         self._call = None
