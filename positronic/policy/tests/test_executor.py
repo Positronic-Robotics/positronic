@@ -7,16 +7,15 @@ from contextvars import ContextVar
 
 import pytest
 
-import pimm
-from positronic.policy.executor import Executor
+from positronic.policy.executor import Answer, Executor, NotAnswered
 
-# How long a test waits for the worker thread before calling the call lost.
+# How long a test waits for the worker threads before calling the call lost.
 TIMEOUT_SEC = 5.0
 
 _marker: ContextVar[str] = ContextVar('test_executor_marker', default='unset')
 
 
-def settled(answer: pimm.calls.Answer) -> pimm.calls.Answer:
+def settled(answer: Answer) -> Answer:
     """The answer once the worker has run its call; fails the test if it never lands."""
     deadline = time.monotonic() + TIMEOUT_SEC
     while not answer.done():
@@ -30,8 +29,8 @@ def serve():
     """Serves the functions it is called with, and closes every executor it made when the test ends."""
     executors = []
 
-    def make(**functions):
-        executors.append(Executor(functions))
+    def make(*, max_workers: int = 1, **functions):
+        executors.append(Executor(functions, max_workers=max_workers))
         return executors[-1]
 
     yield make
@@ -46,7 +45,7 @@ def test_fns_are_the_declared_names(serve):
 def test_call_answers_with_the_functions_result(serve):
     answer = serve(add=operator.add).fns['add'](2, 3)
 
-    assert isinstance(answer, pimm.calls.Answer)
+    assert isinstance(answer, Answer)
     assert settled(answer).result() == 5
 
 
@@ -61,7 +60,7 @@ def test_answer_is_pending_until_the_function_returns(serve):
     answer = serve(gate=lambda: release.wait(TIMEOUT_SEC)).fns['gate']()
 
     assert not answer.done()
-    with pytest.raises(pimm.NoValueException):
+    with pytest.raises(NotAnswered):
         answer.result()
 
     release.set()
@@ -88,6 +87,16 @@ def test_calls_run_one_at_a_time(serve):
     release.set()
     assert settled(gated).result() is True
     assert settled(queued).result() == 5
+
+
+def test_max_workers_calls_run_side_by_side(serve):
+    # Neither call passes the barrier unless the other is running too, so a single worker breaks it.
+    paired = threading.Barrier(2)
+    fns = serve(max_workers=2, gate=lambda: paired.wait(TIMEOUT_SEC)).fns
+
+    first, second = fns['gate'](), fns['gate']()
+
+    assert sorted([settled(first).result(), settled(second).result()]) == [0, 1]
 
 
 def test_call_runs_under_a_copy_of_the_context_it_was_made_in(serve):
