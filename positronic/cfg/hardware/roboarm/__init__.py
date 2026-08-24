@@ -20,11 +20,7 @@ DROID_IMPEDANCE = command.Impedance(
 
 
 def franka_start_pose() -> command.JointPosition:
-    """Where a Franka trial puts the arm before it opens, drawn afresh on every call.
-
-    It travels under the same impedance law the rollout runs, so the arm is no stiffer getting to the
-    start pose than it is once the policy has it.
-    """
+    """Where a Franka trial puts the arm before it opens, drawn afresh on every call."""
     return command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD, DROID_IMPEDANCE)
 
 
