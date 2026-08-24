@@ -31,7 +31,7 @@ class RemoteSession(Session):
     """Per-episode session that forwards observations to a remote inference server.
 
     One round-trip is in flight at a time: the call that starts it, and every call until it answers, return
-    ``None``; the call that finds it answered returns its trajectory.
+    ``None``; the call that finds it answered returns its trajectory, or drops it after a ``cancel``.
 
     ``compress_images`` comes from what the server declared (see ``RemoteMarker``).
     """
@@ -41,6 +41,7 @@ class RemoteSession(Session):
         self._rt = rt
         self._compress_images = compress_images
         self._answer: Answer | None = None
+        self._cancelled = False
 
     def _prepare_obs(self, obs: cabc.Mapping[str, Any]) -> dict[str, Any]:
         if not self._compress_images:
@@ -78,12 +79,18 @@ class RemoteSession(Session):
         if not self._answer.done():
             return None
         answer, self._answer = self._answer, None
+        # Read before anything else is decided: ``result`` re-raises what the round-trip raised, so a call
+        # that failed is heard whether its chunk is still wanted or not.
         result = answer.result()
+        if self._cancelled:
+            self._cancelled = False
+            return None
         return [result] if isinstance(result, dict) else result
 
     def cancel(self):
-        # The round-trip in flight keeps running; its answer lands nowhere, and so does its failure.
-        self._answer = None
+        # The chunk in flight was planned for a world the cancel says is gone, so the round-trip is read for
+        # its failure and its chunk thrown away.
+        self._cancelled = self._answer is not None
 
     @property
     def meta(self) -> dict[str, Any]:

@@ -353,9 +353,9 @@ def test_a_session_without_a_runtime_refuses_to_infer():
         endpoint.new_session()({})
 
 
-def test_cancel_drops_the_round_trip_in_flight(open_session):
-    """A cancelled session lets go of the answer it was waiting for: that chunk was planned on a world the
-    cancel says is gone, and the next call asks afresh."""
+def test_cancel_drops_the_chunk_of_the_round_trip_in_flight(open_session):
+    """A cancelled session lets go of the chunk it was waiting for — that chunk was planned on a world the
+    cancel says is gone — and asks afresh."""
     endpoint, mock_ws = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
     session, rt = open_session(endpoint)
 
@@ -363,9 +363,25 @@ def test_cancel_drops_the_round_trip_in_flight(open_session):
     rt.wait(ANSWER_SEC)
     session.cancel()
 
-    assert session({}) is None  # a round-trip of its own, not the answer the cancel dropped
+    assert session({}) is None  # the cancelled answer, read and thrown away
+    assert session({}) is None  # a round-trip of its own
     rt.wait(ANSWER_SEC)
     assert mock_ws.infer.call_count == 2
+
+
+def test_a_cancelled_round_trip_still_raises_what_it_failed_with(open_session):
+    """Dropping the chunk drops no failure: a cancelled answer is still read, so a stalled server reaches
+    whoever asked for the episode instead of passing in silence."""
+    endpoint, mock_ws = _mock_endpoint()
+    mock_ws.infer.side_effect = TimeoutError('server stalled')
+    session, rt = open_session(endpoint)
+
+    assert session({}) is None
+    rt.wait(ANSWER_SEC)
+    session.cancel()
+
+    with pytest.raises(TimeoutError, match='server stalled'):
+        session({})
 
 
 def test_records_infer_span_without_scheduling_layer(tmp_path, open_session):
