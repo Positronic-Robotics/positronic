@@ -18,15 +18,15 @@ from positronic.server.positronic_server import (
 
 _Addr = namedtuple('_Addr', 'family address netmask broadcast ptp')
 
-# A multi-homed host: loopback, a LAN interface with a link-local companion and a MAC, and a tailnet.
+# A multi-homed host: loopback, a LAN interface with a link-local companion and a MAC, and a VPN.
 _INTERFACES = {
     'lo': [_Addr(socket.AF_INET, '127.0.0.1', None, None, None), _Addr(socket.AF_INET6, '::1', None, None, None)],
     'eth0': [
         _Addr(socket.AF_INET, '192.168.0.8', None, None, None),
-        _Addr(socket.AF_INET6, 'fe80::985a:62ff:fe48:f8e0%eth0', None, None, None),
-        _Addr(psutil.AF_LINK, '9a:5a:62:48:f8:e0', None, None, None),
+        _Addr(socket.AF_INET6, 'fe80::1%eth0', None, None, None),
+        _Addr(psutil.AF_LINK, '02:00:00:00:00:01', None, None, None),
     ],
-    'tailscale0': [_Addr(socket.AF_INET, '100.108.71.121', None, None, None)],
+    'vpn0': [_Addr(socket.AF_INET, '198.51.100.7', None, None, None)],
 }
 
 
@@ -36,26 +36,23 @@ def multi_homed(monkeypatch):
 
 
 def test_wildcard_bind_serves_every_routable_local_address(multi_homed):
-    assert _served_addresses('::') == ['127.0.0.1', '::1', '192.168.0.8', '100.108.71.121']
+    assert _served_addresses('::') == ['127.0.0.1', '::1', '192.168.0.8', '198.51.100.7']
 
 
 def test_an_ipv4_wildcard_advertises_no_address_its_listener_cannot_answer(multi_homed):
-    # `0.0.0.0` binds AF_INET, so a v6 URL built from it names an address nothing is listening on —
-    # and a certificate carrying it certifies a host the server never serves. `::` accepts v4 too.
-    assert _served_addresses('0.0.0.0') == ['127.0.0.1', '192.168.0.8', '100.108.71.121']
+    # `0.0.0.0` binds AF_INET, so a v6 URL or SAN built from it names an address nothing serves.
+    assert _served_addresses('0.0.0.0') == ['127.0.0.1', '192.168.0.8', '198.51.100.7']
     assert '::1' in _served_addresses('::')
 
 
 def test_every_spelling_of_the_wildcard_is_one(multi_homed):
-    # The bind normalizes an address, so two spellings of one wildcard serve the same set. A
-    # spelling read as an address of its own is certified and advertised as one.
+    # The bind normalizes the address, so two spellings of one wildcard serve the same set.
     assert _served_addresses('0:0:0:0:0:0:0:0') == _served_addresses('::')
     assert _served_addresses('') == _served_addresses('0.0.0.0')
 
 
 def test_a_wildcard_serves_an_ipv4_link_local_address(monkeypatch):
-    # 169.254/16 carries no zone and is a URL like any other, so a wildcard listener answers on it.
-    # Only a v6 link-local is unreachable by URL, and that is what the filter is for.
+    # 169.254/16 carries no zone, so the filter that drops a v6 link-local must not reach it.
     monkeypatch.setattr(
         psutil, 'net_if_addrs', lambda: {'eth0': [_Addr(socket.AF_INET, '169.254.10.2', None, None, None)]}
     )
@@ -63,7 +60,7 @@ def test_a_wildcard_serves_an_ipv4_link_local_address(monkeypatch):
 
 
 def test_concrete_bind_serves_only_the_address_it_binds(multi_homed):
-    assert _served_addresses('100.108.71.121') == ['100.108.71.121']
+    assert _served_addresses('198.51.100.7') == ['198.51.100.7']
     assert _served_addresses('127.0.0.1') == ['127.0.0.1']
     assert _served_addresses('rig.local') == ['rig.local']
 
@@ -73,18 +70,16 @@ def test_certificate_names_every_served_address():
 
 
 def test_certificate_names_no_address_beyond_the_bind():
-    assert _subject_alt_names(['100.108.71.121']) == 'IP:100.108.71.121'
+    assert _subject_alt_names(['198.51.100.7']) == 'IP:198.51.100.7'
     assert _subject_alt_names(['rig.local']) == 'DNS:rig.local'
 
 
 def test_certificate_drops_a_zone_from_an_ip_it_names():
-    # The socket layer binds `fe80::1%eth0`; OpenSSL refuses the same string as a bad IP address, so
-    # a SAN carrying the zone fails certificate generation and the server never reaches uvicorn.
     assert _subject_alt_names(['fe80::1%eth0']) == 'IP:fe80::1'
 
 
 def test_generated_certificate_carries_the_bind_addresses_and_no_others():
-    hosts = ['100.108.71.121', 'fd7a:115c:a1e0::a53a:477a']
+    hosts = ['198.51.100.7', '2001:db8::7']
     files = _generate_self_signed_cert(hosts)
     extension = subprocess.run(
         ['openssl', 'x509', '-in', files['ssl_certfile'], '-noout', '-ext', 'subjectAltName'],
@@ -100,7 +95,7 @@ def test_generated_certificate_carries_the_bind_addresses_and_no_others():
 
 def test_advertised_url_follows_the_bind_address():
     assert _access_url('http', '127.0.0.1', 8412) == 'http://127.0.0.1:8412'
-    assert _access_url('https', '100.108.71.121', 8913) == 'https://100.108.71.121:8913'
+    assert _access_url('https', '198.51.100.7', 8913) == 'https://198.51.100.7:8913'
     assert _access_url('https', 'rig.local', 8400) == 'https://rig.local:8400'
 
 
@@ -109,7 +104,6 @@ def test_advertised_url_brackets_an_ipv6_literal():
 
 
 def test_advertised_url_encodes_a_zone_the_way_a_url_carries_one():
-    # RFC 6874: a bare `%` is not a URL a browser takes.
     assert _access_url('https', 'fe80::1%eth0', 8400) == 'https://[fe80::1%25eth0]:8400'
 
 

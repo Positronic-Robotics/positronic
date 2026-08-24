@@ -537,10 +537,9 @@ def _as_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
 
 
 def _local_ip_addresses(version: int | None = None) -> list[str]:
-    """Every routable IP address on a local interface, of `version` when one is named.
+    """Every IP address on a local interface, of `version` when one is named.
 
-    An IPv6 link-local address is left out: it carries a zone that no URL a browser is given can
-    name. An IPv4 one (169.254/16) carries no zone and is a URL like any other, so it stays.
+    An IPv6 link-local address is left out: it carries a zone no URL a browser is given can name.
     """
     addresses: list[str] = []
     for interface in psutil.net_if_addrs().values():
@@ -560,12 +559,9 @@ def _local_ip_addresses(version: int | None = None) -> list[str]:
 def _served_addresses(host: str) -> list[str]:
     """The addresses a server bound to `host` answers on.
 
-    A concrete host answers on itself. A wildcard answers on the local interfaces of the family it
-    binds: `0.0.0.0` is an AF_INET listener, so an IPv6 URL built from it names an address nothing
-    is listening on, while `::` on a dual-stack host accepts IPv4 too. An empty host is the AF_INET
-    wildcard the socket layer reads it as.
-
-    The wildcard is judged by value, so `0:0:0:0:0:0:0:0` is the one the bind normalizes it to.
+    A concrete host answers on itself. A wildcard answers on the local addresses of the family it
+    binds: `0.0.0.0` and an empty host listen on AF_INET alone, `::` on a dual-stack host takes
+    IPv4 too.
     """
     if host == '':
         return _local_ip_addresses(version=4)
@@ -604,8 +600,8 @@ def _insecure_context_warning(hosts: list[str], https: bool) -> str | None:
 def _subject_alt_names(hosts: list[str]) -> str:
     """The certificate's subjectAltName over the addresses the server answers on.
 
-    A scope is dropped from an IP entry: `fe80::1%eth0` is a host the socket layer binds, and
-    OpenSSL refuses the same string as a bad IP address, which fails the server before it starts.
+    A zone is dropped from an IP entry: the socket layer binds `fe80::1%eth0`, and OpenSSL refuses
+    that string as a bad IP address.
     """
     sans = [f'IP:{host.split("%")[0]}' if _as_ip(host) is not None else f'DNS:{host}' for host in hosts]
     if any(_is_loopback(host) for host in hosts):
