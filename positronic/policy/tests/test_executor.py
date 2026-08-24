@@ -12,8 +12,6 @@ from positronic.policy.executor import Answer, Executor, NotAnswered
 # How long a test waits for the worker threads before calling the call lost.
 TIMEOUT_SEC = 5.0
 
-_marker: ContextVar[str] = ContextVar('test_executor_marker', default='unset')
-
 
 def settled(answer: Answer) -> Answer:
     """The answer once the worker has run its call; fails the test if it never lands."""
@@ -53,6 +51,12 @@ def test_keyword_arguments_reach_the_function(serve):
     fns = serve(pose=lambda arm, gripper=0.0: (arm, gripper)).fns
 
     assert settled(fns['pose']('left', gripper=0.5)).result() == ('left', 0.5)
+
+
+def test_no_keyword_name_is_reserved(serve):
+    fns = serve(apply=lambda fn, self: (fn, self)).fns
+
+    assert settled(fns['apply'](fn='a', self='b')).result() == ('a', 'b')
 
 
 def test_answer_is_pending_until_the_function_returns(serve):
@@ -97,6 +101,11 @@ def test_max_workers_calls_run_side_by_side(serve):
     first, second = fns['gate'](), fns['gate']()
 
     assert sorted([settled(first).result(), settled(second).result()]) == [0, 1]
+
+
+# A ContextVar belongs at module level: every context that sets it holds a strong reference, so one made
+# inside a function is never collected.
+_marker: ContextVar[str] = ContextVar('test_executor_marker', default='unset')
 
 
 def test_call_runs_under_a_copy_of_the_context_it_was_made_in(serve):

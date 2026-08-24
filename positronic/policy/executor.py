@@ -57,7 +57,7 @@ class Executor:
     def fns(self) -> Mapping[str, Fn]:
         return self._fns
 
-    def _start(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Answer:
+    def _start(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Answer:
         context = contextvars.copy_context()
         return self._Answer(self._pool.submit(context.run, fn, *args, **kwargs))
 
