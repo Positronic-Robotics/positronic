@@ -384,6 +384,26 @@ def test_a_cancelled_round_trip_still_raises_what_it_failed_with(open_session):
         session({})
 
 
+def test_closing_a_session_with_a_round_trip_in_flight_is_refused(open_session):
+    """A runtime is closed before the session it serves, so a caller that shuts the websocket from under a
+    round-trip hears about it rather than failing that round-trip on a dead socket."""
+    endpoint, mock_ws = _mock_endpoint()
+    release = threading.Event()
+
+    def blocked(obs):
+        assert release.wait(ANSWER_SEC), 'the test never released the round-trip'
+        return None
+
+    mock_ws.infer.side_effect = blocked
+    session, _rt = open_session(endpoint)
+
+    assert session({}) is None
+    with pytest.raises(AssertionError, match='close the runtime'):
+        session.close()
+
+    release.set()
+
+
 def test_records_infer_span_without_scheduling_layer(tmp_path, open_session):
     """The ``policy.infer`` span is recorded at the remote inference boundary itself, not by a layer in
     front of it."""

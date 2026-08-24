@@ -97,6 +97,10 @@ class RemoteSession(Session):
         return flatten_dict({keys.TYPE: 'remote', keys.SERVER: self._session.metadata})
 
     def close(self):
+        assert self._answer is None or self._answer.done(), (
+            'close the runtime serving this session first: the round-trip in flight is talking over the '
+            'websocket this closes'
+        )
         self._session.close()
 
 

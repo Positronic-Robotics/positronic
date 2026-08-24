@@ -35,7 +35,10 @@ Fn = Callable[..., Answer]
 
 
 class Runtime(ABC):
-    """What the framework offers one session. Every session gets its own."""
+    """What the framework offers one session. Every session gets its own.
+
+    Closed before the session it serves: a call still in flight is using what that session holds.
+    """
 
     @property
     @abstractmethod
