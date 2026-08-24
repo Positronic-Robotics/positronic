@@ -269,19 +269,15 @@ class _Arm(DriverRun[command.CommandType]):
                 call.set_exception(exc)  # an arm the driver cannot read still leaves nobody waiting
 
     def park(self, *, at_teardown: bool = False) -> Iterator[pimm.Command]:
-        """Move the arm to ``_PARK_JOINTS``, logging a failure rather than raising it. Drive with ``yield from``.
-
-        A run that ends by raising skips the park on the way out, because moving an arm in answer to a fault
-        is the driver deciding on its own to move.
-        """
+        """Move the arm to ``_PARK_JOINTS``, logging a failure rather than raising it."""
         try:
-            logger.info('Parking the arm')
-            self.robot.recover_from_errors()  # once, before the move: a reflex during the move ends the park
+            logger.info('Moving the arm to the park pose')
+            self.robot.recover_from_errors()
             # The park pose is a long way off, and only the native law shapes the reference on the way there.
             yield from self.move_to(_PARK_JOINTS, None, at_teardown=at_teardown)
         # rules-allow: swallowed-error — a failed park reads ERROR on the arm and ends neither run nor shutdown
         except Exception:
-            logger.exception('Parking failed, the arm stays where it stands')
+            logger.exception('The arm did not reach the park pose, it stays where it stands')
 
 
 class Robot(pimm.ControlSystem):
