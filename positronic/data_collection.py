@@ -131,7 +131,11 @@ class DataCollectionController(pimm.ControlSystem):
         self.sound = pimm.ControlSystemEmitter(self)
 
     def _move_to_start(self, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
-        """Put the arm at a start pose drawn around the nominal joints, yielding until it is there."""
+        """Put the arm at a start pose drawn around the nominal joints, yielding until it is there.
+
+        Raises whatever the arm's driver failed the move with: a call hands its handler's exception back, so
+        the vocabulary is the driver's — a move abandoned, a target it cannot hold, a fault from the vendor.
+        """
         logging.info('Moving the arm to a start pose')
         answer = self.sync_move(roboarm.command.sampled_joints(self._nominal_joints, self._joints_spread))
         while not answer.done():
