@@ -256,7 +256,7 @@ class _Arm(DriverRun[command.CommandType]):
             raise ValueError(f'{cmd} does not name a joint target this arm can hold: {target}')
         return target
 
-    def serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
+    def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
         """Put the arm where ``call`` asks and answer it once the state saying so is out."""
         cmd = call.request
         try:
@@ -460,7 +460,7 @@ class Robot(pimm.ControlSystem):
 
                 asked = arm.moves.next_request()
                 if isinstance(asked, pimm.calls.Call):
-                    yield from arm.serve_sync_move(asked)
+                    yield from arm.sync_move(asked)
                 elif asked is not None:
                     with log_failure(asked):
                         arm.command_target(arm.to_joints(asked), asked.mode)

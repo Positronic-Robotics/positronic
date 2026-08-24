@@ -279,7 +279,7 @@ class _Chain(DriverRun[command.CommandType]):
             logger.error(f'The chain did not reach the park pose, it is not where the driver put it: {exc}')
         return self.hold_where_it_stopped()
 
-    def serve_sync_move(
+    def sync_move(
         self, call: pimm.calls.Call[command.CommandType, None], q: np.ndarray, grip: float
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
         """Put the chain where ``call`` asks, hold it wherever it ends up, and answer it once that is out.
@@ -372,7 +372,7 @@ class Robot(pimm.ControlSystem):
                 q = chain.observations()[_JOINT_POS]
                 asked = chain.moves.next_request()
                 if isinstance(asked, pimm.calls.Call):
-                    q_target, grip_target = yield from chain.serve_sync_move(asked, q, grip_target)
+                    q_target, grip_target = yield from chain.sync_move(asked, q, grip_target)
                 elif asked is not None:
                     with log_failure(asked):
                         command.require_native_mode(asked, 'YAM')

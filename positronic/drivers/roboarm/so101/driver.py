@@ -151,7 +151,7 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
         """Hold the arm at the setpoint ``cmd`` asks for, with nobody waiting on the arrival."""
         self._qpos, self._unsent = self._target_qpos(cmd), True
 
-    def serve_sync_move(self, call: pimm.calls.Call[roboarm_command.CommandType, None]) -> None:
+    def sync_move(self, call: pimm.calls.Call[roboarm_command.CommandType, None]) -> None:
         """Hold the arm where ``call`` asks; ``settle`` answers it once the bus reads back there."""
         with pimm.calls.raise_to(call):
             target = self._target_qpos(call.request)
@@ -235,7 +235,7 @@ class Robot(pimm.ControlSystem):
                 arm.settle()
                 asked = arm.moves.next_request()
                 if isinstance(asked, pimm.calls.Call):
-                    arm.serve_sync_move(asked)
+                    arm.sync_move(asked)
                 elif asked is not None:
                     with log_failure(asked):
                         arm.track(asked)

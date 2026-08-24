@@ -134,7 +134,7 @@ class _Arm(DriverRun[command.CommandType]):
         """How long the arm may take to reach ``target``, from the speed its controller is capped at."""
         return self._MOVE_GRACE_S + float(np.max(np.abs(target - self.q)) / np.min(self.controller.max_velocity))
 
-    def serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
+    def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
         """Put the controller where ``call`` asks; ``settle`` answers it once the arm reads back there."""
         with pimm.calls.raise_to(call):
             target = self._target_qpos(call.request)
@@ -190,7 +190,7 @@ class Robot(pimm.ControlSystem):
                     arm.settle()
                     asked = arm.moves.next_request()
                     if isinstance(asked, pimm.calls.Call):
-                        arm.serve_sync_move(asked)
+                        arm.sync_move(asked)
                     elif asked is not None:
                         with log_failure(asked):
                             arm.track(asked)
