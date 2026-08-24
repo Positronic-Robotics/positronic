@@ -202,30 +202,30 @@ class _Arm(DriverRun[command.CommandType]):
 
         deadline = self.clock.now() + self._travel_s(self.state.q, target)
 
+        def expired() -> bool:
+            return self.clock.now() >= deadline
+
         def should_stop() -> bool:
-            return self.should_stop.value or self.clock.now() >= deadline
+            return self.should_stop.value or expired()
 
         try:
-            # The arm's own rate: this loop publishes every pass, so the goal is asked about that often too
             for wait in self.await_goal(target, should_stop, self.limiter.wait, mode):
                 st = self.vendor.state()
-                self.state.encode(st, RobotStatus.BUSY)  # the driver owns the arm until it arrives
+                self.state.encode(st, RobotStatus.BUSY)
                 self.out.emit(self.state)
                 if st.error != 0:
                     self.vendor.recover_from_errors()
                 yield wait
-            # The deadline stops the poll loop before it asks, so a goal that landed as it expired has not
-            # been seen yet; reading a timeout off the clock alone would fail a move the arm completed.
-            if self.clock.now() >= deadline and self.vendor.goal().status != pf.GoalStatus.REACHED:
-                # The vendor controller is still tracking the goal it did not reach; left alone it would
-                # resume the move once whatever held the arm back goes away.
+            # The loop exits before it polls again, so a goal that landed as the deadline passed is unseen.
+            if expired() and self.vendor.goal().status != pf.GoalStatus.REACHED:
+                # The vendor still tracks the goal it missed, and would resume the move once the arm comes free.
                 self.vendor.set_target_joints(self.vendor.state().q)
                 raise TimeoutError(f'the arm stopped short of {target}')
         except Exception:
             self.moves.errored = True
             raise
 
-        if self.should_stop.value:  # the travel gave up on the stop rather than on arrival
+        if self.should_stop.value:
             return MoveStatus.GAVE_UP
         self.moves.errored = False
         # The poll that reports arrival ends the loop, so the sample before it was taken mid-travel
