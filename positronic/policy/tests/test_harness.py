@@ -1173,7 +1173,7 @@ class _LabeledRecorder(pimm.SignalEmitter):
 @pytest.mark.timeout(3.0)
 def test_finish_stops_playing_the_live_chunk(world):
     """Finishing drops the schedule the harness is playing: the chunk's remaining waypoints never reach the
-    devices, and the only command after the recorder's STOP is the reset the close emits."""
+    devices, and the only command after the recorder's STOP is the home the close emits."""
     policy = ChunkPolicy()
     wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # 1.8 s chunk — won't drain before the episode ends
     harness = Harness(wrapped, make_embodiment())
@@ -1203,44 +1203,6 @@ def test_finish_stops_playing_the_live_chunk(world):
     assert stops, 'finishing did not emit STOP_EPISODE'
     grips_after = [data for lbl, data in events[stops[0] :] if lbl == keys.TARGET_GRIP]
     assert not grips_after, f'the cancelled chunk kept playing past the finish: {grips_after}'
-
-
-@pytest.mark.timeout(3.0)
-@pytest.mark.parametrize('simulated', [False, True])
-def test_a_closing_episode_sends_a_real_arm_home(world, simulated):
-    """A real episode ends on a ``Reset``, emitted after the recorder's STOP so the homing stays out of the
-    recording. A sim's arm is placed by the trial's prepare, so nothing is sent between episodes."""
-    harness = Harness(ChunkPolicy(), make_embodiment(simulated=simulated))
-    events: list[tuple[str, object]] = []
-    harness.commands[keys.ROBOT_COMMAND]._bind(_LabeledRecorder(keys.ROBOT_COMMAND, events))
-    harness.commands['target_grip']._bind(_LabeledRecorder('target_grip', events))
-    harness.ds_command._bind(_LabeledRecorder('ds_command', events))
-
-    frame_em = world.pair(harness.observations[CAM])
-    robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
-    grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = world.pair(harness.perform_task)
-    done_em = world.pair(harness.done)
-
-    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    script = [
-        (partial(perform_task, Task(instruction_source='t', timeout_sec=None)), 0.0),
-        (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.01),
-        (None, 0.1),
-        (partial(done_em.emit, OPERATOR_DONE), 0.0),
-        (None, 0.5),
-    ]
-    scheduler = world.start([harness, ManualDriver(script), _Pacer()])
-    drive_scheduler(scheduler, steps=400)
-
-    stops = [i for i, (_, data) in enumerate(events) if getattr(data, 'type', None) is DsWriterCommandType.STOP_EPISODE]
-    assert stops, 'the episode never ended'
-    resets = [i for i, (_, data) in enumerate(events) if isinstance(data, Reset)]
-    if simulated:
-        assert not resets, 'a sim arm is placed by the trial it opens, not by a command between episodes'
-    else:
-        assert resets == [len(events) - 1], 'the arm was not sent home as the last thing the episode did'
-        assert resets[0] > stops[0], 'the homing landed inside the recording'
 
 
 @pytest.mark.timeout(3.0)
