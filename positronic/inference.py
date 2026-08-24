@@ -111,6 +111,12 @@ def real(
     """
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
+    # The operator answers for the scene whatever the rig declares; everything else the rig must have of its
+    # own, and a run configured against one embodiment names what another has not got.
+    asks = set(_attended_task(task or '', nominal_joints, joints_spread, start_grip).prepare_args)
+    unknown = sorted(asks - set(embodiment.prepare_handlers) - {keys.SCENE})
+    if unknown:
+        raise ValueError(f'{unknown} is not something {embodiment.descriptor or "this rig"} readies')
 
     # The policy is this function's to close from here on, and everything below can raise:
     # `prepare_output_dir` syncs a directory and snapshots sources into it, and `LocalDatasetWriter`

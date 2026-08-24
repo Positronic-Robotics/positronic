@@ -5,13 +5,14 @@ import numpy as np
 import pytest
 
 import pimm
-from positronic import keys, wire
+from positronic import data_collection, keys, wire
 from positronic.data_collection import DataCollectionController, OperatorPosition, controller_positions_serializer
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, DsWriterCommandType
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
+from positronic.drivers.webxr import WebXR
 from positronic.geom import Rotation, Transform3D
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -160,6 +161,13 @@ def build_teleop_arm(world):
     dc.target_grip._bind(grips)
     dc.sound._bind(sounds)
     return dc, world.pair(dc.sync_move), world.pair(dc.buttons_receiver), grips, sounds
+
+
+def test_a_station_that_names_an_arm_but_no_start_pose_is_refused():
+    """A start pose belongs to the arm it was measured on, so the two are named together or not at all: a
+    station that swaps its arm and keeps the pose would drive the new one to the old one's joints."""
+    with pytest.raises(ValueError, match='nominal_joints'):
+        data_collection.main(robot_arm=DummyRobot(), gripper=None, webxr=WebXR(port=0), sound=None, cameras=None)
 
 
 def test_the_right_stick_holds_the_session_until_the_arm_is_at_its_start_pose(world):

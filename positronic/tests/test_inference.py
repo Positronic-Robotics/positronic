@@ -8,23 +8,7 @@ import pimm
 from positronic import inference, keys
 from positronic.eval import Embodiment, Task
 from positronic.inference import KeyboardOperator, real
-from positronic.tests.testing_coutils import drive_scheduler, scripted_driver
-
-
-class _IdleSession:
-    def __init__(self, policy):
-        self._policy = policy
-
-    def __call__(self, obs):
-        self._policy.observations.append(obs)
-        return []  # nothing to place: an attended episode ends when the operator says so, not on a chunk
-
-    @property
-    def meta(self):
-        return {}
-
-    def close(self):
-        pass
+from positronic.tests.testing_coutils import IdleSession, drive_scheduler, scripted_driver
 
 
 class _IdlePolicy:
@@ -37,7 +21,7 @@ class _IdlePolicy:
 
     def new_session(self, *_args, **_kwargs):
         self.warmed = True
-        return _IdleSession(self)
+        return IdleSession(self)
 
     @property
     def meta(self):
@@ -81,6 +65,13 @@ def test_the_keyboard_path_refuses_a_simulated_embodiment():
     neither of."""
     with pytest.raises(ValueError, match='sim'):
         real(policy=_IdlePolicy(), embodiment=_embodiment(simulated=True), task='stub')
+
+
+def test_the_keyboard_path_refuses_a_start_the_rig_cannot_be_put_at():
+    """What an episode starts from belongs to the rig, so swapping the embodiment and keeping the start pose
+    is caught before a run begins rather than at the first press."""
+    with pytest.raises(ValueError, match="'gripper'"):
+        real(policy=_IdlePolicy(), embodiment=_embodiment(), task='stub', start_grip=0.0)
 
 
 class _ScriptedKeyboard(pimm.ControlSystem):

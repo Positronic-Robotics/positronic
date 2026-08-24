@@ -265,6 +265,11 @@ def main(
     video_options: dict[str, str] | None = None,
 ):
     """Runs data collection in real hardware."""
+    if robot_arm is not None and not len(nominal_joints):
+        raise ValueError(
+            'an arm needs the joints its start pose is drawn around: pass --nominal_joints alongside '
+            '--robot_arm, or the right stick has nowhere to put it'
+        )
     camera_instances = cameras or {}
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
     static_meta = {}
@@ -370,8 +375,6 @@ main_cfg = cfn.Config(
     main,
     robot_arm=None,
     gripper=positronic.cfg.hardware.gripper.dh_gripper,
-    nominal_joints=positronic.cfg.hardware.roboarm.FRANKA_NOMINAL_JOINTS,
-    joints_spread=positronic.cfg.hardware.roboarm.FRANKA_JOINTS_SPREAD,
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
     cameras={

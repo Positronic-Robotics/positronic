@@ -10,7 +10,7 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cli.eval.run import TaskDriver, _pass_span, _run_world, main, timed_pass
 from positronic.eval import Embodiment, Eval, Task
-from positronic.tests.testing_coutils import drive_scheduler
+from positronic.tests.testing_coutils import IdleSession, drive_scheduler
 
 
 def _eval(simulated: bool) -> Eval:
@@ -24,22 +24,6 @@ def test_timed_sweep_rejects_real_embodiment(tmp_path):
         main(policy=object(), evals=[_eval(True), _eval(False)], output_dir=tmp_path, timing=True)
 
 
-class _IdleSession:
-    def __init__(self, policy):
-        self._policy = policy
-
-    def __call__(self, obs):
-        self._policy.observations.append(obs)
-        return []  # nothing to place, so the trial runs out its budget with the channels idle
-
-    @property
-    def meta(self):
-        return {}
-
-    def close(self):
-        pass
-
-
 class _IdlePolicy:
     """Enough policy for a trial to open, run and close; it commands nothing."""
 
@@ -47,7 +31,7 @@ class _IdlePolicy:
         self.observations: list[dict] = []
 
     def new_session(self, *_args, **_kwargs):
-        return _IdleSession(self)
+        return IdleSession(self)
 
     @property
     def meta(self):

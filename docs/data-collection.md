@@ -68,7 +68,7 @@ uv run positronic-data-collection real \
 Requires Franka Panda with FCI, gripper, cameras. Install extras: `uv sync --locked --extra hardware` (Linux only). Configure network connection and udev rules (see [Drivers](../positronic/drivers/)).
 
 ### Other Platforms
-- **Kinova Gen3**: Add `--robot_arm=@positronic.cfg.hardware.roboarm.kinova`
+- **Kinova Gen3**: Add `--robot_arm=@positronic.cfg.hardware.roboarm.kinova --nominal_joints=[0.0,0.0,0.5,-1.5,0.0,-0.5,1.5708]` — the start pose the right stick puts the arm at belongs to the arm, so it is named with it
 - **SO101**: Use `positronic-data-collection so101` (bimanual setup)
 - **DROID**: Use `positronic-data-collection droid` (joint-space control)
 
