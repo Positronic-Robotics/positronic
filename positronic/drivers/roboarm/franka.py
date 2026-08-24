@@ -201,11 +201,13 @@ class _Arm(DriverRun[command.CommandType]):
         self.out.emit(self.state)
 
         deadline = self.clock.now() + self._travel_s(self.state.q, target)
+
+        def should_stop() -> bool:
+            return self.should_stop.value or self.clock.now() >= deadline
+
         try:
             # The arm's own rate: this loop publishes every pass, so the goal is asked about that often too
-            for wait in self.await_goal(
-                target, lambda: self.should_stop.value or self.clock.now() >= deadline, self.limiter.wait, mode
-            ):
+            for wait in self.await_goal(target, should_stop, self.limiter.wait, mode):
                 st = self.vendor.state()
                 self.state.encode(st, RobotStatus.BUSY)  # the driver owns the arm until it arrives
                 self.out.emit(self.state)
