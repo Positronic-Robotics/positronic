@@ -234,11 +234,11 @@ class _Arm(DriverRun[command.CommandType]):
         """The joints that put the end effector at ``pose``, within the arm's limits."""
         return self.vendor.inverse_kinematics_with_limits(np.asarray([*pose.translation, *pose.rotation.as_quat]))
 
-    def accept(self, cmd: command.CommandType) -> tuple[np.ndarray, command.ControlModeType | None]:
-        """The joints ``cmd`` asks for and the law it pins, neither applied yet.
+    def to_joints(self, cmd: command.CommandType) -> np.ndarray:
+        """The joints ``cmd`` asks for, not applied yet.
 
         Solved here so that a command the arm cannot hold raises before anything changes; ``command_target``
-        is what applies the pair.
+        is what applies the result.
         """
         match cmd:
             case command.CartesianPosition(pose):
@@ -256,12 +256,13 @@ class _Arm(DriverRun[command.CommandType]):
         # that vector's width is how many joints a target must name.
         if np.shape(target) != self._MAX_JOINT_VELOCITY.shape or not np.all(np.isfinite(target)):
             raise ValueError(f'{cmd} does not name a joint target this arm can hold: {target}')
-        return target, cmd.mode
+        return target
 
     def serve_sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
         """Put the arm where ``call`` asks and answer it once the state saying so is out."""
+        cmd = call.request
         try:
-            if (yield from self.move_to(*self.accept(call.request))) is MoveStatus.ARRIVED:
+            if (yield from self.move_to(self.to_joints(cmd), cmd.mode)) is MoveStatus.ARRIVED:
                 call.set_result(None)
             else:
                 call.set_exception(MoveAbandoned())
@@ -464,7 +465,7 @@ class Robot(pimm.ControlSystem):
                     yield from arm.serve_sync_move(asked)
                 elif asked is not None:
                     with log_failure(asked):
-                        arm.command_target(*arm.accept(asked))
+                        arm.command_target(arm.to_joints(asked), asked.mode)
 
                 yield arm.limiter.wait()
 
