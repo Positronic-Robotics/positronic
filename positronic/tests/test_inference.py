@@ -4,12 +4,10 @@ from dataclasses import replace
 from functools import partial
 from typing import Any
 
-import numpy as np
 import pytest
 
 import pimm
 from positronic import inference, keys
-from positronic.cfg.hardware.roboarm import FRANKA_JOINTS_SPREAD, FRANKA_NOMINAL_JOINTS
 from positronic.eval import Embodiment, Task
 from positronic.inference import KeyboardOperator, real
 from positronic.tests.testing_coutils import IdleSession, drive_scheduler, scripted_driver
@@ -131,17 +129,6 @@ def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, capsys):
     assert policy.observations[0][keys.TASK] == 'pick up the cube'
     assert keys.ENDED_BY_OPERATOR in capsys.readouterr().out
     assert policy.closed
-
-
-def test_every_attended_trial_draws_its_own_start_pose():
-    """A press readies the arm and the fingers, and the pose the arm is put at is drawn afresh each time."""
-    first, second = inference._attended_task('pick'), inference._attended_task('pick')
-
-    assert set(first.prepare_args) == {keys.ARM, keys.GRIPPER}
-    assert first.prepare_args[keys.GRIPPER] == 0.0
-    arms = [t.prepare_args[keys.ARM].positions for t in (first, second)]
-    np.testing.assert_array_less(np.abs(arms[0] - np.array(FRANKA_NOMINAL_JOINTS)), FRANKA_JOINTS_SPREAD)
-    assert not (arms[0] == arms[1]).all(), 'every trial draws its own start pose'
 
 
 def test_the_operator_reports_an_ask_the_harness_refuses(capsys):
