@@ -107,7 +107,7 @@ class _Arm(DriverRun[command.CommandType]):
             # once whatever blocked it goes away, long after its asker was told it failed.
             self.controller.set_target_qpos(self.q)
 
-    def _target_qpos(self, cmd: command.CommandType) -> np.ndarray:
+    def _to_joints(self, cmd: command.CommandType) -> np.ndarray:
         """The joints ``cmd`` asks the arm to hold, solved from the joints it reports now."""
         # `JointCompliantController` is a compliance law, not a position servo: `PositionControl` would pin
         # a rule the arm does not run.
@@ -128,7 +128,7 @@ class _Arm(DriverRun[command.CommandType]):
 
     def track(self, cmd: command.CommandType) -> None:
         """Put the controller on the setpoint ``cmd`` asks for, with nobody waiting on the arrival."""
-        self.controller.set_target_qpos(self._target_qpos(cmd))
+        self.controller.set_target_qpos(self._to_joints(cmd))
 
     def _travel_s(self, target: np.ndarray) -> float:
         """How long the arm may take to reach ``target``, from the speed its controller is capped at."""
@@ -137,7 +137,7 @@ class _Arm(DriverRun[command.CommandType]):
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
         """Put the controller where ``call`` asks; ``settle`` answers it once the arm reads back there."""
         with pimm.calls.raise_to(call):
-            target = self._target_qpos(call.request)
+            target = self._to_joints(call.request)
             self.controller.set_target_qpos(target)
             # The branch the controller tracks: it wraps the target once, when it is set
             wrapped = wrap_joint_angle(target, self.q)

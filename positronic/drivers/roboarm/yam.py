@@ -219,8 +219,11 @@ class _Chain(DriverRun[command.CommandType]):
             raise ValueError(f'{world_pose} is out of reach')
         return solution
 
-    def target_joints(self, cmd: command.CommandType, q: np.ndarray) -> np.ndarray:
+    def to_joints(self, cmd: command.CommandType, q: np.ndarray) -> np.ndarray:
         """The joints ``cmd`` asks the chain to hold; raises what the chain cannot be asked for."""
+        # TODO: accept the modes the chain can run instead of leaving them to what a command omits. Its
+        # joints are position-servoed, so `PositionControl` names the rule already running.
+        command.require_native_mode(cmd, 'YAM')
         match cmd:
             case command.JointPosition(positions):
                 return np.asarray(positions, dtype=np.float64)
@@ -287,10 +290,7 @@ class _Chain(DriverRun[command.CommandType]):
         Only an arrival earns the target: commanding it part-way is the jump the ramp exists to avoid.
         """
         try:
-            # TODO: accept the modes the chain can run instead of leaving them to what a command omits. Its
-            # joints are position-servoed, so `PositionControl` names the rule already running.
-            command.require_native_mode(call.request, 'YAM')
-            target = self.target_joints(call.request, q)
+            target = self.to_joints(call.request, q)
             if (yield from self.move_to(target, grip)) is MoveStatus.ARRIVED:
                 call.set_result(None)
                 return target, grip
@@ -375,8 +375,7 @@ class Robot(pimm.ControlSystem):
                     q_target, grip_target = yield from chain.sync_move(asked, q, grip_target)
                 elif asked is not None:
                     with log_failure(asked):
-                        command.require_native_mode(asked, 'YAM')
-                        q_target = chain.target_joints(asked, q)
+                        q_target = chain.to_joints(asked, q)
 
                 chain.vendor.command_joint_pos(np.append(q_target, 1.0 - grip_target))
 

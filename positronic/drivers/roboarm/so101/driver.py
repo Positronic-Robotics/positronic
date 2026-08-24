@@ -100,7 +100,7 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
     def _forward_kinematics(self, q_norm: np.ndarray) -> tuple[geom.Transform3D, float]:
         return self.kinematic.forward(self._norm_to_rad(q_norm)), q_norm[-1]
 
-    def _solve_ik(self, pose: geom.Transform3D) -> np.ndarray:
+    def _ik(self, pose: geom.Transform3D) -> np.ndarray:
         q = self._norm_to_rad(self.q_norm).tolist()
         q[-1] = 0.0  # ignore gripper in ik
         return self._rad_to_norm(self.kinematic.inverse(q, pose, n_iter=10))[:-1]
@@ -117,10 +117,10 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
         roboarm_command.require_native_mode(cmd, 'SO101')
         match cmd:
             case roboarm_command.CartesianPosition(pose):
-                return self._solve_ik(pose)
+                return self._ik(pose)
             case roboarm_command.CartesianDelta() as delta_cmd:
                 ee_pose, _ = self._forward_kinematics(self.q_norm)
-                return self._solve_ik(delta_cmd.apply(ee_pose))
+                return self._ik(delta_cmd.apply(ee_pose))
             case roboarm_command.JointPosition(qpos):
                 return self._arm_rad_to_norm(np.asarray(qpos, dtype=np.float32))
             case other:
