@@ -905,10 +905,10 @@ def test_a_handler_the_trial_does_not_name_is_left_alone(world):
 
 @pytest.mark.timeout(3.0)
 @pytest.mark.parametrize('simulated', [False, True], ids=['real', 'sim'])
-def test_only_a_real_rig_is_put_back_where_the_trial_placed_it(world, simulated):
-    """A powered arm holds the policy's last setpoint through the gap to the next trial, so a real rig is
-    asked for the trial's start pose again once the recording stops. A sim's arm is placed by the next
-    trial's prepare, so nothing is asked between episodes."""
+def test_every_rig_is_put_back_where_the_trial_placed_it(world, simulated):
+    """A powered arm holds the policy's last setpoint through the gap to the next trial, so what the trial
+    placed is placed again once the recording stops — the same joints it opened on, never a fresh draw. A
+    sim rig is asked no differently."""
     placed = []
     arm = _Scene(placed.append)
     handlers = {keys.ARM: arm.env_reset}
@@ -922,7 +922,7 @@ def test_only_a_real_rig_is_put_back_where_the_trial_placed_it(world, simulated)
     drive_scheduler(scheduler, steps=2000)
 
     assert answer.done(), 'the episode never ended, so there was no close to be put back by'
-    assert len(placed) == (1 if simulated else 2)
+    assert len(placed) == 2, 'the trial opened on its start pose and closes back at it'
     # The same object every time: a trial closes on the joints it opened on, never a fresh draw.
     assert all(asked is start for asked in placed)
 
