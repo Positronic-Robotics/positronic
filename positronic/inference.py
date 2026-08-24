@@ -4,7 +4,6 @@ aliases over ``cli.eval.run``."""
 from collections import Counter
 from collections.abc import Callable
 from contextlib import nullcontext
-from dataclasses import replace
 from functools import partial
 from typing import Any
 
@@ -29,16 +28,15 @@ from positronic.policy.harness import Harness
 class KeyboardOperator(pimm.ControlSystem):
     """Turns keystrokes into episodes: ``s`` asks for one through ``perform_task``, ``p`` ends the live one.
 
-    It serves the trial's ``scene`` prepare, and holds the pending answers because that is where an
-    episode's terminal — and any refused ask — arrives; both are printed as they land. ``next_task`` is
-    called per press, so each trial draws its own start pose.
+    It holds the pending answers because that is where an episode's terminal — and any refused ask —
+    arrives; both are printed as they land. ``next_task`` is called per press, so each trial draws its own
+    start pose.
     """
 
     def __init__(self, next_task: Callable[[], Task]):
         self._next_task = next_task
         self.keystrokes = pimm.ControlSystemReceiver[str](self)
         self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
-        self.ready = pimm.calls.ControlSystemHandler[Any, None](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
@@ -50,9 +48,6 @@ class KeyboardOperator(pimm.ControlSystem):
                         pending.append(self.perform_task(self._next_task()))
                     case 'p':
                         self.done.emit({keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR})
-            for call in self.ready.incoming():
-                print(f'Set up: {call.request}')
-                call.set_result(None)  # the operator set the rig up before asking for the trial at all
             running = []
             for answer in pending:
                 if answer.done():
@@ -72,15 +67,15 @@ class KeyboardOperator(pimm.ControlSystem):
 
 
 def _attended_task(instruction: str) -> Task:
-    """The trial one keypress asks for. An attended episode has no time budget: the operator is what ends it."""
+    """The trial one keypress asks for.
+
+    Nothing asks for the scene: pressing for the trial is the operator saying it is set up. Nothing holds
+    the episode to a budget either — the operator is what ends it.
+    """
     return Task(
         instruction_source=instruction,
         timeout_sec=None,
-        prepare_args={
-            keys.SCENE: instruction,
-            keys.ARM: command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD),
-            keys.GRIPPER: 0.0,
-        },
+        prepare_args={keys.ARM: command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD), keys.GRIPPER: 0.0},
     )
 
 
@@ -98,10 +93,8 @@ def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
     """
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
-    # The operator answers for the scene whatever the rig declares; the arm and the fingers the rig must have
-    # of its own, and a run pointed at an embodiment that readies neither is caught here rather than at the
-    # first press.
-    unknown = sorted(set(_attended_task('').prepare_args) - set(embodiment.prepare_handlers) - {keys.SCENE})
+    # A rig that cannot be put at a start pose fails the run at startup rather than at the first press.
+    unknown = sorted(set(_attended_task('').prepare_args) - set(embodiment.prepare_handlers))
     if unknown:
         raise ValueError(f'{unknown} is not something {embodiment.descriptor or "this rig"} readies')
 
@@ -119,7 +112,6 @@ def _run_attended(policy, embodiment: Embodiment, task: str | None, output_dir) 
     output_dir = prepare_output_dir(output_dir)
     keyboard = KeyboardControl(quit_key='q')
     operator = KeyboardOperator(partial(_attended_task, task or ''))
-    embodiment = replace(embodiment, prepare_handlers={**embodiment.prepare_handlers, keys.SCENE: operator.ready})
     harness = Harness(policy, embodiment)
     print('Keyboard controls: [s]tart, sto[p], [q]uit')
 

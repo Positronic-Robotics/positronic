@@ -119,9 +119,9 @@ class _ScriptedKeyboard(pimm.ControlSystem):
 
 
 @pytest.mark.timeout(30.0)
-def test_the_operator_readies_the_scene_an_attended_trial_runs_in(monkeypatch, capsys):
-    """The rig a person sets up by hand readies like any device: the trial asks for the scene, the operator
-    answers for it, and the episode runs from there until they stop it."""
+def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, capsys):
+    """The press is the whole start signal: the rig's devices ready, the episode opens on the instruction it
+    was given, and it runs until the operator stops it."""
     policy = _IdlePolicy()
     monkeypatch.setattr(inference, 'KeyboardControl', lambda quit_key: _ScriptedKeyboard(policy))
 
@@ -134,10 +134,10 @@ def test_the_operator_readies_the_scene_an_attended_trial_runs_in(monkeypatch, c
 
 
 def test_every_attended_trial_draws_its_own_start_pose():
-    """A press readies the scene, the arm and the fingers, and the pose the arm is put at is drawn afresh."""
+    """A press readies the arm and the fingers, and the pose the arm is put at is drawn afresh each time."""
     first, second = inference._attended_task('pick'), inference._attended_task('pick')
 
-    assert set(first.prepare_args) == {keys.ARM, keys.GRIPPER, keys.SCENE}
+    assert set(first.prepare_args) == {keys.ARM, keys.GRIPPER}
     assert first.prepare_args[keys.GRIPPER] == 0.0
     arms = [t.prepare_args[keys.ARM].positions for t in (first, second)]
     np.testing.assert_array_less(np.abs(arms[0] - np.array(FRANKA_NOMINAL_JOINTS)), FRANKA_JOINTS_SPREAD)
