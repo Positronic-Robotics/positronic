@@ -252,8 +252,7 @@ class Policy(Protocol):
 # The framework's handle to the next session in. No `time` parameter: the
 # framework stamps the inner call with the outermost call's time, so the
 # whole chain sees one `time`.
-class Inner(Protocol):
-    def __call__(self, obs: Obs) -> tuple[Commands, float]: ...
+Inner = Callable[[Obs], tuple[Commands, float]]
 
 
 class Layer(Protocol):
@@ -269,7 +268,9 @@ class Codec(Protocol):
 ```
 
 `layer_a | layer_b` is a layer. `chain.wrap(policy)` is a policy: its
-sessions are the chained sessions, with a handle between each pair.
+sessions are the chained sessions, with a handle between each pair. The
+framework closes every session it made, and a session closes what it made
+itself. `close` never travels through the chain.
 
 ## Related APIs
 
