@@ -65,12 +65,12 @@ class RemoteSession(Session):
         Single-action server responses are wrapped into a 1-element list to honor
         the ``Session.__call__`` contract (``list[dict] | None``).
         """
+        if self._rt is None:
+            raise ValueError(
+                'RemoteSession needs a runtime to run inference: pass rt to new_session. The harness '
+                'supplies it; a direct RemotePolicy.new_session() outside the harness must too.'
+            )
         if self._answer is None:
-            if self._rt is None:
-                raise ValueError(
-                    'RemoteSession needs a runtime to run inference: pass rt to new_session. The harness '
-                    'supplies it; a direct RemotePolicy.new_session() outside the harness must too.'
-                )
             # Preparation stays the session's own work: JPEG-encoding a stack of HD frames is client-side, and
             # folding it into the function would inflate the inference percentiles.
             self._answer = self._rt.fns[INFER](self._session, self._prepare_obs(obs))

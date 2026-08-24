@@ -37,10 +37,10 @@ class _InferenceWorker:
     """One episode's policy session, called one at a time on a thread of its own so the harness keeps
     playing while the model runs, and the runtime serving the policy's functions to it.
 
-    A call's work is the session call plus whatever function it starts, and the two are timed as one: the
-    session hands the model to the runtime and returns at once, so what the trial pays for is the function
-    still in flight. ``charges_wall_time`` says whether that costs the trial the wall time it really took or
-    nothing — the loop is held for the work, which holds a virtual clock still.
+    A call's work is the session call plus whatever function it starts, timed as one: a session that hands
+    its model to the runtime returns at once, and what the trial pays for is the function still in flight.
+    ``charges_wall_time`` says whether that costs the trial the wall time it really took or nothing — the
+    loop is held for the work, which holds a virtual clock still.
     """
 
     def __init__(self, policy: Policy, context: dict[str, Any], charges_wall_time: bool, clock: pimm.Clock) -> None:
@@ -68,8 +68,8 @@ class _InferenceWorker:
         return self._call is not None and self._call.done()
 
     def effect_time(self) -> float:
-        """The trial instant the work in flight takes effect: where it started, plus its wall duration so far
-        when the trial pays wall time."""
+        """The trial instant the work in flight takes effect: its start, plus its wall duration so far when
+        the trial pays wall time."""
         wall = time.monotonic() - self._wall_t0 if self._charges_wall_time else 0.0
         return self._t0_ns / 1e9 + wall
 
@@ -105,8 +105,8 @@ class _InferenceWorker:
         """Slow the loop for the work in flight as the trial's mode requires: until it is done when the world
         is held for it, else only while the world is ahead of its own wall clock.
 
-        The session call and the function it started share one deadline, being one piece of work seen from
-        the loop thread and from the runtime.
+        The session call and the function it started share one deadline: they are one piece of work, seen
+        from the loop thread and from the runtime.
         """
         assert self._call is not None
         deadline = None

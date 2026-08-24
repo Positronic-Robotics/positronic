@@ -1560,7 +1560,7 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     p = _pair_all(world, harness)
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     # A latched observation set makes every step's inference fire (the harness reads the latest value). The
-    # world ends when the script runs out, so it holds open for the rounds an inference takes: one starts the
+    # world ends when the script runs out, so the script spans the rounds one inference takes: one starts the
     # round-trip, a later one reads its answer.
     producer = ManualDriver(
         [(partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.0)] * 4
@@ -1874,53 +1874,43 @@ def _run_episode(
     return grip_recorder.emitted
 
 
+def _slow_policies(wall_sec: float) -> list:
+    """A model taking ``wall_sec`` in each home it can run in: inside the session call, and in a function the
+    session starts and returns from at once. The trial pays for it the same either way."""
+    return [
+        pytest.param(SlowPolicy(wall_sec=wall_sec), id='in-the-call'),
+        pytest.param(RemoteStubPolicy(wall_sec=wall_sec), id='in-a-function'),
+    ]
+
+
 @pytest.mark.timeout(20.0)
-def test_an_uncharged_call_pauses_the_world(world):
+@pytest.mark.parametrize('policy', _slow_policies(0.05))
+def test_an_uncharged_call_pauses_the_world(world, policy):
     """Sim's default charges nothing: the world does not advance while the model runs, so the chunk is
     anchored at the observation's own instant however long the call really took."""
-    played = _run_episode(world, SlowPolicy(wall_sec=0.05), ChunkedSchedule(), charge_inference_time=False)
+    played = _run_episode(world, policy, ChunkedSchedule(), charge_inference_time=False)
 
     assert played, 'no command was played'
     assert played[0][0] < 0.05, f'the world paid for the call: first command at {played[0][0]}s'
 
 
 @pytest.mark.timeout(20.0)
-def test_a_charged_call_costs_its_own_wall_duration(world):
+@pytest.mark.parametrize('policy', _slow_policies(0.2))
+def test_a_charged_call_costs_its_own_wall_duration(world, policy):
     """``charge_inference_time=True`` charges the world what the model really took, so a slow server is scored
     as slow — at the cost of a trace that inherits the machine's noise."""
-    played = _run_episode(world, SlowPolicy(wall_sec=0.2), ChunkedSchedule(), charge_inference_time=True)
+    played = _run_episode(world, policy, ChunkedSchedule(), charge_inference_time=True)
 
     assert played, 'no command was played'
     assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the call took'
 
 
 @pytest.mark.timeout(20.0)
-def test_an_uncharged_function_pauses_the_world(world):
-    """A session that hands its model to the runtime spends the same trial time as one that runs it itself:
-    the world stands still for the round-trip in flight, and nothing advances until it comes back."""
-    played = _run_episode(world, RemoteStubPolicy(wall_sec=0.05), ChunkedSchedule(), charge_inference_time=False)
-
-    assert played, 'no command was played'
-    assert played[0][0] < 0.05, f'the world paid for the round-trip: first command at {played[0][0]}s'
-
-
-@pytest.mark.timeout(20.0)
-def test_a_charged_function_costs_its_own_wall_duration(world):
-    """What a charged trial pays for is the round-trip in flight, not the call that started it and returned
-    at once."""
-    played = _run_episode(world, RemoteStubPolicy(wall_sec=0.2), ChunkedSchedule(), charge_inference_time=True)
-
-    assert played, 'no command was played'
-    assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the round-trip took'
-
-
-@pytest.mark.timeout(20.0)
-def test_a_real_rig_pays_wall_time_whatever_the_trial_asks_for(world):
+@pytest.mark.parametrize('policy', _slow_policies(0.2))
+def test_a_real_rig_pays_wall_time_whatever_the_trial_asks_for(world, policy):
     """The knob is sim-only: a real rig pays what its calls take, so a task leaving
     ``charge_inference_time`` unset does not hold the world for them."""
-    played = _run_episode(
-        world, SlowPolicy(wall_sec=0.2), ChunkedSchedule(), charge_inference_time=False, simulated=False
-    )
+    played = _run_episode(world, policy, ChunkedSchedule(), charge_inference_time=False, simulated=False)
 
     assert played, 'no command was played'
     assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the call took'
