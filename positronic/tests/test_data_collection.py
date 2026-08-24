@@ -223,6 +223,21 @@ def test_the_right_stick_holds_the_session_until_the_arm_is_at_its_start_pose(wo
     assert marks['arrived'] > marks['waited']
 
 
+def test_a_start_pose_naming_something_that_is_not_an_angle_is_refused():
+    """A draw between non-finite bounds raises where the operator hears nothing but a failed move, so the
+    station is refused before any hardware starts."""
+    with pytest.raises(ValueError, match='finite'):
+        data_collection.main(
+            robot_arm=DummyRobot(),
+            gripper=None,
+            webxr=WebXR(port=0),
+            sound=None,
+            cameras=None,
+            nominal_joints=NOMINAL_JOINTS.tolist(),
+            joints_spread=[*JOINTS_SPREAD[:-1].tolist(), float('nan')],
+        )
+
+
 def test_the_right_stick_redraws_the_scene_the_arm_is_put_back_into(world):
     """One press readies every device the station has: a sim's scene is drawn again alongside the arm's
     start pose, and the session stays held until both have answered."""

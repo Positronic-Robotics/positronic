@@ -287,6 +287,11 @@ def main(
             f'--joints_spread names {len(joints_spread)} joints and --nominal_joints names {len(nominal_joints)}: '
             'the spread is jitter measured per joint, so it carries one value for each, or none at all'
         )
+    if not np.all(np.isfinite([*nominal_joints, *joints_spread])):
+        raise ValueError(
+            '--nominal_joints and --joints_spread name joint angles: every value has to be finite, or the '
+            'draw between them raises instead of reaching the arm'
+        )
     camera_instances = cameras or {}
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
     static_meta = {}
