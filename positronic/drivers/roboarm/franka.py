@@ -251,9 +251,7 @@ class _Arm(DriverRun[command.CommandType]):
                 target = self.state.q + joint_delta
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
-        # The vendor takes a fixed-width finite vector and raises on anything else, too late to be caught
-        # alongside the rest of what makes a command unusable. The arm has one velocity limit per joint, so
-        # that vector's width is how many joints a target must name.
+        # The vendor raises on a bad target too late to name the command; one velocity limit per joint sets the width.
         if np.shape(target) != self._MAX_JOINT_VELOCITY.shape or not np.all(np.isfinite(target)):
             raise ValueError(f'{cmd} does not name a joint target this arm can hold: {target}')
         return target
