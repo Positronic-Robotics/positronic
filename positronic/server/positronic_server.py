@@ -529,10 +529,19 @@ def default_table() -> TableConfig:
 
 
 def _as_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
-    """The host parsed as an IP literal, or None when it is a name."""
+    """The host parsed as an IP literal, or None when it is a name.
+
+    The socket layer takes legacy short IPv4 spellings `ipaddress` refuses — `0`, `0.0` and `127.1`
+    each bind an address — so a host is a name only when both parsers refuse it. Only those numeric
+    forms are read here: resolving a name would certify an address in place of the name itself.
+    """
     try:
         return ipaddress.ip_address(host)
     except ValueError:
+        pass
+    try:
+        return ipaddress.IPv4Address(socket.inet_aton(host))
+    except (OSError, ValueError):
         return None
 
 
@@ -559,15 +568,17 @@ def _local_ip_addresses(version: int | None = None) -> list[str]:
 def _served_addresses(host: str) -> list[str]:
     """The addresses a server bound to `host` answers on.
 
-    A concrete host answers on itself. A wildcard answers on the local addresses of the family it
-    binds: `0.0.0.0` and an empty host listen on AF_INET alone, `::` on a dual-stack host takes
-    IPv4 too.
+    A concrete host answers on itself, in the spelling the bind resolves it to. A wildcard answers
+    on the local addresses of the family it binds: `0.0.0.0` and an empty host listen on AF_INET
+    alone, `::` on a dual-stack host takes IPv4 too.
     """
     if host == '':
         return _local_ip_addresses(version=4)
     ip = _as_ip(host)
-    if ip is None or not ip.is_unspecified:
+    if ip is None:
         return [host]
+    if not ip.is_unspecified:
+        return [str(ip)]
     return _local_ip_addresses() if ip.version == 6 else _local_ip_addresses(version=4)
 
 
@@ -609,6 +620,20 @@ def _subject_alt_names(hosts: list[str]) -> str:
     return ','.join(sans)
 
 
+_MAX_CERTIFICATE_SUBJECT_BYTES = 64
+_FALLBACK_CERTIFICATE_SUBJECT = 'positronic-server'
+
+
+def _certificate_subject(hosts: list[str]) -> str:
+    """The certificate's subject CN: the first bind address, or a fixed name when it will not fit.
+
+    X.509 caps a CN at 64 bytes and OpenSSL aborts on a longer one, which would fail the bind before
+    it starts; a client matches on `subjectAltName` (RFC 6125), which names the host either way.
+    """
+    host = hosts[0]
+    return host if len(host.encode()) <= _MAX_CERTIFICATE_SUBJECT_BYTES else _FALLBACK_CERTIFICATE_SUBJECT
+
+
 def _generate_self_signed_cert(hosts: list[str]) -> dict[str, str]:
     ssl_dir = tempfile.mkdtemp(prefix='positronic-ssl-')
     keyfile = os.path.join(ssl_dir, 'key.pem')
@@ -628,7 +653,7 @@ def _generate_self_signed_cert(hosts: list[str]) -> dict[str, str]:
             '365',
             '-nodes',
             '-subj',
-            f'/CN={hosts[0]}',
+            f'/CN={_certificate_subject(hosts)}',
             '-addext',
             f'subjectAltName={_subject_alt_names(hosts)}',
         ],

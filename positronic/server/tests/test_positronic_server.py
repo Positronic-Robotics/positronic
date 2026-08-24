@@ -8,7 +8,9 @@ import psutil
 import pytest
 
 from positronic.server.positronic_server import (
+    _FALLBACK_CERTIFICATE_SUBJECT,
     _access_url,
+    _certificate_subject,
     _generate_self_signed_cert,
     _insecure_context_warning,
     _served_addresses,
@@ -51,6 +53,24 @@ def test_every_spelling_of_the_wildcard_is_one(multi_homed):
     assert _served_addresses('') == _served_addresses('0.0.0.0')
 
 
+def test_a_socket_only_spelling_of_the_wildcard_is_one(multi_homed):
+    # `socket` takes the legacy short IPv4 forms `ipaddress` refuses, and the bind resolves each of
+    # these to the wildcard — so a set derived from them must be the wildcard's, not the string's.
+    assert _served_addresses('0') == _served_addresses('0.0.0.0')
+    assert _served_addresses('0.0') == _served_addresses('0.0.0.0')
+    assert _served_addresses('0.0.0') == _served_addresses('0.0.0.0')
+
+
+def test_a_socket_only_spelling_that_is_not_the_wildcard_names_its_own_address(multi_homed):
+    # The same parser normalizes a CONCRETE short form, which stays the one address it binds.
+    assert _served_addresses('127.1') == ['127.0.0.1']
+    assert _served_addresses('1') == ['0.0.0.1']
+    # A name the resolver would happily turn into an address stays a name: the certificate names it
+    # with `DNS:` and the URL keeps it, so normalizing must go no further than the numeric spellings.
+    assert _served_addresses('localhost') == ['localhost']
+    assert 'IP:' not in _subject_alt_names(['localhost'])
+
+
 def test_a_wildcard_serves_an_ipv4_link_local_address(monkeypatch):
     # 169.254/16 carries no zone, so the filter that drops a v6 link-local must not reach it.
     monkeypatch.setattr(
@@ -91,6 +111,30 @@ def test_generated_certificate_carries_the_bind_addresses_and_no_others():
     certified = {ipaddress.ip_address(address) for address in re.findall(r'IP Address:([0-9A-Fa-f.:]+)', extension)}
     assert certified == {ipaddress.ip_address(host) for host in hosts}
     assert 'DNS:localhost' not in extension
+
+
+def test_generated_certificate_subject_is_the_bind_address_when_it_fits():
+    assert _certificate_subject(['198.51.100.7']) == '198.51.100.7'
+    assert _certificate_subject(['b' * 52 + '.example.com']) == 'b' * 52 + '.example.com'  # exactly 64 bytes
+
+
+def test_a_bind_name_too_long_for_the_subject_field_still_certifies():
+    # X.509 caps a CN at 64 bytes and OpenSSL aborts on a longer one, so a long DNS bind would fail
+    # to start. `subjectAltName` is what a client matches on, and it still carries the name.
+    host = 'a' * 60 + '.example.com'
+    assert len(host.encode()) > 64
+    assert _certificate_subject([host]) == _FALLBACK_CERTIFICATE_SUBJECT
+
+    files = _generate_self_signed_cert([host])
+    text = subprocess.run(
+        ['openssl', 'x509', '-in', files['ssl_certfile'], '-noout', '-subject', '-ext', 'subjectAltName'],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    assert _FALLBACK_CERTIFICATE_SUBJECT in text
+    assert f'DNS:{host}' in text
 
 
 def test_advertised_url_follows_the_bind_address():
