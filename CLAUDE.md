@@ -67,8 +67,8 @@
   use a synonym for variety
 - Choose the shortest common word that carries the meaning. Write the articles. Put not more than three nouns
   together
-- Write not more than 20 words in an instruction and not more than 25 in a description. Write one instruction
-  in one sentence
+- Write not more than 20 words in an instruction. Write not more than 25 words in a description. Write one
+  instruction in one sentence
 - Use the active voice and the present tense. Start an instruction with its verb
 - Write no idiom, no metaphor, no joke and no rhetorical question
 - Code, identifiers, configuration values and log lines are out of scope. Quote text from a source as written
