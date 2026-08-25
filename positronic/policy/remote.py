@@ -74,8 +74,9 @@ class RemoteSession(Session):
         if not self._answer.done():
             return None
         answer, cancelled = self._answer, self._cancelled
-        # Both are cleared before the read, because ``result`` raises what the round trip raised. A cancel
-        # then ends with the answer it was made against, and does not drop the next chunk.
+        # The answer and the flag are cleared before the read, because ``result`` raises what the round
+        # trip raised. A cancel then ends with the answer it was made against, and never drops the next
+        # chunk.
         self._answer, self._cancelled = None, False
         result = answer.result()
         if cancelled:

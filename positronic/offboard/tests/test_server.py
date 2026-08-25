@@ -238,7 +238,6 @@ def test_pipeline_with_no_rig_side_half_refused_at_startup(make_mock_policy):
         PolicyServer(remote | _StubSource(stub))
 
 
-# The name the scripted model is served under.
 _INFER = 'infer'
 
 

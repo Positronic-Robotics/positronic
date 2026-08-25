@@ -54,9 +54,8 @@ class Executor(Runtime):
     def __init__(self, functions: Mapping[str, Callable[..., Any]], *, max_workers: int = 1):
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
         self._fns: Mapping[str, Fn] = {name: partial(self._start, name, fn) for name, fn in functions.items()}
-        # Every answer that no caller has read, written from the caller's thread while the workers answer.
-        # A call that has still to answer is one of these; what is left at close failed with nobody to
-        # raise to.
+        # Every answer that no caller has read. A call that has still to answer is one of these, so
+        # ``in_flight`` and ``owes_an_answer`` read this one set.
         self._unread: set[Executor._Answer] = set()
         self._lock = threading.Lock()
 
@@ -104,8 +103,8 @@ class Executor(Runtime):
         """
         self._pool.shutdown(wait=True, cancel_futures=True)
         with self._lock:
-            # A function holds what it was declared with — model weights, a socket — so the close that ends
-            # its last call drops it. Otherwise the policy that closes next frees nothing.
+            # A function holds what it was declared with — model weights, a socket. Dropping the functions
+            # here is what lets the policy that closes next free them.
             unread, self._unread = self._unread, set()
             self._fns = dict.fromkeys(self._fns, _closed)
         for answer in unread:
@@ -122,8 +121,8 @@ class _BlockingPolicy(DelegatingPolicy):
             self._rt = rt
 
         def __call__(self, obs: Mapping[str, Any]) -> list[dict[str, Any]] | None:
-            # Not ``in_flight``: a call that lands before this test would leave its answer unread, and the
-            # inner session reads an answer only on a later call.
+            # The inner session reads an answer only on a later call. A test of ``in_flight`` would exit
+            # on a call that lands while the session call runs, leaving its answer unread.
             while (actions := self._inner(obs)) is None and self._rt.owes_an_answer:
                 self._rt.wait()
             return actions

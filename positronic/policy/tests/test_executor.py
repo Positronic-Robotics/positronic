@@ -353,19 +353,21 @@ class TestBlocking:
         assert policy.session.calls == 1
 
     def test_a_layer_above_it_is_called_one_time_for_one_answer(self, opened):
-        """Why this wraps the policy and not the chain: a layer that encodes the observation, or records
-        it, would otherwise do that work once per call the answer took."""
+        """A layer above ``blocking`` is called once for one answer. That is why ``blocking`` wraps the
+        policy and not the chain: a layer that encodes the observation, or records it, would otherwise do
+        that work once per call the answer took."""
         layer, policy = _CountingLayer(), _EchoPolicy(rounds=2)
 
         assert opened(layer.wrap(blocking(policy)))({'x': 1}) == {'x': 1}
         assert (layer.calls, policy.session.calls) == (1, 3)
 
     def test_it_serves_its_functions_itself(self):
-        """Nothing above builds a runtime for them: they are already run by the time an answer comes out."""
+        """A blocking policy runs its own functions, so nothing above it builds a runtime for them."""
         assert blocking(_EchoPolicy(rounds=1)).functions == {}
 
     def test_closing_the_session_closes_the_runtime_it_made(self):
-        """Nobody else can: the runtime is the session's own, made where the session was."""
+        """The session owns the runtime it was made with, and closing the session is the only way to
+        close it."""
         policy = _EchoPolicy(rounds=1)
         session = blocking(policy).new_session()
         session.close()
@@ -380,10 +382,7 @@ class _Weights:
 
 
 def test_close_frees_what_the_functions_held(serve):
-    """A closed runtime drops its functions, so the policy that closes next can free the weights.
-
-    The live session keeps its ``Caller``: the runtime is the only place a function reference lives.
-    """
+    """A closed runtime drops its functions, so the policy that closes next can free the weights."""
     weights = _Weights()
     gone = weakref.ref(weights)
     executor = serve(infer=partial(operator.is_, weights))

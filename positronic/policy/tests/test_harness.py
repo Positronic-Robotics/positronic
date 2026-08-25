@@ -1837,8 +1837,8 @@ def _slow_policies(wall_sec: float) -> list:
     """A model that takes ``wall_sec`` in each home it can run in: inside the session call, and inside a
     function the session starts and returns from at once. The trial pays the same for both.
 
-    Both answer the same chunk. A shorter one from either would be played out sooner, and that home would
-    run the model more times over the trial for the comparison to charge.
+    Both answer the same chunk. A shorter chunk is played out sooner, so the home that answered it runs
+    the model more times over the trial and pays more for it.
     """
     return [
         pytest.param(SlowPolicy(wall_sec=wall_sec), id='in-the-call'),

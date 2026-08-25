@@ -315,8 +315,8 @@ class PolicyServer:
             rid = self._source.resolve(model_id) if model_id is not None else self._default_id
             assert rid is not None
             policy = await self._manager.get_policy(rid, websocket)
-            # Wrapped in ``blocking`` before anything else: a request has no control loop to answer
-            # ``None`` to, and every layer above it must see one call per answer.
+            # A request has no control loop to answer ``None`` to. This goes innermost, so every layer
+            # above it sees one call per answer rather than one per call the answer took.
             answered = blocking(policy)
             if self._recording_dir is not None:
                 # Tap both sides: 'raw' is the wire boundary, 'inference' the encoded obs and model output.
