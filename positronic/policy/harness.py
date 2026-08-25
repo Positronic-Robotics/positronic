@@ -340,11 +340,7 @@ class Harness(pimm.ControlSystem):
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, call: pimm.calls.Call[Task, dict[str, Any]]
     ) -> Generator[pimm.Command, None, None]:
         """Open a fresh episode: ready the rig and the scene, read the instruction, open the session, the
-        recording and the first inference.
-
-        Every device publishes what it holds as it answers its prepare, so the recording and the first
-        inference both open on the readied rig.
-        """
+        recording and the first inference."""
         # Before anything that can raise, so an episode that fails to open still answers whoever asked for it.
         self._call = call
         # The episode span opens first, so the prepare and the rollout's other phase spans parent to it.
