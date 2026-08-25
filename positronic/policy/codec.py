@@ -65,12 +65,12 @@ class Codec(Layer):
     def encode(self, data: dict) -> dict:
         return {}
 
-    def decode(self, data, *, context=None):
+    def decode(self, data):
         if isinstance(data, list):
-            return [self.decode(d, context=context) for d in data]
-        return self._decode_single(data, context)
+            return [self.decode(d) for d in data]
+        return self._decode_single(data)
 
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
+    def _decode_single(self, data: dict) -> dict:
         return {}
 
     @property
@@ -112,7 +112,7 @@ class _CodecSession(DelegatingSession):
         action = self._inner(encoded)
         if action is None:
             return None
-        return self._codec.decode(action, context=obs)
+        return self._codec.decode(action)
 
     @property
     def meta(self):
@@ -157,12 +157,8 @@ class _ComposedCodec(Codec):
     def encode(self, data):
         return self._right.encode(self._left.encode(data))
 
-    def decode(self, data, *, context=None):
-        # The right half decodes actions the left half re-expressed, so its context has to be re-expressed too:
-        # a decoder that rebuilds its command from it (``RelativePositionAction``) would otherwise anchor a
-        # policy-frame delta on a pose in the frame the policy never saw. Encoders carry no state across calls.
-        inner = self._left.encode(context) if context is not None else None
-        return self._left.decode(self._right.decode(data, context=inner), context=context)
+    def decode(self, data):
+        return self._left.decode(self._right.decode(data))
 
     @property
     def training_encoder(self):
@@ -195,9 +191,9 @@ class _ParallelCodec(Codec):
     def encode(self, data):
         return {**self._left.encode(data), **self._right.encode(data)}
 
-    def decode(self, data, *, context=None):
-        left_out = self._left.decode(data, context=context)
-        right_out = self._right.decode(data, context=context)
+    def decode(self, data):
+        left_out = self._left.decode(data)
+        right_out = self._right.decode(data)
         if isinstance(data, list):
             return [{**lf, **rt} for lf, rt in zip(left_out, right_out, strict=True)]
         return {**left_out, **right_out}
@@ -250,7 +246,7 @@ class ActionTimestamp(Codec):
     def encode(self, data):
         return data
 
-    def decode(self, data, *, context=None):
+    def decode(self, data):
         # Build fresh entries rather than stamping in place: a session may hand back a cached template
         # list, and appending the sentinel to it would regrow the chunk on every re-inference.
         if isinstance(data, list):
@@ -296,7 +292,7 @@ class ActionHorizon(Codec):
     def encode(self, data):
         return data
 
-    def decode(self, data, *, context=None):
+    def decode(self, data):
         if isinstance(data, list):
             # Treat untimestamped actions as t=0 so they always pass the horizon
             # (servers may apply horizon truncation before stamping).
@@ -349,7 +345,7 @@ class BinarizeGripTraining(Codec):
     def encode(self, data):
         return data
 
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
+    def _decode_single(self, data: dict) -> dict:
         return data
 
     @property
@@ -392,7 +388,7 @@ class BinarizeGripInference(Codec):
     def training_encoder(self) -> EpisodeTransform:
         return Identity()
 
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
+    def _decode_single(self, data: dict) -> dict:
         if self._key in data:
             data[self._key] = 1.0 if data[self._key] > self._threshold else 0.0
         return data
@@ -416,7 +412,7 @@ class FlipGrip(Codec):
     WIRE_NAME = 'flip_grip'
 
     def encode(self, data):
-        # Copy: the original dict is also the decode ``context`` and the raw recording tap's input.
+        # ``data`` belongs to the caller, so the flip goes on a copy.
         if obs_keys.GRIP in data:
             data = {**data, obs_keys.GRIP: 1.0 - data[obs_keys.GRIP]}
         return data
@@ -425,7 +421,7 @@ class FlipGrip(Codec):
     def training_encoder(self) -> EpisodeTransform:
         return Identity()
 
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
+    def _decode_single(self, data: dict) -> dict:
         if obs_keys.TARGET_GRIP in data:
             data[obs_keys.TARGET_GRIP] = 1.0 - data[obs_keys.TARGET_GRIP]
         return data
@@ -477,7 +473,7 @@ class RestrictImageSize(Codec):
             return type(value)(self._restrict(key, v) for v in value)
         return value
 
-    def decode(self, data, *, context=None):
+    def decode(self, data):
         return data
 
     @property
@@ -566,7 +562,7 @@ class ChangeEEFrame(Codec):
     def encode(self, data):
         return self._apply(data, self._transform)
 
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
+    def _decode_single(self, data: dict) -> dict:
         return self._apply(data, self._transform.inv)
 
     @property
@@ -598,7 +594,7 @@ class SetControlMode(Codec):
     def encode(self, data):
         return data
 
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
+    def _decode_single(self, data: dict) -> dict:
         # The command family also holds the pose/joint vectors a recording unfolds into, so what carries a
         # mode is decided by type rather than by name.
         stamped = {

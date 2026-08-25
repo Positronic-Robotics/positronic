@@ -36,6 +36,56 @@ something else reads as working configuration.
 The cut paragraph argued for a design choice. The signature and the `raise` line already show what
 `source` does.
 
+## Give a reason, not a description
+
+The code already states what it does. A comment that states it again holds a second copy of one
+fact, and the copy that goes stale is the comment. Write the reason instead: a constraint from
+outside the file, an invariant that holds here, an alternative that fails.
+
+✗
+
+```python
+# Set training steps if provided
+if num_train_steps is not None:
+    cfg.steps = num_train_steps
+```
+
+✓ Delete it. Every word of it appears in the two lines under it.
+
+✗
+
+```python
+# Check if stdin is a TTY before attempting terminal operations
+if not sys.stdin.isatty():
+```
+
+✓
+
+```python
+# `tty.setcbreak` raises on anything that is not a terminal, and the loop needs the cbreak mode it
+# sets to read one key at a time.
+if not sys.stdin.isatty():
+```
+
+The first comment says what `isatty` tests. The second says why the function gives up instead of
+reading anyway.
+
+A "what" that needs explaining is a defect in the code. Find what made it unreadable, and fix that:
+
+| the code | the fix |
+|---|---|
+| a name that does not say what the value holds | rename it |
+| a stretch of a function that wants a label | extract it, and the label becomes the name |
+| a condition nobody can read | bind it to a named variable and test that |
+| a call nobody can read at the call site | make the parameters keyword-only |
+
+Each fix reaches every later reader of that code. A comment reaches only the one who stops to read
+it.
+
+Naming the subject is not a description. A comment keeps the one clause that says which thing this
+is, so its reason has something to attach to — see "Trimming has a floor". The failure is a sentence
+that walks through behaviour already on the screen.
+
 ## Say what it is before why it is shaped that way
 
 A reader landing on a definition needs its job first. The constraint on it is the second sentence,
@@ -174,9 +224,10 @@ the thing.
 Before keeping a comment, confirm each:
 
 1. Deleting it, or renaming something, would not serve the reader better.
-2. Its first sentence says what the thing does.
-3. Every term in it is defined somewhere a reader can reach.
-4. Its subject is named, not implied by position.
-5. It reads forward: this code, then the reason.
-6. The fact is not already in a neighbouring comment or the docstring above.
-7. Deleting or reordering the code it guards would break something silently.
+2. It gives a reason. Behaviour the code states is not a reason.
+3. Its first sentence says what the thing does.
+4. Every term in it is defined somewhere a reader can reach.
+5. Its subject is named, not implied by position.
+6. It reads forward: this code, then the reason.
+7. The fact is not already in a neighbouring comment or the docstring above.
+8. Deleting or reordering the code it guards would break something silently.

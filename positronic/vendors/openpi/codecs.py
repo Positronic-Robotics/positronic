@@ -73,7 +73,7 @@ class ObservationCodec(Codec):
         w, h = self._image_size
         return image.resize_with_pad(w, h, signal=episode[input_key])
 
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
+    def _decode_single(self, data: dict) -> dict:
         return {}
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
@@ -193,7 +193,7 @@ class PoseDeltaAction(Codec):
 
     OUTPUT_MAX = np.array([0.05, 0.05, 0.05, 0.5, 0.5, 0.5])
 
-    def _decode_single(self, data, context=None):
+    def _decode_single(self, data):
         action = np.asarray(data['action']).clip(-1.0, 1.0)  # robosuite clips both pose and gripper to [-1, 1]
         physical = action[:6] * self.OUTPUT_MAX
         delta = geom.Transform3D(translation=physical[:3], rotation=geom.Rotation.from_rotvec(physical[3:6]))

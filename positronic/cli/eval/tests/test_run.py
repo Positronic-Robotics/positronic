@@ -9,7 +9,8 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, timed_pass
 from positronic.eval import Embodiment, Eval, Task
-from positronic.tests.testing_coutils import drive_scheduler
+from positronic.policy import Policy, Session
+from positronic.tests.testing_coutils import IdleSession, drive_scheduler
 
 
 def _eval(simulated: bool) -> Eval:
@@ -23,11 +24,14 @@ def test_timed_sweep_rejects_real_embodiment(tmp_path):
         main(policy=object(), evals=[_eval(True), _eval(False)], output_dir=tmp_path, timing=True)
 
 
-class _IdlePolicy:
+class _IdlePolicy(Policy):
     """Enough policy for ``main`` to warm up and close; it is never asked for an action."""
 
-    def new_session(self, *_args, **_kwargs):
-        return SimpleNamespace(close=lambda: None)
+    def __init__(self):
+        self.observations: list[dict] = []
+
+    def new_session(self, *_args, **_kwargs) -> Session:
+        return IdleSession(self)
 
     def close(self):
         pass

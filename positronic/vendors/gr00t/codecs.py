@@ -115,7 +115,7 @@ class GrootObservationCodec(Codec):
         w, h = self._image_size
         return image.resize_with_pad_per_frame(w, h, PilImage.Resampling.BILINEAR, frame)
 
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
+    def _decode_single(self, data: dict) -> dict:
         return {}
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
@@ -162,7 +162,7 @@ class _GrootActionModality(Codec):
     def encode(self, data):
         return data
 
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
+    def _decode_single(self, data: dict) -> dict:
         action_part = np.asarray(data[self._action_key], dtype=np.float32).reshape(-1)
         grip_part = np.asarray(data[gr00t.GRIP], dtype=np.float32).reshape(-1)
         return {'action': np.concatenate([action_part, grip_part])}

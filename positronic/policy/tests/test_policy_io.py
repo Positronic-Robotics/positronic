@@ -7,7 +7,7 @@ from positronic.cfg.codecs import compose
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.geom import Rotation
-from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, RelativePositionAction
+from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction
 from positronic.policy.base import Policy, Session
 from positronic.policy.codec import (
     ActionHorizon,
@@ -84,50 +84,13 @@ def test_absolute_position_action_encode_decode_quat():
     assert vec.shape == (8,)  # 4 quat + 3 trans + 1 grip
     assert vec.dtype == np.float32
 
-    decoded = act._decode_single({'action': vec}, context={})
+    decoded = act._decode_single({'action': vec})
     command = decoded[obs_keys.ROBOT_COMMAND]
     target_grip = decoded['target_grip']
     assert isinstance(command, cmd_module.CartesianPosition)
     np.testing.assert_allclose(command.pose.translation, t[0], atol=1e-6)
     np.testing.assert_allclose(command.pose.rotation.as_quat, q[0].as_quat, atol=1e-6)
     assert np.isclose(target_grip, g[0])
-
-
-def test_relative_target_position_action_encode_decode_quat():
-    ts = [1000]
-    q_cur = [Rotation.identity]
-    # 90 deg about X: w=cos(45)=sqrt(2)/2, x=sin(45)=sqrt(2)/2
-    q_tgt = [Rotation.from_quat([np.sqrt(0.5), np.sqrt(0.5), 0, 0])]
-    t_cur = [np.array([0.0, 0.0, 0.0], dtype=np.float32)]
-    t_tgt = [np.array([0.1, 0.2, 0.3], dtype=np.float32)]
-    g_tgt = [0.7]
-
-    cur_pose = [np.concatenate([t_cur[0], q_cur[0].as_quat]).astype(np.float32)]
-    tgt_pose = [np.concatenate([t_tgt[0], q_tgt[0].as_quat]).astype(np.float32)]
-
-    ep = EpisodeContainer({
-        obs_keys.EE_POSE: DummySignal(ts, cur_pose),
-        obs_keys.TARGET_EE_POSE: DummySignal(ts, tgt_pose),
-        'target_grip': DummySignal(ts, g_tgt),
-    })
-
-    act = RelativePositionAction(Rotation.Representation.QUAT)
-    vec = list(act._encode_episode(ep))[0][0]
-    # First 4 should match target quaternion since current is identity
-    np.testing.assert_allclose(vec[:4], q_tgt[0].as_quat, atol=1e-6)
-    assert vec.dtype == np.float32
-    np.testing.assert_allclose(vec[4:7], t_tgt[0] - t_cur[0], atol=1e-6)
-    assert np.isclose(vec[7], g_tgt[0])
-
-    decoded = act._decode_single(
-        {'action': vec}, context={obs_keys.EE_POSE: np.concatenate([t_cur[0], q_cur[0].as_quat])}
-    )
-    command = decoded[obs_keys.ROBOT_COMMAND]
-    target_grip = decoded['target_grip']
-    assert isinstance(command, cmd_module.CartesianPosition)
-    # Decode applies diff to current translation
-    np.testing.assert_allclose(command.pose.translation, t_cur[0] + vec[4:7], atol=1e-6)
-    assert np.isclose(target_grip, g_tgt[0])
 
 
 def test_absolute_joints_action_encode_decode():
@@ -144,7 +107,7 @@ def test_absolute_joints_action_encode_decode():
     assert vec.shape == (8,)  # 7 joints + 1 grip
     assert vec.dtype == np.float32
 
-    decoded = act._decode_single({'action': vec}, context={})
+    decoded = act._decode_single({'action': vec})
     command = decoded[obs_keys.ROBOT_COMMAND]
     target_grip = decoded['target_grip']
     assert isinstance(command, cmd_module.JointPosition)
@@ -164,12 +127,12 @@ class _ChunkPolicy(Policy):
     def __init__(self, actions: list[dict]):
         self._actions = actions
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, rt=None):
         return _FixedSession(list(self._actions))
 
 
 class _SinglePolicy(Policy):
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, rt=None):
         return _FixedSession({'v': 42})
 
 
@@ -183,7 +146,7 @@ class _PassthroughCodec(Codec):
 
 
 class _MetaPolicy(Policy):
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, rt=None):
         return _FixedSession({})
 
     @property
@@ -246,7 +209,7 @@ def test_action_horizon_sec_seconds_truncates():
 def test_action_timestamp_stamps_chunk():
     actions = [{'v': i} for i in range(4)]
     codec = ActionTimestamp(fps=10.0)
-    result = codec.decode(actions, context=_T0_OBS)
+    result = codec.decode(actions)
     assert len(result) == 5  # 4 actions + timestamp sentinel
     for i, action in enumerate(result):
         assert action['timestamp'] == pytest.approx(i * 0.1)
@@ -254,7 +217,7 @@ def test_action_timestamp_stamps_chunk():
 
 def test_action_timestamp_single_action():
     codec = ActionTimestamp(fps=15.0)
-    result = codec.decode({'v': 42}, context=_T0_OBS)
+    result = codec.decode({'v': 42})
     assert result['timestamp'] == 0.0
 
 
@@ -266,7 +229,7 @@ def test_action_timestamp_meta():
 def test_action_horizon_truncates():
     actions = [{'v': i, 'timestamp': i * 0.1} for i in range(10)]
     codec = ActionHorizon(0.3)
-    result = codec.decode(actions, context=_T0_OBS)
+    result = codec.decode(actions)
     assert [r['v'] for r in result if 'v' in r] == [0, 1, 2]
     assert result[-1] == {'timestamp': pytest.approx(0.3)}  # horizon sentinel
 
@@ -274,7 +237,7 @@ def test_action_horizon_truncates():
 def test_action_horizon_passes_single_action():
     action = {'v': 1, 'timestamp': 0.0}
     codec = ActionHorizon(0.5)
-    result = codec.decode(action, context=_T0_OBS)
+    result = codec.decode(action)
     assert result == {'v': 1, 'timestamp': 0.0}
 
 
@@ -336,7 +299,7 @@ def test_timestamps_survive_action_decoder_composition():
     raw_action[7] = 0.5
 
     raw_chunk = [{'action': raw_action} for _ in range(5)]
-    decoded = composed.decode(raw_chunk, context=_T0_OBS)
+    decoded = composed.decode(raw_chunk)
 
     assert len(decoded) == 6  # 5 actions + timestamp sentinel
     for i, action in enumerate(decoded[:5]):
@@ -397,12 +360,12 @@ def test_composed_training_encoder_uses_parallel():
 
 def test_binarize_grip_inference():
     binarize = BinarizeGripInference()
-    assert binarize._decode_single({'target_grip': 0.3}, None) == {'target_grip': 0.0}
-    assert binarize._decode_single({'target_grip': 0.7}, None) == {'target_grip': 1.0}
-    assert binarize._decode_single({'target_grip': 0.5}, None) == {'target_grip': 0.0}
+    assert binarize._decode_single({'target_grip': 0.3}) == {'target_grip': 0.0}
+    assert binarize._decode_single({'target_grip': 0.7}) == {'target_grip': 1.0}
+    assert binarize._decode_single({'target_grip': 0.5}) == {'target_grip': 0.0}
 
     binarize_low = BinarizeGripInference(threshold=0.3)
-    assert binarize_low._decode_single({'target_grip': 0.4}, None) == {'target_grip': 1.0}
+    assert binarize_low._decode_single({'target_grip': 0.4}) == {'target_grip': 1.0}
 
 
 def test_binarize_grip_training():
@@ -451,11 +414,11 @@ def test_flip_grip():
 
     obs = {obs_keys.GRIP: 0.2, 'other': 1.0}
     assert flip.encode(obs) == {obs_keys.GRIP: pytest.approx(0.8), 'other': 1.0}
-    assert obs[obs_keys.GRIP] == 0.2  # the original obs dict doubles as decode context and must stay intact
+    assert obs[obs_keys.GRIP] == 0.2  # the codec copies rather than mutates: the raw dict is the recording tap's input
     assert flip.encode({'other': 1.0}) == {'other': 1.0}
 
-    assert flip._decode_single({'target_grip': 0.9}, None) == {'target_grip': pytest.approx(0.1)}
-    assert flip._decode_single({'pose': 1.0}, None) == {'pose': 1.0}
+    assert flip._decode_single({'target_grip': 0.9}) == {'target_grip': pytest.approx(0.1)}
+    assert flip._decode_single({'pose': 1.0}) == {'pose': 1.0}
     assert flip.decode([{'target_grip': 1.0}, {'target_grip': 0.25}]) == [
         {'target_grip': pytest.approx(0.0)},
         {'target_grip': pytest.approx(0.75)},
@@ -471,7 +434,7 @@ def test_flip_grip_composed_with_obs_and_action():
     np.testing.assert_allclose(encoded['observation.state'], [0.8])
 
     vec = np.concatenate([[0.1, -0.2, 0.3], Rotation.identity.as_quat, [0.9]]).astype(np.float32)
-    decoded = composed.decode({'action': vec}, context={})
+    decoded = composed.decode({'action': vec})
     assert decoded['target_grip'] == pytest.approx(0.1)
 
 

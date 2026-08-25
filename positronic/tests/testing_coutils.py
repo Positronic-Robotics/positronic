@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 import pimm
+from positronic.policy import Session
 
 # The driver runs a step for its effect, so a step that hands something back — a call's answer — is one too.
 ScriptStep = tuple[Callable[[], object] | None, float]
@@ -116,7 +117,7 @@ def run_scripted_agent(
     drive_scheduler(scheduler, steps=steps)
 
 
-class IdleSession:
+class IdleSession(Session):
     """A policy session that records what it is shown and commands nothing.
 
     The recording lands on its policy's ``observations`` list.

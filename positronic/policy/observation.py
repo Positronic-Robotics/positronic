@@ -57,7 +57,7 @@ class ObservationCodec(Codec):
         input_key, (width, height) = self._image_configs[out_name]
         return image.resize_with_pad(width, height, signal=episode[input_key])
 
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
+    def _decode_single(self, data: dict) -> dict:
         return {}
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:

@@ -12,6 +12,40 @@ SEQ = 'seq'
 PAR = 'par'
 
 
+class NotAnswered(RuntimeError):
+    """The call has not answered yet. A read of an ``Answer`` raises this rather than waiting."""
+
+
+class Answer(ABC):
+    """The caller's handle on one call.
+
+    pimm has an ``Answer`` of the same shape. The two are not interchangeable.
+    """
+
+    @abstractmethod
+    def done(self) -> bool: ...
+
+    @abstractmethod
+    def result(self) -> Any:
+        """What the function returned. Raises what the function raised, or ``NotAnswered`` before it answers."""
+
+
+# A call to an ``Fn`` starts the work and returns at once.
+Fn = Callable[..., Answer]
+
+
+class Runtime(ABC):
+    """What the framework offers one session. Every session gets its own.
+
+    Closed before the session it serves: a call still in flight is using what that session holds.
+    """
+
+    @property
+    @abstractmethod
+    def fns(self) -> Mapping[str, Fn]:
+        """The policy's functions, under the names it declared them by."""
+
+
 class Session(ABC):
     """Per-episode inference session. Created by ``Policy.new_session()``.
 
@@ -26,7 +60,9 @@ class Session(ABC):
     (dicts, lists, numpy arrays, scalars). No tensors or custom objects.
 
     **Return contract**: ``list[dict] | None``. ``None`` means "no new
-    trajectory, keep executing the current one" (used by scheduling layers).
+    trajectory, keep executing the current one" — what a scheduling layer
+    answers while its chunk plays, and what a session answers while the
+    function it asked is still in flight.
     An empty list means "stop whatever is executing now". A non-empty list is
     a new trajectory. Single-action returns must be wrapped into a 1-element
     list by the producer.
@@ -82,14 +118,23 @@ class Policy(ABC):
     """
 
     @abstractmethod
-    def new_session(self, context: dict[str, Any] | None = None, now: Now | None = None) -> Session:
+    def new_session(
+        self, context: dict[str, Any] | None = None, now: Now | None = None, rt: Runtime | None = None
+    ) -> Session:
         """Create a new inference session for an episode.
 
         Args:
             context: The episode's task description.
             now: The runtime clock (current time in seconds), supplied by the harness and passed down
                 to every wrapped session. ``None`` where no runtime clock exists (server-side, warmup).
+            rt: This session's runtime, serving ``functions``. ``None`` where nothing runs them, as in a
+                server's own session. A session that needs one refuses to open without it.
         """
+
+    @property
+    def functions(self) -> Mapping[str, Callable[..., Any]]:
+        """The work this policy runs off the session's thread, by name. The framework serves it as ``rt.fns``."""
+        return {}
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -106,8 +151,12 @@ class DelegatingPolicy(Policy):
     def __init__(self, inner: Policy):
         self._inner = inner
 
-    def new_session(self, context=None, now=None):
-        return self._inner.new_session(context, now)
+    def new_session(self, context=None, now=None, rt=None):
+        return self._inner.new_session(context, now, rt)
+
+    @property
+    def functions(self):
+        return self._inner.functions
 
     @property
     def meta(self):
@@ -186,8 +235,8 @@ class _LayerPolicy(DelegatingPolicy):
         super().__init__(inner)
         self._layer = layer
 
-    def new_session(self, context=None, now=None):
-        return self._layer.make_session(self._inner.new_session(context, now), context, now)
+    def new_session(self, context=None, now=None, rt=None):
+        return self._layer.make_session(self._inner.new_session(context, now, rt), context, now)
 
     @property
     def meta(self):

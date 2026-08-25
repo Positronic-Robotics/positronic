@@ -220,7 +220,7 @@ class Gr00tPolicy(Policy):
         self._groot = groot
         self._checkpoint_path = checkpoint_path
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, rt=None):
         self._groot.client.reset()
         return _Gr00tSession(self._groot.client)
 

@@ -10,13 +10,7 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import Impedance, JointDelta
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
-from positronic.policy.action import (
-    AbsoluteJointsAction,
-    AbsolutePositionAction,
-    IKJointsAction,
-    JointDeltaAction,
-    RelativePositionAction,
-)
+from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction, JointDeltaAction
 from positronic.policy.base import Layer, Policy, Session
 from positronic.policy.codec import (
     ActionHorizon,
@@ -61,7 +55,7 @@ class _ConstPolicy(Policy):
         self._actions = actions
         self._session: _ConstSession | None = None
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, rt=None):
         self._session = _ConstSession(self._actions)
         return self._session
 
@@ -144,7 +138,30 @@ class TestStopOnFault:
         assert session(_obs(0.3)) is not None
 
 
+class _ScriptedSession(Session):
+    """Answers each of ``script`` in turn — ``None`` where a session has nothing to place yet."""
+
+    def __init__(self, script):
+        self._script = list(script)
+        self.call_count = 0
+
+    def __call__(self, obs):
+        self.call_count += 1
+        return self._script.pop(0)
+
+
 class TestChunkedSchedule:
+    def test_an_inner_with_no_answer_yet_is_asked_again(self):
+        """A session that waits for a served function answers ``None``, which is no trajectory. The layer
+        passes the ``None`` on and asks again on the next observation."""
+        inner = _ScriptedSession([None, None, [{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]])
+        session = ChunkedSchedule().make_session(inner, None, _FakeClock(t=1.0).now)
+
+        assert session(_obs(0.0)) is None
+        assert session(_obs(0.1)) is None
+        assert session(_obs(0.2)) == [{'v': 1, keys.ACTION_TIMESTAMP: 1.0}]
+        assert inner.call_count == 3
+
     def test_first_call_runs_inference(self):
         # Relative timestamps: trajectory of duration 0.5s
         clock = _FakeClock(t=1.0)
@@ -267,27 +284,6 @@ class TestPipelineComposition:
         with pytest.raises(ValueError, match=keys.EE_FRAME):
             _ = (ChangeEEFrame(a) | ChangeEEFrame(a)).meta
 
-    def test_a_relative_decoder_anchors_on_the_pose_the_policy_saw(self):
-        """The right half decodes actions the left half re-expressed, so its context is re-expressed too —
-        anchoring a policy-frame delta on the raw pose would send the arm somewhere else."""
-        quat = Rotation.Representation.QUAT
-        t = Transform3D(np.array([0.0, 0.0, 0.1]), Rotation.from_euler([0.0, 0.0, np.pi / 2]))
-        raw = Transform3D(np.array([0.3, 0.1, 0.4]), Rotation.from_euler([0.0, 0.0, 0.0]))
-        turn, shift = Rotation.from_euler([0.0, 0.0, 0.2]), np.array([0.01, -0.02, 0.03])
-        action = {'action': np.concatenate([turn.as_quat, shift, [1.0]]).astype(np.float32)}
-
-        codec = ChangeEEFrame(t) | RelativePositionAction()
-        assert isinstance(codec, Codec)
-        decoded = codec.decode(action, context={keys.EE_POSE: raw.as_vector(quat)})
-        assert isinstance(decoded, dict)
-
-        seen = raw * t
-        pose = decoded[keys.ROBOT_COMMAND].pose
-        want = Transform3D(seen.translation + shift, seen.rotation * turn) * t.inv
-        np.testing.assert_allclose(pose.as_vector(quat), want.as_vector(quat), atol=1e-6)
-        anchored_raw = Transform3D(raw.translation + shift, raw.rotation * turn) * t.inv
-        assert not np.allclose(pose.translation, anchored_raw.translation)
-
     def test_parallel_frame_codecs_keep_the_frame_they_share(self):
         """Both halves encode the same input, so one move happens and the shared declaration describes it."""
         a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
@@ -309,7 +305,7 @@ class _CapturePolicy(Policy):
     def __init__(self):
         self.session = _CaptureSession()
 
-    def new_session(self, context=None, now=None):
+    def new_session(self, context=None, now=None, rt=None):
         return self.session
 
 
@@ -505,7 +501,6 @@ class TestPipelineSpec:
             'observation_codec': ObservationCodec(state={}, images={}),
             'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, 'target_grip'),
             'absolute_joints_action': AbsoluteJointsAction(keys.TARGET_JOINTS, 'target_grip'),
-            'relative_position_action': RelativePositionAction(),
             'joint_delta_action': JointDeltaAction(),
             'change_ee_frame': ChangeEEFrame(Transform3D.identity),
         }
