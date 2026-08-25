@@ -152,7 +152,7 @@ def test_abort_flow_then_restart(world):
     assert len(ds.created) == 2
     w1, w2 = ds.created[0], ds.created[1]
     assert w1.aborted is True and w1.exited is True
-    assert [(s, v) for (s, v, _, _) in w2.appends] == [('s', 11)]
+    assert [(s, v) for (s, v, _, _) in w2.appends] == [('s', 10), ('s', 11)]  # 10 is what the channel held
 
 
 def test_appends_only_on_updates_and_timestamps_from_clock(world):

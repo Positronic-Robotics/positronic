@@ -141,10 +141,14 @@ class DsWriterAgent(pimm.ControlSystem):
                 if v is not None:
                     ep_writer.append(full_name, v, primary_ts, extra_ts)
 
-    def _record_window(self, ep_writer: EpisodeWriter, clock: pimm.Clock, before: int | None):
-        """Append every input sample delivered this turn that is not stamped after ``before``."""
+    def _record_window(self, ep_writer: EpisodeWriter, clock: pimm.Clock, before: int | None, opening: bool):
+        """Append this turn's input samples, dropping any stamped after ``before``.
+
+        The opening turn reads every channel outright rather than only what arrived, so a channel silent
+        since the last episode still contributes what it holds.
+        """
         for name, reader in self._inputs.items():
-            msg = pimm.read_updated(reader)
+            msg = reader.read() if opening else pimm.read_updated(reader)
             if msg is not None and (before is None or msg.ts <= before):
                 self._record(ep_writer, name, msg, clock)
 
@@ -158,15 +162,17 @@ class DsWriterAgent(pimm.ControlSystem):
         try:
             while not should_stop.value:
                 cmd = pimm.read_updated(self.command)
-                stop_at, stop_cmd = None, None
+                stop_at, stop_cmd, opening = None, None, False
                 if cmd is not None:
                     if cmd.data.type == DsWriterCommandType.START_EPISODE:
+                        was_open = ep_writer is not None
                         ep_writer, ep_counter = self._handle_command(cmd.data, ep_writer, ep_counter)
+                        opening = ep_writer is not None and not was_open
                     else:
                         stop_at, stop_cmd = cmd.ts, cmd.data
 
                 if ep_writer is not None:
-                    self._record_window(ep_writer, clock, stop_at)
+                    self._record_window(ep_writer, clock, stop_at, opening)
 
                 if stop_cmd is not None:
                     ep_writer, ep_counter = self._handle_command(stop_cmd, ep_writer, ep_counter)

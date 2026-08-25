@@ -77,9 +77,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._meta = self._frame['meta']
         self._active = True
         self.robot_meta.emit(self._frame['robot_meta'])
-        # The image buffers and camera copies are reset work; outside the span the report counts them as overhead.
-        with telemetry.span(telemetry_keys.SPAN_RESET):
-            self._emit_payload(self._frame['obs'])
+        self._emit_payload(self._frame['obs'])
         # An empty payload clears the wire: a terminal the previous trial reached would end this one at once.
         self.done.emit({})
 

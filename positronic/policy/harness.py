@@ -428,8 +428,8 @@ class Harness(pimm.ControlSystem):
 
     def _infer(self, worker: _InferenceWorker, clock: pimm.Clock) -> None:
         """One round of inference: throttle the loop for the call in flight as the trial's mode requires and
-        reschedule on what it returns; with no call in flight, submit one on a fresh observation and give it
-        the rest of the round to return. A channel the rig has never published to defers the round."""
+        reschedule on what it returns; with no call in flight, submit one on what the channels hold and give
+        it the rest of the round to return. A channel the rig has never published to defers the round."""
         if not worker.idle:
             self._throttle_and_reschedule(worker, clock)
         if worker.idle:
