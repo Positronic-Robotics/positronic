@@ -108,7 +108,7 @@ def _run_attended(policy, embodiment: Embodiment, next_task: Callable[[], Task],
 real_cfg = cfn.Config(
     real,
     embodiment=positronic.cfg.embodiment.droid,
-    next_task=positronic.cfg.eval.real.droid.attended_trial,
+    next_task=positronic.cfg.eval.real.droid.attended_trials,
     policy=policy_cfg.placeholder,
 )
 
