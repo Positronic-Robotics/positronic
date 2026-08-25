@@ -214,6 +214,7 @@ class RemoteStubPolicy(Policy):
         self.wall_sec = wall_sec
 
     def new_session(self, context=None, now=None, rt=None) -> RemoteSession:
+        assert rt is not None, 'the harness supplies the runtime'
         action = [{'robot_command': self.command, 'target_grip': self.target_grip, 'timestamp': 0.0}]
         return RemoteSession(_FakeInferenceSession(action, self.wall_sec), rt)
 

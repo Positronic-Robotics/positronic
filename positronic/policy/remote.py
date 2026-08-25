@@ -36,7 +36,7 @@ class RemoteSession(Session):
     ``compress_images`` comes from what the server declared (see ``RemoteMarker``).
     """
 
-    def __init__(self, ws_session: InferenceSession, rt: Runtime | None, compress_images: bool = False):
+    def __init__(self, ws_session: InferenceSession, rt: Runtime, compress_images: bool = False):
         self._session = ws_session
         self._rt = rt
         self._compress_images = compress_images
@@ -66,14 +66,9 @@ class RemoteSession(Session):
         Single-action server responses are wrapped into a 1-element list to honor
         the ``Session.__call__`` contract (``list[dict] | None``).
         """
-        if self._rt is None:
-            raise ValueError(
-                'RemoteSession needs a runtime to run inference: pass rt to new_session. The harness '
-                'supplies it; a direct RemotePolicy.new_session() outside the harness must too.'
-            )
         if self._answer is None:
-            # Preparation stays the session's own work: JPEG-encoding a stack of HD frames is client-side, and
-            # folding it into the function would inflate the inference percentiles.
+            # The session prepares the observation, and the function only sends it. The ``policy.infer`` span
+            # times the function, and a JPEG encode of an HD frame stack is not inference.
             self._answer = self._rt.fns[INFER](self._session, self._prepare_obs(obs))
             return None
         if not self._answer.done():
@@ -124,6 +119,11 @@ class _Endpoint(Policy):
         return self._server_meta
 
     def new_session(self, context=None, now=None, rt=None) -> RemoteSession:
+        if rt is None:
+            raise ValueError(
+                'A remote session runs its inference on a runtime: pass rt to new_session. The harness '
+                'passes one, and a caller that opens a session outside the harness must pass one too.'
+            )
         compress = bool(self.server_meta().get(keys.COMPRESS_IMAGES))
         ws_session = self._client.new_session()
         return RemoteSession(ws_session, rt, compress_images=compress)

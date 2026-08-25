@@ -15,6 +15,7 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, _
 from positronic.offboard.tests.conftest import ANSWER_SEC, round_trip
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
+from positronic.policy.executor import Executor
 from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.remote import RemoteSession
 from positronic.policy.spec import PolicySource, remote
@@ -57,14 +58,14 @@ class TestPrepareObs:
     """The border's own settings. Image geometry is the declared stack's business (see RestrictImageSize)."""
 
     def test_images_pass_through_untouched_by_default(self):
-        session = RemoteSession(_mock_ws_session(), None)
+        session = RemoteSession(_mock_ws_session(), Executor({}))
         obs = {'cam': _make_image(480, 640), 'state': np.array([1.0])}
         prepared = session._prepare_obs(obs)
         assert prepared.keys() == obs.keys()
         assert all(prepared[key] is value for key, value in obs.items())
 
     def test_compression_reaches_nested_images(self):
-        session = RemoteSession(_mock_ws_session(), None, compress_images=True)
+        session = RemoteSession(_mock_ws_session(), Executor({}), compress_images=True)
         result = session._prepare_obs({
             'cam': _make_image(48, 64),
             'video': {'wrist': _make_image(48, 64)},
@@ -344,13 +345,13 @@ def test_a_call_while_a_round_trip_is_in_flight_answers_none(open_session):
     assert session({}) == chunk
 
 
-def test_a_session_without_a_runtime_refuses_to_infer():
-    """Nothing serves the round-trip without a runtime, so a session opened without one says so instead of
-    running it on the caller's thread."""
+def test_opening_a_session_without_a_runtime_is_refused():
+    """Nothing serves the round trip without a runtime, so the session is refused where it is opened, and not
+    at the first observation it is given."""
     endpoint, _ = _mock_endpoint()
 
-    with pytest.raises(ValueError, match='needs a runtime'):
-        endpoint.new_session()({})
+    with pytest.raises(ValueError, match='runs its inference on a runtime'):
+        endpoint.new_session()
 
 
 def test_cancel_drops_the_chunk_of_the_round_trip_in_flight(open_session):
@@ -565,11 +566,10 @@ def test_remote_policy_lifecycle(inference_server, mock_policy, open_session):
     session2.close()
 
 
-def test_remote_session_meta(inference_server):
+def test_remote_session_meta(inference_server, open_session):
     """Session meta must include server metadata."""
     host, port = inference_server
-    policy = RemotePolicy(f'{host}:{port}')
-    session = policy.new_session(now=lambda: 0.0)
+    session, _ = open_session(RemotePolicy(f'{host}:{port}'), now=lambda: 0.0)
 
     meta = session.meta
     assert meta['type'] == 'remote'
