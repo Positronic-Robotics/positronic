@@ -63,7 +63,7 @@
 # Writing
 - Write every text that a person reads in **Simplified Technical English** (ASD-STE100). This covers
   comments, docstrings, commit messages, pull requests, review replies, issues and documents
-- Give each word one meaning and one part of speech. Use the same word for the same thing every time; do not
+- Give each word one meaning and one part of speech. Use the same word for the same thing every time. Do not
   use a synonym for variety
 - Choose the shortest common word that carries the meaning. Write the articles. Put not more than three nouns
   together
@@ -72,9 +72,9 @@
 - Use the active voice and the present tense. Start an instruction with its verb
 - Write no idiom, no metaphor, no joke and no rhetorical question
 - Code, identifiers, configuration values and log lines are out of scope. Quote text from a source as written
-- The standard is at asd-ste100.org, free for non-commercial use. Part 2 is a dictionary of approved words;
-  where you cannot check it, apply the shortest-common-word rule
-- A caveat, a correction and a mark on an unverified claim all stay. Write each one in short sentences; do not
+- The standard is at asd-ste100.org, free for non-commercial use. Part 2 is a dictionary of approved words.
+  Where you cannot check it, apply the shortest-common-word rule
+- A caveat, a correction and a mark on an unverified claim all stay. Write each one in short sentences. Do not
   drop one to meet a word count
 
 # Comments & docstrings
