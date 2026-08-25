@@ -40,6 +40,7 @@ dependencies = [
     # backwards compatibility: a floating requirement would let a fresh install of THIS release
     # resolve a contract it was never built against.
     "positronic-platform-client==0.2.0",
+    "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
     "pydantic",
     "pyturbojpeg<2",
@@ -111,7 +112,6 @@ telemetry = [
     "nvidia-ml-py",
     "opentelemetry-exporter-otlp-json-file>=0.65b0",
     "opentelemetry-sdk>=1.42",
-    "psutil",
 ]
 
 # A dependency group rather than an extra, so `uv run` and `uv sync` include it without being asked.

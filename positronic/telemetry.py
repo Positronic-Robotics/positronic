@@ -23,9 +23,9 @@ Instrumented code sees one seam: ``from positronic import telemetry`` then ``wit
 The span helpers no-op while unbound (a normal eval binds nothing), so a call site carries no ``None`` check.
 The pass-level report is an offline reduce over the raw files (``positronic.cli.eval.timing_report``).
 
-Only the OTel API — the no-op span surface every instrumented call site touches — is a default dependency. The
-recording stack (the OTel SDK, psutil, pynvml) ships in the ``telemetry`` extra, imported by ``bind`` and
-``StatsSampler``, the two entry points ``--timing`` reaches.
+An instrumented call site needs only the OTel API, a default dependency, for the no-op span surface. The
+``telemetry`` extra adds the OTel SDK and pynvml, imported by ``bind`` and ``StatsSampler``, the two entry
+points ``--timing`` reaches.
 """
 
 import functools

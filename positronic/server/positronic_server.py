@@ -1,9 +1,11 @@
 """A FastAPI web server for visualizing Positronic LocalDatasets using Rerun."""
 
 import atexit
+import ipaddress
 import logging
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 import threading
@@ -17,6 +19,7 @@ from typing import Any
 
 import configuronic as cfn
 import pos3
+import psutil
 import rerun as rr
 import uvicorn
 from fastapi import FastAPI, HTTPException, Response
@@ -27,7 +30,7 @@ from starlette.requests import Request
 
 import positronic.cfg.ds
 from pimm.logging import init_logging
-from positronic import keys, utils
+from positronic import keys
 from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import get_dataset_root, get_episodes_list, stream_episode_rrd
@@ -525,7 +528,71 @@ def default_table() -> TableConfig:
     }
 
 
-def _generate_self_signed_cert(host: str) -> dict[str, str]:
+def _as_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """The host parsed as an IP literal, or None when it is a name. A name is never resolved here."""
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
+def _local_ip_addresses(version: int | None = None) -> list[str]:
+    """Every IP address on a local interface, of `version` when one is named.
+
+    An IPv6 link-local address is left out: it carries a zone no URL a browser is given can name.
+    """
+    addresses: list[str] = []
+    for interface in psutil.net_if_addrs().values():
+        for addr in interface:
+            if addr.family not in (socket.AF_INET, socket.AF_INET6):
+                continue
+            ip = _as_ip(addr.address.split('%')[0])
+            if ip is None or (version is not None and ip.version != version):
+                continue
+            if ip.version == 6 and ip.is_link_local:
+                continue
+            if str(ip) not in addresses:
+                addresses.append(str(ip))
+    return addresses
+
+
+def _served_addresses(host: str) -> list[str]:
+    """The addresses a server bound to `host` answers on.
+
+    A concrete host answers on itself, a name on itself. A wildcard answers on the local addresses
+    of the family it binds: `0.0.0.0` and an empty host listen on AF_INET alone, `::` takes IPv4 too.
+    """
+    if host == '':
+        return _local_ip_addresses(version=4)
+    ip = _as_ip(host)
+    if ip is None:
+        return [host]
+    if not ip.is_unspecified:
+        return [str(ip)]
+    return _local_ip_addresses() if ip.version == 6 else _local_ip_addresses(version=4)
+
+
+def _is_loopback(host: str) -> bool:
+    ip = _as_ip(host)
+    return ip.is_loopback if ip is not None else host == 'localhost'
+
+
+def _access_url(scheme: str, host: str, port: int) -> str:
+    """The URL a browser reaches `host` on."""
+    ip = _as_ip(host)
+    literal = f'[{host}]' if ip is not None and ip.version == 6 else host
+    return f'{scheme}://{literal}:{port}'
+
+
+def _generate_self_signed_cert(hosts: list[str]) -> dict[str, str]:
+    """A self-signed certificate naming every host the server answers on.
+
+    The subject is a fixed name: a client matches `subjectAltName` (RFC 6125), and X.509 caps the
+    subject CN at 64 bytes, which a longer host name exceeds. An IP entry drops its zone, which
+    OpenSSL refuses as a bad address.
+    """
+    entries = [f'IP:{host.split("%")[0]}' if _as_ip(host) is not None else f'DNS:{host}' for host in hosts]
+
     ssl_dir = tempfile.mkdtemp(prefix='positronic-ssl-')
     keyfile = os.path.join(ssl_dir, 'key.pem')
     certfile = os.path.join(ssl_dir, 'cert.pem')
@@ -544,14 +611,14 @@ def _generate_self_signed_cert(host: str) -> dict[str, str]:
             '365',
             '-nodes',
             '-subj',
-            f'/CN={host}',
+            '/CN=positronic-server',
             '-addext',
-            f'subjectAltName=DNS:localhost,IP:{host}',
+            f'subjectAltName={",".join([*entries, "DNS:localhost"])}',
         ],
         check=True,
         capture_output=True,
     )
-    atexit.register(shutil.rmtree, ssl_dir, ignore_errors=True)
+    atexit.register(shutil.rmtree, ssl_dir, True)
     return {'ssl_keyfile': keyfile, 'ssl_certfile': certfile}
 
 
@@ -650,10 +717,19 @@ def main(
     t = threading.Thread(target=load_dataset, daemon=True)
     t.start()
 
-    primary_host = utils.resolve_host_ip()
-    ssl_kwargs = _generate_self_signed_cert(primary_host) if https else {}
+    served = _served_addresses(host)
+    ssl_kwargs = _generate_self_signed_cert(served) if https else {}
     scheme = 'https' if https else 'http'
-    logging.info(f'Starting server on {scheme}://{primary_host}:{port}')
+
+    exposed = [] if https else [address for address in served if not _is_loopback(address)]
+    if exposed:
+        logging.warning(
+            f'Serving plain HTTP on {", ".join(exposed)}. A browser exposes WebCodecs only to a secure context, '
+            f'so video panels fail to decode there with "VideoDecoder is not defined". Serve over HTTPS, or '
+            f'reach the server on a loopback address.'
+        )
+    urls = [_access_url(scheme, address, port) for address in served] or [_access_url(scheme, host, port)]
+    logging.info(f'Starting server on {", ".join(urls)}')
 
     uvicorn.run(app, host=host, port=port, log_level='debug' if debug else 'info', **ssl_kwargs)
 
