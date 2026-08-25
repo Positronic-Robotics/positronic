@@ -64,7 +64,7 @@ class KeyboardOperator(pimm.ControlSystem):
             print(f'Episode failed: {e}')
 
 
-def real(policy, embodiment: Embodiment, task: Callable[[], Task], output_dir=None):
+def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_dir=None):
     """Run one hardware embodiment attended and headless, the keyboard deciding when an episode starts and
     finishes.
 
@@ -77,7 +77,7 @@ def real(policy, embodiment: Embodiment, task: Callable[[], Task], output_dir=No
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
     # A rig that cannot be put at a start pose fails the run at startup rather than at the first press.
-    unknown = sorted(set(task().prepare_args) - set(embodiment.prepare_handlers))
+    unknown = sorted(set(next_task().prepare_args) - set(embodiment.prepare_handlers))
     if unknown:
         raise ValueError(f'{unknown} is not something {embodiment.descriptor or "this rig"} readies')
 
@@ -85,16 +85,16 @@ def real(policy, embodiment: Embodiment, task: Callable[[], Task], output_dir=No
     # `prepare_output_dir` syncs a directory and snapshots sources into it, and `LocalDatasetWriter`
     # scans the one it is given.
     try:
-        _run_attended(policy, embodiment, task, output_dir)
+        _run_attended(policy, embodiment, next_task, output_dir)
     finally:
         policy.close()
 
 
-def _run_attended(policy, embodiment: Embodiment, task: Callable[[], Task], output_dir) -> None:
+def _run_attended(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_dir) -> None:
     """Record from a warmed policy until the keyboard returns. The caller owns the policy."""
     output_dir = prepare_output_dir(output_dir)
     keyboard = KeyboardControl(quit_key='q')
-    operator = KeyboardOperator(task)
+    operator = KeyboardOperator(next_task)
     harness = Harness(policy, embodiment)
     print('Keyboard controls: [s]tart, sto[p], [q]uit')
 
@@ -112,7 +112,7 @@ def _run_attended(policy, embodiment: Embodiment, task: Callable[[], Task], outp
 real_cfg = cfn.Config(
     real,
     embodiment=positronic.cfg.embodiment.droid,
-    task=positronic.cfg.eval.real.droid.attended_trial,
+    next_task=positronic.cfg.eval.real.droid.attended_trial,
     policy=policy_cfg.placeholder,
 )
 

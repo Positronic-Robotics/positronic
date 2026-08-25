@@ -23,8 +23,8 @@ def _droid_trial(instruction: str, timeout: float | None, meta: dict[str, Any] |
 
 @cfn.config(instruction=UNIFIED_TASK, timeout=None)
 def attended_trial(instruction: str, timeout: float | None) -> Callable[[], Task]:
-    """The trial an attended droid run asks for at each press. The operator ends the episode, so the
-    trial needs no budget."""
+    """The trial an attended droid run asks for at each press. Without a ``timeout`` the operator ends
+    the episode."""
     return partial(_droid_trial, instruction, timeout)
 
 

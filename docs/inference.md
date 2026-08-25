@@ -94,7 +94,7 @@ Something has to say when an episode starts and when it finishes. `positronic-in
 
 **Unattended (`sim`):** a driver walks the eval's tasks — `--eval.trial_count=10` episodes back-to-back, each ending when its task's `timeout` expires (override with `--eval.timeout=60`, seconds per episode). Batch evaluation with nobody in the loop.
 
-**Keyboard (`real`):** press `s` to start an episode, `p` to stop and save, `q` to quit. Headless — it renders nothing — and it takes `--task`, `--embodiment`, `--policy` and `--output_dir`. `--task` names the config that makes each trial, so every press draws a new start pose. Set the goal with `--task.instruction="..."`. Manual evaluation and debugging on hardware.
+**Keyboard (`real`):** press `s` to start an episode, `p` to stop and save, `q` to quit. Headless — it renders nothing — and it takes `--next_task`, `--embodiment`, `--policy` and `--output_dir`. `--next_task` names the config that makes each trial, so every press draws a new start pose. Set the goal with `--next_task.instruction="..."`. Manual evaluation and debugging on hardware.
 
 ### A console of your own
 
