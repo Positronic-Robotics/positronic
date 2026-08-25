@@ -93,7 +93,8 @@ def test_certificate_carries_a_subject_a_long_host_name_would_overflow():
     assert len(host.encode()) > 64
     text = _certificate_text([host], '-subject', '-ext', 'subjectAltName')
 
-    # OpenSSL prints the subject as `CN = value`, LibreSSL as `CN=value`.
+    # Every implementation spaces the subject its own way: `CN = value` on OpenSSL 3.0, `CN=value` on
+    # OpenSSL 3.6, `/CN=value` on LibreSSL.
     assert re.search(r'CN\s*=\s*positronic-server', text)
     assert f'DNS:{host}' in text
 
