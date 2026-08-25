@@ -1,3 +1,5 @@
+from functools import partial
+
 import configuronic as cfn
 
 from positronic import keys
@@ -193,7 +195,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
     return Eval(
         embodiment,
         # rules-allow: hardcoded-keys — the env names this reset-meta field; it is not positronic's ``keys.TASK``
-        number_trials(Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout), params),
+        partial(number_trials, Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout), params),
         privileged={'subtask': Observation(proxy.privileged['subtask'], None)},
         done=proxy.done,
     )

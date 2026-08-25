@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from functools import partial
 from typing import Any
 
@@ -21,11 +21,24 @@ def _droid_trial(instruction: str, timeout: float | None, meta: dict[str, Any] |
     )
 
 
+def _endless_trials(instruction: str, timeout: float | None) -> Iterator[Task]:
+    """A trial whenever one is asked for; the operator decides how many a session runs."""
+    while True:
+        yield _droid_trial(instruction, timeout)
+
+
 @cfn.config(instruction=UNIFIED_TASK, timeout=None)
-def attended_trials(instruction: str, timeout: float | None) -> Callable[[], Task]:
+def attended_trials(instruction: str, timeout: float | None) -> Callable[[], Iterable[Task]]:
     """The trials an attended droid run gets, one per press. Without a ``timeout`` the operator ends
     the episode."""
-    return partial(_droid_trial, instruction, timeout)
+    return partial(_endless_trials, instruction, timeout)
+
+
+def _planned_trials(instruction: str, timeout: float | None, trial_count: int) -> list[Task]:
+    return [
+        _droid_trial(instruction, timeout, {keys.EVAL_TRIAL_INDEX: trial, keys.EVAL_TRIAL_COUNT: trial_count})
+        for trial in range(trial_count)
+    ]
 
 
 @cfn.config(embodiment=droid, timeout=180, trial_count=1)
@@ -34,13 +47,7 @@ def _droid_pick_place(embodiment, instruction, timeout, trial_count):
 
     The outcome is the operator's annotation, since real has no ground-truth source to compute one from.
     """
-    return Eval(
-        embodiment,
-        [
-            _droid_trial(instruction, timeout, {keys.EVAL_TRIAL_INDEX: trial, keys.EVAL_TRIAL_COUNT: trial_count})
-            for trial in range(trial_count)
-        ],
-    )
+    return Eval(embodiment, partial(_planned_trials, instruction, timeout, trial_count))
 
 
 pick_place = _droid_pick_place.override(instruction=UNIFIED_TASK)

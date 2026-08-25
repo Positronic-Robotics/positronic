@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -96,7 +96,7 @@ class Task:
 # [✓] ``command.Reset`` goes: a robot is moved by a ``prepare`` call that names where to go.
 # [✓] The recorder keeps what is on the wire when it opens, and a producer publishes the scene as it answers.
 # [✓] A config makes each attended trial, so the keyboard path makes none of its own.
-# [ ] A task source makes the plan when the world starts, and both runs read it.
+# [✓] A task source makes the plan when the world starts, and both runs read it.
 # [ ] One runner builds the world for both.
 # [ ] A benchmark answers ``tasks(spec)``, so positronic holds no task table of its own.
 # [ ] A task carries its instruction as data, so no trial reads it after the reset.
@@ -108,10 +108,11 @@ class Eval:
     """An eval = embodiment + the tasks to run on it, produced by a single config.
 
     ``privileged`` and ``done`` are per-run, not per-task: the World wires the signals once, before it runs.
-    ``tasks`` is the sweep — one entry per (scenario, seed) the config expands.
+    ``tasks`` makes the sweep — one entry per (scenario, seed) — and the driver calls it on its first turn,
+    so a source that asks its env what tasks it has reaches a live one.
     """
 
     embodiment: Embodiment
-    tasks: list[Task]
+    tasks: Callable[[], Iterable[Task]]
     privileged: dict[str, Observation] = field(default_factory=dict)
     done: pimm.ControlSystemEmitter | None = None

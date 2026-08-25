@@ -10,6 +10,7 @@ and exposes it as the gym-style ``reset``/``step`` the server serves. ``make_muj
 
 from collections import deque
 from contextlib import nullcontext
+from functools import partial
 from typing import Any
 
 import numpy as np
@@ -189,9 +190,10 @@ def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]
     # The server is already up (the test fixture owns it), so the proxy just receives its address.
     proxy = RemoteEnvControlSystem(StackCubesAdapter(camera_dict), nullcontext((host, port)))
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.mujoco.franka')
+    plan = [Task(instruction_source='Pick up the green cube and place it on the red cube.', timeout_sec=15.0)]
     return Eval(
         embodiment,
-        [Task(instruction_source='Pick up the green cube and place it on the red cube.', timeout_sec=15.0)],
+        partial(iter, plan),
         privileged={'sim_state': Observation(proxy.privileged['sim_state'], None)},
         done=proxy.done,
     )

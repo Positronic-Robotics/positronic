@@ -1,6 +1,7 @@
 import os
 import xml.etree.ElementTree as ET
 from dataclasses import replace
+from functools import partial
 from typing import Any
 
 import mujoco as mj
@@ -79,8 +80,12 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
             instruction='integration-test',
             timeout=0.4,
         )
-        trials = number_trials(ev.tasks[0], [{keys.EVAL_SEED: 100 + i} for i in range(2)])
-        main(policy=ChunkedSchedule().wrap(policy), evals=[replace(ev, tasks=trials)], output_dir=str(tmp_path))
+        trials = number_trials(next(iter(ev.tasks())), [{keys.EVAL_SEED: 100 + i} for i in range(2)])
+        main(
+            policy=ChunkedSchedule().wrap(policy),
+            evals=[replace(ev, tasks=partial(iter, trials))],
+            output_dir=str(tmp_path),
+        )
 
     ds = LocalDataset(tmp_path)
     # Two trials: the driver walks the plan, each trial ending at the task's timeout.
@@ -199,7 +204,8 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
         control_systems=(producer,),
         simulated=True,
     )
-    return Eval(embodiment, [Task(instruction_source='count', timeout_sec=timeout)], done=producer.done)
+    plan = [Task(instruction_source='count', timeout_sec=timeout)]
+    return Eval(embodiment, partial(iter, plan), done=producer.done)
 
 
 @pytest.mark.timeout(30.0)
@@ -209,11 +215,11 @@ def test_every_trial_records_from_its_own_reset(tmp_path):
     producer quickly between trials, so a stray step from the previous trial would show up as a non-zero
     first sample."""
     ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.35)
-    trials = number_trials(ev.tasks[0], [{keys.EVAL_SEED: i} for i in range(2)])
+    trials = number_trials(next(iter(ev.tasks())), [{keys.EVAL_SEED: i} for i in range(2)])
     with pos3.mirror():
         main(
             policy=StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0),
-            evals=[replace(ev, tasks=trials)],
+            evals=[replace(ev, tasks=partial(iter, trials))],
             # the degenerate obs is not Franka-shaped, so run the policy unwrapped
             output_dir=str(tmp_path),
         )
@@ -232,13 +238,13 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     and the machine-load stats stream records at least one sample. record.io parenting proves the episode span
     stays in flight while the recorder commits STOP."""
     ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2)
-    trials = number_trials(ev.tasks[0], [{}, {}])
+    trials = number_trials(next(iter(ev.tasks())), [{}, {}])
     with pos3.mirror():
         main(
             policy=ChunkedSchedule().wrap(
                 RemoteStubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
             ),
-            evals=[replace(ev, tasks=trials)],
+            evals=[replace(ev, tasks=partial(iter, trials))],
             output_dir=str(tmp_path),
             timing=True,
         )
@@ -280,11 +286,11 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     """[harness + recorder + sim] with no MuJoCo: a trial ends early when the producer's ``done`` fires,
     recording ``eval.terminated`` True and the delivered payload into the episode's static data."""
     ev = _countdown_eval(_CountdownProducer(done_after=4), timeout=15.0)
-    trial = number_trials(ev.tasks[0], [{keys.EVAL_SEED: 100}])[0]
+    trial = number_trials(next(iter(ev.tasks())), [{keys.EVAL_SEED: 100}])[0]
     with pos3.mirror():
         main(
             policy=StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0),
-            evals=[replace(ev, tasks=[trial])],
+            evals=[replace(ev, tasks=partial(iter, [trial]))],
             output_dir=str(tmp_path),
         )
 

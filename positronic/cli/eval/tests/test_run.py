@@ -1,5 +1,6 @@
 import sys
 from contextlib import contextmanager
+from functools import partial
 from types import SimpleNamespace
 from typing import cast
 
@@ -14,7 +15,7 @@ from positronic.tests.testing_coutils import IdleSession, drive_scheduler
 
 
 def _eval(simulated: bool) -> Eval:
-    return Eval(embodiment=cast(Embodiment, SimpleNamespace(simulated=simulated)), tasks=[])
+    return Eval(embodiment=cast(Embodiment, SimpleNamespace(simulated=simulated)), tasks=partial(iter, ()))
 
 
 def test_timed_sweep_rejects_real_embodiment(tmp_path):
@@ -49,7 +50,7 @@ def test_an_exhausted_trial_plan_ends_the_sweep():
         meta_source=None,
         simulated=True,
     )
-    main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=[])])
+    main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=partial(iter, ()))])
 
 
 class _EpisodeStub(pimm.ControlSystem):
@@ -75,7 +76,7 @@ def test_the_driver_asks_for_its_tasks_one_at_a_time():
     answered."""
     tasks = [Task(instruction_source='stack', timeout_sec=0.05, meta={keys.EVAL_TRIAL_INDEX: i}) for i in range(2)]
     stub = _EpisodeStub()
-    driver = TaskDriver(tasks)
+    driver = TaskDriver(partial(iter, tasks))
     with pimm.World(virtual_time=True) as world:
         world.connect(driver.perform_task, stub.perform_task)
         drive_scheduler(world.start([driver, stub]), steps=200)

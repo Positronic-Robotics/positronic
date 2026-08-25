@@ -2,6 +2,7 @@ import threading
 import time
 from contextlib import contextmanager, nullcontext
 from dataclasses import replace
+from functools import partial
 
 import numpy as np
 import pos3
@@ -326,9 +327,13 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     host, port = env_server
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        trial = number_trials(replace(ev.tasks[0], timeout_sec=0.1), [{keys.EVAL_SEED: 100}])[0]
+        trial = number_trials(replace(next(iter(ev.tasks())), timeout_sec=0.1), [{keys.EVAL_SEED: 100}])[0]
         policy = StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
-        main(policy=ChunkedSchedule().wrap(policy), evals=[replace(ev, tasks=[trial])], output_dir=str(tmp_path))
+        main(
+            policy=ChunkedSchedule().wrap(policy),
+            evals=[replace(ev, tasks=partial(iter, [trial]))],
+            output_dir=str(tmp_path),
+        )
 
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
@@ -396,8 +401,8 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     policy = (ChunkedSchedule() | ActionTimestamp(fps=1.0 / control_dt)).wrap(raw)
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        trial = number_trials(replace(ev.tasks[0], timeout_sec=20 * control_dt), [{keys.EVAL_SEED: 100}])[0]
-        main(policy=policy, evals=[replace(ev, tasks=[trial])], output_dir=str(tmp_path))
+        trial = number_trials(replace(next(iter(ev.tasks())), timeout_sec=20 * control_dt), [{keys.EVAL_SEED: 100}])[0]
+        main(policy=policy, evals=[replace(ev, tasks=partial(iter, [trial]))], output_dir=str(tmp_path))
 
     grip = LocalDataset(tmp_path)[0].signals['target_grip']
     executed = [(float(v), int(ts)) for v, ts in (grip[i] for i in range(len(grip)))]

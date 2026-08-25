@@ -1,3 +1,5 @@
+from functools import partial
+
 import configuronic as cfn
 
 import positronic.cfg.simulator
@@ -38,7 +40,7 @@ def _mujoco_franka_eval(mujoco_model_path, loaders, camera_fps, camera_dict, ins
     privileged = {'sim_state': Observation(sim.sim_state, None)}
     return Eval(
         embodiment,
-        build_tasks(Task(instruction_source=instruction, timeout_sec=timeout), seed, trial_count),
+        partial(build_tasks, Task(instruction_source=instruction, timeout_sec=timeout), seed, trial_count),
         privileged=privileged,
     )
 
