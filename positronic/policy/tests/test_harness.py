@@ -204,7 +204,11 @@ class RemoteStubPolicy(Policy):
     round-trips ``RemoteSession.__call__`` and records the ``policy.infer`` span independent of any layer."""
 
     def __init__(
-        self, command: roboarm.command.CommandType | None = None, target_grip: float = 0.33, wall_sec: float = 0.0
+        self,
+        command: roboarm.command.CommandType | None = None,
+        target_grip: float = 0.33,
+        wall_sec: float = 0.0,
+        chunk: list[dict[str, Any]] | None = None,
     ) -> None:
         if command is None:
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
@@ -212,10 +216,11 @@ class RemoteStubPolicy(Policy):
         self.command = command
         self.target_grip = float(target_grip)
         self.wall_sec = wall_sec
+        self._chunk = chunk
 
     def new_session(self, context=None, now=None, rt=None) -> RemoteSession:
         assert rt is not None, 'the harness supplies the runtime'
-        action = [{'robot_command': self.command, 'target_grip': self.target_grip, 'timestamp': 0.0}]
+        action = self._chunk or [{'robot_command': self.command, 'target_grip': self.target_grip, 'timestamp': 0.0}]
         return RemoteSession(_FakeInferenceSession(action, self.wall_sec), rt)
 
     @property
@@ -1721,6 +1726,17 @@ def test_a_reply_is_scheduled_only_while_the_trial_still_has_budget(world, expir
     assert bool(harness._schedules[keys.ROBOT_COMMAND]) is scheduled
 
 
+def slow_chunk(span_sec: float = 0.2, steps: int = 10) -> list[dict[str, Any]]:
+    """A chunk of ``steps`` waypoints over ``span_sec``, which a scheduler plays for that long before it
+    asks again."""
+    dt = span_sec / steps
+    pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+    return [
+        {keys.ROBOT_COMMAND: CartesianPosition(pose=pose), keys.TARGET_GRIP: float(i), keys.ACTION_TIMESTAMP: i * dt}
+        for i in range(steps)
+    ]
+
+
 class _SlowSession(Session):
     """A session whose inference costs ``wall_sec`` of real time and returns a fixed-length chunk."""
 
@@ -1731,16 +1747,7 @@ class _SlowSession(Session):
 
     def __call__(self, obs):
         time.sleep(self._wall_sec)
-        dt = self._span_sec / self._steps
-        pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
-        return [
-            {
-                keys.ROBOT_COMMAND: CartesianPosition(pose=pose),
-                keys.TARGET_GRIP: float(i),
-                keys.ACTION_TIMESTAMP: i * dt,
-            }
-            for i in range(self._steps)
-        ]
+        return slow_chunk(self._span_sec, self._steps)
 
 
 class SlowPolicy(Policy):
@@ -1828,10 +1835,14 @@ def _run_episode(
 
 def _slow_policies(wall_sec: float) -> list:
     """A model that takes ``wall_sec`` in each home it can run in: inside the session call, and inside a
-    function the session starts and returns from at once. The trial pays the same for both."""
+    function the session starts and returns from at once. The trial pays the same for both.
+
+    Both answer the same chunk. A shorter one from either would be played out sooner, and that home would
+    run the model more times over the trial for the comparison to charge.
+    """
     return [
         pytest.param(SlowPolicy(wall_sec=wall_sec), id='in-the-call'),
-        pytest.param(RemoteStubPolicy(wall_sec=wall_sec), id='in-a-function'),
+        pytest.param(RemoteStubPolicy(wall_sec=wall_sec, chunk=slow_chunk()), id='in-a-function'),
     ]
 
 
