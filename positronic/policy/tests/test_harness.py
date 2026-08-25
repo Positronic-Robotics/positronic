@@ -204,7 +204,12 @@ class RemoteStubPolicy(Policy):
     round-trips ``RemoteSession.__call__`` and records the ``policy.infer`` span independent of any layer."""
 
     def __init__(
-        self, command: roboarm.command.CommandType | None = None, target_grip: float = 0.33, wall_sec: float = 0.0
+        self,
+        command: roboarm.command.CommandType | None = None,
+        target_grip: float = 0.33,
+        wall_sec: float = 0.0,
+        span_sec: float = 0.0,
+        steps: int = 1,
     ) -> None:
         if command is None:
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
@@ -212,10 +217,16 @@ class RemoteStubPolicy(Policy):
         self.command = command
         self.target_grip = float(target_grip)
         self.wall_sec = wall_sec
+        self.span_sec = span_sec
+        self.steps = steps
 
     def new_session(self, context=None, now=None, rt=None) -> RemoteSession:
         assert rt is not None, 'the harness supplies the runtime'
-        action = [{'robot_command': self.command, 'target_grip': self.target_grip, 'timestamp': 0.0}]
+        dt = self.span_sec / self.steps
+        action = [
+            {'robot_command': self.command, 'target_grip': self.target_grip, 'timestamp': i * dt}
+            for i in range(self.steps)
+        ]
         return RemoteSession(_FakeInferenceSession(action, self.wall_sec), rt)
 
     @property
@@ -1828,10 +1839,15 @@ def _run_episode(
 
 def _slow_policies(wall_sec: float) -> list:
     """A model that takes ``wall_sec`` in each home it can run in: inside the session call, and inside a
-    function the session starts and returns from at once. The trial pays the same for both."""
+    function the session starts and returns from at once. The trial pays the same for both.
+
+    Both return a chunk of the same shape, so the schedule replans at the same cadence and the two run the
+    model the same number of times. A shorter chunk on one side is exhausted sooner, and that side pays
+    ``wall_sec`` again every round it replans."""
+    span_sec, steps = 0.2, 10
     return [
-        pytest.param(SlowPolicy(wall_sec=wall_sec), id='in-the-call'),
-        pytest.param(RemoteStubPolicy(wall_sec=wall_sec), id='in-a-function'),
+        pytest.param(SlowPolicy(wall_sec=wall_sec, span_sec=span_sec, steps=steps), id='in-the-call'),
+        pytest.param(RemoteStubPolicy(wall_sec=wall_sec, span_sec=span_sec, steps=steps), id='in-a-function'),
     ]
 
 
