@@ -1,7 +1,6 @@
 import ipaddress
 import socket
 from collections import namedtuple
-from pathlib import Path
 
 import psutil
 import pytest
@@ -29,8 +28,7 @@ def multi_homed(monkeypatch):
 
 
 def _certificate(hosts: list[str]) -> x509.Certificate:
-    files = _generate_self_signed_cert(hosts)
-    return x509.load_pem_x509_certificate(Path(files['ssl_certfile']).read_bytes())
+    return x509.load_pem_x509_certificate(_generate_self_signed_cert(hosts).certfile.read_bytes())
 
 
 def _alt_names(cert: x509.Certificate) -> x509.SubjectAlternativeName:

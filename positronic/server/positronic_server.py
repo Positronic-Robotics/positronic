@@ -584,7 +584,13 @@ def _access_url(scheme: str, host: str, port: int) -> str:
     return f'{scheme}://{literal}:{port}'
 
 
-def _generate_self_signed_cert(hosts: list[str]) -> dict[str, str]:
+@dataclass(frozen=True)
+class _SelfSignedCert:
+    keyfile: Path
+    certfile: Path
+
+
+def _generate_self_signed_cert(hosts: list[str]) -> _SelfSignedCert:
     """A self-signed certificate naming every host the server answers on.
 
     The subject is a fixed name: a client matches `subjectAltName` (RFC 6125), and X.509 caps the
@@ -593,9 +599,8 @@ def _generate_self_signed_cert(hosts: list[str]) -> dict[str, str]:
     """
     entries = [f'IP:{host.split("%")[0]}' if _as_ip(host) is not None else f'DNS:{host}' for host in hosts]
 
-    ssl_dir = tempfile.mkdtemp(prefix='positronic-ssl-')
-    keyfile = os.path.join(ssl_dir, 'key.pem')
-    certfile = os.path.join(ssl_dir, 'cert.pem')
+    ssl_dir = Path(tempfile.mkdtemp(prefix='positronic-ssl-'))
+    keyfile, certfile = ssl_dir / 'key.pem', ssl_dir / 'cert.pem'
     subprocess.run(
         [
             'openssl',
@@ -619,7 +624,7 @@ def _generate_self_signed_cert(hosts: list[str]) -> dict[str, str]:
         capture_output=True,
     )
     atexit.register(shutil.rmtree, ssl_dir, True)
-    return {'ssl_keyfile': keyfile, 'ssl_certfile': certfile}
+    return _SelfSignedCert(keyfile, certfile)
 
 
 @cfn.config(dataset=positronic.cfg.ds.local_all, ep_table_cfg=default_table, max_resolution=640, group_tables=None)
@@ -718,7 +723,8 @@ def main(
     t.start()
 
     served = _served_addresses(host)
-    ssl_kwargs = _generate_self_signed_cert(served) if https else {}
+    cert = _generate_self_signed_cert(served) if https else None
+    ssl_kwargs = {'ssl_keyfile': str(cert.keyfile), 'ssl_certfile': str(cert.certfile)} if cert else {}
     scheme = 'https' if https else 'http'
 
     exposed = [] if https else [address for address in served if not _is_loopback(address)]
