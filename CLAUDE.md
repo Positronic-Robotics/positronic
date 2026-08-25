@@ -73,7 +73,7 @@
 - Write no idiom, no metaphor, no joke and no rhetorical question
 - Code, identifiers, configuration values and log lines are out of scope. Quote text from a source as written
 - The standard is at asd-ste100.org, free for non-commercial use. Part 2 is a dictionary of approved words.
-  Where you cannot check it, apply the shortest-common-word rule
+  Apply the shortest-common-word rule where you cannot check it
 - A caveat, a correction and a mark on an unverified claim all stay. Write each one in short sentences. Do not
   drop one to meet a word count
 
