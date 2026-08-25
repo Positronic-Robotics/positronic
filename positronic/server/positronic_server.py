@@ -529,18 +529,10 @@ def default_table() -> TableConfig:
 
 
 def _as_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
-    """The host parsed as an IP literal, or None when it is a name.
-
-    The socket layer takes short IPv4 spellings `ipaddress` refuses — `0`, `0.0`, `127.1` — so a
-    host is a name only when both parsers refuse it. A name is never resolved here.
-    """
+    """The host parsed as an IP literal, or None when it is a name. A name is never resolved here."""
     try:
         return ipaddress.ip_address(host)
     except ValueError:
-        pass
-    try:
-        return ipaddress.IPv4Address(socket.inet_aton(host))
-    except (OSError, ValueError):
         return None
 
 
@@ -567,9 +559,8 @@ def _local_ip_addresses(version: int | None = None) -> list[str]:
 def _served_addresses(host: str) -> list[str]:
     """The addresses a server bound to `host` answers on.
 
-    A concrete host answers on itself, in the spelling the bind resolves it to. A wildcard answers
-    on the local addresses of the family it binds: `0.0.0.0` and an empty host listen on AF_INET
-    alone, `::` on a dual-stack host takes IPv4 too.
+    A concrete host answers on itself, a name on itself. A wildcard answers on the local addresses
+    of the family it binds: `0.0.0.0` and an empty host listen on AF_INET alone, `::` takes IPv4 too.
     """
     if host == '':
         return _local_ip_addresses(version=4)
@@ -587,47 +578,20 @@ def _is_loopback(host: str) -> bool:
 
 
 def _access_url(scheme: str, host: str, port: int) -> str:
-    """The URL a browser reaches `host` on. An IPv6 zone is written `%25<zone>` (RFC 6874)."""
+    """The URL a browser reaches `host` on."""
     ip = _as_ip(host)
-    literal = f'[{host.replace("%", "%25")}]' if ip is not None and ip.version == 6 else host
+    literal = f'[{host}]' if ip is not None and ip.version == 6 else host
     return f'{scheme}://{literal}:{port}'
-
-
-def _insecure_context_warning(hosts: list[str], https: bool) -> str | None:
-    """The warning for a bind a browser denies WebCodecs on, or None when it grants them."""
-    if https:
-        return None
-    exposed = [host for host in hosts if not _is_loopback(host)]
-    if not exposed:
-        return None
-    return (
-        f'Serving plain HTTP on {", ".join(exposed)}. A browser exposes WebCodecs only to a secure context, so '
-        f'video panels fail to decode there with "VideoDecoder is not defined". Serve over HTTPS, or reach the '
-        f'server on a loopback address.'
-    )
-
-
-_MAX_CERTIFICATE_SUBJECT_BYTES = 64
-_FALLBACK_CERTIFICATE_SUBJECT = 'positronic-server'
 
 
 def _generate_self_signed_cert(hosts: list[str]) -> dict[str, str]:
     """A self-signed certificate naming every host the server answers on.
 
-    An empty host list is refused: a certificate that names nothing certifies nothing. X.509 caps
-    the subject CN at 64 bytes and OpenSSL aborts past it, so a longer host takes a fixed subject
-    and `subjectAltName` names it, which is what a client matches on (RFC 6125). An IP entry drops
-    its zone, which OpenSSL refuses as a bad address.
+    The subject is a fixed name: a client matches `subjectAltName` (RFC 6125), and X.509 caps the
+    subject CN at 64 bytes, which a longer host name exceeds. An IP entry drops its zone, which
+    OpenSSL refuses as a bad address.
     """
-    if not hosts:
-        raise ValueError(
-            'no local address to certify: the bind matched no interface of its family. Bind a '
-            'concrete host, or pass ssl_certfile and ssl_keyfile.'
-        )
-    subject = hosts[0] if len(hosts[0].encode()) <= _MAX_CERTIFICATE_SUBJECT_BYTES else _FALLBACK_CERTIFICATE_SUBJECT
-    sans = [f'IP:{host.split("%")[0]}' if _as_ip(host) is not None else f'DNS:{host}' for host in hosts]
-    if any(_is_loopback(host) for host in hosts):
-        sans.append('DNS:localhost')
+    entries = [f'IP:{host.split("%")[0]}' if _as_ip(host) is not None else f'DNS:{host}' for host in hosts]
 
     ssl_dir = tempfile.mkdtemp(prefix='positronic-ssl-')
     keyfile = os.path.join(ssl_dir, 'key.pem')
@@ -647,25 +611,15 @@ def _generate_self_signed_cert(hosts: list[str]) -> dict[str, str]:
             '365',
             '-nodes',
             '-subj',
-            f'/CN={subject}',
+            '/CN=positronic-server',
             '-addext',
-            f'subjectAltName={",".join(sans)}',
+            f'subjectAltName={",".join([*entries, "DNS:localhost"])}',
         ],
         check=True,
         capture_output=True,
     )
-    atexit.register(shutil.rmtree, ssl_dir, ignore_errors=True)
+    atexit.register(shutil.rmtree, ssl_dir, True)
     return {'ssl_keyfile': keyfile, 'ssl_certfile': certfile}
-
-
-def _ssl_kwargs(https: bool, hosts: list[str], certfile: str | None, keyfile: str | None) -> dict[str, str]:
-    if not https:
-        return {}
-    if certfile is not None and keyfile is not None:
-        return {'ssl_certfile': certfile, 'ssl_keyfile': keyfile}
-    if certfile is not None or keyfile is not None:
-        raise ValueError('ssl_certfile and ssl_keyfile must be given together')
-    return _generate_self_signed_cert(hosts)
 
 
 @cfn.config(dataset=positronic.cfg.ds.local_all, ep_table_cfg=default_table, max_resolution=640, group_tables=None)
@@ -678,8 +632,6 @@ def main(
     port: int = 8400,
     debug: bool = False,
     https: bool = True,
-    ssl_certfile: str | None = None,
-    ssl_keyfile: str | None = None,
     reset_cache: bool = False,
     group_tables: dict[str, GroupTableConfig] | None = None,
     home_page: str | None = None,
@@ -696,8 +648,6 @@ def main(
         host: Server host
         port: Server port
         debug: Enable debug logging
-        ssl_certfile: Certificate to serve, given with ssl_keyfile. A self-signed one is generated when absent
-        ssl_keyfile: Private key for ssl_certfile
         reset_cache: If True, clear cache_dir at startup
         ep_table_cfg: Mapping of episode static data keys to display in episode list,
             where the value is either:
@@ -768,16 +718,18 @@ def main(
     t.start()
 
     served = _served_addresses(host)
-    ssl_kwargs = _ssl_kwargs(https, served, ssl_certfile, ssl_keyfile)
+    ssl_kwargs = _generate_self_signed_cert(served) if https else {}
     scheme = 'https' if https else 'http'
 
-    warning = _insecure_context_warning(served, https)
-    if warning is not None:
-        logging.warning(warning)
-    if served:
-        logging.info(f'Starting server on {", ".join(_access_url(scheme, address, port) for address in served)}')
-    else:
-        logging.warning(f'Binding {host}:{port} with no local address of that family to advertise.')
+    exposed = [] if https else [address for address in served if not _is_loopback(address)]
+    if exposed:
+        logging.warning(
+            f'Serving plain HTTP on {", ".join(exposed)}. A browser exposes WebCodecs only to a secure context, '
+            f'so video panels fail to decode there with "VideoDecoder is not defined". Serve over HTTPS, or '
+            f'reach the server on a loopback address.'
+        )
+    urls = [_access_url(scheme, address, port) for address in served] or [_access_url(scheme, host, port)]
+    logging.info(f'Starting server on {", ".join(urls)}')
 
     uvicorn.run(app, host=host, port=port, log_level='debug' if debug else 'info', **ssl_kwargs)
 
