@@ -342,8 +342,8 @@ class Harness(pimm.ControlSystem):
         """Open a fresh episode: ready the rig and the scene, read the instruction, open the session, the
         recording and the first inference.
 
-        Every device publishes what it holds as it answers its prepare, so the episode opens on the readied
-        rig: the recording keeps what is on its channels, and the policy acts on it.
+        Every device publishes what it holds as it answers its prepare, so the recording and the first
+        inference both open on the readied rig.
         """
         # Before anything that can raise, so an episode that fails to open still answers whoever asked for it.
         self._call = call
@@ -362,11 +362,9 @@ class Harness(pimm.ControlSystem):
         )
         budget = self._task.timeout_sec
         self._deadline = clock.now() + budget if budget is not None else None
-        # The rollout begins where the prepare ends: the turns spent readying the rig are neither the trial's
-        # budget nor its duration.
         self._telemetry.start_rollout(clock.now())
         self.ds_command.emit(DsWriterCommand.START())
-        # The policy acts on what the recording opens on: both read the rig in this round, not one apart.
+        # The first inference runs in this round: a later one would read a frame the recording did not open on.
         self._step(self._worker, clock)
 
     def _end_episode(
