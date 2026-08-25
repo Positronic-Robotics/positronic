@@ -61,8 +61,8 @@
   suppress an error that actually fires — no blanket or speculative suppressions
 
 # Writing
-- Write every text that a person reads in **Simplified Technical English** (ASD-STE100): a code comment, a
-  docstring, a commit message, a pull request title and body, a review reply, an issue, and every document
+- Write every text that a person reads in **Simplified Technical English** (ASD-STE100). This covers
+  comments, docstrings, commit messages, pull requests, review replies, issues and documents
 - Give each word one meaning and one part of speech. Use the same word for the same thing every time; do not
   use a synonym for variety
 - Choose the shortest common word that carries the meaning. Write the articles. Put not more than three nouns
