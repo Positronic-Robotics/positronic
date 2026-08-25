@@ -134,6 +134,7 @@ dev = [
     "pytest-xdist",
     "pytest",
     "rerun-sdk[notebook]",
+    "cryptography",  # the server's certificate tests read the certificate itself
     "positronic[telemetry]",  # the telemetry tests exercise the SDK and the samplers
 ]
 

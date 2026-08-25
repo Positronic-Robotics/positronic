@@ -1,11 +1,11 @@
 import ipaddress
-import re
 import socket
-import subprocess
 from collections import namedtuple
 
 import psutil
 import pytest
+from cryptography import x509
+from cryptography.x509.oid import NameOID
 
 from positronic.server.positronic_server import _access_url, _generate_self_signed_cert, _is_loopback, _served_addresses
 
@@ -27,15 +27,12 @@ def multi_homed(monkeypatch):
     monkeypatch.setattr(psutil, 'net_if_addrs', lambda: _INTERFACES)
 
 
-def _certified_ips(extension: str) -> set[ipaddress.IPv4Address | ipaddress.IPv6Address]:
-    return {ipaddress.ip_address(address) for address in re.findall(r'IP Address:([0-9A-Fa-f.:]+)', extension)}
+def _certificate(hosts: list[str]) -> x509.Certificate:
+    return x509.load_pem_x509_certificate(_generate_self_signed_cert(hosts).certfile.read_bytes())
 
 
-def _certificate_text(hosts: list[str], *fields: str) -> str:
-    files = _generate_self_signed_cert(hosts)
-    return subprocess.run(
-        ['openssl', 'x509', '-in', files['ssl_certfile'], '-noout', *fields], check=True, capture_output=True, text=True
-    ).stdout
+def _alt_names(cert: x509.Certificate) -> x509.SubjectAlternativeName:
+    return cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
 
 
 def test_wildcard_bind_serves_every_routable_local_address(multi_homed):
@@ -70,38 +67,41 @@ def test_a_name_the_resolver_would_take_stays_a_name(multi_homed):
 
 
 def test_certificate_names_every_served_address():
-    extension = _certificate_text(['198.51.100.7', '2001:db8::7'], '-ext', 'subjectAltName')
+    names = _alt_names(_certificate(['198.51.100.7', '2001:db8::7']))
 
-    assert _certified_ips(extension) == {ipaddress.ip_address('198.51.100.7'), ipaddress.ip_address('2001:db8::7')}
+    assert set(names.get_values_for_type(x509.IPAddress)) == {
+        ipaddress.ip_address('198.51.100.7'),
+        ipaddress.ip_address('2001:db8::7'),
+    }
 
 
 def test_certificate_names_a_host_name_as_a_dns_entry():
-    extension = _certificate_text(['rig.local'], '-ext', 'subjectAltName')
+    names = _alt_names(_certificate(['rig.local']))
 
-    assert 'DNS:rig.local' in extension
-    assert not _certified_ips(extension)
+    assert 'rig.local' in names.get_values_for_type(x509.DNSName)
+    assert not names.get_values_for_type(x509.IPAddress)
 
 
 def test_certificate_drops_a_zone_from_an_ip_it_names():
-    extension = _certificate_text(['fe80::1%eth0'], '-ext', 'subjectAltName')
+    names = _alt_names(_certificate(['fe80::1%eth0']))
 
-    assert _certified_ips(extension) == {ipaddress.ip_address('fe80::1')}
+    assert names.get_values_for_type(x509.IPAddress) == [ipaddress.ip_address('fe80::1')]
 
 
 def test_certificate_carries_a_subject_a_long_host_name_would_overflow():
     host = 'a' * 60 + '.example.com'
     assert len(host.encode()) > 64
-    text = _certificate_text([host], '-subject', '-ext', 'subjectAltName')
+    cert = _certificate([host])
 
-    assert 'CN = positronic-server' in text
-    assert f'DNS:{host}' in text
+    assert cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == 'positronic-server'
+    assert host in _alt_names(cert).get_values_for_type(x509.DNSName)
 
 
 def test_a_bind_naming_no_address_still_certifies():
-    extension = _certificate_text([], '-ext', 'subjectAltName')
+    names = _alt_names(_certificate([]))
 
-    assert 'DNS:localhost' in extension
-    assert not _certified_ips(extension)
+    assert 'localhost' in names.get_values_for_type(x509.DNSName)
+    assert not names.get_values_for_type(x509.IPAddress)
 
 
 def test_advertised_url_follows_the_bind_address():
