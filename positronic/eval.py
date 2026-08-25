@@ -84,7 +84,7 @@ class Task:
 
 # rules-allow: stale-doc — a plan is read for what is left, which needs the landed steps marked
 # rules-allow: diff-comments — the marks are the plan's state, not a note about an edit
-# TODO: the attended and the unattended run collapse into one path.
+# TODO: one lifecycle for every trial: sim or real, attended or not.
 # Roadmap:
 # [✓] ``privileged``, ``done`` and ``reset`` are per-run: they move to ``Eval``.
 # [✓] ``trials`` becomes ``list[Task]``, one per trial; a ``Task`` carries what ``reset`` is called with.
@@ -96,7 +96,13 @@ class Task:
 # [✓] ``command.Reset`` goes: a robot is moved by a ``prepare`` call that names where to go.
 # [✓] The recorder keeps what is on the wire when it opens, and a producer publishes the scene as it answers.
 # [✓] A config makes each attended trial, so the keyboard path makes none of its own.
+# [ ] A task source makes the plan when the world starts, and both runs read it.
 # [ ] One runner builds the world for both.
+# [ ] A benchmark answers ``tasks(spec)``, so positronic holds no task table of its own.
+# [ ] A task carries its instruction as data, so no trial reads it after the reset.
+# [ ] A sim eval config names a selection, and a spec flag narrows it to one task.
+# [ ] A task names its model, and a routed policy serves the mix.
+# [ ] A session logs the trials it ran, and a later run replays that log.
 @dataclass
 class Eval:
     """An eval = embodiment + the tasks to run on it, produced by a single config.
