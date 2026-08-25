@@ -95,7 +95,7 @@ class Task:
 # [✓] A trial's reset is every ``prepare`` it asks for — scene, arm, gripper — and it opens once all answer.
 # [✓] ``command.Reset`` goes: a robot is moved by a ``prepare`` call that names where to go.
 # [✓] The recorder keeps what is on the wire when it opens, and a producer publishes the scene as it answers.
-# [ ] An eval config names what its rig starts at, attended or not, so the keyboard path builds no trial of its own.
+# [✓] A config makes each attended trial, so the keyboard path makes none of its own.
 # [ ] One runner builds the world for both.
 @dataclass
 class Eval:

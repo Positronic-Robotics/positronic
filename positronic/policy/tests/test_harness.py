@@ -949,7 +949,8 @@ def test_a_trial_asking_to_ready_what_the_rig_has_not_got_fails_loudly(world):
     """Only the handlers a task names are asked, so a name matching none of them would go unasked and the
     trial would open on a rig nothing readied."""
     scene = _Scene(lambda _params: None)
-    harness = Harness(StubPolicy(), make_embodiment(prepare_handlers={keys.SCENE: scene.env_reset}))
+    embodiment = make_embodiment(descriptor='yam', prepare_handlers={keys.SCENE: scene.env_reset})
+    harness = Harness(StubPolicy(), embodiment)
     p = _pair_all(world, harness)
     wire_call(world, harness.prepare[keys.SCENE], scene.env_reset)
 
@@ -958,9 +959,10 @@ def test_a_trial_asking_to_ready_what_the_rig_has_not_got_fails_loudly(world):
         Task(instruction_source='stack', timeout_sec=0.05, prepare_args={keys.ARM: JointPosition(np.zeros(7))})
     )
 
-    with pytest.raises(AssertionError, match='not something this embodiment readies'):
+    named = r"\['arm'\] is not something yam readies; it readies \['scene'\]"
+    with pytest.raises(ValueError, match=named):
         drive_scheduler(scheduler, steps=50)
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         answer.result()  # and whoever asked for the trial hears it, rather than reading a clean episode
 
 
