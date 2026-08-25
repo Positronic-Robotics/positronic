@@ -10,10 +10,11 @@ import pimm
 from positronic import inference, keys
 from positronic.eval import Embodiment, Task
 from positronic.inference import KeyboardOperator, real
+from positronic.policy import Policy
 from positronic.tests.testing_coutils import IdleSession, drive_scheduler, scripted_driver
 
 
-class _IdlePolicy:
+class _IdlePolicy(Policy):
     """Enough policy for the attended path to run an episode and close; it commands nothing."""
 
     def __init__(self):
