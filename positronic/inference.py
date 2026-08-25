@@ -4,7 +4,6 @@ aliases over ``cli.eval.run``."""
 from collections import Counter
 from collections.abc import Callable
 from contextlib import nullcontext
-from functools import partial
 from typing import Any
 
 import configuronic as cfn
@@ -12,11 +11,11 @@ import pos3
 
 import pimm
 import positronic.cfg.embodiment
+import positronic.cfg.eval.real.droid
 import positronic.cfg.policy as policy_cfg
 from pimm.logging import init_logging
 from positronic import keys, wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
-from positronic.cfg.hardware.roboarm import droid_start_pose
 from positronic.cli.eval.run import prepare_output_dir, run
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
@@ -65,22 +64,9 @@ class KeyboardOperator(pimm.ControlSystem):
             print(f'Episode failed: {e}')
 
 
-def _attended_task(instruction: str) -> Task:
-    """The trial one keypress asks for.
-
-    Nothing asks for the scene: pressing for the trial is the operator saying it is set up. Nothing holds
-    the episode to a budget either — the operator is what ends it.
-    """
-    return Task(
-        instruction_source=instruction, timeout_sec=None, prepare_args={keys.ARM: droid_start_pose(), keys.GRIPPER: 0.0}
-    )
-
-
-def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
+def real(policy, embodiment: Embodiment, task: Callable[[], Task], output_dir=None):
     """Run one hardware embodiment attended and headless, the keyboard deciding when an episode starts and
     finishes.
-
-    Every episode starts the arm at a pose drawn around the Franka's nominal joints, with the fingers open.
 
     The world is composed here rather than by the runner: an attended surface is the binary's own business,
     and the keyboard is the only one this library ships. There is no viewer — a console that shows the
@@ -91,7 +77,7 @@ def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
     # A rig that cannot be put at a start pose fails the run at startup rather than at the first press.
-    unknown = sorted(set(_attended_task('').prepare_args) - set(embodiment.prepare_handlers))
+    unknown = sorted(set(task().prepare_args) - set(embodiment.prepare_handlers))
     if unknown:
         raise ValueError(f'{unknown} is not something {embodiment.descriptor or "this rig"} readies')
 
@@ -104,11 +90,11 @@ def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
         policy.close()
 
 
-def _run_attended(policy, embodiment: Embodiment, task: str | None, output_dir) -> None:
+def _run_attended(policy, embodiment: Embodiment, task: Callable[[], Task], output_dir) -> None:
     """Record from a warmed policy until the keyboard returns. The caller owns the policy."""
     output_dir = prepare_output_dir(output_dir)
     keyboard = KeyboardControl(quit_key='q')
-    operator = KeyboardOperator(partial(_attended_task, task or ''))
+    operator = KeyboardOperator(task)
     harness = Harness(policy, embodiment)
     print('Keyboard controls: [s]tart, sto[p], [q]uit')
 
@@ -123,7 +109,12 @@ def _run_attended(policy, embodiment: Embodiment, task: str | None, output_dir) 
         world.run([harness, keyboard, operator], [*producers, ds_agent])
 
 
-real_cfg = cfn.Config(real, embodiment=positronic.cfg.embodiment.droid, policy=policy_cfg.placeholder)
+real_cfg = cfn.Config(
+    real,
+    embodiment=positronic.cfg.embodiment.droid,
+    task=positronic.cfg.eval.real.droid.attended_trial,
+    policy=policy_cfg.placeholder,
+)
 
 
 # Console entry point for [project.scripts].

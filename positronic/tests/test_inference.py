@@ -1,5 +1,6 @@
 import io
 import sys
+from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
 from typing import Any
@@ -63,6 +64,11 @@ def _embodiment(simulated: bool = False) -> Embodiment:
     )
 
 
+def _trial(instruction: str = 'stub') -> Callable[[], Task]:
+    prepare_args = {keys.ARM: 'start-pose', keys.GRIPPER: 0.0}
+    return partial(Task, instruction_source=instruction, timeout_sec=None, prepare_args=prepare_args)
+
+
 @pytest.mark.timeout(30.0)
 def test_the_keyboard_path_ends_when_the_keyboard_returns(monkeypatch):
     """How an attended run finishes: ``KeyboardControl`` returns, the world stops, ``real`` closes the policy.
@@ -72,7 +78,7 @@ def test_the_keyboard_path_ends_when_the_keyboard_returns(monkeypatch):
     monkeypatch.setattr(sys, 'stdin', io.StringIO())
     policy = _IdlePolicy()
 
-    real(policy=policy, embodiment=_embodiment(), task='stub')
+    real(policy=policy, embodiment=_embodiment(), task=_trial())
 
     assert policy.closed
     # Not warmed: an attended run opens no throwaway session here. A binary that wants an endpoint
@@ -84,7 +90,7 @@ def test_the_keyboard_path_refuses_a_simulated_embodiment():
     """It composes a real-time world and records against the wall clock, which a simulated embodiment needs
     neither of."""
     with pytest.raises(ValueError, match='sim'):
-        real(policy=_IdlePolicy(), embodiment=_embodiment(simulated=True), task='stub')
+        real(policy=_IdlePolicy(), embodiment=_embodiment(simulated=True), task=_trial())
 
 
 def test_the_keyboard_path_refuses_a_rig_it_cannot_put_at_a_start_pose():
@@ -92,7 +98,7 @@ def test_the_keyboard_path_refuses_a_rig_it_cannot_put_at_a_start_pose():
     before a run begins rather than at the first press."""
     bare = replace(_embodiment(), prepare_handlers={}, control_systems=())
     with pytest.raises(ValueError, match="'gripper'"):
-        real(policy=_IdlePolicy(), embodiment=bare, task='stub')
+        real(policy=_IdlePolicy(), embodiment=bare, task=_trial())
 
 
 class _ScriptedKeyboard(pimm.ControlSystem):
@@ -124,7 +130,7 @@ def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, capsys):
     policy = _IdlePolicy()
     monkeypatch.setattr(inference, 'KeyboardControl', lambda quit_key: _ScriptedKeyboard(policy))
 
-    real(policy=policy, embodiment=_embodiment(), task='pick up the cube')
+    real(policy=policy, embodiment=_embodiment(), task=_trial('pick up the cube'))
 
     assert policy.observations, 'the episode never opened'
     assert policy.observations[0][keys.TASK] == 'pick up the cube'
