@@ -1,5 +1,3 @@
-from functools import partial
-
 import numpy as np
 
 from positronic import geom, keys
@@ -18,13 +16,6 @@ def _convert_quat_to_array(q: geom.Rotation, representation: RotRep | str) -> np
     return q.to(representation).reshape(-1)
 
 
-def _relative_rot_vec(q_current: np.ndarray, q_target: np.ndarray, representation: RotRep | str) -> np.ndarray:
-    r_cur = geom.Rotation.from_quat(q_current)
-    r_tgt = geom.Rotation.from_quat(q_target)
-    rel = r_cur.inv * r_tgt
-    return _convert_quat_to_array(rel, representation)
-
-
 class AbsolutePositionAction(Codec):
     WIRE_NAME = 'absolute_position_action'
 
@@ -39,7 +30,7 @@ class AbsolutePositionAction(Codec):
     def encode(self, data):
         return {}
 
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
+    def _decode_single(self, data: dict) -> dict:
         action_vector = data['action']
         target_pose = geom.Transform3D.from_vector(action_vector[:-1], self.rot_rep)
         target_grip = action_vector[-1].item()
@@ -78,7 +69,7 @@ class AbsoluteJointsAction(Codec):
     def encode(self, data):
         return {}
 
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
+    def _decode_single(self, data: dict) -> dict:
         action_vector = data['action']
         if action_vector.shape[-1] != self.num_joints + 1:
             raise ValueError(f'Expected action vector of size {self.num_joints + 1}, got {action_vector.shape[-1]}')
@@ -129,7 +120,7 @@ class IKJointsAction(Codec):
     def encode(self, data):
         return data
 
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
+    def _decode_single(self, data: dict) -> dict:
         return data
 
     def _derive_joints(self, episode: Episode):
@@ -138,76 +129,6 @@ class IKJointsAction(Codec):
     @property
     def training_encoder(self):
         return Group(Derive(**{self.tgt_joints_key: self._derive_joints}), Identity(remove=[self.tgt_ee_pose_key]))
-
-
-class RelativePositionAction(Codec):
-    WIRE_NAME = 'relative_position_action'
-
-    def __init__(
-        self,
-        rotation_rep: RotRep | str = RotRep.QUAT,
-        robot_pose_key: str = keys.EE_POSE,
-        target_pose_key: str = keys.TARGET_EE_POSE,
-        target_grip_key: str = keys.TARGET_GRIP,
-    ):
-        self.rot_rep = RotRep(rotation_rep)
-        self.robot_pose_key = robot_pose_key
-        self.target_pose_key = target_pose_key
-        self.target_grip_key = target_grip_key
-
-        ee_dim = self.rot_rep.size + 3
-        self._training_meta = {'lerobot_features': {'action': lerobot_action(ee_dim + 1)}}
-
-    def encode(self, data):
-        return {}
-
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
-        action_vector = data['action']
-        rotation = action_vector[: self.rot_rep.size].reshape(self.rot_rep.shape)
-        q_diff = geom.Rotation.create_from(rotation, self.rot_rep)
-        tr_diff = action_vector[self.rot_rep.size : self.rot_rep.size + 3]
-
-        robot_pose = context[keys.EE_POSE]
-
-        rot_mul = geom.Rotation.from_quat(robot_pose[3:7]) * q_diff
-        tr_add = robot_pose[0:3] + tr_diff
-
-        target_pose = geom.Transform3D(translation=tr_add, rotation=rot_mul)
-        target_grip = action_vector[self.rot_rep.size + 3].item()
-        return {keys.ROBOT_COMMAND: command.CartesianPosition(pose=target_pose), keys.TARGET_GRIP: target_grip}
-
-    def _encode_episode(self, episode: Episode) -> Signal[np.ndarray]:
-        robot_pose = episode[self.robot_pose_key]
-        target_pose = episode[self.target_pose_key]
-
-        robot_quat = transforms.view(robot_pose, slice(3, None))
-        target_quat = transforms.view(target_pose, slice(3, None))
-        rotations = transforms.pairwise(
-            robot_quat, target_quat, partial(_relative_rot_vec, representation=self.rot_rep)
-        )
-
-        robot_trans = transforms.view(robot_pose, slice(0, 3))
-        target_trans = transforms.view(target_pose, slice(0, 3))
-        translations = transforms.pairwise(target_trans, robot_trans, np.subtract)
-
-        grips = episode[self.target_grip_key]
-
-        return transforms.concat(rotations, translations, grips, dtype=np.float32)
-
-    @property
-    def training_encoder(self):
-        return Derive(meta=self._training_meta, action=self._encode_episode)
-
-    def to_spec(self):
-        return {
-            'name': self.WIRE_NAME,
-            'args': {
-                'rotation_rep': self.rot_rep.value,
-                'robot_pose_key': self.robot_pose_key,
-                'target_pose_key': self.target_pose_key,
-                'target_grip_key': self.target_grip_key,
-            },
-        }
 
 
 class JointDeltaAction(Codec):
@@ -238,7 +159,7 @@ class JointDeltaAction(Codec):
     def encode(self, data):
         return {}
 
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
+    def _decode_single(self, data: dict) -> dict:
         action_vector = data['action']
         if action_vector.shape[-1] != self.num_joints + 1:
             raise ValueError(f'Expected action vector of size {self.num_joints + 1}, got {action_vector.shape[-1]}')

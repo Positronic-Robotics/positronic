@@ -4868,22 +4868,6 @@
                     "endColumn": 72,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportOptionalSubscript",
-                "range": {
-                    "startColumn": 21,
-                    "endColumn": 28,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 71,
-                    "endColumn": 81,
-                    "lineCount": 1
-                }
             }
         ],
         "./positronic/policy/codec.py": [
@@ -5044,6 +5028,16 @@
                 "range": {
                     "startColumn": 14,
                     "endColumn": 27,
+                    "lineCount": 1
+                }
+            }
+        ],
+        "./positronic/policy/tests/test_layers.py": [
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 30,
+                    "endColumn": 40,
                     "lineCount": 1
                 }
             }
@@ -5384,16 +5378,6 @@
                 "range": {
                     "startColumn": 30,
                     "endColumn": 50,
-                    "lineCount": 1
-                }
-            }
-        ],
-        "./positronic/policy/tests/test_layers.py": [
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 30,
-                    "endColumn": 40,
                     "lineCount": 1
                 }
             }

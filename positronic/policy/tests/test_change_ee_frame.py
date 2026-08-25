@@ -41,7 +41,7 @@ def test_decode_maps_action_back_to_canonical():
     pose_c = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
     action = {keys.ROBOT_COMMAND: cmd_module.CartesianPosition(pose=pose_c * TO_DROID), 'target_grip': 1.0}
 
-    decoded = ChangeEEFrame(TO_DROID)._decode_single(dict(action), context=None)
+    decoded = ChangeEEFrame(TO_DROID)._decode_single(dict(action))
 
     np.testing.assert_allclose(decoded[keys.ROBOT_COMMAND].pose.as_vector(QUAT), pose_c.as_vector(QUAT), atol=1e-9)
     assert decoded['target_grip'] == 1.0
@@ -56,7 +56,7 @@ def test_decode_keeps_the_control_mode_a_command_pinned():
         'other': cmd_module.CartesianDelta(delta=pose, mode=mode),
     }
 
-    decoded = ChangeEEFrame(TO_DROID, keys=(keys.ROBOT_COMMAND, 'other'))._decode_single(action, context=None)
+    decoded = ChangeEEFrame(TO_DROID, keys=(keys.ROBOT_COMMAND, 'other'))._decode_single(action)
 
     assert decoded[keys.ROBOT_COMMAND].mode == mode
     assert decoded['other'].mode == mode
@@ -67,7 +67,7 @@ def test_decode_hands_a_delta_the_frame_it_was_meant_for():
     delta = _pose([0.01, 0.0, -0.02], [0.0, 0.0, 0.1])
     action = {keys.ROBOT_COMMAND: cmd_module.CartesianDelta(delta=delta)}
 
-    decoded = ChangeEEFrame(TO_DROID)._decode_single(action, context=None)[keys.ROBOT_COMMAND]
+    decoded = ChangeEEFrame(TO_DROID)._decode_single(action)[keys.ROBOT_COMMAND]
 
     np.testing.assert_allclose(decoded.delta.as_vector(QUAT), delta.as_vector(QUAT), atol=1e-12)
     np.testing.assert_allclose(decoded.frame.as_vector(QUAT), TO_DROID.as_vector(QUAT), atol=1e-9)
@@ -79,7 +79,7 @@ def test_a_delta_moves_the_arm_where_the_policy_meant():
     delta = _pose([0.01, 0.0, -0.02], [0.0, 0.0, 0.1])
 
     action = {keys.ROBOT_COMMAND: cmd_module.CartesianDelta(delta)}
-    decoded = ChangeEEFrame(TO_DROID)._decode_single(action, context=None)
+    decoded = ChangeEEFrame(TO_DROID)._decode_single(action)
     target = decoded[keys.ROBOT_COMMAND].apply(measured)
 
     before, after = measured * TO_DROID, target * TO_DROID
@@ -91,7 +91,7 @@ def test_a_delta_moves_the_arm_where_the_policy_meant():
 
 def test_decode_passes_non_cartesian_commands_through():
     action = {keys.ROBOT_COMMAND: cmd_module.JointPosition(positions=np.zeros(7)), 'target_grip': 0.0}
-    decoded = ChangeEEFrame(TO_DROID)._decode_single(dict(action), context=None)
+    decoded = ChangeEEFrame(TO_DROID)._decode_single(dict(action))
     assert isinstance(decoded[keys.ROBOT_COMMAND], cmd_module.JointPosition)
 
 
@@ -118,7 +118,7 @@ def test_one_key_carries_a_vector_one_way_and_a_command_the_other():
     codec = ChangeEEFrame(TO_DROID, keys=('x',))
 
     encoded = codec.encode({'x': pose_c.as_vector(QUAT)})
-    decoded = codec._decode_single({'x': cmd_module.CartesianPosition(pose=pose_c * TO_DROID)}, context=None)
+    decoded = codec._decode_single({'x': cmd_module.CartesianPosition(pose=pose_c * TO_DROID)})
 
     np.testing.assert_allclose(encoded['x'], (pose_c * TO_DROID).as_vector(QUAT), atol=1e-9)
     np.testing.assert_allclose(decoded['x'].pose.as_vector(QUAT), pose_c.as_vector(QUAT), atol=1e-9)

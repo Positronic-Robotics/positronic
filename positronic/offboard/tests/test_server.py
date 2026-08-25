@@ -171,7 +171,7 @@ class _IdentityCodec(Codec):
     def encode(self, data):
         return data
 
-    def _decode_single(self, data, context):
+    def _decode_single(self, data):
         return data
 
     @property

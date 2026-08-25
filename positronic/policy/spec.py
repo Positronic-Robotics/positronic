@@ -29,12 +29,7 @@ from collections.abc import Callable
 from typing import Any
 
 from positronic import keys
-from positronic.policy.action import (
-    AbsoluteJointsAction,
-    AbsolutePositionAction,
-    JointDeltaAction,
-    RelativePositionAction,
-)
+from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, JointDeltaAction
 from positronic.policy.base import PAR, SEQ, Layer, Policy
 from positronic.policy.codec import (
     ActionHorizon,
@@ -158,7 +153,6 @@ WIRE_LAYERS: dict[str, type[Layer]] = {
         ObservationCodec,
         AbsolutePositionAction,
         AbsoluteJointsAction,
-        RelativePositionAction,
         JointDeltaAction,
     )
 }

@@ -168,7 +168,7 @@ class DreamZeroActionCodec(Codec):
     def _encode_action(self, episode: Episode):
         return transforms.concat(episode[self._tgt_joints_key], episode[self._tgt_grip_key], dtype=np.float32)
 
-    def _decode_single(self, data: dict, context: dict | None) -> dict:
+    def _decode_single(self, data: dict) -> dict:
         action = data['action']
         joints = action[: self._num_joints]
         grip = action[self._num_joints].item()
