@@ -41,6 +41,11 @@ inference by ``ChunkedSchedule``) by the inference latency. Select ``action_time
 Entity paths are ``{tap_name}/{data_key}``. A tap's incoming observation keys and
 outgoing action keys share that namespace; in the rare case the same key appears on
 both sides, the later write overwrites at that timestamp.
+
+TODO(#661): this module becomes the recording the framework offers a session, and stops being a layer a
+pipeline composes. The framework then records every boundary it carries, a session appends series of its
+own, and a served function records against the call it answers. A tap around a session cannot do the
+last of those: it sees an answer on a later call than the observation that produced it.
 """
 
 import itertools
@@ -472,10 +477,9 @@ class _RecordingTapSession(DelegatingSession):
             if actions is not None:
                 with self._stream:
                     self._set_timelines()
-                    # TODO(#661): the tap logs the chunk against the observation and the timelines of the call
-                    # that answers. A session that gives its work to a served function answers on a later
-                    # call, so the chunk lands one control period after the observation it ran on. A tap
-                    # around the served function, and not around the session, removes this.
+                    # TODO(#661): the chunk is logged against the observation and the timelines of this
+                    # call, which a session that answers from a served function makes a later call than the
+                    # one the chunk was computed from. See the module docstring.
                     self._log_action_chunk(self._name, actions, obs)
             # Send a combined blueprint (all taps' paths) once, from the outermost
             # tap, after inner taps have logged their first obs.
