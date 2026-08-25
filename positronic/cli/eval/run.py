@@ -92,9 +92,10 @@ def _run_world(policy, ev: Eval, output_dir: Path | None):
         if embodiment.simulated:
             # Why this order:
             # - Each scheduler pass is one instant: everything emitted in it shares a timestamp.
-            # - The harness tells the recorder when an episode opens; only later-stamped samples get in.
-            # - The recorder runs in the harness's pass, so the episode opens at the reset.
-            # - The producers run after it, so the observation the reset produced is the episode's first.
+            # - The harness tells the recorder when an episode opens, so the recorder runs after it and opens
+            #   in that same pass.
+            # - The producers run last, so what the recorder finds on the channels is the frame the reset
+            #   published, with no step in between.
             world.run([driver, harness, ds_agent, *producers])
         else:
             world.run([driver, harness], [*producers, ds_agent])
