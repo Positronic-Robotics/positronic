@@ -15,10 +15,7 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, _
 from positronic.offboard.tests.conftest import ANSWER_SEC, round_trip
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
-from positronic.policy.executor import Executor
 from positronic.policy.layers import ChunkedSchedule
-from positronic.policy.remote import INFER, RemoteSession
-from positronic.policy.remote import round_trip as wire_round_trip
 from positronic.policy.spec import PolicySource, remote
 
 # These fixtures stand in for a server, so they spell the handshake fields rather than importing the
@@ -55,23 +52,20 @@ def _make_image(h, w):
     return np.zeros((h, w, 3), dtype=np.uint8)
 
 
-def _served_wire() -> Executor:
-    """A runtime serving the round trip a ``RemoteSession`` declares. These tests never start one."""
-    return Executor({INFER: wire_round_trip})
-
-
 class TestPrepareObs:
     """The border's own settings. Image geometry is the declared stack's business (see RestrictImageSize)."""
 
-    def test_images_pass_through_untouched_by_default(self):
-        session = RemoteSession(_mock_ws_session(), _served_wire())
+    def test_images_pass_through_untouched_by_default(self, open_session):
+        endpoint, _ = _mock_endpoint()
+        session, _ = open_session(endpoint)
         obs = {'cam': _make_image(480, 640), 'state': np.array([1.0])}
         prepared = session._prepare_obs(obs)
         assert prepared.keys() == obs.keys()
         assert all(prepared[key] is value for key, value in obs.items())
 
-    def test_compression_reaches_nested_images(self):
-        session = RemoteSession(_mock_ws_session(), _served_wire(), compress_images=True)
+    def test_compression_reaches_nested_images(self, open_session):
+        endpoint, _ = _mock_endpoint({keys.COMPRESS_IMAGES: True})
+        session, _ = open_session(endpoint)
         result = session._prepare_obs({
             'cam': _make_image(48, 64),
             'video': {'wrist': _make_image(48, 64)},

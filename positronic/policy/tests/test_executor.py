@@ -242,7 +242,7 @@ class TestCaller:
     """One session's use of one served function."""
 
     def test_a_caller_of_an_unserved_function_fails_where_it_is_built(self, serve):
-        with pytest.raises(KeyError):
+        with pytest.raises(AssertionError, match='infer'):
             Caller(serve(add=operator.add), 'infer')
 
     def test_a_fresh_caller_is_idle(self, serve):
@@ -360,19 +360,26 @@ class _RoundsSession(Session):
         return result
 
 
+class _PlainPolicy(Policy):
+    """Serves nothing: its session answers inside the call that asked."""
+
+    def __init__(self):
+        self.session = _PlainSession()
+
+    def new_session(self, context=None, now=None, rt=None) -> Session:
+        return self.session
+
+
 class _EchoPolicy(Policy):
     """Serves ``echo``, and makes sessions that take ``rounds`` calls of it to answer."""
 
-    def __init__(self, rounds: int | None = None):
+    def __init__(self, rounds: int):
         self._rounds = rounds
-        self.session: _PlainSession | _RoundsSession
+        self.session: _RoundsSession
 
     def new_session(self, context=None, now=None, rt=None) -> Session:
-        if self._rounds is None:
-            self.session = _PlainSession()
-        else:
-            assert rt is not None
-            self.session = _RoundsSession(rt, self._rounds)
+        assert rt is not None
+        self.session = _RoundsSession(rt, self._rounds)
         return self.session
 
     @property
@@ -417,7 +424,7 @@ class TestBlocking:
     """A policy whose sessions answer in the call that asked."""
 
     def test_a_session_that_answers_in_its_own_call_is_called_one_time(self, opened):
-        policy = _EchoPolicy()
+        policy = _PlainPolicy()
 
         assert opened(blocking(policy))({'x': 1}) == [{'action': {'x': 1}}]
         assert policy.session.calls == 1
@@ -451,7 +458,6 @@ class TestBlocking:
         """Nobody else can: the runtime is the session's own, made where the session was."""
         policy = _EchoPolicy(rounds=1)
         session = blocking(policy).new_session()
-        assert isinstance(policy.session, _RoundsSession)
         session.close()
 
         with pytest.raises(RuntimeError):
@@ -463,12 +469,16 @@ class _Weights:
 
 
 def test_close_frees_what_the_functions_held(serve):
-    """A closed runtime drops its functions, so the policy that closes next can free the weights."""
+    """A closed runtime drops its functions, so the policy that closes next can free the weights.
+
+    The live session keeps its ``Caller``: the runtime is the only place a function reference lives.
+    """
     weights = _Weights()
     gone = weakref.ref(weights)
     executor = serve(infer=partial(operator.is_, weights))
+    caller = Caller(executor, 'infer')
     del weights
 
     assert gone() is not None
     executor.close()
-    assert gone() is None
+    assert (gone(), caller.idle) == (None, True)

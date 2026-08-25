@@ -35,31 +35,30 @@ class Executor(Runtime):
     class _Answer(Answer):
         def __init__(self, name: str, call: Future[Any], read: Callable[['Executor._Answer'], None]):
             self.name = name
-            self._call = call
+            self.call = call
             self._read = read
 
         def done(self) -> bool:
-            return self._call.done()
+            return self.call.done()
 
         def result(self) -> Any:
-            if not self._call.done():
+            if not self.call.done():
                 raise NotAnswered('The call is not answered yet')
             self._read(self)
-            return self._call.result()
+            return self.call.result()
 
         def failure(self) -> BaseException | None:
             """What the call raised, once it has answered. ``None`` when it returned a value or was cancelled."""
-            return None if self._call.cancelled() else self._call.exception()
+            return None if self.call.cancelled() else self.call.exception()
 
     def __init__(self, functions: Mapping[str, Callable[..., Any]], *, max_workers: int = 1):
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
         self._fns: Mapping[str, Fn] = {name: partial(self._start, name, fn) for name, fn in functions.items()}
-        # Every call made and not answered yet, read from the caller's thread while the workers answer. The
-        # lock is reentrant because a call that answers before it is registered runs ``_answered`` inline.
-        self._pending: set[Future[Any]] = set()
-        # Every answer that no caller has read. What is left at close failed with nobody to raise to.
+        # Every answer that no caller has read, written from the caller's thread while the workers answer.
+        # A call that has still to answer is one of these; what is left at close failed with nobody to
+        # raise to.
         self._unread: set[Executor._Answer] = set()
-        self._lock = threading.RLock()
+        self._lock = threading.Lock()
 
     @property
     def fns(self) -> Mapping[str, Fn]:
@@ -69,7 +68,7 @@ class Executor(Runtime):
     def in_flight(self) -> bool:
         """Whether any call is still to answer."""
         with self._lock:
-            return bool(self._pending)
+            return any(not answer.done() for answer in self._unread)
 
     @property
     def owes_an_answer(self) -> bool:
@@ -82,7 +81,7 @@ class Executor(Runtime):
     def wait(self, timeout: float | None = None) -> None:
         """Block until every call made so far has answered, or until ``timeout`` seconds pass."""
         with self._lock:
-            pending = set(self._pending)
+            pending = [answer.call for answer in self._unread]
         concurrent.futures.wait(pending, timeout=timeout)
 
     def _start(self, name: str, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Answer:
@@ -90,14 +89,8 @@ class Executor(Runtime):
         call = self._pool.submit(context.run, fn, *args, **kwargs)
         answer = self._Answer(name, call, self._read)
         with self._lock:
-            self._pending.add(call)
             self._unread.add(answer)
-            call.add_done_callback(self._answered)
         return answer
-
-    def _answered(self, call: Future[Any]) -> None:
-        with self._lock:
-            self._pending.discard(call)
 
     def _read(self, answer: '_Answer') -> None:
         with self._lock:
@@ -143,8 +136,12 @@ class _BlockingSession(DelegatingSession):
 class _BlockingPolicy(DelegatingPolicy):
     def new_session(self, context=None, now=None, rt=None) -> Session:
         assert rt is None, 'a blocking policy serves its own functions; nothing above it runs them'
-        rt = Executor(self._inner.functions)
-        return _BlockingSession(self._inner.new_session(context, now, rt), rt)
+        own = Executor(self._inner.functions)
+        try:
+            return _BlockingSession(self._inner.new_session(context, now, own), own)
+        except BaseException:
+            own.close()
+            raise
 
     @property
     def functions(self) -> Mapping[str, Callable[..., Any]]:
@@ -155,6 +152,7 @@ def blocking(policy: Policy) -> Policy:
     """``policy`` with its heavy work waited out: a session answers in the call that asked.
 
     For a caller with no control loop to give the time back to — a server request, a warmup, a probe.
-    Layers wrap the result rather than the other way round, so each sees one call per answer.
+    Layers wrap the result rather than the other way round, so each sees one call per answer. Layers that
+    ``policy`` composes itself are inside, so those still run once per call.
     """
     return _BlockingPolicy(policy)

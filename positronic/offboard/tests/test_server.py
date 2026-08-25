@@ -242,10 +242,6 @@ def test_pipeline_with_no_rig_side_half_refused_at_startup(make_mock_policy):
 _INFER = 'infer'
 
 
-def _scripted_chunk(obs) -> list[dict[str, Any]]:
-    return [{'a': 1.0}, {'a': 2.0}, {'a': 3.0}]
-
-
 class _ScriptedSession(Session):
     def __init__(self, rt: Runtime):
         self._infer = Caller(rt, _INFER)
@@ -266,7 +262,7 @@ class _ScriptedPolicy(Policy):
 
     @property
     def functions(self):
-        return {_INFER: _scripted_chunk}
+        return {_INFER: lambda obs: [{'a': 1.0}, {'a': 2.0}, {'a': 3.0}]}
 
 
 def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
