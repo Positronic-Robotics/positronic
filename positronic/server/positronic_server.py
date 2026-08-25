@@ -587,8 +587,8 @@ def _is_loopback(host: str) -> bool:
 
 
 def _access_url(scheme: str, host: str, port: int) -> str:
+    """The URL a browser reaches `host` on. An IPv6 zone is written `%25<zone>` (RFC 6874)."""
     ip = _as_ip(host)
-    # A zone is written `%25<zone>` inside a URL (RFC 6874); a bare `%` is not a URL a browser takes.
     literal = f'[{host.replace("%", "%25")}]' if ip is not None and ip.version == 6 else host
     return f'{scheme}://{literal}:{port}'
 
@@ -607,40 +607,28 @@ def _insecure_context_warning(hosts: list[str], https: bool) -> str | None:
     )
 
 
-def _subject_alt_names(hosts: list[str]) -> str:
-    """The certificate's subjectAltName over the addresses the server answers on.
-
-    A zone is dropped from an IP entry: the socket layer binds `fe80::1%eth0`, and OpenSSL refuses
-    that string as a bad IP address.
-    """
-    sans = [f'IP:{host.split("%")[0]}' if _as_ip(host) is not None else f'DNS:{host}' for host in hosts]
-    if any(_is_loopback(host) for host in hosts):
-        sans.append('DNS:localhost')
-    return ','.join(sans)
-
-
 _MAX_CERTIFICATE_SUBJECT_BYTES = 64
 _FALLBACK_CERTIFICATE_SUBJECT = 'positronic-server'
 
 
-def _certificate_subject(hosts: list[str]) -> str:
-    """The certificate's subject CN: the first bind address, or a fixed name when it will not fit.
-
-    X.509 caps a CN at 64 bytes and OpenSSL aborts on a longer one; `subjectAltName` names the host
-    either way, and is what a client matches on (RFC 6125).
-    """
-    host = hosts[0]
-    return host if len(host.encode()) <= _MAX_CERTIFICATE_SUBJECT_BYTES else _FALLBACK_CERTIFICATE_SUBJECT
-
-
 def _generate_self_signed_cert(hosts: list[str]) -> dict[str, str]:
-    # A wildcard bind in a namespace with no address of its family scans to nothing, which certifies
-    # nothing: refuse here, where both the subject and the SANs are derived, rather than at each.
+    """A self-signed certificate naming every host the server answers on.
+
+    An empty host list is refused: a certificate that names nothing certifies nothing. X.509 caps
+    the subject CN at 64 bytes and OpenSSL aborts past it, so a longer host takes a fixed subject
+    and `subjectAltName` names it, which is what a client matches on (RFC 6125). An IP entry drops
+    its zone, which OpenSSL refuses as a bad address.
+    """
     if not hosts:
         raise ValueError(
             'no local address to certify: the bind matched no interface of its family. Bind a '
             'concrete host, or pass ssl_certfile and ssl_keyfile.'
         )
+    subject = hosts[0] if len(hosts[0].encode()) <= _MAX_CERTIFICATE_SUBJECT_BYTES else _FALLBACK_CERTIFICATE_SUBJECT
+    sans = [f'IP:{host.split("%")[0]}' if _as_ip(host) is not None else f'DNS:{host}' for host in hosts]
+    if any(_is_loopback(host) for host in hosts):
+        sans.append('DNS:localhost')
+
     ssl_dir = tempfile.mkdtemp(prefix='positronic-ssl-')
     keyfile = os.path.join(ssl_dir, 'key.pem')
     certfile = os.path.join(ssl_dir, 'cert.pem')
@@ -659,9 +647,9 @@ def _generate_self_signed_cert(hosts: list[str]) -> dict[str, str]:
             '365',
             '-nodes',
             '-subj',
-            f'/CN={_certificate_subject(hosts)}',
+            f'/CN={subject}',
             '-addext',
-            f'subjectAltName={_subject_alt_names(hosts)}',
+            f'subjectAltName={",".join(sans)}',
         ],
         check=True,
         capture_output=True,

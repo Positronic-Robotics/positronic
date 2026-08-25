@@ -10,17 +10,14 @@ import pytest
 from positronic.server.positronic_server import (
     _FALLBACK_CERTIFICATE_SUBJECT,
     _access_url,
-    _certificate_subject,
     _generate_self_signed_cert,
     _insecure_context_warning,
     _served_addresses,
     _ssl_kwargs,
-    _subject_alt_names,
 )
 
 _Addr = namedtuple('_Addr', 'family address netmask broadcast ptp')
 
-# A multi-homed host: loopback, a LAN interface with a link-local companion and a MAC, and a VPN.
 _INTERFACES = {
     'lo': [_Addr(socket.AF_INET, '127.0.0.1', None, None, None), _Addr(socket.AF_INET6, '::1', None, None, None)],
     'eth0': [
@@ -37,42 +34,43 @@ def multi_homed(monkeypatch):
     monkeypatch.setattr(psutil, 'net_if_addrs', lambda: _INTERFACES)
 
 
+def _certificate_text(hosts: list[str], *fields: str) -> str:
+    files = _generate_self_signed_cert(hosts)
+    return subprocess.run(
+        ['openssl', 'x509', '-in', files['ssl_certfile'], '-noout', *fields], check=True, capture_output=True, text=True
+    ).stdout
+
+
+def _certified_ips(extension: str) -> set[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    return {ipaddress.ip_address(address) for address in re.findall(r'IP Address:([0-9A-Fa-f.:]+)', extension)}
+
+
 def test_wildcard_bind_serves_every_routable_local_address(multi_homed):
     assert _served_addresses('::') == ['127.0.0.1', '::1', '192.168.0.8', '198.51.100.7']
 
 
 def test_an_ipv4_wildcard_advertises_no_address_its_listener_cannot_answer(multi_homed):
-    # `0.0.0.0` binds AF_INET, so a v6 URL or SAN built from it names an address nothing serves.
     assert _served_addresses('0.0.0.0') == ['127.0.0.1', '192.168.0.8', '198.51.100.7']
     assert '::1' in _served_addresses('::')
 
 
 def test_every_spelling_of_the_wildcard_is_one(multi_homed):
-    # The bind normalizes the address, so two spellings of one wildcard serve the same set.
     assert _served_addresses('0:0:0:0:0:0:0:0') == _served_addresses('::')
     assert _served_addresses('') == _served_addresses('0.0.0.0')
 
 
 def test_a_socket_only_spelling_of_the_wildcard_is_one(multi_homed):
-    # `socket` takes the legacy short IPv4 forms `ipaddress` refuses, and the bind resolves each of
-    # these to the wildcard — so a set derived from them must be the wildcard's, not the string's.
     assert _served_addresses('0') == _served_addresses('0.0.0.0')
     assert _served_addresses('0.0') == _served_addresses('0.0.0.0')
     assert _served_addresses('0.0.0') == _served_addresses('0.0.0.0')
 
 
 def test_a_socket_only_spelling_that_is_not_the_wildcard_names_its_own_address(multi_homed):
-    # The same parser normalizes a concrete short form, which stays the one address it binds.
     assert _served_addresses('127.1') == ['127.0.0.1']
     assert _served_addresses('1') == ['0.0.0.1']
-    # A name the resolver would happily turn into an address stays a name: the certificate names it
-    # with `DNS:` and the URL keeps it, so normalizing must go no further than the numeric spellings.
-    assert _served_addresses('localhost') == ['localhost']
-    assert 'IP:' not in _subject_alt_names(['localhost'])
 
 
 def test_a_wildcard_serves_an_ipv4_link_local_address(monkeypatch):
-    # 169.254/16 carries no zone, so the filter that drops a v6 link-local must not reach it.
     monkeypatch.setattr(
         psutil, 'net_if_addrs', lambda: {'eth0': [_Addr(socket.AF_INET, '169.254.10.2', None, None, None)]}
     )
@@ -82,11 +80,14 @@ def test_a_wildcard_serves_an_ipv4_link_local_address(monkeypatch):
 def test_concrete_bind_serves_only_the_address_it_binds(multi_homed):
     assert _served_addresses('198.51.100.7') == ['198.51.100.7']
     assert _served_addresses('127.0.0.1') == ['127.0.0.1']
+
+
+def test_a_name_the_resolver_would_take_stays_a_name(multi_homed):
     assert _served_addresses('rig.local') == ['rig.local']
+    assert _served_addresses('localhost') == ['localhost']
 
 
 def test_a_wildcard_bind_with_no_address_of_its_family_refuses_to_certify(monkeypatch):
-    # The one interface carries no AF_INET address, so an IPv4 wildcard scans to nothing.
     monkeypatch.setattr(psutil, 'net_if_addrs', lambda: {'lo': [_Addr(socket.AF_INET6, '::1', None, None, None)]})
     assert _served_addresses('0.0.0.0') == []
 
@@ -95,8 +96,6 @@ def test_a_wildcard_bind_with_no_address_of_its_family_refuses_to_certify(monkey
 
 
 def test_a_wildcard_bind_with_no_address_of_its_family_still_serves_plain_http(monkeypatch):
-    # Only the certificate needs an address to name. The listener answers on the wildcard either
-    # way, so the refusal belongs to the certificate path and must not reach the bind itself.
     monkeypatch.setattr(psutil, 'net_if_addrs', lambda: {'lo': [_Addr(socket.AF_INET6, '::1', None, None, None)]})
     assert _ssl_kwargs(False, _served_addresses('0.0.0.0'), None, None) == {}
     assert _ssl_kwargs(True, [], '/etc/cert.pem', '/etc/key.pem') == {
@@ -106,52 +105,47 @@ def test_a_wildcard_bind_with_no_address_of_its_family_still_serves_plain_http(m
 
 
 def test_certificate_names_every_served_address():
-    assert _subject_alt_names(['127.0.0.1', '::1', '192.168.0.8']) == 'IP:127.0.0.1,IP:::1,IP:192.168.0.8,DNS:localhost'
+    hosts = ['198.51.100.7', '2001:db8::7']
+    extension = _certificate_text(hosts, '-ext', 'subjectAltName')
+
+    assert _certified_ips(extension) == {ipaddress.ip_address(host) for host in hosts}
+    assert 'DNS:' not in extension
 
 
-def test_certificate_names_no_address_beyond_the_bind():
-    assert _subject_alt_names(['198.51.100.7']) == 'IP:198.51.100.7'
-    assert _subject_alt_names(['rig.local']) == 'DNS:rig.local'
+def test_certificate_names_localhost_beside_a_loopback_bind():
+    extension = _certificate_text(['127.0.0.1', '::1'], '-ext', 'subjectAltName')
+
+    assert _certified_ips(extension) == {ipaddress.ip_address('127.0.0.1'), ipaddress.ip_address('::1')}
+    assert 'DNS:localhost' in extension
+
+
+def test_certificate_names_a_host_name_as_a_dns_entry():
+    extension = _certificate_text(['rig.local'], '-ext', 'subjectAltName')
+
+    assert 'DNS:rig.local' in extension
+    assert not _certified_ips(extension)
 
 
 def test_certificate_drops_a_zone_from_an_ip_it_names():
-    assert _subject_alt_names(['fe80::1%eth0']) == 'IP:fe80::1'
+    extension = _certificate_text(['fe80::1%eth0'], '-ext', 'subjectAltName')
 
-
-def test_generated_certificate_carries_the_bind_addresses_and_no_others():
-    hosts = ['198.51.100.7', '2001:db8::7']
-    files = _generate_self_signed_cert(hosts)
-    extension = subprocess.run(
-        ['openssl', 'x509', '-in', files['ssl_certfile'], '-noout', '-ext', 'subjectAltName'],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-
-    certified = {ipaddress.ip_address(address) for address in re.findall(r'IP Address:([0-9A-Fa-f.:]+)', extension)}
-    assert certified == {ipaddress.ip_address(host) for host in hosts}
-    assert 'DNS:localhost' not in extension
+    assert _certified_ips(extension) == {ipaddress.ip_address('fe80::1')}
 
 
 def test_generated_certificate_subject_is_the_bind_address_when_it_fits():
-    assert _certificate_subject(['198.51.100.7']) == '198.51.100.7'
-    assert _certificate_subject(['b' * 52 + '.example.com']) == 'b' * 52 + '.example.com'  # exactly 64 bytes
+    assert 'CN = 198.51.100.7' in _certificate_text(['198.51.100.7'], '-subject')
+
+    host = 'b' * 52 + '.example.com'
+    assert len(host.encode()) == 64
+    assert f'CN = {host}' in _certificate_text([host], '-subject')
 
 
 def test_a_bind_name_too_long_for_the_subject_field_still_certifies():
     host = 'a' * 60 + '.example.com'
     assert len(host.encode()) > 64
-    assert _certificate_subject([host]) == _FALLBACK_CERTIFICATE_SUBJECT
+    text = _certificate_text([host], '-subject', '-ext', 'subjectAltName')
 
-    files = _generate_self_signed_cert([host])
-    text = subprocess.run(
-        ['openssl', 'x509', '-in', files['ssl_certfile'], '-noout', '-subject', '-ext', 'subjectAltName'],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-
-    assert _FALLBACK_CERTIFICATE_SUBJECT in text
+    assert f'CN = {_FALLBACK_CERTIFICATE_SUBJECT}' in text
     assert f'DNS:{host}' in text
 
 
