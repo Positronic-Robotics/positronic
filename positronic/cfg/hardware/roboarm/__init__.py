@@ -1,12 +1,31 @@
 import configuronic as cfn
 
 import positronic.cfg.hardware.motors
+from positronic.drivers.roboarm import command
+
+# The pose each arm is drawn around at the start of a trial. Where a driver parks is its own and lives with it.
+FRANKA_NOMINAL_JOINTS = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
+YAM_NOMINAL_JOINTS = [0.0, 1.047, 1.047, 0.0, 0.0, 0.0]
+SO101_NOMINAL_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0]
+# How far, per joint, a start pose drawn around the Franka's nominal may sit from it.
+FRANKA_JOINTS_SPREAD = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
+# The gains DROID's Franka ran, which its pretrained checkpoints were trained under.
+DROID_IMPEDANCE = command.Impedance(
+    kq=(40.0, 30.0, 50.0, 25.0, 35.0, 25.0, 10.0),
+    kqd=(4.0, 6.0, 5.0, 5.0, 3.0, 2.0, 1.0),
+    kx=(750.0, 750.0, 750.0, 15.0, 15.0, 15.0),
+    kxd=(37.0, 37.0, 37.0, 2.0, 2.0, 2.0),
+)
+
+
+def droid_start_pose() -> command.JointPosition:
+    """The command a DROID trial opens with: joints drawn afresh around the Franka's nominal, under DROID's gains."""
+    return command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD, DROID_IMPEDANCE)
 
 
 @cfn.config(
     ip='172.168.0.2',
     relative_dynamics_factor=0.2,
-    home_joints=[0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0],
     load=None,
     collision_coeff=2.0,
     manage_desk=True,
@@ -15,7 +34,6 @@ import positronic.cfg.hardware.motors
 def franka(
     ip: str,
     relative_dynamics_factor: float,
-    home_joints: list[float],
     load: tuple | None = None,
     collision_coeff: float = 2.0,
     manage_desk: bool = True,
@@ -26,7 +44,6 @@ def franka(
     return franka.Robot(
         ip=ip,
         relative_dynamics_factor=relative_dynamics_factor,
-        home_joints=home_joints,
         load=load,
         collision_coeff=collision_coeff,
         manage_desk=manage_desk,
@@ -51,8 +68,8 @@ def so101(motor_bus):
     return Robot(motor_bus=motor_bus)
 
 
-@cfn.config(channel='can0', home_joints=None, sim=False, base_pose=None)
-def yam(channel: str, home_joints: list[float] | None, sim: bool, base_pose):
+@cfn.config(channel='can0', sim=False, base_pose=None)
+def yam(channel: str, sim: bool, base_pose):
     from positronic.drivers.roboarm.yam import Robot
 
-    return Robot(channel, home_joints=home_joints, base_pose=base_pose, sim=sim)
+    return Robot(channel, base_pose=base_pose, sim=sim)

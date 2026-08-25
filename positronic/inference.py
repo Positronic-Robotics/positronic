@@ -2,8 +2,9 @@
 aliases over ``cli.eval.run``."""
 
 from collections import Counter
+from collections.abc import Callable
 from contextlib import nullcontext
-from dataclasses import replace
+from functools import partial
 from typing import Any
 
 import configuronic as cfn
@@ -15,6 +16,7 @@ import positronic.cfg.policy as policy_cfg
 from pimm.logging import init_logging
 from positronic import keys, wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
+from positronic.cfg.hardware.roboarm import droid_start_pose
 from positronic.cli.eval.run import prepare_output_dir, run
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
@@ -25,15 +27,15 @@ from positronic.policy.harness import Harness
 class KeyboardOperator(pimm.ControlSystem):
     """Turns keystrokes into episodes: ``s`` asks for one through ``perform_task``, ``p`` ends the live one.
 
-    It serves the trial's ``human`` prepare, and holds the pending answers because that is where an
-    episode's terminal — and any refused ask — arrives; both are printed as they land.
+    It holds the pending answers because that is where an episode's terminal — and any refused ask —
+    arrives; both are printed as they land. ``next_task`` is called per press, so each trial draws its own
+    start pose.
     """
 
-    def __init__(self, task: Task):
-        self._task = task
+    def __init__(self, next_task: Callable[[], Task]):
+        self._next_task = next_task
         self.keystrokes = pimm.ControlSystemReceiver[str](self)
         self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
-        self.ready = pimm.calls.ControlSystemHandler[Any, None](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
@@ -42,11 +44,9 @@ class KeyboardOperator(pimm.ControlSystem):
             if (key := pimm.value_updated(self.keystrokes)) is not None:
                 match key:
                     case 's':
-                        pending.append(self.perform_task(self._task))
+                        pending.append(self.perform_task(self._next_task()))
                     case 'p':
                         self.done.emit({keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR})
-            for call in self.ready.incoming():
-                call.set_result(None)  # the operator set the rig up before asking for the trial at all
             running = []
             for answer in pending:
                 if answer.done():
@@ -65,9 +65,22 @@ class KeyboardOperator(pimm.ControlSystem):
             print(f'Episode failed: {e}')
 
 
+def _attended_task(instruction: str) -> Task:
+    """The trial one keypress asks for.
+
+    Nothing asks for the scene: pressing for the trial is the operator saying it is set up. Nothing holds
+    the episode to a budget either — the operator is what ends it.
+    """
+    return Task(
+        instruction_source=instruction, timeout_sec=None, prepare_args={keys.ARM: droid_start_pose(), keys.GRIPPER: 0.0}
+    )
+
+
 def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
     """Run one hardware embodiment attended and headless, the keyboard deciding when an episode starts and
     finishes.
+
+    Every episode starts the arm at a pose drawn around the Franka's nominal joints, with the fingers open.
 
     The world is composed here rather than by the runner: an attended surface is the binary's own business,
     and the keyboard is the only one this library ships. There is no viewer — a console that shows the
@@ -77,6 +90,10 @@ def real(policy, embodiment: Embodiment, task: str | None, output_dir=None):
     """
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
+    # A rig that cannot be put at a start pose fails the run at startup rather than at the first press.
+    unknown = sorted(set(_attended_task('').prepare_args) - set(embodiment.prepare_handlers))
+    if unknown:
+        raise ValueError(f'{unknown} is not something {embodiment.descriptor or "this rig"} readies')
 
     # The policy is this function's to close from here on, and everything below can raise:
     # `prepare_output_dir` syncs a directory and snapshots sources into it, and `LocalDatasetWriter`
@@ -91,10 +108,7 @@ def _run_attended(policy, embodiment: Embodiment, task: str | None, output_dir) 
     """Record from a warmed policy until the keyboard returns. The caller owns the policy."""
     output_dir = prepare_output_dir(output_dir)
     keyboard = KeyboardControl(quit_key='q')
-    # An attended episode has no budget: the operator ends it, so nothing but ``done`` can.
-    operator = KeyboardOperator(Task(instruction_source=task or '', timeout_sec=None))
-    # The rig a human sets up by hand readies like any device: it is the operator who answers for it.
-    embodiment = replace(embodiment, prepare_handlers={**embodiment.prepare_handlers, keys.HUMAN: operator.ready})
+    operator = KeyboardOperator(partial(_attended_task, task or ''))
     harness = Harness(policy, embodiment)
     print('Keyboard controls: [s]tart, sto[p], [q]uit')
 

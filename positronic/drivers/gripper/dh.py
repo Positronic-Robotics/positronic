@@ -11,12 +11,11 @@ with vendor_import('pymodbus', 'Gripper support'):
 
 
 class DHGripper(pimm.ControlSystem):
-    def __init__(self, port: str, home_grip: float = 0.0):
+    def __init__(self, port: str):
         self.port = port
-        self._home_grip = home_grip
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
-        self.sync_move = pimm.calls.ControlSystemHandler[float | None, None](self)
+        self.sync_move = pimm.calls.ControlSystemHandler[float, None](self)
         self.force = pimm.DefaultingReceiver(self, default=100)
         self.speed = pimm.DefaultingReceiver(self, default=100)
 
@@ -60,7 +59,7 @@ class DHGripper(pimm.ControlSystem):
                     current_grip = self._width(client)
                     self.grip.emit(current_grip)
 
-                    target = grip_setpoint(moves, self._home_grip, current_grip, clock.now())
+                    target = grip_setpoint(moves, current_grip, clock.now())
                     if target is not None:
                         last_grip = target
                     self._command(client, last_grip)

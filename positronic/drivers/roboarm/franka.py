@@ -1,4 +1,5 @@
 import contextlib
+import functools
 import logging
 import os
 import time
@@ -97,40 +98,34 @@ def _revolute_joint_names(urdf_xml):
 
 
 _MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collision'
+# Where the driver leaves the arm: taking control it travels here, and handing it back it returns here.
+_PARK_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 
 
 class _Arm(DriverRun[command.CommandType]):
-    """The arm the driver drives: the vendor handle, and the state and moves that go with it."""
+    """The arm the driver drives: the robot handle, and the state and moves that go with it."""
 
-    # A move needs a deadline at all because the vendor reports a goal it abandons, but a goal it never
+    # A move needs a deadline at all because the robot reports a goal it abandons, but a goal it never
     # converges on stays in flight for as long as the arm is pushed off course.
     # FR3 joint velocity limits in rad/s, from the bundled ``fr3.urdf``; ``relative_dynamics_factor`` scales them
     _MAX_JOINT_VELOCITY = np.array([2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26])
-    # On top of the travel itself: the vendor controller ramps in and out of its speed cap, and settles late
+    # On top of the travel itself: the robot's controller ramps in and out of its speed cap, and settles late
     _MOVE_GRACE_S = 5.0
-    # Parking publishes nothing, so it comes back only as often as it needs to ask again
-    _PARK_POLL_S = 0.005
 
     def __init__(
         self,
-        vendor: pf.Robot,
-        sync_move: pimm.calls.ControlSystemHandler[command.CommandType | None, None],
+        robot: pf.Robot,
+        sync_move: pimm.calls.ControlSystemHandler[command.CommandType, None],
         async_move: pimm.SignalReceiver[command.CommandType],
         out: pimm.SignalEmitter[FrankaState],
-        home_joints: list[float],
-        home_joints_variation: list[float],
-        park_timeout_s: float,
         dynamics_factor: float,
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=2000)
-        self.vendor = vendor
+        self.robot = robot
         self.out = out
         self.state = FrankaState()
-        self._home_joints = home_joints
-        self._home_joints_variation = home_joints_variation
-        self._park_timeout_s = park_timeout_s
         self._dynamics_factor = dynamics_factor
 
     def __enter__(self) -> '_Arm':
@@ -140,23 +135,13 @@ class _Arm(DriverRun[command.CommandType]):
         """Halt the control thread."""
         # Before ``_desk_session`` deactivates FCI, or the thread dies mid-control with
         # "TCP connection got interrupted".
-        self.vendor.stop()
+        self.robot.stop()
 
     def publish(self, st: pf.State) -> None:
-        """Ship the arm as the vendor reports it, marked ERROR while it is not where the driver put it."""
-        faulted = self.moves.errored or st.error != 0  # the vendor reports its own faults; a stall is not one
+        """Ship the arm as it is reported, marked ERROR while it is not where the driver put it."""
+        faulted = self.moves.errored or st.error != 0  # the robot reports its own faults; a stall is not one
         self.state.encode(st, RobotStatus.ERROR if faulted else RobotStatus.AVAILABLE)
         self.out.emit(self.state)
-
-    def home_target(self) -> np.ndarray:
-        """The home joints this trip aims for, drawn afresh from the spread each time."""
-        target = np.asarray(self._home_joints, dtype=np.float64)
-        if any(v > 0 for v in self._home_joints_variation):
-            variation = np.random.uniform(
-                -np.asarray(self._home_joints_variation), np.asarray(self._home_joints_variation)
-            )
-            target = target + variation
-        return target
 
     @staticmethod
     def _to_pf_mode(mode: command.ControlModeType | None) -> pf.InternalImpedance | pf.SoftwareImpedance:
@@ -170,28 +155,19 @@ class _Arm(DriverRun[command.CommandType]):
                 return pf.SoftwareImpedance(kq=list(kq), kqd=list(kqd), kx=list(kx), kxd=list(kxd))
 
     def command_target(self, target: np.ndarray, mode: command.ControlModeType | None) -> None:
-        """Put the arm under ``mode`` and publish ``target`` to it, in that order with nothing in between.
-
-        Together, because either alone is a half-applied command: a law changed for a target that never
-        arrives leaves the arm holding its last one under dynamics nobody asked for.
-        """
-        self.vendor.set_control_mode(self._to_pf_mode(mode))  # the vendor no-ops a mode already running
-        self.vendor.set_target_joints(target)
+        """Put the arm under ``mode`` and publish ``target`` to it, in that order with nothing in between."""
+        self.robot.set_control_mode(self._to_pf_mode(mode))  # the robot no-ops a mode already running
+        self.robot.set_target_joints(target)
 
     def await_goal(
-        self,
-        target: np.ndarray,
-        should_stop: Callable[[], bool],
-        pace: Callable[[], pimm.Command],
-        mode: command.ControlModeType | None,
+        self, should_stop: Callable[[], bool], pace: Callable[[], pimm.Command]
     ) -> Generator[pimm.Command, None, MoveStatus]:
-        """Command ``target`` under ``mode`` and poll the goal until the arm arrives, one poll per resume.
+        """Poll the goal until the arm arrives, one poll per resume.
 
         ``pace`` is what to wait between polls, and so how often the goal is asked about.
         """
-        self.command_target(target, mode)
         while not should_stop():
-            goal = self.vendor.goal()
+            goal = self.robot.goal()
             if goal.status == pf.GoalStatus.REACHED:
                 return MoveStatus.ARRIVED
             if goal.status != pf.GoalStatus.IN_FLIGHT:
@@ -205,111 +181,103 @@ class _Arm(DriverRun[command.CommandType]):
         return self._MOVE_GRACE_S + float(np.max(np.abs(target - q) / cap))
 
     def move_to(
-        self, target: np.ndarray, mode: command.ControlModeType | None
+        self, target: np.ndarray, mode: command.ControlModeType | None, *, at_teardown: bool = False
     ) -> Generator[pimm.Command, None, MoveStatus]:
-        """Travel to ``target`` under ``mode``, yielding until it arrives."""
+        """Travel to ``target`` under ``mode``, yielding until it arrives.
+
+        ``at_teardown`` is for the move the driver makes on its way out. The stop is already set by then, so
+        heeding it would abandon the move before it began, and recovering from a fault cancels the goal.
+        """
         # The first emit must not ship an unfilled state.
-        self.state.encode(self.vendor.state(), RobotStatus.BUSY)
+        self.state.encode(self.robot.state(), RobotStatus.BUSY)
         self.out.emit(self.state)
 
         deadline = self.clock.now() + self._travel_s(self.state.q, target)
+
+        def expired() -> bool:
+            return self.clock.now() >= deadline
+
+        def abandoned() -> bool:
+            return self.should_stop.value and not at_teardown
+
+        def should_stop() -> bool:
+            return abandoned() or expired()
+
         try:
-            # The arm's own rate: this loop publishes every pass, so the goal is asked about that often too
-            for wait in self.await_goal(
-                target, lambda: self.should_stop.value or self.clock.now() >= deadline, self.limiter.wait, mode
-            ):
-                st = self.vendor.state()
-                self.state.encode(st, RobotStatus.BUSY)  # the driver owns the arm until it arrives
+            self.command_target(target, mode)
+            for wait in self.await_goal(should_stop, self.limiter.wait):
+                st = self.robot.state()
+                self.state.encode(st, RobotStatus.BUSY)
                 self.out.emit(self.state)
-                if st.error != 0:
-                    self.vendor.recover_from_errors()
+                if st.error != 0 and not at_teardown:
+                    self.robot.recover_from_errors()
                 yield wait
-            # The deadline stops the poll loop before it asks, so a goal that landed as it expired has not
-            # been seen yet; reading a timeout off the clock alone would fail a move the arm completed.
-            if self.clock.now() >= deadline and self.vendor.goal().status != pf.GoalStatus.REACHED:
-                # The vendor controller is still tracking the goal it did not reach; left alone it would
-                # resume the move once whatever held the arm back goes away.
-                self.vendor.set_target_joints(self.vendor.state().q)
+            # The loop exits before it polls again, so a goal that landed as the deadline passed is unseen.
+            if expired() and self.robot.goal().status != pf.GoalStatus.REACHED:
+                # The robot still tracks the goal it missed, and would resume the move once the arm comes free.
+                self.robot.set_target_joints(self.robot.state().q)
                 raise TimeoutError(f'the arm stopped short of {target}')
         except Exception:
             self.moves.errored = True
             raise
 
-        if self.should_stop.value:  # the travel gave up on the stop rather than on arrival
+        if abandoned():
             return MoveStatus.GAVE_UP
         self.moves.errored = False
         # The poll that reports arrival ends the loop, so the sample before it was taken mid-travel
-        self.publish(self.vendor.state())
+        self.publish(self.robot.state())
         return MoveStatus.ARRIVED
 
-    def target_joints(self, cmd: command.CommandType | None) -> np.ndarray:
-        """The joints ``cmd`` asks the arm to hold; asking for nothing asks for home."""
-        match cmd:
-            case None | command.Reset():
-                return self.home_target()
-            case command.CartesianPosition(pose):
-                return self.vendor.inverse_kinematics_with_limits(
-                    np.asarray([*pose.translation, *pose.rotation.as_quat])
-                )
-            case command.CartesianDelta() as delta_cmd:
-                target = delta_cmd.apply(self.state.ee_pose)
-                return self.vendor.inverse_kinematics_with_limits(
-                    np.asarray([*target.translation, *target.rotation.as_quat])
-                )
-            case command.JointPosition(positions):
-                return np.asarray(positions, dtype=np.float64)
-            case command.JointDelta(velocities=joint_delta):
-                return self.state.q + joint_delta
-            case other:
-                raise NotImplementedError(f'Unsupported command {other}')
+    def _ik(self, pose: geom.Transform3D) -> np.ndarray:
+        """The joints that put the end effector at ``pose``, within the arm's limits."""
+        return self.robot.inverse_kinematics_with_limits(np.asarray([*pose.translation, *pose.rotation.as_quat]))
 
-    def accept(self, cmd: command.CommandType | None) -> tuple[np.ndarray, command.ControlModeType | None]:
-        """The joints ``cmd`` asks for and the law it pins, neither applied yet.
+    def to_joints(self, cmd: command.CommandType) -> np.ndarray:
+        """The joints ``cmd`` asks for, not applied yet.
 
         Solved here so that a command the arm cannot hold raises before anything changes; ``command_target``
-        is what applies the pair. Asking for nothing, and a ``Reset``, travel home under the native law.
+        is what applies the result.
         """
-        target = self.target_joints(cmd)
-        # The vendor takes a fixed-width finite vector and raises on anything else, too late to be caught
-        # alongside the rest of what makes a command unusable.
-        if np.shape(target) != np.shape(self._home_joints) or not np.all(np.isfinite(target)):
+        match cmd:
+            case command.CartesianPosition(pose):
+                target = self._ik(pose)
+            case command.CartesianDelta() as delta_cmd:
+                target = self._ik(delta_cmd.apply(self.state.ee_pose))
+            case command.JointPosition(positions):
+                target = np.asarray(positions, dtype=np.float64)
+            case command.JointDelta(velocities=joint_delta):
+                target = self.state.q + joint_delta
+            case other:
+                raise NotImplementedError(f'Unsupported command {other}')
+        # The robot raises on a bad target too late to name the command; one velocity limit per joint sets the width.
+        if np.shape(target) != self._MAX_JOINT_VELOCITY.shape or not np.all(np.isfinite(target)):
             raise ValueError(f'{cmd} does not name a joint target this arm can hold: {target}')
-        return target, None if isinstance(cmd, command.Reset | None) else cmd.mode
+        return target
 
-    def serve_sync_move(self, call: pimm.calls.Call[command.CommandType | None, None]) -> Iterator[pimm.Command]:
+    def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
         """Put the arm where ``call`` asks and answer it once the state saying so is out."""
+        cmd = call.request
         try:
-            if (yield from self.move_to(*self.accept(call.request))) is MoveStatus.ARRIVED:
+            if (yield from self.move_to(self.to_joints(cmd), cmd.mode)) is MoveStatus.ARRIVED:
                 call.set_result(None)
             else:
                 call.set_exception(MoveAbandoned())
         except Exception as exc:
             try:
-                self.publish(self.vendor.state())
+                self.publish(self.robot.state())
             finally:
                 call.set_exception(exc)  # an arm the driver cannot read still leaves nobody waiting
 
-    def park(self) -> Iterator[pimm.Command]:
-        """Move the arm to the home pose, giving up after ``park_timeout_s``. Drive with ``yield from``.
-
-        Only a stop gets here: a run that ends by raising skips the park, because moving an arm in answer to
-        a fault is the driver deciding on its own to move. Where it goes is fixed — ``home_joints``, at the
-        configured dynamics factor. Nothing here can fail the shutdown; failures are logged and no more.
-        """
-        target = np.asarray(self._home_joints, dtype=np.float64)
+    def park(self, *, at_teardown: bool = False) -> Iterator[pimm.Command]:
+        """Move the arm to ``_PARK_JOINTS``, logging a failure rather than raising it."""
         try:
-            logger.info('Parking the arm at the home pose')
-            self.vendor.recover_from_errors()  # once, before the move: a reflex during the move ends the park
-            deadline = self.clock.now() + self._park_timeout_s
-            # The home pose is a long way off, and only the native law shapes the reference on the way there.
-            outcome = yield from self.await_goal(
-                target, lambda: self.clock.now() >= deadline, lambda: pimm.Sleep(self._PARK_POLL_S), None
-            )
-            if outcome is MoveStatus.GAVE_UP:
-                logger.error(f'Parking timed out after {self._park_timeout_s}s, the arm stays where it stands')
-        # rules-allow: swallowed-error — parking is best-effort; brakes and control release must run regardless.
+            logger.info('Moving the arm to the park pose')
+            self.robot.recover_from_errors()
+            # The park pose is a long way off, and only the native law shapes the reference on the way there.
+            yield from self.move_to(_PARK_JOINTS, None, at_teardown=at_teardown)
+        # rules-allow: swallowed-error — a failed park reads ERROR on the arm and ends neither run nor shutdown
         except Exception:
-            logger.exception('Parking failed, the arm stays where it stands')
+            logger.exception('The arm did not reach the park pose, it stays where it stands')
 
 
 class Robot(pimm.ControlSystem):
@@ -318,19 +286,14 @@ class Robot(pimm.ControlSystem):
         ip: str,
         *,
         relative_dynamics_factor=0.2,
-        home_joints: list[float] | None = None,
-        home_joints_variation: list[float] | None = None,
         load: tuple | None = None,
         collision_coeff: float = 2.0,
         manage_desk: bool = True,
         reboot_on_safety_error: bool = False,
-        park_timeout_s: float = 10.0,
     ) -> None:
         """
         :param ip: IP address of the robot.
         :param relative_dynamics_factor: Relative dynamics factor in (0, 1]. Smaller values are more conservative.
-        :param home_joints: Joints of "reset" position, and the pose the arm is parked at when the run ends.
-        :param home_joints_variation: Max random deviation per joint in radians. Set to [0]*7 to disable.
         :param collision_coeff: Multiplier for collision thresholds. Higher = more tolerant.
         :param manage_desk: Run the Desk session from the driver: open the brakes and activate FCI on start, close
             them on stop. Requires ``FRANKA_DESK_USER`` and ``FRANKA_DESK_PASSWORD`` in the environment. Set to
@@ -339,26 +302,18 @@ class Robot(pimm.ControlSystem):
         :param reboot_on_safety_error: When the control box is in an unrecoverable ``SafetyError`` on start, reboot
             it, wait for it to come back, and try once more before giving up. Only applies when ``manage_desk`` is
             set.
-        :param park_timeout_s: How long the arm may travel back to ``home_joints`` when the run ends before the
-            driver gives up and stops control where it stands. It is spent inside the world's teardown budget.
         """
         assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
         self._ip = ip
         self._relative_dynamics_factor = relative_dynamics_factor
-        self._home_joints = home_joints if home_joints is not None else [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
-        self._home_joints_variation = (
-            home_joints_variation if home_joints_variation is not None else [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
-        )
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
-        self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType | None, None](self)
+        self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state = pimm.ControlSystemEmitter[FrankaState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
         self._load = load
         self._collision_coeff = collision_coeff
-        self._robot: pf.Robot | None = None
         self._desk_credentials = _read_desk_credentials() if manage_desk else None
         self._reboot_on_safety_error = reboot_on_safety_error
-        self._park_timeout_s = park_timeout_s
 
     @staticmethod
     def _build_robot_meta(robot) -> dict:
@@ -445,49 +400,31 @@ class Robot(pimm.ControlSystem):
                     yield desk
                     return
 
-    @property
-    def _vendor(self) -> pf.Robot:
+    @functools.cached_property
+    def _robot(self) -> pf.Robot:
         """The libfranka handle, connected on first use."""
-        if self._robot is None:
-            self._robot = pf.Robot(
-                self._ip,
-                realtime_config=pf.RealtimeConfig.Ignore,
-                relative_dynamics_factor=self._relative_dynamics_factor,
-            )
-        return self._robot
+        return pf.Robot(
+            self._ip, realtime_config=pf.RealtimeConfig.Ignore, relative_dynamics_factor=self._relative_dynamics_factor
+        )
 
     def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
         return _Arm(
-            self._vendor,
-            self.sync_move,
-            self.commands,
-            self.state,
-            self._home_joints,
-            self._home_joints_variation,
-            self._park_timeout_s,
-            self._relative_dynamics_factor,
-            should_stop,
-            clock,
+            self._robot, self.sync_move, self.commands, self.state, self._relative_dynamics_factor, should_stop, clock
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         with self._desk_session(), self._arm(should_stop, clock) as arm:
-            vendor = arm.vendor
-            self._init_robot(vendor)
-            self.robot_meta.emit(Robot._build_robot_meta(vendor))
-            vendor.recover_from_errors()
+            robot = arm.robot
+            self._init_robot(robot)
+            self.robot_meta.emit(Robot._build_robot_meta(robot))
 
-            try:
-                yield from arm.move_to(arm.home_target(), None)
-            # rules-allow: swallowed-error — an arm that will not home reads ERROR; it does not end the run
-            except Exception as exc:
-                logger.error(f'Homing failed, the arm is not where the driver put it: {exc}')
+            yield from arm.park()
 
             in_error = False
 
             while not should_stop.value:
-                st = vendor.state()
+                st = robot.state()
                 arm.publish(st)
 
                 in_error, entered_error = _check_error(st.error != 0, in_error)
@@ -495,24 +432,20 @@ class Robot(pimm.ControlSystem):
                     logger.warning(f'Robot error: {st.error_message}')
 
                 if in_error:
-                    vendor.recover_from_errors()
+                    robot.recover_from_errors()
                     yield arm.limiter.wait()
                     continue
 
                 asked = arm.moves.next_request()
                 if isinstance(asked, pimm.calls.Call):
-                    yield from arm.serve_sync_move(asked)
+                    yield from arm.sync_move(asked)
                 elif asked is not None:
                     with log_failure(asked):
-                        target, mode = arm.accept(asked)
-                        if isinstance(asked, command.Reset):
-                            yield from arm.move_to(target, mode)
-                        else:
-                            arm.command_target(target, mode)
+                        arm.command_target(arm.to_joints(asked), asked.mode)
 
                 yield arm.limiter.wait()
 
-            yield from arm.park()
+            yield from arm.park(at_teardown=True)
 
 
 if __name__ == '__main__':

@@ -145,8 +145,8 @@ def mujoco_franka(sim, camera_dict):
         descriptor='mujoco.franka',
         observations=observations,
         commands=commands,
-        # Two handlers on one sim: the draw places the objects, and the move takes the arm to where the
-        # trial starts it.
+        # Two handlers on one sim: the draw places the objects and leaves the arm at the pose the scene
+        # itself starts from; the move is what a trial names to put the arm somewhere else.
         prepare_handlers={keys.SCENE: sim.env_reset, keys.ARM: sim.sync_move},
         static_meta={**ROBOT_STATIC_META, 'simulation.mujoco_model_path': sim.mujoco_model_path},
         meta_source=sim.robot_meta,

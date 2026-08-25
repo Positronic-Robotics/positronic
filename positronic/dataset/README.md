@@ -373,9 +373,8 @@ Built‑in serializers (`positronic.dataset.serializers.Serializers`)
   - Expands to `{'.status': status, '.q': q, '.dq': dq, '.ee_pose': transform_3d(ee)}`; every sample is
     recorded whatever the status.
 - `robot_command(command) -> dict`
-  - `CartesianMove(pose)` -> `{'.pose': transform_3d(pose)}`
-  - `JointMove(positions)` -> `{'.joints': positions}`
-  - `Reset()` -> `{'.reset': 1}`
+  - `CartesianPosition(pose)` -> `{'.pose': transform_3d(pose)}`
+  - `JointPosition(positions)` -> `{'.joints': positions}`
 
 Lifecycle
 - `START_EPISODE`: allocates a new episode writer and applies provided static

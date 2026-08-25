@@ -25,7 +25,7 @@ uv run positronic-data-collection sim \
     --webxr=.iphone
 ```
 
-Install **XR Browser** or **WebXR Viewer** on iPhone. The script prints the URL in console. Open in browser, tap **Enter AR**, grant permissions. Hold phone upright (reticle = virtual controller). Use HUD: **Track** (start/stop positional tracking), **Record** (start/stop episode), **Reset** (abort/reset scene), **Gripper slider** (0-1).
+Install **XR Browser** or **WebXR Viewer** on iPhone. The script prints the URL in console. Open in browser, tap **Enter AR**, grant permissions. Hold phone upright (reticle = virtual controller). Use HUD: **Track** (start/stop positional tracking), **Record** (start/stop episode), **Reset** (abort recording, return the arm to its start pose; in sim the scene is drawn again too), **Gripper slider** (0-1).
 
 ### Android
 ```bash
@@ -48,11 +48,11 @@ uv run positronic-data-collection sim \
 
 Open Oculus Browser, navigate to `https://<host-ip>:5005/`. Browser shows "Dangerous connection" warning (expected with self-signed certificates) – click Advanced → Proceed. Click "Enter AR" and approve permissions.
 
-**Controls:** Right B (start/stop recording), Right A (toggle tracking), Right stick press (abort/reset), Right trigger (gripper).
+**Controls:** Right B (start/stop recording), Right A (toggle tracking), Right stick press (abort recording, return the arm to its start pose; in sim the scene is drawn again too), Right trigger (gripper).
 
 ## Collection Workflow
 
-Press **Track** (or Right A) to enable controller. Press **Record** (or Right B) to start episode. Perform task (e.g., grasp cube, move, place). Press **Record** again to save. Press **Reset** (or Right stick press) to randomize scene and start next episode. Press **Reset** during recording to abort and discard.
+Press **Track** (or Right A) to enable controller. Press **Record** (or Right B) to start episode. Perform task (e.g., grasp cube, move, place). Press **Record** again to save. Press **Reset** (or Right stick press) to ready the rig for the next episode: the arm goes back to a start pose, and in sim the scene is drawn again. Teleoperation is held until every device is there. Press **Reset** during recording to abort and discard.
 
 **Best practices:** Record calibration runs first and review in Positronic server (`uv run positronic-server --dataset.path=~/datasets/my_task`). Collect 50+ demonstrations for single-task scenarios (minimum 30, multi-task needs 100-500+). Randomize object positions, vary approach angles, keep episodes short (10-30s), demonstrate successful and near-failure cases (not catastrophic failures).
 
@@ -68,7 +68,7 @@ uv run positronic-data-collection real \
 Requires Franka Panda with FCI, gripper, cameras. Install extras: `uv sync --locked --extra hardware` (Linux only). Configure network connection and udev rules (see [Drivers](../positronic/drivers/)).
 
 ### Other Platforms
-- **Kinova Gen3**: Add `--robot_arm=@positronic.cfg.hardware.roboarm.kinova`
+- **Kinova Gen3**: Add `--robot_arm=@positronic.cfg.hardware.roboarm.kinova --nominal_joints=[0.0,0.0,0.5,-1.5,0.0,-0.5,1.5708]` — the start pose the right stick puts the arm at belongs to the arm, so it is named with it
 - **SO101**: Use `positronic-data-collection so101` (bimanual setup)
 - **DROID**: Use `positronic-data-collection droid` (joint-space control)
 

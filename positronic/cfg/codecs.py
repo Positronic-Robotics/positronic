@@ -3,6 +3,7 @@
 import configuronic as cfn
 
 from positronic import geom, keys
+from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.policy.codec import (
     ActionHorizon,
@@ -110,15 +111,6 @@ def joint_delta_action(num_joints: int):
     from positronic.policy.action import JointDeltaAction
 
     return JointDeltaAction(num_joints=num_joints)
-
-
-# The gains DROID's Franka ran, which its pretrained checkpoints were trained under.
-DROID_IMPEDANCE = roboarm_command.Impedance(
-    kq=(40.0, 30.0, 50.0, 25.0, 35.0, 25.0, 10.0),
-    kqd=(4.0, 6.0, 5.0, 5.0, 3.0, 2.0, 1.0),
-    kx=(750.0, 750.0, 750.0, 15.0, 15.0, 15.0),
-    kxd=(37.0, 37.0, 37.0, 2.0, 2.0, 2.0),
-)
 
 
 @cfn.config()

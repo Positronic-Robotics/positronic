@@ -11,14 +11,13 @@ from positronic.drivers.utils import _GRIP_TIMEOUT_S, MoveAbandoned, Moves, Move
 from positronic.tests.testing_coutils import ManualCommandReceiver
 
 TOL = 0.05
-HOME_WIDTH = 0.0
 
 
 def _accepted(
     target: float | np.ndarray, tol: float = TOL, timeout_s: float = 3.0
-) -> tuple[Moves[float], FakeCall[float | None, None]]:
+) -> tuple[Moves[float], FakeCall[float, None]]:
     moves = _unasked()
-    call = FakeCall[float | None, None](0.0)
+    call = FakeCall[float, None](0.0)
     moves.accept(call, target, tol, now=0.0, timeout_s=timeout_s)
     return moves, call
 
@@ -94,14 +93,14 @@ def test_a_move_that_arrives_clears_the_error_left_by_one_that_did_not():
     moves.settle(0.4, now=3.0)
     assert moves.errored
 
-    moves.accept(FakeCall[float | None, None](0.0), 1.0, TOL, now=3.0, timeout_s=3.0)
+    moves.accept(FakeCall[float, None](0.0), 1.0, TOL, now=3.0, timeout_s=3.0)
     assert moves.settle(1.0, now=3.1) is MoveStatus.ARRIVED
     assert not moves.errored
 
 
 def _unasked() -> Moves[float]:
     """Moves driven by hand rather than asked for: nothing is bound to either way of asking."""
-    handler = pimm.calls.ControlSystemHandler[float | None, None](Passive())
+    handler = pimm.calls.ControlSystemHandler[float, None](Passive())
     return Moves[float](handler, ManualCommandReceiver())
 
 
@@ -109,8 +108,8 @@ def _unasked() -> Moves[float]:
 def asking():
     """The two ways a gripper is asked for a width: a caller wired to the moves it serves, so a test asks
     the way a client does, and the stream its setpoints arrive on."""
-    caller = pimm.calls.ControlSystemCaller[float | None, None](Passive())
-    handler = pimm.calls.ControlSystemHandler[float | None, None](Passive())
+    caller = pimm.calls.ControlSystemCaller[float, None](Passive())
+    handler = pimm.calls.ControlSystemHandler[float, None](Passive())
     stream = ManualCommandReceiver()
     with pimm.World() as world:
         wire_call(world, caller, handler)
@@ -122,7 +121,7 @@ def test_a_grip_target_that_is_no_width_is_refused_rather_than_saturated(asking)
     ask, moves, _ = asking
     answer = ask(float('nan'))
 
-    assert grip_setpoint(moves, HOME_WIDTH, grip=0.0, now=0.0) is None
+    assert grip_setpoint(moves, grip=0.0, now=0.0) is None
     assert not moves.active
     with pytest.raises(ValueError, match='not a grip width'):
         answer.result()
@@ -133,29 +132,17 @@ def test_a_streamed_grip_target_that_is_no_width_leaves_the_fingers_alone(asking
     _, moves, stream = asking
     stream.push(float('inf'))
 
-    assert grip_setpoint(moves, HOME_WIDTH, grip=0.4, now=0.0) is None
-
-
-def test_a_grip_move_that_asks_for_no_width_asks_for_home(asking):
-    """Readying a rig is this call with nothing in it, so the width it opens to is the driver's own."""
-    ask, moves, _ = asking
-    answer = ask(None)
-
-    assert grip_setpoint(moves, 0.3, grip=0.0, now=0.0) == 0.3
-    assert moves.active
-    assert grip_setpoint(moves, 0.3, grip=0.3, now=0.1) is None
-    moves.answer()
-    assert answer.result() is None
+    assert grip_setpoint(moves, grip=0.4, now=0.0) is None
 
 
 def test_a_grip_call_takes_the_fingers_until_it_arrives(asking):
     ask, moves, _ = asking
     answer = ask(0.7)
 
-    assert grip_setpoint(moves, HOME_WIDTH, grip=0.0, now=0.0) == 0.7
+    assert grip_setpoint(moves, grip=0.0, now=0.0) == 0.7
     assert moves.active
-    assert grip_setpoint(moves, HOME_WIDTH, grip=0.3, now=0.1) is None, 'commanded again mid-travel'
-    assert grip_setpoint(moves, HOME_WIDTH, grip=0.7, now=0.2) is None
+    assert grip_setpoint(moves, grip=0.3, now=0.1) is None, 'commanded again mid-travel'
+    assert grip_setpoint(moves, grip=0.7, now=0.2) is None
     assert not moves.active
     moves.answer()
     assert answer.result() is None
@@ -165,9 +152,9 @@ def test_a_grip_that_gives_up_hands_back_the_width_the_fingers_stopped_at(asking
     """The answer waits for the driver to write the width handed back here, so the fingers stop first."""
     ask, moves, _ = asking
     answer = ask(1.0)
-    grip_setpoint(moves, HOME_WIDTH, grip=0.0, now=0.0)
+    grip_setpoint(moves, grip=0.0, now=0.0)
 
-    assert grip_setpoint(moves, HOME_WIDTH, grip=0.42, now=_GRIP_TIMEOUT_S) == 0.42
+    assert grip_setpoint(moves, grip=0.42, now=_GRIP_TIMEOUT_S) == 0.42
     assert not moves.active and moves.errored
     assert not answer.done(), 'the fingers are still on the width they missed'
 
@@ -181,8 +168,8 @@ def test_a_grip_asked_for_past_the_range_is_tracked_against_a_width_the_fingers_
     ask, moves, _ = asking
     answer = ask(1.5)
 
-    assert grip_setpoint(moves, HOME_WIDTH, grip=0.0, now=0.0) == 1.0
-    assert grip_setpoint(moves, HOME_WIDTH, grip=1.0, now=0.1) is None
+    assert grip_setpoint(moves, grip=0.0, now=0.0) == 1.0
+    assert grip_setpoint(moves, grip=1.0, now=0.1) is None
     moves.answer()
     assert answer.result() is None
 
@@ -193,11 +180,11 @@ def test_a_streamed_grip_waits_for_the_call_queue_to_be_empty(asking):
     stream.push(0.25)
     ask(0.9)
 
-    assert grip_setpoint(moves, HOME_WIDTH, grip=0.0, now=0.0) == 0.9
-    assert grip_setpoint(moves, HOME_WIDTH, grip=0.9, now=0.1) is None  # the call arrives
+    assert grip_setpoint(moves, grip=0.0, now=0.0) == 0.9
+    assert grip_setpoint(moves, grip=0.9, now=0.1) is None  # the call arrives
     moves.answer()
-    assert grip_setpoint(moves, HOME_WIDTH, grip=0.9, now=0.2) == 0.25  # the stream, still waiting
-    assert grip_setpoint(moves, HOME_WIDTH, grip=0.25, now=0.3) is None
+    assert grip_setpoint(moves, grip=0.9, now=0.2) == 0.25  # the stream, still waiting
+    assert grip_setpoint(moves, grip=0.25, now=0.3) is None
 
 
 def test_how_long_a_move_gets_is_the_driver_s_to_say():
@@ -265,7 +252,7 @@ def test_a_run_that_dies_with_one_move_settled_and_another_in_flight_answers_bot
     """One outcome each: the settled move earned its answer, the travelling one is owed what killed it."""
     moves, landed = _accepted(0.0)
     moves.settle(TOL / 2, now=0.1)
-    travelling = FakeCall[float | None, None](0.0)
+    travelling = FakeCall[float, None](0.0)
     moves.accept(travelling, 1.0, TOL, now=0.1, timeout_s=3.0)
 
     moves.fail(RuntimeError('the bus went away'))

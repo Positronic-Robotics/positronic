@@ -15,7 +15,6 @@ from positronic.drivers.roboarm.command import (
     JointDelta,
     JointPosition,
     PositionControl,
-    Reset,
 )
 
 # Serializer contract for values:
@@ -113,11 +112,11 @@ class Serializers:
                     '.mode.impedance.kxd': np.asarray(kxd),
                 }
 
-    # TODO: a command writes only the entries its own form has, so a signal here is sparse — `.reset` and
-    # `.mode.*` have samples at some commands and none at others. Which command a sample belongs to is
-    # then a timestamp alignment against a signal every command writes, and a reader taking the last
-    # value as still standing ascribes a pinned mode to commands that pinned none. A serializer cannot
-    # say which of its entries are sparse, and nothing downstream asks.
+    # TODO: a command writes only the entries its own form has, so a signal here is sparse — `.mode.*` has
+    # samples at some commands and none at others. Which command a sample belongs to is then a timestamp
+    # alignment against a signal every command writes, and a reader taking the last value as still standing
+    # ascribes a pinned mode to commands that pinned none. A serializer cannot say which of its entries are
+    # sparse, and nothing downstream asks.
     @staticmethod
     def robot_command(command: CommandType) -> dict[str, np.ndarray | int]:
         entries: dict[str, np.ndarray | int]
@@ -133,8 +132,6 @@ class Serializers:
                 entries = {'.joints': positions}
             case JointDelta(delta):
                 entries = {'.joint_deltas': delta}
-            case Reset():
-                return {'.reset': 1}
         if command.mode is not None:
             entries.update(Serializers._mode_entries(command.mode))
         return entries

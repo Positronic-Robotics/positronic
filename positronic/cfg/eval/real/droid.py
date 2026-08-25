@@ -1,8 +1,9 @@
 import configuronic as cfn
 
+from positronic import keys
 from positronic.cfg.embodiment import droid
-from positronic.cfg.eval import build_tasks
 from positronic.cfg.eval.real.tasks import BATTERIES_TASK, SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK, UNIFIED_TASK
+from positronic.cfg.hardware.roboarm import droid_start_pose
 from positronic.eval import Eval, Task
 
 
@@ -10,12 +11,22 @@ from positronic.eval import Eval, Task
 def _droid_pick_place(embodiment, instruction, timeout, trial_count):
     """A real droid tote pick-and-place eval: the embodiment is the physical Franka, the task carries the instruction.
 
-    Real has no scene to seed (``reset=None`` — reset is physical and human) and no privileged ground-truth source
-    to record (``privileged={}`` — the droid exposes none), so the outcome is the operator's annotation rather than
-    a computed criterion. ``timeout`` is the per-trial wall-clock budget the Harness applies on the unattended path;
-    ``trial_count`` is how many such trials it sweeps (real has no seed or task axis, so each is a bare timed trial).
+    The rig has no scene of its own to seed, so nothing asks for one: filling the tote is a person's, and
+    they do it before the sweep starts. The outcome is the operator's annotation, since real has no
+    ground-truth source to compute one from.
     """
-    return Eval(embodiment, build_tasks(Task(instruction_source=instruction, timeout_sec=timeout), None, trial_count))
+    return Eval(
+        embodiment,
+        [
+            Task(
+                instruction_source=instruction,
+                timeout_sec=timeout,
+                prepare_args={keys.ARM: droid_start_pose(), keys.GRIPPER: 0.0},
+                meta={keys.EVAL_TRIAL_INDEX: trial, keys.EVAL_TRIAL_COUNT: trial_count},
+            )
+            for trial in range(trial_count)
+        ],
+    )
 
 
 pick_place = _droid_pick_place.override(instruction=UNIFIED_TASK)

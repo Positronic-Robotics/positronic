@@ -19,12 +19,11 @@ _STOPBITS = 1
 
 
 class Robotiq2F(pimm.ControlSystem):
-    def __init__(self, port: str, home_grip: float = 0.0):
+    def __init__(self, port: str):
         self._port = port
-        self._home_grip = home_grip
         self.grip = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
-        self.sync_move = pimm.calls.ControlSystemHandler[float | None, None](self)
+        self.sync_move = pimm.calls.ControlSystemHandler[float, None](self)
         self.force = pimm.DefaultingReceiver(self, default=255)  # device scale 0..255
         self.speed = pimm.DefaultingReceiver(self, default=255)  # device scale 0..255
 
@@ -56,7 +55,7 @@ class Robotiq2F(pimm.ControlSystem):
                     grip = self._width(client)
                     self.grip.emit(grip)
 
-                    target = grip_setpoint(moves, self._home_grip, grip, clock.now())
+                    target = grip_setpoint(moves, grip, clock.now())
                     if target is not None:
                         self._command(client, target)
                     moves.answer()  # the width a settled move is answered with is on the fingers

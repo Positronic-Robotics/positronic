@@ -14,7 +14,6 @@ import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
-from positronic.drivers.roboarm.command import Reset
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
 from positronic.policy.base import Policy
@@ -281,11 +280,11 @@ class Harness(pimm.ControlSystem):
         for name, value in action.items():
             self.commands[name].emit(value)
 
-    def _prepare(self, should_stop: pimm.SignalReceiver, task: Task) -> Generator[pimm.Command, None, None]:
-        """Ask everything the trial readies — scene, devices, operator — and come back once all have."""
-        unknown = sorted(set(task.prepare_args) - set(self.prepare))
+    def _ready(self, should_stop: pimm.SignalReceiver, args: dict[str, Any]) -> Generator[pimm.Command, None, None]:
+        """Ask each device in ``args`` for the value it names, and come back once every one has answered."""
+        unknown = sorted(set(args) - set(self.prepare))
         assert not unknown, f'{unknown} is not something this embodiment readies, so nothing would be asked'
-        ready = pimm.calls.all_of([ask(task.prepare_args.get(name)) for name, ask in self.prepare.items()])
+        ready = pimm.calls.all_of([self.prepare[name](arg) for name, arg in args.items()])
         while not ready.done() and not should_stop.value:
             yield pimm.Yield() if self._embodiment.simulated else pimm.Sleep(POLL_PERIOD_SEC)
         # An episode must not open on a rig that never got ready, and its asker must hear that rather than wait
@@ -308,7 +307,8 @@ class Harness(pimm.ControlSystem):
         """Drop everything the episode has going: the schedule being played, and the call on the worker.
 
         The call is let go of rather than waited for, so a model that hangs cannot hold up the recording's
-        stop or the home. Devices hold their last commanded position; nothing downstream is buffered.
+        stop or the next trial's prepare. Devices hold their last commanded position; nothing downstream is
+        buffered.
         """
         for schedule in self._schedules.values():
             schedule.clear()
@@ -338,7 +338,8 @@ class Harness(pimm.ControlSystem):
         self.ds_command.emit(stop)
         virtual_now = clock.now()  # before the round below, whose sim-clock advance belongs to no rollout
         # Give the recorder a round to commit the STOP before the next START (they share ``ds_command``, where
-        # last-value-wins would drop one) and before the home command, so homing stays out of the recording.
+        # last-value-wins would drop one) and before the next trial's prepare, so the moves it asks for stay
+        # out of the recording.
         yield self._pace(clock)
         # After that round, so the recorder's STOP-time record.io span still parents to the episode. Skew: a
         # producer stepping in that shared round charges ≤ one control period to the closing episode.
@@ -361,7 +362,7 @@ class Harness(pimm.ControlSystem):
         # The episode span opens first, so the prepare and the rollout's other phase spans parent to it.
         self._telemetry.begin(self._task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
-            yield from self._prepare(should_stop, self._task)
+            yield from self._ready(should_stop, self._task.prepare_args)
         # The join waits on the call the last episode abandoned, so the rig is readied before it: a model
         # that hangs must not leave the devices standing at the setpoint the policy left them. It runs
         # before the session below, which is what makes closing the abandoned one safe.
@@ -375,16 +376,21 @@ class Harness(pimm.ControlSystem):
         self._deadline = clock.now() + budget if budget is not None else None
         self.ds_command.emit(DsWriterCommand.START())
 
-    def _end_episode(self, clock: pimm.Clock, payload: dict[str, Any]) -> Generator[pimm.Command, None, None]:
-        """Close the live episode: finalize the recording, retire the session, hand the terminal back to
-        whoever asked for the episode.
+    def _end_episode(
+        self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, payload: dict[str, Any]
+    ) -> Generator[pimm.Command, None, None]:
+        """Close the live episode: finalize the recording, put the rig back, retire the session, hand the
+        terminal back to whoever asked for the episode.
 
         The worker is retired rather than joined here, so a ``RemoteSession``'s websocket outlives the call
         still using it.
         """
         yield from self._finalize_recording(clock, payload)
-        if not self._embodiment.simulated:  # a powered arm holds the policy's last setpoint until the next trial
-            self._emit({name: Reset() for name in self.commands if keys.is_robot_command(name)})
+        # A powered arm holds the policy's last setpoint until the next trial, so each device the trial placed
+        # goes back where it put it — the trial's own args, not a fresh draw. The scene is a person's to set
+        # up, and is not asked again. The terminal waits on the move: a scene the next trial draws rebuilds
+        # the model an unfinished one is still travelling under, which nothing but its timeout would end.
+        yield from self._ready(should_stop, {k: v for k, v in self._task.prepare_args.items() if k != keys.SCENE})
         assert self._call is not None, 'an episode exists only for the call that asked for it'
         self._call.set_result(payload)
         self._call = None
@@ -396,11 +402,15 @@ class Harness(pimm.ControlSystem):
             self._call = None
 
     def _advance_episode(
-        self, worker: _InferenceWorker, done: pimm.Message[dict] | None, clock: pimm.Clock
+        self,
+        worker: _InferenceWorker,
+        done: pimm.Message[dict] | None,
+        clock: pimm.Clock,
+        should_stop: pimm.SignalReceiver,
     ) -> Generator[pimm.Command, None, None]:
         """One round of the live episode: end it if it is out of budget or done, else step the policy."""
         if (terminal := self._trial_terminal(done, clock)) is not None:
-            yield from self._end_episode(clock, terminal)
+            yield from self._end_episode(clock, should_stop, terminal)
         else:
             try:
                 self._step(worker, clock)
@@ -545,7 +555,7 @@ class Harness(pimm.ControlSystem):
             if self._worker is not None:
                 if call is not None:  # the live episode is the one that finishes; a second ask is refused
                     call.set_exception(RuntimeError('An episode is already running'))
-                yield from self._advance_episode(self._worker, done, clock)
+                yield from self._advance_episode(self._worker, done, clock, should_stop)
             elif call is not None:
                 yield from self._begin_episode(clock, should_stop, call)
             elif manual is not None:

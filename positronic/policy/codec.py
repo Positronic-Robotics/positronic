@@ -514,7 +514,7 @@ class ChangeEEFrame(Codec):
                 return command.CartesianPosition(pose=pose * transform, mode=mode)
             case command.CartesianDelta(delta, frame, mode):
                 return command.CartesianDelta(delta=delta, frame=transform.inv * frame, mode=mode)
-            case command.Reset() | command.JointPosition() | command.JointDelta():
+            case command.JointPosition() | command.JointDelta():
                 return value
             case _:
                 return change_frame(value, transform)
@@ -589,8 +589,7 @@ class SetControlMode(Codec):
     """Sets the control mode a chunk executes under on every robot command it carries (inference only).
 
     Composes left of an action decoder (``SetControlMode(mode) | action``). Every command of every arm
-    carries the mode, not only the first of the unsuffixed channel; a ``Reset`` pins none and passes
-    through untouched.
+    carries the mode, not only the first of the unsuffixed channel.
     """
 
     def __init__(self, mode: command.ControlModeType):
@@ -605,8 +604,6 @@ class SetControlMode(Codec):
         stamped = {
             key: replace(cmd, mode=self._mode)
             for key, cmd in data.items()
-            if obs_keys.is_robot_command(key)
-            and isinstance(cmd, command.CommandType)
-            and not isinstance(cmd, command.Reset)
+            if obs_keys.is_robot_command(key) and isinstance(cmd, command.CommandType)
         }
         return {**data, **stamped} if stamped else data

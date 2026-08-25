@@ -48,8 +48,8 @@ def test_a_sync_move_travels_the_arm_to_the_joints_it_asks_for():
         np.testing.assert_allclose(state.value.q, target, atol=sim._MOVE_TOL)
 
 
-def test_a_sync_move_that_asks_for_nothing_puts_the_arm_home():
-    """Readying a rig is this call with nothing in it, so where it goes is the sim's own home pose."""
+def test_a_sync_move_takes_the_arm_over_from_the_command_stream():
+    """Between moves the stream owns the arm, so a move has to retarget what the stream last set."""
     sim = MujocoSim(MODEL, loaders=())
 
     with pimm.World(virtual_time=True) as world:
@@ -61,9 +61,9 @@ def test_a_sync_move_that_asks_for_nothing_puts_the_arm_home():
 
         commands.emit(roboarm_command.JointPosition(home + 0.3))
         drive_scheduler(scheduler, steps=_turns(sim, 2.0))
-        assert np.max(np.abs(state.value.q - home)) > sim._MOVE_TOL, 'the arm never left home'
+        assert np.max(np.abs(state.value.q - home)) > sim._MOVE_TOL, 'the streamed command never moved the arm'
 
-        _answered(scheduler, move(None), _turns(sim, 5.0)).result()
+        _answered(scheduler, move(roboarm_command.JointPosition(home)), _turns(sim, 5.0)).result()
         np.testing.assert_allclose(state.value.q, home, atol=sim._MOVE_TOL)
 
 

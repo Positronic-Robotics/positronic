@@ -37,7 +37,7 @@ from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import CartesianPosition, CommandType, Reset
+from positronic.drivers.roboarm.command import CartesianPosition, CommandType
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
@@ -156,10 +156,6 @@ class FakeRobot(pimm.ControlSystem):
                 self._pos = np.asarray(pose.translation, dtype=np.float32)
                 self._q = self._q.copy()
                 self._q[:3] = self._pos
-            case Reset():
-                self._pos = INITIAL_POS.copy()
-                self._q = INITIAL_Q.copy()
-                self._status = RobotStatus.AVAILABLE
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         self.robot_meta.emit({})

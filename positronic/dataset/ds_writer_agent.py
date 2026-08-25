@@ -74,15 +74,16 @@ class DsWriterAgent(pimm.ControlSystem):
 
     On `START_EPISODE`, opens a new `EpisodeWriter` from the provided
     `DatasetWriter` and applies `static_data`. On the opening turn, samples that
-    predate START — the inter-episode home command and any pre-reset frame — are
-    dropped, while a genuine post-START value is kept; the producer's post-reset
+    predate START — the previous episode's last command and any pre-reset frame —
+    are dropped, while a genuine post-START value is kept; the producer's post-reset
     frame-0 arrives the next turn and is the first recorded sample. While open,
     each updated input signal (from `inputs`) is appended with the current
     timestamp from `clock`. `STOP_EPISODE` and `ABORT_EPISODE` are handled after
     that turn's inputs, so the trial's last frame is recorded before STOP
-    finalizes the writer; samples timestamped after STOP — post-episode home or
-    sensor data the async real path may queue — are dropped, and ABORT discards
-    the episode. Invalid or out-of-order commands are ignored with a log message.
+    finalizes the writer; samples timestamped after STOP — whatever the next
+    trial's prepare moves, or sensor data the async real path queues — are
+    dropped, and ABORT discards the episode. Invalid or out-of-order commands
+    are ignored with a log message.
 
     `TimeMode` selects whether timestamps come from the control loop clock
     (`CLOCK`) or from the producing message (`MESSAGE`).
