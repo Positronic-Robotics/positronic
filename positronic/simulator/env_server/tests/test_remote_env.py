@@ -282,10 +282,10 @@ class _CountdownAdapter(EnvAdapter):
 
 
 @pytest.mark.timeout(60.0)
-def test_proxy_publishes_frame0_then_free_runs():
-    """``reset`` arms frame-0 (step 0); the proxy publishes it on its next turn and clears ``done``, then
-    free-runs — it steps the env every active tick (physics progresses through the inference window). The
-    step-count obs makes it observable: frame-0 is step 0, then it advances each tick with no command needed."""
+def test_proxy_publishes_the_reset_frame_then_free_runs():
+    """``reset`` publishes the env's frame (step 0) and clears ``done``, then the proxy free-runs — it steps
+    the env every active tick (physics progresses through the inference window). The step-count obs makes it
+    observable: the reset publishes step 0, then it advances each tick with no command needed."""
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
         obs_rx = world.pair(proxy.observations['value'])
@@ -294,8 +294,7 @@ def test_proxy_publishes_frame0_then_free_runs():
         scheduler = world.start([proxy])
         drive_scheduler(scheduler, steps=2)  # inactive: the proxy paces time without an env
 
-        proxy.reset({keys.EVAL_SEED: 0})  # arm frame-0; the run loop publishes it on its next turn
-        drive_scheduler(scheduler, steps=1)
+        proxy.reset({keys.EVAL_SEED: 0})
         np.testing.assert_array_equal(obs_rx.read().data, np.zeros(7))
         assert done_rx.read().data == {}
 

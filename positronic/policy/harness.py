@@ -139,7 +139,7 @@ class _EpisodeTelemetry:
         self._span: Span | None = None
         self._index = -1
         self._steps = 0
-        # ``None`` until the rollout starts, so the reset is excluded and a failed reset leaves it unstamped.
+        # ``None`` until the rollout starts, so the prepare is excluded and one that fails leaves it unstamped.
         self._virtual_start: float | None = None
 
     def begin(self, params: dict[str, Any]) -> None:
@@ -154,7 +154,7 @@ class _EpisodeTelemetry:
         telemetry.push_anchor(self._span)
 
     def start_rollout(self, virtual_now: float) -> None:
-        """Anchor the rollout's virtual duration at the instant its first observation landed."""
+        """Anchor the rollout's virtual duration at the instant the rig finished being readied."""
         self._virtual_start = virtual_now
 
     def step(self) -> None:
@@ -178,8 +178,7 @@ class _EpisodeTelemetry:
         self.end(virtual_now)
 
     def _close(self, virtual_now: float) -> None:
-        # A rollout whose first observation never landed — a reset that raised, or a task already done before
-        # it arrived — has zero virtual duration.
+        # A rollout that never started — a prepare that raised — has zero virtual duration.
         virtual_s = max(virtual_now - self._virtual_start, 0.0) if self._virtual_start is not None else 0.0
         assert self._span is not None
         attrs = {telemetry_keys.ATTR_EPISODE_STEPS: self._steps, telemetry_keys.ATTR_EPISODE_VIRTUAL_S: virtual_s}
@@ -220,16 +219,8 @@ class Harness(pimm.ControlSystem):
         self._retiring: _InferenceWorker | None = None
         # ``task.timeout_sec``, armed per episode; a task without one has no deadline and ends on ``done`` alone.
         self._deadline: float | None = None
-        # False until this episode's first observation lands; until then the deadline stands where the reset
-        # put it, which bounds an episode that never gets one.
-        self._rollout_started = False
         # Wall-clock telemetry for the live rollout, opened under ``--timing`` and inert otherwise.
         self._telemetry = _EpisodeTelemetry()
-        # Channels that have not delivered since this episode began; the first inference waits until every one
-        # has. A receiver latches its last value, so a producer silent between episodes would otherwise feed
-        # the previous episode's final frame. Delivery is judged by ``updated``, not ``ts``: some producers
-        # stamp ``ts`` on their own clock.
-        self._awaiting_obs: set[str] = set()
 
         self.observations = pimm.ReceiverDict(self, names=embodiment.observations)
         self.commands = pimm.EmitterDict(self, names=embodiment.commands)
@@ -348,17 +339,14 @@ class Harness(pimm.ControlSystem):
     def _begin_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, call: pimm.calls.Call[Task, dict[str, Any]]
     ) -> Generator[pimm.Command, None, None]:
-        """Open a fresh episode: ready the rig and the scene, read the instruction, open the session and
-        the recording.
+        """Open a fresh episode: ready the rig and the scene, read the instruction, open the session, the
+        recording and the first inference.
 
-        A prepare that answers only arms the producer; the first observation lands a later round. The
-        recorder drains its channels the turn it opens, so the frame from before drops out. The deadline is
-        armed here and moved to that first observation once it lands.
+        Every device publishes what it holds as it answers its prepare, so the episode opens on the readied
+        rig: the recording keeps what is on its channels, and the policy acts on it.
         """
         # Before anything that can raise, so an episode that fails to open still answers whoever asked for it.
         self._call = call
-        self._awaiting_obs = set(self._embodiment.observations)
-        self._rollout_started = False
         # The episode span opens first, so the prepare and the rollout's other phase spans parent to it.
         self._telemetry.begin(self._task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
@@ -374,7 +362,12 @@ class Harness(pimm.ControlSystem):
         )
         budget = self._task.timeout_sec
         self._deadline = clock.now() + budget if budget is not None else None
+        # The rollout begins where the prepare ends: the turns spent readying the rig are neither the trial's
+        # budget nor its duration.
+        self._telemetry.start_rollout(clock.now())
         self.ds_command.emit(DsWriterCommand.START())
+        # The policy acts on what the recording opens on: both read the rig in this round, not one apart.
+        self._step(self._worker, clock)
 
     def _end_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, payload: dict[str, Any]
@@ -412,57 +405,42 @@ class Harness(pimm.ControlSystem):
         if (terminal := self._trial_terminal(done, clock)) is not None:
             yield from self._end_episode(clock, should_stop, terminal)
         else:
-            try:
-                self._step(worker, clock)
-            except pimm.NoValueException:
-                pass
+            self._step(worker, clock)
 
-    def _build_obs(self, clock: pimm.Clock) -> dict[str, Any] | None:
+    def _build_obs(self, clock: pimm.Clock) -> dict[str, Any]:
         """Read every observation channel and assemble the policy input dict.
 
-        Raises ``NoValueException`` if any channel has no value yet, and returns ``None`` while a channel
-        still holds a pre-reset value, rather than feed a stale obs.
+        Raises ``NoValueException`` if any channel has no value yet.
         """
-        # Against the live model, not the one known at episode start: a remote env publishes its ``robot_meta``
-        # a turn after the reset that produced it, so at episode start there is no model to check.
         assert_default_frame(self._statics())
         inputs: dict[str, Any] = {}
         for name, obs in self._embodiment.observations.items():
             message = self.observations[name].read()
             if message is None:
                 raise pimm.NoValueException
-            if message.updated:
-                self._awaiting_obs.discard(name)
             value = message.data
             if obs.serializer is not None:
                 value = obs.serializer(value)
             inputs.update({full: v for full, v in expand_suffixed(name, value) if v is not None})
-        if self._awaiting_obs:
-            return None
         inputs[keys.TASK] = self._task.instruction
         inputs[keys.WALL_TIME_NS] = time.time_ns()
         inputs[keys.OBS_TIME_NS] = clock.now_ns()
         inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
-        if not self._rollout_started:
-            # The rollout begins at its first observation, not when the reset returned: the turns spent
-            # delivering the scene are neither the trial's budget nor its duration.
-            self._rollout_started = True
-            self._telemetry.start_rollout(clock.now())
-            if self._task.timeout_sec is not None:
-                self._deadline = clock.now() + self._task.timeout_sec
         return inputs
 
     def _step(self, worker: _InferenceWorker, clock: pimm.Clock) -> None:
         """One round of inference: throttle the loop for the call in flight as the trial's mode requires and
         reschedule on what it returns; with no call in flight, submit one on a fresh observation and give it
-        the rest of the round to return."""
+        the rest of the round to return. A channel the rig has never published to defers the round."""
         if not worker.idle:
             self._throttle_and_reschedule(worker, clock)
         if worker.idle:
-            obs = self._build_obs(clock)
-            if obs is not None:
-                worker.submit(obs)
-                self._throttle_and_reschedule(worker, clock)
+            try:
+                obs = self._build_obs(clock)
+            except pimm.NoValueException:
+                return
+            worker.submit(obs)
+            self._throttle_and_reschedule(worker, clock)
 
     def _throttle_and_reschedule(self, worker: _InferenceWorker, clock: pimm.Clock) -> None:
         worker.throttle()
@@ -543,9 +521,8 @@ class Harness(pimm.ControlSystem):
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         while not should_stop.value:
-            # One action per round, mutually exclusive: start the episode a call asks for, finish one that
-            # is out of budget or done, or step the policy. Starting takes its own round, so inference waits
-            # for the producer's post-reset observation.
+            # One action per round: start the episode a call asks for, finish one that is out of budget or
+            # done, or step the policy.
             call = next(self.perform_task.incoming(), None)
             # Read every round so the flag clears mid-episode; a press during a trial is consumed, not replayed.
             manual = pimm.value_updated(self.manual_command)

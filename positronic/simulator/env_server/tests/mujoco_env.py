@@ -98,16 +98,14 @@ class MujocoEnv(EnvProtocol):
 
     def reset(self, token: Any) -> dict[str, Any]:
         # Close the prior generator before rebuilding the scene, so its ``run`` cleanup tears down the old
-        # renderer before ``reset`` creates the new one. ``reset`` loads the scene and arms frame-0; pump the
-        # run loop twice — its setup + first control-period sleep, then the reset turn that publishes frame-0 —
-        # and return that frame without stepping. The first ``step`` advances the generator with the first
-        # action (Gym-style).
+        # renderer before ``reset`` creates the new one. ``reset`` loads the scene and publishes it, so the
+        # frame returned here is the one it drew, unstepped. The first ``step`` advances the generator with
+        # the first action (Gym-style).
         if self._gen is not None:
             self._gen.close()
         self._sim.reset(token)
         self._gen = self._sim.run(_NeverStop(), self._clock)
         next(self._gen)  # loop setup + first control-period sleep
-        next(self._gen)  # the reset turn: publishes frame-0 (no step)
         # Native ``stack_cubes`` has no language scene meta (its instruction is a static client string), so ``meta``
         # is empty; the sim's robot identity (URDF / joints) is the ``robot_meta``.
         return {

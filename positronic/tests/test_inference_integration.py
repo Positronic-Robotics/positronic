@@ -108,12 +108,12 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     first_image, _ = camera_samples[0]
     assert isinstance(first_image, np.ndarray)
 
-    # Frame-0 is recorded for every trial, not just the first: each episode's first sim-state sample is its
-    # own post-reset scene (seeds 100 and 101), bit-reproducible from a fresh reset on the same seed. A
-    # dropped frame-0 — or a stale step from the prior trial's run loop bleeding in — would record a
-    # post-step state instead.
+    # Each episode opens on its own scene (seeds 100 and 101), so its first sim-state sample is
+    # bit-reproducible from a fresh reset on the same seed. A stale step from the prior trial's run loop
+    # bleeding in would record a post-step state instead.
     # TODO: the reference is a bare reset because no config asks for a starting arm pose. A task that sets
-    # ``keys.ARM`` in ``prepare_args`` moves the arm before frame-0, and the reference needs the same move.
+    # ``keys.ARM`` in ``prepare_args`` moves the arm before the episode opens, and the reference needs the
+    # same move.
     for i, seed in enumerate((100, 101)):
         reference = MujocoSim(
             'positronic/assets/mujoco/franka_table.xml', positronic.cfg.simulator.stack_cubes_loaders()
@@ -151,11 +151,10 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
 class _CountdownProducer(pimm.ControlSystem):
     """A local deterministic producer standing in for the simulator, so the harness+recorder control loop
     is exercised end to end without MuJoCo. Obs encodes the env step count — ``reset`` is step 0, each step
-    adds 1 — so a recorded episode's first ``value`` sample is all-zeros iff the recorder logged the
-    post-reset frame-0. ``done`` fires after ``done_after`` steps (``None`` → never). The producer is the
-    eval's sole time-master: it sleeps one ``control_dt`` every turn, publishing frame-0 in its own turn
-    (in sequence, after the recorder's open-turn drain) and free-running — it advances each tick regardless
-    of the commands the policy emits.
+    adds 1 — so a recorded episode's first ``value`` sample says how far past the reset the episode opened.
+    ``done`` fires after ``done_after`` steps (``None`` → never). The producer is the eval's sole
+    time-master: it sleeps one ``control_dt`` every turn and free-runs — it advances each tick regardless of
+    the commands the policy emits.
     """
 
     def __init__(self, done_after: int | None = None, control_dt: float = 0.01):
@@ -163,7 +162,6 @@ class _CountdownProducer(pimm.ControlSystem):
         self._control_dt = control_dt
         self._steps = 0
         self._active = False
-        self._reset_pending = False
         self.observations = pimm.EmitterDict(self)
         self.commands = pimm.ReceiverDict(self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
@@ -177,13 +175,11 @@ class _CountdownProducer(pimm.ControlSystem):
         while not should_stop.value:
             yield pimm.Sleep(self._control_dt)
             if (call := next(self.env_reset.incoming(), None)) is not None:
-                self._steps, self._reset_pending, self._active = 0, True, True
-                call.set_result(None)  # before frame-0, so the episode is open when it lands
-            elif self._reset_pending:
-                self._reset_pending = False
+                self._steps, self._active = 0, True
                 self.robot_meta.emit({})
-                self._emit_obs()  # frame-0 (step 0), before any step advances the env
+                self._emit_obs()  # step 0, published with the answer the trial opens on
                 self.done.emit({})
+                call.set_result(None)
             elif self._active:
                 self._steps += 1
                 self._emit_obs()
@@ -207,12 +203,11 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
 
 
 @pytest.mark.timeout(30.0)
-def test_countdown_records_frame0_every_trial(tmp_path):
-    """[harness + recorder + sim] with no MuJoCo: every recorded episode's first ``value`` sample is the
-    post-reset frame-0 (all-zeros), trials after the first included. Proves the recorder's open-turn drain
-    drops the pre-reset frame and the producer publishes frame-0 in sequence. The small ``control_dt`` wakes
-    the producer quickly between trials, so a stray step would overwrite frame-0 if it weren't published in
-    the producer's own turn."""
+def test_every_trial_records_from_its_own_reset(tmp_path):
+    """[harness + recorder + sim] with no MuJoCo: every recorded episode's first ``value`` sample is its own
+    post-reset scene (all-zeros), trials after the first included. The small ``control_dt`` wakes the
+    producer quickly between trials, so a stray step from the previous trial would show up as a non-zero
+    first sample."""
     ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.35)
     trials = number_trials(ev.tasks[0], [{keys.EVAL_SEED: i} for i in range(2)])
     with pos3.mirror():
