@@ -76,10 +76,6 @@ def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_d
     """
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
-    # A rig that cannot be put at a start pose fails the run at startup rather than at the first press.
-    unknown = sorted(set(next_task().prepare_args) - set(embodiment.prepare_handlers))
-    if unknown:
-        raise ValueError(f'{unknown} is not something {embodiment.descriptor or "this rig"} readies')
 
     # The policy is this function's to close from here on, and everything below can raise:
     # `prepare_output_dir` syncs a directory and snapshots sources into it, and `LocalDatasetWriter`

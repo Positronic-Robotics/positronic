@@ -1,7 +1,6 @@
 import io
 import sys
 from collections.abc import Callable
-from dataclasses import replace
 from functools import partial
 from typing import Any
 
@@ -91,14 +90,6 @@ def test_the_keyboard_path_refuses_a_simulated_embodiment():
     neither of."""
     with pytest.raises(ValueError, match='sim'):
         real(policy=_IdlePolicy(), embodiment=_embodiment(simulated=True), next_task=_trial())
-
-
-def test_the_keyboard_path_refuses_a_rig_it_cannot_put_at_a_start_pose():
-    """Every attended episode places the arm and opens the fingers, so a rig that readies neither is caught
-    before a run begins rather than at the first press."""
-    bare = replace(_embodiment(), prepare_handlers={}, control_systems=())
-    with pytest.raises(ValueError, match="'gripper'"):
-        real(policy=_IdlePolicy(), embodiment=bare, next_task=_trial())
 
 
 class _ScriptedKeyboard(pimm.ControlSystem):

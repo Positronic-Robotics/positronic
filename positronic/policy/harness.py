@@ -294,7 +294,9 @@ class Harness(pimm.ControlSystem):
     def _ready(self, should_stop: pimm.SignalReceiver, args: dict[str, Any]) -> Generator[pimm.Command, None, None]:
         """Ask each device in ``args`` for the value it names, and come back once every one has answered."""
         unknown = sorted(set(args) - set(self.prepare))
-        assert not unknown, f'{unknown} is not something this embodiment readies, so nothing would be asked'
+        if unknown:
+            rig = self._embodiment.descriptor or 'this rig'
+            raise ValueError(f'{unknown} is not something {rig} readies; it readies {sorted(self.prepare)}')
         ready = pimm.calls.all_of([self.prepare[name](arg) for name, arg in args.items()])
         while not ready.done() and not should_stop.value:
             yield pimm.Yield() if self._embodiment.simulated else pimm.Sleep(POLL_PERIOD_SEC)
