@@ -152,8 +152,8 @@ class _ScriptedSession(Session):
 
 class TestChunkedSchedule:
     def test_an_inner_with_no_answer_yet_is_asked_again(self):
-        """A session waiting on a served function answers ``None``, which is no trajectory: the layer passes
-        it on and asks again on the next observation."""
+        """A session that waits for a served function answers ``None``, which is no trajectory. The layer
+        passes the ``None`` on and asks again on the next observation."""
         inner = _ScriptedSession([None, None, [{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]])
         session = ChunkedSchedule().make_session(inner, None, _FakeClock(t=1.0).now)
 

@@ -262,7 +262,7 @@ def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
 
     local_session, _ = open_session(inline(pipeline()), now=lambda: clock[0])
 
-    # The wire half answers the call after the one that asked, the in-process half answers the call itself.
+    # The wire half answers on the call after the one that asked. The in-process half answers that call.
     remote_actions = round_trip(remote_session, rt, {keys.OBS_TIME_NS: 0})
     local_actions = local_session({keys.OBS_TIME_NS: 0})
     assert remote_actions == local_actions

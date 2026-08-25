@@ -1560,9 +1560,9 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    # A latched observation set makes every step's inference fire (the harness reads the latest value). The
-    # world ends when the script runs out, so the script spans the rounds one inference takes: one starts the
-    # round-trip, a later one reads its answer.
+    # A latched observation set makes the inference of every step run, because the harness reads the latest
+    # value. The world ends when the script runs out, so the script covers the rounds one inference takes:
+    # one round starts the round trip, and a later round reads its answer.
     producer = ManualDriver(
         [(partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.0)] * 4
     )
@@ -1590,7 +1590,7 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     assert all(r.parent_id == episode.span_id for r in by_name[telemetry_keys.SPAN_POLICY_INFER])
 
     assert episode.attrs[telemetry_keys.ATTR_EPISODE_INDEX] == 0
-    # Every answered round-trip is one step, and the trial may end on one still in flight, which has none.
+    # Every answered round trip is one step. The trial can end on a round trip in flight, which has no step.
     infers = len(by_name[telemetry_keys.SPAN_POLICY_INFER])
     assert infers - 1 <= episode.attrs[telemetry_keys.ATTR_EPISODE_STEPS] <= infers
     assert episode.attrs[telemetry_keys.ATTR_EPISODE_VIRTUAL_S] >= 0.0
@@ -1876,8 +1876,8 @@ def _run_episode(
 
 
 def _slow_policies(wall_sec: float) -> list:
-    """A model taking ``wall_sec`` in each home it can run in: inside the session call, and in a function the
-    session starts and returns from at once. The trial pays for it the same either way."""
+    """A model that takes ``wall_sec`` in each home it can run in: inside the session call, and inside a
+    function the session starts and returns from at once. The trial pays the same for both."""
     return [
         pytest.param(SlowPolicy(wall_sec=wall_sec), id='in-the-call'),
         pytest.param(RemoteStubPolicy(wall_sec=wall_sec), id='in-a-function'),

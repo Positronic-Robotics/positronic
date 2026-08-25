@@ -34,13 +34,13 @@ SKIP_REPLY_SEC = 0.001
 
 
 class _InferenceWorker:
-    """One episode's policy session, called one at a time on a thread of its own so the harness keeps
-    playing while the model runs, and the runtime serving the policy's functions to it.
+    """One episode's policy session, called one at a time on a thread of its own, and the runtime that
+    serves the policy's functions to it.
 
-    A call's work is the session call plus whatever function it starts, timed as one: a session that hands
-    its model to the runtime returns at once, and what the trial pays for is the function still in flight.
-    ``charges_wall_time`` says whether that costs the trial the wall time it really took or nothing — the
-    loop is held for the work, which holds a virtual clock still.
+    The work is the session call and the function it starts, timed as one. A session that gives its model
+    to the runtime returns at once, so what stays in flight is the function. ``charges_wall_time`` says
+    whether that work costs the trial the wall time it took or nothing. The loop is held for the work,
+    which holds a virtual clock still.
     """
 
     def __init__(self, policy: Policy, context: dict[str, Any], charges_wall_time: bool, clock: pimm.Clock) -> None:
@@ -68,8 +68,7 @@ class _InferenceWorker:
         return self._call is not None and self._call.done()
 
     def effect_time(self) -> float:
-        """The trial instant the work in flight takes effect: its start, plus its wall duration so far when
-        the trial pays wall time."""
+        """The trial instant the work in flight takes effect."""
         wall = time.monotonic() - self._wall_t0 if self._charges_wall_time else 0.0
         return self._t0_ns / 1e9 + wall
 
@@ -86,8 +85,8 @@ class _InferenceWorker:
     def submit(self, obs: dict[str, Any]) -> None:
         """Start a call on ``obs``. The moment's wait lets a layer that skips inference resolve in the round
         it was asked."""
-        # A function still in flight is work this call joins rather than begins, so the anchor stays where
-        # that function started and the trial is charged for it once.
+        # A call that finds a function in flight joins that work rather than starts new work. The anchor
+        # stays where the function started, so the trial is charged for it one time.
         if not self._runtime.in_flight:
             self._t0_ns, self._wall_t0 = self._clock.now_ns(), time.monotonic()
         # The call runs under a copy of the loop's context, so the telemetry it records anchors to the episode
@@ -102,16 +101,15 @@ class _InferenceWorker:
         return None if deadline is None else max(deadline - time.monotonic(), 0.0)
 
     def throttle(self) -> None:
-        """Slow the loop for the work in flight as the trial's mode requires: until it is done when the world
-        is held for it, else only while the world is ahead of its own wall clock.
+        """Slow the loop for the work in flight, as the trial's mode requires.
 
-        The session call and the function it started share one deadline: they are one piece of work, seen
+        The session call and the function it started share one deadline. They are one piece of work, seen
         from the loop thread and from the runtime.
         """
         assert self._call is not None
         deadline = None
         if self._charges_wall_time:
-            # Wall time cannot be held still, so the world runs no further ahead of the work's start than it has.
+            # Wall time cannot be held still, so the loop waits out only the time the world is already ahead by.
             deadline = time.monotonic() + max(self._clock.now() - self.effect_time(), 0.0)
         concurrent.futures.wait([self._call], timeout=self._time_left(deadline))
         self._runtime.wait(self._time_left(deadline))
@@ -218,10 +216,10 @@ class Harness(pimm.ControlSystem):
     """Control system that runs the episode lifecycle and plays the policy's trajectory to the drivers.
 
     The layer owns the trajectory, the harness plays it, one command per channel per round. The session call
-    runs on a worker, and the functions it starts on the runtime's own, so playing continues while the model
-    does. That work costs the trial either the wall time it took or nothing — the world held still for it —
-    and the ``now`` handed to ``new_session`` reads the instant its output takes effect, so layers stamp for
-    it without knowing the mode.
+    runs on a worker thread, and the functions it starts run on the runtime's own, so playing continues while
+    the model runs. That work costs the trial either the wall time it took or nothing, with the world held
+    still for it. The ``now`` given to ``new_session`` reads the instant the output of that work takes effect,
+    so layers stamp for it without knowing the mode.
 
     An episode runs one ``Task``, asked for by a ``perform_task`` call and answered with the terminal
     payload it ended on. The task's ``timeout_sec`` bounds it and a truthy ``done`` within budget ends it

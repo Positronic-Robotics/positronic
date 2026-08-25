@@ -58,8 +58,7 @@ def start_server() -> Generator[StartServer, None, None]:
 
 @pytest.fixture
 def open_session() -> Generator[Callable[..., tuple[Session, Executor]], None, None]:
-    """Opens a policy's session against a runtime serving its functions, as the harness does, and closes
-    every runtime it opened at teardown."""
+    """Opens a policy's session against a runtime that serves its functions, as the harness does."""
     runtimes: list[Executor] = []
 
     def make(policy: Policy, now=None) -> tuple[Session, Executor]:
@@ -71,13 +70,12 @@ def open_session() -> Generator[Callable[..., tuple[Session, Executor]], None, N
         runtime.close()
 
 
-# How long a round-trip against a local server may take before a test calls it lost.
+# How long a round trip against a local server may take before a test calls it lost.
 ANSWER_SEC = 5.0
 
 
 def round_trip(session: Session, rt: Executor, obs) -> list[dict] | None:
-    """What ``session`` answers for ``obs``: the call that starts a round-trip answers ``None``, and the call
-    after it comes back reads what the server returned."""
+    """What ``session`` answers for ``obs``, over the two calls one round trip takes."""
     assert session(obs) is None, 'a round-trip was already in flight'
     rt.wait(ANSWER_SEC)
     assert not rt.in_flight, 'the round-trip never came back'

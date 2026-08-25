@@ -141,8 +141,8 @@ def main(
     meta = dict(session.meta)
     name = label or _recording_name(meta)
     try:
-        # A session that hands its inference to a served function answers the call after the one that asked,
-        # so ask again once the runtime has nothing left in flight.
+        # A session that gives its inference to a served function answers on the call after the one that
+        # asked. Ask again once the runtime has nothing in flight.
         actions = session(obs)
         if actions is None:
             rt.wait()
@@ -160,7 +160,7 @@ def main(
             # only known after inference — a velocity chunk drops the 3D trajectory view.
             rr.send_blueprint(_blueprint(image_keys, _is_cartesian_chunk(actions)))
     finally:
-        # The runtime goes first: a round-trip still in flight is talking over the socket the session closes.
+        # The runtime closes first: a round trip in flight uses the socket that the session closes.
         rt.close()
         session.close()
 

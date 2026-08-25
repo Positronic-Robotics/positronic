@@ -321,8 +321,8 @@ def test_remote_session_passes_through_none(open_session):
 
 
 def test_a_call_while_a_round_trip_is_in_flight_answers_none(open_session):
-    """A session never waits: while its round-trip is in flight every call answers ``None``, and none of
-    them starts a second one."""
+    """A session never waits. Every call while the round trip is in flight answers ``None``, and none of
+    them starts a second round trip."""
     chunk = [{'a': 1, 'timestamp': 0.0}]
     endpoint, mock_ws = _mock_endpoint()
     started, release = threading.Event(), threading.Event()
@@ -355,8 +355,8 @@ def test_opening_a_session_without_a_runtime_is_refused():
 
 
 def test_cancel_drops_the_chunk_of_the_round_trip_in_flight(open_session):
-    """A cancelled session lets go of the chunk it was waiting for — that chunk was planned on a world the
-    cancel says is gone — and asks afresh."""
+    """A cancelled session drops the chunk it waited for, because that chunk applies to a world the cancel
+    says has gone, and it asks for a new one."""
     endpoint, mock_ws = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
     session, rt = open_session(endpoint)
 
@@ -371,8 +371,8 @@ def test_cancel_drops_the_chunk_of_the_round_trip_in_flight(open_session):
 
 
 def test_a_cancelled_round_trip_still_raises_what_it_failed_with(open_session):
-    """Dropping the chunk drops no failure: a cancelled answer is still read, so a stalled server reaches
-    whoever asked for the episode instead of passing in silence."""
+    """A dropped chunk drops no failure. The session reads a cancelled answer, so a stalled server raises
+    to the caller that asked for the episode."""
     endpoint, mock_ws = _mock_endpoint()
     mock_ws.infer.side_effect = TimeoutError('server stalled')
     session, rt = open_session(endpoint)
@@ -386,8 +386,8 @@ def test_a_cancelled_round_trip_still_raises_what_it_failed_with(open_session):
 
 
 def test_a_cancel_dies_with_the_answer_it_was_made_against(open_session):
-    """A cancelled round trip that fails ends the cancel with it: a caller that catches the failure and keeps
-    the session gets the next chunk, and not a silent ``None``."""
+    """A cancel ends with the round trip it was made against, even when that round trip fails. A caller
+    that catches the failure and keeps the session gets the next chunk."""
     endpoint, mock_ws = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
     mock_ws.infer.side_effect = [TimeoutError('server stalled'), [{'a': 1, 'timestamp': 0.0}]]
     session, rt = open_session(endpoint)
@@ -402,8 +402,8 @@ def test_a_cancel_dies_with_the_answer_it_was_made_against(open_session):
 
 
 def test_closing_a_session_with_a_round_trip_in_flight_is_refused(open_session):
-    """A runtime is closed before the session it serves, so a caller that shuts the websocket from under a
-    round-trip hears about it rather than failing that round-trip on a dead socket."""
+    """A runtime closes before the session it serves. A caller that closes the websocket under a round trip
+    gets an error that names the order, and not a failure on a dead socket."""
     endpoint, mock_ws = _mock_endpoint()
     release = threading.Event()
 
@@ -455,8 +455,8 @@ def test_infer_span_excludes_client_side_image_preparation(tmp_path, open_sessio
 
 
 def test_records_infer_span_when_inference_raises(tmp_path, open_session):
-    """A raising round-trip (a stalled server surfaces ``TimeoutError``) still records its time-to-failure —
-    the span is timed in a ``finally`` — and the answer re-raises it at the call that reads it."""
+    """A round trip that raises still records the time it took to fail, and the answer raises it again at
+    the call that reads it."""
     endpoint, mock_ws = _mock_endpoint()
     mock_ws.infer.side_effect = TimeoutError('server stalled')
     session, rt = open_session(endpoint)

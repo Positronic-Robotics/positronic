@@ -14,12 +14,12 @@ from .base import Answer, Layer, Policy, Runtime, Session
 from .recording import Recorder
 from .spec import from_spec
 
-# The name the wire round-trip is served under; a policy whose sessions are ``RemoteSession``s declares it.
+# The name the wire round trip is served under. A policy whose sessions are ``RemoteSession``s declares it.
 INFER = 'infer'
 
 
 def round_trip(ws_session: InferenceSession, obs: dict[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
-    """One inference over the wire, timed as the ``policy.infer`` span. ``finally`` times a raising one too."""
+    """One inference over the wire, timed as the ``policy.infer`` span."""
     infer_start_ns = time.time_ns()
     try:
         return ws_session.infer(obs)
@@ -30,8 +30,9 @@ def round_trip(ws_session: InferenceSession, obs: dict[str, Any]) -> list[dict[s
 class RemoteSession(Session):
     """Per-episode session that forwards observations to a remote inference server.
 
-    One round-trip is in flight at a time: the call that starts it, and every call until it answers, return
-    ``None``; the call that finds it answered returns its trajectory, or drops it after a ``cancel``.
+    One round trip is in flight at a time. The call that starts it answers ``None``, and so does every
+    call until the round trip comes back. The call that finds it answered returns its trajectory, or drops
+    that trajectory after a ``cancel``.
 
     ``compress_images`` comes from what the server declared (see ``RemoteMarker``).
     """
@@ -60,11 +61,10 @@ class RemoteSession(Session):
         return value
 
     def __call__(self, obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | None:
-        """Starts a round-trip on ``obs`` when none is in flight, and answers the trajectory of one that
-        has come back.
+        """The trajectory of a round trip that has come back, and ``None`` while one is in flight.
 
-        Single-action server responses are wrapped into a 1-element list to honor
-        the ``Session.__call__`` contract (``list[dict] | None``).
+        A server answer of one action becomes a 1-element list, which is the form ``Session.__call__``
+        returns.
         """
         if self._answer is None:
             # The session prepares the observation, and the function only sends it. The ``policy.infer`` span
@@ -74,8 +74,8 @@ class RemoteSession(Session):
         if not self._answer.done():
             return None
         answer, cancelled = self._answer, self._cancelled
-        # Cleared before the read, which raises again what the round trip raised: a failure reaches the
-        # caller, and the cancel it arrives under does not outlive the answer it was made against.
+        # Both are cleared before the read, because ``result`` raises what the round trip raised. A cancel
+        # then ends with the answer it was made against, and does not drop the next chunk.
         self._answer, self._cancelled = None, False
         result = answer.result()
         if cancelled:
@@ -83,8 +83,8 @@ class RemoteSession(Session):
         return [result] if isinstance(result, dict) else result
 
     def cancel(self):
-        # The cancel says the world the chunk applies to is gone. The session still reads the round trip
-        # for its failure, and drops the chunk it answers with.
+        # The cancel says the world the chunk applies to has gone. The session still reads the round trip
+        # for its failure, and drops the chunk that comes with it.
         self._cancelled = self._answer is not None
 
     @property

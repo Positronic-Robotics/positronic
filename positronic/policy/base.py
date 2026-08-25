@@ -13,13 +13,13 @@ PAR = 'par'
 
 
 class NotAnswered(RuntimeError):
-    """The call has not answered yet, and reading it never waits for one."""
+    """The call has not answered yet. A read of an ``Answer`` raises this rather than waiting."""
 
 
 class Answer(ABC):
-    """The caller's handle on one call: ``done()`` once the function has answered, then ``result()``.
+    """The caller's handle on one call.
 
-    This is the policy API's own, and not interchangeable with pimm's ``Answer``, which it mirrors.
+    pimm has an ``Answer`` of the same shape. The two are not interchangeable.
     """
 
     @abstractmethod
@@ -27,10 +27,10 @@ class Answer(ABC):
 
     @abstractmethod
     def result(self) -> Any:
-        """What the function returned, re-raising what it raised. ``NotAnswered`` before it has answered."""
+        """What the function returned. Raises what the function raised, or ``NotAnswered`` before it answers."""
 
 
-# Calling one starts the work and returns its ``Answer`` at once, never waiting.
+# A call to an ``Fn`` starts the work and returns at once.
 Fn = Callable[..., Answer]
 
 
@@ -127,13 +127,13 @@ class Policy(ABC):
             context: The episode's task description.
             now: The runtime clock (current time in seconds), supplied by the harness and passed down
                 to every wrapped session. ``None`` where no runtime clock exists (server-side, warmup).
-            rt: This session's runtime, serving ``functions``. ``None`` where nothing runs them (server-side,
-                warmup); a session that needs one then says so rather than running the work itself.
+            rt: This session's runtime, serving ``functions``. ``None`` where nothing runs them, as in a
+                server's own session. A session that needs one refuses to open without it.
         """
 
     @property
     def functions(self) -> Mapping[str, Callable[..., Any]]:
-        """This policy's heavy work, by name. The framework serves them back to its sessions as ``rt.fns``."""
+        """The work this policy runs off the session's thread, by name. The framework serves it as ``rt.fns``."""
         return {}
 
     @property
