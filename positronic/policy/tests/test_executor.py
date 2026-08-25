@@ -1,5 +1,6 @@
 """Unit tests for the executor serving functions off the caller's thread."""
 
+import logging
 import operator
 import threading
 import time
@@ -178,3 +179,40 @@ def test_calling_a_closed_executor_raises(serve):
 
     with pytest.raises(RuntimeError):
         executor.fns['add'](2, 3)
+
+
+def _fail():
+    raise RuntimeError('the server went away')
+
+
+def test_close_reports_a_failure_that_nobody_read(serve, caplog):
+    executor = serve(infer=_fail)
+    settled(executor.fns['infer']())
+
+    with caplog.at_level(logging.ERROR):
+        executor.close()
+
+    assert 'the server went away' in caplog.text
+    assert 'infer' in caplog.text
+
+
+def test_close_stays_quiet_about_a_failure_its_caller_read(serve, caplog):
+    executor = serve(infer=_fail)
+    answer = settled(executor.fns['infer']())
+    with pytest.raises(RuntimeError):
+        answer.result()
+
+    with caplog.at_level(logging.ERROR):
+        executor.close()
+
+    assert caplog.text == ''
+
+
+def test_close_stays_quiet_about_a_call_that_answered(serve, caplog):
+    executor = serve(add=operator.add)
+    settled(executor.fns['add'](2, 3))
+
+    with caplog.at_level(logging.ERROR):
+        executor.close()
+
+    assert caplog.text == ''
