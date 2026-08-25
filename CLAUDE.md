@@ -60,6 +60,23 @@
 - Linter suppressions (`noqa`, `type: ignore`, `pyright: ignore`) must be narrowly scoped to a specific rule and
   suppress an error that actually fires — no blanket or speculative suppressions
 
+# Writing
+- Write every text that a person reads in **Simplified Technical English** (ASD-STE100): a code comment, a
+  docstring, a commit message, a pull request title and body, a review reply, an issue, and every document
+- Give each word one meaning and one part of speech. Use the same word for the same thing every time; do not
+  use a synonym for variety
+- Choose the shortest common word that carries the meaning. Write the articles. Put not more than three nouns
+  together
+- Write not more than 20 words in an instruction and not more than 25 in a description. Write one instruction
+  in one sentence
+- Use the active voice and the present tense. Start an instruction with its verb
+- Write no idiom, no metaphor, no joke and no rhetorical question
+- Code, identifiers, configuration values and log lines are out of scope. Quote text from a source as written
+- The standard is at asd-ste100.org, free for non-commercial use. Part 2 is a dictionary of approved words;
+  where you cannot check it, apply the shortest-common-word rule
+- A caveat, a correction and a mark on an unverified claim all stay. Write each one in short sentences; do not
+  drop one to meet a word count
+
 # Comments & docstrings
 - Write for a colleague who knows this codebase but not the thing you are documenting: don't explain the domain,
   the neighbouring modules, or vocabulary the repo already uses
