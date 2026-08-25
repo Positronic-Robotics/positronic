@@ -27,8 +27,7 @@ class KeyboardOperator(pimm.ControlSystem):
     """Turns keystrokes into episodes: ``s`` asks for one through ``perform_task``, ``p`` ends the live one.
 
     It holds the pending answers because that is where an episode's terminal — and any refused ask —
-    arrives; both are printed as they land. ``next_task`` is called per press, so each trial draws its own
-    start pose.
+    arrives; both are printed as they land. ``next_task`` is called once per press.
     """
 
     def __init__(self, next_task: Callable[[], Task]):
