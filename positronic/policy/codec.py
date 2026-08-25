@@ -412,7 +412,7 @@ class FlipGrip(Codec):
     WIRE_NAME = 'flip_grip'
 
     def encode(self, data):
-        # The raw recording tap logs the caller's dict, so this makes a copy rather than changing it.
+        # ``data`` belongs to the caller, so the flip goes on a copy.
         if obs_keys.GRIP in data:
             data = {**data, obs_keys.GRIP: 1.0 - data[obs_keys.GRIP]}
         return data

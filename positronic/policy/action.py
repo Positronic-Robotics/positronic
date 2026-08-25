@@ -12,10 +12,6 @@ from positronic.policy.codec import Codec, lerobot_action
 RotRep = geom.Rotation.Representation
 
 
-def _convert_quat_to_array(q: geom.Rotation, representation: RotRep | str) -> np.ndarray:
-    return q.to(representation).reshape(-1)
-
-
 class AbsolutePositionAction(Codec):
     WIRE_NAME = 'absolute_position_action'
 
