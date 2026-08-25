@@ -234,10 +234,6 @@ def test_close_stays_quiet_about_a_call_that_answered(serve, caplog):
     assert caplog.text == ''
 
 
-def _raises() -> None:
-    raise ValueError('the call failed')
-
-
 class _PlainSession(Session):
     """A session that does its work inside its own call."""
 
@@ -247,6 +243,9 @@ class _PlainSession(Session):
     def __call__(self, obs):
         self.calls += 1
         return [{'action': obs}]
+
+
+_ECHO = 'echo'
 
 
 class _RoundsSession(Session):
@@ -265,7 +264,7 @@ class _RoundsSession(Session):
             result, self._answer = self._answer.result(), None
         if self._left > 0:
             self._left -= 1
-            self._answer = self._rt.fns['echo'](obs)
+            self._answer = self._rt.fns[_ECHO](obs)
             return None
         return result
 
@@ -294,7 +293,7 @@ class _EchoPolicy(Policy):
 
     @property
     def functions(self):
-        return {'echo': lambda obs: obs}
+        return {_ECHO: lambda obs: obs}
 
 
 class _CountingLayer(Layer):

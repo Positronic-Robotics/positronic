@@ -45,25 +45,6 @@ def _detect_device() -> str:
 _INFER = 'infer'
 
 
-def _infer(policy: PreTrainedPolicy, device: str, obs: dict[str, Any]) -> list[dict[str, Any]]:
-    """One model call: an observation in, an action chunk out."""
-    obs_int = {}
-    for key, val in obs.items():
-        if key == TASK_FIELD:
-            obs_int[key] = val
-        elif isinstance(val, np.ndarray):
-            if key.startswith('observation.images.'):
-                val = np.transpose(val.astype(np.float32) / 255.0, (2, 0, 1))
-            val = val[np.newaxis, ...]
-            obs_int[key] = torch.from_numpy(val).to(device)
-        else:
-            obs_int[key] = torch.as_tensor(val).to(device)
-
-    action = policy.predict_action_chunk(obs_int)
-    action = action.squeeze(0).cpu().numpy()
-    return [{'action': a} for a in action]
-
-
 class _LerobotSession(Session):
     """Per-episode session that gives the model call to the runtime, and answers the chunk on a later call."""
 
@@ -114,6 +95,25 @@ def warm_observation(config: PreTrainedConfig) -> dict[str, Any]:
         else:
             obs[name] = np.zeros(feature.shape, dtype=np.float32)
     return obs
+
+
+def _infer(policy: PreTrainedPolicy, device: str, obs: dict[str, Any]) -> list[dict[str, Any]]:
+    """One model call: an observation in, an action chunk out."""
+    obs_int = {}
+    for key, val in obs.items():
+        if key == TASK_FIELD:
+            obs_int[key] = val
+        elif isinstance(val, np.ndarray):
+            if key.startswith('observation.images.'):
+                val = np.transpose(val.astype(np.float32) / 255.0, (2, 0, 1))
+            val = val[np.newaxis, ...]
+            obs_int[key] = torch.from_numpy(val).to(device)
+        else:
+            obs_int[key] = torch.as_tensor(val).to(device)
+
+    action = policy.predict_action_chunk(obs_int)
+    action = action.squeeze(0).cpu().numpy()
+    return [{'action': a} for a in action]
 
 
 class LerobotPolicy(Policy):

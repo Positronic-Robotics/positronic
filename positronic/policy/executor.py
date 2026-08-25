@@ -21,10 +21,6 @@ from positronic.policy.base import (
 )
 
 
-def _closed(*args: Any, **kwargs: Any) -> Answer:
-    raise RuntimeError('The runtime is closed and serves nothing')
-
-
 class Executor(Runtime):
     """Serves a set of functions on worker threads of its own, ``max_workers`` calls at a time.
 
@@ -95,6 +91,10 @@ class Executor(Runtime):
         with self._lock:
             self._unread.discard(answer)
 
+    @staticmethod
+    def _closed(*args: Any, **kwargs: Any) -> Answer:
+        raise RuntimeError('The runtime is closed and serves nothing')
+
     def close(self) -> None:
         """Drop the queued calls and wait out those in flight, which may still hold their caller's resources.
         A call made after close raises.
@@ -103,10 +103,10 @@ class Executor(Runtime):
         """
         self._pool.shutdown(wait=True, cancel_futures=True)
         with self._lock:
-            # A function holds what it was declared with — model weights, a socket. Dropping the functions
-            # here is what lets the policy that closes next free them.
+            # A function holds what it was declared with — model weights, a socket. Nothing reaches them
+            # through this runtime after it closes.
             unread, self._unread = self._unread, set()
-            self._fns = dict.fromkeys(self._fns, _closed)
+            self._fns = dict.fromkeys(self._fns, self._closed)
         for answer in unread:
             # rules-allow: swallowed-error — the caller dropped the answer, so there is nobody to raise to,
             # and the log is the only place the failure can go.
