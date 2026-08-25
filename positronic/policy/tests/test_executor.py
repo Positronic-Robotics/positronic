@@ -10,7 +10,7 @@ from functools import partial
 
 import pytest
 
-from positronic.policy.base import Answer, Caller, DelegatingSession, Layer, NotAnswered, Policy, Session
+from positronic.policy.base import Answer, DelegatingSession, Layer, NotAnswered, Policy, Session
 from positronic.policy.executor import Executor, blocking
 
 # How long a test waits for the worker threads before calling the call lost.
@@ -238,99 +238,6 @@ def _raises() -> None:
     raise ValueError('the call failed')
 
 
-class TestCaller:
-    """One session's use of one served function."""
-
-    def test_a_caller_of_an_unserved_function_fails_where_it_is_built(self, serve):
-        with pytest.raises(AssertionError, match='infer'):
-            Caller(serve(add=operator.add), 'infer')
-
-    def test_a_fresh_caller_is_idle(self, serve):
-        assert Caller(serve(add=operator.add), 'add').idle
-
-    def test_a_started_call_is_no_longer_idle(self, serve):
-        caller = Caller(serve(add=operator.add), 'add')
-        caller.start(2, 3)
-
-        assert not caller.idle
-
-    def test_take_answers_none_while_the_call_is_out(self, serve):
-        release = threading.Event()
-        caller = Caller(serve(gate=release.wait), 'gate')
-        caller.start(TIMEOUT_SEC)
-
-        assert caller.take() is None
-        assert caller.in_flight
-        release.set()
-
-    def test_take_answers_the_result_once_the_call_lands(self, serve):
-        rt = serve(add=operator.add)
-        caller = Caller(rt, 'add')
-        caller.start(2, 3)
-        rt.wait(TIMEOUT_SEC)
-
-        assert caller.take() == 5
-
-    def test_a_taken_call_leaves_the_caller_idle(self, serve):
-        rt = serve(add=operator.add)
-        caller = Caller(rt, 'add')
-        caller.start(2, 3)
-        rt.wait(TIMEOUT_SEC)
-        caller.take()
-
-        assert caller.idle
-        assert not caller.in_flight
-
-    def test_take_raises_what_the_call_raised(self, serve):
-        rt = serve(fail=_raises)
-        caller = Caller(rt, 'fail')
-        caller.start()
-        rt.wait(TIMEOUT_SEC)
-
-        with pytest.raises(ValueError, match='the call failed'):
-            caller.take()
-
-    def test_a_cancelled_call_answers_none(self, serve):
-        rt = serve(add=operator.add)
-        caller = Caller(rt, 'add')
-        caller.start(2, 3)
-        caller.cancel()
-        rt.wait(TIMEOUT_SEC)
-
-        assert caller.take() is None
-
-    def test_a_cancelled_call_still_raises_what_it_raised(self, serve):
-        rt = serve(fail=_raises)
-        caller = Caller(rt, 'fail')
-        caller.start()
-        caller.cancel()
-        rt.wait(TIMEOUT_SEC)
-
-        with pytest.raises(ValueError, match='the call failed'):
-            caller.take()
-
-    def test_a_cancel_ends_with_the_call_it_was_made_against(self, serve):
-        rt = serve(add=operator.add)
-        caller = Caller(rt, 'add')
-        caller.start(2, 3)
-        caller.cancel()
-        rt.wait(TIMEOUT_SEC)
-        caller.take()
-
-        caller.start(4, 5)
-        rt.wait(TIMEOUT_SEC)
-        assert caller.take() == 9
-
-    def test_a_cancel_with_nothing_in_flight_drops_no_later_call(self, serve):
-        rt = serve(add=operator.add)
-        caller = Caller(rt, 'add')
-        caller.cancel()
-
-        caller.start(2, 3)
-        rt.wait(TIMEOUT_SEC)
-        assert caller.take() == 5
-
-
 class _PlainSession(Session):
     """A session that does its work inside its own call."""
 
@@ -346,16 +253,19 @@ class _RoundsSession(Session):
     """A session that starts one served call per round, and answers the last round's result."""
 
     def __init__(self, rt, rounds: int):
-        self.infer = Caller(rt, 'echo')
+        self._rt = rt
+        self._answer = None
         self._left = rounds
         self.calls = 0
 
     def __call__(self, obs):
         self.calls += 1
-        result = None if self.infer.idle else self.infer.take()
+        result = None
+        if self._answer is not None:
+            result, self._answer = self._answer.result(), None
         if self._left > 0:
             self._left -= 1
-            self.infer.start(obs)
+            self._answer = self._rt.fns['echo'](obs)
             return None
         return result
 
@@ -460,8 +370,9 @@ class TestBlocking:
         session = blocking(policy).new_session()
         session.close()
 
+        # The session's own runtime is closed, so the function it would start is gone.
         with pytest.raises(RuntimeError):
-            policy.session.infer.start({'x': 1})
+            policy.session({'x': 1})
 
 
 class _Weights:
@@ -476,9 +387,8 @@ def test_close_frees_what_the_functions_held(serve):
     weights = _Weights()
     gone = weakref.ref(weights)
     executor = serve(infer=partial(operator.is_, weights))
-    caller = Caller(executor, 'infer')
     del weights
 
     assert gone() is not None
     executor.close()
-    assert (gone(), caller.idle) == (None, True)
+    assert gone() is None

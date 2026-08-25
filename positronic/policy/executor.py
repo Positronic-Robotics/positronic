@@ -115,30 +115,29 @@ class Executor(Runtime):
                 logging.error(f'The function {answer.name} failed and no caller read its answer: {exc}')
 
 
-class _BlockingSession(DelegatingSession):
-    def __init__(self, inner: Session, rt: Executor):
-        super().__init__(inner)
-        self._rt = rt
-
-    def __call__(self, obs: Mapping[str, Any]) -> list[dict[str, Any]] | None:
-        # Not ``in_flight``: a call that lands before this test would leave its answer unread, and the
-        # inner session reads an answer only on a later call.
-        while (actions := self._inner(obs)) is None and self._rt.owes_an_answer:
-            self._rt.wait()
-        return actions
-
-    def close(self):
-        # The runtime closes first: a call in flight is still using what the session holds.
-        self._rt.close()
-        self._inner.close()
-
-
 class _BlockingPolicy(DelegatingPolicy):
+    class _Session(DelegatingSession):
+        def __init__(self, inner: Session, rt: Executor):
+            super().__init__(inner)
+            self._rt = rt
+
+        def __call__(self, obs: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+            # Not ``in_flight``: a call that lands before this test would leave its answer unread, and the
+            # inner session reads an answer only on a later call.
+            while (actions := self._inner(obs)) is None and self._rt.owes_an_answer:
+                self._rt.wait()
+            return actions
+
+        def close(self):
+            # The runtime closes first: a call in flight is still using what the session holds.
+            self._rt.close()
+            self._inner.close()
+
     def new_session(self, context=None, now=None, rt=None) -> Session:
         assert rt is None, 'a blocking policy serves its own functions; nothing above it runs them'
         own = Executor(self._inner.functions)
         try:
-            return _BlockingSession(self._inner.new_session(context, now, own), own)
+            return _BlockingPolicy._Session(self._inner.new_session(context, now, own), own)
         except BaseException:
             own.close()
             raise

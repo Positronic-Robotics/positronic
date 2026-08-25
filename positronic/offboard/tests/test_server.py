@@ -19,7 +19,7 @@ from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.tests.conftest import round_trip
 from positronic.policy import Codec, Policy, RemotePolicy, Session
-from positronic.policy.base import Caller, Runtime
+from positronic.policy.base import Runtime
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
@@ -244,13 +244,17 @@ _INFER = 'infer'
 
 class _ScriptedSession(Session):
     def __init__(self, rt: Runtime):
-        self._infer = Caller(rt, _INFER)
+        self._rt = rt
+        self._answer = None
 
     def __call__(self, obs):
-        if self._infer.idle:
-            self._infer.start(obs)
+        if self._answer is None:
+            self._answer = self._rt.fns[_INFER](obs)
             return None
-        return self._infer.take()
+        if not self._answer.done():
+            return None
+        answer, self._answer = self._answer, None
+        return answer.result()
 
 
 class _ScriptedPolicy(Policy):

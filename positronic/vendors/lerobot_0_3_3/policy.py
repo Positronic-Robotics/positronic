@@ -15,7 +15,7 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.policy import Codec, Policy, Session
-from positronic.policy.base import Caller, Runtime
+from positronic.policy.base import Answer, Runtime
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.observation import TASK_FIELD
 from positronic.policy.spec import PolicySource, inline
@@ -69,17 +69,28 @@ class _LerobotSession(Session):
     """Per-episode session that gives the model call to the runtime, and answers the chunk on a later call."""
 
     def __init__(self, rt: Runtime, meta: dict[str, Any]):
-        self._infer = Caller(rt, _INFER)
+        self._rt = rt
         self._meta = meta
+        self._answer: Answer | None = None
+        self._cancelled = False
 
     def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
-        if self._infer.idle:
-            self._infer.start(obs)
+        if self._answer is None:
+            self._answer = self._rt.fns[_INFER](obs)
             return None
-        return self._infer.take()
+        if not self._answer.done():
+            return None
+        answer, cancelled = self._answer, self._cancelled
+        # Both are cleared before the read, because ``result`` raises what the model call raised. A cancel
+        # then ends with the answer it was made against, and does not drop the next chunk.
+        self._answer, self._cancelled = None, False
+        result = answer.result()
+        return None if cancelled else result
 
     def cancel(self):
-        self._infer.cancel()
+        # The cancel says the world the chunk applies to has gone. The session still reads the model call
+        # for its failure, and drops the chunk that comes with it.
+        self._cancelled = self._answer is not None
 
     @property
     def meta(self) -> dict[str, Any]:

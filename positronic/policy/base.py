@@ -46,53 +46,6 @@ class Runtime(ABC):
         """The policy's functions, under the names it declared them by."""
 
 
-class Caller:
-    """One session's use of one served function, with one call in flight at a time.
-
-    A session starts a call and gives control back. It reads the answer on a later call, through ``take``.
-
-    pimm has a ``Caller`` of another shape. The two are not interchangeable.
-    """
-
-    def __init__(self, rt: Runtime, name: str):
-        # Looked up per call, so a runtime that closes drops the function and what it was declared with.
-        assert name in rt.fns, f'the runtime serves no function named {name!r}'
-        self._rt = rt
-        self._name = name
-        self._answer: Answer | None = None
-        self._cancelled = False
-
-    @property
-    def idle(self) -> bool:
-        """Whether no call is held, so a new one can start."""
-        return self._answer is None
-
-    @property
-    def in_flight(self) -> bool:
-        """Whether the call that is held has still to answer."""
-        return self._answer is not None and not self._answer.done()
-
-    def start(self, *args: Any, **kwargs: Any) -> None:
-        assert self._answer is None, 'a call is already in flight'
-        self._answer = self._rt.fns[self._name](*args, **kwargs)
-
-    def take(self) -> Any:
-        """What the call returned, and ``None`` while it is out or after a cancel."""
-        assert self._answer is not None, 'no call is held, so there is no answer to take'
-        if not self._answer.done():
-            return None
-        answer, cancelled = self._answer, self._cancelled
-        # Both are cleared before the read, because ``result`` raises what the call raised. A cancel then
-        # ends with the answer it was made against, and does not drop the next one.
-        self._answer, self._cancelled = None, False
-        result = answer.result()
-        return None if cancelled else result
-
-    def cancel(self) -> None:
-        """Drop the result of the call that is held. ``take`` still raises what that call raised."""
-        self._cancelled = self._answer is not None
-
-
 class Session(ABC):
     """Per-episode inference session. Created by ``Policy.new_session()``.
 
