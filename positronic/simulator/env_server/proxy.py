@@ -77,11 +77,12 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._meta = self._frame['meta']
         self._active = True
         self.robot_meta.emit(self._frame['robot_meta'])
-        # Left untimed, the buffers and camera copies the reset asked for would land in overhead.
+        # Allocating the image buffers and copying the camera frames is work the reset asked for. Outside
+        # the span the report counts that cost as overhead.
         with telemetry.span(telemetry_keys.SPAN_RESET):
             self._emit_payload(self._frame['obs'])
-        # The env can reach ``done`` while the proxy free-runs between trials, and the harness would read
-        # that stale success as this trial's terminal.
+        # An empty payload clears a terminal the previous trial left on the wire. The env can reach ``done``
+        # while the proxy free-runs between trials, and the harness would read that success as this trial's.
         self.done.emit({})
 
     def _emit_payload(self, raw_obs: dict[str, Any]) -> None:
