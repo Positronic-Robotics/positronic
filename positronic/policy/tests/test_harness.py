@@ -224,7 +224,7 @@ class RemoteStubPolicy(Policy):
         assert rt is not None, 'the harness supplies the runtime'
         dt = self.span_sec / self.steps
         action = [
-            {'robot_command': self.command, 'target_grip': self.target_grip, 'timestamp': i * dt}
+            {keys.ROBOT_COMMAND: self.command, keys.TARGET_GRIP: self.target_grip, keys.ACTION_TIMESTAMP: i * dt}
             for i in range(self.steps)
         ]
         return RemoteSession(_FakeInferenceSession(action, self.wall_sec), rt)
@@ -1841,9 +1841,8 @@ def _slow_policies(wall_sec: float) -> list:
     """A model that takes ``wall_sec`` in each home it can run in: inside the session call, and inside a
     function the session starts and returns from at once. The trial pays the same for both.
 
-    Both return a chunk of the same shape, so the schedule replans at the same cadence and the two run the
-    model the same number of times. A shorter chunk on one side is exhausted sooner, and that side pays
-    ``wall_sec`` again every round it replans."""
+    Both return the same chunk shape: a shorter one is exhausted sooner, so that side replans more often
+    and pays ``wall_sec`` again each time."""
     span_sec, steps = 0.2, 10
     return [
         pytest.param(SlowPolicy(wall_sec=wall_sec, span_sec=span_sec, steps=steps), id='in-the-call'),
