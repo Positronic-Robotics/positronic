@@ -10,8 +10,8 @@ from functools import partial
 
 import pytest
 
-from positronic.policy.base import Answer, Caller, NotAnswered, Session
-from positronic.policy.executor import Executor, call_until_answered
+from positronic.policy.base import Answer, Caller, DelegatingSession, Layer, NotAnswered, Policy, Session
+from positronic.policy.executor import Executor, blocking
 
 # How long a test waits for the worker threads before calling the call lost.
 TIMEOUT_SEC = 5.0
@@ -345,44 +345,117 @@ class _PlainSession(Session):
 class _RoundsSession(Session):
     """A session that starts one served call per round, and answers the last round's result."""
 
-    def __init__(self, rt: Executor, rounds: int):
-        self._infer = Caller(rt, 'echo')
+    def __init__(self, rt, rounds: int):
+        self.infer = Caller(rt, 'echo')
         self._left = rounds
         self.calls = 0
 
     def __call__(self, obs):
         self.calls += 1
-        result = None if self._infer.idle else self._infer.take()
+        result = None if self.infer.idle else self.infer.take()
         if self._left > 0:
             self._left -= 1
-            self._infer.start(obs)
+            self.infer.start(obs)
             return None
         return result
 
 
-class TestCallUntilAnswered:
-    """The way a caller with no control loop of its own reads a session."""
+class _EchoPolicy(Policy):
+    """Serves ``echo``, and makes sessions that take ``rounds`` calls of it to answer."""
 
-    def test_a_session_that_answers_in_its_own_call_is_called_one_time(self, serve):
-        session = _PlainSession()
+    def __init__(self, rounds: int | None = None):
+        self._rounds = rounds
+        self.session: _PlainSession | _RoundsSession
 
-        assert call_until_answered(session, serve(), {'x': 1}) == [{'action': {'x': 1}}]
-        assert session.calls == 1
+    def new_session(self, context=None, now=None, rt=None) -> Session:
+        if self._rounds is None:
+            self.session = _PlainSession()
+        else:
+            assert rt is not None
+            self.session = _RoundsSession(rt, self._rounds)
+        return self.session
+
+    @property
+    def functions(self):
+        return {'echo': lambda obs: obs}
+
+
+class _CountingLayer(Layer):
+    """Counts the calls that reach the session it wraps."""
+
+    def __init__(self):
+        self.calls = 0
+
+    class _Session(DelegatingSession):
+        def __init__(self, inner: Session, layer: '_CountingLayer'):
+            super().__init__(inner)
+            self._layer = layer
+
+        def __call__(self, obs):
+            self._layer.calls += 1
+            return self._inner(obs)
+
+    def make_session(self, inner, context, now):
+        return self._Session(inner, self)
+
+
+@pytest.fixture
+def opened():
+    """Opens the sessions a test asks for, and closes every one at teardown."""
+    sessions = []
+
+    def make(policy: Policy) -> Session:
+        sessions.append(policy.new_session())
+        return sessions[-1]
+
+    yield make
+    for session in sessions:
+        session.close()
+
+
+class TestBlocking:
+    """A policy whose sessions answer in the call that asked."""
+
+    def test_a_session_that_answers_in_its_own_call_is_called_one_time(self, opened):
+        policy = _EchoPolicy()
+
+        assert opened(blocking(policy))({'x': 1}) == [{'action': {'x': 1}}]
+        assert policy.session.calls == 1
 
     @pytest.mark.parametrize(('rounds', 'calls'), [(1, 2), (2, 3)])
-    def test_a_session_is_called_again_for_every_function_it_starts(self, serve, rounds, calls):
-        rt = serve(echo=lambda obs: obs)
-        session = _RoundsSession(rt, rounds=rounds)
+    def test_a_session_is_called_again_for_every_function_it_starts(self, opened, rounds, calls):
+        policy = _EchoPolicy(rounds)
 
-        assert call_until_answered(session, rt, {'x': 1}) == {'x': 1}
-        assert session.calls == calls
+        assert opened(blocking(policy))({'x': 1}) == {'x': 1}
+        assert policy.session.calls == calls
 
-    def test_a_session_that_starts_nothing_and_answers_none_is_called_one_time(self, serve):
-        rt = serve(echo=lambda obs: obs)
-        session = _RoundsSession(rt, rounds=0)
+    def test_a_session_that_starts_nothing_and_answers_none_is_called_one_time(self, opened):
+        policy = _EchoPolicy(rounds=0)
 
-        assert call_until_answered(session, rt, {'x': 1}) is None
-        assert session.calls == 1
+        assert opened(blocking(policy))({'x': 1}) is None
+        assert policy.session.calls == 1
+
+    def test_a_layer_above_it_is_called_one_time_for_one_answer(self, opened):
+        """Why this wraps the policy and not the chain: a layer that encodes the observation, or records
+        it, would otherwise do that work once per call the answer took."""
+        layer, policy = _CountingLayer(), _EchoPolicy(rounds=2)
+
+        assert opened(layer.wrap(blocking(policy)))({'x': 1}) == {'x': 1}
+        assert (layer.calls, policy.session.calls) == (1, 3)
+
+    def test_it_serves_its_functions_itself(self):
+        """Nothing above builds a runtime for them: they are already run by the time an answer comes out."""
+        assert blocking(_EchoPolicy(rounds=1)).functions == {}
+
+    def test_closing_the_session_closes_the_runtime_it_made(self):
+        """Nobody else can: the runtime is the session's own, made where the session was."""
+        policy = _EchoPolicy(rounds=1)
+        session = blocking(policy).new_session()
+        assert isinstance(policy.session, _RoundsSession)
+        session.close()
+
+        with pytest.raises(RuntimeError):
+            policy.session.infer.start({'x': 1})
 
 
 class _Weights:

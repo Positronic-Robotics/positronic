@@ -18,9 +18,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocke
 from starlette.datastructures import QueryParams
 
 from positronic import keys
-from positronic.policy import Policy, Recorder, Session
+from positronic.policy import Policy, Recorder
 from positronic.policy.base import Layer
-from positronic.policy.executor import Executor, call_until_answered
+from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
 
 from . import protocol
@@ -307,7 +307,6 @@ class PolicyServer:
         self._last_activity = time.monotonic()
         policy: Policy | None = None
         session = None
-        rt: Executor | None = None
         try:
             pipeline = self._session_pipeline(_session_params(websocket.query_params))
             local, border, remote_half = split(pipeline)
@@ -316,24 +315,26 @@ class PolicyServer:
             rid = self._source.resolve(model_id) if model_id is not None else self._default_id
             assert rid is not None
             policy = await self._manager.get_policy(rid, websocket)
+            # Wrapped in ``blocking`` before anything else: a request has no control loop to answer
+            # ``None`` to, and every layer above it must see one call per answer.
+            answered = blocking(policy)
             if self._recording_dir is not None:
                 # Tap both sides: 'raw' is the wire boundary, 'inference' the encoded obs and model output.
                 rec = Recorder(self._recording_dir)
                 if remote_half is not None:
-                    served = (rec.tap('raw') | remote_half | rec.tap('inference')).wrap(policy)
+                    served = (rec.tap('raw') | remote_half | rec.tap('inference')).wrap(answered)
                 else:
-                    served = rec.tap('inference').wrap(policy)
+                    served = rec.tap('inference').wrap(answered)
             else:
-                served = remote_half.wrap(policy) if remote_half is not None else policy
+                served = remote_half.wrap(answered) if remote_half is not None else answered
             # ``new_session`` resets the shared backend client, so it must not interleave with an in-flight
             # inference. Keepalives here: queuing behind a peer would otherwise trip the handshake timeout.
             await _acquire_with_keepalives(self._infer_lock, websocket, 'Waiting for inference slot')
             try:
-                rt = Executor(served.functions)
-                session = await asyncio.to_thread(served.new_session, rt=rt)
+                session = await asyncio.to_thread(served.new_session)
             finally:
                 self._infer_lock.release()
-            assert session is not None and rt is not None
+            assert session is not None
             # Later entries win: per-episode session facts over static ones, the server's own last.
             meta = {
                 **self.metadata,
@@ -356,7 +357,7 @@ class PolicyServer:
                         # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
                         # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
                         async with self._infer_lock:
-                            actions = await asyncio.to_thread(call_until_answered, session, rt, raw_obs)
+                            actions = await asyncio.to_thread(session, raw_obs)
                         await websocket.send_bytes(serialise({protocol.RESULT: actions}))
                     except Exception as e:
                         logger.error(f'Error processing message: {e}', exc_info=True)
@@ -377,22 +378,15 @@ class PolicyServer:
             self._active_sessions = max(0, self._active_sessions - 1)
             self._last_activity = time.monotonic()
             try:
-                # The nesting keeps a failure here from swallowing the manager release.
-                await self._close_session(rt, session)
+                if session is not None:
+                    # Both ends of a session's life touch the backend — close does a reset round-trip — so
+                    # it takes the inference lock like ``new_session`` and runs off the event loop. The
+                    # nesting keeps a failure here from swallowing the manager release.
+                    async with self._infer_lock:
+                        await asyncio.to_thread(session.close)
             finally:
                 if policy is not None:
                     await self._manager.release_session()
-
-    async def _close_session(self, rt: Executor | None, session: Session | None) -> None:
-        """Release what one served session held. A ``new_session`` that raised leaves only the runtime."""
-        if rt is None:
-            return
-        # Both ends of a session's life touch the backend — close does a reset round-trip — so it takes
-        # the inference lock like ``new_session`` and runs off the event loop.
-        async with self._infer_lock:
-            await asyncio.to_thread(rt.close)
-            if session is not None:
-                await asyncio.to_thread(session.close)
 
     async def _startup(self):
         self._default_id = self._source.resolve(None)

@@ -9,7 +9,16 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
 from typing import Any
 
-from positronic.policy.base import Answer, Fn, NotAnswered, Runtime, Session
+from positronic.policy.base import (
+    Answer,
+    DelegatingPolicy,
+    DelegatingSession,
+    Fn,
+    NotAnswered,
+    Policy,
+    Runtime,
+    Session,
+)
 
 
 def _closed(*args: Any, **kwargs: Any) -> Answer:
@@ -113,13 +122,39 @@ class Executor(Runtime):
                 logging.error(f'The function {answer.name} failed and no caller read its answer: {exc}')
 
 
-def call_until_answered(session: Session, rt: Executor, obs: Mapping[str, Any]) -> list[dict[str, Any]] | None:
-    """What ``session`` answers for ``obs``, over as many calls as the functions it starts take.
+class _BlockingSession(DelegatingSession):
+    def __init__(self, inner: Session, rt: Executor):
+        super().__init__(inner)
+        self._rt = rt
 
-    For a caller that has no control loop to give the time back to.
+    def __call__(self, obs: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+        # Not ``in_flight``: a call that lands before this test would leave its answer unread, and the
+        # inner session reads an answer only on a later call.
+        while (actions := self._inner(obs)) is None and self._rt.owes_an_answer:
+            self._rt.wait()
+        return actions
+
+    def close(self):
+        # The runtime closes first: a call in flight is still using what the session holds.
+        self._rt.close()
+        self._inner.close()
+
+
+class _BlockingPolicy(DelegatingPolicy):
+    def new_session(self, context=None, now=None, rt=None) -> Session:
+        assert rt is None, 'a blocking policy serves its own functions; nothing above it runs them'
+        rt = Executor(self._inner.functions)
+        return _BlockingSession(self._inner.new_session(context, now, rt), rt)
+
+    @property
+    def functions(self) -> Mapping[str, Callable[..., Any]]:
+        return {}
+
+
+def blocking(policy: Policy) -> Policy:
+    """``policy`` with its heavy work waited out: a session answers in the call that asked.
+
+    For a caller with no control loop to give the time back to — a server request, a warmup, a probe.
+    Layers wrap the result rather than the other way round, so each sees one call per answer.
     """
-    # Not ``in_flight``: a call that lands before this test would leave its answer unread, and the session
-    # reads an answer only on a later call.
-    while (actions := session(obs)) is None and rt.owes_an_answer:
-        rt.wait()
-    return actions
+    return _BlockingPolicy(policy)

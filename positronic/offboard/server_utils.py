@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from positronic.policy import Policy
-from positronic.policy.executor import Executor, call_until_answered
+from positronic.policy.executor import blocking
 
 logger = logging.getLogger(__name__)
 
@@ -42,16 +42,11 @@ def warmup(policy: Policy, obs: dict[str, Any], on_progress: Callable[[str], Non
 
     ``obs`` has to be an observation the loaded backend accepts.
     """
-    rt = Executor(policy.functions)
-    session = None
+    session = blocking(policy).new_session()
     try:
-        session = policy.new_session(rt=rt)
-        run_with_progress(lambda: call_until_answered(session, rt, obs), 'Running warmup inference', on_progress)
+        run_with_progress(lambda: session(obs), 'Running warmup inference', on_progress)
     finally:
-        # The runtime closes first: a call in flight is still using what the session holds.
-        rt.close()
-        if session is not None:
-            session.close()
+        session.close()
 
 
 def wait_for_subprocess_ready(
