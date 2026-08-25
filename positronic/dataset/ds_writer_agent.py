@@ -158,9 +158,9 @@ class DsWriterAgent(pimm.ControlSystem):
         try:
             while not should_stop.value:
                 cmd = pimm.read_updated(self.command)
-                # Open before draining this turn's inputs, but finalize/abort after them: the trial's last
-                # frame, queued by the producer a control period earlier, is recorded before STOP closes the
-                # writer.
+                # Open before draining this turn's inputs, so the episode opens on what they hold. Finalize
+                # or abort after them, so the trial's last frame — queued by the producer a control period
+                # earlier — is recorded before STOP closes the writer.
                 stop_at, stop_cmd = None, None
                 if cmd is not None:
                     if cmd.data.type == DsWriterCommandType.START_EPISODE:
