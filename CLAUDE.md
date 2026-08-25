@@ -69,7 +69,8 @@
   together
 - Write not more than 20 words in an instruction. Write not more than 25 words in a description. Write one
   instruction in one sentence
-- Use the active voice and the present tense. Start an instruction with its verb
+- Use the active voice. Use the present tense for a fact or a state, and the past tense for an event that
+  happened. Start an instruction with its verb
 - Write no idiom, no metaphor, no joke and no rhetorical question
 - Code, identifiers, configuration values and log lines are out of scope. Quote text from a source as written
 - The standard is at asd-ste100.org, free for non-commercial use. Part 2 is a dictionary of approved words.
