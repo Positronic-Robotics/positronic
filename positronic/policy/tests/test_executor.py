@@ -9,8 +9,8 @@ from functools import partial
 
 import pytest
 
-from positronic.policy.base import Answer, NotAnswered
-from positronic.policy.executor import Executor
+from positronic.policy.base import Answer, NotAnswered, Session
+from positronic.policy.executor import Caller, Executor, call_until_answered
 
 # How long a test waits for the worker threads before calling the call lost.
 TIMEOUT_SEC = 5.0
@@ -134,6 +134,21 @@ def test_a_call_is_in_flight_until_it_answers(serve):
     assert not executor.in_flight
 
 
+def test_nothing_is_owed_before_a_call(serve):
+    assert not serve(add=operator.add).owes_an_answer
+
+
+def test_an_answer_stays_owed_after_its_call_lands_until_it_is_read(serve):
+    executor = serve(add=operator.add)
+    answer = settled(executor.fns['add'](2, 3))
+
+    assert not executor.in_flight
+    assert executor.owes_an_answer
+
+    answer.result()
+    assert not executor.owes_an_answer
+
+
 def test_wait_returns_once_every_call_has_answered(serve):
     executor = serve(sleep=partial(time.sleep, 0.05), add=operator.add)
 
@@ -216,3 +231,160 @@ def test_close_stays_quiet_about_a_call_that_answered(serve, caplog):
         executor.close()
 
     assert caplog.text == ''
+
+
+def _raises() -> None:
+    raise ValueError('the call failed')
+
+
+class TestCaller:
+    """One session's use of one served function."""
+
+    def test_a_caller_of_an_unserved_function_fails_where_it_is_built(self, serve):
+        with pytest.raises(KeyError):
+            Caller(serve(add=operator.add), 'infer')
+
+    def test_a_fresh_caller_is_idle(self, serve):
+        assert Caller(serve(add=operator.add), 'add').idle
+
+    def test_a_started_call_is_no_longer_idle(self, serve):
+        caller = Caller(serve(add=operator.add), 'add')
+        caller.start(2, 3)
+
+        assert not caller.idle
+
+    def test_take_answers_none_while_the_call_is_out(self, serve):
+        release = threading.Event()
+        caller = Caller(serve(gate=release.wait), 'gate')
+        caller.start(TIMEOUT_SEC)
+
+        assert caller.take() is None
+        assert caller.in_flight
+        release.set()
+
+    def test_take_answers_the_result_once_the_call_lands(self, serve):
+        rt = serve(add=operator.add)
+        caller = Caller(rt, 'add')
+        caller.start(2, 3)
+        rt.wait(TIMEOUT_SEC)
+
+        assert caller.take() == 5
+
+    def test_a_taken_call_leaves_the_caller_idle(self, serve):
+        rt = serve(add=operator.add)
+        caller = Caller(rt, 'add')
+        caller.start(2, 3)
+        rt.wait(TIMEOUT_SEC)
+        caller.take()
+
+        assert caller.idle
+        assert not caller.in_flight
+
+    def test_take_raises_what_the_call_raised(self, serve):
+        rt = serve(fail=_raises)
+        caller = Caller(rt, 'fail')
+        caller.start()
+        rt.wait(TIMEOUT_SEC)
+
+        with pytest.raises(ValueError, match='the call failed'):
+            caller.take()
+
+    def test_a_cancelled_call_answers_none(self, serve):
+        rt = serve(add=operator.add)
+        caller = Caller(rt, 'add')
+        caller.start(2, 3)
+        caller.cancel()
+        rt.wait(TIMEOUT_SEC)
+
+        assert caller.take() is None
+
+    def test_a_cancelled_call_still_raises_what_it_raised(self, serve):
+        rt = serve(fail=_raises)
+        caller = Caller(rt, 'fail')
+        caller.start()
+        caller.cancel()
+        rt.wait(TIMEOUT_SEC)
+
+        with pytest.raises(ValueError, match='the call failed'):
+            caller.take()
+
+    def test_a_cancel_ends_with_the_call_it_was_made_against(self, serve):
+        rt = serve(add=operator.add)
+        caller = Caller(rt, 'add')
+        caller.start(2, 3)
+        caller.cancel()
+        rt.wait(TIMEOUT_SEC)
+        caller.take()
+
+        caller.start(4, 5)
+        rt.wait(TIMEOUT_SEC)
+        assert caller.take() == 9
+
+    def test_a_cancel_with_nothing_in_flight_drops_no_later_call(self, serve):
+        rt = serve(add=operator.add)
+        caller = Caller(rt, 'add')
+        caller.cancel()
+
+        caller.start(2, 3)
+        rt.wait(TIMEOUT_SEC)
+        assert caller.take() == 5
+
+
+class _PlainSession(Session):
+    """A session that does its work inside its own call."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, obs):
+        self.calls += 1
+        return [{'action': obs}]
+
+
+class _RoundsSession(Session):
+    """A session that starts one served call per round, and answers the last round's result."""
+
+    def __init__(self, rt: Executor, rounds: int):
+        self._infer = Caller(rt, 'echo')
+        self._left = rounds
+        self.calls = 0
+
+    def __call__(self, obs):
+        self.calls += 1
+        result = None if self._infer.idle else self._infer.take()
+        if self._infer.idle and self._left > 0:
+            self._left -= 1
+            self._infer.start(obs)
+            return None
+        return result
+
+
+class TestCallUntilAnswered:
+    """The way a caller with no control loop of its own reads a session."""
+
+    def test_a_session_that_answers_in_its_own_call_is_called_one_time(self, serve):
+        session = _PlainSession()
+
+        assert call_until_answered(session, serve(), {'x': 1}) == [{'action': {'x': 1}}]
+        assert session.calls == 1
+
+    def test_a_session_is_called_again_for_the_function_it_started(self, serve):
+        rt = serve(echo=lambda obs: obs)
+        session = _RoundsSession(rt, rounds=1)
+
+        assert call_until_answered(session, rt, {'x': 1}) == {'x': 1}
+        assert session.calls == 2
+
+    def test_a_session_is_called_again_for_every_function_it_starts(self, serve):
+        rt = serve(echo=lambda obs: obs)
+        session = _RoundsSession(rt, rounds=2)
+
+        assert call_until_answered(session, rt, {'x': 1}) == {'x': 1}
+        assert session.calls == 3
+
+    def test_a_session_that_starts_nothing_and_answers_none_is_called_one_time(self, serve):
+        rt = serve(echo=lambda obs: obs)
+        session = _RoundsSession(rt, rounds=0)
+
+        assert call_until_answered(session, rt, {'x': 1}) is None
+        assert session.calls == 1

@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from positronic.policy import Policy
+from positronic.policy.executor import Executor, call_until_answered
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +42,12 @@ def warmup(policy: Policy, obs: dict[str, Any], on_progress: Callable[[str], Non
 
     ``obs`` has to be an observation the loaded backend accepts.
     """
-    session = policy.new_session()
+    rt = Executor(policy.functions)
+    session = policy.new_session(rt=rt)
     try:
-        run_with_progress(lambda: session(obs), 'Running warmup inference', on_progress)
+        run_with_progress(lambda: call_until_answered(session, rt, obs), 'Running warmup inference', on_progress)
     finally:
+        rt.close()
         session.close()
 
 

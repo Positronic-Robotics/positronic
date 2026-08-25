@@ -10,7 +10,8 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, I
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
-from .base import Answer, Layer, Policy, Runtime, Session
+from .base import Layer, Policy, Runtime, Session
+from .executor import Caller
 from .recording import Recorder
 from .spec import from_spec
 
@@ -39,10 +40,8 @@ class RemoteSession(Session):
 
     def __init__(self, ws_session: InferenceSession, rt: Runtime, compress_images: bool = False):
         self._session = ws_session
-        self._rt = rt
+        self._infer = Caller(rt, INFER)
         self._compress_images = compress_images
-        self._answer: Answer | None = None
-        self._cancelled = False
 
     def _prepare_obs(self, obs: cabc.Mapping[str, Any]) -> dict[str, Any]:
         if not self._compress_images:
@@ -66,33 +65,23 @@ class RemoteSession(Session):
         A server answer of one action becomes a 1-element list, which is the form ``Session.__call__``
         returns.
         """
-        if self._answer is None:
+        if self._infer.idle:
             # The session prepares the observation, and the function only sends it. The ``policy.infer`` span
             # times the function, and a JPEG encode of an HD frame stack is not inference.
-            self._answer = self._rt.fns[INFER](self._session, self._prepare_obs(obs))
+            self._infer.start(self._session, self._prepare_obs(obs))
             return None
-        if not self._answer.done():
-            return None
-        answer, cancelled = self._answer, self._cancelled
-        # Both are cleared before the read, because ``result`` raises what the round trip raised. A cancel
-        # then ends with the answer it was made against, and does not drop the next chunk.
-        self._answer, self._cancelled = None, False
-        result = answer.result()
-        if cancelled:
-            return None
+        result = self._infer.take()
         return [result] if isinstance(result, dict) else result
 
     def cancel(self):
-        # The cancel says the world the chunk applies to has gone. The session still reads the round trip
-        # for its failure, and drops the chunk that comes with it.
-        self._cancelled = self._answer is not None
+        self._infer.cancel()
 
     @property
     def meta(self) -> dict[str, Any]:
         return flatten_dict({keys.TYPE: 'remote', keys.SERVER: self._session.metadata})
 
     def close(self):
-        assert self._answer is None or self._answer.done(), (
+        assert not self._infer.in_flight, (
             'close the runtime serving this session first: the round trip in flight uses the websocket that this closes'
         )
         self._session.close()

@@ -1,3 +1,5 @@
+from collections.abc import Callable, Mapping
+from functools import partial
 from typing import Any
 
 import configuronic as cfn
@@ -13,6 +15,8 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.policy import Codec, Policy, Session
+from positronic.policy.base import Runtime
+from positronic.policy.executor import Caller
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.observation import TASK_FIELD
 from positronic.policy.spec import PolicySource, inline
@@ -39,28 +43,44 @@ def _detect_device() -> str:
     return 'cpu'
 
 
+# The name this policy serves its model call under.
+INFER = 'infer'
+
+
+def _infer(policy: PreTrainedPolicy, device: str, obs: dict[str, Any]) -> list[dict[str, Any]]:
+    """One model call: an observation in, an action chunk out."""
+    obs_int = {}
+    for key, val in obs.items():
+        if key == TASK_FIELD:
+            obs_int[key] = val
+        elif isinstance(val, np.ndarray):
+            if key.startswith('observation.images.'):
+                val = np.transpose(val.astype(np.float32) / 255.0, (2, 0, 1))
+            val = val[np.newaxis, ...]
+            obs_int[key] = torch.from_numpy(val).to(device)
+        else:
+            obs_int[key] = torch.as_tensor(val).to(device)
+
+    action = policy.predict_action_chunk(obs_int)
+    action = action.squeeze(0).cpu().numpy()
+    return [{'action': a} for a in action]
+
+
 class _LerobotSession(Session):
-    def __init__(self, policy, device: str, meta: dict[str, Any]):
-        self._policy = policy
-        self._device = device
+    """Per-episode session that gives the model call to the runtime, and answers the chunk on a later call."""
+
+    def __init__(self, rt: Runtime, meta: dict[str, Any]):
+        self._infer = Caller(rt, INFER)
         self._meta = meta
 
-    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
-        obs_int = {}
-        for key, val in obs.items():
-            if key == TASK_FIELD:
-                obs_int[key] = val
-            elif isinstance(val, np.ndarray):
-                if key.startswith('observation.images.'):
-                    val = np.transpose(val.astype(np.float32) / 255.0, (2, 0, 1))
-                val = val[np.newaxis, ...]
-                obs_int[key] = torch.from_numpy(val).to(self._device)
-            else:
-                obs_int[key] = torch.as_tensor(val).to(self._device)
+    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+        if self._infer.idle:
+            self._infer.start(obs)
+            return None
+        return self._infer.take()
 
-        action = self._policy.predict_action_chunk(obs_int)
-        action = action.squeeze(0).cpu().numpy()
-        return [{'action': a} for a in action]
+    def cancel(self):
+        self._infer.cancel()
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -93,8 +113,17 @@ class LerobotPolicy(Policy):
         self._meta = extra_meta or {}
 
     def new_session(self, context=None, now=None, rt=None):
+        if rt is None:
+            raise ValueError(
+                'A lerobot session runs its model on a runtime: pass rt to new_session. The harness passes '
+                'one, and a caller that opens a session outside the harness must pass one too.'
+            )
         self._policy.reset()
-        return _LerobotSession(self._policy, self._device, self._meta)
+        return _LerobotSession(rt, self._meta)
+
+    @property
+    def functions(self) -> Mapping[str, Callable[..., Any]]:
+        return {INFER: partial(_infer, self._policy, self._device)}
 
     @property
     def meta(self) -> dict[str, Any]:
