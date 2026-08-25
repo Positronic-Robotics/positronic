@@ -112,10 +112,10 @@ class _CodecSession(DelegatingSession):
         action = self._inner(encoded)
         if action is None:
             return None
-        # TODO(#661): a codec decodes against the observation of the call that answers, which a session
-        # handing its work to a served function makes a later one — ``RelativePositionAction`` would then
-        # anchor its delta to a pose the model never saw. Resolved when a codec wraps the served function
-        # rather than the session.
+        # TODO(#661): the codec decodes against the observation of the call that answers. A session that
+        # gives its work to a served function answers on a later call, so that observation is a later one.
+        # ``RelativePositionAction`` then anchors its delta to a pose the model never saw. A codec that
+        # wraps the served function, and not the session, removes this.
         return self._codec.decode(action, context=obs)
 
     @property
