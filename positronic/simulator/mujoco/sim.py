@@ -253,8 +253,7 @@ class MujocoSim(pimm.ControlSystem):
         self.target_grip.read()
         self._last_grip = 0.0
         self._emit_robot_meta()
-        # Rendering the scene a redraw just built is reset cost: it is work the reset asked for, and left
-        # untimed it would land in overhead.
+        # Left untimed, the render the reset asked for would land in overhead.
         with telemetry.span(telemetry_keys.SPAN_RESET):
             self._publish_frame()
 

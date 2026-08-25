@@ -364,8 +364,8 @@ class Harness(pimm.ControlSystem):
         self._deadline = clock.now() + budget if budget is not None else None
         self._telemetry.start_rollout(clock.now())
         self.ds_command.emit(DsWriterCommand.START())
-        # The first inference runs in this round: a later one would read a frame the recording did not open on.
-        self._step(self._worker, clock)
+        # The fresh data is here, later round would read a frame the recording did not open on.
+        self._infer(self._worker, clock)
 
     def _end_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, payload: dict[str, Any]
@@ -399,11 +399,11 @@ class Harness(pimm.ControlSystem):
         clock: pimm.Clock,
         should_stop: pimm.SignalReceiver,
     ) -> Generator[pimm.Command, None, None]:
-        """One round of the live episode: end it if it is out of budget or done, else step the policy."""
+        """One round of the live episode: end it if it is out of budget or done, else run one inference round."""
         if (terminal := self._trial_terminal(done, clock)) is not None:
             yield from self._end_episode(clock, should_stop, terminal)
         else:
-            self._step(worker, clock)
+            self._infer(worker, clock)
 
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any]:
         """Read every observation channel and assemble the policy input dict.
@@ -426,7 +426,7 @@ class Harness(pimm.ControlSystem):
         inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
         return inputs
 
-    def _step(self, worker: _InferenceWorker, clock: pimm.Clock) -> None:
+    def _infer(self, worker: _InferenceWorker, clock: pimm.Clock) -> None:
         """One round of inference: throttle the loop for the call in flight as the trial's mode requires and
         reschedule on what it returns; with no call in flight, submit one on a fresh observation and give it
         the rest of the round to return. A channel the rig has never published to defers the round."""
@@ -520,7 +520,7 @@ class Harness(pimm.ControlSystem):
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         while not should_stop.value:
             # One action per round: start the episode a call asks for, finish one that is out of budget or
-            # done, or step the policy.
+            # done, or run one inference round.
             call = next(self.perform_task.incoming(), None)
             # Read every round so the flag clears mid-episode; a press during a trial is consumed, not replayed.
             manual = pimm.value_updated(self.manual_command)

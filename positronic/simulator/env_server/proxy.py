@@ -76,15 +76,12 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._frame = self._conn.reset(self._adapter.reset_token(params))
         self._meta = self._frame['meta']
         self._active = True
-        # The robot model identity the env reports at reset (URDF / joint names), distinct from the scene ``meta``.
         self.robot_meta.emit(self._frame['robot_meta'])
-        # Materialising the frame (allocating shared-memory image buffers, copying each camera frame) is reset
-        # cost: it is work the reset asked for, and left untimed it would land in overhead.
+        # Left untimed, the buffers and camera copies the reset asked for would land in overhead.
         with telemetry.span(telemetry_keys.SPAN_RESET):
             self._emit_payload(self._frame['obs'])
-        # Clear any terminal the previous trial left on the wire: the env can reach ``done`` while the proxy
-        # free-runs between trials, and the harness, which runs before producers, would otherwise sample that
-        # stale success as this trial's terminal.
+        # The env can reach ``done`` while the proxy free-runs between trials, and the harness would read
+        # that stale success as this trial's terminal.
         self.done.emit({})
 
     def _emit_payload(self, raw_obs: dict[str, Any]) -> None:
