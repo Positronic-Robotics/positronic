@@ -234,61 +234,55 @@ def test_close_stays_quiet_about_a_call_that_answered(serve, caplog):
     assert caplog.text == ''
 
 
-class _PlainSession(Session):
-    """A session that does its work inside its own call."""
-
-    def __init__(self):
-        self.calls = 0
-
-    def __call__(self, obs):
-        self.calls += 1
-        return [{'action': obs}]
-
-
-_ECHO = 'echo'
-
-
-class _RoundsSession(Session):
-    """A session that starts one served call per round, and answers the last round's result."""
-
-    def __init__(self, rt, rounds: int):
-        self._rt = rt
-        self._answer = None
-        self._left = rounds
-        self.calls = 0
-
-    def __call__(self, obs):
-        self.calls += 1
-        result = None
-        if self._answer is not None:
-            result, self._answer = self._answer.result(), None
-        if self._left > 0:
-            self._left -= 1
-            self._answer = self._rt.fns[_ECHO](obs)
-            return None
-        return result
-
-
 class _PlainPolicy(Policy):
     """Serves nothing: its session answers inside the call that asked."""
 
+    class _Session(Session):
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self, obs):
+            self.calls += 1
+            return [{'action': obs}]
+
     def __init__(self):
-        self.session = _PlainSession()
+        self.session = _PlainPolicy._Session()
 
     def new_session(self, context=None, now=None, rt=None) -> Session:
         return self.session
 
 
+_ECHO = 'echo'
+
+
 class _EchoPolicy(Policy):
     """Serves ``echo``, and makes sessions that take ``rounds`` calls of it to answer."""
 
+    class _Session(Session):
+        def __init__(self, rt, rounds: int):
+            self._rt = rt
+            self._answer = None
+            self._left = rounds
+            self.calls = 0
+
+        def __call__(self, obs):
+            self.calls += 1
+            result = None
+            if self._answer is not None:
+                result, self._answer = self._answer.result(), None
+            if self._left > 0:
+                self._left -= 1
+                self._answer = self._rt.fns[_ECHO](obs)
+                return None
+            return result
+
     def __init__(self, rounds: int):
         self._rounds = rounds
-        self.session: _RoundsSession
+        self.session: _EchoPolicy._Session
 
     def new_session(self, context=None, now=None, rt=None) -> Session:
         assert rt is not None
-        self.session = _RoundsSession(rt, self._rounds)
+        self.session = _EchoPolicy._Session(rt, self._rounds)
         return self.session
 
     @property

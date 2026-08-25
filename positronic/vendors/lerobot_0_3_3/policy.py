@@ -42,42 +42,6 @@ def _detect_device() -> str:
     return 'cpu'
 
 
-_INFER = 'infer'
-
-
-class _LerobotSession(Session):
-    """Per-episode session that gives the model call to the runtime, and answers the chunk on a later call."""
-
-    def __init__(self, rt: Runtime, meta: dict[str, Any]):
-        self._rt = rt
-        self._meta = meta
-        self._answer: Answer | None = None
-        self._cancelled = False
-
-    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
-        if self._answer is None:
-            self._answer = self._rt.fns[_INFER](obs)
-            return None
-        if not self._answer.done():
-            return None
-        answer, cancelled = self._answer, self._cancelled
-        # The answer and the flag are cleared before the read, because ``result`` raises what the model
-        # call raised. A cancel then ends with the answer it was made against, and never drops the next
-        # chunk.
-        self._answer, self._cancelled = None, False
-        result = answer.result()
-        return None if cancelled else result
-
-    def cancel(self):
-        # The cancel says the world the chunk applies to has gone. The session still reads the model call
-        # for its failure, and drops the chunk that comes with it.
-        self._cancelled = self._answer is not None
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return self._meta
-
-
 def warm_observation(config: PreTrainedConfig) -> dict[str, Any]:
     """Zero-filled inputs matching the features ``config`` declares.
 
@@ -117,6 +81,40 @@ def _infer(policy: PreTrainedPolicy, device: str, obs: dict[str, Any]) -> list[d
 
 
 class LerobotPolicy(Policy):
+    _INFER = 'infer'
+
+    class _Session(Session):
+        """Per-episode session that gives the model call to the runtime, and answers the chunk on a later call."""
+
+        def __init__(self, rt: Runtime, meta: dict[str, Any]):
+            self._rt = rt
+            self._meta = meta
+            self._answer: Answer | None = None
+            self._cancelled = False
+
+        def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+            if self._answer is None:
+                self._answer = self._rt.fns[LerobotPolicy._INFER](obs)
+                return None
+            if not self._answer.done():
+                return None
+            answer, cancelled = self._answer, self._cancelled
+            # The answer and the flag are cleared before the read, because ``result`` raises what the model
+            # call raised. A cancel then ends with the answer it was made against, and never drops the next
+            # chunk.
+            self._answer, self._cancelled = None, False
+            result = answer.result()
+            return None if cancelled else result
+
+        def cancel(self):
+            # The cancel says the world the chunk applies to has gone. The session still reads the model call
+            # for its failure, and drops the chunk that comes with it.
+            self._cancelled = self._answer is not None
+
+        @property
+        def meta(self) -> dict[str, Any]:
+            return self._meta
+
     def __init__(self, policy: PreTrainedPolicy, device: str | None = None, extra_meta: dict[str, Any] | None = None):
         self._device = device or _detect_device()
         self._policy = policy.to(self._device)
@@ -126,11 +124,11 @@ class LerobotPolicy(Policy):
         if rt is None:
             raise ValueError('A lerobot session runs its model on a runtime: pass rt to new_session.')
         self._policy.reset()
-        return _LerobotSession(rt, self._meta)
+        return LerobotPolicy._Session(rt, self._meta)
 
     @property
     def functions(self) -> Mapping[str, Callable[..., Any]]:
-        return {_INFER: partial(_infer, self._policy, self._device)}
+        return {self._INFER: partial(_infer, self._policy, self._device)}
 
     @property
     def meta(self) -> dict[str, Any]:
