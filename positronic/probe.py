@@ -137,10 +137,11 @@ def main(
     rec = Recorder(pos3.sync(output_dir))
     tapped = rec.tap(_TAP).wrap(policy)
     rt = Executor(tapped.functions)
-    session = tapped.new_session({keys.TASK: task} if task else None, time.time, rt)
-    meta = dict(session.meta)
-    name = label or _recording_name(meta)
+    session = None
     try:
+        session = tapped.new_session({keys.TASK: task} if task else None, time.time, rt)
+        meta = dict(session.meta)
+        name = label or _recording_name(meta)
         actions = call_until_answered(session, rt, obs)
         if actions is not None:
             actions = [a for a in actions if is_action(a)]  # drop the codec's keyless validity sentinel
@@ -157,7 +158,8 @@ def main(
     finally:
         # The runtime closes first: a round trip in flight uses the socket that the session closes.
         rt.close()
-        session.close()
+        if session is not None:
+            session.close()
 
 
 @pos3.with_mirror()

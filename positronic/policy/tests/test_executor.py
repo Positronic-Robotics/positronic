@@ -4,13 +4,14 @@ import logging
 import operator
 import threading
 import time
+import weakref
 from contextvars import ContextVar
 from functools import partial
 
 import pytest
 
-from positronic.policy.base import Answer, NotAnswered, Session
-from positronic.policy.executor import Caller, Executor, call_until_answered
+from positronic.policy.base import Answer, Caller, NotAnswered, Session
+from positronic.policy.executor import Executor, call_until_answered
 
 # How long a test waits for the worker threads before calling the call lost.
 TIMEOUT_SEC = 5.0
@@ -352,7 +353,7 @@ class _RoundsSession(Session):
     def __call__(self, obs):
         self.calls += 1
         result = None if self._infer.idle else self._infer.take()
-        if self._infer.idle and self._left > 0:
+        if self._left > 0:
             self._left -= 1
             self._infer.start(obs)
             return None
@@ -368,19 +369,13 @@ class TestCallUntilAnswered:
         assert call_until_answered(session, serve(), {'x': 1}) == [{'action': {'x': 1}}]
         assert session.calls == 1
 
-    def test_a_session_is_called_again_for_the_function_it_started(self, serve):
+    @pytest.mark.parametrize(('rounds', 'calls'), [(1, 2), (2, 3)])
+    def test_a_session_is_called_again_for_every_function_it_starts(self, serve, rounds, calls):
         rt = serve(echo=lambda obs: obs)
-        session = _RoundsSession(rt, rounds=1)
+        session = _RoundsSession(rt, rounds=rounds)
 
         assert call_until_answered(session, rt, {'x': 1}) == {'x': 1}
-        assert session.calls == 2
-
-    def test_a_session_is_called_again_for_every_function_it_starts(self, serve):
-        rt = serve(echo=lambda obs: obs)
-        session = _RoundsSession(rt, rounds=2)
-
-        assert call_until_answered(session, rt, {'x': 1}) == {'x': 1}
-        assert session.calls == 3
+        assert session.calls == calls
 
     def test_a_session_that_starts_nothing_and_answers_none_is_called_one_time(self, serve):
         rt = serve(echo=lambda obs: obs)
@@ -388,3 +383,19 @@ class TestCallUntilAnswered:
 
         assert call_until_answered(session, rt, {'x': 1}) is None
         assert session.calls == 1
+
+
+class _Weights:
+    """Stands in for what a function is declared with: model weights, a socket."""
+
+
+def test_close_frees_what_the_functions_held(serve):
+    """A closed runtime drops its functions, so the policy that closes next can free the weights."""
+    weights = _Weights()
+    gone = weakref.ref(weights)
+    executor = serve(infer=partial(operator.is_, weights))
+    del weights
+
+    assert gone() is not None
+    executor.close()
+    assert gone() is None

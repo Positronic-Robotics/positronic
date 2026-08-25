@@ -1,8 +1,4 @@
-"""The in-process runtime, and the two ways code calls a served function.
-
-A session holds one call at a time through a ``Caller``. A caller with no control loop of its own —
-a server request, a warmup, a probe — runs a session call to its answer with ``call_until_answered``.
-"""
+"""The in-process runtime: a call starts the work on a worker thread and returns an ``Answer``."""
 
 import concurrent.futures
 import contextvars
@@ -14,6 +10,10 @@ from functools import partial
 from typing import Any
 
 from positronic.policy.base import Answer, Fn, NotAnswered, Runtime, Session
+
+
+def _closed(*args: Any, **kwargs: Any) -> Answer:
+    raise RuntimeError('The runtime is closed and serves nothing')
 
 
 class Executor(Runtime):
@@ -65,6 +65,8 @@ class Executor(Runtime):
     @property
     def owes_an_answer(self) -> bool:
         """Whether any call's answer has still to be read, whether or not that call has landed."""
+        # TODO(#661): a caller polls this because a session cannot say when it wants the next call. Rung 7
+        # gives the session ``resume_at``, and the poll goes with it.
         with self._lock:
             return bool(self._unread)
 
@@ -100,7 +102,10 @@ class Executor(Runtime):
         """
         self._pool.shutdown(wait=True, cancel_futures=True)
         with self._lock:
+            # A function holds what it was declared with — model weights, a socket — so the close that ends
+            # its last call drops it. Otherwise the policy that closes next frees nothing.
             unread, self._unread = self._unread, set()
+            self._fns = dict.fromkeys(self._fns, _closed)
         for answer in unread:
             # rules-allow: swallowed-error — the caller dropped the answer, so there is nobody to raise to,
             # and the log is the only place the failure can go.
@@ -108,57 +113,13 @@ class Executor(Runtime):
                 logging.error(f'The function {answer.name} failed and no caller read its answer: {exc}')
 
 
-class Caller:
-    """One session's use of one served function, with one call in flight at a time.
-
-    A session starts a call and gives control back. It reads the answer on a later call, through ``take``.
-    """
-
-    def __init__(self, rt: Runtime, name: str):
-        self._fn = rt.fns[name]
-        self._answer: Answer | None = None
-        self._cancelled = False
-
-    @property
-    def idle(self) -> bool:
-        """Whether no call is held, so a new one can start."""
-        return self._answer is None
-
-    @property
-    def in_flight(self) -> bool:
-        """Whether the call that is held has still to answer."""
-        return self._answer is not None and not self._answer.done()
-
-    def start(self, *args: Any, **kwargs: Any) -> None:
-        assert self._answer is None, 'a call is already in flight'
-        self._answer = self._fn(*args, **kwargs)
-
-    def take(self) -> Any:
-        """What the call returned, and ``None`` while it is out or after a cancel."""
-        assert self._answer is not None, 'no call is held, so there is no answer to take'
-        if not self._answer.done():
-            return None
-        answer, cancelled = self._answer, self._cancelled
-        # Both are cleared before the read, because ``result`` raises what the call raised. A cancel then
-        # ends with the answer it was made against, and does not drop the next one.
-        self._answer, self._cancelled = None, False
-        result = answer.result()
-        return None if cancelled else result
-
-    def cancel(self) -> None:
-        """Drop the result of the call that is held. ``take`` still raises what that call raised."""
-        self._cancelled = self._answer is not None
-
-
 def call_until_answered(session: Session, rt: Executor, obs: Mapping[str, Any]) -> list[dict[str, Any]] | None:
     """What ``session`` answers for ``obs``, over as many calls as the functions it starts take.
 
     For a caller that has no control loop to give the time back to.
     """
-    actions = session(obs)
     # Not ``in_flight``: a call that lands before this test would leave its answer unread, and the session
     # reads an answer only on a later call.
-    while actions is None and rt.owes_an_answer:
+    while (actions := session(obs)) is None and rt.owes_an_answer:
         rt.wait()
-        actions = session(obs)
     return actions

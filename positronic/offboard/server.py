@@ -8,7 +8,6 @@ import os
 import time
 from collections import Counter
 from collections.abc import Callable
-from functools import partial
 from importlib.metadata import version as _pkg_version
 from typing import Any
 
@@ -331,7 +330,7 @@ class PolicyServer:
             await _acquire_with_keepalives(self._infer_lock, websocket, 'Waiting for inference slot')
             try:
                 rt = Executor(served.functions)
-                session = await asyncio.to_thread(partial(served.new_session, rt=rt))
+                session = await asyncio.to_thread(served.new_session, rt=rt)
             finally:
                 self._infer_lock.release()
             assert session is not None and rt is not None
@@ -385,11 +384,7 @@ class PolicyServer:
                     await self._manager.release_session()
 
     async def _close_session(self, rt: Executor | None, session: Session | None) -> None:
-        """Release what one served session held, in the order that keeps it usable to the end.
-
-        The runtime closes first: a call in flight is still using what the session holds. A ``new_session``
-        that raised leaves the runtime to close on its own.
-        """
+        """Release what one served session held. A ``new_session`` that raised leaves only the runtime."""
         if rt is None:
             return
         # Both ends of a session's life touch the backend — close does a reset round-trip — so it takes

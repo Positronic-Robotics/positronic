@@ -10,8 +10,7 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, I
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
-from .base import Layer, Policy, Runtime, Session
-from .executor import Caller
+from .base import Caller, Layer, Policy, Runtime, Session
 from .recording import Recorder
 from .spec import from_spec
 
@@ -109,10 +108,7 @@ class _Endpoint(Policy):
 
     def new_session(self, context=None, now=None, rt=None) -> RemoteSession:
         if rt is None:
-            raise ValueError(
-                'A remote session runs its inference on a runtime: pass rt to new_session. The harness '
-                'passes one, and a caller that opens a session outside the harness must pass one too.'
-            )
+            raise ValueError('A remote session runs its inference on a runtime: pass rt to new_session.')
         compress = bool(self.server_meta().get(keys.COMPRESS_IMAGES))
         ws_session = self._client.new_session()
         return RemoteSession(ws_session, rt, compress_images=compress)

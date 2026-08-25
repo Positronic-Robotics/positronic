@@ -19,9 +19,8 @@ from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.tests.conftest import round_trip
 from positronic.policy import Codec, Policy, RemotePolicy, Session
-from positronic.policy.base import Runtime
+from positronic.policy.base import Caller, Runtime
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.executor import Caller
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
 

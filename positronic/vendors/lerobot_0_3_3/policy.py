@@ -15,8 +15,7 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.policy import Codec, Policy, Session
-from positronic.policy.base import Runtime
-from positronic.policy.executor import Caller
+from positronic.policy.base import Caller, Runtime
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.observation import TASK_FIELD
 from positronic.policy.spec import PolicySource, inline
@@ -44,7 +43,7 @@ def _detect_device() -> str:
 
 
 # The name this policy serves its model call under.
-INFER = 'infer'
+_INFER = 'infer'
 
 
 def _infer(policy: PreTrainedPolicy, device: str, obs: dict[str, Any]) -> list[dict[str, Any]]:
@@ -70,7 +69,7 @@ class _LerobotSession(Session):
     """Per-episode session that gives the model call to the runtime, and answers the chunk on a later call."""
 
     def __init__(self, rt: Runtime, meta: dict[str, Any]):
-        self._infer = Caller(rt, INFER)
+        self._infer = Caller(rt, _INFER)
         self._meta = meta
 
     def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
@@ -114,16 +113,13 @@ class LerobotPolicy(Policy):
 
     def new_session(self, context=None, now=None, rt=None):
         if rt is None:
-            raise ValueError(
-                'A lerobot session runs its model on a runtime: pass rt to new_session. The harness passes '
-                'one, and a caller that opens a session outside the harness must pass one too.'
-            )
+            raise ValueError('A lerobot session runs its model on a runtime: pass rt to new_session.')
         self._policy.reset()
         return _LerobotSession(rt, self._meta)
 
     @property
     def functions(self) -> Mapping[str, Callable[..., Any]]:
-        return {INFER: partial(_infer, self._policy, self._device)}
+        return {_INFER: partial(_infer, self._policy, self._device)}
 
     @property
     def meta(self) -> dict[str, Any]:
