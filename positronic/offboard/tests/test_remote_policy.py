@@ -384,6 +384,22 @@ def test_a_cancelled_round_trip_still_raises_what_it_failed_with(open_session):
         session({})
 
 
+def test_a_cancel_dies_with_the_answer_it_was_made_against(open_session):
+    """A cancelled round trip that fails ends the cancel with it: a caller that catches the failure and keeps
+    the session gets the next chunk, and not a silent ``None``."""
+    endpoint, mock_ws = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
+    mock_ws.infer.side_effect = [TimeoutError('server stalled'), [{'a': 1, 'timestamp': 0.0}]]
+    session, rt = open_session(endpoint)
+
+    assert session({}) is None
+    rt.wait(ANSWER_SEC)
+    session.cancel()
+    with pytest.raises(TimeoutError, match='server stalled'):
+        session({})
+
+    assert round_trip(session, rt, {}) == [{'a': 1, 'timestamp': 0.0}]
+
+
 def test_closing_a_session_with_a_round_trip_in_flight_is_refused(open_session):
     """A runtime is closed before the session it serves, so a caller that shuts the websocket from under a
     round-trip hears about it rather than failing that round-trip on a dead socket."""

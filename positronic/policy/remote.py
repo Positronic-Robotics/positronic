@@ -78,18 +78,18 @@ class RemoteSession(Session):
             return None
         if not self._answer.done():
             return None
-        answer, self._answer = self._answer, None
-        # Read before anything else is decided: ``result`` re-raises what the round-trip raised, so a call
-        # that failed is heard whether its chunk is still wanted or not.
+        answer, cancelled = self._answer, self._cancelled
+        # Cleared before the read, which raises again what the round trip raised: a failure reaches the
+        # caller, and the cancel it arrives under does not outlive the answer it was made against.
+        self._answer, self._cancelled = None, False
         result = answer.result()
-        if self._cancelled:
-            self._cancelled = False
+        if cancelled:
             return None
         return [result] if isinstance(result, dict) else result
 
     def cancel(self):
-        # The chunk in flight was planned for a world the cancel says is gone, so the round-trip is read for
-        # its failure and its chunk thrown away.
+        # The cancel says the world the chunk applies to is gone. The session still reads the round trip
+        # for its failure, and drops the chunk it answers with.
         self._cancelled = self._answer is not None
 
     @property
@@ -98,8 +98,7 @@ class RemoteSession(Session):
 
     def close(self):
         assert self._answer is None or self._answer.done(), (
-            'close the runtime serving this session first: the round-trip in flight is talking over the '
-            'websocket this closes'
+            'close the runtime serving this session first: the round trip in flight uses the websocket that this closes'
         )
         self._session.close()
 
