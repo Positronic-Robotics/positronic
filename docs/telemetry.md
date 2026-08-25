@@ -76,7 +76,7 @@ The span names are the contract:
 |---|---|---|---|
 | `eval.pass` | root | `run.id`, policy name | one eval sweep (its wall is `W_pass`) |
 | `episode` | `eval.pass` | `episode.index` + the trial's flat `params` keys; at end `episode.steps`, `episode.virtual_s` | one rollout's wall |
-| `reset` | `episode` | — | scene reset (harness arming + producer frame-0 materialisation) |
+| `reset` | `episode` | — | scene reset (the harness readying the rig + the producer publishing what it drew) |
 | `env.step` | `episode` | — | the client-observed env step (materialisation included) |
 | `materialize` | `env.step` | — | client-side observation assembly (shared-memory image alloc + camera copies) |
 | `record.io` | `episode` | — | the recorder's serialize + append |

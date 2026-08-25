@@ -20,8 +20,8 @@ from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
 
-# Pacing before the first reset, when the env's ``control_dt`` is still unknown. Only sets the instant
-# frame-0 lands at, then the env's reported ``control_dt`` takes over.
+# Pacing before the first reset, when the env's ``control_dt`` is still unknown. Only sets the instant the
+# first reset lands at, then the env's reported ``control_dt`` takes over.
 _IDLE_DT = 0.1
 
 
@@ -50,8 +50,6 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         # The scene meta the env reports at ``reset`` (the task/prompt, scene ids) — constant for the trial; read
         # by the client's ``Task`` for its live instruction. ``step`` omits it.
         self._meta: dict[str, Any] | None = None
-        # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) on its next turn and clears it.
-        self._reset_pending = False
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -60,12 +58,11 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         return self._meta
 
     def reset(self, params: dict[str, Any]) -> None:
-        """Re-randomize the env from the trial's params and arm frame-0 publication for the next turn.
+        """Re-randomize the env from the trial's params and publish the scene it draws.
 
-        Resets the remote env (acquiring the fresh frame and its ``control_dt``), then flags the run loop
-        to publish the scene meta, a full observation payload (frame-0) and a non-terminal ``done`` on its
-        next turn — in sequence, so the recorder samples frame-0 before any step. Stale commands queued
-        while inactive (e.g. the inter-episode home) are dropped so the first step doesn't apply them.
+        Resets the remote env (acquiring the fresh frame and its ``control_dt``), then publishes the robot
+        model, a full observation payload and a non-terminal ``done``. Stale commands queued while inactive
+        are dropped so the first step doesn't apply them.
         """
         if self._conn is None:
             # Start the server and connect on the first reset, not at construction, so positronic can wire the
@@ -78,11 +75,10 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
             receiver.read()
         self._frame = self._conn.reset(self._adapter.reset_token(params))
         self._meta = self._frame['meta']
-        self._reset_pending = True
         self._active = True
-        # Clear any terminal the previous trial left on the wire: the env can reach ``done`` while the proxy
-        # free-runs between trials, and the reset-publish turn re-clears it only later — the harness, which runs
-        # before producers, would otherwise sample that stale success as this trial's terminal.
+        self.robot_meta.emit(self._frame['robot_meta'])
+        self._emit_payload(self._frame['obs'])
+        # An empty payload clears the wire: a terminal the previous trial reached would end this one at once.
         self.done.emit({})
 
     def _emit_payload(self, raw_obs: dict[str, Any]) -> None:
@@ -95,29 +91,12 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         try:
             while not should_stop.value:
                 # The proxy is the eval's sole time-master: it sleeps one control period every turn —
-                # stepping, publishing frame-0, or idle between trials alike. Before the first reset the
-                # env's ``control_dt`` is unknown, so it paces at ``_IDLE_DT`` until reset reports the real one.
+                # stepping, resetting, or idle between trials alike. Before the first reset the env's
+                # ``control_dt`` is unknown, so it paces at ``_IDLE_DT`` until reset reports the real one.
                 yield pimm.Sleep(self._frame['control_dt'] if self._frame is not None else _IDLE_DT)
-                if self._reset_pending:
-                    # The reset is this turn's step: publish the env's frame-0 (no step) and clear the prior
-                    # terminal, so the recorder samples it before any step advances the env.
-                    assert self._frame is not None  # reset() set the frame before arming reset_pending
-                    self._reset_pending = False
-                    # The robot model identity the env reports at reset (URDF / joint names), distinct from
-                    # the scene ``meta``.
-                    self.robot_meta.emit(self._frame['robot_meta'])
-                    # Materialising frame-0 (allocating shared-memory image buffers, copying each camera
-                    # frame) is reset cost: it is work the reset asked for, and left untimed it would land in
-                    # overhead.
-                    with telemetry.span(telemetry_keys.SPAN_RESET):
-                        self._emit_payload(self._frame['obs'])
-                    self.done.emit({})
-                elif (call := next(self.env_reset.incoming(), None)) is not None:
+                if (call := next(self.env_reset.incoming(), None)) is not None:
                     with pimm.calls.raise_to(call):
                         self.reset(dict(call.request or {}))
-                        # Answered before frame-0 goes out: the recorder opens on this answer and drains its
-                        # channels as it opens, so a frame published first would be dropped. Frame-0 itself is
-                        # the next turn's, so no step comes between it and the reset.
                         call.set_result(None)
                 elif self._active:
                     # ``env.step`` spans the whole client-observed step; ``materialize`` nests the client-side

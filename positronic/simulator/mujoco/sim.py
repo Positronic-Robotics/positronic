@@ -98,11 +98,10 @@ class _Cadence:
 class MujocoSim(pimm.ControlSystem):
     """The MuJoCo embodiment in one control system: scene, Franka arm, gripper, and cameras.
 
-    ``reset`` rebuilds the scene and ``sync_move`` puts the arm where the trial starts it; the run loop
-    publishes the readied scene as frame-0 once both have answered, before any step advances it. Every other
-    turn applies whatever command has just arrived, steps once, and emits the due streams (post-step,
-    Gym-style). The sim sleeps one control period each turn, so it is the eval's sole time-master. Each
-    stream has an independent rate (``*_fps``, ``None`` = every physics tick).
+    ``reset`` rebuilds the scene and publishes it, and ``sync_move`` puts the arm where the trial starts
+    it. Every other turn applies whatever command has just arrived, steps once, and emits the due streams
+    (post-step, Gym-style). The sim sleeps one control period each turn, so it is the eval's sole
+    time-master. Each stream has an independent rate (``*_fps``, ``None`` = every physics tick).
     """
 
     _MOVE_TOL = 0.05  # radians; the position actuators hold the arm a few hundredths short of their ctrl
@@ -145,8 +144,6 @@ class MujocoSim(pimm.ControlSystem):
         self._error = False
         self._adapters: dict[str, pimm.shared_memory.NumpySMAdapter] | None = None
         self._last_grip = 0.0
-        # Set by ``reset``; the run loop publishes frame-0 (instead of stepping) once the trial is readied.
-        self._reset_pending = False
 
         self.commands = pimm.ControlSystemReceiver[roboarm_command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[roboarm_command.CommandType, None](self)
@@ -193,7 +190,7 @@ class MujocoSim(pimm.ControlSystem):
                 elif command is not None:
                     self._apply_command(command)
                 if redraw is None:  # a redraw is the turn's whole work
-                    self._advance(now)
+                    self._step_and_emit(now)
 
         if self._renderer is not None:
             self._renderer.close()
@@ -205,8 +202,7 @@ class MujocoSim(pimm.ControlSystem):
             target = self._to_joints(call.request)
             self._set_actuator_values(target)
             self._moves.accept(call, target, self._MOVE_TOL, now, self._MOVE_TIMEOUT_S)
-            # Already there: answered on the spot, after its state and without a step, so the scene a
-            # redraw just built reaches frame-0 untouched.
+            # Already there: answered on the spot, after the state that says so and without a step.
             if self._settle_move(now) is MoveStatus.ARRIVED:
                 self._emit_state()
                 self._moves.answer()
@@ -242,26 +238,11 @@ class MujocoSim(pimm.ControlSystem):
                     emit()
         self._moves.answer()  # after the state that says where the arm got to, never mid-travel
 
-    def _advance(self, now: float) -> None:
-        """Carry the sim through one turn: frame-0 for a scene just redrawn, otherwise a step."""
-        # Frame-0 goes out after the last answer a trial waits on, and before any step: the recorder opens
-        # on that answer and drains its channels as it opens.
-        if self._reset_pending and not self._moves.busy:
-            self._reset_pending = False
-            self._emit_robot_meta()
-            # Rendering frame-0 is reset cost: it is work the reset asked for, and left untimed it would
-            # land in overhead.
-            with telemetry.span(telemetry_keys.SPAN_RESET):
-                self._publish_frame()
-        else:
-            self._step_and_emit(now)
-
     def reset(self, seed: int | None = None):
-        """Re-randomize the scene from ``seed`` and flag frame-0 for publication.
+        """Re-randomize the scene from ``seed`` and publish what it draws.
 
         The model and data are rebuilt wholesale, so model-level loader effects (fixed-body poses,
-        colors, cameras) re-randomize too; the renderer and IK physics rebind lazily. The run loop
-        publishes the prepared scene as frame-0 — in sequence, before any step advances it. Stale commands
+        colors, cameras) re-randomize too; the renderer and IK physics rebind lazily. Stale commands
         queued while idle are dropped and the held grip is cleared, so the first step does not apply a
         queued command on the freshly reset scene.
         """
@@ -271,7 +252,8 @@ class MujocoSim(pimm.ControlSystem):
         self.commands.read()
         self.target_grip.read()
         self._last_grip = 0.0
-        self._reset_pending = True
+        self._emit_robot_meta()
+        self._publish_frame()
 
     def _load_scene(self, seed: int | None = None):
         """Apply the loaders to the model file and bind the result; ``scene_xml`` captures the draw."""
@@ -287,7 +269,7 @@ class MujocoSim(pimm.ControlSystem):
         self.robot_meta.emit({**bundled_panda_model(), 'scene_xml': self.scene_xml})
 
     def _publish_frame(self):
-        """Emit every observation stream once for the current scene — the post-reset frame-0."""
+        """Emit every observation stream once for the current scene."""
         self._emit_state()
         self._emit_grip()
         self._emit_sim_state()

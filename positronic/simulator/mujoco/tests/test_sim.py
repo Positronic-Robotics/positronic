@@ -240,24 +240,23 @@ def test_a_move_to_a_pose_the_arm_cannot_reach_hands_its_asker_the_reason():
             _answered(scheduler, answer, _turns(sim, 1.0)).result()
 
 
-def test_frame_zero_waits_for_the_arm_a_trial_readies():
-    """Frame-0 follows both prepare answers, so it is the first thing an episode opening on them can see."""
+def test_a_redraw_publishes_the_scene_before_it_answers():
+    """A trial opening on the redraw's answer finds the scene it drew already on the channels."""
     sim = MujocoSim(MODEL, loaders=())
 
     with pimm.World(virtual_time=True) as world:
         draw = world.pair(sim.env_reset)
-        move = world.pair(sim.sync_move)
         state = world.pair(sim.state)
         meta = world.pair(sim.robot_meta)
         scheduler = world.start([sim])
-        home = _at_rest(scheduler, state, sim)
-        meta.read()  # the run start emits it too; frame-0 is the next one
+        _at_rest(scheduler, state, sim)
+        meta.read()  # the run start emits it too; the redraw's is the next one
 
-        drawn, readied = draw({}), move(roboarm_command.JointPosition(home + 0.3))
+        drawn = draw({})
 
         for _ in range(_turns(sim, 5.0)):
             next(scheduler)
-            if pimm.value_updated(meta) is not None:
-                assert drawn.done() and readied.done(), 'frame-0 went out while the trial was still being readied'
+            if drawn.done():
+                assert pimm.value_updated(meta) is not None, 'the redraw answered before it published the scene'
                 return
-        pytest.fail('frame-0 never went out')
+        pytest.fail('the redraw never answered')

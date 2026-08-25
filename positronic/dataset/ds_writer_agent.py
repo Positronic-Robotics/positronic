@@ -73,17 +73,14 @@ class DsWriterAgent(pimm.ControlSystem):
     episode lifecycle.
 
     On `START_EPISODE`, opens a new `EpisodeWriter` from the provided
-    `DatasetWriter` and applies `static_data`. On the opening turn, samples that
-    predate START — the previous episode's last command and any pre-reset frame —
-    are dropped, while a genuine post-START value is kept; the producer's post-reset
-    frame-0 arrives the next turn and is the first recorded sample. While open,
-    each updated input signal (from `inputs`) is appended with the current
-    timestamp from `clock`. `STOP_EPISODE` and `ABORT_EPISODE` are handled after
-    that turn's inputs, so the trial's last frame is recorded before STOP
-    finalizes the writer; samples timestamped after STOP — whatever the next
-    trial's prepare moves, or sensor data the async real path queues — are
-    dropped, and ABORT discards the episode. Invalid or out-of-order commands
-    are ignored with a log message.
+    `DatasetWriter` and applies `static_data`. The opening turn records what each
+    input holds, whenever that value was produced. While open, each updated input
+    signal (from `inputs`) is appended with the current timestamp from `clock`.
+    `STOP_EPISODE` and `ABORT_EPISODE` are handled after that turn's inputs, so
+    the trial's last frame is recorded before STOP finalizes the writer; samples
+    timestamped after STOP — whatever the next trial's prepare moves, or sensor
+    data the async real path queues — are dropped, and ABORT discards the
+    episode. Invalid or out-of-order commands are ignored with a log message.
 
     `TimeMode` selects whether timestamps come from the control loop clock
     (`CLOCK`) or from the producing message (`MESSAGE`).
@@ -144,11 +141,15 @@ class DsWriterAgent(pimm.ControlSystem):
                 if v is not None:
                     ep_writer.append(full_name, v, primary_ts, extra_ts)
 
-    def _record_window(self, ep_writer: EpisodeWriter, clock: pimm.Clock, after: int | None, before: int | None):
-        """Append every input sample delivered this turn that falls inside ``(after, before]``."""
+    def _record_window(self, ep_writer: EpisodeWriter, clock: pimm.Clock, before: int | None, opening: bool):
+        """Append this turn's input samples, dropping any stamped after ``before``.
+
+        The opening turn reads every channel outright rather than only what arrived, so a channel silent
+        since the last episode still contributes what it holds.
+        """
         for name, reader in self._inputs.items():
-            msg = pimm.read_updated(reader)
-            if msg is not None and (after is None or msg.ts > after) and (before is None or msg.ts <= before):
+            msg = reader.read() if opening else pimm.read_updated(reader)
+            if msg is not None and (before is None or msg.ts <= before):
                 self._record(ep_writer, name, msg, clock)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
@@ -161,20 +162,17 @@ class DsWriterAgent(pimm.ControlSystem):
         try:
             while not should_stop.value:
                 cmd = pimm.read_updated(self.command)
-                # Open before draining this turn's inputs, but finalize/abort after them: the trial's last
-                # frame, queued by the producer a control period earlier, is recorded before STOP closes the
-                # writer.
-                opened_at, stop_at, stop_cmd = None, None, None
+                stop_at, stop_cmd, opening = None, None, False
                 if cmd is not None:
                     if cmd.data.type == DsWriterCommandType.START_EPISODE:
                         was_open = ep_writer is not None
                         ep_writer, ep_counter = self._handle_command(cmd.data, ep_writer, ep_counter)
-                        opened_at = cmd.ts if ep_writer is not None and not was_open else None
+                        opening = ep_writer is not None and not was_open
                     else:
                         stop_at, stop_cmd = cmd.ts, cmd.data
 
                 if ep_writer is not None:
-                    self._record_window(ep_writer, clock, opened_at, stop_at)
+                    self._record_window(ep_writer, clock, stop_at, opening)
 
                 if stop_cmd is not None:
                     ep_writer, ep_counter = self._handle_command(stop_cmd, ep_writer, ep_counter)
