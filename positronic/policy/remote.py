@@ -18,22 +18,22 @@ from .spec import from_spec
 INFER = 'infer'
 
 
-def _prepare_value(key: str, value: Any) -> Any:
+def _prepare_value(value: Any) -> Any:
     # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
     if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
         # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's websocket message cap.
         return encode_jpeg(value)
     if isinstance(value, cabc.Mapping):
-        return {k: _prepare_value(k, v) for k, v in value.items()}
+        return {k: _prepare_value(v) for k, v in value.items()}
     if isinstance(value, list | tuple):
-        return type(value)(_prepare_value(key, v) for v in value)
+        return type(value)(_prepare_value(v) for v in value)
     return value
 
 
 def _prepare_obs(obs: cabc.Mapping[str, Any], compress_images: bool) -> dict[str, Any]:
     if not compress_images:
         return dict(obs)
-    return {key: _prepare_value(key, value) for key, value in obs.items()}
+    return {key: _prepare_value(value) for key, value in obs.items()}
 
 
 def round_trip(
