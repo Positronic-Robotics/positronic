@@ -9,12 +9,10 @@ The gripper is the 7th joint, a prismatic finger drive the controller reports in
 speaks a normalized grip where 1 is closed, so grip converts against the travel the arm reports for that
 joint instead of a constant.
 
-Limitation: a link that drops takes the controller's TCP session with it, and the vendor driver does not
-open a new one. Telemetry resumes on its own, so the arm starts being heard from again, but no command
-reaches it and it reads ERROR until the run restarts.
-
-TODO: recover the session with `clear_error`, which cleans up and configures again, once an unreachable
-target is handled too — both need the same rig time.
+A link that drops takes the controller's TCP session with it, and the vendor driver does not open a new
+one. Telemetry and commands travel separately — the controller streams the first over UDP and takes the
+second over TCP — so the arm can be heard from while nothing reaches it. The driver opens a new session
+itself once either half stops working, and resumes from wherever it finds the arm.
 """
 
 import contextlib
@@ -53,6 +51,11 @@ _ARRIVED_TOL = 0.02  # radians; the firmware reports position, so arrival is jud
 # How long the controller's clock may stand still before the link counts as down. Telemetry arrives at
 # over 200 Hz, so this is many missed frames, not a scheduling hiccup.
 _STALE_AFTER_S = 0.25
+_CONNECT_TIMEOUT_S = 20.0
+# A reconnect runs on the control loop, so its timeout is what the loop stands still for on a failed attempt.
+_RECONNECT_TIMEOUT_S = 1.0
+_RECONNECT_AFTER_S = 0.5  # how long the link stays down before a new session is worth opening
+_RECONNECT_EVERY_S = 2.0  # and how often another is tried while it stays down
 
 
 class TrossenState(State, pimm.shared_memory.NumpySMAdapter):
@@ -93,10 +96,16 @@ class TrossenState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[TrossenState.STATUS_OFFSET] = status.value
 
 
+def _configure(driver: Any, ip: str, timeout_s: float) -> None:
+    """Open a session with the controller, clearing an error a previous one left behind."""
+    end_effector = trossen_arm.StandardEndEffector.wxai_v0_follower
+    driver.configure(trossen_arm.Model.wxai_v0, end_effector, ip, True, timeout_s)
+
+
 def _connect(ip: str) -> Any:
-    """Open the arm controller and take ownership of it, clearing an error a previous run left behind."""
+    """Open the arm controller and take ownership of it."""
     driver = trossen_arm.TrossenArmDriver()
-    driver.configure(trossen_arm.Model.wxai_v0, trossen_arm.StandardEndEffector.wxai_v0_follower, ip, True)
+    _configure(driver, ip, _CONNECT_TIMEOUT_S)
     return driver
 
 
@@ -154,12 +163,26 @@ class _Arm(DriverRun[command.CommandType]):
         self._grip_target = self._grip_of(self._output)
         self._goal_time = _STREAM_GOAL_TIME_S
         self._unsent = False
-        # Whether the arm is still being heard from. Not `Moves.errored`, which says the arm is not where
-        # the driver put it: a link that drops says nothing about the move, and the two clear on different
-        # events.
-        self.link_down = False
+        # The two halves of the link, which fail apart. Neither is `Moves.errored`, which says the arm is
+        # not where the driver put it: a link that drops says nothing about the move.
+        self._stream_stale = False  # the controller's clock stands still, so its telemetry stopped arriving
+        self._command_dead = False  # a write was refused, and only a new session takes another
+        self._down_since: float | None = None
+        self._reconnect_at = -_RECONNECT_EVERY_S
         self._stamp = int(self._output.header.timestamp)
         self._stamp_at = clock.now()
+
+    @property
+    def link_down(self) -> bool:
+        """Whether the arm is out of reach, either way round."""
+        return self._stream_stale or self._command_dead
+
+    def _note_link(self, now: float) -> None:
+        """Keep when the link went down, which is what a reconnect waits on."""
+        if not self.link_down:
+            self._down_since = None
+        elif self._down_since is None:
+            self._down_since = now
 
     def _grip_of(self, output: Any) -> float:
         """How closed the fingers are, from the joint position the controller reports.
@@ -174,43 +197,49 @@ class _Arm(DriverRun[command.CommandType]):
         """The gripper joint position that holds the fingers at ``grip``."""
         return self._grip_closed + (1.0 - grip) * self._grip_travel
 
-    def __enter__(self) -> '_Arm':
+    def _take_control(self) -> None:
         """Put the arm in position mode holding where it reads.
 
         The mode change comes first and the setpoint immediately after, so the servo has a goal from the
-        tick it starts servoing.
+        tick it starts servoing. Reading first is what makes a session opened mid-run resume without a jump:
+        the arm is wherever it ended up, not where the last session was driving it.
         """
+        self._output = self.driver.get_robot_output()
+        self._q_target = self.q
+        self._grip_target = self._grip_of(self._output)
         self.driver.set_all_modes(trossen_arm.Mode.position)
         self._unsent = True
         self.write()
+
+    def __enter__(self) -> '_Arm':
+        self._take_control()
         return self
 
     def __exit__(self, exc_type, exc: BaseException | None, tb) -> None:
         """Answer whatever was waiting on a move; ``_opened`` takes the arm back to idle."""
         self.moves.abandon(exc)
 
-    def read(self) -> bool:
-        """Take the whole arm off the link, once a tick, and say whether the arm is still being heard from.
+    def read(self) -> None:
+        """Take the whole arm off the link, once a tick.
 
         The controller streams its telemetry and the read hands back the last of it, so a link that drops
         does not raise — it repeats itself. The controller's own clock is what says the stream stopped.
         """
+        now = self.clock.now()
         try:
             self._output = self.driver.get_robot_output()
-        # rules-allow: swallowed-error — a link that drops reads ERROR; the run outlives it, and the next
-        # reading that arrives clears it
+        # rules-allow: swallowed-error — a link that drops reads ERROR; the run outlives it, and a new
+        # session clears it
         except trossen_arm.RuntimeError as exc:
             logger.error(f'The arm at {self.ip} did not answer: {exc}')
-            self.link_down = True
-            return False
-        now = self.clock.now()
+            self._stream_stale = True
+            self._note_link(now)
+            return
         stamp = int(self._output.header.timestamp)
         if stamp != self._stamp:
             self._stamp, self._stamp_at = stamp, now
-        self.link_down = now - self._stamp_at > _STALE_AFTER_S
-        if self.link_down:
-            logger.error(f'The arm at {self.ip} stopped streaming {now - self._stamp_at:.2f} s ago')
-        return not self.link_down
+        self._stream_stale = now - self._stamp_at > _STALE_AFTER_S
+        self._note_link(now)
 
     @property
     def q(self) -> np.ndarray:
@@ -276,17 +305,47 @@ class _Arm(DriverRun[command.CommandType]):
         goal = [*self._q_target, self._grip_metres(self._grip_target)]
         try:
             self.driver.set_all_positions(goal, self._goal_time, False)
-        # rules-allow: swallowed-error — a link that drops reads ERROR; the setpoint stays unsent and goes
-        # out again once the arm answers
+        # rules-allow: swallowed-error — a link that refuses a write reads ERROR; the setpoint stays unsent
+        # and goes out again on the next session
         except trossen_arm.RuntimeError as exc:
             logger.error(f'The arm at {self.ip} did not take the setpoint: {exc}')
-            self.link_down = True
+            self._command_dead = True
+            self._note_link(self.clock.now())
             return
-        self._unsent = False
+        self._command_dead, self._unsent = False, False
+        self._note_link(self.clock.now())
+
+    def recover(self) -> None:
+        """Open a new session once the link has been down long enough, and no more often than that again.
+
+        A session does not survive the link dropping and the vendor driver does not open another, so the
+        arm stays out of reach until this does it. The attempt runs on the control loop, which stands still
+        for as long as the connection takes to fail.
+        """
+        now = self.clock.now()
+        if self._down_since is None or now - self._down_since < _RECONNECT_AFTER_S:
+            return
+        if now - self._reconnect_at < _RECONNECT_EVERY_S:
+            return
+        self._reconnect_at = now
+        logger.info(f'Opening a new session with the arm at {self.ip}')
+        try:
+            with contextlib.suppress(trossen_arm.RuntimeError):  # the old session is what failed
+                self.driver.cleanup()
+            _configure(self.driver, self.ip, _RECONNECT_TIMEOUT_S)
+            self._take_control()
+        # rules-allow: swallowed-error — an arm still out of reach reads ERROR; the next attempt tries again
+        except trossen_arm.RuntimeError as exc:
+            logger.error(f'The arm at {self.ip} did not take a new session: {exc}')
+            return
+        self._stamp, self._stamp_at = int(self._output.header.timestamp), now
+        self._stream_stale = False
+        self._note_link(now)
+        logger.info(f'The arm at {self.ip} answers again')
 
     def publish(self) -> None:
         """Ship the arm as the controller last reported it, arm and fingers."""
-        if self.link_down or self.moves.errored:  # not where the driver put it, or not answering at all
+        if self.link_down or self.moves.errored:  # not where the driver put it, or out of reach entirely
             status = RobotStatus.ERROR
         elif self.moves.active:  # the driver owns the arm until the move settles
             status = RobotStatus.BUSY
@@ -328,7 +387,9 @@ class Robot(pimm.ControlSystem):
                 self.robot_meta.emit({'robot': 'trossen_wxai'})
 
                 while not should_stop.value:
-                    if not arm.read():
+                    arm.read()
+                    if arm.link_down:
+                        arm.recover()  # get the arm back first, so the state that goes out says where it is
                         arm.settle()  # a move runs out its deadline on the last reading; nobody waits forever
                         arm.publish()
                         arm.moves.answer()
@@ -384,10 +445,16 @@ class _FakeTrossen:
         self._velocity = np.zeros(7)
         self._stamp = 0
         self.frozen = False  # the controller stops being heard from, as a dropped link leaves it
+        self.sessions = 1
         self.mode: Any = None
         self.goals: list[list[float]] = []
         self.goal_times: list[float] = []
         self.cleaned_up = False
+
+    def configure(self, model: Any, end_effector: Any, serv_ip: str, clear_error: bool, timeout: float = 20.0):
+        self.mode = None
+        self.cleaned_up = False
+        self.sessions += 1
 
     def get_joint_limits(self) -> list['_FakeTrossen._Limit']:
         return [_FakeTrossen._Limit(lower, upper) for lower, upper in _FakeTrossen._LIMITS]
