@@ -4,6 +4,10 @@ import pos3
 
 logger = logging.getLogger(__name__)
 
+# Orbax writes this beside one checkpoint's own payload, and nothing writes it beside numbered checkpoint
+# dirs — so a directory holding it is a checkpoint, and the caller passed a path one level too deep.
+_ORBAX_CHECKPOINT_MARKER = '_CHECKPOINT_METADATA'
+
 
 def list_checkpoints(checkpoints_dir: str, prefix: str = '') -> list[str]:
     """List available checkpoint subdirectories in a checkpoints directory.
@@ -22,6 +26,11 @@ def list_checkpoints(checkpoints_dir: str, prefix: str = '') -> list[str]:
                 checkpoint_nums.append((int(candidate), name))
 
     if not checkpoint_nums:
+        if _ORBAX_CHECKPOINT_MARKER in children:
+            raise ValueError(
+                f'No checkpoint found in {checkpoints_dir}: it is a single checkpoint, not a checkpoints '
+                f'directory. Pass the parent experiment directory, which holds the numbered checkpoints.'
+            )
         raise ValueError(f'No checkpoint found in {checkpoints_dir}. Available files: {children}')
 
     checkpoint_nums.sort(key=lambda pair: pair[0])

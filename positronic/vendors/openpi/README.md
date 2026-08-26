@@ -255,6 +255,28 @@ A `droid` server emits `JointDelta` commands; the driver applies each to the liv
 3. Check checkpoint directory structure: `checkpoints/<checkpoint-id>/`
 4. If using specific checkpoint, verify the checkpoint ID exists
 
+### Checkpoint directory one level too deep
+
+**Problem:** Server exits with "No checkpoint found in `<dir>`: it is a single checkpoint, not a checkpoints directory"
+
+**Solutions:**
+1. `--pipeline.source.checkpoints_dir` takes the experiment directory, which holds the numbered checkpoint
+   subdirectories — drop the trailing checkpoint number from the path
+2. A directory holding `_CHECKPOINT_METADATA`, `assets`, `params` and `train_state` is one checkpoint; its
+   parent is the experiment directory
+
+### Missing `ee_frame`
+
+**Problem:** Server exits with "TypeError: pipeline() missing 1 required positional argument: 'ee_frame'"
+
+**Solutions:**
+1. The EE pipelines (`serve`, `ee`, `ee_joints`, `ee_traj`, `ee_joints_traj`, `ee_flip_grip`) bind no
+   checkpoint, so they state no frame and require `--pipeline.ee_frame`. The `droid`, `droid_jointpos` and
+   `libero` deployments bind their own, which is why moving off one of them needs the flag added
+2. Pass `--pipeline.ee_frame=None` for a checkpoint trained in the rig's `default` frame
+3. Otherwise pass the frame the checkpoint speaks, relative to `default` —
+   `@positronic.drivers.roboarm.models.DROID_EE_FRAME` is the shipped one
+
 ### Action decoding fails
 
 **Problem:** Server returns error during action decoding
