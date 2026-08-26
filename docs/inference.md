@@ -106,18 +106,19 @@ Something has to say when an episode starts and when it finishes. `positronic-in
 
 ### A console of your own
 
-Anything richer — a web console, a foot pedal, a rig UI — is a `Driver` of its own rather than a plug-in. It decides when an episode starts, and `run_world` builds the world around it: the harness, the recorder, the devices, and every wire between them. A driver reads what it decides from itself — the keyboard operator reads the terminal in its own loop — so the runner wires nothing of it but the `perform_task` call and `done`.
+Anything richer — a web console, a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller: it decides when an episode starts, and `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. A driver reads what it decides from itself — the keyboard operator reads the terminal in its own loop — so the runner wires nothing of it but that call and `done`.
 
 ```python
 import pimm
-from positronic.cli.eval.run import Driver, prepare_output_dir, run_world
+from positronic.cli.eval.run import prepare_output_dir, run_world
+from positronic.eval import Task
 
 
-class MyConsole(Driver):
+class MyConsole(pimm.ControlSystem):
     """Asks `perform_task` for a `Task` per episode, and emits the episode's terminal on `done`."""
 
     def __init__(self):
-        super().__init__()
+        self.perform_task = pimm.calls.ControlSystemCaller[Task, dict](self)
         self.done = pimm.ControlSystemEmitter[dict](self)
 
     def run(self, should_stop, clock):

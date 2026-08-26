@@ -47,28 +47,17 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
     return local_dir
 
 
-class Driver(pimm.ControlSystem):
-    """Decides when a trial starts, and asks for it as an episode through ``perform_task``.
-
-    ``run_world`` builds one world around one driver: a plan walked to its end, a person at a keyboard, or a
-    console of somebody's own. A driver reads whatever it decides from — a plan, a terminal — itself, so the
-    runner wires nothing of it but this call.
-    """
-
-    def __init__(self):
-        self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
-
-
-class TaskDriver(Driver):
-    """Walks a plan of tasks, and returns — stopping the world — once the last has ended.
+class TaskDriver(pimm.ControlSystem):
+    """Walks a plan of tasks, asking for each as an episode through ``perform_task``, and returns —
+    stopping the world — once the last has ended.
 
     It makes the plan on its first turn, not when it is built. One task is in flight at a time: the next is
     asked for only when the previous episode's terminal comes back, so the plan never overlaps two episodes.
     """
 
     def __init__(self, tasks: Callable[[], Iterable[Task]]):
-        super().__init__()
         self._tasks = tasks
+        self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         for task in self._tasks():
@@ -85,7 +74,7 @@ class TaskDriver(Driver):
 def run_world(
     policy,
     embodiment: Embodiment,
-    driver: Driver,
+    driver,
     output_dir: Path | None,
     *,
     privileged: dict[str, Observation] | None = None,
@@ -94,8 +83,11 @@ def run_world(
     """Wire one embodiment under a fresh Harness + World, and run it until a control system returns.
 
     Every trial runs here, whoever asks for it: the driver is what an attended run and an unattended one
-    differ by. ``done`` is what ends an episode from outside the policy — the env's terminal in a sim eval,
-    the operator in an attended run. The ``policy``'s lifetime stays with the caller.
+    differ by. A driver is any control system with a ``perform_task`` caller — a plan walked to its end, a
+    person at a keyboard, a console of somebody's own — and it reads what it decides from itself, so the
+    runner wires nothing of it but that call. ``done`` is what ends an episode from outside the policy: the
+    env's terminal in a sim eval, the operator in an attended run. The ``policy``'s lifetime stays with the
+    caller.
     """
     harness = Harness(policy, embodiment)
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK

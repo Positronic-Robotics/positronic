@@ -9,7 +9,8 @@ from typing import Any
 import pytest
 
 import pimm
-from positronic import inference, keys
+from positronic import keys
+from positronic.drivers import keyboard
 from positronic.eval import Embodiment, Task
 from positronic.inference import KeyboardOperator, real
 from positronic.policy import Policy
@@ -71,7 +72,7 @@ def _trial(instruction: str = 'stub') -> Callable[[], Task]:
 
 
 @pytest.mark.timeout(30.0)
-def test_the_keyboard_path_ends_when_the_operator_returns(monkeypatch):
+def test_the_keyboard_path_ends_when_the_keyboard_returns(monkeypatch):
     """How an attended run finishes: the operator returns, the world stops, ``real`` closes the policy.
 
     A stdin that is not a terminal is the return the test can force; ``q`` is the other one.
@@ -125,7 +126,7 @@ def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, capsys):
     """The press is the whole start signal: the rig's devices ready, the episode opens on the instruction it
     was given, and it runs until the operator stops it."""
     policy = _IdlePolicy()
-    monkeypatch.setattr(inference, 'key_reader', partial(nullcontext, _ScriptedKeys(policy)))
+    monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, _ScriptedKeys(policy)))
 
     real(policy=policy, embodiment=_embodiment(), next_task=_trial('pick up the cube'))
 
@@ -140,7 +141,7 @@ def test_the_operator_reports_an_ask_the_harness_refuses(monkeypatch, capsys):
     is printed as it lands."""
     task = Task(instruction_source='pick', timeout_sec=None)
     presses = iter(['s', 's'])
-    monkeypatch.setattr(inference, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
+    monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
     operator = KeyboardOperator(lambda: task)
     with pimm.World(virtual_time=True) as world:
         harness = world.pair(operator.perform_task)
