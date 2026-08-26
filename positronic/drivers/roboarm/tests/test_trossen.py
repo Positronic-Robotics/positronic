@@ -380,3 +380,124 @@ def test_a_move_the_world_stops_under_is_handed_back_to_its_asker(world):
     assert answer.done()
     with pytest.raises(MoveAbandoned):
         answer.result()
+
+
+HELD_POSE = geom.Transform3D(np.array([0.254, -0.0039, 0.1618]), geom.Rotation.from_rotvec(np.zeros(3)))
+
+
+def _pose_of(goal: list[float]) -> geom.Transform3D:
+    return geom.Transform3D(np.asarray(goal[:3]), geom.Rotation.from_rotvec(np.asarray(goal[3:6])))
+
+
+def test_a_streamed_cartesian_command_reaches_the_arm_as_a_pose():
+    """The controller speaks angle-axis where positronic speaks a rotation."""
+    arm = FakeArm()
+    driver, _, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    next(loop)
+
+    target = geom.Transform3D(HELD_POSE.translation + np.array([0.01, 0.0, 0.0]), HELD_POSE.rotation)
+    commands.push(command.CartesianPosition(target))
+    next(loop)
+
+    reached = _pose_of(arm.poses[-1])
+    np.testing.assert_allclose(reached.translation, target.translation, atol=1e-6)
+    np.testing.assert_allclose(reached.rotation.as_quat, target.rotation.as_quat, atol=1e-6)
+
+
+def test_a_cartesian_delta_composes_onto_the_pose_the_controller_reports():
+    arm = FakeArm()
+    driver, states, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    next(loop)
+    measured = states.emitted[-1][1].ee_pose
+
+    commands.push(command.CartesianDelta(geom.Transform3D(np.array([0.01, 0.0, 0.0]))))
+    next(loop)
+
+    expected = measured.translation + np.array([0.01, 0.0, 0.0])
+    np.testing.assert_allclose(_pose_of(arm.poses[-1]).translation, expected, atol=1e-5)
+
+
+def test_a_cartesian_target_out_of_reach_is_capped_to_one_step():
+    """A teleoperator reaching past the arm asks for a target that runs away from it."""
+    arm = FakeArm()
+    driver, _, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    next(loop)
+    held = _pose_of(arm.poses[-1]) if arm.poses else HELD_POSE
+
+    commands.push(command.CartesianPosition(geom.Transform3D(held.translation + np.array([5.0, 0.0, 0.0]))))
+    next(loop)
+
+    step = np.linalg.norm(_pose_of(arm.poses[-1]).translation - held.translation)
+    assert step == pytest.approx(trossen_driver._MAX_STEP_M, abs=1e-6)
+
+
+def test_a_turn_the_long_way_round_is_capped_along_the_short_one():
+    """`as_rotvec` keeps the way round it was given, and a cap along it would drive the arm backwards."""
+    arm = FakeArm()
+    driver, states, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    next(loop)
+    held = states.emitted[-1][1].ee_pose
+
+    away = geom.Rotation.from_rotvec(np.array([0.0, 0.0, np.deg2rad(350)]))
+    commands.push(command.CartesianPosition(geom.Transform3D(held.translation, held.rotation * away)))
+    next(loop)
+
+    turn = (held.rotation.inv * _pose_of(arm.poses[-1]).rotation).as_rotvec
+    assert np.linalg.norm(turn) == pytest.approx(trossen_driver._MAX_STEP_RAD, abs=1e-6)
+    assert turn[2] < 0  # ten degrees back, not three hundred and fifty forward
+
+
+def test_the_firmware_is_asked_to_check_the_path_before_it_starts_one():
+    arm = FakeArm()
+    driver, _, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    next(loop)
+
+    commands.push(command.CartesianPosition(HELD_POSE))
+    next(loop)
+
+    assert arm.checked_samples[-1] == trossen_driver._TRAJECTORY_CHECK_SAMPLES
+
+
+def test_the_fingers_take_their_own_call_while_the_arm_holds_a_pose():
+    """A Cartesian goal names the arm alone, so one goal vector cannot carry both."""
+    arm = FakeArm()
+    driver, _, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    grip = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    driver.target_grip._bind(grip)
+    next(loop)
+
+    commands.push(command.CartesianPosition(HELD_POSE))
+    next(loop)
+    poses = len(arm.poses)
+
+    grip.push(0.0)
+    next(loop)
+
+    assert arm.gripper_goals[-1] == pytest.approx(GRIP_TRAVEL_M)
+    assert len(arm.poses) == poses  # and the arm was not asked to plan its path again
+
+
+def test_a_cartesian_move_nobody_can_judge_the_arrival_of_is_refused(world):
+    """Arrival is judged from the joints, and a pose does not say which joints reach it."""
+    arm = FakeArm()
+    driver, _, loop = _driven(arm)
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
+    wire_call(world, caller, driver.sync_move)
+
+    answer = caller(command.CartesianPosition(HELD_POSE))
+    next(loop)
+
+    with pytest.raises(NotImplementedError):
+        answer.result()
