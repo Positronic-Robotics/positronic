@@ -305,7 +305,7 @@ class _CountingLayer(Layer):
             self._layer.calls += 1
             return self._inner(obs, time)
 
-    def make_session(self, inner, context):
+    def make_session(self, inner):
         return self._Session(inner, self)
 
 

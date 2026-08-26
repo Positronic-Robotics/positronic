@@ -186,7 +186,7 @@ class Layer:
         """Apply this layer to a policy. Default: wrap every session it creates via ``make_session``."""
         return _LayerPolicy(policy, self)
 
-    def make_session(self, inner: Session, context: dict[str, Any] | None) -> Session:
+    def make_session(self, inner: Session) -> Session:
         """Make this layer's session around ``inner``."""
         raise NotImplementedError('Override make_session or wrap')
 
@@ -229,7 +229,7 @@ class _LayerPolicy(DelegatingPolicy):
         self._layer = layer
 
     def new_session(self, context=None, rt=None):
-        return self._layer.make_session(self._inner.new_session(context, rt), context)
+        return self._layer.make_session(self._inner.new_session(context, rt))
 
     @property
     def meta(self):

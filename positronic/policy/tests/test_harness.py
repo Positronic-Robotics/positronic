@@ -1827,7 +1827,7 @@ class _ReplanEarly(Layer):
             self._replan_at = t0 + (result[-1][keys.ACTION_TIMESTAMP] - t0) / 2
             return result
 
-    def make_session(self, inner: Session, context):
+    def make_session(self, inner: Session):
         return _ReplanEarly._Session(inner)
 
 
@@ -1923,7 +1923,7 @@ class _ObservedTicks(Layer):
             self._seen.append(obs[keys.OBS_TIME_NS] / 1e9)
             return self._inner(obs, time)
 
-    def make_session(self, inner: Session, context):
+    def make_session(self, inner: Session):
         return _ObservedTicks._Session(inner, self.seen)
 
 

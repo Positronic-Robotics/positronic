@@ -363,7 +363,7 @@ class _RecordingTap(Layer):
         self._rec = rec
         self._name = name
 
-    def make_session(self, inner: Session, context) -> Session:
+    def make_session(self, inner: Session) -> Session:
         stream = self._rec._open_stream()
         return _RecordingTapSession(inner, self._rec, self._name, stream)
 

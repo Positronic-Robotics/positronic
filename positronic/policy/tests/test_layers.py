@@ -55,14 +55,14 @@ class TestStopOnFault:
     @pytest.mark.parametrize('unavailable', [RobotStatus.ERROR, RobotStatus.BUSY])
     def test_an_unavailable_arm_stops_what_is_executing(self, unavailable):
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
-        session = StopOnFault().make_session(inner, None)
+        session = StopOnFault().make_session(inner)
 
         assert session(_obs(0.0, unavailable), 0.0) == []
         assert inner.call_count == 0, 'the model was asked about an arm that is not tracking it'
 
     def test_an_available_arm_reaches_the_model(self):
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
-        session = StopOnFault().make_session(inner, None)
+        session = StopOnFault().make_session(inner)
 
         assert session(_obs(0.0, RobotStatus.AVAILABLE), 0.0) is not None
         assert inner.call_count == 1
@@ -70,7 +70,7 @@ class TestStopOnFault:
     def test_an_observation_with_no_arm_status_reaches_the_model(self):
         """A probe replaying a recording has no arm to stop for."""
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
-        session = StopOnFault().make_session(inner, None)
+        session = StopOnFault().make_session(inner)
 
         assert session({keys.OBS_TIME_NS: 0}, 0.0) is not None
         assert inner.call_count == 1
@@ -79,7 +79,7 @@ class TestStopOnFault:
         """Whichever arm is unavailable stops the pair, and the status counts as its number: a server-side stack
         reads it off a wire with no enum to carry."""
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
-        session = StopOnFault().make_session(inner, None)
+        session = StopOnFault().make_session(inner)
         obs = {
             keys.OBS_TIME_NS: 0,
             f'{keys.ROBOT_STATE}.left.status': int(RobotStatus.AVAILABLE),
@@ -92,7 +92,7 @@ class TestStopOnFault:
     def test_the_status_a_recording_carries_for_a_taken_arm_stops_the_policy(self):
         """The numbers are the contract between a rig and a server: 1 is an arm its driver has taken."""
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
-        session = StopOnFault().make_session(inner, None)
+        session = StopOnFault().make_session(inner)
 
         assert (RobotStatus.AVAILABLE, RobotStatus.BUSY, RobotStatus.ERROR) == (0, 1, 3)
         assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 1}, 0.0) == []
@@ -101,7 +101,7 @@ class TestStopOnFault:
     def test_the_status_published_for_a_travelling_arm_reaches_the_model(self):
         """The wire protocol publishes 2 for an arm on its way to a setpoint, which is one taking commands."""
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
-        session = StopOnFault().make_session(inner, None)
+        session = StopOnFault().make_session(inner)
 
         assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 2}, 0.0) is not None
         assert inner.call_count == 1
@@ -109,7 +109,7 @@ class TestStopOnFault:
     def test_a_status_no_arm_answers_to_raises(self):
         """A number outside ``RobotStatus`` is the rig and the server disagreeing about the protocol, which
         is not something to drive an arm through."""
-        session = StopOnFault().make_session(_ConstSession([]), None)
+        session = StopOnFault().make_session(_ConstSession([]))
 
         with pytest.raises(ValueError):
             session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 99}, 0.0)
@@ -142,7 +142,7 @@ class TestChunkedSchedule:
         """A session that waits for a served function answers ``None``, which is no trajectory. The layer
         passes the ``None`` on and asks again on the next observation."""
         inner = _ScriptedSession([None, None, [{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]])
-        session = ChunkedSchedule().make_session(inner, None)
+        session = ChunkedSchedule().make_session(inner)
 
         assert session(_obs(0.0), 1.0) is None
         assert session(_obs(0.1), 1.0) is None

@@ -81,7 +81,7 @@ class Codec(Layer):
     def meta(self) -> dict:
         return {}
 
-    def make_session(self, inner: Session, context):
+    def make_session(self, inner: Session):
         return _CodecSession(inner, self)
 
     @final

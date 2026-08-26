@@ -52,7 +52,7 @@ class StopOnFault(Layer):
             self.cancel()
             return []
 
-    def make_session(self, inner: Session, context):
+    def make_session(self, inner: Session):
         return StopOnFault._Session(inner)
 
     def to_spec(self):
@@ -65,6 +65,9 @@ class ChunkedSchedule(Layer):
     Owns relative→absolute time conversion: the sessions below (codecs, models) emit relative timestamps;
     this layer anchors them to the ``time`` of the call. Returns ``None`` ("keep executing the current
     trajectory") until the last action's timestamp is reached, then calls the inner policy.
+
+    The call's ``time`` and the observation's ``obs_time_ns`` must be readings of one clock: the anchor
+    comes from the first, and the test for a complete chunk uses the second.
     """
 
     WIRE_NAME = 'chunked_schedule'
@@ -95,7 +98,7 @@ class ChunkedSchedule(Layer):
             self._trajectory_end = None
             super().cancel()
 
-    def make_session(self, inner: Session, context):
+    def make_session(self, inner: Session):
         return ChunkedSchedule._Session(inner)
 
     def to_spec(self):
@@ -191,7 +194,7 @@ class TemporalStack(Layer):
             'in-range targets and the stack would be empty'
         )
 
-    def make_session(self, inner: Session, context):
+    def make_session(self, inner: Session):
         return TemporalStack._Session(inner, self._keys, self._offsets_sec, self._pad_start)
 
     def to_spec(self):
