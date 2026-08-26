@@ -33,6 +33,7 @@ class FakeArm(trossen_driver._FakeTrossen):
         self.configure_raises: Exception | None = None
         self.attempts = 0
         self.blocked = False
+        self.velocities: np.ndarray | None = None  # what the joints read as running at, when the test says
 
     def configure(self, model, end_effector, serv_ip, clear_error, timeout=20.0) -> None:
         self.attempts += 1
@@ -43,7 +44,10 @@ class FakeArm(trossen_driver._FakeTrossen):
     def get_robot_output(self):
         if self.raises is not None:
             raise self.raises
-        return super().get_robot_output()
+        out = super().get_robot_output()
+        if self.velocities is not None:
+            out.joint.arm.velocities = np.asarray(self.velocities, dtype=np.float64)
+        return out
 
     def set_all_modes(self, mode) -> None:
         if self.write_raises is not None:
@@ -292,7 +296,8 @@ def test_a_new_session_holds_the_arm_where_it_finds_it():
     np.testing.assert_allclose(arm.goals[-1][: trossen_driver._ARM_JOINTS], where_it_is, atol=1e-3)
 
 
-def test_a_new_session_that_fails_is_tried_again_rather_than_hammered():
+def test_a_new_session_that_fails_is_tried_again_further_and_further_apart():
+    """A fault the controller latches outlives a new session, so retrying at the same pace stalls the loop."""
     arm = FakeArm()
     clock = MockClock()
     driver, _, loop = _driven(arm, clock)
@@ -306,6 +311,11 @@ def test_a_new_session_that_fails_is_tried_again_rather_than_hammered():
     for _ in range(20):  # many ticks inside one reconnect interval, one attempt between them
         next(loop)
     assert arm.attempts == 1
+
+    clock.advance(trossen_driver._RECONNECT_EVERY_S + 0.01)
+    for _ in range(5):
+        next(loop)
+    assert arm.attempts == 1  # the interval doubled after the first attempt failed
 
     clock.advance(trossen_driver._RECONNECT_EVERY_S + 0.01)
     next(loop)
@@ -518,3 +528,25 @@ def test_a_cartesian_target_does_not_run_away_from_an_arm_that_is_held_up():
 
     step = np.linalg.norm(_pose_of(arm.poses[-1]).translation - HELD_POSE.translation)
     assert step == pytest.approx(trossen_driver._MAX_STEP_M, abs=1e-6)
+
+
+def test_an_arm_running_past_a_joint_limit_is_left_alone_until_it_slows():
+    """Past its limit the controller faults and drops the arm, so the driver stops driving before that."""
+    arm = FakeArm()
+    driver, states, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    next(loop)
+
+    arm.velocities = np.array([0.0, 0.0, 0.0, 0.0, 9.0, 0.0])  # joint 4 stops at 9.4248 rad/s
+    commands.push(command.JointPosition(JOGGED))
+    next(loop)
+    held = arm.goals[-1]
+
+    assert states.emitted[-1][1].status == RobotStatus.ERROR
+    np.testing.assert_allclose(held[: trossen_driver._ARM_JOINTS], states.emitted[-1][1].q, atol=1e-6)
+
+    arm.velocities = np.zeros(6)
+    commands.push(command.JointPosition(JOGGED))
+    next(loop)
+    np.testing.assert_allclose(arm.goals[-1][: trossen_driver._ARM_JOINTS], JOGGED)
