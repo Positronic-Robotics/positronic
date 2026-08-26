@@ -59,14 +59,17 @@ class _EpisodeInference:
             self._t0_ns, self._wall_t0 = self._clock.now_ns(), time.monotonic()
         return self._session(frozen_view(self._owned(obs)))
 
-    def wait(self) -> None:
+    def wait(self, should_stop: pimm.SignalReceiver[bool]) -> None:
         """Wait for the function in flight, for as long as the trial charges the loop for it."""
-        timeout = None
         if self._charges_wall_time:
             # Wall time cannot be held still, so the loop waits out only the time the world is already ahead by.
             paid_through = self._t0_ns / 1e9 + (time.monotonic() - self._wall_t0)
-            timeout = max(self._clock.now() - paid_through, 0.0)
-        self._runtime.wait(timeout)
+            self._runtime.wait(max(self._clock.now() - paid_through, 0.0))
+            return
+        # A trial that pays nothing waits the function out. It waits in steps, because a model that never
+        # answers must not also keep the world from coming down.
+        while self._runtime.in_flight and not should_stop.value:
+            self._runtime.wait(POLL_PERIOD_SEC)
 
     def close(self) -> None:
         """Close the runtime, then the session it was serving.
@@ -298,7 +301,7 @@ class Harness(pimm.ControlSystem):
         self._telemetry.start_rollout(clock.now())
         self.ds_command.emit(DsWriterCommand.START())
         # The fresh data is here, later round would read a frame the recording did not open on.
-        self._infer(self._inference, clock)
+        self._infer(self._inference, clock, should_stop)
 
     def _end_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, payload: dict[str, Any]
@@ -336,7 +339,7 @@ class Harness(pimm.ControlSystem):
         if (terminal := self._trial_terminal(done, clock)) is not None:
             yield from self._end_episode(clock, should_stop, terminal)
         else:
-            self._infer(inference, clock)
+            self._infer(inference, clock, should_stop)
 
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any]:
         """Read every observation channel and assemble the policy input dict.
@@ -359,14 +362,14 @@ class Harness(pimm.ControlSystem):
         inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
         return inputs
 
-    def _infer(self, inference: _EpisodeInference, clock: pimm.Clock) -> None:
+    def _infer(self, inference: _EpisodeInference, clock: pimm.Clock, should_stop: pimm.SignalReceiver[bool]) -> None:
         try:
             obs = self._build_obs(clock)
         except pimm.NoValueException:
             return  # no function is in flight yet, so this skips no wait
         if (trajectory := inference(obs)) is not None:
             self._reschedule(trajectory, clock)
-        inference.wait()
+        inference.wait(should_stop)
 
     @staticmethod
     def _assert_anchored(trajectory: list[dict[str, Any]], now: float) -> None:

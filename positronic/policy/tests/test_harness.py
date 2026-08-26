@@ -23,7 +23,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import DelegatingSession, Layer, Policy, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import Harness
+from positronic.policy.harness import Harness, _EpisodeInference
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.remote import INFER, RemoteSession, round_trip
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -670,6 +670,38 @@ def test_the_world_stopping_under_a_live_episode_fails_the_call(world):
 
     with pytest.raises(RuntimeError):
         answer.result()
+
+
+@pytest.mark.timeout(10.0)
+def test_an_uncharged_wait_ends_when_the_world_comes_down(world):
+    """An uncharged trial waits its function out, so a model that never answers would hold the loop for ever.
+    The wait ends on ``should_stop`` as well."""
+    never_answers = threading.Event()
+
+    class _HangingPolicy(Policy):
+        class _Session(Session):
+            def __init__(self, rt):
+                self._rt = rt
+
+            def __call__(self, obs):
+                self._rt.fns[INFER]()
+                return None
+
+        def new_session(self, context=None, now=None, rt=None):
+            assert rt is not None
+            return _HangingPolicy._Session(rt)
+
+        @property
+        def functions(self):
+            return {INFER: never_answers.wait}
+
+    inference = _EpisodeInference(_HangingPolicy(), {}, charges_wall_time=False, clock=world.clock)
+    try:
+        inference({})  # starts the function, which never answers
+        world.request_stop()
+        inference.wait(world.should_stop_reader())
+    finally:
+        never_answers.set()
 
 
 @pytest.mark.timeout(3.0)
