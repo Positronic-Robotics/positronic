@@ -9,8 +9,12 @@ The gripper is the 7th joint, a prismatic finger drive the controller reports in
 speaks a normalized grip where 1 is closed, so grip converts against the travel the arm reports for that
 joint instead of a constant.
 
-Station bring-up is not verifiable off-hardware and must be re-checked on the rig: gripper polarity (this
-driver reads joint position 0 as closed), the mount pose, and the setpoint rate the link sustains.
+Limitation: a link that drops takes the controller's TCP session with it, and the vendor driver does not
+open a new one. Telemetry resumes on its own, so the arm starts being heard from again, but no command
+reaches it and it reads ERROR until the run restarts.
+
+TODO: recover the session with `clear_error`, which cleans up and configures again, once an unreachable
+target is handled too — both need the same rig time.
 """
 
 import contextlib
