@@ -34,8 +34,8 @@ CACHE_ROOT=/home/<user> docker --context vm-train compose run -d --service-ports
 ## Restart policy
 
 Start a container with `--restart on-failure:2`, not `--restart unless-stopped`. A container that crashes and
-restarts reports `Up 1 second` to every `docker ps`, which reads as a slow start. A restart policy that hides a
-crash costs more than the crash.
+restarts reports `Up 1 second` to every `docker ps`, which reads as a slow start. `on-failure:2` stops the
+container after the second crash, so `docker ps` shows it dead and `docker logs` gives the fault.
 
 ## VM management
 
