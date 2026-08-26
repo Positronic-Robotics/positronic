@@ -70,11 +70,10 @@ class Session(ABC):
 
     @abstractmethod
     def __call__(self, obs: Mapping[str, Any]) -> list[dict[str, Any]] | None:
-        """Predict actions for the given observation.
+        """Predict actions for the given observation, without waiting.
 
-        Answers without waiting. A harness calls this on the loop thread that plays the trajectory and steps
-        every other control system, so a call that waits for a model stalls the rig. Heavy work belongs in
-        ``Policy.functions``, which the framework runs off that thread.
+        A harness calls this on the thread that plays the trajectory and steps every other control system,
+        so a call that waits for a model stalls the rig. Heavy work belongs in ``Policy.functions``.
         """
 
     @property

@@ -204,8 +204,7 @@ class ServedPolicy(Policy):
     it is given, so its inference round-trips ``RemoteSession.__call__`` and records the ``policy.infer``
     span independent of any layer.
 
-    A model that costs wall time, hangs, raises or watches its observation belongs in that session's
-    ``infer``. A session that does any of it inside ``__call__`` would block the loop the harness runs on.
+    A model that costs wall time, hangs or raises belongs in that session's ``infer``.
     """
 
     def __init__(self, session: InferenceSession) -> None:
@@ -1904,8 +1903,7 @@ def test_the_layers_see_every_tick(world):
     """What a temporal stack records: nothing keeps an observation from the layers above the scheduler —
     not the machine time inside the function, and not the rounds in between.
 
-    The trial charges its inference, which is what leaves the world running while the model does. An
-    uncharged trial holds the world for the function, so there is no tick left to miss.
+    The trial charges its inference, because an uncharged one holds the world and leaves no tick to miss.
     """
     ticks = _ObservedTicks()
     _run_episode(

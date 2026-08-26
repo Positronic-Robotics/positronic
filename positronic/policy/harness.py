@@ -26,19 +26,12 @@ POLL_PERIOD_SEC = 0.01
 
 
 class _EpisodeInference:
-    """One episode's policy session, called on the loop thread, and the runtime that serves the policy's
-    functions to it.
-
-    A session that gives its model to the runtime returns at once, so what stays in flight is the function.
-    ``charges_wall_time`` says whether that work costs the trial the wall time it took or nothing. The loop
-    is held for the work, which holds a virtual clock still.
-    """
+    """One episode's policy session, and the runtime that serves the policy's functions to it."""
 
     def __init__(self, policy: Policy, context: dict[str, Any], charges_wall_time: bool, clock: pimm.Clock) -> None:
         self._charges_wall_time = charges_wall_time
         self._clock = clock
-        # One instant on two clocks — the world clock and ``time.monotonic()`` — at the start of the work in
-        # flight, so ``hold`` adds a wall duration to a world instant.
+        # One instant on two clocks, so ``hold`` adds a wall duration to a world instant.
         self._t0_ns, self._wall_t0 = clock.now_ns(), time.monotonic()
         self._runtime = Executor(policy.functions)
         try:
@@ -55,15 +48,13 @@ class _EpisodeInference:
     def _owned(obs: dict[str, Any]) -> dict[str, Any]:
         """The observation with its arrays copied, so nothing rewrites what a function is still reading.
 
-        A producer may reuse one buffer for every sample it emits — a camera renders into the array behind
-        the adapter it re-emits each frame — and it keeps stepping while the function runs.
+        A camera renders into the array behind the adapter it re-emits, and it keeps stepping while the
+        function runs.
         """
         return {name: value.copy() if isinstance(value, np.ndarray) else value for name, value in obs.items()}
 
     def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
-        """The session's trajectory for ``obs``, and ``None`` when it has nothing to place."""
-        # A call that finds a function in flight joins that work rather than starts new work. The anchor
-        # stays where the function started, so the trial is charged for it one time.
+        # A call that joins work already in flight keeps its anchor, so the trial pays for that work one time.
         if not self._runtime.in_flight:
             self._t0_ns, self._wall_t0 = self._clock.now_ns(), time.monotonic()
         return self._session(frozen_view(self._owned(obs)))
@@ -78,10 +69,9 @@ class _EpisodeInference:
         self._runtime.wait(timeout)
 
     def close(self) -> None:
-        """Wait out the function still running, then close the runtime and the session it was serving.
+        """Close the runtime, then the session it was serving.
 
-        Until this returns the function holds what the session holds: a ``RemoteSession``'s websocket, or the
-        in-process model every session of a policy shares.
+        Until ``Executor.close`` returns, the function in flight still holds the session's websocket or model.
         """
         self._runtime.close()
         self._session.close()
@@ -167,12 +157,11 @@ class Harness(pimm.ControlSystem):
         self._embodiment = embodiment
         self.policy: Policy = policy
         self._static_meta = static_meta or {}
-        # This episode's session and the runtime serving it. ``None`` while no episode is live: while one is,
-        # stepping and recording happen together.
+        # This episode's session and the runtime serving it. ``None`` while no episode is live.
         self._inference: _EpisodeInference | None = None
         # The call this episode answers when it ends.
         self._call: pimm.calls.Call[Task, dict[str, Any]] | None = None
-        # An inference let go of with a function running, kept until the close that waits that function out.
+        # An inference let go of with a function still running.
         self._retired: _EpisodeInference | None = None
         # ``task.timeout_sec``, armed per episode; a task without one has no deadline and ends on ``done`` alone.
         self._deadline: float | None = None
@@ -260,7 +249,6 @@ class Harness(pimm.ControlSystem):
             self._retired, self._inference = self._inference, None
 
     def _reap_inference(self) -> None:
-        """Close the retired inference, waiting out the function still inside it."""
         if self._retired is not None:
             self._retired.close()
             self._retired = None
@@ -296,9 +284,9 @@ class Harness(pimm.ControlSystem):
         self._telemetry.begin(self._task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
             yield from self._ready(should_stop, self._task.prepare_args)
-        # The close waits out the function the last episode left running, so the rig is readied before it: a
-        # model that hangs must not leave the devices standing at the setpoint the policy left them. It runs
-        # before the session below, because an in-process policy is one model across every episode.
+        # The reap waits out the function the last episode left running. It runs after the rig is readied, so
+        # a model that hangs does not leave the devices at the policy's last setpoint, and before the session
+        # below, because an in-process policy is one model across every episode.
         self._reap_inference()
         # Read after the reset: an embodiment that learns its task from the scene reports it only once the
         # scene is set up.
@@ -372,12 +360,11 @@ class Harness(pimm.ControlSystem):
         return inputs
 
     def _infer(self, inference: _EpisodeInference, clock: pimm.Clock) -> None:
-        """One round of inference: call the session on what the channels hold, place the trajectory it
-        answers, then hold the loop for the function it left running.
+        """One round of inference.
 
-        The hold comes last, so the round that starts a function does not reach the yield that ends it. A
-        yield moves a virtual clock, and an uncharged trial pays nothing for that function. A channel the
-        rig has never published to defers the round, before any function exists.
+        The hold comes last. A hold at the top of the round lets the round that starts a function reach the
+        yield that ends it, and a yield moves a virtual clock. A channel the rig has never published to
+        defers the round, before any function exists to hold for.
         """
         try:
             obs = self._build_obs(clock)
