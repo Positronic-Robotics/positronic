@@ -57,6 +57,14 @@ _CONNECT_TIMEOUT_S = 20.0
 _RECONNECT_TIMEOUT_S = 1.0
 _RECONNECT_AFTER_S = 0.5  # how long the link stays down before a new session is worth opening
 _RECONNECT_EVERY_S = 2.0  # and how often another is tried while it stays down
+# How often a failure that stands is worth saying again. A tick rate of complaints buries every other line.
+_COMPLAIN_EVERY_S = 5.0
+# A fault the controller latches is not cleared by opening another session, so the attempts back off rather
+# than stall the loop every couple of seconds for as long as the arm stays down.
+_RECONNECT_MAX_S = 30.0
+# The share of a joint's own velocity limit at which the driver stops driving. Past its limit the controller
+# faults and drops the arm to idle, so the driver stands down before it gets there.
+_VELOCITY_HEADROOM = 0.8
 # How many points along a planned Cartesian trajectory the firmware checks for a solution before it starts.
 _TRAJECTORY_CHECK_SAMPLES = 10
 # How far ahead of where the arm reads a streamed Cartesian target may sit. At the tick rate this allows
@@ -176,8 +184,21 @@ class _Arm(DriverRun[command.CommandType]):
         self._command_dead = False  # a write was refused, and only a new session takes another
         self._down_since: float | None = None
         self._reconnect_at = -_RECONNECT_EVERY_S
+        self._reconnect_every = _RECONNECT_EVERY_S
         self._stamp = int(self._output.header.timestamp)
         self._stamp_at = clock.now()
+        self._dq_max = np.array([limits[i].velocity_max for i in range(_ARM_JOINTS)]) * _VELOCITY_HEADROOM
+        self.overspeed = False
+        self._complaint = ''
+        self._complained_at = -_COMPLAIN_EVERY_S
+
+    def complain(self, message: str) -> None:
+        """Say what is wrong, but not on every tick of a fault that stands."""
+        now = self.clock.now()
+        if message == self._complaint and now - self._complained_at < _COMPLAIN_EVERY_S:
+            return
+        self._complaint, self._complained_at = message, now
+        logger.error(message)
 
     @property
     def link_down(self) -> bool:
@@ -238,7 +259,7 @@ class _Arm(DriverRun[command.CommandType]):
         # rules-allow: swallowed-error — a link that drops reads ERROR; the run outlives it, and a new
         # session clears it
         except trossen_arm.RuntimeError as exc:
-            logger.error(f'The arm at {self.ip} did not answer: {exc}')
+            self.complain(f'The arm at {self.ip} did not answer: {exc}')
             self._stream_stale = True
             self._note_link(now)
             return
@@ -247,6 +268,11 @@ class _Arm(DriverRun[command.CommandType]):
             self._stamp, self._stamp_at = stamp, now
         self._stream_stale = now - self._stamp_at > _STALE_AFTER_S
         self._note_link(now)
+        dq = np.abs(np.asarray(self._output.joint.arm.velocities, dtype=np.float64))
+        was_overspeed, self.overspeed = self.overspeed, bool(np.any(dq > self._dq_max))
+        if self.overspeed and not was_overspeed:
+            fastest = int(np.argmax(dq / self._dq_max))
+            self.complain(f'Joint {fastest} of the arm at {self.ip} runs at {dq[fastest]:.2f} rad/s; standing down')
 
     @property
     def q(self) -> np.ndarray:
@@ -364,7 +390,7 @@ class _Arm(DriverRun[command.CommandType]):
         # rules-allow: swallowed-error — a link that refuses a write reads ERROR; the setpoint stays unsent
         # and goes out again on the next session
         except trossen_arm.RuntimeError as exc:
-            logger.error(f'The arm at {self.ip} did not take the setpoint: {exc}')
+            self.complain(f'The arm at {self.ip} did not take the setpoint: {exc}')
             self._command_dead = True
             self._note_link(self.clock.now())
             return
@@ -381,7 +407,7 @@ class _Arm(DriverRun[command.CommandType]):
         now = self.clock.now()
         if self._down_since is None or now - self._down_since < _RECONNECT_AFTER_S:
             return
-        if now - self._reconnect_at < _RECONNECT_EVERY_S:
+        if now - self._reconnect_at < self._reconnect_every:
             return
         self._reconnect_at = now
         logger.info(f'Opening a new session with the arm at {self.ip}')
@@ -392,16 +418,24 @@ class _Arm(DriverRun[command.CommandType]):
             self._take_control()
         # rules-allow: swallowed-error — an arm still out of reach reads ERROR; the next attempt tries again
         except trossen_arm.RuntimeError as exc:
-            logger.error(f'The arm at {self.ip} did not take a new session: {exc}')
+            self.complain(f'The arm at {self.ip} did not take a new session: {exc}')
+            self._reconnect_every = min(self._reconnect_every * 2, _RECONNECT_MAX_S)
             return
+        self._reconnect_every = _RECONNECT_EVERY_S
         self._stamp, self._stamp_at = int(self._output.header.timestamp), now
         self._stream_stale = False
         self._note_link(now)
         logger.info(f'The arm at {self.ip} answers again')
 
+    def stand_down(self) -> None:
+        """Hold the arm where it reads, so nothing is driving it while it runs too fast."""
+        self._target, self._goal_time, self._arm_unsent = self.q, _STREAM_GOAL_TIME_S, True
+        self.write()
+
     def publish(self) -> None:
         """Ship the arm as the controller last reported it, arm and fingers."""
-        if self.link_down or self.moves.errored:  # not where the driver put it, or out of reach entirely
+        if self.link_down or self.overspeed or self.moves.errored:  # out of reach, running away, or not
+            # where the driver put it
             status = RobotStatus.ERROR
         elif self.moves.active:  # the driver owns the arm until the move settles
             status = RobotStatus.BUSY
@@ -452,6 +486,14 @@ class Robot(pimm.ControlSystem):
                         yield arm.limiter.wait()
                         continue
 
+                    if arm.overspeed:  # a joint past its limit faults the controller and drops the arm
+                        arm.stand_down()
+                        arm.settle()
+                        arm.publish()
+                        arm.moves.answer()
+                        yield arm.limiter.wait()
+                        continue
+
                     if (grip := pimm.value_updated(self.target_grip)) is not None:
                         arm.hold_grip(grip)
                     arm.settle()
@@ -478,20 +520,21 @@ class _FakeTrossen:
 
     # What the arm reports for itself, read off a wxai_v0 controller on firmware 1.11.1
     _LIMITS = [
-        (-3.141593, 3.141593),
-        (0.0, 3.141593),
-        (0.0, 2.356194),
-        (-1.570796, 1.570796),
-        (-1.570796, 1.570796),
-        (-3.141593, 3.141593),
-        (0.0, 0.04),
+        (-3.141593, 3.141593, 6.2832),
+        (0.0, 3.141593, 6.2832),
+        (0.0, 2.356194, 6.2832),
+        (-1.570796, 1.570796, 9.4248),
+        (-1.570796, 1.570796, 9.4248),
+        (-3.141593, 3.141593, 9.4248),
+        (0.0, 0.04, 0.25),
     ]
     _CARTESIAN = [0.254, -0.0039, 0.1618, -0.0086, 0.009, -0.0179]
 
     class _Limit:
-        def __init__(self, lower: float, upper: float):
+        def __init__(self, lower: float, upper: float, velocity_max: float):
             self.position_min = lower
             self.position_max = upper
+            self.velocity_max = velocity_max
 
     _TICK_US = 5000  # the controller streams faster than the driver reads, so its clock moves every read
 
@@ -520,7 +563,7 @@ class _FakeTrossen:
         return 'No error'
 
     def get_joint_limits(self) -> list['_FakeTrossen._Limit']:
-        return [_FakeTrossen._Limit(lower, upper) for lower, upper in _FakeTrossen._LIMITS]
+        return [_FakeTrossen._Limit(*limit) for limit in _FakeTrossen._LIMITS]
 
     def get_robot_output(self) -> Any:
         if not self.frozen:
@@ -569,6 +612,9 @@ class _FakeTrossen:
         if self._gripper_goal is not None:
             goal = np.append(goal[:_ARM_JOINTS], self._gripper_goal)
         step = self._alpha * (goal - self._position)
+        # Half of what each joint may do, which is the headroom a servo keeps when it is not faulting.
+        per_tick = np.array([limit[2] for limit in _FakeTrossen._LIMITS]) / (2 * _HZ)
+        step = np.clip(step, -per_tick, per_tick)
         self._velocity = step * _HZ
         self._position = self._position + step
 
