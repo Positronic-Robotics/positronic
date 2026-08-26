@@ -30,7 +30,15 @@ class FakeArm(trossen_driver._FakeTrossen):
             self._position = np.asarray(position, dtype=np.float64)
         self.raises: Exception | None = None
         self.write_raises: Exception | None = None
+        self.configure_raises: Exception | None = None
+        self.attempts = 0
         self.blocked = False
+
+    def configure(self, model, end_effector, serv_ip, clear_error, timeout=20.0) -> None:
+        self.attempts += 1
+        if self.configure_raises is not None:
+            raise self.configure_raises
+        super().configure(model, end_effector, serv_ip, clear_error, timeout)
 
     def get_robot_output(self):
         if self.raises is not None:
@@ -203,7 +211,14 @@ def test_an_arm_that_stops_streaming_reads_error_though_the_read_still_answers()
     assert states.emitted[-1][1].status == RobotStatus.AVAILABLE
 
 
-def test_a_setpoint_the_link_refuses_reads_error_and_goes_out_again_when_the_arm_answers():
+def _refuse_the_next_write(arm: FakeArm, commands: ManualCommandReceiver, loop) -> None:
+    """Break the command half of the link, and give the driver a setpoint that finds out."""
+    arm.write_raises = trossen_driver.trossen_arm.RuntimeError('Broken pipe')
+    commands.push(command.JointPosition(JOGGED))
+    next(loop)
+
+
+def test_a_setpoint_the_link_refuses_reads_error_and_stops_the_writes():
     arm = FakeArm()
     driver, states, loop = _driven(arm)
     commands = ManualCommandReceiver()
@@ -211,15 +226,91 @@ def test_a_setpoint_the_link_refuses_reads_error_and_goes_out_again_when_the_arm
 
     next(loop)
     written = len(arm.goals)
-    arm.write_raises = trossen_driver.trossen_arm.RuntimeError('Broken pipe')
-    commands.push(command.JointPosition(JOGGED))
-    next(loop)
+    _refuse_the_next_write(arm, commands, loop)
+    assert states.emitted[-1][1].status == RobotStatus.ERROR
+
+    for _ in range(5):  # a refused write is not retried a hundred times a second
+        next(loop)
     assert len(arm.goals) == written
+
+
+def test_telemetry_alone_does_not_bring_a_refused_command_channel_back():
+    """The controller keeps streaming over a link whose command half is gone, so freshness proves nothing."""
+    arm = FakeArm()
+    driver, states, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    next(loop)
+
+    _refuse_the_next_write(arm, commands, loop)
+    arm.write_raises = None  # the wire is back, but the session the controller dropped is not
+    for _ in range(5):
+        next(loop)
+
+    assert states.emitted[-1][1].status == RobotStatus.ERROR
+    assert arm.sessions == 1
+
+
+def test_a_link_that_stays_down_gets_a_new_session_and_the_arm_answers_again():
+    arm = FakeArm()
+    clock = MockClock()
+    driver, states, loop = _driven(arm, clock)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    next(loop)
+    assert arm.sessions == 1
+
+    _refuse_the_next_write(arm, commands, loop)
     assert states.emitted[-1][1].status == RobotStatus.ERROR
 
     arm.write_raises = None
+    clock.advance(trossen_driver._RECONNECT_AFTER_S + 0.01)
     next(loop)
-    np.testing.assert_allclose(arm.goals[-1][: trossen_driver._ARM_JOINTS], JOGGED)
+
+    assert arm.sessions == 2
+    assert states.emitted[-1][1].status == RobotStatus.AVAILABLE
+
+
+def test_a_new_session_holds_the_arm_where_it_finds_it():
+    """The arm ends up wherever the lost session left it, and driving it back to an old target is a jump."""
+    arm = FakeArm()
+    clock = MockClock()
+    driver, _, loop = _driven(arm, clock)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+
+    commands.push(command.JointPosition(JOGGED))
+    for _ in range(30):  # let the arm arrive, so its own position is not the zero it booted at
+        next(loop)
+    where_it_is = np.asarray(arm.get_robot_output().joint.arm.positions)
+
+    _refuse_the_next_write(arm, commands, loop)
+    arm.write_raises = None
+    clock.advance(trossen_driver._RECONNECT_AFTER_S + 0.01)
+    next(loop)
+
+    np.testing.assert_allclose(arm.goals[-1][: trossen_driver._ARM_JOINTS], where_it_is, atol=1e-3)
+
+
+def test_a_new_session_that_fails_is_tried_again_rather_than_hammered():
+    arm = FakeArm()
+    clock = MockClock()
+    driver, _, loop = _driven(arm, clock)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    next(loop)
+
+    _refuse_the_next_write(arm, commands, loop)
+    arm.configure_raises = trossen_driver.trossen_arm.RuntimeError('Network is unreachable')
+    clock.advance(trossen_driver._RECONNECT_AFTER_S + 0.01)
+    for _ in range(20):  # many ticks inside one reconnect interval, one attempt between them
+        next(loop)
+    assert arm.attempts == 1
+
+    clock.advance(trossen_driver._RECONNECT_EVERY_S + 0.01)
+    next(loop)
+    assert arm.attempts == 2
+    assert arm.sessions == 1  # none of them took
 
 
 def test_a_run_that_ends_on_a_dead_link_still_gives_the_handle_back():
