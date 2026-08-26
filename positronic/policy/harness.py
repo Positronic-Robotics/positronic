@@ -1,10 +1,6 @@
-import concurrent.futures
-import contextvars
-import logging
 import time
 from collections import deque
 from collections.abc import Generator, Iterator
-from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
@@ -28,123 +24,65 @@ MAX_ACTION_SKEW_SEC = 60.0
 # and with it the granularity every command timestamp is quantized to.
 POLL_PERIOD_SEC = 0.01
 
-# How long a submitted call may take and still resolve within its round: a layer that skips inference
-# answers in microseconds, a real model call runs far past this and is throttled across rounds.
-SKIP_REPLY_SEC = 0.001
 
+class _EpisodeInference:
+    """One episode's policy session, called on the loop thread, and the runtime that serves the policy's
+    functions to it.
 
-class _InferenceWorker:
-    """One episode's policy session, called one at a time on a thread of its own, and the runtime that
-    serves the policy's functions to it.
-
-    The work is the session call and the function it starts, timed as one. A session that gives its model
-    to the runtime returns at once, so what stays in flight is the function. ``charges_wall_time`` says
-    whether that work costs the trial the wall time it took or nothing. The loop is held for the work,
-    which holds a virtual clock still.
+    A session that gives its model to the runtime returns at once, so what stays in flight is the function.
+    ``charges_wall_time`` says whether that work costs the trial the wall time it took or nothing. The loop
+    is held for the work, which holds a virtual clock still.
     """
 
     def __init__(self, policy: Policy, context: dict[str, Any], charges_wall_time: bool, clock: pimm.Clock) -> None:
         self._charges_wall_time = charges_wall_time
         self._clock = clock
-        # World clock and ``time.monotonic()`` at the start of the work in flight, anchored at the episode's
-        # start so ``effect_time`` reads a trial instant from the moment the session exists.
+        # One instant on two clocks — the world clock and ``time.monotonic()`` — at the start of the work in
+        # flight, so ``hold`` adds a wall duration to a world instant.
         self._t0_ns, self._wall_t0 = clock.now_ns(), time.monotonic()
         self._runtime = Executor(policy.functions)
-        self._session = policy.new_session(context, self.effect_time, self._runtime)
-        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='harness-session')
-        self._call: Future[list[dict[str, Any]] | None] | None = None
+        try:
+            self._session = policy.new_session(context, clock.now, self._runtime)
+        except BaseException:
+            self._runtime.close()
+            raise
 
     @property
     def meta(self) -> dict[str, Any]:
         return self._session.meta
 
-    @property
-    def idle(self) -> bool:
-        return self._call is None
-
-    @property
-    def done(self) -> bool:
-        """Whether the call in flight has returned."""
-        return self._call is not None and self._call.done()
-
-    def effect_time(self) -> float:
-        """The trial instant the work in flight takes effect."""
-        wall = time.monotonic() - self._wall_t0 if self._charges_wall_time else 0.0
-        return self._t0_ns / 1e9 + wall
-
     @staticmethod
     def _owned(obs: dict[str, Any]) -> dict[str, Any]:
-        """The observation with its arrays copied, so nothing rewrites what the worker is still reading.
+        """The observation with its arrays copied, so nothing rewrites what a function is still reading.
 
         A producer may reuse one buffer for every sample it emits — a camera renders into the array behind
-        the adapter it re-emits each frame — and it keeps stepping while a call charged in wall time runs.
-        Copying at dispatch pays once per call rather than per round.
+        the adapter it re-emits each frame — and it keeps stepping while the function runs.
         """
         return {name: value.copy() if isinstance(value, np.ndarray) else value for name, value in obs.items()}
 
-    def submit(self, obs: dict[str, Any]) -> None:
-        """Start a call on ``obs``. The moment's wait lets a layer that skips inference resolve in the round
-        it was asked."""
+    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+        """The session's trajectory for ``obs``, and ``None`` when it has nothing to place."""
         # A call that finds a function in flight joins that work rather than starts new work. The anchor
         # stays where the function started, so the trial is charged for it one time.
         if not self._runtime.in_flight:
             self._t0_ns, self._wall_t0 = self._clock.now_ns(), time.monotonic()
-        # The call runs under a copy of the loop's context, so the telemetry it records anchors to the episode
-        # that asked for it even when it outlives that episode's close.
-        context = contextvars.copy_context()
-        self._call = self._pool.submit(context.run, self._session, frozen_view(self._owned(obs)))
-        concurrent.futures.wait([self._call], timeout=SKIP_REPLY_SEC)
+        return self._session(frozen_view(self._owned(obs)))
 
-    @staticmethod
-    def _time_left(deadline: float | None) -> float | None:
-        """Seconds until ``deadline``, never negative; ``None`` for a wait with no deadline."""
-        return None if deadline is None else max(deadline - time.monotonic(), 0.0)
-
-    def throttle(self) -> None:
-        """Slow the loop for the work in flight, as the trial's mode requires.
-
-        The session call and the function it started share one deadline. They are one piece of work, seen
-        from the loop thread and from the runtime.
-        """
-        assert self._call is not None
-        deadline = None
+    def hold(self) -> None:
+        """Hold the loop for the function in flight, as the trial's mode requires."""
+        timeout = None
         if self._charges_wall_time:
             # Wall time cannot be held still, so the loop waits out only the time the world is already ahead by.
-            deadline = time.monotonic() + max(self._clock.now() - self.effect_time(), 0.0)
-        concurrent.futures.wait([self._call], timeout=self._time_left(deadline))
-        self._runtime.wait(self._time_left(deadline))
+            paid_through = self._t0_ns / 1e9 + (time.monotonic() - self._wall_t0)
+            timeout = max(self._clock.now() - paid_through, 0.0)
+        self._runtime.wait(timeout)
 
-    def result(self) -> list[dict[str, Any]] | None:
-        """The returned call's trajectory — ``None`` when it had nothing to place — leaving the worker idle."""
-        assert self._call is not None
-        # Read on the loop thread, so a failing call still seals the episode.
-        actions, self._call = self._call.result(), None
-        return actions
+    def close(self) -> None:
+        """Wait out the function still running, then close the runtime and the session it was serving.
 
-    @staticmethod
-    def _report_abandoned(future: Future[list[dict[str, Any]] | None]) -> None:
-        """Report the failure of a call nobody is waiting for any more."""
-        # rules-allow: swallowed-error — the call outlived the episode that asked for it, so there is no
-        # caller left to raise to; the log is the only place its failure can go.
-        if not future.cancelled() and (exc := future.exception()) is not None:
-            logging.error(f'Inference failed after the episode that asked for it ended: {exc}')
-
-    def abandon(self) -> None:
-        """Let go of the call in flight: its answer lands nowhere and its failure only reaches the log."""
-        if self._call is not None:
-            self._call.add_done_callback(self._report_abandoned)
-            self._call = None
-        self._pool.shutdown(wait=False, cancel_futures=True)
-
-    def join(self) -> None:
-        """Wait out an abandoned call and the function it left running, then close the session both were
-        inside.
-
-        ``shutdown(cancel_futures=True)`` cancels only what is still queued, so until this returns the work
-        still holds the session's resources: a ``RemoteSession``'s websocket, or the in-process model every
-        session shares.
+        Until this returns the function holds what the session holds: a ``RemoteSession``'s websocket, or the
+        in-process model every session of a policy shares.
         """
-        self._pool.shutdown(wait=True)
         self._runtime.close()
         self._session.close()
 
@@ -214,11 +152,10 @@ class _EpisodeTelemetry:
 class Harness(pimm.ControlSystem):
     """Control system that runs the episode lifecycle and plays the policy's trajectory to the drivers.
 
-    The layer owns the trajectory, the harness plays it, one command per channel per round. The session call
-    runs on a worker thread, and the functions it starts run on the runtime's own, so playing continues while
-    the model runs. That work costs the trial either the wall time it took or nothing, with the world held
-    still for it. The ``now`` given to ``new_session`` reads the instant the output of that work takes effect,
-    so layers stamp for it without knowing the mode.
+    The layer owns the trajectory, the harness plays it, one command per channel per round. The session is
+    called on the loop thread and answers inside the round; the functions it starts run on the runtime's own,
+    so playing continues while the model runs. That work costs the trial either the wall time it took or
+    nothing, with the world held still for it.
 
     An episode runs one ``Task``, asked for by a ``perform_task`` call and answered with the terminal
     payload it ended on. The task's ``timeout_sec`` bounds it and a truthy ``done`` within budget ends it
@@ -230,13 +167,13 @@ class Harness(pimm.ControlSystem):
         self._embodiment = embodiment
         self.policy: Policy = policy
         self._static_meta = static_meta or {}
-        # This episode's session and the thread it runs on. ``None`` while no episode is live: while one is,
+        # This episode's session and the runtime serving it. ``None`` while no episode is live: while one is,
         # stepping and recording happen together.
-        self._worker: _InferenceWorker | None = None
+        self._inference: _EpisodeInference | None = None
         # The call this episode answers when it ends.
         self._call: pimm.calls.Call[Task, dict[str, Any]] | None = None
-        # A worker let go of mid-call, kept until the join that makes closing its session safe.
-        self._retiring: _InferenceWorker | None = None
+        # An inference let go of with a function running, kept until the close that waits that function out.
+        self._retired: _EpisodeInference | None = None
         # ``task.timeout_sec``, armed per episode; a task without one has no deadline and ends on ``done`` alone.
         self._deadline: float | None = None
         # Wall-clock telemetry for the live rollout, opened under ``--timing`` and inert otherwise.
@@ -280,7 +217,7 @@ class Harness(pimm.ControlSystem):
             meta[keys.EVAL_TIMEOUT] = self._task.timeout_sec
         # ``policy.meta`` is the static baseline; the session overlays per-episode specifics (e.g. the
         # sampled sub-policy) and wins on conflict.
-        session_meta = self.policy.meta | (self._worker.meta if self._worker else {})
+        session_meta = self.policy.meta | (self._inference.meta if self._inference else {})
         for k, v in flatten_dict(session_meta).items():
             meta[f'{keys.POLICY_META}.{k}'] = v
         meta.update(self._task.meta)
@@ -316,38 +253,28 @@ class Harness(pimm.ControlSystem):
             return pimm.Sleep(POLL_PERIOD_SEC)
         return pimm.Sleep(min(POLL_PERIOD_SEC, max(due - clock.now_ns(), 1) / 1e9))
 
-    def _cancel_session(self) -> None:
-        """Drop everything the episode has going: the schedule being played, and the call on the worker.
+    def _retire_inference(self) -> None:
+        """Let go of this episode's inference, keeping it for ``_reap_inference``: ending an episode must not
+        wait for a model that hangs."""
+        if self._inference is not None:
+            self._retired, self._inference = self._inference, None
 
-        The call is let go of rather than waited for, so a model that hangs cannot hold up the recording's
-        stop or the next trial's prepare. Devices hold their last commanded position; nothing downstream is
-        buffered.
-        """
-        for schedule in self._schedules.values():
-            schedule.clear()
-        self._retire_worker()
-
-    def _retire_worker(self) -> None:
-        """Let go of this episode's worker and the call it is running, keeping it for ``_reap_worker``:
-        ending an episode must not wait for a model that hangs."""
-        if self._worker is not None:
-            self._worker.abandon()
-            self._retiring, self._worker = self._worker, None
-
-    def _reap_worker(self) -> None:
-        """Join the retired worker and close the session its abandoned call was inside."""
-        if self._retiring is not None:
-            self._retiring.join()
-            self._retiring = None
+    def _reap_inference(self) -> None:
+        """Close the retired inference, waiting out the function still inside it."""
+        if self._retired is not None:
+            self._retired.close()
+            self._retired = None
 
     def _finalize_recording(
         self, clock: pimm.Clock, payload: dict[str, Any] | None = None
     ) -> Generator[pimm.Command, None, None]:
         """Commit the live episode: cancel the in-flight chunk, stop the recorder — stamping the
         episode's full static meta (plus any terminal payload) — then close its span."""
-        # Stamped before the worker is retired: the meta overlays what its session reports.
+        # Stamped before the inference is retired: the meta overlays what its session reports.
         stop = DsWriterCommand.STOP({**self._build_episode_meta(), **(payload or {})})
-        self._cancel_session()
+        for schedule in self._schedules.values():  # devices hold their last commanded position
+            schedule.clear()
+        self._retire_inference()
         self.ds_command.emit(stop)
         virtual_now = clock.now()  # before the round below, whose sim-clock advance belongs to no rollout
         # Give the recorder a round to commit the STOP before the next START (they share ``ds_command``, where
@@ -369,13 +296,13 @@ class Harness(pimm.ControlSystem):
         self._telemetry.begin(self._task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
             yield from self._ready(should_stop, self._task.prepare_args)
-        # The join waits on the call the last episode abandoned, so the rig is readied before it: a model
-        # that hangs must not leave the devices standing at the setpoint the policy left them. It runs
-        # before the session below, which is what makes closing the abandoned one safe.
-        self._reap_worker()
+        # The close waits out the function the last episode left running, so the rig is readied before it: a
+        # model that hangs must not leave the devices standing at the setpoint the policy left them. It runs
+        # before the session below, because an in-process policy is one model across every episode.
+        self._reap_inference()
         # Read after the reset: an embodiment that learns its task from the scene reports it only once the
         # scene is set up.
-        self._worker = _InferenceWorker(
+        self._inference = _EpisodeInference(
             self.policy, {keys.TASK: self._task.instruction}, self._charges_wall_time, clock
         )
         budget = self._task.timeout_sec
@@ -383,7 +310,7 @@ class Harness(pimm.ControlSystem):
         self._telemetry.start_rollout(clock.now())
         self.ds_command.emit(DsWriterCommand.START())
         # The fresh data is here, later round would read a frame the recording did not open on.
-        self._infer(self._worker, clock)
+        self._infer(self._inference, clock)
 
     def _end_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, payload: dict[str, Any]
@@ -391,8 +318,8 @@ class Harness(pimm.ControlSystem):
         """Close the live episode: finalize the recording, put the rig back, retire the session, hand the
         terminal back to whoever asked for the episode.
 
-        The worker is retired rather than joined here, so a ``RemoteSession``'s websocket outlives the call
-        still using it.
+        The inference is retired rather than closed here, so a ``RemoteSession``'s websocket outlives the
+        function still using it.
         """
         yield from self._finalize_recording(clock, payload)
         # A powered arm holds the policy's last setpoint until the next trial, so each device the trial placed
@@ -412,7 +339,7 @@ class Harness(pimm.ControlSystem):
 
     def _advance_episode(
         self,
-        worker: _InferenceWorker,
+        inference: _EpisodeInference,
         done: pimm.Message[dict] | None,
         clock: pimm.Clock,
         should_stop: pimm.SignalReceiver,
@@ -421,7 +348,7 @@ class Harness(pimm.ControlSystem):
         if (terminal := self._trial_terminal(done, clock)) is not None:
             yield from self._end_episode(clock, should_stop, terminal)
         else:
-            self._infer(worker, clock)
+            self._infer(inference, clock)
 
     def _build_obs(self, clock: pimm.Clock) -> dict[str, Any]:
         """Read every observation channel and assemble the policy input dict.
@@ -444,24 +371,21 @@ class Harness(pimm.ControlSystem):
         inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
         return inputs
 
-    def _infer(self, worker: _InferenceWorker, clock: pimm.Clock) -> None:
-        """One round of inference: throttle the loop for the call in flight as the trial's mode requires and
-        reschedule on what it returns; with no call in flight, submit one on what the channels hold and give
-        it the rest of the round to return. A channel the rig has never published to defers the round."""
-        if not worker.idle:
-            self._throttle_and_reschedule(worker, clock)
-        if worker.idle:
-            try:
-                obs = self._build_obs(clock)
-            except pimm.NoValueException:
-                return
-            worker.submit(obs)
-            self._throttle_and_reschedule(worker, clock)
+    def _infer(self, inference: _EpisodeInference, clock: pimm.Clock) -> None:
+        """One round of inference: call the session on what the channels hold, place the trajectory it
+        answers, then hold the loop for the function it left running.
 
-    def _throttle_and_reschedule(self, worker: _InferenceWorker, clock: pimm.Clock) -> None:
-        worker.throttle()
-        if worker.done and (trajectory := worker.result()) is not None:
+        The hold comes last, so the round that starts a function does not reach the yield that ends it. A
+        yield moves a virtual clock, and an uncharged trial pays nothing for that function. A channel the
+        rig has never published to defers the round, before any function exists.
+        """
+        try:
+            obs = self._build_obs(clock)
+        except pimm.NoValueException:
+            return
+        if (trajectory := inference(obs)) is not None:
             self._reschedule(trajectory, clock)
+        inference.hold()
 
     @staticmethod
     def _assert_anchored(trajectory: list[dict[str, Any]], now: float) -> None:
@@ -476,11 +400,11 @@ class Harness(pimm.ControlSystem):
     def _reschedule(self, trajectory: list[dict[str, Any]], clock: pimm.Clock) -> None:
         """Replace the schedule being played with the session's trajectory. Every channel it names gets that
         channel's waypoints; one it omits is cleared and holds. The timestamps are already absolute, stamped
-        by the scheduling layer for the instant the call's output takes effect.
+        by the scheduling layer against the harness clock.
         """
         if self._deadline is not None and clock.now() >= self._deadline:
-            # The world reached the deadline while the call was in flight, so its chunk is dropped rather than
-            # placed past the point the trial advertises it stops at; ``_run`` finishes the trial next round.
+            # The world reached the deadline while the function was in flight, so its chunk is dropped rather
+            # than placed past the point the trial advertises it stops at; ``_run`` finishes the trial next round.
             return
         self._assert_anchored(trajectory, clock.now())
         self._telemetry.step()
@@ -532,8 +456,8 @@ class Harness(pimm.ControlSystem):
             # A no-op once the block above has answered: the world coming down under a live episode is the
             # one way a call goes unanswered, and it is the caller's to hear about.
             self._fail_call(RuntimeError('The world stopped before the episode ended'))
-            self._retire_worker()
-            self._reap_worker()
+            self._retire_inference()
+            self._reap_inference()
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         while not should_stop.value:
@@ -545,10 +469,10 @@ class Harness(pimm.ControlSystem):
             # Read every round for the same reason: a terminal landing between episodes belongs to none of
             # them, and left on the wire it would end the next one on its first round.
             done = pimm.read_updated(self.done)
-            if self._worker is not None:
+            if self._inference is not None:
                 if call is not None:  # the live episode is the one that finishes; a second ask is refused
                     call.set_exception(RuntimeError('An episode is already running'))
-                yield from self._advance_episode(self._worker, done, clock, should_stop)
+                yield from self._advance_episode(self._inference, done, clock, should_stop)
             elif call is not None:
                 yield from self._begin_episode(clock, should_stop, call)
             elif manual is not None:
@@ -556,5 +480,5 @@ class Harness(pimm.ControlSystem):
             self._play(clock)
             yield self._pace(clock)
 
-        if self._worker is not None:
+        if self._inference is not None:
             yield from self._finalize_recording(clock)
