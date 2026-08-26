@@ -58,10 +58,10 @@ _RECONNECT_AFTER_S = 0.5  # how long the link stays down before a new session is
 _RECONNECT_EVERY_S = 2.0  # and how often another is tried while it stays down
 # How many points along a planned Cartesian trajectory the firmware checks for a solution before it starts.
 _TRAJECTORY_CHECK_SAMPLES = 10
-# The most a streamed Cartesian target may move in one tick. A hand moves under 2 m/s, so this does not
-# shape teleoperation; it stops one wild target from asking for a step no arm can take.
-_MAX_STEP_M = 0.03
-_MAX_STEP_RAD = 0.15
+# How far ahead of where the arm reads a streamed Cartesian target may sit. At the tick rate this allows
+# 1.5 m/s, which is faster than a hand moves, so it does not shape teleoperation.
+_MAX_STEP_M = 0.015
+_MAX_STEP_RAD = 0.08
 
 
 class TrossenState(State, pimm.shared_memory.NumpySMAdapter):
@@ -275,13 +275,13 @@ class _Arm(DriverRun[command.CommandType]):
         self._grip_unsent = True
 
     def _stepped(self, target: geom.Transform3D) -> geom.Transform3D:
-        """``target`` brought within one tick's travel of the pose the arm is already asked to hold.
+        """``target`` brought within one tick's travel of where the arm reads.
 
-        A teleoperator reaching past what the arm can do produces targets that run away from it, and the
-        firmware plans a trajectory to each. Capping the step keeps the plan short enough to be solvable
-        and the arm following rather than lunging.
+        A teleoperator reaching past what the arm can do produces targets that run away from it. Measured
+        against the arm rather than against the last target, the goal cannot outrun an arm that is held up,
+        so nothing is stored up for it to lunge through once whatever held it goes away.
         """
-        held = self._target if isinstance(self._target, geom.Transform3D) else self.ee_pose
+        held = self.ee_pose
         step = target.translation - held.translation
         distance = float(np.linalg.norm(step))
         if distance > _MAX_STEP_M:
