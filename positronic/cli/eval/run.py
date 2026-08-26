@@ -1,9 +1,10 @@
 import logging
 import os
 import uuid
-from collections.abc import Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -50,16 +51,16 @@ class TaskDriver(pimm.ControlSystem):
     """Walks a plan of tasks, asking for each as an episode through ``perform_task``, and returns —
     stopping the world — once the last has ended.
 
-    One task is in flight at a time: the next is asked for only when the previous episode's terminal comes
-    back, so the plan never overlaps two episodes.
+    It makes the plan on its first turn, not when it is built. One task is in flight at a time: the next is
+    asked for only when the previous episode's terminal comes back, so the plan never overlaps two episodes.
     """
 
-    def __init__(self, tasks: list[Task]):
+    def __init__(self, tasks: Callable[[], Iterable[Task]]):
         self._tasks = tasks
         self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        for task in self._tasks:
+        for task in self._tasks():
             answer = self.perform_task(task)
             while not answer.done():
                 if should_stop.value:
@@ -215,6 +216,11 @@ def _refuse(inapplicable: dict[str, object], where: str) -> None:
         raise SystemExit(f'a {where} run has no {", ".join(asked)}')
 
 
+def _charged(tasks: Callable[[], Iterable[Task]], charge: bool) -> Iterator[Task]:
+    """Every task the source makes, stamped with the run's inference-time policy."""
+    return (replace(task, charge_inference_time=charge) for task in tasks())
+
+
 @cfn.config(eval=placeholder, policy=policy_cfg.unset)
 def run(
     eval: Eval | str,
@@ -247,7 +253,7 @@ def run(
         _refuse({'--alias': alias, '--transaction-key': transaction_key, '--platform-url': platform_url}, 'local')
         if not isinstance(eval, Eval):
             raise SystemExit(f'--eval={eval!r} is a name, not a config: pass --policy-image to run it on the platform')
-        eval = replace(eval, tasks=[replace(t, charge_inference_time=charge_inference_time) for t in eval.tasks])
+        eval = replace(eval, tasks=partial(_charged, eval.tasks, charge_inference_time))
         main(policy=policy, evals=[eval], output_dir=output_dir, timing=timing)
         return None
 

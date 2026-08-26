@@ -1,3 +1,5 @@
+from functools import partial
+
 import configuronic as cfn
 
 from positronic import keys
@@ -74,8 +76,12 @@ def _libero_eval(
     return Eval(
         embodiment,
         # rules-allow: hardcoded-keys — the env names this reset-meta field; it is not positronic's ``keys.TASK``
-        build_tasks(
-            Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout), seed, trial_count, scenes
+        partial(
+            build_tasks,
+            Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout),
+            seed,
+            trial_count,
+            scenes,
         ),
         privileged=privileged,
         done=proxy.done,
