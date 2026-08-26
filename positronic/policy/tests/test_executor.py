@@ -241,14 +241,14 @@ class _PlainPolicy(Policy):
         def __init__(self):
             self.calls = 0
 
-        def __call__(self, obs):
+        def __call__(self, obs, time):
             self.calls += 1
             return [{'action': obs}]
 
     def __init__(self):
         self.session = _PlainPolicy._Session()
 
-    def new_session(self, context=None, now=None, rt=None) -> Session:
+    def new_session(self, context=None, rt=None) -> Session:
         return self.session
 
 
@@ -265,7 +265,7 @@ class _EchoPolicy(Policy):
             self._left = rounds
             self.calls = 0
 
-        def __call__(self, obs):
+        def __call__(self, obs, time):
             self.calls += 1
             result = None
             if self._answer is not None:
@@ -280,7 +280,7 @@ class _EchoPolicy(Policy):
         self._rounds = rounds
         self.session: _EchoPolicy._Session
 
-    def new_session(self, context=None, now=None, rt=None) -> Session:
+    def new_session(self, context=None, rt=None) -> Session:
         assert rt is not None
         self.session = _EchoPolicy._Session(rt, self._rounds)
         return self.session
@@ -301,11 +301,11 @@ class _CountingLayer(Layer):
             super().__init__(inner)
             self._layer = layer
 
-        def __call__(self, obs):
+        def __call__(self, obs, time):
             self._layer.calls += 1
-            return self._inner(obs)
+            return self._inner(obs, time)
 
-    def make_session(self, inner, context, now):
+    def make_session(self, inner, context):
         return self._Session(inner, self)
 
 
@@ -329,20 +329,20 @@ class TestBlocking:
     def test_a_session_that_answers_in_its_own_call_is_called_one_time(self, opened):
         policy = _PlainPolicy()
 
-        assert opened(blocking(policy))({'x': 1}) == [{'action': {'x': 1}}]
+        assert opened(blocking(policy))({'x': 1}, 0.0) == [{'action': {'x': 1}}]
         assert policy.session.calls == 1
 
     @pytest.mark.parametrize(('rounds', 'calls'), [(1, 2), (2, 3)])
     def test_a_session_is_called_again_for_every_function_it_starts(self, opened, rounds, calls):
         policy = _EchoPolicy(rounds)
 
-        assert opened(blocking(policy))({'x': 1}) == {'x': 1}
+        assert opened(blocking(policy))({'x': 1}, 0.0) == {'x': 1}
         assert policy.session.calls == calls
 
     def test_a_session_that_starts_nothing_and_answers_none_is_called_one_time(self, opened):
         policy = _EchoPolicy(rounds=0)
 
-        assert opened(blocking(policy))({'x': 1}) is None
+        assert opened(blocking(policy))({'x': 1}, 0.0) is None
         assert policy.session.calls == 1
 
     def test_a_layer_above_it_is_called_one_time_for_one_answer(self, opened):
@@ -351,7 +351,7 @@ class TestBlocking:
         that work once per call the answer took."""
         layer, policy = _CountingLayer(), _EchoPolicy(rounds=2)
 
-        assert opened(layer.wrap(blocking(policy)))({'x': 1}) == {'x': 1}
+        assert opened(layer.wrap(blocking(policy)))({'x': 1}, 0.0) == {'x': 1}
         assert (layer.calls, policy.session.calls) == (1, 3)
 
     def test_it_serves_its_functions_itself(self):
@@ -367,7 +367,7 @@ class TestBlocking:
 
         # The session's own runtime is closed, so the function it would start is gone.
         with pytest.raises(RuntimeError):
-            policy.session({'x': 1})
+            policy.session({'x': 1}, 0.0)
 
 
 class _Weights:

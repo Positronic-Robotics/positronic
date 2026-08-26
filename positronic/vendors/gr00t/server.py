@@ -204,7 +204,7 @@ class _Gr00tSession(Session):
     def __init__(self, client: PolicyClient):
         self._client = client
 
-    def __call__(self, obs):
+    def __call__(self, obs, time):
         action_response, _info = self._client.get_action(obs)
         action = {k: v[0] for k, v in action_response.items()}
         lengths = {len(v) for v in action.values()}
@@ -220,7 +220,7 @@ class Gr00tPolicy(Policy):
         self._groot = groot
         self._checkpoint_path = checkpoint_path
 
-    def new_session(self, context=None, now=None, rt=None):
+    def new_session(self, context=None, rt=None):
         self._groot.client.reset()
         return _Gr00tSession(self._groot.client)
 

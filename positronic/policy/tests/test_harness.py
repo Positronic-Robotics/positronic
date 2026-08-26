@@ -81,7 +81,7 @@ class _SpySession(Session):
     def __init__(self, policy):
         self._policy = policy
 
-    def __call__(self, obs):
+    def __call__(self, obs, time):
         self._policy.last_obs = obs
         return [{keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}]
 
@@ -97,7 +97,7 @@ class SpyPolicy(Policy):
         self.reset_calls: int = 0
         self.last_reset_context = None
 
-    def new_session(self, context=None, now=None, rt=None):
+    def new_session(self, context=None, rt=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _SpySession(self)
@@ -108,7 +108,7 @@ class _StubSession(Session):
         self._policy = policy
         self._meta = dict(policy._meta)
 
-    def __call__(self, obs):
+    def __call__(self, obs, time):
         self._policy.last_obs = obs
         self._policy.observations.append(obs)
         return [{keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}]
@@ -142,7 +142,7 @@ class StubPolicy(Policy):
     def meta(self) -> dict[str, object]:
         return self._meta
 
-    def new_session(self, context=None, now=None, rt=None) -> Session:
+    def new_session(self, context=None, rt=None) -> Session:
         self.reset_calls += 1
         self.last_reset_context = context
         return _StubSession(self)
@@ -152,7 +152,7 @@ class _ChunkSession(Session):
     def __init__(self, policy):
         self._policy = policy
 
-    def __call__(self, obs):
+    def __call__(self, obs, time):
         self._policy.counter += 1
         dt = 0.005
         return [
@@ -172,7 +172,7 @@ class ChunkPolicy(StubPolicy):
         super().__init__(*args, **kwargs)
         self.counter = 0
 
-    def new_session(self, context=None, now=None, rt=None):
+    def new_session(self, context=None, rt=None):
         self.reset_calls += 1
         self.last_reset_context = context
         return _ChunkSession(self)
@@ -210,7 +210,7 @@ class ServedPolicy(Policy):
     def __init__(self, session: InferenceSession) -> None:
         self._session = session
 
-    def new_session(self, context=None, now=None, rt=None) -> RemoteSession:
+    def new_session(self, context=None, rt=None) -> RemoteSession:
         assert rt is not None, 'the harness supplies the runtime'
         return RemoteSession(self._session, rt)
 
@@ -586,7 +586,7 @@ def test_episode_meta_includes_policy_static_meta(world):
         def __init__(self, command):
             self._command = command
 
-        def __call__(self, obs):
+        def __call__(self, obs, time):
             return [{keys.ROBOT_COMMAND: self._command, 'target_grip': 0.0, 'timestamp': 0.0}]
 
     class _StaticMetaPolicy(Policy):
@@ -594,7 +594,7 @@ def test_episode_meta_includes_policy_static_meta(world):
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             self._command = CartesianPosition(pose=pose)
 
-        def new_session(self, context=None, now=None, rt=None):
+        def new_session(self, context=None, rt=None):
             return _StaticMetaSession(self._command)  # Session.meta defaults to {}
 
         @property
@@ -683,11 +683,11 @@ def test_an_uncharged_wait_ends_when_the_world_comes_down(world):
             def __init__(self, rt):
                 self._rt = rt
 
-            def __call__(self, obs):
+            def __call__(self, obs, time):
                 self._rt.fns[INFER]()
                 return None
 
-        def new_session(self, context=None, now=None, rt=None):
+        def new_session(self, context=None, rt=None):
             assert rt is not None
             return _HangingPolicy._Session(rt)
 
@@ -710,11 +710,11 @@ def test_a_session_that_raises_fails_the_call_that_asked_for_the_episode(world):
     than the log."""
 
     class _RaisingSession(Session):
-        def __call__(self, obs):
+        def __call__(self, obs, time):
             raise RuntimeError('inference boom')
 
     class _RaisingPolicy(Policy):
-        def new_session(self, context=None, now=None, rt=None):
+        def new_session(self, context=None, rt=None):
             return _RaisingSession()
 
     harness = Harness(_RaisingPolicy(), make_embodiment())
@@ -1235,9 +1235,9 @@ class _AbandonedCallPolicy(ServedPolicy):
         self.events: list[str] = []
         super().__init__(_AbandonedCallPolicy._Infer(self.events, wall_sec))
 
-    def new_session(self, context=None, now=None, rt=None):
+    def new_session(self, context=None, rt=None):
         self.events.append('open')
-        return super().new_session(context, now, rt)
+        return super().new_session(context, rt)
 
 
 @pytest.mark.timeout(10.0)
@@ -1359,11 +1359,11 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
     already is rather than one channel draining on while another stops."""
 
     class _EmptyChunkSession(Session):
-        def __call__(self, obs):
+        def __call__(self, obs, time):
             return []
 
     class EmptyChunkPolicy(Policy):
-        def new_session(self, context=None, now=None, rt=None):
+        def new_session(self, context=None, rt=None):
             return _EmptyChunkSession()
 
     harness = Harness(EmptyChunkPolicy(), make_embodiment())
@@ -1812,26 +1812,23 @@ class _ReplanEarly(Layer):
     """
 
     class _Session(DelegatingSession):
-        def __init__(self, inner: Session, now):
+        def __init__(self, inner: Session):
             super().__init__(inner)
-            self._now = now
             self._replan_at: float | None = None
 
-        def __call__(self, obs):
+        def __call__(self, obs, time):
             t0 = obs[keys.OBS_TIME_NS] / 1e9
             if self._replan_at is not None and t0 < self._replan_at:
                 return None
-            result = self._inner(obs)
+            result = self._inner(obs, time)
             if result is None:  # the function it asked has still to answer
                 return None
-            anchor = self._now()
-            result = [{**action, keys.ACTION_TIMESTAMP: anchor + action[keys.ACTION_TIMESTAMP]} for action in result]
+            result = [{**action, keys.ACTION_TIMESTAMP: time + action[keys.ACTION_TIMESTAMP]} for action in result]
             self._replan_at = t0 + (result[-1][keys.ACTION_TIMESTAMP] - t0) / 2
             return result
 
-    def make_session(self, inner: Session, context, now):
-        assert now is not None  # the harness always passes its clock
-        return _ReplanEarly._Session(inner, now)
+    def make_session(self, inner: Session, context):
+        return _ReplanEarly._Session(inner)
 
 
 class _TimedRecorder(pimm.SignalEmitter):
@@ -1922,11 +1919,11 @@ class _ObservedTicks(Layer):
             super().__init__(inner)
             self._seen = seen
 
-        def __call__(self, obs):
+        def __call__(self, obs, time):
             self._seen.append(obs[keys.OBS_TIME_NS] / 1e9)
-            return self._inner(obs)
+            return self._inner(obs, time)
 
-    def make_session(self, inner: Session, context, now):
+    def make_session(self, inner: Session, context):
         return _ObservedTicks._Session(inner, self.seen)
 
 
@@ -2208,7 +2205,7 @@ def test_a_rescheduled_trajectory_clears_the_channels_it_omits(world):
         def __init__(self):
             self._calls = 0
 
-        def __call__(self, obs):
+        def __call__(self, obs, time):
             self._calls += 1
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             command = CartesianPosition(pose=pose)
@@ -2220,7 +2217,7 @@ def test_a_rescheduled_trajectory_clears_the_channels_it_omits(world):
             return [{keys.ROBOT_COMMAND: command, keys.ACTION_TIMESTAMP: i * 0.01} for i in range(10)]
 
     class _GripThenArmPolicy(Policy):
-        def new_session(self, context=None, now=None, rt=None):
+        def new_session(self, context=None, rt=None):
             return _GripThenArm()
 
     harness = Harness(ChunkedSchedule().wrap(_GripThenArmPolicy()), make_embodiment())

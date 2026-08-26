@@ -44,7 +44,7 @@ def warmup(policy: Policy, obs: dict[str, Any], on_progress: Callable[[str], Non
     """
     session = blocking(policy).new_session()
     try:
-        run_with_progress(lambda: session(obs), 'Running warmup inference', on_progress)
+        run_with_progress(lambda: session(obs, time.time()), 'Running warmup inference', on_progress)
     finally:
         session.close()
 

@@ -4,7 +4,7 @@ import time
 import urllib.parse
 from collections.abc import Callable, Generator
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 import configuronic as cfn
 import httpx
@@ -65,7 +65,7 @@ def test_full_inference_cycle(stub_server):
         obs = {'image': 'test'}
         result = session.infer(obs)
         assert result == [{'action': [1, 2, 3]}]
-        policy._mock_session.assert_called_with(obs)
+        policy._mock_session.assert_called_with(obs, ANY)
     finally:
         session.close()
 
@@ -205,7 +205,7 @@ def test_warmup_runs_one_inference_and_ends_its_session(make_mock_policy):
 
     warmup(policy, obs)
 
-    policy._mock_session.assert_called_once_with(obs)
+    policy._mock_session.assert_called_once_with(obs, ANY)
     policy._mock_session.close.assert_called_once()
 
 
@@ -246,7 +246,7 @@ class _ScriptedSession(Session):
         self._rt = rt
         self._answer = None
 
-    def __call__(self, obs):
+    def __call__(self, obs, time):
         if self._answer is None:
             self._answer = self._rt.fns[_INFER](obs)
             return None
@@ -259,7 +259,7 @@ class _ScriptedSession(Session):
 class _ScriptedPolicy(Policy):
     """Deterministic base policy: every session serves the same untimestamped chunk from its runtime."""
 
-    def new_session(self, context=None, now=None, rt=None) -> Session:
+    def new_session(self, context=None, rt=None) -> Session:
         assert rt is not None
         return _ScriptedSession(rt)
 
@@ -274,15 +274,13 @@ def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
     def pipeline():
         return ChunkedSchedule() | remote | ActionTimestamp(fps=10.0) | PolicySource(_ScriptedPolicy())
 
-    clock = [100.0]
-
     host, port, _server = start_server(pipeline())
-    remote_session, rt = open_session(RemotePolicy(f'{host}:{port}'), now=lambda: clock[0])
+    remote_session, rt = open_session(RemotePolicy(f'{host}:{port}'))
 
-    local_session, local_rt = open_session(inline(pipeline()), now=lambda: clock[0])
+    local_session, local_rt = open_session(inline(pipeline()))
 
-    remote_actions = round_trip(remote_session, rt, {keys.OBS_TIME_NS: 0})
-    local_actions = round_trip(local_session, local_rt, {keys.OBS_TIME_NS: 0})
+    remote_actions = round_trip(remote_session, rt, {keys.OBS_TIME_NS: 0}, 100.0)
+    local_actions = round_trip(local_session, local_rt, {keys.OBS_TIME_NS: 0}, 100.0)
     assert remote_actions == local_actions
     # Three scripted actions plus the chunk-closing validity sentinel ActionTimestamp appends.
     assert local_actions == [
@@ -293,9 +291,8 @@ def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
     ]
 
     # Both gate identically while the chunk plays out.
-    clock[0] = 100.15
-    assert remote_session({keys.OBS_TIME_NS: 0}) is None
-    assert local_session({keys.OBS_TIME_NS: 0}) is None
+    assert remote_session({keys.OBS_TIME_NS: 0}, 100.15) is None
+    assert local_session({keys.OBS_TIME_NS: 0}, 100.15) is None
 
     remote_session.close()
 

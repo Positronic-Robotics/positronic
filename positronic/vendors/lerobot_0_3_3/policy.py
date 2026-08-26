@@ -92,7 +92,7 @@ class LerobotPolicy(Policy):
             self._answer: Answer | None = None
             self._cancelled = False
 
-        def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+        def __call__(self, obs: dict[str, Any], time: float) -> list[dict[str, Any]] | None:
             if self._answer is None:
                 self._answer = self._rt.fns[LerobotPolicy._INFER](obs)
                 return None
@@ -120,7 +120,7 @@ class LerobotPolicy(Policy):
         self._policy = policy.to(self._device)
         self._meta = extra_meta or {}
 
-    def new_session(self, context=None, now=None, rt=None):
+    def new_session(self, context=None, rt=None):
         if rt is None:
             raise ValueError('A lerobot session runs its model on a runtime: pass rt to new_session.')
         self._policy.reset()

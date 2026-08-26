@@ -44,7 +44,7 @@ A returned trajectory also needs timing — *when* each action runs. That is han
 | `ActionHorizon` | `ActionHorizon(horizon_sec)` (positional) | Drops decoded actions whose relative `timestamp` is `>= horizon_sec`. Single (untimestamped) actions pass through. At training time surfaces `action_horizon_sec`. (`codec.py:245`) |
 | `ActionTiming` | `ActionTiming(fps=..., horizon_sec=None)` | Factory: returns `ActionTimestamp(fps=fps) \| ActionHorizon(horizon_sec)` when `horizon_sec` is set, otherwise just `ActionTimestamp(fps=fps)`. (`codec.py:289`) |
 
-These timestamps are **relative** — seconds from the start of the trajectory. The model and codecs never see wall-clock time; the real-time client anchors each offset to its own clock the moment inference returns (`now + timestamp`), so execution starts at inference-finish and the round-trip latency is absorbed. Stamping a per-action timestamp rather than a fixed rate is deliberate: it lets non-uniform timings and client-side scheduling strategies share one wire format. See [How inference works](connect-your-model.md#how-inference-works) for the full reasoning.
+These timestamps are **relative** — seconds from the start of the trajectory. The model and codecs never see wall-clock time; the real-time client anchors each offset to the clock reading it gave to the call that returns the chunk (`time + timestamp`), which absorbs the round-trip latency. Stamping a per-action timestamp rather than a fixed rate is deliberate: it lets non-uniform timings and client-side scheduling strategies share one wire format. See [How inference works](connect-your-model.md#how-inference-works) for the full reasoning.
 
 ## End-effector frames
 

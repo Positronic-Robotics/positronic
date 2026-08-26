@@ -70,7 +70,7 @@ class RemoteSession(Session):
         self._answer: Answer | None = None
         self._cancelled = False
 
-    def __call__(self, obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | None:
+    def __call__(self, obs: cabc.Mapping[str, Any], time: float) -> list[dict[str, Any]] | None:
         """The trajectory of a round trip that has come back, and ``None`` while one is in flight.
 
         A server answer of one action becomes a 1-element list, which is the form ``Session.__call__``
@@ -127,7 +127,7 @@ class _Endpoint(Policy):
                 ws_session.close()
         return self._server_meta
 
-    def new_session(self, context=None, now=None, rt=None) -> RemoteSession:
+    def new_session(self, context=None, rt=None) -> RemoteSession:
         if rt is None:
             raise ValueError('A remote session runs its inference on a runtime: pass rt to new_session.')
         compress = bool(self.server_meta().get(keys.COMPRESS_IMAGES))
@@ -197,8 +197,8 @@ class RemotePolicy(Policy):
             self._stacked = stack.wrap(self._endpoint)
         return self._stacked
 
-    def new_session(self, context=None, now=None, rt=None) -> Session:
-        return self._policy().new_session(context, now, rt)
+    def new_session(self, context=None, rt=None) -> Session:
+        return self._policy().new_session(context, rt)
 
     @property
     def functions(self) -> cabc.Mapping[str, cabc.Callable[..., Any]]:
