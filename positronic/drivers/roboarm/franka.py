@@ -110,12 +110,11 @@ SAFE_INPUT_STATE = 'safeInputState'
 
 
 class _SafeInputs:
-    """The control box's safe inputs, read from Desk.
+    """The control box's safe inputs, which libfranka does not report and Desk does.
 
-    libfranka reports neither the safe inputs nor the robot mode, so Desk is the only reading of
-    them. A thread takes one every ``_SAFE_INPUT_POLL_S`` and logs what changes; a move that fails
-    takes one of its own. The read needs no control token, so it never disturbs the session that
-    drives the arm, and it runs over a Desk client of its own so that session stays on one thread.
+    A thread reads them every ``_SAFE_INPUT_POLL_S``; a caller takes a reading of its own with
+    ``sample``. Both go over a Desk client this owns, since the read needs no control token and the
+    session that drives the arm must stay on one thread.
     """
 
     # Desk's own words for a safe input that permits motion. The control box answers a phrase, and its
@@ -351,10 +350,9 @@ class _Arm(DriverRun[command.CommandType]):
     ) -> Generator[pimm.Command, None, MoveStatus]:
         """Travel to ``target`` under ``mode``, yielding until it arrives.
 
-        A move a safe input stopped is made again, up to ``_SAFE_STOP_RETRIES`` times. No other fault earns
-        a recovery: one the driver cannot explain may have moved the arm, and a fresh target would then be
-        motion in answer to it. A safe input is the exception because a real stop LATCHES it triggered until
-        a person releases it, so one that clears on its own moved nothing.
+        A move a safe input stopped is made again, up to ``_SAFE_STOP_RETRIES`` times. It is the one fault
+        answered with a recovery, because a real stop LATCHES the input triggered until a person releases
+        it: one that clears on its own moved nothing, so the target below is still where the arm was going.
 
         ``at_teardown`` is for the move the driver makes on its way out. The stop is already set by then, so
         heeding it would abandon the move before it began, and recovering from a fault cancels the goal.

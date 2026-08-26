@@ -746,8 +746,7 @@ def test_a_safe_input_that_stops_every_attempt_gives_the_move_up(desk):
 
 
 def test_the_driver_logs_a_safe_input_that_changes(desk, caplog):
-    """One stamped line in the run's own log says when the control box prohibited motion, and when it
-    stopped: without it the reason sits only in the control box's separate log, on a separate clock."""
+    """Which is the run's only trace of a trip: the control box logs one on its own separate clock."""
     caplog.set_level(logging.INFO)
     watch = _driver(FakeArm(PARK))._safe_inputs()
 
@@ -763,7 +762,7 @@ def test_the_driver_logs_a_safe_input_that_changes(desk, caplog):
 
 
 def test_the_driver_logs_the_move_the_arm_refused_with_the_reason_it_gave(desk, caplog):
-    """libfranka prints its own rejection from the control thread, unstamped and outside Python."""
+    """The wall of refusals gets one stamped line, and it carries what libfranka said."""
     arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())
