@@ -148,8 +148,13 @@ class _Arm(DriverRun[command.CommandType]):
         self.link_down = False
 
     def _grip_of(self, output: Any) -> float:
-        """How closed the fingers are, from the joint position the controller reports."""
-        return 1.0 - (float(output.joint.gripper.position) - self._grip_closed) / self._grip_travel
+        """How closed the fingers are, from the joint position the controller reports.
+
+        The reading sits a little outside the joint range at either end, so it saturates to the 0..1 the
+        ``grip`` port carries.
+        """
+        travelled = (float(output.joint.gripper.position) - self._grip_closed) / self._grip_travel
+        return float(np.clip(1.0 - travelled, 0.0, 1.0))
 
     def _grip_metres(self, grip: float) -> float:
         """The gripper joint position that holds the fingers at ``grip``."""
