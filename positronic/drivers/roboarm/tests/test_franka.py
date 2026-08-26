@@ -639,9 +639,9 @@ def test_a_sync_move_that_never_arrives_times_out_and_holds_where_the_arm_stoppe
 
 def test_a_reading_the_driver_does_not_recognise_counts_as_a_triggered_safe_input():
     """The gate opens only on a reading that says motion is permitted, so an unknown one stops nothing."""
-    assert not franka._triggered(CLEAR)
-    assert franka._triggered(STOPPED)
-    assert franka._triggered('a phrase this control box has never sent')
+    assert not franka._SafeInputs._triggered(CLEAR)
+    assert franka._SafeInputs._triggered(STOPPED)
+    assert franka._SafeInputs._triggered('a phrase this control box has never sent')
 
 
 def test_a_move_a_safe_input_stopped_is_made_again_once_it_clears(desk):

@@ -105,20 +105,8 @@ _PARK_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 
 # How often the watch thread reads the safe inputs, and how often a move waiting on one reads them.
 _SAFE_INPUT_POLL_S = 0.5
-# The field Desk answers the safe inputs in, and its own words for one that permits motion. The control
-# box answers a phrase, and its safety log records the same two: 'Not triggered (Motion permitted)' and
-# 'Triggered (Motion prohibited)'.
+# The field Desk answers the safe inputs in.
 SAFE_INPUT_STATE = 'safeInputState'
-_MOTION_PERMITTED = 'not triggered'
-
-
-def _triggered(reading: object) -> bool:
-    """Whether Desk reports a safe input as triggered.
-
-    A reading this does not recognise counts as triggered, which is the safe direction: it leaves
-    every move the outcome it has where nothing reads the safe inputs at all.
-    """
-    return _MOTION_PERMITTED not in str(reading).casefold()
 
 
 class _SafeInputs:
@@ -129,6 +117,10 @@ class _SafeInputs:
     takes one of its own. The read needs no control token, so it never disturbs the session that
     drives the arm, and it runs over a Desk client of its own so that session stays on one thread.
     """
+
+    # Desk's own words for a safe input that permits motion. The control box answers a phrase, and its
+    # safety log records the same two: 'Not triggered (Motion permitted)' and 'Triggered (Motion prohibited)'.
+    _MOTION_PERMITTED = 'not triggered'
 
     def __init__(self, ip: str, credentials: tuple[str, str] | None):
         self._ip = ip
@@ -152,12 +144,21 @@ class _SafeInputs:
         """Whether the last reading found every safe input clear."""
         return self._sampled and not self._triggered_inputs
 
-    def stopped_the_arm(self, since: int) -> bool:
+    def tripped_since(self, since: int) -> bool:
         """Whether a safe input has been triggered since ``since`` trips, or is triggered now.
 
-        False while no reading is in hand: without one, nothing attributes a failure to a safe input.
+        False while no reading is in hand: without one there is nothing to attribute anything to.
         """
         return self._sampled and (self._trips > since or bool(self._triggered_inputs))
+
+    @staticmethod
+    def _triggered(reading: object) -> bool:
+        """Whether Desk reports a safe input as triggered.
+
+        A reading this does not recognise counts as triggered, which is the safe direction: it leaves
+        every move the outcome it has where nothing reads the safe inputs at all.
+        """
+        return _SafeInputs._MOTION_PERMITTED not in str(reading).casefold()
 
     def sample(self) -> None:
         """Take one reading, and log a safe input that changed."""
@@ -184,7 +185,7 @@ class _SafeInputs:
         if not self._sampled:
             logger.info(f'The control box reports its safe inputs as {dict(state)}')
         self._sampled, self._unreadable = True, False
-        triggered = frozenset(name for name, reading in state.items() if _triggered(reading))
+        triggered = frozenset(name for name, reading in state.items() if self._triggered(reading))
         if triggered == self._triggered_inputs:
             return
         if triggered and not self._triggered_inputs:
@@ -329,7 +330,7 @@ class _Arm(DriverRun[command.CommandType]):
         """
         watch = self.safe_inputs
         watch.sample()
-        if not watch.stopped_the_arm(since):
+        if not watch.tripped_since(since):
             return False
         wait_s = self._SAFE_STOP_WAIT_S
         logger.warning(f'A safe input stopped the move; waiting up to {wait_s:.0f}s for it to clear')
