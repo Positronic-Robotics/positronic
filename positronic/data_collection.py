@@ -437,6 +437,23 @@ def yamcfg(robot_arm, **kwargs):
     main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
 
 
+@cfn.config(
+    robot_arm=positronic.cfg.hardware.roboarm.trossen,
+    webxr=positronic.cfg.webxr.oculus,
+    # TODO: confirm on the rig which way round the operator stands, by moving the controller along one axis
+    # and watching which way the arm goes. Neither enum member is the answer until that is done.
+    operator_position=OperatorPosition.FRONT,
+    # No camera and no sound yet: the RealSense driver and its wiring into the headset are still to come, and
+    # the station has no audio device, so the operator reads the recording state off the terminal.
+    sound=None,
+    cameras={},
+    nominal_joints=positronic.cfg.hardware.roboarm.TROSSEN_NOMINAL_JOINTS,
+)
+def trossencfg(robot_arm, **kwargs):
+    """Runs data collection on a real Trossen WidowX AI arm (the arm driver carries the gripper)."""
+    main(robot_arm=robot_arm, gripper=robot_arm, **kwargs)
+
+
 droid = cfn.Config(
     main,
     robot_arm=positronic.cfg.hardware.roboarm.franka_droid,
@@ -473,6 +490,7 @@ def _internal_main():
         'real': main_cfg,
         'so101': so101cfg,
         'yam': yamcfg,
+        'trossen': trossencfg,
         'sim': main_sim,
         'sim_pnp': main_sim.override(loaders=positronic.cfg.simulator.multi_tote_loaders),
         'droid': droid,
