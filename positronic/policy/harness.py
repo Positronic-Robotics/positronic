@@ -360,11 +360,6 @@ class Harness(pimm.ControlSystem):
         return inputs
 
     def _infer(self, inference: _EpisodeInference, clock: pimm.Clock) -> None:
-        """One round of inference.
-
-        An uncharged trial pays nothing for the model. World time moves only when the loop yields, so the
-        round that starts a function waits for it before it yields.
-        """
         try:
             obs = self._build_obs(clock)
         except pimm.NoValueException:
