@@ -1,7 +1,7 @@
 import logging
 import os
 import uuid
-from collections.abc import Callable, Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from functools import partial
@@ -19,7 +19,7 @@ from positronic.cfg.eval import placeholder
 from positronic.cli.eval.submit import submit
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
-from positronic.eval import Embodiment, Eval, Task
+from positronic.eval import Embodiment, Eval, Observation, Task
 from positronic.policy.executor import blocking
 from positronic.policy.harness import Harness
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
@@ -47,17 +47,34 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
     return local_dir
 
 
-class TaskDriver(pimm.ControlSystem):
-    """Walks a plan of tasks, asking for each as an episode through ``perform_task``, and returns —
-    stopping the world — once the last has ended.
+class Driver(pimm.ControlSystem):
+    """Decides when a trial starts, and asks for it as an episode through ``perform_task``.
+
+    ``run_world`` builds one world around one driver: a plan walked to its end, a person at a keyboard, or a
+    console of somebody's own.
+    """
+
+    def __init__(self):
+        self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
+
+    def wire(self, world: pimm.World, harness: Harness) -> Sequence[pimm.ControlSystem]:
+        """Connect what this driver adds — a viewer, an input device — and return what the runner schedules.
+
+        The runner connects ``perform_task`` itself, so this is for everything else.
+        """
+        return ()
+
+
+class TaskDriver(Driver):
+    """Walks a plan of tasks, and returns — stopping the world — once the last has ended.
 
     It makes the plan on its first turn, not when it is built. One task is in flight at a time: the next is
     asked for only when the previous episode's terminal comes back, so the plan never overlaps two episodes.
     """
 
     def __init__(self, tasks: Callable[[], Iterable[Task]]):
+        super().__init__()
         self._tasks = tasks
-        self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         for task in self._tasks():
@@ -71,25 +88,33 @@ class TaskDriver(pimm.ControlSystem):
         yield pimm.Sleep(0.5)
 
 
-def _run_world(policy, ev: Eval, output_dir: Path | None):
-    """Wire one eval's embodiment under a fresh Harness + World and run it to completion.
+def run_world(
+    policy,
+    embodiment: Embodiment,
+    driver: Driver,
+    output_dir: Path | None,
+    *,
+    privileged: dict[str, Observation] | None = None,
+    done: pimm.ControlSystemEmitter | None = None,
+) -> None:
+    """Wire one embodiment under a fresh Harness + World, and run it until a control system returns.
 
-    The driver walks ``ev.tasks``; the shared ``policy``'s lifetime stays with ``main``.
+    Every trial runs here, whoever asks for it: the driver is what an attended run and an unattended one
+    differ by. ``done`` is what ends an episode from outside the policy — the env's terminal in a sim eval,
+    the operator in an attended run. The ``policy``'s lifetime stays with the caller.
     """
-    embodiment = ev.embodiment
     harness = Harness(policy, embodiment)
-    driver = TaskDriver(ev.tasks)
-
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(virtual_time=embodiment.simulated) as world:
         ds_agent = wire.wire_embodiment(
-            world, harness, embodiment, dataset_writer, time_mode, privileged=ev.privileged, done=ev.done
+            world, harness, embodiment, dataset_writer, time_mode, privileged=privileged, done=done
         )
         world.connect(driver.perform_task, harness.perform_task)
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)
 
+        driver_systems = driver.wire(world, harness)
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         if embodiment.simulated:
             # Why this order:
@@ -98,9 +123,9 @@ def _run_world(policy, ev: Eval, output_dir: Path | None):
             #   in that same pass.
             # - The producers run last, so what the recorder finds on the channels is the frame the reset
             #   published, with no step in between.
-            world.run([driver, harness, ds_agent, *producers])
+            world.run([driver, *driver_systems, harness, ds_agent, *producers])
         else:
-            world.run([driver, harness], [*producers, ds_agent])
+            world.run([driver, *driver_systems, harness], [*producers, ds_agent])
 
 
 def _validate_timing(embodiments: Iterable[Embodiment], output_dir: str | Path | None) -> None:
@@ -200,7 +225,8 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     try:
         with timed_pass(output_dir, timing, policy):
             for ev in evals:
-                _run_world(policy, ev, output_dir)
+                driver = TaskDriver(ev.tasks)
+                run_world(policy, ev.embodiment, driver, output_dir, privileged=ev.privileged, done=ev.done)
     finally:
         policy.close()
 

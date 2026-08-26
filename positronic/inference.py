@@ -2,8 +2,7 @@
 aliases over ``cli.eval.run``."""
 
 from collections import Counter
-from collections.abc import Callable
-from contextlib import nullcontext
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import configuronic as cfn
@@ -14,29 +13,36 @@ import positronic.cfg.embodiment
 import positronic.cfg.eval.real.droid
 import positronic.cfg.policy as policy_cfg
 from pimm.logging import init_logging
-from positronic import keys, wire
+from positronic import keys
 from positronic.cfg.eval.sim.positronic import stack_cubes
-from positronic.cli.eval.run import prepare_output_dir, run
-from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
+from positronic.cli.eval.run import Driver, prepare_output_dir, run, run_world
+from positronic.dataset.local_dataset import load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment, Task
 from positronic.policy.harness import Harness
 
 
-class KeyboardOperator(pimm.ControlSystem):
+class KeyboardOperator(Driver):
     """Turns keystrokes into episodes: ``s`` asks for one through ``perform_task``, ``p`` ends the live one.
 
     It holds the pending answers because that is where an episode's terminal — and any refused ask —
-    arrives; both are printed as they land. ``next_task`` is called once per press.
+    arrives; both are printed as they land. ``next_task`` is called once per press. The keyboard is the
+    operator's own, so ``q`` returns from it and brings the world down.
     """
 
     def __init__(self, next_task: Callable[[], Task]):
+        super().__init__()
         self._next_task = next_task
+        self._keyboard = KeyboardControl(quit_key='q')
         self.keystrokes = pimm.ControlSystemReceiver[str](self)
-        self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
+    def wire(self, world: pimm.World, harness: Harness) -> Sequence[pimm.ControlSystem]:
+        world.connect(self._keyboard.keyboard_inputs, self.keystrokes)
+        return (self._keyboard,)
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+        print('Keyboard controls: [s]tart, sto[p], [q]uit')
         pending: list[pimm.calls.Answer[dict[str, Any]]] = []
         while not should_stop.value:
             if (key := pimm.value_updated(self.keystrokes)) is not None:
@@ -67,41 +73,22 @@ def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_d
     """Run one hardware embodiment attended and headless, the keyboard deciding when an episode starts and
     finishes.
 
-    The world is composed here rather than by the runner: an attended surface is the binary's own business,
-    and the keyboard is the only one this library ships. There is no viewer — a console that shows the
-    cameras is a binary of its own, composing a world around ``Harness``, ``wire.wire_embodiment`` and
-    ``gui.dpg_ui``. A run ends when ``KeyboardControl`` returns — on ``q``, or on a stdin that is not a
-    terminal — since a control system returning stops the world.
+    The keyboard is the only attended surface this library ships, and there is no viewer — a console that
+    shows the cameras is a ``Driver`` of its own, wiring ``gui.dpg_ui`` into the world ``run_world`` builds.
+    A run ends when ``KeyboardControl`` returns — on ``q``, or on a stdin that is not a terminal — since a
+    control system returning stops the world.
     """
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
 
     # The policy is this function's to close from here on, and everything below can raise:
-    # `prepare_output_dir` syncs a directory and snapshots sources into it, and `LocalDatasetWriter`
-    # scans the one it is given.
+    # `prepare_output_dir` syncs a directory and snapshots sources into it, and `run_world` opens the
+    # dataset it is given.
     try:
-        _run_attended(policy, embodiment, next_task, output_dir)
+        operator = KeyboardOperator(next_task)
+        run_world(policy, embodiment, operator, prepare_output_dir(output_dir), done=operator.done)
     finally:
         policy.close()
-
-
-def _run_attended(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_dir) -> None:
-    """Record from a warmed policy until the keyboard returns. The caller owns the policy."""
-    output_dir = prepare_output_dir(output_dir)
-    keyboard = KeyboardControl(quit_key='q')
-    operator = KeyboardOperator(next_task)
-    harness = Harness(policy, embodiment)
-    print('Keyboard controls: [s]tart, sto[p], [q]uit')
-
-    writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
-    with writer_cm as dataset_writer, pimm.World() as world:
-        ds_agent = wire.wire_embodiment(world, harness, embodiment, dataset_writer, done=operator.done)
-        world.connect(keyboard.keyboard_inputs, operator.keystrokes)
-        world.connect(operator.perform_task, harness.perform_task)
-        if ds_agent is not None:
-            world.connect(harness.ds_command, ds_agent.command)
-        producers = [cs for cs in embodiment.control_systems if cs is not None]
-        world.run([harness, keyboard, operator], [*producers, ds_agent])
 
 
 real_cfg = cfn.Config(
