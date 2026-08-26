@@ -31,6 +31,12 @@ When running `docker --context <remote> compose run ...`, volume paths in `docke
 CACHE_ROOT=/home/<user> docker --context vm-train compose run -d --service-ports openpi-server ...
 ```
 
+## Restart policy
+
+Start a container with `--restart on-failure:2`, not `--restart unless-stopped`. A container that crashes and
+restarts reports `Up 1 second` to every `docker ps`, which reads as a slow start. A restart policy that hides a
+crash costs more than the crash.
+
 ## VM management
 
 Start: `../internal/scripts/start.sh train`

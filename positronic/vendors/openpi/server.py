@@ -73,8 +73,12 @@ class OpenpiSubprocess:
         """Start the subprocess and block until it accepts connections, reporting progress."""
         command = self._build_command()
         logger.info(f'Starting OpenPI subprocess: {" ".join(command)}')
+        env = os.environ.copy()
+        # JAX takes ~75% of the GPU at its first use, so a second server on that GPU finds none free.
+        # With no preallocation ``XLA_PYTHON_CLIENT_MEM_FRACTION`` caps each server. Set it per container.
+        env.setdefault('XLA_PYTHON_CLIENT_PREALLOCATE', 'false')
         # Don't pipeline stdout/stderr so we can see the output
-        self.process = subprocess.Popen(command, env=os.environ.copy(), cwd=str(self.openpi_root))
+        self.process = subprocess.Popen(command, env=env, cwd=str(self.openpi_root))
         self._wait_for_ready(on_progress)
 
     def _check_ready(self) -> bool:
