@@ -1,8 +1,7 @@
 import io
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from functools import partial
-from itertools import repeat
 from typing import Any
 
 import pytest
@@ -64,9 +63,9 @@ def _embodiment(simulated: bool = False) -> Embodiment:
     )
 
 
-def _trials(instruction: str = 'stub') -> Callable[[], Iterable[Task]]:
+def _trial(instruction: str = 'stub') -> Callable[[], Task]:
     prepare_args = {keys.ARM: 'start-pose', keys.GRIPPER: 0.0}
-    return partial(repeat, Task(instruction_source=instruction, timeout_sec=None, prepare_args=prepare_args))
+    return partial(Task, instruction_source=instruction, timeout_sec=None, prepare_args=prepare_args)
 
 
 @pytest.mark.timeout(30.0)
@@ -78,7 +77,7 @@ def test_the_keyboard_path_ends_when_the_keyboard_returns(monkeypatch):
     monkeypatch.setattr(sys, 'stdin', io.StringIO())
     policy = _IdlePolicy()
 
-    real(policy=policy, embodiment=_embodiment(), tasks=_trials())
+    real(policy=policy, embodiment=_embodiment(), task=_trial())
 
     assert policy.closed
     # Not warmed: an attended run opens no throwaway session here. A binary that wants an endpoint
@@ -90,7 +89,7 @@ def test_the_keyboard_path_refuses_a_simulated_embodiment():
     """It composes a real-time world and records against the wall clock, which a simulated embodiment needs
     neither of."""
     with pytest.raises(ValueError, match='sim'):
-        real(policy=_IdlePolicy(), embodiment=_embodiment(simulated=True), tasks=_trials())
+        real(policy=_IdlePolicy(), embodiment=_embodiment(simulated=True), task=_trial())
 
 
 class _ScriptedKeyboard(pimm.ControlSystem):
@@ -122,7 +121,7 @@ def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, capsys):
     policy = _IdlePolicy()
     monkeypatch.setattr(inference, 'KeyboardControl', lambda quit_key: _ScriptedKeyboard(policy))
 
-    real(policy=policy, embodiment=_embodiment(), tasks=_trials('pick up the cube'))
+    real(policy=policy, embodiment=_embodiment(), task=_trial('pick up the cube'))
 
     assert policy.observations, 'the episode never opened'
     assert policy.observations[0][keys.TASK] == 'pick up the cube'
@@ -134,7 +133,7 @@ def test_the_operator_reports_an_ask_the_harness_refuses(capsys):
     """The operator does not police who may start an episode: every press is asked for, and what comes back
     is printed as it lands."""
     task = Task(instruction_source='pick', timeout_sec=None)
-    operator = KeyboardOperator(partial(repeat, task))
+    operator = KeyboardOperator(lambda: task)
     with pimm.World(virtual_time=True) as world:
         keystrokes = world.pair(operator.keystrokes)
         harness = world.pair(operator.perform_task)
@@ -153,25 +152,3 @@ def test_the_operator_reports_an_ask_the_harness_refuses(capsys):
 
     assert received == [task, task]
     assert 'already running' in capsys.readouterr().out
-
-
-def test_the_operator_stops_asking_once_its_plan_is_walked(capsys):
-    """A plan walked by hand: each press starts the next trial, and a press past the last starts nothing."""
-    tasks = [Task(instruction_source='pick', timeout_sec=None), Task(instruction_source='place', timeout_sec=None)]
-    operator = KeyboardOperator(partial(iter, tasks))
-    with pimm.World(virtual_time=True) as world:
-        keystrokes = world.pair(operator.keystrokes)
-        harness = world.pair(operator.perform_task)
-        received = []
-
-        def end_the_episode():
-            for call in harness.incoming():
-                received.append(call.request)
-                call.set_result({})
-
-        press = partial(keystrokes.emit, 's')
-        driver = scripted_driver(*[(press, 0.05), (end_the_episode, 0.05)] * 3)
-        drive_scheduler(world.start([operator, driver]))
-
-    assert received == tasks
-    assert 'no trial left' in capsys.readouterr().out

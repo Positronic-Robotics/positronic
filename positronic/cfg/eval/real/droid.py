@@ -1,4 +1,4 @@
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable
 from functools import partial
 from typing import Any
 
@@ -21,17 +21,11 @@ def _droid_trial(instruction: str, timeout: float | None, meta: dict[str, Any] |
     )
 
 
-def _endless_trials(instruction: str, timeout: float | None) -> Iterator[Task]:
-    """A trial whenever one is asked for; the operator decides how many a session runs."""
-    while True:
-        yield _droid_trial(instruction, timeout)
-
-
 @cfn.config(instruction=UNIFIED_TASK, timeout=None)
-def attended_trials(instruction: str, timeout: float | None) -> Callable[[], Iterable[Task]]:
+def attended_trials(instruction: str, timeout: float | None) -> Callable[[], Task]:
     """The trials an attended droid run gets, one per press. Without a ``timeout`` the operator ends
     the episode."""
-    return partial(_endless_trials, instruction, timeout)
+    return partial(_droid_trial, instruction, timeout)
 
 
 def _planned_trials(instruction: str, timeout: float | None, trial_count: int) -> list[Task]:

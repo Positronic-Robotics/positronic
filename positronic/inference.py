@@ -2,7 +2,7 @@
 aliases over ``cli.eval.run``."""
 
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from contextlib import nullcontext
 from typing import Any
 
@@ -27,26 +27,22 @@ class KeyboardOperator(pimm.ControlSystem):
     """Turns keystrokes into episodes: ``s`` asks for one through ``perform_task``, ``p`` ends the live one.
 
     It holds the pending answers because that is where an episode's terminal — and any refused ask —
-    arrives; both are printed as they land. The plan is made on the first turn, and each ``s`` takes the
-    next trial from it.
+    arrives; both are printed as they land. ``task`` makes the trial the session repeats, one per press.
     """
 
-    def __init__(self, tasks: Callable[[], Iterable[Task]]):
-        self._tasks = tasks
+    def __init__(self, task: Callable[[], Task]):
+        self._task = task
         self.keystrokes = pimm.ControlSystemReceiver[str](self)
         self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
         pending: list[pimm.calls.Answer[dict[str, Any]]] = []
-        tasks = iter(self._tasks())
         while not should_stop.value:
             if (key := pimm.value_updated(self.keystrokes)) is not None:
                 match key:
-                    case 's' if (task := next(tasks, None)) is not None:
-                        pending.append(self.perform_task(task))
                     case 's':
-                        print('The plan has no trial left to start')
+                        pending.append(self.perform_task(self._task()))
                     case 'p':
                         self.done.emit({keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR})
             running = []
@@ -67,7 +63,7 @@ class KeyboardOperator(pimm.ControlSystem):
             print(f'Episode failed: {e}')
 
 
-def real(policy, embodiment: Embodiment, tasks: Callable[[], Iterable[Task]], output_dir=None):
+def real(policy, embodiment: Embodiment, task: Callable[[], Task], output_dir=None):
     """Run one hardware embodiment attended and headless, the keyboard deciding when an episode starts and
     finishes.
 
@@ -84,16 +80,16 @@ def real(policy, embodiment: Embodiment, tasks: Callable[[], Iterable[Task]], ou
     # `prepare_output_dir` syncs a directory and snapshots sources into it, and `LocalDatasetWriter`
     # scans the one it is given.
     try:
-        _run_attended(policy, embodiment, tasks, output_dir)
+        _run_attended(policy, embodiment, task, output_dir)
     finally:
         policy.close()
 
 
-def _run_attended(policy, embodiment: Embodiment, tasks: Callable[[], Iterable[Task]], output_dir) -> None:
+def _run_attended(policy, embodiment: Embodiment, task: Callable[[], Task], output_dir) -> None:
     """Record from a warmed policy until the keyboard returns. The caller owns the policy."""
     output_dir = prepare_output_dir(output_dir)
     keyboard = KeyboardControl(quit_key='q')
-    operator = KeyboardOperator(tasks)
+    operator = KeyboardOperator(task)
     harness = Harness(policy, embodiment)
     print('Keyboard controls: [s]tart, sto[p], [q]uit')
 
@@ -111,7 +107,7 @@ def _run_attended(policy, embodiment: Embodiment, tasks: Callable[[], Iterable[T
 real_cfg = cfn.Config(
     real,
     embodiment=positronic.cfg.embodiment.droid,
-    tasks=positronic.cfg.eval.real.droid.attended_trials,
+    task=positronic.cfg.eval.real.droid.attended_trials,
     policy=policy_cfg.placeholder,
 )
 

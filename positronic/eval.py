@@ -96,7 +96,7 @@ class Task:
 # [✓] ``command.Reset`` goes: a robot is moved by a ``prepare`` call that names where to go.
 # [✓] The recorder keeps what is on the wire when it opens, and a producer publishes the scene as it answers.
 # [✓] A config makes each attended trial, so the keyboard path makes none of its own.
-# [✓] A task source makes the plan when the world starts, and both runs read it.
+# [✓] A task source makes the plan when the world starts.
 # [ ] One runner builds the world for both.
 # [ ] A benchmark answers ``tasks(spec)``, so positronic holds no task table of its own.
 # [ ] A task carries its instruction as data, so no trial reads it after the reset.
