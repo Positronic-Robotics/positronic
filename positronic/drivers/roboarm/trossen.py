@@ -74,11 +74,18 @@ _VELOCITY_HEADROOM = 0.8
 # The share of that limit a commanded setpoint may ask for. Well under the guard above, so the arm reaching
 # it is the driver driving rather than something else moving the arm.
 _COMMANDED_SHARE = 0.25
+# How many ticks of travel the setpoint may sit ahead of where the arm reads. This is the following error
+# the servo is driven with, and what stops a goal running away from an arm that is held up.
+_LEAD_TICKS = 4
 _MJCF_PATH = 'assets/mujoco/trossen_wxai/wxai_follower.xml'
 _EE_SITE = 'ee_site'
 _JOINT_NAMES = ('joint_0', 'joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5')
 _IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after clamping
 _IK_ROT_TOL = 1e-2  # radians
+# How far a streamed target's solution may sit from where the arm stands. A target a step away has a
+# solution a step away; anything further reaches the same pose with the arm in another shape, and moving
+# into it swings the end effector far from where it was asked to be.
+_MAX_JOINT_JUMP = 0.2
 # How far ahead of where the arm reads a streamed Cartesian target may sit. At the tick rate this allows
 # 1.5 m/s, which is faster than a hand moves, so it does not shape teleoperation.
 _MAX_STEP_M = 0.015
@@ -156,17 +163,22 @@ class _Kinematics:
         mj.mju_mat2Quat(quat, self._data.site_xmat[self._site_id].copy())
         return geom.Transform3D(self._data.site_xpos[self._site_id].copy(), geom.Rotation.from_quat(quat))
 
-    def ik(self, target: geom.Transform3D, current_q: np.ndarray) -> np.ndarray | None:
-        """Multi-start LM IK: where the arm stands first, then the reach postures toward the target.
+    def ik(self, target: geom.Transform3D, current_q: np.ndarray, max_jump: float | None = None) -> np.ndarray | None:
+        """LM IK for ``target``, warm-started from where the arm stands.
+
+        ``max_jump`` bounds how far the solution may sit from ``current_q``, and searching stops there: the
+        arm keeps the shape it has, and a pose it can only reach in another one comes back as nothing.
+        Without it the reach postures are tried too, so the arm may change shape to get there — which
+        swings the end effector, and is only for a move somebody asked for and waits on.
 
         Solutions are clamped into joint range and FK-verified before acceptance, so a target the arm cannot
         reach comes back as nothing rather than as the nearest thing the solver stopped at.
 
         A target that is reached costs about a quarter of a millisecond, and one that is not costs every
-        seed's full search — more than a tick. The caller keeps targets within a step of where the arm
-        stands, which is what keeps the second case rare.
+        seed's full search — more than a tick.
         """
-        for start in (current_q, *_reach_postures(*target.translation[:2])):
+        seeds = (current_q,) if max_jump is not None else (current_q, *_reach_postures(*target.translation[:2]))
+        for start in seeds:
             self._data.qpos[:] = 0.0
             self._data.qpos[self._qpos_ids] = start
             qpos, _, success = qpos_from_site_pose(
@@ -181,6 +193,8 @@ class _Kinematics:
             if not success:
                 continue
             q = np.clip(qpos[self._qpos_ids].copy(), self.lower, self.upper)
+            if max_jump is not None and np.max(np.abs(q - current_q)) > max_jump:
+                continue
             reached = self.fk(q)
             turn = (reached.rotation.inv * target.rotation).as_rotvec
             angle = float(np.linalg.norm(turn))
@@ -255,6 +269,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._dq_limit = np.array([limits[i].velocity_max for i in range(_ARM_JOINTS)])
         self._dq_max = self._dq_limit * _VELOCITY_HEADROOM
         self._step_max = self._dq_limit * _COMMANDED_SHARE / _HZ  # what a joint may travel in one tick
+        self._max_lead = self._step_max * _LEAD_TICKS
         self._output = driver.get_robot_output()
         self._kin = _Kinematics()
         self._target = np.asarray(self._output.joint.arm.positions, dtype=np.float64)
@@ -403,14 +418,21 @@ class _Arm(DriverRun[command.CommandType]):
             turn = turn * (_MAX_STEP_RAD / angle)
         return geom.Transform3D(held.translation + step, held.rotation * geom.Rotation.from_rotvec(turn))
 
-    def _ik(self, pose: geom.Transform3D) -> np.ndarray:
-        """The joints that reach ``pose``; raises what the arm cannot reach."""
-        solution = self._kin.ik(self._stepped(pose), self.q)
+    def _ik(self, pose: geom.Transform3D, *, streamed: bool) -> np.ndarray:
+        """The joints that reach ``pose``; raises what the arm cannot reach.
+
+        A streamed pose is paced to a step at a time and solved without letting the arm change shape. One
+        somebody waits on is solved as it stands, and may change shape to get there.
+        """
+        if streamed:
+            solution = self._kin.ik(self._stepped(pose), self.q, max_jump=_MAX_JOINT_JUMP)
+        else:
+            solution = self._kin.ik(pose, self.q)
         if solution is None:
             raise ValueError(f'{pose} is out of reach')
         return solution
 
-    def _target_of(self, cmd: command.CommandType) -> np.ndarray:
+    def _target_of(self, cmd: command.CommandType, *, streamed: bool = True) -> np.ndarray:
         """The joints ``cmd`` asks the arm to hold, clipped to the range the controller reports."""
         # TODO: accept the modes the arm can run instead of leaving them to what a command omits. Its joints
         # are position-servoed, so `PositionControl` names the law already running.
@@ -421,9 +443,9 @@ class _Arm(DriverRun[command.CommandType]):
             case command.JointDelta(velocities=delta):
                 target = self.q + np.asarray(delta, dtype=np.float64)
             case command.CartesianPosition(pose):
-                target = self._ik(pose)
+                target = self._ik(pose, streamed=streamed)
             case command.CartesianDelta() as delta_cmd:
-                target = self._ik(delta_cmd.apply(self.ee_pose))
+                target = self._ik(delta_cmd.apply(self.ee_pose), streamed=streamed)
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
         return np.clip(target, self._q_lower, self._q_upper)
@@ -435,17 +457,22 @@ class _Arm(DriverRun[command.CommandType]):
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
         """Hold the arm where ``call`` asks; ``settle`` answers it once the controller reads back there."""
         with pimm.calls.raise_to(call):
-            target = self._target_of(call.request)
+            target = self._target_of(call.request, streamed=False)
             self._target, self._arm_unsent = target, True
             self.moves.accept(call, target, _ARRIVED_TOL, self.clock.now(), _MOVE_TIMEOUT_S)
 
     def _setpoint(self) -> np.ndarray:
-        """The joints to ask for this tick: the target, brought within one tick's travel of the arm.
+        """The joints to ask for this tick: the last setpoint, moved one tick's travel towards the target.
 
         This is where a joint's own velocity limit is kept. Past it the controller faults and drops the arm,
-        and a goal it has to cross the workspace to reach would ask for exactly that.
+        and a goal the arm has to cross the workspace to reach would ask for exactly that.
+
+        The step is taken from the last setpoint rather than from the reading, so the ramp runs at the rate
+        the joints are held to instead of at whatever the servo manages to follow it with. It is clamped
+        against the reading first, so an arm that is held up does not have a goal run away from it.
         """
-        return self.q + np.clip(self._target - self.q, -self._step_max, self._step_max)
+        base = self.q + np.clip(self._sent - self.q, -self._max_lead, self._max_lead)
+        return base + np.clip(self._target - base, -self._step_max, self._step_max)
 
     def _put_goal(self, setpoint: np.ndarray, move_arm: bool) -> None:
         """Hand the controller this tick's setpoint, fingers included where one call carries both.

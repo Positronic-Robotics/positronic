@@ -517,7 +517,8 @@ def test_a_sync_move_to_a_pose_is_answered_like_any_other(world):
     _at_home(commands, loop)
     caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
     wire_call(world, caller, driver.sync_move)
-    target = geom.Transform3D(_ee(states).translation + np.array([0.0, 0.01, 0.0]), _ee(states).rotation)
+    # Further than a streamed target is ever paced to, so a move that only stepped once would fall short
+    target = geom.Transform3D(_ee(states).translation + np.array([0.0, 0.05, -0.04]), _ee(states).rotation)
 
     answer = caller(command.CartesianPosition(target))
     for _ in range(400):
@@ -527,3 +528,13 @@ def test_a_sync_move_to_a_pose_is_answered_like_any_other(world):
     answer.result()
 
     np.testing.assert_allclose(_ee(states).translation, target.translation, atol=1e-2)
+
+
+def test_a_pose_far_from_where_the_arm_stands_is_solved_only_when_it_may_change_shape():
+    """The same pose is reachable with the arm in more than one shape, and moving between them swings it."""
+    kin = trossen_driver._Kinematics()
+    here = kin.fk(HOME)
+    far = geom.Transform3D(here.translation + np.array([-0.15, 0.15, -0.1]), here.rotation)
+
+    assert kin.ik(far, HOME, max_jump=trossen_driver._MAX_JOINT_JUMP) is None
+    assert kin.ik(far, HOME) is not None
