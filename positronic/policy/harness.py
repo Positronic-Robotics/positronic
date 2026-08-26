@@ -362,14 +362,13 @@ class Harness(pimm.ControlSystem):
     def _infer(self, inference: _EpisodeInference, clock: pimm.Clock) -> None:
         """One round of inference.
 
-        The wait comes last. A wait at the top of the round lets the round that starts a function reach the
-        yield that ends it, and a yield moves a virtual clock. A channel the rig has never published to
-        defers the round, before any function exists to wait for.
+        An uncharged trial pays nothing for the model. World time moves only when the loop yields, so the
+        round that starts a function waits for it before it yields.
         """
         try:
             obs = self._build_obs(clock)
         except pimm.NoValueException:
-            return
+            return  # no function is in flight yet, so this skips no wait
         if (trajectory := inference(obs)) is not None:
             self._reschedule(trajectory, clock)
         inference.wait()
