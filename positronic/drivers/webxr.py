@@ -39,7 +39,9 @@ def _parse_controller_data(data: dict):
             rotation = np.array(data['controllers'][side]['orientation'], dtype=np.float64)
             buttons = np.array(data['controllers'][side]['buttons'], dtype=np.float64)
             controller_positions[side] = geom.Transform3D(translation, geom.Rotation.from_quat(rotation))
-            buttons_dict[side] = buttons
+            # An input source with no gamepad sends an empty array. Hand tracking is one such source.
+            if buttons.size > 0:
+                buttons_dict[side] = buttons
 
     return controller_positions, buttons_dict
 
