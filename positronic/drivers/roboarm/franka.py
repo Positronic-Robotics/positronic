@@ -140,11 +140,6 @@ class _SafeInputs:
         self._thread: threading.Thread | None = None
 
     @property
-    def trips(self) -> int:
-        """How many times a reading found a safe input triggered after one that found none."""
-        return self._reading.trips
-
-    @property
     def mark(self) -> int:
         """What a move about to be made hands ``tripped_since`` when it fails.
 
@@ -345,7 +340,8 @@ class _Arm(DriverRun[command.CommandType]):
             if self._refusals == 1:
                 logger.warning(f'The arm refused a move: {goal.reason or goal.status}')
         self._refused = refused
-        if self._refusals and self.clock.now() >= self._quiet_at:
+        # A goal that is not refused is what makes the summary true; without one the arm is still refusing.
+        if self._refusals and not refused and self.clock.now() >= self._quiet_at:
             if self._refusals > 1:  # the line above already reported a single one, with its reason
                 logger.warning(f'The arm refused {self._refusals} moves in a row; it accepts them again')
             self._refusals = 0
@@ -385,8 +381,8 @@ class _Arm(DriverRun[command.CommandType]):
         A move the arm stopped short of its target is made again, up to ``_SAFE_STOP_RETRIES`` times, and
         only where a safe input was triggered during it and has since cleared. A real stop LATCHES the
         input until a person releases it, so one that clears on its own moved nothing. Every other
-        failure — a deadline the arm ran past, a control box that stopped answering — reaches the caller
-        as it always did, since one the driver cannot attribute may have moved the arm.
+        failure — a deadline the arm ran past, a control box that stopped answering — reaches the caller,
+        since one the driver cannot attribute may have moved the arm.
 
         ``at_teardown`` is for the move the driver makes on its way out. The stop is already set by then, so
         heeding it would abandon the move before it began, and recovering from a fault cancels the goal.
@@ -396,6 +392,9 @@ class _Arm(DriverRun[command.CommandType]):
             try:
                 return (yield from self._travel_to(target, mode, at_teardown=at_teardown))
             except _StoppedShort:
+                # Read while the refused goal still carries its reason: the run loop does not tick inside a
+                # move, and both the wait below and the retry after it leave nothing for it to find.
+                self.note_refusals()
                 if not (yield from self._safe_stop_cleared(since, at_teardown=at_teardown)):
                     raise
                 self.robot.recover_from_errors()  # the stop faulted the arm; the target is unchanged

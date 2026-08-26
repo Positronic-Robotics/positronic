@@ -230,7 +230,8 @@ def test_park_gives_up_when_the_goal_stops_advancing():
 
     _drive_park(_driver(arm, manage_desk=False), arm)
 
-    assert arm.calls.count(Call.GOAL) == 1
+    # One read to find the goal stopped short, a second to record what the arm refused. Then it gives up.
+    assert arm.calls.count(Call.GOAL) == 2
     np.testing.assert_allclose(arm.q, JOGGED)
 
 
@@ -756,7 +757,7 @@ def test_the_driver_logs_a_safe_input_that_changes(desk, caplog):
     desk.safe_inputs['x31'] = CLEAR
     watch.sample()
 
-    assert watch.trips == 1
+    assert watch._reading.trips == 1
     assert "safe inputs ['x31'] are triggered" in caplog.text
     assert 'permits motion' in caplog.text
 
@@ -847,10 +848,69 @@ def test_a_second_move_the_arm_refuses_is_counted_with_the_first(desk, caplog):
     watching.note_refusals()  # the arm refuses one move
     watching.command_target(PARK, None)  # the next is dispatched
     watching.note_refusals()  # and refused in its turn
+    arm.goal_status = None  # then the arm takes a goal again
     clock.advance(franka._Arm._REFUSAL_QUIET_S)
     watching.note_refusals()
 
     assert 'The arm refused 2 moves in a row' in caplog.text
+
+
+def test_a_refusal_that_never_lets_up_is_not_reported_as_recovered(desk, caplog):
+    """The summary says the arm accepts moves again, so a goal it has accepted is what earns it."""
+    arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    watching = _arm(driver, clock)
+
+    watching.note_refusals()
+    watching.command_target(PARK, None)
+    watching.note_refusals()  # and every goal after it stays refused
+    clock.advance(franka._Arm._REFUSAL_QUIET_S * 3)
+    watching.note_refusals()
+
+    assert 'accepts them again' not in caplog.text
+
+
+def test_a_refusal_the_retry_overwrites_is_still_logged(desk, caplog):
+    """The run loop does not tick inside a synchronous move, so the goal carrying the reason is gone by then."""
+    arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    desk.safe_inputs['x31'] = STOPPED
+    travel = _arm(driver, clock).move_to(JOGGED, None)
+
+    assert isinstance(next(travel), pimm.Sleep)
+    desk.safe_inputs['x31'] = CLEAR
+    arm.goal_status = None
+
+    assert _run_move(travel, clock) is franka.MoveStatus.ARRIVED
+    assert 'The arm refused a move: scripted' in caplog.text
+
+
+def test_a_desk_that_stops_answering_leaves_the_move_the_outcome_it_had(desk):
+    """The gate needs a live reading, so a trip nobody can confirm still standing attributes nothing."""
+    arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    watch = driver._safe_inputs()
+    desk.safe_inputs['x31'] = STOPPED
+    watch.sample()  # a trip is on the record, and then the control box goes quiet
+
+    def unreachable() -> dict[str, Any]:
+        raise ConnectionError('the control box stopped answering')
+
+    desk.safety_status = unreachable
+    travel = driver._arm(StopFlag(), clock, watch).move_to(JOGGED, None)
+
+    with pytest.raises(RuntimeError, match='stopped short'):
+        _run_move(travel, clock)
+
+    assert clock.now() == 0.0, 'the move waited on a reading nobody could take'
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == 0
+    assert arm.calls.count(Call.SET_TARGET_JOINTS) == 1
 
 
 def test_a_run_carries_on_after_a_safe_input_stopped_a_move(desk, world):
