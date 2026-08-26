@@ -51,7 +51,7 @@ class Session(ABC):
     a function to get actions::
 
         session = policy.new_session(context)
-        trajectory = session(obs, time)
+        trajectory = session(obs, time_ns)
 
     **Plain-data contract**: sessions accept and return only plain data
     (dicts, lists, numpy arrays, scalars). No tensors or custom objects.
@@ -66,11 +66,11 @@ class Session(ABC):
     """
 
     @abstractmethod
-    def __call__(self, obs: Mapping[str, Any], time: float) -> list[dict[str, Any]] | None:
+    def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict[str, Any]] | None:
         """Predict actions for the given observation, without waiting: heavy work belongs in
         ``Policy.functions``.
 
-        ``time`` is the caller's clock reading in seconds. A session reads no clock of its own.
+        ``time_ns`` is the caller's clock reading in nanoseconds. A session reads no clock of its own.
         """
 
     @property
@@ -96,8 +96,8 @@ class DelegatingSession(Session):
     def __init__(self, inner: Session):
         self._inner = inner
 
-    def __call__(self, obs, time):
-        return self._inner(obs, time)
+    def __call__(self, obs, time_ns):
+        return self._inner(obs, time_ns)
 
     @property
     def meta(self):

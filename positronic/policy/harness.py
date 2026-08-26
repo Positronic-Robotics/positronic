@@ -58,7 +58,7 @@ class _EpisodeInference:
         # A call that joins work already in flight keeps its anchor, so the trial pays for that work one time.
         if not self._runtime.in_flight:
             self._t0_ns, self._wall_t0 = now_ns, time.monotonic()
-        return self._session(frozen_view(self._owned(obs)), now_ns / 1e9)
+        return self._session(frozen_view(self._owned(obs)), now_ns)
 
     def wait(self, should_stop: pimm.SignalReceiver[bool]) -> None:
         """Wait for the function in flight, for as long as the trial charges the loop for it."""

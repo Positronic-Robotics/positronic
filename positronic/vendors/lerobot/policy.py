@@ -38,7 +38,7 @@ class _LerobotSession(Session):
         self._device = device
         self._meta = meta
 
-    def __call__(self, obs: dict[str, Any], time: float) -> list[dict[str, Any]]:
+    def __call__(self, obs: dict[str, Any], time_ns: int) -> list[dict[str, Any]]:
         obs_int = {}
         for key, val in obs.items():
             if key == TASK_FIELD:

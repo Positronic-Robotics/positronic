@@ -1,8 +1,8 @@
 """Composable policy layers — scheduling, fault handling and temporal frame stacking.
 
 Layers are serving-time concerns wrapped around a policy with ``|`` (left is outermost). Most read time
-from the observation (``obs_time_ns``); ``ChunkedSchedule`` anchors a chunk with the ``time`` of the call,
-which is the caller's clock reading in seconds.
+from the observation (``obs_time_ns``); ``ChunkedSchedule`` anchors a chunk with the ``time_ns`` of the
+call, which is the caller's clock reading in nanoseconds.
 """
 
 from collections import deque
@@ -46,9 +46,9 @@ class StopOnFault(Layer):
     WIRE_NAME = 'stop_on_fault'
 
     class _Session(DelegatingSession):
-        def __call__(self, obs, time):
+        def __call__(self, obs, time_ns):
             if _arms_available(obs):
-                return self._inner(obs, time)
+                return self._inner(obs, time_ns)
             self.cancel()
             return []
 
@@ -63,10 +63,11 @@ class ChunkedSchedule(Layer):
     """Wait for the current trajectory to finish before calling the inner policy again.
 
     Owns relative→absolute time conversion: the sessions below (codecs, models) emit relative timestamps;
-    this layer anchors them to the ``time`` of the call. Returns ``None`` ("keep executing the current
-    trajectory") until the last action's timestamp is reached, then calls the inner policy.
+    this layer anchors them to the call's ``time_ns``, in the seconds a timestamp is written in. Returns
+    ``None`` ("keep executing the current trajectory") until the last action's timestamp is reached, then
+    calls the inner policy.
 
-    The call's ``time`` and the observation's ``obs_time_ns`` must be readings of one clock: the anchor
+    The call's ``time_ns`` and the observation's ``obs_time_ns`` must be readings of one clock: the anchor
     comes from the first, and the test for a complete chunk uses the second.
     """
 
@@ -79,10 +80,10 @@ class ChunkedSchedule(Layer):
             super().__init__(inner)
             self._trajectory_end: float | None = None
 
-        def __call__(self, obs, time):
+        def __call__(self, obs, time_ns):
             if self._trajectory_end is not None and _obs_time(obs) < self._trajectory_end:
                 return None
-            result = self._inner(obs, time)
+            result = self._inner(obs, time_ns)
             if result is not None:
                 # A single-action session may return a bare dict, and a no-codec path may omit
                 # ``timestamp`` (servers can stamp/truncate themselves); normalize both so an
@@ -90,7 +91,8 @@ class ChunkedSchedule(Layer):
                 if isinstance(result, dict):
                     result = [result]
                 # Copy dicts so we don't mutate caller-owned data (sessions may reuse templates).
-                result = [{**r, keys.ACTION_TIMESTAMP: time + r.get(keys.ACTION_TIMESTAMP, 0.0)} for r in result]
+                anchor = time_ns / 1e9
+                result = [{**r, keys.ACTION_TIMESTAMP: anchor + r.get(keys.ACTION_TIMESTAMP, 0.0)} for r in result]
                 self._trajectory_end = result[-1][keys.ACTION_TIMESTAMP] if result else None
             return result
 
@@ -176,10 +178,10 @@ class TemporalStack(Layer):
             self._keys = keys
             self._buffer = _StackBuffer(offsets_sec, pad_start=pad_start)
 
-        def __call__(self, obs, time):
+        def __call__(self, obs, time_ns):
             now = _obs_time(obs)
             self._buffer.append(now, {k: obs[k] for k in self._keys})
-            return self._inner({**obs, **self._buffer.sample(now)}, time)
+            return self._inner({**obs, **self._buffer.sample(now)}, time_ns)
 
         def cancel(self):
             self._buffer.reset()

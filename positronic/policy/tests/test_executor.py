@@ -241,7 +241,7 @@ class _PlainPolicy(Policy):
         def __init__(self):
             self.calls = 0
 
-        def __call__(self, obs, time):
+        def __call__(self, obs, time_ns):
             self.calls += 1
             return [{'action': obs}]
 
@@ -265,7 +265,7 @@ class _EchoPolicy(Policy):
             self._left = rounds
             self.calls = 0
 
-        def __call__(self, obs, time):
+        def __call__(self, obs, time_ns):
             self.calls += 1
             result = None
             if self._answer is not None:
@@ -301,9 +301,9 @@ class _CountingLayer(Layer):
             super().__init__(inner)
             self._layer = layer
 
-        def __call__(self, obs, time):
+        def __call__(self, obs, time_ns):
             self._layer.calls += 1
-            return self._inner(obs, time)
+            return self._inner(obs, time_ns)
 
     def make_session(self, inner):
         return self._Session(inner, self)
@@ -367,7 +367,7 @@ class TestBlocking:
 
         # The session's own runtime is closed, so the function it would start is gone.
         with pytest.raises(RuntimeError):
-            policy.session({'x': 1}, 0.0)
+            policy.session({'x': 1}, 0)
 
 
 class _Weights:

@@ -246,7 +246,7 @@ class _ScriptedSession(Session):
         self._rt = rt
         self._answer = None
 
-    def __call__(self, obs, time):
+    def __call__(self, obs, time_ns):
         if self._answer is None:
             self._answer = self._rt.fns[_INFER](obs)
             return None
@@ -279,8 +279,8 @@ def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
 
     local_session, local_rt = open_session(inline(pipeline()))
 
-    remote_actions = round_trip(remote_session, rt, {keys.OBS_TIME_NS: 0}, 100.0)
-    local_actions = round_trip(local_session, local_rt, {keys.OBS_TIME_NS: 0}, 100.0)
+    remote_actions = round_trip(remote_session, rt, {keys.OBS_TIME_NS: 0}, int(100e9))
+    local_actions = round_trip(local_session, local_rt, {keys.OBS_TIME_NS: 0}, int(100e9))
     assert remote_actions == local_actions
     # Three scripted actions plus the chunk-closing validity sentinel ActionTimestamp appends.
     assert local_actions == [
@@ -291,8 +291,8 @@ def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
     ]
 
     # Both gate identically while the chunk plays out.
-    assert remote_session({keys.OBS_TIME_NS: 0}, 100.15) is None
-    assert local_session({keys.OBS_TIME_NS: 0}, 100.15) is None
+    assert remote_session({keys.OBS_TIME_NS: 0}, int(100.15e9)) is None
+    assert local_session({keys.OBS_TIME_NS: 0}, int(100.15e9)) is None
 
     remote_session.close()
 

@@ -335,14 +335,14 @@ def test_a_call_while_a_round_trip_is_in_flight_answers_none(open_session):
     mock_ws.infer.side_effect = blocked
     session, rt = open_session(endpoint)
 
-    assert session({}, 0.0) is None
+    assert session({}, 0) is None
     assert started.wait(ANSWER_SEC), 'the round-trip never started'
-    assert session({}, 0.0) is None
+    assert session({}, 0) is None
     assert mock_ws.infer.call_count == 1
 
     release.set()
     rt.wait(ANSWER_SEC)
-    assert session({}, 0.0) == chunk
+    assert session({}, 0) == chunk
 
 
 def test_opening_a_session_without_a_runtime_is_refused():
@@ -360,12 +360,12 @@ def test_cancel_drops_the_chunk_of_the_round_trip_in_flight(open_session):
     endpoint, mock_ws = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
     session, rt = open_session(endpoint)
 
-    assert session({}, 0.0) is None
+    assert session({}, 0) is None
     rt.wait(ANSWER_SEC)
     session.cancel()
 
-    assert session({}, 0.0) is None  # the cancelled answer, read and thrown away
-    assert session({}, 0.0) is None  # a round-trip of its own
+    assert session({}, 0) is None  # the cancelled answer, read and thrown away
+    assert session({}, 0) is None  # a round-trip of its own
     rt.wait(ANSWER_SEC)
     assert mock_ws.infer.call_count == 2
 
@@ -377,12 +377,12 @@ def test_a_cancelled_round_trip_still_raises_what_it_failed_with(open_session):
     mock_ws.infer.side_effect = TimeoutError('server stalled')
     session, rt = open_session(endpoint)
 
-    assert session({}, 0.0) is None
+    assert session({}, 0) is None
     rt.wait(ANSWER_SEC)
     session.cancel()
 
     with pytest.raises(TimeoutError, match='server stalled'):
-        session({}, 0.0)
+        session({}, 0)
 
 
 def test_a_cancel_dies_with_the_answer_it_was_made_against(open_session):
@@ -392,11 +392,11 @@ def test_a_cancel_dies_with_the_answer_it_was_made_against(open_session):
     mock_ws.infer.side_effect = [TimeoutError('server stalled'), [{'a': 1, 'timestamp': 0.0}]]
     session, rt = open_session(endpoint)
 
-    assert session({}, 0.0) is None
+    assert session({}, 0) is None
     rt.wait(ANSWER_SEC)
     session.cancel()
     with pytest.raises(TimeoutError, match='server stalled'):
-        session({}, 0.0)
+        session({}, 0)
 
     assert round_trip(session, rt, {}) == [{'a': 1, 'timestamp': 0.0}]
 
@@ -414,7 +414,7 @@ def test_closing_a_session_with_a_round_trip_in_flight_is_refused(open_session):
     mock_ws.infer.side_effect = blocked
     session, _rt = open_session(endpoint)
 
-    assert session({}, 0.0) is None
+    assert session({}, 0) is None
     with pytest.raises(AssertionError, match='close the runtime'):
         session.close()
 
@@ -496,7 +496,7 @@ def test_declared_stack_built_at_session_open(open_session):
     policy, mock_ws = _mock_remote_policy(CHUNKED_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}])
     session, rt = open_session(policy)
 
-    assert round_trip(session, rt, {keys.OBS_TIME_NS: 0}, 1.0) == [{'a': 1, 'timestamp': 1.0}]
+    assert round_trip(session, rt, {keys.OBS_TIME_NS: 0}, int(1e9)) == [{'a': 1, 'timestamp': 1.0}]
 
 
 def test_unknown_declared_entry_fails_before_motion():

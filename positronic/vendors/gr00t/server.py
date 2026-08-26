@@ -204,7 +204,7 @@ class _Gr00tSession(Session):
     def __init__(self, client: PolicyClient):
         self._client = client
 
-    def __call__(self, obs, time):
+    def __call__(self, obs, time_ns):
         action_response, _info = self._client.get_action(obs)
         action = {k: v[0] for k, v in action_response.items()}
         lengths = {len(v) for v in action.values()}

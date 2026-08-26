@@ -138,7 +138,7 @@ the wall time it took or nothing: the task's `charge_inference_time` flag asks a
 and a real rig pays it regardless. Only the harness reads the flag. Paying nothing means the loop
 waits for the work, which keeps a virtual clock still; paying wall time means letting the world run,
 though no further ahead of the work's start than wall time has. The harness reads the world clock and
-gives the reading to the policy stack as the call's `time`. A scheduling layer stamps its chunk with
+gives the reading to the policy stack as the call's `time_ns`. A scheduling layer stamps its chunk with
 that value, and never learns the mode.
 
 **Recordings are canonical; codecs bind the dialect late.** The dataset records every run in the

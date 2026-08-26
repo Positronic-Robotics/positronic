@@ -127,7 +127,7 @@ The normal response is a list of action dicts — a short trajectory. (A single 
 |-------|------|-------------|
 | `robot_command` | command object | Control command (see below) |
 | `target_grip` | float | Target gripper closure in `[0, 1]`: 0 = open, 1 = closed |
-| `timestamp` | float | Execution time in seconds from the start of the returned trajectory (e.g. `i / action_fps` for the i-th action). The client runs each action at `time + timestamp`, where `time` is the clock reading it gave to the call that returned the prediction. A single action dict returned *outside* a list is auto-stamped `0.0`; give every action in a list its own `timestamp`, or they all collapse onto one instant and fire at once. |
+| `timestamp` | float | Execution time in seconds from the start of the returned trajectory (e.g. `i / action_fps` for the i-th action). The client runs each action at the call's `time_ns` in seconds, plus `timestamp`, where `time_ns` is the clock reading it gave to the call that returned the prediction. A single action dict returned *outside* a list is auto-stamped `0.0`; give every action in a list its own `timestamp`, or they all collapse onto one instant and fire at once. |
 
 The `robot_command` field says what the arm is asked to do. Build one of the commands in
 [`positronic.drivers.roboarm.command`](../positronic/drivers/roboarm/command.py):
@@ -181,7 +181,7 @@ class MySession(Session):
     def __init__(self, model):
         self._model = model
 
-    def __call__(self, obs, time):
+    def __call__(self, obs, time_ns):
         # obs holds the raw keys from the wire table above. Pick what you need:
         images = obs['image.exterior']
         ee = obs['robot_state.ee_pose']
@@ -213,7 +213,7 @@ The pipeline reads left to right: everything left of the `remote` marker is the 
 
 The left side is not optional: a pipeline with nothing there is refused when the server starts, and a rig refuses a handshake that declares nothing. It needs a scheduler in particular, and `StopOnFault` outside that scheduler — an arm that is faulted or busy is not taking the plan it was given, so the layer answers the empty trajectory and the rig stops rather than resuming a chunk stamped before. Actions come back timestamped relative to their chunk, and `ChunkedSchedule` is what turns those into times on the rig's clock; a stack that leaves them relative — or anchors them twice — makes the harness reject the chunk at the first inference, since it schedules nothing more than `MAX_ACTION_SKEW_SEC` from now.
 
-The session's `time` argument is the caller's clock reading in seconds. A session reads no clock of its own, and a policy that schedules nothing accepts the value and ignores it.
+The session's `time_ns` argument is the caller's clock reading in nanoseconds, the same unit the observation's `obs_time_ns` carries. A session reads no clock of its own, and a policy that schedules nothing accepts the value and ignores it.
 
 If you put a `Codec` right of the marker (`ChunkedSchedule() | remote | codec | PolicySource(...)`), your session works entirely in *model space* — it receives encoded observations and returns model-native actions, and the codec handles the wire format. A codec that encodes images should also bound them on the rig, so full-resolution frames never cross the wire — that is what the built-in vendor pipelines do:
 
@@ -260,7 +260,7 @@ from positronic.offboard.protocol import serialise, deserialise
 session = policy.new_session()           # one Session per episode/connection
 async for message in websocket.iter_bytes():
     obs = deserialise(message)           # dict with numpy arrays
-    actions = session(obs, time.time())  # list of action dicts (or None)
+    actions = session(obs, time.time_ns())  # list of action dicts (or None)
     await websocket.send_bytes(serialise({"result": actions}))
 ```
 

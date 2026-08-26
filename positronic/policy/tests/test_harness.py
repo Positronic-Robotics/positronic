@@ -81,7 +81,7 @@ class _SpySession(Session):
     def __init__(self, policy):
         self._policy = policy
 
-    def __call__(self, obs, time):
+    def __call__(self, obs, time_ns):
         self._policy.last_obs = obs
         return [{keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}]
 
@@ -108,7 +108,7 @@ class _StubSession(Session):
         self._policy = policy
         self._meta = dict(policy._meta)
 
-    def __call__(self, obs, time):
+    def __call__(self, obs, time_ns):
         self._policy.last_obs = obs
         self._policy.observations.append(obs)
         return [{keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}]
@@ -152,7 +152,7 @@ class _ChunkSession(Session):
     def __init__(self, policy):
         self._policy = policy
 
-    def __call__(self, obs, time):
+    def __call__(self, obs, time_ns):
         self._policy.counter += 1
         dt = 0.005
         return [
@@ -586,7 +586,7 @@ def test_episode_meta_includes_policy_static_meta(world):
         def __init__(self, command):
             self._command = command
 
-        def __call__(self, obs, time):
+        def __call__(self, obs, time_ns):
             return [{keys.ROBOT_COMMAND: self._command, 'target_grip': 0.0, 'timestamp': 0.0}]
 
     class _StaticMetaPolicy(Policy):
@@ -683,7 +683,7 @@ def test_an_uncharged_wait_ends_when_the_world_comes_down(world):
             def __init__(self, rt):
                 self._rt = rt
 
-            def __call__(self, obs, time):
+            def __call__(self, obs, time_ns):
                 self._rt.fns[INFER]()
                 return None
 
@@ -710,7 +710,7 @@ def test_a_session_that_raises_fails_the_call_that_asked_for_the_episode(world):
     than the log."""
 
     class _RaisingSession(Session):
-        def __call__(self, obs, time):
+        def __call__(self, obs, time_ns):
             raise RuntimeError('inference boom')
 
     class _RaisingPolicy(Policy):
@@ -1359,7 +1359,7 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
     already is rather than one channel draining on while another stops."""
 
     class _EmptyChunkSession(Session):
-        def __call__(self, obs, time):
+        def __call__(self, obs, time_ns):
             return []
 
     class EmptyChunkPolicy(Policy):
@@ -1816,14 +1816,15 @@ class _ReplanEarly(Layer):
             super().__init__(inner)
             self._replan_at: float | None = None
 
-        def __call__(self, obs, time):
+        def __call__(self, obs, time_ns):
             t0 = obs[keys.OBS_TIME_NS] / 1e9
             if self._replan_at is not None and t0 < self._replan_at:
                 return None
-            result = self._inner(obs, time)
+            result = self._inner(obs, time_ns)
             if result is None:  # the function it asked has still to answer
                 return None
-            result = [{**action, keys.ACTION_TIMESTAMP: time + action[keys.ACTION_TIMESTAMP]} for action in result]
+            anchor = time_ns / 1e9
+            result = [{**action, keys.ACTION_TIMESTAMP: anchor + action[keys.ACTION_TIMESTAMP]} for action in result]
             self._replan_at = t0 + (result[-1][keys.ACTION_TIMESTAMP] - t0) / 2
             return result
 
@@ -1919,9 +1920,9 @@ class _ObservedTicks(Layer):
             super().__init__(inner)
             self._seen = seen
 
-        def __call__(self, obs, time):
+        def __call__(self, obs, time_ns):
             self._seen.append(obs[keys.OBS_TIME_NS] / 1e9)
-            return self._inner(obs, time)
+            return self._inner(obs, time_ns)
 
     def make_session(self, inner: Session):
         return _ObservedTicks._Session(inner, self.seen)
@@ -2205,7 +2206,7 @@ def test_a_rescheduled_trajectory_clears_the_channels_it_omits(world):
         def __init__(self):
             self._calls = 0
 
-        def __call__(self, obs, time):
+        def __call__(self, obs, time_ns):
             self._calls += 1
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             command = CartesianPosition(pose=pose)

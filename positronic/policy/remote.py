@@ -70,7 +70,7 @@ class RemoteSession(Session):
         self._answer: Answer | None = None
         self._cancelled = False
 
-    def __call__(self, obs: cabc.Mapping[str, Any], time: float) -> list[dict[str, Any]] | None:
+    def __call__(self, obs: cabc.Mapping[str, Any], time_ns: int) -> list[dict[str, Any]] | None:
         """The trajectory of a round trip that has come back, and ``None`` while one is in flight.
 
         A server answer of one action becomes a 1-element list, which is the form ``Session.__call__``

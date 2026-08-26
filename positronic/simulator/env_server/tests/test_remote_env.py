@@ -377,7 +377,7 @@ class _JointposChunkSession(Session):
     def __init__(self, policy: _JointposChunks):
         self._policy = policy
 
-    def __call__(self, obs, time):
+    def __call__(self, obs, time_ns):
         self._policy.chunks += 1
         return [
             {keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.chunks * 100.0 + i}

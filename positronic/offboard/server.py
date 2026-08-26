@@ -358,7 +358,7 @@ class PolicyServer:
                         # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
                         async with self._infer_lock:
                             # The server's clock is not the rig's.
-                            actions = await asyncio.to_thread(session, raw_obs, time.time())
+                            actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
                         await websocket.send_bytes(serialise({protocol.RESULT: actions}))
                     except Exception as e:
                         logger.error(f'Error processing message: {e}', exc_info=True)

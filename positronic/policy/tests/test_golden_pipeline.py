@@ -65,7 +65,7 @@ CAPTURED_SIGNALS = (keys.EE_POSE, keys.JOINTS, keys.GRIP)
 
 
 class _ScriptedSession(Session):
-    def __call__(self, obs, time):
+    def __call__(self, obs, time_ns):
         current = np.asarray(obs[keys.EE_POSE][:3], dtype=np.float32)
         delta = TARGET_POS - current
         chunk = []
@@ -103,19 +103,17 @@ class _SimulatedLatency(DelegatingPolicy):
             self._held: list | None = None
             self._release_at_ns = 0
 
-        def __call__(self, obs, time):
-            # Integer ns, the world's own timeline: a float compare can miss the release instant by one ULP.
-            now_ns = round(time * 1e9)
+        def __call__(self, obs, time_ns):
             if self._held is not None:
-                if now_ns < self._release_at_ns:
+                if time_ns < self._release_at_ns:
                     return None
                 held, self._held = self._held, None
                 return held
             # The chunk is held for ``latency_ns``, so the sessions below stamp it from the release instant.
-            result = self._inner(obs, time + self._latency_ns / 1e9)
+            result = self._inner(obs, time_ns + self._latency_ns)
             if not result:
                 return result
-            self._held, self._release_at_ns = result, now_ns + self._latency_ns
+            self._held, self._release_at_ns = result, time_ns + self._latency_ns
             return None
 
         def cancel(self):

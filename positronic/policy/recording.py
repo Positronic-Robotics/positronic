@@ -458,7 +458,7 @@ class _RecordingTapSession(DelegatingSession):
         if bp is not None:
             rr.send_blueprint(bp)
 
-    def __call__(self, obs, time):
+    def __call__(self, obs, time_ns):
         rec = self._rec
         outermost = rec._depth == 0
         if outermost:
@@ -469,7 +469,7 @@ class _RecordingTapSession(DelegatingSession):
                 self._set_timelines()
                 self._log(self._name, obs)
 
-            actions = self._inner(obs, time)
+            actions = self._inner(obs, time_ns)
 
             if actions is not None:
                 with self._stream:

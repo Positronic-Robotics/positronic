@@ -32,7 +32,7 @@ class _ConstSession(Session):
         self._actions = actions
         self.call_count = 0
 
-    def __call__(self, obs, time):
+    def __call__(self, obs, time_ns):
         self.call_count += 1
         return self._actions
 
@@ -57,14 +57,14 @@ class TestStopOnFault:
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().make_session(inner)
 
-        assert session(_obs(0.0, unavailable), 0.0) == []
+        assert session(_obs(0.0, unavailable), 0) == []
         assert inner.call_count == 0, 'the model was asked about an arm that is not tracking it'
 
     def test_an_available_arm_reaches_the_model(self):
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().make_session(inner)
 
-        assert session(_obs(0.0, RobotStatus.AVAILABLE), 0.0) is not None
+        assert session(_obs(0.0, RobotStatus.AVAILABLE), 0) is not None
         assert inner.call_count == 1
 
     def test_an_observation_with_no_arm_status_reaches_the_model(self):
@@ -72,7 +72,7 @@ class TestStopOnFault:
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().make_session(inner)
 
-        assert session({keys.OBS_TIME_NS: 0}, 0.0) is not None
+        assert session({keys.OBS_TIME_NS: 0}, 0) is not None
         assert inner.call_count == 1
 
     def test_either_arm_of_a_bimanual_rig_stops_the_pair(self):
@@ -86,7 +86,7 @@ class TestStopOnFault:
             f'{keys.ROBOT_STATE}.right.status': int(RobotStatus.ERROR),
         }
 
-        assert session(obs, 0.0) == []
+        assert session(obs, 0) == []
         assert inner.call_count == 0
 
     def test_the_status_a_recording_carries_for_a_taken_arm_stops_the_policy(self):
@@ -95,7 +95,7 @@ class TestStopOnFault:
         session = StopOnFault().make_session(inner)
 
         assert (RobotStatus.AVAILABLE, RobotStatus.BUSY, RobotStatus.ERROR) == (0, 1, 3)
-        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 1}, 0.0) == []
+        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 1}, 0) == []
         assert inner.call_count == 0
 
     def test_the_status_published_for_a_travelling_arm_reaches_the_model(self):
@@ -103,7 +103,7 @@ class TestStopOnFault:
         inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         session = StopOnFault().make_session(inner)
 
-        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 2}, 0.0) is not None
+        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 2}, 0) is not None
         assert inner.call_count == 1
 
     def test_a_status_no_arm_answers_to_raises(self):
@@ -112,7 +112,7 @@ class TestStopOnFault:
         session = StopOnFault().make_session(_ConstSession([]))
 
         with pytest.raises(ValueError):
-            session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 99}, 0.0)
+            session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 99}, 0)
 
     def test_recovery_plans_afresh_instead_of_resuming(self):
         """The stop resets the scheduler below it, so the first observation from an available arm infers
@@ -120,9 +120,9 @@ class TestStopOnFault:
         inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 1.0}])
         session = (StopOnFault() | ChunkedSchedule()).wrap(inner).new_session()
 
-        assert session(_obs(0.0), 0.0) is not None  # a chunk that runs until 1.0
-        assert session(_obs(0.2, RobotStatus.ERROR), 0.2) == []
-        assert session(_obs(0.3), 0.3) is not None
+        assert session(_obs(0.0), 0) is not None  # a chunk that runs until 1.0
+        assert session(_obs(0.2, RobotStatus.ERROR), int(0.2e9)) == []
+        assert session(_obs(0.3), int(0.3e9)) is not None
 
 
 class _ScriptedSession(Session):
@@ -132,7 +132,7 @@ class _ScriptedSession(Session):
         self._script = list(script)
         self.call_count = 0
 
-    def __call__(self, obs, time):
+    def __call__(self, obs, time_ns):
         self.call_count += 1
         return self._script.pop(0)
 
@@ -144,9 +144,9 @@ class TestChunkedSchedule:
         inner = _ScriptedSession([None, None, [{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]])
         session = ChunkedSchedule().make_session(inner)
 
-        assert session(_obs(0.0), 1.0) is None
-        assert session(_obs(0.1), 1.0) is None
-        assert session(_obs(0.2), 1.0) == [{'v': 1, keys.ACTION_TIMESTAMP: 1.0}]
+        assert session(_obs(0.0), int(1e9)) is None
+        assert session(_obs(0.1), int(1e9)) is None
+        assert session(_obs(0.2), int(1e9)) == [{'v': 1, keys.ACTION_TIMESTAMP: 1.0}]
         assert inner.call_count == 3
 
     def test_first_call_runs_inference(self):
@@ -154,7 +154,7 @@ class TestChunkedSchedule:
         inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
         policy = ChunkedSchedule().wrap(inner)
         session = policy.new_session()
-        result = session(_obs(), 1.0)
+        result = session(_obs(), int(1e9))
         assert result is not None
         assert len(result) == 2
         # Timestamps stamped to absolute by ChunkedSchedule.
@@ -166,16 +166,16 @@ class TestChunkedSchedule:
         inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
         policy = ChunkedSchedule().wrap(inner)
         session = policy.new_session()
-        session(_obs(), 1.0)
-        assert session(_obs(), 1.2) is None
-        assert session(_obs(), 1.4) is None
+        session(_obs(), int(1e9))
+        assert session(_obs(), int(1.2e9)) is None
+        assert session(_obs(), int(1.4e9)) is None
 
     def test_re_infers_after_trajectory_consumed(self):
         inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
         session = ChunkedSchedule().wrap(inner).new_session()
-        session(_obs(1.0), 1.0)  # trajectory ends at 1.5
-        assert session(_obs(1.3), 1.3) is None
-        result = session(_obs(1.6), 1.6)
+        session(_obs(1.0), int(1e9))  # trajectory ends at 1.5
+        assert session(_obs(1.3), int(1.3e9)) is None
+        result = session(_obs(1.6), int(1.6e9))
         assert result is not None
         assert inner._session.call_count == 2
 
@@ -183,17 +183,17 @@ class TestChunkedSchedule:
         """Single action at ts=0 → trajectory_end is the call's time → next tick re-infers."""
         policy = ChunkedSchedule().wrap(_ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]))
         session = policy.new_session()
-        session(_obs(1.0), 1.0)
-        result = session(_obs(1.01), 1.01)
+        session(_obs(1.0), int(1e9))
+        result = session(_obs(1.01), int(1.01e9))
         assert result is not None
 
     def test_expiry_is_judged_at_the_observation_instant(self):
         """Whether the trajectory has run out is a question about the observation, not about the call's time."""
         inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
         session = ChunkedSchedule().wrap(inner).new_session()
-        session(_obs(1.0), 2.0)  # anchored at the call's time 2.0, so the trajectory ends at 2.5
-        assert session(_obs(2.4), 2.0) is None
-        assert session(_obs(2.6), 2.0) is not None
+        session(_obs(1.0), int(2e9))  # anchored at the call's time 2.0, so the trajectory ends at 2.5
+        assert session(_obs(2.4), int(2e9)) is None
+        assert session(_obs(2.6), int(2e9)) is not None
 
 
 class TestPipelineComposition:
@@ -204,7 +204,7 @@ class TestPipelineComposition:
         assert isinstance(pipeline, Layer)
         policy = pipeline.wrap(_ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]))
         session = policy.new_session()
-        result = session({keys.OBS_TIME_NS: int(1e9), 'v': np.array([5.0])}, 1.0)
+        result = session({keys.OBS_TIME_NS: int(1e9), 'v': np.array([5.0])}, int(1e9))
         assert result is not None
         assert result[0]['v'] == 1
 
@@ -214,7 +214,7 @@ class TestPipelineComposition:
         assert isinstance(pipeline, Layer)
         policy = pipeline.wrap(_ConstPolicy([{'action': 'test', keys.ACTION_TIMESTAMP: 0.0}]))
         session = policy.new_session()
-        result = session(_obs(), 1.0)
+        result = session(_obs(), int(1e9))
         assert result is not None
 
     def test_full_pipeline(self):
@@ -225,11 +225,11 @@ class TestPipelineComposition:
         # → ChunkedSchedule shifts to 1.0, 1.1, 1.2, 1.3, 1.4 (call time 1.0).
         policy = pipeline.wrap(_ConstPolicy([{'action': f'a{i}'} for i in range(5)]))
         session = policy.new_session()
-        result = session(_obs(), 1.0)
+        result = session(_obs(), int(1e9))
         assert result is not None
         assert result[0][keys.ACTION_TIMESTAMP] == 1.0
         # Second call within trajectory window returns None (ChunkedSchedule).
-        assert session(_obs(), 1.2) is None
+        assert session(_obs(), int(1.2e9)) is None
 
     def test_codec_and_stays_codec_only(self):
         """& only works between codecs, not layers."""
@@ -271,7 +271,7 @@ class _CaptureSession(Session):
     def __init__(self):
         self.seen = []
 
-    def __call__(self, obs, time):
+    def __call__(self, obs, time_ns):
         self.seen.append(obs)
         return []
 
@@ -331,7 +331,7 @@ class TestTemporalStack:
     def test_pad_start_repeats_oldest(self):
         inner = _CapturePolicy()
         session = TemporalStack(keys=('v',), offsets_sec=self.OFFSETS).wrap(inner).new_session()
-        session(_stack_obs(0.0, 1.0), 0.0)
+        session(_stack_obs(0.0, 1.0), 0)
         stack = inner.session.seen[0]['v']
         assert stack.shape == (3, 1)
         assert (stack == 1.0).all()
@@ -341,14 +341,14 @@ class TestTemporalStack:
         layer = TemporalStack(keys=('v',), offsets_sec=self.OFFSETS, pad_start=False)
         session = layer.wrap(inner).new_session()
 
-        session(_stack_obs(0.0, 1.0), 0.0)
+        session(_stack_obs(0.0, 1.0), 0)
         assert inner.session.seen[0]['v'].shape == (1, 1)
 
-        session(_stack_obs(0.1, 2.0), 0.1)
+        session(_stack_obs(0.1, 2.0), int(0.1e9))
         assert inner.session.seen[1]['v'].shape == (2, 1)
         assert inner.session.seen[1]['v'][:, 0].tolist() == [1.0, 2.0]
 
-        session(_stack_obs(0.2, 3.0), 0.2)
+        session(_stack_obs(0.2, 3.0), int(0.2e9))
         assert inner.session.seen[2]['v'].shape == (3, 1)
         assert inner.session.seen[2]['v'][:, 0].tolist() == [1.0, 2.0, 3.0]
 
@@ -360,7 +360,7 @@ class TestTemporalStack:
             layer = TemporalStack(keys=('v',), offsets_sec=offsets, pad_start=pad_start)
             session = layer.wrap(inner).new_session()
             for i in range(4):
-                session(_stack_obs(0.1 * i, float(i)), 0.1 * i)
+                session(_stack_obs(0.1 * i, float(i)), round(0.1 * i * 1e9))
             stacks[pad_start] = inner.session.seen[-1]['v']
         assert stacks[True].shape == stacks[False].shape == (3, 1)
         assert (stacks[True] == stacks[False]).all()
@@ -550,16 +550,16 @@ class TestPipe:
         policy = spec.inline(ChunkedSchedule() | spec.remote | ActionTimestamp(fps=10.0) | spec.PolicySource(inner))
         assert isinstance(policy, Policy)
         session = policy.new_session()
-        result = session(_obs(), 1.0)
+        result = session(_obs(), int(1e9))
         assert result is not None
         assert result[0][keys.ACTION_TIMESTAMP] == 1.0
-        assert session(_obs(), 1.2) is None
+        assert session(_obs(), int(1.2e9)) is None
 
     def test_inline_tolerates_marker_less_pipe(self):
         inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         policy = spec.inline(ChunkedSchedule() | spec.PolicySource(inner))
         session = policy.new_session()
-        result = session(_obs(), 1.0)
+        result = session(_obs(), int(1e9))
         assert result is not None and result[0][keys.ACTION_TIMESTAMP] == 1.0
 
     def test_inline_bare_source_pipe_is_the_loaded_policy(self):

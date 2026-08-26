@@ -128,7 +128,7 @@ class _OpenpiSession(Session):
     def __init__(self, client: WebsocketClientPolicy):
         self._client = client
 
-    def __call__(self, obs, time):
+    def __call__(self, obs, time_ns):
         response = self._client.infer(obs)
         actions = response['actions']
         return [{'action': a} for a in actions]

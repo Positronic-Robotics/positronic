@@ -20,7 +20,7 @@ class _TrackingSession(Session):
         self._actions = actions
         self._meta = meta
 
-    def __call__(self, obs, time):
+    def __call__(self, obs, time_ns):
         return list(self._actions)
 
     @property
@@ -53,7 +53,7 @@ class _CapturingSession(Session):
         self.seen_timeline_values = None
         self.seen_depth = None
 
-    def __call__(self, obs, time):
+    def __call__(self, obs, time_ns):
         self.seen_timeline_values = dict(self._rec._timeline_values)
         self.seen_depth = self._rec._depth
         return list(self._actions)
@@ -116,7 +116,7 @@ def test_a_cartesian_chunk_records_the_mode_beside_its_trajectory(tmp_path):
     actions = [{keys.ROBOT_COMMAND: CartesianPosition(pose=pose, mode=mode), 'timestamp': 0.0}]
 
     rec = Recorder(tmp_path)
-    rec.tap('t').wrap(_TrackingPolicy(actions)).new_session()({'x': 1.0, keys.WALL_TIME_NS: 1}, 0.0)
+    rec.tap('t').wrap(_TrackingPolicy(actions)).new_session()({'x': 1.0, keys.WALL_TIME_NS: 1}, 0)
 
     assert any('mode.impedance.kq' in path for path in rec._series_paths), rec._series_paths
     assert not any(path.endswith('cartesian_pos/pose') for path in rec._series_paths), 'the pose is the trajectory'
@@ -162,7 +162,7 @@ def test_tap_delegates_inner_call(tmp_path):
     actions = [{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.1}]
     policy = Recorder(tmp_path).tap('t').wrap(_TrackingPolicy(actions))
     session = policy.new_session()
-    result = session({'x': 1.0, keys.WALL_TIME_NS: 1_000_000}, 0.0)
+    result = session({'x': 1.0, keys.WALL_TIME_NS: 1_000_000}, 0)
     assert result == actions
 
 
@@ -184,7 +184,7 @@ def test_obs_log_filtering_uses_pure_tap_names(tmp_path):
             'joints_list': [0.1, 0.2, 0.3],
             keys.GRIP: 0.5,
         },
-        0.0,
+        0,
     )
 
     assert 'cam/camera' in rec._image_paths
@@ -206,13 +206,13 @@ def test_logs_command_chunk_without_mutating(tmp_path):
         {keys.ROBOT_COMMAND: CartesianPosition(pose=pose), 'target_grip': 0.6, 'timestamp': 0.1},
     ]
     session = Recorder(tmp_path).tap('t').wrap(_TrackingPolicy(actions)).new_session()
-    result = session({'x': 1.0, keys.WALL_TIME_NS: 1}, 0.0)
+    result = session({'x': 1.0, keys.WALL_TIME_NS: 1}, 0)
     assert result[0][keys.ROBOT_COMMAND] is actions[0][keys.ROBOT_COMMAND]  # unchanged on return
 
 
 def test_handles_none_actions(tmp_path):
     class _NoneSession(Session):
-        def __call__(self, obs, time):
+        def __call__(self, obs, time_ns):
             return None
 
     class _NonePolicy(Policy):
@@ -220,7 +220,7 @@ def test_handles_none_actions(tmp_path):
             return _NoneSession()
 
     session = Recorder(tmp_path).tap('t').wrap(_NonePolicy()).new_session()
-    assert session({'x': 1.0}, 0.0) is None
+    assert session({'x': 1.0}, 0) is None
     assert session._step == 1
 
 
@@ -244,7 +244,7 @@ def test_two_taps_log_both_seams(tmp_path):
     actions = [{'v': 1.0, 'timestamp': 0.0}]
     policy = (rec.tap('raw') | rec.tap('server')).wrap(_TrackingPolicy(actions))
     session = policy.new_session()
-    session({'camera': np.zeros((4, 4, 3), dtype=np.uint8), keys.WALL_TIME_NS: 1}, 0.0)
+    session({'camera': np.zeros((4, 4, 3), dtype=np.uint8), keys.WALL_TIME_NS: 1}, 0)
 
     assert 'raw/camera' in rec._image_paths
     assert 'server/camera' in rec._image_paths
@@ -257,7 +257,7 @@ def test_timeline_values_captured_once_and_carried(tmp_path):
     policy = (rec.tap('raw') | rec.tap('server')).wrap(inner)
     session = policy.new_session()
 
-    session({keys.WALL_TIME_NS: 111, keys.OBS_TIME_NS: 222, 'x': 1.0}, 0.0)
+    session({keys.WALL_TIME_NS: 111, keys.OBS_TIME_NS: 222, 'x': 1.0}, 0)
 
     # Both taps entered before the inner session ran, and both share the values
     # captured once from the raw obs at the outermost tap.
@@ -273,7 +273,7 @@ def test_partial_timelines_only_set_present_keys(tmp_path):
     inner = _CapturingPolicy(rec, [{'v': 1.0, 'timestamp': 0.0}])
     session = rec.tap('raw').wrap(inner).new_session()
 
-    session({keys.WALL_TIME_NS: 555, 'x': 1.0}, 0.0)  # no obs_time_ns
+    session({keys.WALL_TIME_NS: 555, 'x': 1.0}, 0)  # no obs_time_ns
     assert inner.last_session.seen_timeline_values == {'wall_time': 555}
 
 

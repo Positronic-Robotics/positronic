@@ -92,7 +92,7 @@ class LerobotPolicy(Policy):
             self._answer: Answer | None = None
             self._cancelled = False
 
-        def __call__(self, obs: dict[str, Any], time: float) -> list[dict[str, Any]] | None:
+        def __call__(self, obs: dict[str, Any], time_ns: int) -> list[dict[str, Any]] | None:
             if self._answer is None:
                 self._answer = self._rt.fns[LerobotPolicy._INFER](obs)
                 return None
