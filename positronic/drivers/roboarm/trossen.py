@@ -46,6 +46,9 @@ _STREAM_GOAL_TIME_S = 0.0
 _MOVE_GOAL_TIME_S = 2.0
 _MOVE_TIMEOUT_S = _MOVE_GOAL_TIME_S + 3.0
 _ARRIVED_TOL = 0.02  # radians; the firmware reports position, so arrival is judged from the reading
+# How long the controller's clock may stand still before the link counts as down. Telemetry arrives at
+# over 200 Hz, so this is many missed frames, not a scheduling hiccup.
+_STALE_AFTER_S = 0.25
 
 
 class TrossenState(State, pimm.shared_memory.NumpySMAdapter):
@@ -102,6 +105,10 @@ def _opened(connect: Callable[[str], Any], ip: str) -> Iterator[Any]:
     finally:
         try:
             driver.set_all_modes(trossen_arm.Mode.idle)
+        # rules-allow: swallowed-error — an arm that cannot be reached cannot be set idle either, and the
+        # handle still has to go back
+        except trossen_arm.RuntimeError as exc:
+            logger.error(f'The arm at {ip} was not set idle: {exc}')
         finally:  # an arm that will not go idle still has a handle to give back
             driver.cleanup()
 
@@ -143,9 +150,12 @@ class _Arm(DriverRun[command.CommandType]):
         self._grip_target = self._grip_of(self._output)
         self._goal_time = _STREAM_GOAL_TIME_S
         self._unsent = False
-        # Whether the last reading arrived. Not `Moves.errored`, which says the arm is not where the driver
-        # put it: a link that drops says nothing about the move, and the two clear on different events.
+        # Whether the arm is still being heard from. Not `Moves.errored`, which says the arm is not where
+        # the driver put it: a link that drops says nothing about the move, and the two clear on different
+        # events.
         self.link_down = False
+        self._stamp = int(self._output.header.timestamp)
+        self._stamp_at = clock.now()
 
     def _grip_of(self, output: Any) -> float:
         """How closed the fingers are, from the joint position the controller reports.
@@ -176,9 +186,10 @@ class _Arm(DriverRun[command.CommandType]):
         self.moves.abandon(exc)
 
     def read(self) -> bool:
-        """Take the whole arm off the link, once a tick: every step below wants the same instant.
+        """Take the whole arm off the link, once a tick, and say whether the arm is still being heard from.
 
-        A link that does not answer leaves the last reading standing, and says so.
+        The controller streams its telemetry and the read hands back the last of it, so a link that drops
+        does not raise — it repeats itself. The controller's own clock is what says the stream stopped.
         """
         try:
             self._output = self.driver.get_robot_output()
@@ -188,8 +199,14 @@ class _Arm(DriverRun[command.CommandType]):
             logger.error(f'The arm at {self.ip} did not answer: {exc}')
             self.link_down = True
             return False
-        self.link_down = False
-        return True
+        now = self.clock.now()
+        stamp = int(self._output.header.timestamp)
+        if stamp != self._stamp:
+            self._stamp, self._stamp_at = stamp, now
+        self.link_down = now - self._stamp_at > _STALE_AFTER_S
+        if self.link_down:
+            logger.error(f'The arm at {self.ip} stopped streaming {now - self._stamp_at:.2f} s ago')
+        return not self.link_down
 
     @property
     def q(self) -> np.ndarray:
@@ -253,7 +270,14 @@ class _Arm(DriverRun[command.CommandType]):
         if not self._unsent:
             return
         goal = [*self._q_target, self._grip_metres(self._grip_target)]
-        self.driver.set_all_positions(goal, self._goal_time, False)
+        try:
+            self.driver.set_all_positions(goal, self._goal_time, False)
+        # rules-allow: swallowed-error — a link that drops reads ERROR; the setpoint stays unsent and goes
+        # out again once the arm answers
+        except trossen_arm.RuntimeError as exc:
+            logger.error(f'The arm at {self.ip} did not take the setpoint: {exc}')
+            self.link_down = True
+            return
         self._unsent = False
 
     def publish(self) -> None:
@@ -301,7 +325,9 @@ class Robot(pimm.ControlSystem):
 
                 while not should_stop.value:
                     if not arm.read():
+                        arm.settle()  # a move runs out its deadline on the last reading; nobody waits forever
                         arm.publish()
+                        arm.moves.answer()
                         yield arm.limiter.wait()
                         continue
 
@@ -315,8 +341,7 @@ class Robot(pimm.ControlSystem):
                         with log_failure(asked):
                             arm.track(asked)
 
-                    with log_failure('setpoint'):
-                        arm.write()
+                    arm.write()
                     arm.publish()
                     arm.moves.answer()  # the state a settled move is answered with is out
 
@@ -347,10 +372,14 @@ class _FakeTrossen:
             self.position_min = lower
             self.position_max = upper
 
+    _TICK_US = 5000  # the controller streams faster than the driver reads, so its clock moves every read
+
     def __init__(self, alpha: float = 0.3):
         self._alpha = alpha
         self._position = np.zeros(7)  # the arm boots with the fingers closed
         self._velocity = np.zeros(7)
+        self._stamp = 0
+        self.frozen = False  # the controller stops being heard from, as a dropped link leaves it
         self.mode: Any = None
         self.goals: list[list[float]] = []
         self.goal_times: list[float] = []
@@ -360,13 +389,15 @@ class _FakeTrossen:
         return [_FakeTrossen._Limit(lower, upper) for lower, upper in _FakeTrossen._LIMITS]
 
     def get_robot_output(self) -> Any:
-        self._servo()
+        if not self.frozen:
+            self._servo()
+            self._stamp += _FakeTrossen._TICK_US
         arm = SimpleNamespace(positions=self._position[:_ARM_JOINTS].copy(), velocities=self._velocity[:6].copy())
         gripper = SimpleNamespace(position=float(self._position[_GRIPPER_JOINT]))
         return SimpleNamespace(
             joint=SimpleNamespace(arm=arm, gripper=gripper),
             cartesian=SimpleNamespace(positions=list(_FakeTrossen._CARTESIAN)),
-            header=SimpleNamespace(timestamp=0),
+            header=SimpleNamespace(timestamp=self._stamp),
         )
 
     def set_all_modes(self, mode: Any) -> None:

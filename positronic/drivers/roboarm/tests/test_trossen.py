@@ -19,7 +19,9 @@ JOGGED = np.array([0.2, 0.4, 0.3, 0.0, 0.1, 0.0])
 class FakeArm(trossen_driver._FakeTrossen):
     """The driver's fake with the link under the test's control.
 
-    ``blocked`` holds the joints where they stand; ``raises``, once set, is what reading the arm raises.
+    ``blocked`` holds the joints where they stand while the controller keeps streaming; ``frozen`` stops
+    the stream, as a dropped link does. ``raises`` is what reading the arm raises, ``write_raises`` what
+    a write raises.
     """
 
     def __init__(self, position=None):
@@ -27,12 +29,23 @@ class FakeArm(trossen_driver._FakeTrossen):
         if position is not None:
             self._position = np.asarray(position, dtype=np.float64)
         self.raises: Exception | None = None
+        self.write_raises: Exception | None = None
         self.blocked = False
 
     def get_robot_output(self):
         if self.raises is not None:
             raise self.raises
         return super().get_robot_output()
+
+    def set_all_modes(self, mode) -> None:
+        if self.write_raises is not None:
+            raise self.write_raises
+        super().set_all_modes(mode)
+
+    def set_all_positions(self, goal_positions, goal_time=2.0, blocking=True) -> None:
+        if self.write_raises is not None:
+            raise self.write_raises
+        super().set_all_positions(goal_positions, goal_time, blocking)
 
     def _servo(self) -> None:
         if not self.blocked:
@@ -157,7 +170,7 @@ def test_a_streamed_command_the_arm_cannot_be_put_at_leaves_it_where_it_is():
     assert len(arm.goals) == written  # nothing new was written
 
 
-def test_a_link_that_drops_reads_error_and_the_run_carries_on():
+def test_a_read_that_raises_reads_error_and_the_run_carries_on():
     arm = FakeArm()
     _, states, loop = _driven(arm)
 
@@ -169,6 +182,59 @@ def test_a_link_that_drops_reads_error_and_the_run_carries_on():
     arm.raises = None
     next(loop)
     assert states.emitted[-1][1].status == RobotStatus.AVAILABLE
+
+
+def test_an_arm_that_stops_streaming_reads_error_though_the_read_still_answers():
+    """A dropped link does not make the read raise: it hands back the last telemetry, over and over."""
+    arm = FakeArm()
+    clock = MockClock()
+    _, states, loop = _driven(arm, clock)
+
+    next(loop)
+    assert states.emitted[-1][1].status == RobotStatus.AVAILABLE
+
+    arm.frozen = True
+    clock.advance(trossen_driver._STALE_AFTER_S + 0.1)
+    next(loop)
+    assert states.emitted[-1][1].status == RobotStatus.ERROR
+
+    arm.frozen = False
+    next(loop)
+    assert states.emitted[-1][1].status == RobotStatus.AVAILABLE
+
+
+def test_a_setpoint_the_link_refuses_reads_error_and_goes_out_again_when_the_arm_answers():
+    arm = FakeArm()
+    driver, states, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+
+    next(loop)
+    written = len(arm.goals)
+    arm.write_raises = trossen_driver.trossen_arm.RuntimeError('Broken pipe')
+    commands.push(command.JointPosition(JOGGED))
+    next(loop)
+    assert len(arm.goals) == written
+    assert states.emitted[-1][1].status == RobotStatus.ERROR
+
+    arm.write_raises = None
+    next(loop)
+    np.testing.assert_allclose(arm.goals[-1][: trossen_driver._ARM_JOINTS], JOGGED)
+
+
+def test_a_run_that_ends_on_a_dead_link_still_gives_the_handle_back():
+    """Setting the arm idle is what the run tries last, and an arm it cannot reach must not end it badly."""
+    arm = FakeArm()
+    stop = StopFlag()
+    _, _, loop = _driven(arm, stop=stop)
+
+    next(loop)
+    arm.write_raises = trossen_driver.trossen_arm.RuntimeError('Connection reset by peer')
+    stop.stopped = True
+    with pytest.raises(StopIteration):
+        next(loop)
+
+    assert arm.cleaned_up
 
 
 def test_a_sync_move_answers_once_the_arm_reads_back_at_its_target(world):
