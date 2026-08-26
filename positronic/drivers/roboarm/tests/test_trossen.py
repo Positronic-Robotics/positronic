@@ -105,6 +105,18 @@ def test_the_joint_the_arm_reports_comes_back_as_a_normalized_grip():
     assert grips.emitted[-1][1] == pytest.approx(0.75)
 
 
+def test_a_joint_reading_just_outside_its_range_still_comes_back_a_grip():
+    """A closed gripper reads a shade below its lower limit, and the port carries 0..1."""
+    arm = FakeArm(position=np.append(np.zeros(6), -0.000945))
+    driver, _, loop = _driven(arm)
+    grips = RecordingEmitter()
+    driver.grip._bind(grips)
+
+    next(loop)
+
+    assert grips.emitted[-1][1] == pytest.approx(1.0)
+
+
 def test_a_streamed_joint_command_reaches_the_arm():
     arm = FakeArm()
     driver, _, loop = _driven(arm)
