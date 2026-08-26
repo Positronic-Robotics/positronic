@@ -106,31 +106,19 @@ Something has to say when an episode starts and when it finishes. `positronic-in
 
 ### A console of your own
 
-Anything richer — a web console, a foot pedal, a rig UI — is a `Driver` of its own rather than a plug-in. It decides when an episode starts, and `run_world` builds the world around it. Nothing in the library needs to know which surface is driving. The same runner takes a **simulated** embodiment: it reads `embodiment.simulated`, and gives a sim world virtual time, message-stamped recording and foreground producers. One scheduler round is then one control period.
+Anything richer — a web console, a foot pedal, a rig UI — is a `Driver` of its own rather than a plug-in. It decides when an episode starts, and `run_world` builds the world around it: the harness, the recorder, the devices, and every wire between them. A driver reads what it decides from itself — the keyboard operator reads the terminal in its own loop — so the runner wires nothing of it but the `perform_task` call and `done`.
 
 ```python
 import pimm
-from positronic import keys
 from positronic.cli.eval.run import Driver, prepare_output_dir, run_world
-from positronic.gui import dpg_ui
 
 
 class MyConsole(Driver):
     """Asks `perform_task` for a `Task` per episode, and emits the episode's terminal on `done`."""
 
-    def __init__(self, embodiment):
+    def __init__(self):
         super().__init__()
-        self._embodiment = embodiment
-        self._viewer = dpg_ui()
         self.done = pimm.ControlSystemEmitter[dict](self)
-        self.jog = pimm.ControlSystemEmitter(self)
-
-    def wire(self, world, harness):
-        for name, obs in self._embodiment.observations.items():
-            if name.startswith(keys.IMAGE_PREFIX):
-                world.connect(obs.source, self._viewer.cameras[name])
-        world.connect(self.jog, harness.manual_command)
-        return (self._viewer,)
 
     def run(self, should_stop, clock):
         ...
@@ -139,13 +127,15 @@ class MyConsole(Driver):
 # `prepare_output_dir` syncs a directory and snapshots the sources into it, and it can raise. The
 # policy is yours to close from the moment you first touch it. `None` records nothing.
 try:
-    console = MyConsole(embodiment)
+    console = MyConsole()
     run_world(policy, embodiment, console, prepare_output_dir(output_dir), done=console.done)
 finally:
     policy.close()
 ```
 
-`run_world` connects `perform_task` and `done` itself. `wire` connects everything else the console brings, and returns what the runner must schedule. The example connects two things. The viewer takes every observation named with the `positronic.keys.IMAGE_PREFIX` convention on its `cameras`. The jog channel goes into `harness.manual_command`, which the harness applies only while it is idle. The world stops when any of its control systems returns, so the console ends the run by returning from its loop.
+The same runner takes a **simulated** embodiment: it reads `embodiment.simulated`, and gives a sim world virtual time, message-stamped recording and foreground producers. One scheduler round is then one control period. The world stops when any of its control systems returns, so the console ends the run by returning from its loop.
+
+A surface that brings a control system of its own — a camera viewer, a pedal on a socket — composes its own world instead, because only whoever builds a world can wire what runs in it. `run_world` is the shape to copy. To show the cameras, connect every observation named with the `positronic.keys.IMAGE_PREFIX` convention into a viewer's `cameras`; `positronic.gui.dpg_ui()` is one. To let the operator jog the arm between episodes, emit robot commands into `harness.manual_command`, which the harness applies only while it is idle.
 
 To count down an episode's remaining time, read `harness.deadline_ns`: it carries the instant on the world's clock the live episode ends at, so the time left is that value minus your own `clock.now_ns()`. An episode publishes its deadline once the rig is ready — after the task's prepare handlers answer, so the reset costs the episode nothing. It is `None` whenever no deadline stands — no episode running, or one whose task has no `timeout_sec`.
 

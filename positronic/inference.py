@@ -1,8 +1,9 @@
 """Legacy ``positronic-inference`` CLI: the attended keyboard ``real`` path plus the ``sim`` and ``stats``
 aliases over ``cli.eval.run``."""
 
+import logging
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Any
 
 import configuronic as cfn
@@ -17,48 +18,49 @@ from positronic import keys
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import Driver, prepare_output_dir, run, run_world
 from positronic.dataset.local_dataset import load_all_datasets
-from positronic.drivers.keyboard import KeyboardControl
+from positronic.drivers.keyboard import key_reader
 from positronic.eval import Embodiment, Task
-from positronic.policy.harness import Harness
+
+logger = logging.getLogger(__name__)
 
 
 class KeyboardOperator(Driver):
-    """Turns keystrokes into episodes: ``s`` asks for one through ``perform_task``, ``p`` ends the live one.
+    """Turns key presses into episodes: ``s`` asks for one through ``perform_task``, ``p`` ends the live one,
+    ``q`` ends the run.
 
-    It holds the pending answers because that is where an episode's terminal — and any refused ask —
-    arrives; both are printed as they land. ``next_task`` is called once per press. The keyboard is the
-    operator's own, so ``q`` returns from it and brings the world down.
+    The terminal is the operator's own device, read where every other device is read: in its own loop. It
+    holds the pending answers because that is where an episode's terminal — and any refused ask — arrives;
+    both are printed as they land. ``next_task`` is called once per press.
     """
 
     def __init__(self, next_task: Callable[[], Task]):
         super().__init__()
         self._next_task = next_task
-        self._keyboard = KeyboardControl(quit_key='q')
-        self.keystrokes = pimm.ControlSystemReceiver[str](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
-    def wire(self, world: pimm.World, harness: Harness) -> Sequence[pimm.ControlSystem]:
-        world.connect(self._keyboard.keyboard_inputs, self.keystrokes)
-        return (self._keyboard,)
-
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        print('Keyboard controls: [s]tart, sto[p], [q]uit')
         pending: list[pimm.calls.Answer[dict[str, Any]]] = []
-        while not should_stop.value:
-            if (key := pimm.value_updated(self.keystrokes)) is not None:
-                match key:
+        with key_reader() as read_key:
+            if read_key is None:
+                logger.warning('no episode can start: stdin is not a terminal')
+                return
+            print('Keyboard controls: [s]tart, sto[p], [q]uit')
+            while not should_stop.value:
+                match read_key():
                     case 's':
                         pending.append(self.perform_task(self._next_task()))
                     case 'p':
                         self.done.emit({keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR})
-            running = []
-            for answer in pending:
-                if answer.done():
-                    self._report(answer)
-                else:
-                    running.append(answer)
-            pending = running
-            yield pimm.Sleep(0.01)
+                    case 'q':
+                        return
+                running = []
+                for answer in pending:
+                    if answer.done():
+                        self._report(answer)
+                    else:
+                        running.append(answer)
+                pending = running
+                yield pimm.Sleep(0.01)
 
     @staticmethod
     def _report(answer: pimm.calls.Answer[dict[str, Any]]) -> None:
@@ -74,9 +76,8 @@ def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_d
     finishes.
 
     The keyboard is the only attended surface this library ships, and there is no viewer — a console that
-    shows the cameras is a ``Driver`` of its own, wiring ``gui.dpg_ui`` into the world ``run_world`` builds.
-    A run ends when ``KeyboardControl`` returns — on ``q``, or on a stdin that is not a terminal — since a
-    control system returning stops the world.
+    shows the cameras composes a world of its own. A run ends when the operator returns — on ``q``, or on a
+    stdin that is not a terminal — since a control system returning stops the world.
     """
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')

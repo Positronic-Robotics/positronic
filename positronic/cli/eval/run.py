@@ -1,7 +1,7 @@
 import logging
 import os
 import uuid
-from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterable, Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from functools import partial
@@ -51,18 +51,12 @@ class Driver(pimm.ControlSystem):
     """Decides when a trial starts, and asks for it as an episode through ``perform_task``.
 
     ``run_world`` builds one world around one driver: a plan walked to its end, a person at a keyboard, or a
-    console of somebody's own.
+    console of somebody's own. A driver reads whatever it decides from — a plan, a terminal — itself, so the
+    runner wires nothing of it but this call.
     """
 
     def __init__(self):
         self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
-
-    def wire(self, world: pimm.World, harness: Harness) -> Sequence[pimm.ControlSystem]:
-        """Connect what this driver adds — a viewer, an input device — and return what the runner schedules.
-
-        The runner connects ``perform_task`` itself, so this is for everything else.
-        """
-        return ()
 
 
 class TaskDriver(Driver):
@@ -114,7 +108,6 @@ def run_world(
         if ds_agent is not None:
             world.connect(harness.ds_command, ds_agent.command)
 
-        driver_systems = driver.wire(world, harness)
         producers = [cs for cs in embodiment.control_systems if cs is not None]
         if embodiment.simulated:
             # Why this order:
@@ -123,9 +116,9 @@ def run_world(
             #   in that same pass.
             # - The producers run last, so what the recorder finds on the channels is the frame the reset
             #   published, with no step in between.
-            world.run([driver, *driver_systems, harness, ds_agent, *producers])
+            world.run([driver, harness, ds_agent, *producers])
         else:
-            world.run([driver, *driver_systems, harness], [*producers, ds_agent])
+            world.run([driver, harness], [*producers, ds_agent])
 
 
 def _validate_timing(embodiments: Iterable[Embodiment], output_dir: str | Path | None) -> None:

@@ -1,38 +1,31 @@
-import logging
 import select
 import sys
 import termios
 import tty
-
-import pimm
-
-logger = logging.getLogger(__name__)
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 
 
-class KeyboardControl(pimm.ControlSystem):
-    def __init__(self, quit_key: str | None = None):
-        self.quit_key = quit_key
-        self.keyboard_inputs = pimm.ControlSystemEmitter(self)
+def _pressed_key() -> str | None:
+    """The key just typed, or ``None`` when nobody typed one. It never waits."""
+    ready, _, _ = select.select([sys.stdin], [], [], 0.0)
+    return sys.stdin.read(1) if ready else None
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        # Check if stdin is a TTY before attempting terminal operations
-        if not sys.stdin.isatty():
-            print('WARNING: KeyboardControl cannot read input - stdin is not a terminal', file=sys.stderr)
-            logger.warning('KeyboardControl cannot read input - stdin is not a terminal')
-            return
 
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        tty.setcbreak(fd)
+@contextmanager
+def key_reader() -> Iterator[Callable[[], str | None] | None]:
+    """Put the terminal in cbreak mode, and yield a reader of one key press at a time.
 
-        try:
-            while not should_stop.value:
-                r, _, _ = select.select([sys.stdin], [], [], 0.0)
-                if r:
-                    key = sys.stdin.read(1)
-                    if key == self.quit_key:
-                        return
-                    self.keyboard_inputs.emit(key)
-                yield pimm.Sleep(0.01)
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    Yields ``None`` where stdin is not a terminal: there is nothing to read a key from, and the caller
+    decides what a run without an operator does.
+    """
+    if not sys.stdin.isatty():
+        yield None
+        return
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    tty.setcbreak(fd)
+    try:
+        yield _pressed_key
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)

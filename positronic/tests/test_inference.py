@@ -1,6 +1,8 @@
 import io
 import sys
+import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from functools import partial
 from typing import Any
 
@@ -69,8 +71,8 @@ def _trial(instruction: str = 'stub') -> Callable[[], Task]:
 
 
 @pytest.mark.timeout(30.0)
-def test_the_keyboard_path_ends_when_the_keyboard_returns(monkeypatch):
-    """How an attended run finishes: ``KeyboardControl`` returns, the world stops, ``real`` closes the policy.
+def test_the_keyboard_path_ends_when_the_operator_returns(monkeypatch):
+    """How an attended run finishes: the operator returns, the world stops, ``real`` closes the policy.
 
     A stdin that is not a terminal is the return the test can force; ``q`` is the other one.
     """
@@ -92,26 +94,30 @@ def test_the_keyboard_path_refuses_a_simulated_embodiment():
         real(policy=_IdlePolicy(), embodiment=_embodiment(simulated=True), next_task=_trial())
 
 
-class _ScriptedKeyboard(pimm.ControlSystem):
-    """Stands in for ``KeyboardControl``: starts an episode, stops it once it is running, returns as ``q`` would.
+class _ScriptedKeys:
+    """Stands in for a person at the terminal: starts an episode, stops it once it is running, then quits.
 
     ``policy`` is what says the episode is running. The rig's devices are spawned, so how long they take to
-    answer the trial's prepare is nothing a beat between keystrokes could name.
+    answer the trial's prepare is nothing a fixed beat could name. The beat between the stop and the quit is
+    the window in which the operator prints what the episode ended on.
     """
 
-    def __init__(self, policy):
+    def __init__(self, policy, beat_sec: float = 0.3):
         self._policy = policy
-        self.keyboard_inputs = pimm.ControlSystemEmitter[str](self)
+        self._beat_sec = beat_sec
+        self._started = False
+        self._stopped_at: float | None = None
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
-        yield pimm.Sleep(0.1)
-        self.keyboard_inputs.emit('s')
-        while not self._policy.observations:
-            if should_stop.value:
-                return
-            yield pimm.Sleep(0.01)
-        self.keyboard_inputs.emit('p')
-        yield pimm.Sleep(0.3)
+    def __call__(self) -> str | None:
+        if not self._started:
+            self._started = True
+            return 's'
+        if self._stopped_at is None:
+            if not self._policy.observations:
+                return None
+            self._stopped_at = time.monotonic()
+            return 'p'
+        return 'q' if time.monotonic() - self._stopped_at > self._beat_sec else None
 
 
 @pytest.mark.timeout(30.0)
@@ -119,7 +125,7 @@ def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, capsys):
     """The press is the whole start signal: the rig's devices ready, the episode opens on the instruction it
     was given, and it runs until the operator stops it."""
     policy = _IdlePolicy()
-    monkeypatch.setattr(inference, 'KeyboardControl', lambda quit_key: _ScriptedKeyboard(policy))
+    monkeypatch.setattr(inference, 'key_reader', partial(nullcontext, _ScriptedKeys(policy)))
 
     real(policy=policy, embodiment=_embodiment(), next_task=_trial('pick up the cube'))
 
@@ -129,13 +135,14 @@ def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, capsys):
     assert policy.closed
 
 
-def test_the_operator_reports_an_ask_the_harness_refuses(capsys):
+def test_the_operator_reports_an_ask_the_harness_refuses(monkeypatch, capsys):
     """The operator does not police who may start an episode: every press is asked for, and what comes back
     is printed as it lands."""
     task = Task(instruction_source='pick', timeout_sec=None)
+    presses = iter(['s', 's'])
+    monkeypatch.setattr(inference, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
     operator = KeyboardOperator(lambda: task)
     with pimm.World(virtual_time=True) as world:
-        keystrokes = world.pair(operator.keystrokes)
         harness = world.pair(operator.perform_task)
         received = []
 
@@ -146,8 +153,7 @@ def test_the_operator_reports_an_ask_the_harness_refuses(capsys):
                 if len(received) > 1:
                     call.set_exception(RuntimeError('An episode is already running'))
 
-        press = partial(keystrokes.emit, 's')
-        driver = scripted_driver((press, 0.05), (refuse_a_second_ask, 0.05), (press, 0.05), (refuse_a_second_ask, 0.05))
+        driver = scripted_driver((refuse_a_second_ask, 0.05), (refuse_a_second_ask, 0.05))
         drive_scheduler(world.start([operator, driver]))
 
     assert received == [task, task]
