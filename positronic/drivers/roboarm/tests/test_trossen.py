@@ -14,6 +14,10 @@ from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmi
 
 GRIP_TRAVEL_M = 0.04  # the gripper joint's range, which the arm reports and grip is normalized against
 JOGGED = np.array([0.2, 0.4, 0.3, 0.0, 0.1, 0.0])
+# Mid-range on every joint. The arm rests on the lower limit of joints 1 and 2, where Cartesian targets have
+# no solution in half the directions, so every Cartesian test starts from here instead.
+HOME = np.array([0.0, 1.571, 1.178, 0.0, 0.0, 0.0])
+ARM = trossen_driver._ARM_JOINTS
 
 
 class FakeArm(trossen_driver._FakeTrossen):
@@ -21,7 +25,7 @@ class FakeArm(trossen_driver._FakeTrossen):
 
     ``blocked`` holds the joints where they stand while the controller keeps streaming; ``frozen`` stops
     the stream, as a dropped link does. ``raises`` is what reading the arm raises, ``write_raises`` what
-    a write raises.
+    a write raises, and ``velocities`` what the joints read as running at.
     """
 
     def __init__(self, position=None):
@@ -31,9 +35,9 @@ class FakeArm(trossen_driver._FakeTrossen):
         self.raises: Exception | None = None
         self.write_raises: Exception | None = None
         self.configure_raises: Exception | None = None
+        self.velocities: np.ndarray | None = None
         self.attempts = 0
         self.blocked = False
-        self.velocities: np.ndarray | None = None  # what the joints read as running at, when the test says
 
     def configure(self, model, end_effector, serv_ip, clear_error, timeout=20.0) -> None:
         self.attempts += 1
@@ -59,6 +63,11 @@ class FakeArm(trossen_driver._FakeTrossen):
             raise self.write_raises
         super().set_all_positions(goal_positions, goal_time, blocking)
 
+    def set_gripper_position(self, goal_position, goal_time=2.0, blocking=True) -> None:
+        if self.write_raises is not None:
+            raise self.write_raises
+        super().set_gripper_position(goal_position, goal_time, blocking)
+
     def _servo(self) -> None:
         if not self.blocked:
             super()._servo()
@@ -72,25 +81,40 @@ def _driven(arm: FakeArm, clock: MockClock | None = None, stop: StopFlag | None 
     return driver, states, driver.run(stop or StopFlag(), clock or MockClock())
 
 
+def _settle(loop, ticks: int = 400) -> None:
+    """Run the loop long enough for the arm to reach what it was last asked for.
+
+    Every setpoint is held to what the joints may travel in one tick, so arriving takes many of them.
+    """
+    for _ in range(ticks):
+        next(loop)
+
+
+def _held(arm: FakeArm) -> np.ndarray:
+    return np.asarray(arm.goals[-1][:ARM])
+
+
+def _at_home(commands: ManualCommandReceiver, loop) -> None:
+    commands.push(command.JointPosition(HOME))
+    _settle(loop)
+
+
 def test_the_link_is_written_only_once_something_has_asked_for_a_setpoint():
-    """A goal time re-sent every tick restarts the trajectory it plans, so a held setpoint is not rewritten."""
+    """An arm already held where it stands is not written to again."""
     arm = FakeArm()
     driver, _, loop = _driven(arm)
     grip = ManualCommandReceiver()
     driver.target_grip._bind(grip)
 
     next(loop)  # entering position mode writes the hold the servo starts from
-    written = len(arm.goals)
+    written = len(arm.goals) + len(arm.gripper_goals)
     for _ in range(3):  # and nothing has asked since
         next(loop)
-    assert len(arm.goals) == written
+    assert len(arm.goals) + len(arm.gripper_goals) == written
 
     grip.push(0.25)
     next(loop)
-    assert len(arm.goals) == written + 1
-
-    next(loop)
-    assert len(arm.goals) == written + 1
+    assert len(arm.goals) + len(arm.gripper_goals) == written + 1
 
 
 def test_an_open_grip_reaches_the_arm_as_the_joint_at_its_upper_limit():
@@ -103,7 +127,7 @@ def test_an_open_grip_reaches_the_arm_as_the_joint_at_its_upper_limit():
     grip.push(0.0)
     next(loop)
 
-    assert arm.goals[-1][trossen_driver._GRIPPER_JOINT] == pytest.approx(GRIP_TRAVEL_M)
+    assert arm.gripper_goals[-1] == pytest.approx(GRIP_TRAVEL_M)
 
 
 def test_a_closed_grip_reaches_the_arm_as_the_joint_at_its_lower_limit():
@@ -115,7 +139,7 @@ def test_a_closed_grip_reaches_the_arm_as_the_joint_at_its_lower_limit():
     grip.push(1.0)
     next(loop)
 
-    assert arm.goals[-1][trossen_driver._GRIPPER_JOINT] == pytest.approx(0.0)
+    assert arm.gripper_goals[-1] == pytest.approx(0.0)
 
 
 def test_the_joint_the_arm_reports_comes_back_as_a_normalized_grip():
@@ -149,9 +173,27 @@ def test_a_streamed_joint_command_reaches_the_arm():
     driver.commands._bind(commands)
 
     commands.push(command.JointPosition(JOGGED))
+    _settle(loop)
+
+    np.testing.assert_allclose(_held(arm), JOGGED, atol=1e-6)
+
+
+def test_a_setpoint_never_asks_a_joint_for_more_than_it_may_travel_in_a_tick():
+    """Past its velocity limit the controller faults and drops the arm, so no goal may ask for that."""
+    arm = FakeArm()
+    driver, _, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
     next(loop)
 
-    np.testing.assert_allclose(arm.goals[-1][: trossen_driver._ARM_JOINTS], JOGGED)
+    commands.push(command.JointPosition(np.array([3.0, 3.0, 2.0, 1.5, 1.5, 3.0])))
+    for _ in range(40):
+        next(loop)
+
+    per_tick = np.array([limit.velocity_max for limit in arm.get_joint_limits()[:ARM]])
+    per_tick = per_tick * trossen_driver._COMMANDED_SHARE / trossen_driver._HZ
+    steps = np.abs(np.diff(np.array([goal[:ARM] for goal in arm.goals]), axis=0))
+    assert np.all(steps <= per_tick + 1e-9), steps.max(axis=0)
 
 
 def test_a_joint_target_outside_the_range_is_clipped_to_it():
@@ -162,24 +204,36 @@ def test_a_joint_target_outside_the_range_is_clipped_to_it():
     driver.commands._bind(commands)
 
     commands.push(command.JointPosition(np.array([0.0, -1.0, 0.0, 0.0, 0.0, 0.0])))
-    next(loop)
+    _settle(loop)
 
-    assert arm.goals[-1][1] == pytest.approx(0.0)
+    assert _held(arm)[1] == pytest.approx(0.0)
 
 
-def test_a_streamed_command_the_arm_cannot_be_put_at_leaves_it_where_it_is():
-    """A command stream cannot end the run: the next command supersedes one that could not be applied."""
+def test_a_streamed_command_the_arm_cannot_be_put_at_leaves_it_where_it_is(monkeypatch):
+    """A command stream cannot end the run: the next command supersedes one that could not be applied.
+
+    Every target is brought within a step of where the arm stands before it is solved, so one the solver
+    cannot reach is rare enough that the solver is what stands in for it here.
+    """
     arm = FakeArm()
     driver, _, loop = _driven(arm)
     commands = ManualCommandReceiver()
     driver.commands._bind(commands)
+    _at_home(commands, loop)
+    where_it_is = _held(arm)
 
-    next(loop)
-    written = len(arm.goals)
-    commands.push(command.CartesianPosition(geom.Transform3D(np.array([0.3, 0.0, 0.2]))))
+    monkeypatch.setattr(trossen_driver._Kinematics, 'ik', lambda self, target, current_q: None)
+    commands.push(command.CartesianPosition(geom.Transform3D(np.array([3.0, 0.0, 0.2]))))
     next(loop)
 
-    assert len(arm.goals) == written  # nothing new was written
+    np.testing.assert_allclose(_held(arm), where_it_is, atol=1e-6)
+
+
+def _reject_writes(arm: FakeArm, commands: ManualCommandReceiver, loop) -> None:
+    """Break the command half of the link, and give the driver a setpoint that finds out."""
+    arm.write_raises = trossen_driver.trossen_arm.RuntimeError('Broken pipe')
+    commands.push(command.JointPosition(JOGGED))
+    next(loop)
 
 
 def test_a_read_that_raises_reads_error_and_the_run_carries_on():
@@ -215,13 +269,6 @@ def test_an_arm_that_stops_streaming_reads_error_though_the_read_still_answers()
     assert states.emitted[-1][1].status == RobotStatus.AVAILABLE
 
 
-def _refuse_the_next_write(arm: FakeArm, commands: ManualCommandReceiver, loop) -> None:
-    """Break the command half of the link, and give the driver a setpoint that finds out."""
-    arm.write_raises = trossen_driver.trossen_arm.RuntimeError('Broken pipe')
-    commands.push(command.JointPosition(JOGGED))
-    next(loop)
-
-
 def test_a_setpoint_the_link_refuses_reads_error_and_stops_the_writes():
     arm = FakeArm()
     driver, states, loop = _driven(arm)
@@ -230,7 +277,7 @@ def test_a_setpoint_the_link_refuses_reads_error_and_stops_the_writes():
 
     next(loop)
     written = len(arm.goals)
-    _refuse_the_next_write(arm, commands, loop)
+    _reject_writes(arm, commands, loop)
     assert states.emitted[-1][1].status == RobotStatus.ERROR
 
     for _ in range(5):  # a refused write is not retried a hundred times a second
@@ -246,7 +293,7 @@ def test_telemetry_alone_does_not_bring_a_refused_command_channel_back():
     driver.commands._bind(commands)
     next(loop)
 
-    _refuse_the_next_write(arm, commands, loop)
+    _reject_writes(arm, commands, loop)
     arm.write_raises = None  # the wire is back, but the session the controller dropped is not
     for _ in range(5):
         next(loop)
@@ -264,7 +311,7 @@ def test_a_link_that_stays_down_gets_a_new_session_and_the_arm_answers_again():
     next(loop)
     assert arm.sessions == 1
 
-    _refuse_the_next_write(arm, commands, loop)
+    _reject_writes(arm, commands, loop)
     assert states.emitted[-1][1].status == RobotStatus.ERROR
 
     arm.write_raises = None
@@ -284,16 +331,15 @@ def test_a_new_session_holds_the_arm_where_it_finds_it():
     driver.commands._bind(commands)
 
     commands.push(command.JointPosition(JOGGED))
-    for _ in range(30):  # let the arm arrive, so its own position is not the zero it booted at
-        next(loop)
+    _settle(loop)
     where_it_is = np.asarray(arm.get_robot_output().joint.arm.positions)
 
-    _refuse_the_next_write(arm, commands, loop)
+    _reject_writes(arm, commands, loop)
     arm.write_raises = None
     clock.advance(trossen_driver._RECONNECT_AFTER_S + 0.01)
     next(loop)
 
-    np.testing.assert_allclose(arm.goals[-1][: trossen_driver._ARM_JOINTS], where_it_is, atol=1e-3)
+    np.testing.assert_allclose(_held(arm), where_it_is, atol=1e-3)
 
 
 def test_a_new_session_that_fails_is_tried_again_further_and_further_apart():
@@ -305,7 +351,7 @@ def test_a_new_session_that_fails_is_tried_again_further_and_further_apart():
     driver.commands._bind(commands)
     next(loop)
 
-    _refuse_the_next_write(arm, commands, loop)
+    _reject_writes(arm, commands, loop)
     arm.configure_raises = trossen_driver.trossen_arm.RuntimeError('Network is unreachable')
     clock.advance(trossen_driver._RECONNECT_AFTER_S + 0.01)
     for _ in range(20):  # many ticks inside one reconnect interval, one attempt between them
@@ -323,21 +369,6 @@ def test_a_new_session_that_fails_is_tried_again_further_and_further_apart():
     assert arm.sessions == 1  # none of them took
 
 
-def test_a_run_that_ends_on_a_dead_link_still_gives_the_handle_back():
-    """Setting the arm idle is what the run tries last, and an arm it cannot reach must not end it badly."""
-    arm = FakeArm()
-    stop = StopFlag()
-    _, _, loop = _driven(arm, stop=stop)
-
-    next(loop)
-    arm.write_raises = trossen_driver.trossen_arm.RuntimeError('Connection reset by peer')
-    stop.stopped = True
-    with pytest.raises(StopIteration):
-        next(loop)
-
-    assert arm.cleaned_up
-
-
 def test_a_sync_move_answers_once_the_arm_reads_back_at_its_target(world):
     arm = FakeArm()
     clock = MockClock()
@@ -346,31 +377,13 @@ def test_a_sync_move_answers_once_the_arm_reads_back_at_its_target(world):
     wire_call(world, caller, driver.sync_move)
 
     answer = caller(command.JointPosition(JOGGED))
-    for _ in range(60):
+    for _ in range(400):
         if answer.done():
             break
         next(loop)
     answer.result()
 
     np.testing.assert_allclose(states.emitted[-1][1].q, JOGGED, atol=trossen_driver._ARRIVED_TOL)
-
-
-def test_a_sync_move_hands_the_firmware_a_goal_time_and_a_streamed_setpoint_does_not(world):
-    """The firmware plans the trajectory a move asks for; a streamed setpoint is one tick away already."""
-    arm = FakeArm()
-    driver, _, loop = _driven(arm)
-    commands = ManualCommandReceiver()
-    driver.commands._bind(commands)
-    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
-    wire_call(world, caller, driver.sync_move)
-
-    commands.push(command.JointPosition(JOGGED))
-    next(loop)
-    assert arm.goal_times[-1] == pytest.approx(trossen_driver._STREAM_GOAL_TIME_S)
-
-    caller(command.JointPosition(np.zeros(6)))
-    next(loop)
-    assert arm.goal_times[-1] == pytest.approx(trossen_driver._MOVE_GOAL_TIME_S)
 
 
 def test_a_move_the_world_stops_under_is_handed_back_to_its_asker(world):
@@ -392,142 +405,19 @@ def test_a_move_the_world_stops_under_is_handed_back_to_its_asker(world):
         answer.result()
 
 
-HELD_POSE = geom.Transform3D(np.array([0.254, -0.0039, 0.1618]), geom.Rotation.from_rotvec(np.zeros(3)))
-
-
-def _pose_of(goal: list[float]) -> geom.Transform3D:
-    return geom.Transform3D(np.asarray(goal[:3]), geom.Rotation.from_rotvec(np.asarray(goal[3:6])))
-
-
-def test_a_streamed_cartesian_command_reaches_the_arm_as_a_pose():
-    """The controller speaks angle-axis where positronic speaks a rotation."""
+def test_a_run_that_ends_on_a_dead_link_still_gives_the_handle_back():
+    """Setting the arm idle is what the run tries last, and an arm it cannot reach must not end it badly."""
     arm = FakeArm()
-    driver, _, loop = _driven(arm)
-    commands = ManualCommandReceiver()
-    driver.commands._bind(commands)
+    stop = StopFlag()
+    _, _, loop = _driven(arm, stop=stop)
+
     next(loop)
-
-    target = geom.Transform3D(HELD_POSE.translation + np.array([0.01, 0.0, 0.0]), HELD_POSE.rotation)
-    commands.push(command.CartesianPosition(target))
-    next(loop)
-
-    reached = _pose_of(arm.poses[-1])
-    np.testing.assert_allclose(reached.translation, target.translation, atol=1e-6)
-    np.testing.assert_allclose(reached.rotation.as_quat, target.rotation.as_quat, atol=1e-6)
-
-
-def test_a_cartesian_delta_composes_onto_the_pose_the_controller_reports():
-    arm = FakeArm()
-    driver, states, loop = _driven(arm)
-    commands = ManualCommandReceiver()
-    driver.commands._bind(commands)
-    next(loop)
-    measured = states.emitted[-1][1].ee_pose
-
-    commands.push(command.CartesianDelta(geom.Transform3D(np.array([0.01, 0.0, 0.0]))))
-    next(loop)
-
-    expected = measured.translation + np.array([0.01, 0.0, 0.0])
-    np.testing.assert_allclose(_pose_of(arm.poses[-1]).translation, expected, atol=1e-5)
-
-
-def test_a_cartesian_target_out_of_reach_is_capped_to_one_step():
-    """A teleoperator reaching past the arm asks for a target that runs away from it."""
-    arm = FakeArm()
-    driver, _, loop = _driven(arm)
-    commands = ManualCommandReceiver()
-    driver.commands._bind(commands)
-    next(loop)
-    held = _pose_of(arm.poses[-1]) if arm.poses else HELD_POSE
-
-    commands.push(command.CartesianPosition(geom.Transform3D(held.translation + np.array([5.0, 0.0, 0.0]))))
-    next(loop)
-
-    step = np.linalg.norm(_pose_of(arm.poses[-1]).translation - held.translation)
-    assert step == pytest.approx(trossen_driver._MAX_STEP_M, abs=1e-6)
-
-
-def test_a_turn_the_long_way_round_is_capped_along_the_short_one():
-    """`as_rotvec` keeps the way round it was given, and a cap along it would drive the arm backwards."""
-    arm = FakeArm()
-    driver, states, loop = _driven(arm)
-    commands = ManualCommandReceiver()
-    driver.commands._bind(commands)
-    next(loop)
-    held = states.emitted[-1][1].ee_pose
-
-    away = geom.Rotation.from_rotvec(np.array([0.0, 0.0, np.deg2rad(350)]))
-    commands.push(command.CartesianPosition(geom.Transform3D(held.translation, held.rotation * away)))
-    next(loop)
-
-    turn = (held.rotation.inv * _pose_of(arm.poses[-1]).rotation).as_rotvec
-    assert np.linalg.norm(turn) == pytest.approx(trossen_driver._MAX_STEP_RAD, abs=1e-6)
-    assert turn[2] < 0  # ten degrees back, not three hundred and fifty forward
-
-
-def test_the_firmware_is_asked_to_check_the_path_before_it_starts_one():
-    arm = FakeArm()
-    driver, _, loop = _driven(arm)
-    commands = ManualCommandReceiver()
-    driver.commands._bind(commands)
-    next(loop)
-
-    commands.push(command.CartesianPosition(HELD_POSE))
-    next(loop)
-
-    assert arm.checked_samples[-1] == trossen_driver._TRAJECTORY_CHECK_SAMPLES
-
-
-def test_the_fingers_take_their_own_call_while_the_arm_holds_a_pose():
-    """A Cartesian goal names the arm alone, so one goal vector cannot carry both."""
-    arm = FakeArm()
-    driver, _, loop = _driven(arm)
-    commands = ManualCommandReceiver()
-    grip = ManualCommandReceiver()
-    driver.commands._bind(commands)
-    driver.target_grip._bind(grip)
-    next(loop)
-
-    commands.push(command.CartesianPosition(HELD_POSE))
-    next(loop)
-    poses = len(arm.poses)
-
-    grip.push(0.0)
-    next(loop)
-
-    assert arm.gripper_goals[-1] == pytest.approx(GRIP_TRAVEL_M)
-    assert len(arm.poses) == poses  # and the arm was not asked to plan its path again
-
-
-def test_a_cartesian_move_nobody_can_judge_the_arrival_of_is_refused(world):
-    """Arrival is judged from the joints, and a pose does not say which joints reach it."""
-    arm = FakeArm()
-    driver, _, loop = _driven(arm)
-    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
-    wire_call(world, caller, driver.sync_move)
-
-    answer = caller(command.CartesianPosition(HELD_POSE))
-    next(loop)
-
-    with pytest.raises(NotImplementedError):
-        answer.result()
-
-
-def test_a_cartesian_target_does_not_run_away_from_an_arm_that_is_held_up():
-    """Measured against the last target instead, the goal would store up travel to lunge through."""
-    arm = FakeArm()
-    driver, _, loop = _driven(arm)
-    commands = ManualCommandReceiver()
-    driver.commands._bind(commands)
-    next(loop)
-    out_of_reach = geom.Transform3D(HELD_POSE.translation + np.array([5.0, 0.0, 0.0]))
-
-    for _ in range(10):  # the fake has no kinematics, so its arm never leaves the pose it reports
-        commands.push(command.CartesianPosition(out_of_reach))
+    arm.write_raises = trossen_driver.trossen_arm.RuntimeError('Connection reset by peer')
+    stop.stopped = True
+    with pytest.raises(StopIteration):
         next(loop)
 
-    step = np.linalg.norm(_pose_of(arm.poses[-1]).translation - HELD_POSE.translation)
-    assert step == pytest.approx(trossen_driver._MAX_STEP_M, abs=1e-6)
+    assert arm.cleaned_up
 
 
 def test_an_arm_running_past_a_joint_limit_is_left_alone_until_it_slows():
@@ -540,13 +430,100 @@ def test_an_arm_running_past_a_joint_limit_is_left_alone_until_it_slows():
 
     arm.velocities = np.array([0.0, 0.0, 0.0, 0.0, 9.0, 0.0])  # joint 4 stops at 9.4248 rad/s
     commands.push(command.JointPosition(JOGGED))
-    next(loop)
-    held = arm.goals[-1]
+    for _ in range(5):
+        next(loop)
 
     assert states.emitted[-1][1].status == RobotStatus.ERROR
-    np.testing.assert_allclose(held[: trossen_driver._ARM_JOINTS], states.emitted[-1][1].q, atol=1e-6)
+    np.testing.assert_allclose(_held(arm), states.emitted[-1][1].q, atol=1e-3)
 
     arm.velocities = np.zeros(6)
     commands.push(command.JointPosition(JOGGED))
+    _settle(loop)
+    np.testing.assert_allclose(_held(arm), JOGGED, atol=1e-6)
+
+
+# --- Cartesian, which the driver solves itself ---
+
+
+def _ee(states: RecordingEmitter) -> geom.Transform3D:
+    return states.emitted[-1][1].ee_pose
+
+
+def test_the_pose_that_goes_out_is_the_one_the_joints_put_the_end_effector_at():
+    """Measured on the arm at rest: joints all but zero put ``ee_site`` here."""
+    arm = FakeArm()
+    _, states, loop = _driven(arm)
+
     next(loop)
-    np.testing.assert_allclose(arm.goals[-1][: trossen_driver._ARM_JOINTS], JOGGED)
+
+    np.testing.assert_allclose(_ee(states).translation, [0.2537, 0.0, 0.1635], atol=5e-4)
+
+
+def test_a_streamed_cartesian_command_takes_the_end_effector_there():
+    arm = FakeArm()
+    driver, states, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    _at_home(commands, loop)
+    target = geom.Transform3D(_ee(states).translation + np.array([0.0, 0.04, -0.03]), _ee(states).rotation)
+
+    for _ in range(60):  # the target is held, as a teleoperator holds one
+        commands.push(command.CartesianPosition(target))
+        _settle(loop, 10)
+
+    np.testing.assert_allclose(_ee(states).translation, target.translation, atol=2e-3)
+
+
+def test_a_cartesian_delta_composes_onto_the_pose_the_joints_put_the_arm_at():
+    arm = FakeArm()
+    driver, states, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    _at_home(commands, loop)
+    started = _ee(states).translation.copy()
+
+    commands.push(command.CartesianDelta(geom.Transform3D(np.array([0.0, 0.01, 0.0]))))
+    _settle(loop)
+
+    np.testing.assert_allclose(_ee(states).translation, started + np.array([0.0, 0.01, 0.0]), atol=2e-3)
+
+
+def test_a_cartesian_target_out_of_reach_is_solved_one_step_at_a_time():
+    """A teleoperator reaching past the arm asks for a target that runs away from it."""
+    arm = FakeArm()
+    driver, states, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    _at_home(commands, loop)
+    started = _ee(states).translation.copy()
+
+    commands.push(command.CartesianPosition(geom.Transform3D(started + np.array([0.0, 5.0, 0.0]))))
+    next(loop)
+
+    step = np.linalg.norm(_ee(states).translation - started)
+    assert step < trossen_driver._MAX_STEP_M + 1e-6
+
+
+def test_a_sync_move_to_a_pose_is_answered_like_any_other(world):
+    """A pose says which joints reach it once the driver solves for them, so a caller may wait on one.
+
+    Arrival is judged from the joints, within a tolerance that is a degree or so of each — which is
+    millimetres at the end effector, and why the pose is only checked that closely.
+    """
+    arm = FakeArm()
+    driver, states, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    _at_home(commands, loop)
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
+    wire_call(world, caller, driver.sync_move)
+    target = geom.Transform3D(_ee(states).translation + np.array([0.0, 0.01, 0.0]), _ee(states).rotation)
+
+    answer = caller(command.CartesianPosition(target))
+    for _ in range(400):
+        if answer.done():
+            break
+        next(loop)
+    answer.result()
+
+    np.testing.assert_allclose(_ee(states).translation, target.translation, atol=1e-2)

@@ -74,15 +74,10 @@ def _install_trossen_stub() -> None:
     class Model(Enum):
         wxai_v0 = 'wxai_v0'
 
-    class InterpolationSpace(Enum):
-        joint = 'joint'
-        cartesian = 'cartesian'
-
     module = types.ModuleType(TROSSEN)
     module.__dict__.update(
         Mode=Mode,
         Model=Model,
-        InterpolationSpace=InterpolationSpace,
         StandardEndEffector=types.SimpleNamespace(wxai_v0_follower=object()),
         TrossenArmDriver=object,
         RuntimeError=type('RuntimeError', (RuntimeError,), {}),

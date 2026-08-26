@@ -1,9 +1,14 @@
 """Driver for the Trossen WidowX AI arm — one Ethernet link carrying six joints plus the gripper.
 
-The controller firmware runs the servo loop and solves its own kinematics, so this driver streams joint
-setpoints and reads back the end-effector pose the firmware reports, rather than solving FK/IK itself.
-A streamed setpoint is applied without interpolation; a synchronous move hands the firmware a goal time
-and lets it plan the trajectory.
+The controller firmware runs the servo loop, and this driver solves FK/IK itself against the vendored MJCF
+(``assets/mujoco/trossen_wxai/wxai_follower.xml``) at ``ee_site`` — the frame the controller reports its own
+Cartesian position in. So every command reaches the arm as joints, which is what lets the driver hold each
+one to its own velocity limit before it goes out: past that limit the controller faults and drops the arm.
+
+The firmware solves Cartesian goals too, but each one on its own, knowing nothing of the last. Near a
+workspace boundary — the arm at rest sits on the lower limit of two joints — successive solutions come from
+different branches and the arm tears itself between them. Solving here, warm-started from where the arm
+stands, is what keeps the joints continuous.
 
 The gripper is the 7th joint, a prismatic finger drive the controller reports in meters. positronic
 speaks a normalized grip where 1 is closed, so grip converts against the travel the arm reports for that
@@ -21,14 +26,17 @@ from collections.abc import Callable, Iterator
 from types import SimpleNamespace
 from typing import Any
 
+import mujoco as mj
 import numpy as np
 
 import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
 from positronic.drivers.utils import DriverRun, MoveStatus, log_failure
+from positronic.utils import package_assets_path
 
 from . import RobotStatus, State, command
+from .ik import qpos_from_site_pose
 
 # trossen_arm lives in the `trossen` extra, which the type-check environment does not install.
 with vendor_import(
@@ -41,13 +49,11 @@ logger = logging.getLogger(__name__)
 _ARM_JOINTS = 6
 _GRIPPER_JOINT = 6
 _HZ = 100
-# Goal time for a streamed setpoint: one tick, so the firmware interpolates linearly across the gap to the
-# next one. At or below 0.001 s it applies the goal as a step instead, and asks the servo for whatever
-# acceleration closes the distance at once.
-_STREAM_GOAL_TIME_S = 1.0 / _HZ
-# Goal time for a synchronous move, which the firmware plans as a quintic trajectory above 0.2 s.
-_MOVE_GOAL_TIME_S = 2.0
-_MOVE_TIMEOUT_S = _MOVE_GOAL_TIME_S + 3.0
+# Goal time for a setpoint: one tick, so the firmware interpolates linearly across the gap to the next one.
+# At or below 0.001 s it applies the goal as a step instead, and asks the servo for whatever acceleration
+# closes the distance at once. Every setpoint is one tick away by construction, so this is the only one.
+_GOAL_TIME_S = 1.0 / _HZ
+_MOVE_TIMEOUT_S = 5.0  # a joint crosses its whole range well inside this at the speed below
 _ARRIVED_TOL = 0.02  # radians; the firmware reports position, so arrival is judged from the reading
 # How long the controller's clock may stand still before the link counts as down. Telemetry arrives at
 # over 200 Hz, so this is many missed frames, not a scheduling hiccup.
@@ -65,8 +71,14 @@ _RECONNECT_MAX_S = 30.0
 # The share of a joint's own velocity limit at which the driver stops driving. Past its limit the controller
 # faults and drops the arm to idle, so the driver stands down before it gets there.
 _VELOCITY_HEADROOM = 0.8
-# How many points along a planned Cartesian trajectory the firmware checks for a solution before it starts.
-_TRAJECTORY_CHECK_SAMPLES = 10
+# The share of that limit a commanded setpoint may ask for. Well under the guard above, so the arm reaching
+# it is the driver driving rather than something else moving the arm.
+_COMMANDED_SHARE = 0.25
+_MJCF_PATH = 'assets/mujoco/trossen_wxai/wxai_follower.xml'
+_EE_SITE = 'ee_site'
+_JOINT_NAMES = ('joint_0', 'joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5')
+_IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after clamping
+_IK_ROT_TOL = 1e-2  # radians
 # How far ahead of where the arm reads a streamed Cartesian target may sit. At the tick rate this allows
 # 1.5 m/s, which is faster than a hand moves, so it does not shape teleoperation.
 _MAX_STEP_M = 0.015
@@ -109,6 +121,73 @@ class TrossenState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[TrossenState.EE_POSE_OFFSET : TrossenState.EE_POSE_OFFSET + 3] = ee_pose.translation
         self.array[TrossenState.EE_POSE_OFFSET + 3 : TrossenState.EE_POSE_OFFSET + 7] = ee_pose.rotation.as_quat
         self.array[TrossenState.STATUS_OFFSET] = status.value
+
+
+def _reach_postures(x: float, y: float) -> list[np.ndarray]:
+    """IK warm-start candidates for reaching toward base-frame point (x, y).
+
+    Joint 0 swung to the target's azimuth, the arm unfolded to two heights. The arm rests on the lower limit
+    of joints 1 and 2, where half the directions have no solution at all, so a seed away from there is what
+    lets IK find one.
+    """
+    azimuth = np.arctan2(y, x)
+    return [np.array([azimuth, 1.571, 1.178, 0.0, 0.0, 0.0]), np.array([azimuth, 1.2, 1.5, 0.0, 0.4, 0.0])]
+
+
+class _Kinematics:
+    """FK/IK on the vendored MJCF at ``ee_site``, in the arm base frame.
+
+    ``mujoco`` exports every symbol below from a compiled extension, so a type checker cannot see them.
+    """
+
+    def __init__(self):
+        self._model = mj.MjModel.from_xml_path(package_assets_path(_MJCF_PATH))
+        self._data = mj.MjData(self._model)
+        self._site_id = mj.mj_name2id(self._model, mj.mjtObj.mjOBJ_SITE, _EE_SITE)
+        self._qpos_ids = np.array([self._model.joint(name).qposadr.item() for name in _JOINT_NAMES])
+        self._dof_ids = np.array([self._model.joint(name).dofadr.item() for name in _JOINT_NAMES])
+        ranges = np.array([self._model.joint(name).range for name in _JOINT_NAMES])
+        self.lower, self.upper = ranges[:, 0], ranges[:, 1]
+
+    def fk(self, q: np.ndarray) -> geom.Transform3D:
+        self._data.qpos[self._qpos_ids] = q
+        mj.mj_kinematics(self._model, self._data)
+        quat = np.empty(4)
+        mj.mju_mat2Quat(quat, self._data.site_xmat[self._site_id].copy())
+        return geom.Transform3D(self._data.site_xpos[self._site_id].copy(), geom.Rotation.from_quat(quat))
+
+    def ik(self, target: geom.Transform3D, current_q: np.ndarray) -> np.ndarray | None:
+        """Multi-start LM IK: where the arm stands first, then the reach postures toward the target.
+
+        Solutions are clamped into joint range and FK-verified before acceptance, so a target the arm cannot
+        reach comes back as nothing rather than as the nearest thing the solver stopped at.
+
+        A target that is reached costs about a quarter of a millisecond, and one that is not costs every
+        seed's full search — more than a tick. The caller keeps targets within a step of where the arm
+        stands, which is what keeps the second case rare.
+        """
+        for start in (current_q, *_reach_postures(*target.translation[:2])):
+            self._data.qpos[:] = 0.0
+            self._data.qpos[self._qpos_ids] = start
+            qpos, _, success = qpos_from_site_pose(
+                self._model,
+                self._data,
+                self._site_id,
+                self._dof_ids,
+                target.translation,
+                target.rotation.as_quat,
+                rot_weight=0.5,
+            )
+            if not success:
+                continue
+            q = np.clip(qpos[self._qpos_ids].copy(), self.lower, self.upper)
+            reached = self.fk(q)
+            turn = (reached.rotation.inv * target.rotation).as_rotvec
+            angle = float(np.linalg.norm(turn))
+            angle = min(angle, 2 * np.pi - angle)
+            if np.linalg.norm(reached.translation - target.translation) < _IK_POS_TOL and angle < _IK_ROT_TOL:
+                return q
+        return None
 
 
 def _configure(driver: Any, ip: str, timeout_s: float) -> None:
@@ -173,10 +252,14 @@ class _Arm(DriverRun[command.CommandType]):
         # The gripper joint's own travel, which grip is normalized against
         self._grip_travel = float(limits[_GRIPPER_JOINT].position_max - limits[_GRIPPER_JOINT].position_min)
         self._grip_closed = float(limits[_GRIPPER_JOINT].position_min)
+        self._dq_limit = np.array([limits[i].velocity_max for i in range(_ARM_JOINTS)])
+        self._dq_max = self._dq_limit * _VELOCITY_HEADROOM
+        self._step_max = self._dq_limit * _COMMANDED_SHARE / _HZ  # what a joint may travel in one tick
         self._output = driver.get_robot_output()
-        self._target: np.ndarray | geom.Transform3D = np.asarray(self._output.joint.arm.positions, dtype=np.float64)
+        self._kin = _Kinematics()
+        self._target = np.asarray(self._output.joint.arm.positions, dtype=np.float64)
+        self._sent = self._target.copy()
         self._grip_target = self._grip_of(self._output)
-        self._goal_time = _STREAM_GOAL_TIME_S
         self._arm_unsent, self._grip_unsent = False, False
         # The two halves of the link, which fail apart. Neither is `Moves.errored`, which says the arm is
         # not where the driver put it: a link that drops says nothing about the move.
@@ -187,7 +270,6 @@ class _Arm(DriverRun[command.CommandType]):
         self._reconnect_every = _RECONNECT_EVERY_S
         self._stamp = int(self._output.header.timestamp)
         self._stamp_at = clock.now()
-        self._dq_max = np.array([limits[i].velocity_max for i in range(_ARM_JOINTS)]) * _VELOCITY_HEADROOM
         self.overspeed = False
         self._complaint = ''
         self._complained_at = -_COMPLAIN_EVERY_S
@@ -280,12 +362,12 @@ class _Arm(DriverRun[command.CommandType]):
 
     @property
     def ee_pose(self) -> geom.Transform3D:
-        """The end-effector pose the firmware reports, in the arm base frame.
+        """Where the joints put the end effector, in the arm base frame.
 
-        The controller speaks angle-axis where positronic speaks a rotation.
+        Solved here rather than read from the controller so that the pose that goes out and the pose a
+        command is solved against are the same frame by construction. The two agree to 0.13 mm anyway.
         """
-        cartesian = np.asarray(self._output.cartesian.positions, dtype=np.float64)
-        return geom.Transform3D(cartesian[:3], geom.Rotation.from_rotvec(cartesian[3:6]))
+        return self._kin.fk(self.q)
 
     def settle(self) -> None:
         """Judge a move in flight against what the controller reports."""
@@ -294,7 +376,7 @@ class _Arm(DriverRun[command.CommandType]):
         if self.moves.settle(self.q, self.clock.now()) is MoveStatus.GAVE_UP:
             # Holding the target the arm stopped short of would resume the move once whatever blocked it
             # goes away, long after its asker was told it failed.
-            self._target, self._goal_time, self._arm_unsent = self.q, _STREAM_GOAL_TIME_S, True
+            self._target, self._arm_unsent = self.q, True
 
     def hold_grip(self, grip: float) -> None:
         """Hold the fingers at ``grip``."""
@@ -321,72 +403,70 @@ class _Arm(DriverRun[command.CommandType]):
             turn = turn * (_MAX_STEP_RAD / angle)
         return geom.Transform3D(held.translation + step, held.rotation * geom.Rotation.from_rotvec(turn))
 
-    def _target_of(self, cmd: command.CommandType) -> np.ndarray | geom.Transform3D:
-        """What ``cmd`` asks the arm to hold: joints clipped to their range, or a pose one step away."""
+    def _ik(self, pose: geom.Transform3D) -> np.ndarray:
+        """The joints that reach ``pose``; raises what the arm cannot reach."""
+        solution = self._kin.ik(self._stepped(pose), self.q)
+        if solution is None:
+            raise ValueError(f'{pose} is out of reach')
+        return solution
+
+    def _target_of(self, cmd: command.CommandType) -> np.ndarray:
+        """The joints ``cmd`` asks the arm to hold, clipped to the range the controller reports."""
         # TODO: accept the modes the arm can run instead of leaving them to what a command omits. Its joints
         # are position-servoed, so `PositionControl` names the law already running.
         command.require_native_mode(cmd, 'Trossen')
         match cmd:
             case command.JointPosition(positions):
-                return np.clip(np.asarray(positions, dtype=np.float64), self._q_lower, self._q_upper)
+                target = np.asarray(positions, dtype=np.float64)
             case command.JointDelta(velocities=delta):
                 target = self.q + np.asarray(delta, dtype=np.float64)
-                return np.clip(target, self._q_lower, self._q_upper)
             case command.CartesianPosition(pose):
-                return self._stepped(pose)
+                target = self._ik(pose)
             case command.CartesianDelta() as delta_cmd:
-                return self._stepped(delta_cmd.apply(self.ee_pose))
+                target = self._ik(delta_cmd.apply(self.ee_pose))
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
+        return np.clip(target, self._q_lower, self._q_upper)
 
     def track(self, cmd: command.CommandType) -> None:
         """Hold the arm at the setpoint ``cmd`` asks for, with nobody waiting on the arrival."""
-        self._target, self._goal_time, self._arm_unsent = self._target_of(cmd), _STREAM_GOAL_TIME_S, True
+        self._target, self._arm_unsent = self._target_of(cmd), True
 
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
-        """Hand the firmware the trajectory ``call`` asks for; ``settle`` answers it once the arm reads
-        back there."""
+        """Hold the arm where ``call`` asks; ``settle`` answers it once the controller reads back there."""
         with pimm.calls.raise_to(call):
             target = self._target_of(call.request)
-            if not isinstance(target, np.ndarray):
-                # Arrival is judged from the joints the controller reports, and a pose does not say which
-                # joints reach it. Solving that here is what host-side kinematics is for.
-                raise NotImplementedError('Trossen cannot answer a Cartesian move; ask for one in joint space')
-            self._target, self._goal_time, self._arm_unsent = target, _MOVE_GOAL_TIME_S, True
+            self._target, self._arm_unsent = target, True
             self.moves.accept(call, target, _ARRIVED_TOL, self.clock.now(), _MOVE_TIMEOUT_S)
 
-    def _put_goal(self) -> None:
-        """Hand the controller the goal it is being held at, fingers included where one call carries both.
+    def _setpoint(self) -> np.ndarray:
+        """The joints to ask for this tick: the target, brought within one tick's travel of the arm.
 
-        All seven joints are in position mode, which ``set_all_positions`` requires. A Cartesian goal names
-        the arm alone, so the fingers take their own call. ``num_trajectory_check_samples`` makes the
-        firmware refuse a path it cannot solve rather than start one and fail part-way.
+        This is where a joint's own velocity limit is kept. Past it the controller faults and drops the arm,
+        and a goal it has to cross the workspace to reach would ask for exactly that.
+        """
+        return self.q + np.clip(self._target - self.q, -self._step_max, self._step_max)
+
+    def _put_goal(self, setpoint: np.ndarray, move_arm: bool) -> None:
+        """Hand the controller this tick's setpoint, fingers included where one call carries both.
+
+        All seven joints are in position mode, which ``set_all_positions`` requires; the fingers take their
+        own call where the arm is already being held where it is asked to be.
         """
         grip_m = self._grip_metres(self._grip_target)
-        if isinstance(self._target, np.ndarray):
-            self.driver.set_all_positions([*self._target, grip_m], self._goal_time, False)
-            self._arm_unsent, self._grip_unsent = False, False
-            return
-        pose = [*self._target.translation, *self._target.rotation.as_rotvec]
-        if self._arm_unsent:
-            self.driver.set_cartesian_positions(
-                pose,
-                trossen_arm.InterpolationSpace.joint,
-                self._goal_time,
-                False,
-                num_trajectory_check_samples=_TRAJECTORY_CHECK_SAMPLES,
-            )
-            self._arm_unsent = False
-        if self._grip_unsent:
-            self.driver.set_gripper_position(grip_m, self._goal_time, False)
-            self._grip_unsent = False
+        if move_arm:
+            self.driver.set_all_positions([*setpoint, grip_m], _GOAL_TIME_S, False)
+        else:
+            self.driver.set_gripper_position(grip_m, _GOAL_TIME_S, False)
 
     def write(self) -> None:
-        """Put the setpoint on the link, if anything has asked for one since it was last written."""
-        if not (self._arm_unsent or self._grip_unsent):
+        """Put this tick's setpoint on the link, unless the arm is already being held at it."""
+        setpoint = self._setpoint()
+        move_arm = self._arm_unsent or not np.allclose(setpoint, self._sent, atol=1e-4)
+        if not (move_arm or self._grip_unsent):
             return
         try:
-            self._put_goal()
+            self._put_goal(setpoint, move_arm)
         # rules-allow: swallowed-error — a link that refuses a write reads ERROR; the setpoint stays unsent
         # and goes out again on the next session
         except trossen_arm.RuntimeError as exc:
@@ -394,6 +474,9 @@ class _Arm(DriverRun[command.CommandType]):
             self._command_dead = True
             self._note_link(self.clock.now())
             return
+        if move_arm:
+            self._sent, self._arm_unsent = setpoint, False
+        self._grip_unsent = False
         self._command_dead = False
         self._note_link(self.clock.now())
 
@@ -429,7 +512,7 @@ class _Arm(DriverRun[command.CommandType]):
 
     def stand_down(self) -> None:
         """Hold the arm where it reads, so nothing is driving it while it runs too fast."""
-        self._target, self._goal_time, self._arm_unsent = self.q, _STREAM_GOAL_TIME_S, True
+        self._target, self._arm_unsent = self.q, True
         self.write()
 
     def publish(self) -> None:
@@ -514,8 +597,8 @@ class Robot(pimm.ControlSystem):
 class _FakeTrossen:
     """First-order-lag echo of the 7-joint arm, so the ``--fake`` smoke runs without hardware.
 
-    Duck-types the slice of ``TrossenArmDriver`` the driver uses. It models the link and the servo, not
-    the kinematics: the Cartesian reading it reports is a constant.
+    Duck-types the slice of ``TrossenArmDriver`` the driver uses. It models the link and the servo; the
+    kinematics are the driver's own, so the joints it reports are the whole of what it says.
     """
 
     # What the arm reports for itself, read off a wxai_v0 controller on firmware 1.11.1
@@ -528,7 +611,6 @@ class _FakeTrossen:
         (-3.141593, 3.141593, 9.4248),
         (0.0, 0.04, 0.25),
     ]
-    _CARTESIAN = [0.254, -0.0039, 0.1618, -0.0086, 0.009, -0.0179]
 
     class _Limit:
         def __init__(self, lower: float, upper: float, velocity_max: float):
@@ -538,7 +620,7 @@ class _FakeTrossen:
 
     _TICK_US = 5000  # the controller streams faster than the driver reads, so its clock moves every read
 
-    def __init__(self, alpha: float = 0.3):
+    def __init__(self, alpha: float = 1.0):
         self._alpha = alpha
         self._position = np.zeros(7)  # the arm boots with the fingers closed
         self._velocity = np.zeros(7)
@@ -547,9 +629,7 @@ class _FakeTrossen:
         self.sessions = 1
         self.mode: Any = None
         self.goals: list[list[float]] = []
-        self.poses: list[list[float]] = []
         self.goal_times: list[float] = []
-        self.checked_samples: list[int] = []
         self.gripper_goals: list[float] = []
         self._gripper_goal: float | None = None
         self.cleaned_up = False
@@ -572,22 +652,11 @@ class _FakeTrossen:
         arm = SimpleNamespace(positions=self._position[:_ARM_JOINTS].copy(), velocities=self._velocity[:6].copy())
         gripper = SimpleNamespace(position=float(self._position[_GRIPPER_JOINT]))
         return SimpleNamespace(
-            joint=SimpleNamespace(arm=arm, gripper=gripper),
-            cartesian=SimpleNamespace(positions=list(_FakeTrossen._CARTESIAN)),
-            header=SimpleNamespace(timestamp=self._stamp),
+            joint=SimpleNamespace(arm=arm, gripper=gripper), header=SimpleNamespace(timestamp=self._stamp)
         )
 
     def set_all_modes(self, mode: Any) -> None:
         self.mode = mode
-
-    def set_cartesian_positions(
-        self, goal_positions, interpolation_space, goal_time=2.0, blocking=True, num_trajectory_check_samples=0
-    ) -> None:
-        if self.mode is not trossen_arm.Mode.position:
-            raise trossen_arm.RuntimeError(f'a Cartesian goal needs every joint in position mode, not {self.mode}')
-        self.poses.append([float(v) for v in goal_positions])
-        self.goal_times.append(float(goal_time))
-        self.checked_samples.append(int(num_trajectory_check_samples))
 
     def set_gripper_position(self, goal_position, goal_time=2.0, blocking=True) -> None:
         if self.mode is not trossen_arm.Mode.position:
@@ -658,13 +727,13 @@ if __name__ == '__main__':
         # Grip round-trip: polarity inverted on the way out (goal) and on the way back (reading).
         target_grip.emit(0.0)
         pump(0.5)
-        if fake is not None:
-            assert abs(fake.goals[-1][_GRIPPER_JOINT] - 0.04) < 1e-6, fake.goals[-1]  # grip 0 open -> full travel
+        if fake is not None:  # grip 0 open -> the joint at the far end of its travel
+            assert abs(fake.gripper_goals[-1] - 0.04) < 1e-6, fake.gripper_goals[-1]
         assert abs(grip.value) < 0.02, grip.value
         target_grip.emit(1.0)
         pump(0.5)
         if fake is not None:
-            assert abs(fake.goals[-1][_GRIPPER_JOINT]) < 1e-6, fake.goals[-1]
+            assert abs(fake.gripper_goals[-1]) < 1e-6, fake.gripper_goals[-1]
         assert abs(grip.value - 1.0) < 0.02, grip.value
 
         # A streamed joint setpoint nobody waits on.
