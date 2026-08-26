@@ -9,7 +9,7 @@ import pytest
 
 import pimm
 from pimm.tests.testing import MockClock, wire_call
-from positronic import geom, keys
+from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, command, franka
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import MoveAbandoned
@@ -151,7 +151,7 @@ class FakeDesk:
         pass
 
     def safety_status(self) -> dict[str, Any]:
-        return {'safeInputState': dict(self.safe_inputs)}
+        return {franka.SAFE_INPUT_STATE: dict(self.safe_inputs)}
 
 
 @pytest.fixture
@@ -675,7 +675,7 @@ def test_a_safe_input_that_stays_triggered_ends_the_move(desk):
     with pytest.raises(RuntimeError, match='stopped short'):
         _run_move(travel, clock)
 
-    assert clock.now() >= franka._SAFE_STOP_WAIT_S, 'the move gave up before it had waited out the stop'
+    assert clock.now() >= franka._Arm._SAFE_STOP_WAIT_S, 'the move gave up before it had waited out the stop'
     assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == 0, 'a latched stop was answered with a recovery'
     assert arm.calls.count(Call.SET_TARGET_JOINTS) == 1, 'a latched stop was answered with a fresh target'
 
@@ -696,7 +696,7 @@ def test_a_world_that_comes_down_while_a_safe_input_is_triggered_ends_the_move(d
     with pytest.raises(RuntimeError, match='stopped short'):
         _run_move(travel, clock)
 
-    assert clock.now() < franka._SAFE_STOP_WAIT_S, 'the shutdown waited out the safe input'
+    assert clock.now() < franka._Arm._SAFE_STOP_WAIT_S, 'the shutdown waited out the safe input'
 
 
 def test_a_move_the_arm_refuses_with_every_safe_input_clear_fails_at_once(desk):
@@ -735,14 +735,14 @@ def test_a_safe_input_that_stops_every_attempt_gives_the_move_up(desk):
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())
     clock = MockClock()
-    readings = iter([{'x31': STOPPED}, {'x31': CLEAR}] * (franka._SAFE_STOP_RETRIES + 2))
-    desk.safety_status = lambda: {'safeInputState': next(readings)}
+    readings = iter([{'x31': STOPPED}, {'x31': CLEAR}] * (franka._Arm._SAFE_STOP_RETRIES + 2))
+    desk.safety_status = lambda: {franka.SAFE_INPUT_STATE: next(readings)}
     travel = _arm(driver, clock).move_to(JOGGED, None)
 
     with pytest.raises(RuntimeError, match='stopped short'):
         _run_move(travel, clock)
 
-    assert arm.calls.count(Call.SET_TARGET_JOINTS) == 1 + franka._SAFE_STOP_RETRIES
+    assert arm.calls.count(Call.SET_TARGET_JOINTS) == 1 + franka._Arm._SAFE_STOP_RETRIES
 
 
 def test_the_driver_logs_a_safe_input_that_changes(desk, caplog):
@@ -776,20 +776,17 @@ def test_the_driver_logs_the_move_the_arm_refused_with_the_reason_it_gave(desk, 
     assert caplog.text.count('The arm refused a move: scripted') == 1, 'the wall of refusals was logged in full'
 
 
-def test_an_episode_carries_how_often_a_safe_input_stopped_the_arm(desk, world):
-    """`eval.ended_by` says a person ended an episode; this says whether the rig is why they did."""
+def test_a_run_carries_on_after_a_safe_input_stopped_a_move(desk, world):
+    """What the recovery is for: the failure that ends the run reaches the driver through a sync move."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
-    metas = RecordingEmitter()
-    driver.robot_meta._bind(metas)
+    driver.state._bind(RecordingEmitter())
     move = _mover(world, driver)
     clock = MockClock()
     loop = driver.run(StopFlag(), clock)
 
     for _ in range(3):  # init + the opening move
         next(loop)
-    assert metas.emitted[-1][1][keys.SAFE_STOP_TRIPS] == 0
-
     desk.safe_inputs['x31'] = STOPPED
     arm.goal_status = franka.pf.GoalStatus.ABORTED
     answer = move(command.JointPosition(JOGGED))
@@ -802,8 +799,8 @@ def test_an_episode_carries_how_often_a_safe_input_stopped_the_arm(desk, world):
         next(loop)
 
     answer.result()
-    next(loop)
-    assert metas.emitted[-1][1][keys.SAFE_STOP_TRIPS] == 1
+    np.testing.assert_allclose(arm.q, JOGGED)
+    next(loop)  # and the loop goes on rather than raising
 
 
 def test_a_commands_mode_reaches_the_arm_with_the_gains_it_named(desk):

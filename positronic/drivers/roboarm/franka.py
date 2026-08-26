@@ -103,19 +103,12 @@ _MESH_DIR = Path(__file__).resolve().parent.parent.parent / 'assets/fr3_collisio
 # Where the driver leaves the arm: taking control it travels here, and handing it back it returns here.
 _PARK_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 
-# How often the watch thread reads the safe inputs. A recovery does not depend on that thread: a move
-# that fails takes a reading of its own.
+# How often the watch thread reads the safe inputs, and how often a move waiting on one reads them.
 _SAFE_INPUT_POLL_S = 0.5
-# How long a move waits for a triggered safe input to clear before it fails. The longest interval a
-# safe input stayed triggered in this rig's safety log is 4 s.
-_SAFE_STOP_WAIT_S = 15.0
-# How many times one move may be made again after a safe input stopped it.
-_SAFE_STOP_RETRIES = 2
-# How long the arm must accept moves again before the count of the moves it refused is logged.
-_REFUSAL_QUIET_S = 2.0
-# Desk's own words for a safe input that permits motion. The control box answers a phrase, and its
-# safety log records the same two: 'Not triggered (Motion permitted)' and 'Triggered (Motion
-# prohibited)'.
+# The field Desk answers the safe inputs in, and its own words for one that permits motion. The control
+# box answers a phrase, and its safety log records the same two: 'Not triggered (Motion permitted)' and
+# 'Triggered (Motion prohibited)'.
+SAFE_INPUT_STATE = 'safeInputState'
 _MOTION_PERMITTED = 'not triggered'
 
 
@@ -178,7 +171,7 @@ class _SafeInputs:
                     desk = Desk(self._ip, *credentials)
                     desk._authenticate()  # Desk publishes the read; the login behind it stays underscored
                     self._desk = desk
-                self._note(desk.safety_status()['safeInputState'])
+                self._note(desk.safety_status()[SAFE_INPUT_STATE])
         # rules-allow: swallowed-error — a control box that stops answering must not end the run. The reading
         # goes stale instead, which leaves every move the outcome it has where Desk is unmanaged.
         except Exception as exc:
@@ -228,6 +221,13 @@ class _Arm(DriverRun[command.CommandType]):
     _MAX_JOINT_VELOCITY = np.array([2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26])
     # On top of the travel itself: the robot's controller ramps in and out of its speed cap, and settles late
     _MOVE_GRACE_S = 5.0
+    # How long a move waits for a triggered safe input to clear before it fails. The longest interval a safe
+    # input stayed triggered in this rig's safety log is 4 s.
+    _SAFE_STOP_WAIT_S = 15.0
+    # How many times one move may be made again after a safe input stopped it.
+    _SAFE_STOP_RETRIES = 2
+    # How long the arm must accept moves again before the count of the moves it refused is logged.
+    _REFUSAL_QUIET_S = 2.0
 
     def __init__(
         self,
@@ -312,7 +312,7 @@ class _Arm(DriverRun[command.CommandType]):
         refused = goal.status is pf.GoalStatus.ABORTED
         if refused and not self._refused:
             self._refusals += 1
-            self._quiet_at = self.clock.now() + _REFUSAL_QUIET_S
+            self._quiet_at = self.clock.now() + self._REFUSAL_QUIET_S
             if self._refusals == 1:
                 logger.warning(f'The arm refused a move: {goal.reason or goal.status}')
         self._refused = refused
@@ -322,33 +322,27 @@ class _Arm(DriverRun[command.CommandType]):
             self._refusals = 0
 
     def _safe_stop_cleared(self, since: int, *, at_teardown: bool) -> Generator[pimm.Command, None, bool]:
-        """Wait out a safe input that stopped a move, and clear the fault it left behind.
+        """Whether a safe input stopped the move that has just failed, and has since cleared.
 
-        The driver answers no other fault with a recovery: a fault it cannot explain may have moved the arm,
-        and a fresh target would then be motion in answer to it. A safe input is the one exception, because a
-        real stop LATCHES the input triggered until a person releases it. One that clears on its own was
-        never a stop: the arm has not moved, and the target below is the one the caller already asked for.
-
-        False where nothing attributes the failure to a safe input, where the input stayed triggered, and
-        where the world came down while it waited. Each leaves the caller the failure it had.
+        Yields until it clears. False where nothing attributes the failure to a safe input, where the
+        input stayed triggered for ``_SAFE_STOP_WAIT_S``, and where the world came down while it waited.
         """
         watch = self.safe_inputs
         watch.sample()
         if not watch.stopped_the_arm(since):
             return False
-        logger.warning(f'A safe input stopped the move; waiting up to {_SAFE_STOP_WAIT_S:.0f}s for it to clear')
-        deadline = self.clock.now() + _SAFE_STOP_WAIT_S
+        wait_s = self._SAFE_STOP_WAIT_S
+        logger.warning(f'A safe input stopped the move; waiting up to {wait_s:.0f}s for it to clear')
+        deadline = self.clock.now() + wait_s
         while not watch.motion_permitted:
             if self.should_stop.value and not at_teardown:
                 logger.warning('The world stopped while a safe input was triggered; the move fails')
                 return False
             if self.clock.now() >= deadline:
-                logger.error(f'A safe input stayed triggered for {_SAFE_STOP_WAIT_S:.0f}s; the move fails')
+                logger.error(f'A safe input stayed triggered for {wait_s:.0f}s; the move fails')
                 return False
             yield pimm.Sleep(_SAFE_INPUT_POLL_S)
             watch.sample()
-        self.robot.recover_from_errors()
-        logger.warning('Every safe input is clear; making the move again')
         return True
 
     def move_to(
@@ -356,18 +350,23 @@ class _Arm(DriverRun[command.CommandType]):
     ) -> Generator[pimm.Command, None, MoveStatus]:
         """Travel to ``target`` under ``mode``, yielding until it arrives.
 
-        A move a safe input stopped is made again, up to ``_SAFE_STOP_RETRIES`` times.
+        A move a safe input stopped is made again, up to ``_SAFE_STOP_RETRIES`` times. No other fault earns
+        a recovery: one the driver cannot explain may have moved the arm, and a fresh target would then be
+        motion in answer to it. A safe input is the exception because a real stop LATCHES it triggered until
+        a person releases it, so one that clears on its own moved nothing.
 
         ``at_teardown`` is for the move the driver makes on its way out. The stop is already set by then, so
         heeding it would abandon the move before it began, and recovering from a fault cancels the goal.
         """
-        for _ in range(_SAFE_STOP_RETRIES):
+        for _ in range(self._SAFE_STOP_RETRIES):
             since = self.safe_inputs.trips
             try:
                 return (yield from self._travel_to(target, mode, at_teardown=at_teardown))
             except Exception:
                 if not (yield from self._safe_stop_cleared(since, at_teardown=at_teardown)):
                     raise
+                self.robot.recover_from_errors()  # the stop faulted the arm; the target is unchanged
+                logger.warning('Every safe input is clear; making the move again')
         return (yield from self._travel_to(target, mode, at_teardown=at_teardown))
 
     def _travel_to(
@@ -616,9 +615,7 @@ class Robot(pimm.ControlSystem):
         with self._desk_session(), safe_inputs, self._arm(should_stop, clock, safe_inputs) as arm:
             robot = arm.robot
             self._init_robot(robot)
-            meta = Robot._build_robot_meta(robot)
-            trips = safe_inputs.trips
-            self.robot_meta.emit(meta | {roboarm_keys.SAFE_STOP_TRIPS: trips})
+            self.robot_meta.emit(Robot._build_robot_meta(robot))
 
             yield from arm.park()
 
@@ -628,9 +625,6 @@ class Robot(pimm.ControlSystem):
                 st = robot.state()
                 arm.publish(st)
                 arm.note_refusals()
-                if safe_inputs.trips != trips:
-                    trips = safe_inputs.trips
-                    self.robot_meta.emit(meta | {roboarm_keys.SAFE_STOP_TRIPS: trips})
 
                 in_error, entered_error = _check_error(st.error != 0, in_error)
                 if entered_error:
