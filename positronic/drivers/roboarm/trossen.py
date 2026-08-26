@@ -41,9 +41,10 @@ logger = logging.getLogger(__name__)
 _ARM_JOINTS = 6
 _GRIPPER_JOINT = 6
 _HZ = 100
-# Goal time for a streamed setpoint. At or below 0.001 s the firmware applies the goal without interpolation,
-# which is what a setpoint that is already one tick away needs.
-_STREAM_GOAL_TIME_S = 0.0
+# Goal time for a streamed setpoint: one tick, so the firmware interpolates linearly across the gap to the
+# next one. At or below 0.001 s it applies the goal as a step instead, and asks the servo for whatever
+# acceleration closes the distance at once.
+_STREAM_GOAL_TIME_S = 1.0 / _HZ
 # Goal time for a synchronous move, which the firmware plans as a quintic trajectory above 0.2 s.
 _MOVE_GOAL_TIME_S = 2.0
 _MOVE_TIMEOUT_S = _MOVE_GOAL_TIME_S + 3.0
