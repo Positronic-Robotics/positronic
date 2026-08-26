@@ -106,6 +106,14 @@ lance = [
 yam = [
     "i2rt",  # i2rt YAM arm: joint-space position-PD + gravity-comp over CAN; not on PyPI, see [tool.uv.sources]
 ]
+trossen = [
+    # Trossen WidowX AI arm, over Ethernet. The SDK version must match the arm firmware version.
+    "trossen-arm>=1.11",
+]
+realsense = [
+    # RealSense cameras. PyPI carries no macOS wheel and no sdist, so the marker keeps the lock resolvable there.
+    "pyrealsense2>=2.58.3; sys_platform != 'darwin'",
+]
 telemetry = [
     # `positronic eval run --timing` only: the OTel SDK + exporter that write the span sidecars, and the
     # machine-load sampler's probes.
