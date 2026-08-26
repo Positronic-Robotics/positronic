@@ -120,10 +120,10 @@ class _BlockingPolicy(DelegatingPolicy):
             super().__init__(inner)
             self._rt = rt
 
-        def __call__(self, obs: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+        def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict[str, Any]] | None:
             # The inner session reads an answer only on a later call. A test of ``in_flight`` would exit
             # on a call that lands while the session call runs, leaving its answer unread.
-            while (actions := self._inner(obs)) is None and self._rt.owes_an_answer:
+            while (actions := self._inner(obs, time_ns)) is None and self._rt.owes_an_answer:
                 self._rt.wait()
             return actions
 
@@ -132,11 +132,11 @@ class _BlockingPolicy(DelegatingPolicy):
             self._rt.close()
             self._inner.close()
 
-    def new_session(self, context=None, now=None, rt=None) -> Session:
+    def new_session(self, context=None, rt=None) -> Session:
         assert rt is None, 'a blocking policy serves its own functions; nothing above it runs them'
         own = Executor(self._inner.functions)
         try:
-            return _BlockingPolicy._Session(self._inner.new_session(context, now, own), own)
+            return _BlockingPolicy._Session(self._inner.new_session(context, own), own)
         except BaseException:
             own.close()
             raise
@@ -151,6 +151,7 @@ def blocking(policy: Policy) -> Policy:
 
     For a caller with no control loop to give the time back to — a server request, a warmup, a probe.
     Layers wrap the result rather than the other way round, so each sees one call per answer. Layers that
-    ``policy`` composes itself are inside, so those still run once per call.
+    ``policy`` composes itself are inside, so those still run once per call, each with the ``time_ns`` of
+    the call that asked.
     """
     return _BlockingPolicy(policy)

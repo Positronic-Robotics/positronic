@@ -41,7 +41,7 @@ from positronic.drivers.roboarm.command import CartesianPosition, CommandType
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
-from positronic.policy.base import DelegatingPolicy, DelegatingSession, Now, Policy, Session
+from positronic.policy.base import DelegatingPolicy, DelegatingSession, Policy, Session
 from positronic.policy.codec import ActionTiming
 from positronic.policy.harness import Harness
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
@@ -54,7 +54,7 @@ INITIAL_Q = np.array([0.10, -0.20, 0.30, -0.40, 0.50, -0.60, 0.70], dtype=np.flo
 TARGET_POS = np.array([0.50, 0.00, 0.45], dtype=np.float32)
 
 # Fixed deterministic inference latency in world time. Spans >1 control tick (harness loop is
-# 0.01 s) so the post-inference anchoring effect is observable in recorded ts.
+# 0.01 s) so the shift ``_SimulatedLatency`` adds is observable in recorded ts.
 INFERENCE_LATENCY_S = 0.05
 ACTION_FPS = 15.0
 ACTION_HORIZON_S = 0.5  # 8 of every 10-action chunk survives truncation
@@ -65,7 +65,7 @@ CAPTURED_SIGNALS = (keys.EE_POSE, keys.JOINTS, keys.GRIP)
 
 
 class _ScriptedSession(Session):
-    def __call__(self, obs):
+    def __call__(self, obs, time_ns):
         current = np.asarray(obs[keys.EE_POSE][:3], dtype=np.float32)
         delta = TARGET_POS - current
         chunk = []
@@ -80,10 +80,10 @@ class ScriptedProportionalPolicy(Policy):
     """Pure proportional controller toward ``TARGET_POS``.
 
     Reads ``robot_state.ee_pose`` only; returns a 10-action chunk. No RNG, no
-    clock, no images. Codec stamps/truncates; the harness anchors/schedules.
+    clock, no images. Codec stamps/truncates; ``ChunkedSchedule`` anchors and the harness plays.
     """
 
-    def new_session(self, context=None, now=None, rt=None):
+    def new_session(self, context=None, rt=None):
         return _ScriptedSession()
 
 
@@ -97,37 +97,31 @@ class _SimulatedLatency(DelegatingPolicy):
         self._latency_ns = round(latency_sec * 1e9)
 
     class _Session(DelegatingSession):
-        def __init__(self, inner: Session, now: Now, latency_ns: int):
+        def __init__(self, inner: Session, latency_ns: int):
             super().__init__(inner)
-            self._now = now
             self._latency_ns = latency_ns
             self._held: list | None = None
             self._release_at_ns = 0
 
-        def __call__(self, obs):
-            # Integer ns, the world's own timeline: a float compare can miss the release instant by one ULP.
-            now_ns = round(self._now() * 1e9)
+        def __call__(self, obs, time_ns):
             if self._held is not None:
-                if now_ns < self._release_at_ns:
+                if time_ns < self._release_at_ns:
                     return None
                 held, self._held = self._held, None
                 return held
-            result = self._inner(obs)
+            # The chunk is held for ``latency_ns``, so the sessions below stamp it from the release instant.
+            result = self._inner(obs, time_ns + self._latency_ns)
             if not result:
                 return result
-            self._held, self._release_at_ns = result, now_ns + self._latency_ns
+            self._held, self._release_at_ns = result, time_ns + self._latency_ns
             return None
 
         def cancel(self):
             self._held = None
             super().cancel()
 
-    def new_session(self, context=None, now=None, rt=None):
-        assert now is not None, 'the harness supplies the clock'
-        latency_ns = self._latency_ns
-        return _SimulatedLatency._Session(
-            self._inner.new_session(context, lambda: now() + latency_ns / 1e9, rt), now, latency_ns
-        )
+    def new_session(self, context=None, rt=None):
+        return _SimulatedLatency._Session(self._inner.new_session(context, rt), self._latency_ns)
 
 
 class FakeRobot(pimm.ControlSystem):

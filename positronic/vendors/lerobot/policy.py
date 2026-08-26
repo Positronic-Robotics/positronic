@@ -38,7 +38,7 @@ class _LerobotSession(Session):
         self._device = device
         self._meta = meta
 
-    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
+    def __call__(self, obs: dict[str, Any], time_ns: int) -> list[dict[str, Any]]:
         obs_int = {}
         for key, val in obs.items():
             if key == TASK_FIELD:
@@ -102,7 +102,7 @@ class LerobotPolicy(Policy):
         """The checkpoint's own declaration of what this policy takes."""
         return self._policy.config
 
-    def new_session(self, context=None, now=None, rt=None):
+    def new_session(self, context=None, rt=None):
         self._policy.reset()
         return _LerobotSession(self._policy, self._preprocessor, self._postprocessor, self._device, self._meta)
 

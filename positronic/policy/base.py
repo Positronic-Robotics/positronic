@@ -4,9 +4,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from typing import Any, ClassVar
 
-Now = Callable[[], float]
-
-
 # Structural keys of the wire spec: ``|`` serializes as ``{SEQ: [...]}``, ``&`` as ``{PAR: [...]}``.
 SEQ = 'seq'
 PAR = 'par'
@@ -54,7 +51,7 @@ class Session(ABC):
     a function to get actions::
 
         session = policy.new_session(context)
-        trajectory = session(obs)
+        trajectory = session(obs, time_ns)
 
     **Plain-data contract**: sessions accept and return only plain data
     (dicts, lists, numpy arrays, scalars). No tensors or custom objects.
@@ -69,9 +66,12 @@ class Session(ABC):
     """
 
     @abstractmethod
-    def __call__(self, obs: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+    def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict[str, Any]] | None:
         """Predict actions for the given observation, without waiting: heavy work belongs in
-        ``Policy.functions``."""
+        ``Policy.functions``.
+
+        ``time_ns`` is the caller's clock reading in nanoseconds. A session reads no clock of its own.
+        """
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -96,8 +96,8 @@ class DelegatingSession(Session):
     def __init__(self, inner: Session):
         self._inner = inner
 
-    def __call__(self, obs):
-        return self._inner(obs)
+    def __call__(self, obs, time_ns):
+        return self._inner(obs, time_ns)
 
     @property
     def meta(self):
@@ -119,15 +119,11 @@ class Policy(ABC):
     """
 
     @abstractmethod
-    def new_session(
-        self, context: dict[str, Any] | None = None, now: Now | None = None, rt: Runtime | None = None
-    ) -> Session:
+    def new_session(self, context: dict[str, Any] | None = None, rt: Runtime | None = None) -> Session:
         """Create a new inference session for an episode.
 
         Args:
             context: The episode's task description.
-            now: The runtime clock (current time in seconds), supplied by the harness and passed down
-                to every wrapped session. ``None`` where no runtime clock exists (server-side, warmup).
             rt: This session's runtime, serving ``functions``. ``None`` only where no caller supplied one.
                 A session that needs one refuses to open without it.
         """
@@ -152,8 +148,8 @@ class DelegatingPolicy(Policy):
     def __init__(self, inner: Policy):
         self._inner = inner
 
-    def new_session(self, context=None, now=None, rt=None):
-        return self._inner.new_session(context, now, rt)
+    def new_session(self, context=None, rt=None):
+        return self._inner.new_session(context, rt)
 
     @property
     def functions(self):
@@ -187,14 +183,10 @@ class Layer:
     """
 
     def wrap(self, policy: Policy) -> Policy:
-        """Apply this layer to a policy. Default: wrap every session it creates via ``make_session``.
-
-        Composition happens at config time; the runtime clock reaches the wrapped
-        sessions through ``new_session``.
-        """
+        """Apply this layer to a policy. Default: wrap every session it creates via ``make_session``."""
         return _LayerPolicy(policy, self)
 
-    def make_session(self, inner: Session, context: dict[str, Any] | None, now: Now | None) -> Session:
+    def make_session(self, inner: Session) -> Session:
         """Make this layer's session around ``inner``."""
         raise NotImplementedError('Override make_session or wrap')
 
@@ -236,8 +228,8 @@ class _LayerPolicy(DelegatingPolicy):
         super().__init__(inner)
         self._layer = layer
 
-    def new_session(self, context=None, now=None, rt=None):
-        return self._layer.make_session(self._inner.new_session(context, now, rt), context, now)
+    def new_session(self, context=None, rt=None):
+        return self._layer.make_session(self._inner.new_session(context, rt))
 
     @property
     def meta(self):

@@ -136,11 +136,11 @@ def main(
 
     rec = Recorder(pos3.sync(output_dir))
     tapped = rec.tap(_TAP).wrap(blocking(policy))
-    session = tapped.new_session({keys.TASK: task} if task else None, time.time)
+    session = tapped.new_session({keys.TASK: task} if task else None)
     meta = dict(session.meta)
     name = label or _recording_name(meta)
     try:
-        actions = session(obs)
+        actions = session(obs, now_ns)
         if actions is not None:
             actions = [a for a in actions if is_action(a)]  # drop the codec's keyless validity sentinel
         n = 0 if actions is None else len(actions)

@@ -369,7 +369,7 @@ class _JointposChunks(Policy):
         self.chunk_len = chunk_len
         self.chunks = 0
 
-    def new_session(self, context=None, now=None, rt=None):
+    def new_session(self, context=None, rt=None):
         return _JointposChunkSession(self)
 
 
@@ -377,7 +377,7 @@ class _JointposChunkSession(Session):
     def __init__(self, policy: _JointposChunks):
         self._policy = policy
 
-    def __call__(self, obs):
+    def __call__(self, obs, time_ns):
         self._policy.chunks += 1
         return [
             {keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.chunks * 100.0 + i}

@@ -1,4 +1,5 @@
 from types import MappingProxyType
+from unittest.mock import ANY
 
 import numpy as np
 import pytest
@@ -33,7 +34,7 @@ def test_inference_client_connect_and_infer(inference_server, mock_policy):
         action = session.infer(obs)
 
         assert action['action_data'] == [1, 2, 3]
-        mock_policy._mock_session.assert_called_with(obs)
+        mock_policy._mock_session.assert_called_with(obs, ANY)
     finally:
         session.close()
 
@@ -82,9 +83,9 @@ def test_session_url_selects_the_model(multi_policy_server):
     finally:
         beta_session.close()
 
-    policies['alpha']._mock_session.assert_any_call({'obs': 'alpha'})
-    policies['beta']._mock_session.assert_any_call({'obs': 'beta'})
-    policies['alpha']._mock_session.assert_any_call({'obs': 'default'})
+    policies['alpha']._mock_session.assert_any_call({'obs': 'alpha'}, ANY)
+    policies['beta']._mock_session.assert_any_call({'obs': 'beta'}, ANY)
+    policies['alpha']._mock_session.assert_any_call({'obs': 'default'}, ANY)
 
 
 def test_wire_serialisation_accepts_mappingproxy():

@@ -1,9 +1,8 @@
 """Composable policy layers — scheduling, fault handling and temporal frame stacking.
 
 Layers are serving-time concerns wrapped around a policy with ``|`` (left is outermost). Most read time
-from the observation (``obs_time_ns``); only ``ChunkedSchedule`` needs the live clock — it anchors a chunk
-to inference *completion*, which the pre-inference observation stamp cannot give — so the harness passes
-``now`` (a ``Callable[[], float]`` in seconds) to ``new_session`` and it reaches that one session.
+from the observation (``obs_time_ns``); ``ChunkedSchedule`` anchors a chunk with the ``time_ns`` of the
+call, which is the caller's clock reading in nanoseconds.
 """
 
 from collections import deque
@@ -12,7 +11,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.policy.base import DelegatingSession, Layer, Now, Session
+from positronic.policy.base import DelegatingSession, Layer, Session
 
 
 def _obs_time(obs) -> float:
@@ -47,13 +46,13 @@ class StopOnFault(Layer):
     WIRE_NAME = 'stop_on_fault'
 
     class _Session(DelegatingSession):
-        def __call__(self, obs):
+        def __call__(self, obs, time_ns):
             if _arms_available(obs):
-                return self._inner(obs)
+                return self._inner(obs, time_ns)
             self.cancel()
             return []
 
-    def make_session(self, inner: Session, context, now: Now | None):
+    def make_session(self, inner: Session):
         return StopOnFault._Session(inner)
 
     def to_spec(self):
@@ -64,9 +63,12 @@ class ChunkedSchedule(Layer):
     """Wait for the current trajectory to finish before calling the inner policy again.
 
     Owns relative→absolute time conversion: the sessions below (codecs, models) emit relative timestamps;
-    this layer anchors them to ``now()`` *after* inner inference returns, so execution aligns to
-    inference-finish (not inference-start). Returns ``None`` ("keep executing the current trajectory")
-    until the last action's timestamp is reached, then calls the inner policy.
+    this layer anchors them to the call's ``time_ns``, in the seconds a timestamp is written in. Returns
+    ``None`` ("keep executing the current trajectory") until the last action's timestamp is reached, then
+    calls the inner policy.
+
+    The call's ``time_ns`` and the observation's ``obs_time_ns`` must be readings of one clock: the anchor
+    comes from the first, and the test for a complete chunk uses the second.
     """
 
     WIRE_NAME = 'chunked_schedule'
@@ -74,31 +76,23 @@ class ChunkedSchedule(Layer):
     class _Session(DelegatingSession):
         """Skips inner calls while the current trajectory plays; stamps absolute on emit."""
 
-        def __init__(self, inner: Session, now: Now | None):
+        def __init__(self, inner: Session):
             super().__init__(inner)
-            self._now = now
             self._trajectory_end: float | None = None
 
-        def __call__(self, obs):
-            if self._now is None:
-                raise ValueError(
-                    'ChunkedSchedule needs a clock to run inference: pass now (a callable returning seconds) to '
-                    'new_session. The harness supplies it; a direct RemotePolicy.new_session() outside the harness '
-                    'must too.'
-                )
+        def __call__(self, obs, time_ns):
             if self._trajectory_end is not None and _obs_time(obs) < self._trajectory_end:
                 return None
-            result = self._inner(obs)
+            result = self._inner(obs, time_ns)
             if result is not None:
                 # A single-action session may return a bare dict, and a no-codec path may omit
                 # ``timestamp`` (servers can stamp/truncate themselves); normalize both so an
                 # immediate action executes instead of raising.
                 if isinstance(result, dict):
                     result = [result]
-                # Anchor to post-inference time so execution starts when inference *finished*.
                 # Copy dicts so we don't mutate caller-owned data (sessions may reuse templates).
-                now = self._now()
-                result = [{**r, keys.ACTION_TIMESTAMP: now + r.get(keys.ACTION_TIMESTAMP, 0.0)} for r in result]
+                anchor = time_ns / 1e9
+                result = [{**r, keys.ACTION_TIMESTAMP: anchor + r.get(keys.ACTION_TIMESTAMP, 0.0)} for r in result]
                 self._trajectory_end = result[-1][keys.ACTION_TIMESTAMP] if result else None
             return result
 
@@ -106,8 +100,8 @@ class ChunkedSchedule(Layer):
             self._trajectory_end = None
             super().cancel()
 
-    def make_session(self, inner: Session, context, now: Now | None):
-        return ChunkedSchedule._Session(inner, now)
+    def make_session(self, inner: Session):
+        return ChunkedSchedule._Session(inner)
 
     def to_spec(self):
         return {'name': self.WIRE_NAME}
@@ -184,10 +178,10 @@ class TemporalStack(Layer):
             self._keys = keys
             self._buffer = _StackBuffer(offsets_sec, pad_start=pad_start)
 
-        def __call__(self, obs):
+        def __call__(self, obs, time_ns):
             now = _obs_time(obs)
             self._buffer.append(now, {k: obs[k] for k in self._keys})
-            return self._inner({**obs, **self._buffer.sample(now)})
+            return self._inner({**obs, **self._buffer.sample(now)}, time_ns)
 
         def cancel(self):
             self._buffer.reset()
@@ -202,7 +196,7 @@ class TemporalStack(Layer):
             'in-range targets and the stack would be empty'
         )
 
-    def make_session(self, inner: Session, context, now: Now | None):
+    def make_session(self, inner: Session):
         return TemporalStack._Session(inner, self._keys, self._offsets_sec, self._pad_start)
 
     def to_spec(self):

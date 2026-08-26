@@ -126,7 +126,7 @@ class IdleSession(Session):
     def __init__(self, policy):
         self._policy = policy
 
-    def __call__(self, obs):
+    def __call__(self, obs, time_ns):
         self._policy.observations.append(obs)
         return []
 

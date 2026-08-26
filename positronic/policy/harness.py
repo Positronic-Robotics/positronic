@@ -35,7 +35,7 @@ class _EpisodeInference:
         self._t0_ns, self._wall_t0 = clock.now_ns(), time.monotonic()
         self._runtime = Executor(policy.functions)
         try:
-            self._session = policy.new_session(context, clock.now, self._runtime)
+            self._session = policy.new_session(context, self._runtime)
         except BaseException:
             self._runtime.close()
             raise
@@ -54,10 +54,11 @@ class _EpisodeInference:
         return {name: value.copy() if isinstance(value, np.ndarray) else value for name, value in obs.items()}
 
     def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+        now_ns = self._clock.now_ns()
         # A call that joins work already in flight keeps its anchor, so the trial pays for that work one time.
         if not self._runtime.in_flight:
-            self._t0_ns, self._wall_t0 = self._clock.now_ns(), time.monotonic()
-        return self._session(frozen_view(self._owned(obs)))
+            self._t0_ns, self._wall_t0 = now_ns, time.monotonic()
+        return self._session(frozen_view(self._owned(obs)), now_ns)
 
     def wait(self, should_stop: pimm.SignalReceiver[bool]) -> None:
         """Wait for the function in flight, for as long as the trial charges the loop for it."""

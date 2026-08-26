@@ -357,7 +357,8 @@ class PolicyServer:
                         # Plain acquire, not the keepalive helper: the client is awaiting a ``result`` and
                         # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
                         async with self._infer_lock:
-                            actions = await asyncio.to_thread(session, raw_obs)
+                            # The server's clock is not the rig's.
+                            actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
                         await websocket.send_bytes(serialise({protocol.RESULT: actions}))
                     except Exception as e:
                         logger.error(f'Error processing message: {e}', exc_info=True)

@@ -61,9 +61,9 @@ def open_session() -> Generator[Callable[..., tuple[Session, Executor]], None, N
     """Opens a policy's session against a runtime that serves its functions, as the harness does."""
     runtimes: list[Executor] = []
 
-    def make(policy: Policy, now=None) -> tuple[Session, Executor]:
+    def make(policy: Policy) -> tuple[Session, Executor]:
         runtimes.append(Executor(policy.functions))
-        return policy.new_session(None, now, runtimes[-1]), runtimes[-1]
+        return policy.new_session(None, runtimes[-1]), runtimes[-1]
 
     yield make
     for runtime in runtimes:
@@ -74,12 +74,15 @@ def open_session() -> Generator[Callable[..., tuple[Session, Executor]], None, N
 ANSWER_SEC = 5.0
 
 
-def round_trip(session: Session, rt: Executor, obs) -> list[dict] | None:
-    """What ``session`` answers for ``obs``, over the two calls one round trip takes."""
-    assert session(obs) is None, 'a round-trip was already in flight'
+def round_trip(session: Session, rt: Executor, obs, time_ns: int = 0) -> list[dict] | None:
+    """What ``session`` answers for ``obs``, over the two calls one round trip takes.
+
+    Both calls get the same ``time_ns``, so a chunk comes back anchored at the value the test passed.
+    """
+    assert session(obs, time_ns) is None, 'a round-trip was already in flight'
     rt.wait(ANSWER_SEC)
     assert not rt.in_flight, 'the round-trip never came back'
-    return session(obs)
+    return session(obs, time_ns)
 
 
 def _make_mock_policy(action, meta):

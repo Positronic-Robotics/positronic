@@ -119,7 +119,7 @@ class _FixedSession(Session):
     def __init__(self, result):
         self._result = result
 
-    def __call__(self, obs):
+    def __call__(self, obs, time_ns):
         return self._result
 
 
@@ -127,12 +127,12 @@ class _ChunkPolicy(Policy):
     def __init__(self, actions: list[dict]):
         self._actions = actions
 
-    def new_session(self, context=None, now=None, rt=None):
+    def new_session(self, context=None, rt=None):
         return _FixedSession(list(self._actions))
 
 
 class _SinglePolicy(Policy):
-    def new_session(self, context=None, now=None, rt=None):
+    def new_session(self, context=None, rt=None):
         return _FixedSession({'v': 42})
 
 
@@ -146,7 +146,7 @@ class _PassthroughCodec(Codec):
 
 
 class _MetaPolicy(Policy):
-    def new_session(self, context=None, now=None, rt=None):
+    def new_session(self, context=None, rt=None):
         return _FixedSession({})
 
     @property
@@ -162,7 +162,7 @@ def test_action_horizon_sec_truncates_chunk():
     # action_horizon_sec=0.1s at action_fps=30 -> 3 actions
     codec = ActionTiming(fps=30.0, horizon_sec=0.1)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()(_T0_OBS)
+    result = policy.new_session()(_T0_OBS, 0)
     assert [r['v'] for r in result if 'v' in r] == [0, 1, 2]
     assert result[-1] == {'timestamp': pytest.approx(0.1)}  # horizon sentinel
 
@@ -171,7 +171,7 @@ def test_action_horizon_sec_none_returns_full_chunk():
     actions = [{'v': i} for i in range(5)]
     codec = ActionTiming(fps=30.0)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()(_T0_OBS)
+    result = policy.new_session()(_T0_OBS, 0)
     assert len(result) == 6  # 5 actions + timestamp sentinel
 
 
@@ -180,7 +180,7 @@ def test_action_horizon_sec_larger_than_chunk():
     # action_horizon_sec=10s at action_fps=10 -> 100 actions max, but only 3 available
     codec = ActionTiming(fps=10.0, horizon_sec=10.0)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()(_T0_OBS)
+    result = policy.new_session()(_T0_OBS, 0)
     assert len(result) == 4  # 3 actions + timestamp sentinel (nothing truncated)
 
 
@@ -188,7 +188,7 @@ def test_timestamps_embedded_in_actions():
     actions = [{'v': i} for i in range(4)]
     codec = ActionTiming(fps=10.0)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()(_T0_OBS)
+    result = policy.new_session()(_T0_OBS, 0)
     assert len(result) == 5  # 4 actions + timestamp sentinel
     for i, action in enumerate(result):
         assert action['timestamp'] == pytest.approx(i * 0.1)
@@ -199,7 +199,7 @@ def test_action_horizon_sec_seconds_truncates():
     # 0.1s at 30fps -> 3 actions
     codec = ActionTiming(fps=30.0, horizon_sec=0.1)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()(_T0_OBS)
+    result = policy.new_session()(_T0_OBS, 0)
     assert len(result) == 4  # 3 actions + horizon sentinel
     dt = 1.0 / 30.0
     for i, action in enumerate(result):
@@ -250,7 +250,7 @@ def test_action_timestamp_and_horizon_compose():
     actions = [{'v': i} for i in range(10)]
     codec = ActionHorizon(0.3) | ActionTimestamp(fps=10.0)
     policy = codec.wrap(_ChunkPolicy(actions))
-    result = policy.new_session()(_T0_OBS)
+    result = policy.new_session()(_T0_OBS, 0)
     assert len(result) == 4  # 3 actions + horizon sentinel
     assert [r['v'] for r in result if 'v' in r] == [0, 1, 2]
     assert result[-1] == {'timestamp': pytest.approx(0.3)}  # horizon sentinel
@@ -259,7 +259,7 @@ def test_action_timestamp_and_horizon_compose():
 def test_single_action_has_zero_timestamp():
     codec = ActionTiming(fps=15.0)
     policy = codec.wrap(_SinglePolicy())
-    result = policy.new_session()(_T0_OBS)
+    result = policy.new_session()(_T0_OBS, 0)
     assert isinstance(result, dict)
     assert result['timestamp'] == 0.0
     assert result['v'] == 42

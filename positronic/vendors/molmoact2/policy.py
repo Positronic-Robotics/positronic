@@ -32,7 +32,7 @@ class _MolmoAct2Session(Session):
         self._num_steps = num_steps
         self._meta = meta
 
-    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
+    def __call__(self, obs: dict[str, Any], time_ns: int) -> list[dict[str, Any]]:
         # predict_action is decorated @torch.no_grad() and manages its own precision: the model loads
         # in bfloat16 and runs bf16 throughout (its autocast path only guards fp32 inputs), so an
         # external torch.inference_mode() / torch.autocast wrap or a detach() would all be redundant.
@@ -66,7 +66,7 @@ class MolmoAct2Policy(Policy):
         self._num_steps = num_steps
         self._meta = {keys.TYPE: 'molmoact2', 'norm_tag': norm_tag}
 
-    def new_session(self, context=None, now=None, rt=None) -> Session:
+    def new_session(self, context=None, rt=None) -> Session:
         return _MolmoAct2Session(self._model, self._processor, self._norm_tag, self._num_steps, self._meta)
 
     @property

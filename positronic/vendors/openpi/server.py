@@ -128,7 +128,7 @@ class _OpenpiSession(Session):
     def __init__(self, client: WebsocketClientPolicy):
         self._client = client
 
-    def __call__(self, obs):
+    def __call__(self, obs, time_ns):
         response = self._client.infer(obs)
         actions = response['actions']
         return [{'action': a} for a in actions]
@@ -140,7 +140,7 @@ class OpenpiPolicy(Policy):
     def __init__(self, subproc: OpenpiSubprocess):
         self._subproc = subproc
 
-    def new_session(self, context=None, now=None, rt=None):
+    def new_session(self, context=None, rt=None):
         client = self._subproc.client
         client.reset()
         return _OpenpiSession(client)

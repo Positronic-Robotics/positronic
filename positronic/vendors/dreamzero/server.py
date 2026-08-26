@@ -261,7 +261,7 @@ class _DreamZeroSession(Session):
         self._client = client
         self._session_id = session_id
 
-    def __call__(self, obs):
+    def __call__(self, obs, time_ns):
         obs = dict(obs)
         obs[roboarena.SESSION_ID] = self._session_id
         action_array = np.asarray(self._client.infer(obs))
@@ -286,7 +286,7 @@ class DreamZeroPolicy(Policy):
     def __init__(self, sp: DreamZeroSubprocess):
         self._subprocess = sp
 
-    def new_session(self, context=None, now=None, rt=None):
+    def new_session(self, context=None, rt=None):
         client = RoboarenaClient(port=self._subprocess.roboarena_port)
         client.connect()
         return _DreamZeroSession(client, str(uuid.uuid4()))

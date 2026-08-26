@@ -81,7 +81,7 @@ class Codec(Layer):
     def meta(self) -> dict:
         return {}
 
-    def make_session(self, inner: Session, context, now):
+    def make_session(self, inner: Session):
         return _CodecSession(inner, self)
 
     @final
@@ -107,9 +107,9 @@ class _CodecSession(DelegatingSession):
         super().__init__(inner)
         self._codec = codec
 
-    def __call__(self, obs):
+    def __call__(self, obs, time_ns):
         encoded = self._codec.encode(obs)
-        action = self._inner(encoded)
+        action = self._inner(encoded, time_ns)
         if action is None:
             return None
         return self._codec.decode(action)
@@ -223,9 +223,8 @@ def is_action(entry: dict) -> bool:
 class ActionTimestamp(Codec):
     """Stamps each decoded action with a relative ``timestamp`` (seconds from trajectory start).
 
-    Assigns ``timestamp = i * (1/fps)`` starting at 0. The harness converts these
-    relative timestamps to absolute wall time at emission, anchoring execution to
-    inference-finish rather than inference-start.
+    Assigns ``timestamp = i * (1/fps)`` starting at 0. The scheduler anchors them to the
+    ``time_ns`` of the call that emits the chunk.
 
     A K-action chunk covers K periods, so the list is closed with a sentinel entry —
     a dict carrying only ``timestamp = K * (1/fps)`` and no command keys — stating when
