@@ -18,11 +18,37 @@ from .spec import from_spec
 INFER = 'infer'
 
 
-def round_trip(ws_session: InferenceSession, obs: dict[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
-    """One inference over the wire, timed as the ``policy.infer`` span."""
+def _prepare_value(key: str, value: Any) -> Any:
+    # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
+    if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
+        # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's websocket message cap.
+        return encode_jpeg(value)
+    if isinstance(value, cabc.Mapping):
+        return {k: _prepare_value(k, v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return type(value)(_prepare_value(key, v) for v in value)
+    return value
+
+
+def _prepare_obs(obs: cabc.Mapping[str, Any], compress_images: bool) -> dict[str, Any]:
+    if not compress_images:
+        return dict(obs)
+    return {key: _prepare_value(key, value) for key, value in obs.items()}
+
+
+def round_trip(
+    ws_session: InferenceSession, obs: cabc.Mapping[str, Any], compress_images: bool
+) -> list[dict[str, Any]] | dict[str, Any]:
+    """One inference over the wire, timed as the ``policy.infer`` span.
+
+    The observation is prepared here rather than in the session, because a JPEG encode of an HD frame
+    stack must not run on the thread that calls the session. The span starts after it, because that
+    encode is not inference.
+    """
+    prepared = _prepare_obs(obs, compress_images)
     infer_start_ns = time.time_ns()
     try:
-        return ws_session.infer(obs)
+        return ws_session.infer(prepared)
     finally:
         telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns())
 
@@ -44,22 +70,6 @@ class RemoteSession(Session):
         self._answer: Answer | None = None
         self._cancelled = False
 
-    def _prepare_obs(self, obs: cabc.Mapping[str, Any]) -> dict[str, Any]:
-        if not self._compress_images:
-            return dict(obs)
-        return {key: self._prepare_value(key, value) for key, value in obs.items()}
-
-    def _prepare_value(self, key: str, value: Any) -> Any:
-        # Codecs nest images inside dicts and lists (e.g. GR00T), so recurse to reach every image array.
-        if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
-            # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's websocket message cap.
-            return encode_jpeg(value)
-        if isinstance(value, cabc.Mapping):
-            return {k: self._prepare_value(k, v) for k, v in value.items()}
-        if isinstance(value, list | tuple):
-            return type(value)(self._prepare_value(key, v) for v in value)
-        return value
-
     def __call__(self, obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | None:
         """The trajectory of a round trip that has come back, and ``None`` while one is in flight.
 
@@ -67,9 +77,7 @@ class RemoteSession(Session):
         returns.
         """
         if self._answer is None:
-            # The session prepares the observation, and the function only sends it. The ``policy.infer`` span
-            # times the function, and a JPEG encode of an HD frame stack is not inference.
-            self._answer = self._rt.fns[INFER](self._session, self._prepare_obs(obs))
+            self._answer = self._rt.fns[INFER](self._session, obs, self._compress_images)
             return None
         if not self._answer.done():
             return None
