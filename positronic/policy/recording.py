@@ -35,8 +35,7 @@ The robot's actual gripper is overlaid the same way in white for predicted-vs-re
 Every field is *also* logged as ``rr.Scalars`` on a dedicated ``action_time`` timeline
 (each action stamped at the inference-request time plus its horizon offset), so a
 ``TimeSeriesView`` reads commanded values with real axes. That anchor is the call's ``obs_time_ns``,
-and ``ChunkedSchedule`` anchors execution to the ``time`` of the same call, so the plotted time can
-differ from the executed time. Select ``action_time`` to see them.
+and the execution time can differ. Select ``action_time`` to see them.
 
 Entity paths are ``{tap_name}/{data_key}``. A tap's incoming observation keys and
 outgoing action keys share that namespace; in the rare case the same key appears on
@@ -243,8 +242,7 @@ def _log_action_series(path: str, arr: np.ndarray, horizon: np.ndarray, base_ns:
 
     Each action is stamped at ``base_ns + horizon_i``, where ``base_ns`` is the
     inference-request time; successive chunks lay out along one clock so a ``TimeSeriesView``
-    has real axes. ``ChunkedSchedule`` anchors the same commands to the ``time`` of the call, so
-    the plotted time can differ from the executed time.
+    has real axes. The plotted time is the request time, and the execution time can differ.
     """
     arr = np.asarray(arr, dtype=np.float64)
     if arr.ndim == 1:

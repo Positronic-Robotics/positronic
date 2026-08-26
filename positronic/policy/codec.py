@@ -223,8 +223,8 @@ def is_action(entry: dict) -> bool:
 class ActionTimestamp(Codec):
     """Stamps each decoded action with a relative ``timestamp`` (seconds from trajectory start).
 
-    Assigns ``timestamp = i * (1/fps)`` starting at 0. ``ChunkedSchedule`` anchors these
-    relative timestamps to the ``time`` of the call that emits the chunk.
+    Assigns ``timestamp = i * (1/fps)`` starting at 0. The scheduler anchors them to the
+    ``time`` of the call that emits the chunk.
 
     A K-action chunk covers K periods, so the list is closed with a sentinel entry —
     a dict carrying only ``timestamp = K * (1/fps)`` and no command keys — stating when
