@@ -776,7 +776,7 @@ def test_the_driver_logs_the_move_the_arm_refused_with_the_reason_it_gave(desk, 
 
 
 def test_a_run_carries_on_after_a_safe_input_stopped_a_move(desk, world):
-    """What the recovery is for: the failure that ends the run reaches the driver through a sync move."""
+    """The failure that ends a run reaches the driver through a sync move, which is the one this saves."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())
