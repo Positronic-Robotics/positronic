@@ -151,7 +151,7 @@ def blocking(policy: Policy) -> Policy:
 
     For a caller with no control loop to give the time back to — a server request, a warmup, a probe.
     Layers wrap the result rather than the other way round, so each sees one call per answer. Layers that
-    ``policy`` composes itself are inside, so those still run once per call. Each of those gets the ``time``
-    of the call that asked, so a layer below anchors its chunk before the wait, not after it.
+    ``policy`` composes itself are inside, so those still run once per call, each with the ``time`` of the
+    call that asked.
     """
     return _BlockingPolicy(policy)
