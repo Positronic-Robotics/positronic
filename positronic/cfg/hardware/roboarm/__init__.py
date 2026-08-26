@@ -73,3 +73,10 @@ def yam(channel: str, sim: bool, base_pose):
     from positronic.drivers.roboarm.yam import Robot
 
     return Robot(channel, base_pose=base_pose, sim=sim)
+
+
+@cfn.config(ip='192.168.1.4')
+def trossen(ip: str):
+    from positronic.drivers.roboarm.trossen import Robot
+
+    return Robot(ip=ip)
