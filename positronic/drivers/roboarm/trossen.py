@@ -54,7 +54,9 @@ _HZ = 100
 # closes the distance at once. Every setpoint is one tick away by construction, so this is the only one.
 _GOAL_TIME_S = 1.0 / _HZ
 _MOVE_TIMEOUT_S = 5.0  # a joint crosses its whole range well inside this at the speed below
-_ARRIVED_TOL = 0.02  # radians; the firmware reports position, so arrival is judged from the reading
+# The share of the following error the controller allows within which the arm counts as arrived. It holds
+# itself up with that error, so a tolerance tighter than the droop is one no move ever meets.
+_ARRIVED_SHARE = 0.5
 # How long the controller's clock may stand still before the link counts as down. Telemetry arrives at
 # over 200 Hz, so this is many missed frames, not a scheduling hiccup.
 _STALE_AFTER_S = 0.25
@@ -74,22 +76,29 @@ _VELOCITY_HEADROOM = 0.8
 # The share of that limit a commanded setpoint may ask for. Well under the guard above, so the arm reaching
 # it is the driver driving rather than something else moving the arm.
 _COMMANDED_SHARE = 0.25
-# How many ticks of travel the setpoint may sit ahead of where the arm reads. This is the following error
-# the servo is driven with, and what stops a goal running away from an arm that is held up.
-_LEAD_TICKS = 4
+# The share of the following error the controller allows that the driver will drive with. A position servo
+# needs the error to make force — an arm holding itself up against gravity carries tens of milliradians of
+# it — and past what the controller allows it faults, so the arm's own number is what this is a share of.
+_LEAD_SHARE = 0.8
 _MJCF_PATH = 'assets/mujoco/trossen_wxai/wxai_follower.xml'
 _EE_SITE = 'ee_site'
 _JOINT_NAMES = ('joint_0', 'joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5')
 _IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after clamping
 _IK_ROT_TOL = 1e-2  # radians
 # How far a streamed target's solution may sit from where the arm stands. A target a step away has a
-# solution a step away; anything further reaches the same pose with the arm in another shape, and moving
-# into it swings the end effector far from where it was asked to be.
-_MAX_JOINT_JUMP = 0.2
-# How far ahead of where the arm reads a streamed Cartesian target may sit. At the tick rate this allows
-# 1.5 m/s, which is faster than a hand moves, so it does not shape teleoperation.
+# solution a step away — a centimetre at half a metre of reach is hundredths of a radian — and anything
+# further reaches the same pose with the arm in another shape. Moving into one swings the end effector far
+# from where it was asked to be, so the room here is what a step needs and no more.
+_MAX_JOINT_JUMP = 0.05
+# How far a streamed Cartesian target may move in one tick. At the tick rate this allows 1.5 m/s, which is
+# faster than a hand moves, so it does not shape teleoperation.
 _MAX_STEP_M = 0.015
 _MAX_STEP_RAD = 0.08
+# How far that target may sit from where the arm reads. The arm holds itself up with a following error, so
+# it stands off from every pose it is asked for; this is what keeps the standoff from becoming a leash the
+# target drags. Wide enough for the droop, and narrow enough that a target cannot run away from an arm.
+_MAX_STANDOFF_M = 0.08
+_MAX_STANDOFF_RAD = 0.4
 
 
 class TrossenState(State, pimm.shared_memory.NumpySMAdapter):
@@ -128,6 +137,21 @@ class TrossenState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[TrossenState.EE_POSE_OFFSET : TrossenState.EE_POSE_OFFSET + 3] = ee_pose.translation
         self.array[TrossenState.EE_POSE_OFFSET + 3 : TrossenState.EE_POSE_OFFSET + 7] = ee_pose.rotation.as_quat
         self.array[TrossenState.STATUS_OFFSET] = status.value
+
+
+def _towards(frm: geom.Transform3D, to: geom.Transform3D, max_m: float, max_rad: float) -> geom.Transform3D:
+    """``to``, brought within ``max_m`` and ``max_rad`` of ``frm``."""
+    step = to.translation - frm.translation
+    distance = float(np.linalg.norm(step))
+    if distance > max_m:
+        step = step * (max_m / distance)
+    turn = (frm.rotation.inv * to.rotation).as_rotvec
+    angle = float(np.linalg.norm(turn))
+    if angle > np.pi:  # `as_rotvec` keeps the way round it was given; the other one is the short way
+        turn, angle = turn * (1.0 - 2.0 * np.pi / angle), 2.0 * np.pi - angle
+    if angle > max_rad:
+        turn = turn * (max_rad / angle)
+    return geom.Transform3D(frm.translation + step, frm.rotation * geom.Rotation.from_rotvec(turn))
 
 
 def _reach_postures(x: float, y: float) -> list[np.ndarray]:
@@ -270,11 +294,15 @@ class _Arm(DriverRun[command.CommandType]):
         self._dq_limit = np.array([limits[i].velocity_max for i in range(_ARM_JOINTS)])
         self._dq_max = self._dq_limit * _VELOCITY_HEADROOM
         self._step_max = self._dq_limit * _COMMANDED_SHARE / _HZ  # what a joint may travel in one tick
-        self._max_lead = self._step_max * _LEAD_TICKS
+        tolerance = np.array([limits[i].position_tolerance for i in range(_ARM_JOINTS)])
+        self._max_lead = tolerance * _LEAD_SHARE
+        self._arrived_tol = float(np.min(tolerance) * _ARRIVED_SHARE)
         self._output = driver.get_robot_output()
         self._kin = _Kinematics()
         self._target = np.asarray(self._output.joint.arm.positions, dtype=np.float64)
+        self._ramp = self._target.copy()
         self._sent = self._target.copy()
+        self._anchor: geom.Transform3D | None = None  # the pose last asked for, which the next steps on from
         self._grip_target = self._grip_of(self._output)
         self._arm_unsent, self._grip_unsent = False, False
         # The two halves of the link, which fail apart. Neither is `Moves.errored`, which says the arm is
@@ -349,8 +377,10 @@ class _Arm(DriverRun[command.CommandType]):
         if outside := self.outside_limits():
             self.complain(f'The arm at {self.ip} may refuse position mode: {outside}')
         self._target = self.q
+        self._ramp = self.q
         self._grip_target = self._grip_of(self._output)
         self.driver.set_all_modes(trossen_arm.Mode.position)
+        self._anchor = None  # wherever the arm is now is what a Cartesian target steps on from
         self._arm_unsent, self._grip_unsent = True, True
         self.write()
 
@@ -409,7 +439,7 @@ class _Arm(DriverRun[command.CommandType]):
         if self.moves.settle(self.q, self.clock.now()) is MoveStatus.GAVE_UP:
             # Holding the target the arm stopped short of would resume the move once whatever blocked it
             # goes away, long after its asker was told it failed.
-            self._target, self._arm_unsent = self.q, True
+            self._target, self._ramp, self._arm_unsent = self.q, self.q, True
 
     def hold_grip(self, grip: float) -> None:
         """Hold the fingers at ``grip``."""
@@ -417,24 +447,21 @@ class _Arm(DriverRun[command.CommandType]):
         self._grip_unsent = True
 
     def _stepped(self, target: geom.Transform3D) -> geom.Transform3D:
-        """``target`` brought within one tick's travel of where the arm reads.
+        """``target``, one tick's travel on from the pose the arm was last asked for.
 
-        A teleoperator reaching past what the arm can do produces targets that run away from it. Measured
-        against the arm rather than against the last target, the goal cannot outrun an arm that is held up,
-        so nothing is stored up for it to lunge through once whatever held it goes away.
+        Stepping on from the last pose asked for, rather than from the pose the arm reads, is what keeps
+        this from being a loop. The arm stands off from every pose it is given, by the following error it
+        holds itself up with, and that standoff grows as the arm reaches further out — so a target measured
+        from the reading walks itself outwards, further every tick.
+
+        The standoff is bounded instead: the pose stepped on from is first pulled back to within reach of
+        the arm, so a target still cannot run away from one that is held up. The caller keeps what this
+        returns, and only once it has solved for it: an anchor that walked on past a pose with no solution
+        would leave every pose after it further out of reach than the last.
         """
-        held = self.ee_pose
-        step = target.translation - held.translation
-        distance = float(np.linalg.norm(step))
-        if distance > _MAX_STEP_M:
-            step = step * (_MAX_STEP_M / distance)
-        turn = (held.rotation.inv * target.rotation).as_rotvec
-        angle = float(np.linalg.norm(turn))
-        if angle > np.pi:  # `as_rotvec` keeps the way round it was given; the other one is the short way
-            turn, angle = turn * (1.0 - 2.0 * np.pi / angle), 2.0 * np.pi - angle
-        if angle > _MAX_STEP_RAD:
-            turn = turn * (_MAX_STEP_RAD / angle)
-        return geom.Transform3D(held.translation + step, held.rotation * geom.Rotation.from_rotvec(turn))
+        anchor = self._anchor if self._anchor is not None else self.ee_pose
+        anchor = _towards(self.ee_pose, anchor, _MAX_STANDOFF_M, _MAX_STANDOFF_RAD)
+        return _towards(anchor, target, _MAX_STEP_M, _MAX_STEP_RAD)
 
     def _ik(self, pose: geom.Transform3D, *, streamed: bool) -> np.ndarray:
         """The joints that reach ``pose``; raises what the arm cannot reach.
@@ -442,12 +469,19 @@ class _Arm(DriverRun[command.CommandType]):
         A streamed pose is paced to a step at a time and solved without letting the arm change shape. One
         somebody waits on is solved as it stands, and may change shape to get there.
         """
-        if streamed:
-            solution = self._kin.ik(self._stepped(pose), self.q, max_jump=_MAX_JOINT_JUMP)
-        else:
+        if not streamed:
             solution = self._kin.ik(pose, self.q)
+            if solution is None:
+                raise ValueError(f'{pose} is out of reach')
+            return solution
+        # Solved from the joints last asked for, not from the ones read back: the arm stands off from what
+        # it is given, and measuring against the reading would make the room for a step have to cover that
+        # standoff too — which is room enough to change the arm's shape in.
+        stepped = self._stepped(pose)
+        solution = self._kin.ik(stepped, self._target, max_jump=_MAX_JOINT_JUMP)
         if solution is None:
             raise ValueError(f'{pose} is out of reach')
+        self._anchor = stepped
         return solution
 
     def _target_of(self, cmd: command.CommandType, *, streamed: bool = True) -> np.ndarray:
@@ -459,7 +493,7 @@ class _Arm(DriverRun[command.CommandType]):
             case command.JointPosition(positions):
                 target = np.asarray(positions, dtype=np.float64)
             case command.JointDelta(velocities=delta):
-                target = self.q + np.asarray(delta, dtype=np.float64)
+                target = (self._target if streamed else self.q) + np.asarray(delta, dtype=np.float64)
             case command.CartesianPosition(pose):
                 target = self._ik(pose, streamed=streamed)
             case command.CartesianDelta() as delta_cmd:
@@ -477,20 +511,24 @@ class _Arm(DriverRun[command.CommandType]):
         with pimm.calls.raise_to(call):
             target = self._target_of(call.request, streamed=False)
             self._target, self._arm_unsent = target, True
-            self.moves.accept(call, target, _ARRIVED_TOL, self.clock.now(), _MOVE_TIMEOUT_S)
+            self.moves.accept(call, target, self._arrived_tol, self.clock.now(), _MOVE_TIMEOUT_S)
 
-    def _setpoint(self) -> np.ndarray:
-        """The joints to ask for this tick: the last setpoint, moved one tick's travel towards the target.
+    def advance(self) -> None:
+        """Move the ramp one tick's travel towards the target, and no further than the target.
 
         This is where a joint's own velocity limit is kept. Past it the controller faults and drops the arm,
         and a goal the arm has to cross the workspace to reach would ask for exactly that.
-
-        The step is taken from the last setpoint rather than from the reading, so the ramp runs at the rate
-        the joints are held to instead of at whatever the servo manages to follow it with. It is clamped
-        against the reading first, so an arm that is held up does not have a goal run away from it.
         """
-        base = self.q + np.clip(self._sent - self.q, -self._max_lead, self._max_lead)
-        return base + np.clip(self._target - base, -self._step_max, self._step_max)
+        self._ramp = self._ramp + np.clip(self._target - self._ramp, -self._step_max, self._step_max)
+
+    def _setpoint(self) -> np.ndarray:
+        """The joints to ask for this tick: the ramp, held to within reach of where the arm reads.
+
+        The reading bounds what goes out, and is not what the ramp is measured from. Measured from it, an
+        arm that lags leaves the ramp permanently ahead by the clamp, and each tick that the arm closes some
+        of the gap the ramp moves up again — which walks the arm away rather than holding it anywhere.
+        """
+        return self.q + np.clip(self._ramp - self.q, -self._max_lead, self._max_lead)
 
     def _put_goal(self, setpoint: np.ndarray, move_arm: bool) -> None:
         """Hand the controller this tick's setpoint, fingers included where one call carries both.
@@ -557,7 +595,7 @@ class _Arm(DriverRun[command.CommandType]):
 
     def stand_down(self) -> None:
         """Hold the arm where it reads, so nothing is driving it while it runs too fast."""
-        self._target, self._arm_unsent = self.q, True
+        self._target, self._ramp, self._arm_unsent = self.q, self.q, True
         self.write()
 
     def publish(self) -> None:
@@ -632,6 +670,7 @@ class Robot(pimm.ControlSystem):
                         with log_failure(asked):
                             arm.track(asked)
 
+                    arm.advance()
                     arm.write()
                     arm.publish()
                     arm.moves.answer()  # the state a settled move is answered with is out
@@ -648,20 +687,21 @@ class _FakeTrossen:
 
     # What the arm reports for itself, read off a wxai_v0 controller on firmware 1.11.1
     _LIMITS = [
-        (-3.141593, 3.141593, 6.2832),
-        (0.0, 3.141593, 6.2832),
-        (0.0, 2.356194, 6.2832),
-        (-1.570796, 1.570796, 9.4248),
-        (-1.570796, 1.570796, 9.4248),
-        (-3.141593, 3.141593, 9.4248),
-        (0.0, 0.04, 0.25),
+        (-3.141593, 3.141593, 6.2832, 0.2),
+        (0.0, 3.141593, 6.2832, 0.2),
+        (0.0, 2.356194, 6.2832, 0.2),
+        (-1.570796, 1.570796, 9.4248, 0.4),
+        (-1.570796, 1.570796, 9.4248, 0.4),
+        (-3.141593, 3.141593, 9.4248, 0.4),
+        (0.0, 0.04, 0.25, 0.004),
     ]
 
     class _Limit:
-        def __init__(self, lower: float, upper: float, velocity_max: float):
+        def __init__(self, lower: float, upper: float, velocity_max: float, position_tolerance: float):
             self.position_min = lower
             self.position_max = upper
             self.velocity_max = velocity_max
+            self.position_tolerance = position_tolerance
 
     _TICK_US = 5000  # the controller streams faster than the driver reads, so its clock moves every read
 
@@ -745,6 +785,7 @@ if __name__ == '__main__':
     parser.add_argument('--fake', action='store_true', help='in-process first-order-lag echo; needs no hardware')
     args = parser.parse_args()
 
+    _ARRIVED_SLACK = 0.1  # what the checks below allow, being the tolerance the wxai_v0 controller reports
     fake = _FakeTrossen() if args.fake else None
     robot = Robot(args.ip, connect=(lambda ip: fake) if args.fake else _connect)
 
@@ -785,12 +826,12 @@ if __name__ == '__main__':
         jog = np.array([0.2, 0.4, 0.3, 0.0, 0.1, 0.0])
         commands.emit(command.JointPosition(jog))
         pump(0.5)
-        assert np.allclose(state.value.q, jog, atol=_ARRIVED_TOL), state.value.q
+        assert np.allclose(state.value.q, jog, atol=_ARRIVED_SLACK), state.value.q
 
         # A target outside the joint range is clipped, not refused: joint 1 has no negative half.
         commands.emit(command.JointPosition(np.array([0.0, -1.0, 0.0, 0.0, 0.0, 0.0])))
         pump(0.5)
-        assert state.value.q[1] > -_ARRIVED_TOL, state.value.q
+        assert state.value.q[1] > -_ARRIVED_SLACK, state.value.q
 
         # A synchronous move the firmware plans, answered once the arm reads back at the target.
         home = np.zeros(_ARM_JOINTS)
@@ -800,7 +841,7 @@ if __name__ == '__main__':
                 break
             pump(0.1)
         answer.result()
-        assert np.allclose(state.value.q, home, atol=_ARRIVED_TOL), state.value.q
+        assert np.allclose(state.value.q, home, atol=_ARRIVED_SLACK), state.value.q
         assert state.value.status == RobotStatus.AVAILABLE, state.value.status
 
         print(f'ee_pose {state.value.ee_pose}')

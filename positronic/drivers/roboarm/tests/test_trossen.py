@@ -383,7 +383,7 @@ def test_a_sync_move_answers_once_the_arm_reads_back_at_its_target(world):
         next(loop)
     answer.result()
 
-    np.testing.assert_allclose(states.emitted[-1][1].q, JOGGED, atol=trossen_driver._ARRIVED_TOL)
+    np.testing.assert_allclose(states.emitted[-1][1].q, JOGGED, atol=0.1)
 
 
 def test_a_move_the_world_stops_under_is_handed_back_to_its_asker(world):
@@ -507,8 +507,9 @@ def test_a_cartesian_target_out_of_reach_is_solved_one_step_at_a_time():
 def test_a_sync_move_to_a_pose_is_answered_like_any_other(world):
     """A pose says which joints reach it once the driver solves for them, so a caller may wait on one.
 
-    Arrival is judged from the joints, within a tolerance that is a degree or so of each — which is
-    millimetres at the end effector, and why the pose is only checked that closely.
+    Arrival is judged from the joints, within the following error the controller says it allows. The arm
+    carries that error holding itself up, so the tolerance cannot be tighter — and at half a metre of
+    reach it is centimetres at the end effector, which is why the pose is only checked that closely.
     """
     arm = FakeArm()
     driver, states, loop = _driven(arm)
@@ -527,7 +528,7 @@ def test_a_sync_move_to_a_pose_is_answered_like_any_other(world):
         next(loop)
     answer.result()
 
-    np.testing.assert_allclose(_ee(states).translation, target.translation, atol=1e-2)
+    np.testing.assert_allclose(_ee(states).translation, target.translation, atol=6e-2)
 
 
 def test_a_pose_far_from_where_the_arm_stands_is_solved_only_when_it_may_change_shape():
