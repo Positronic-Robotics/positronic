@@ -23,10 +23,12 @@ from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import DelegatingSession, Layer, Policy, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import Harness, _EpisodeInference
+from positronic.policy.harness import POLL_PERIOD_SEC, Harness, _EpisodeInference
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.remote import INFER, RemoteSession, round_trip
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
+
+POLL_PERIOD_NS = round(POLL_PERIOD_SEC * 1e9)
 
 
 @contextmanager
@@ -297,6 +299,8 @@ def _pair_all(world, harness):
     """Pair all harness signals and return a dict of test handles."""
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
+    deadline_recorder = RecordingEmitter()
+    harness.deadline_ns._bind(deadline_recorder)
     return {
         'frame_em': world.pair(harness.observations[CAM]),
         'robot_em': world.pair(harness.observations[keys.ROBOT_STATE]),
@@ -307,11 +311,17 @@ def _pair_all(world, harness):
         'grip_rx': world.pair(harness.commands['target_grip']),
         'meta_em': world.pair(harness.robot_meta_in),
         'ds_recorder': ds_recorder,
+        'deadline_recorder': deadline_recorder,
     }
 
 
 def _ds_commands(p) -> list[DsWriterCommand]:
     return [data for _, data in p['ds_recorder'].emitted]
+
+
+def _deadlines(p) -> list[int | None]:
+    """Every deadline the harness published, in the order it published them."""
+    return [data for _, data in p['deadline_recorder'].emitted]
 
 
 def _ds_types(p) -> list[DsWriterCommandType]:
@@ -1030,6 +1040,150 @@ def test_a_trial_does_not_end_until_the_rig_is_back_where_it_started(world):
 
     assert arm.asks == 2, 'the rig was never asked to go back'
     assert not answer.done(), 'the terminal landed while the return move was still in hand'
+
+
+def test_the_deadline_is_published_once_the_rig_is_ready(world):
+    """An idle harness publishes nothing: ``deadline_ns`` states the instant the harness will stop at, and
+    between episodes there is none to state. The first one goes out when the episode's prepare has
+    answered — this embodiment readies nothing, so that is the round the task is taken."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+
+    driver = ManualDriver([(None, 100.0)])  # outlives the pumping, so the world stays up between phases
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=20)
+    assert _deadlines(p) == []
+
+    asked_at_ns = world.clock.now_ns()
+    p['perform_task'](Task(instruction_source='t', timeout_sec=5.0))
+    drive_scheduler(scheduler, steps=20)
+    # The world is already past zero here, so the published instant and a bare ``timeout_sec`` are
+    # different numbers, which is what this pins.
+    assert _deadlines(p) == [pytest.approx(asked_at_ns + 5e9, abs=2 * POLL_PERIOD_NS)]
+    assert asked_at_ns > 2 * POLL_PERIOD_NS, 'the two would be indistinguishable at a clock still near zero'
+
+
+@pytest.mark.timeout(3.0)
+def test_no_deadline_is_published_while_the_rig_is_still_readying(world):
+    """A rig that takes its time readying gets no deadline until it answers, so the reset never comes out
+    of the budget — and a display shows no countdown rather than one measured from before the episode."""
+
+    class _SlowScene(pimm.ControlSystem):
+        """A prepare handler that answers only once ``release`` is set."""
+
+        def __init__(self):
+            self.env_reset = pimm.calls.ControlSystemHandler[Any, None](self)
+            self.release = False
+
+        def run(self, should_stop, clock):
+            held = []
+            while not should_stop.value:
+                held.extend(self.env_reset.incoming())
+                if self.release:
+                    for call in held:
+                        call.set_result(None)
+                    held = []
+                yield pimm.Sleep(0.001)
+
+    scene = _SlowScene()
+    harness = Harness(StubPolicy(), make_embodiment(prepare_handlers={keys.SCENE: scene.env_reset}))
+    p = _pair_all(world, harness)
+    wire_call(world, harness.prepare[keys.SCENE], scene.env_reset)
+
+    scheduler = world.start([harness, scene])
+    p['perform_task'](Task(instruction_source='t', timeout_sec=5.0, prepare_args={keys.SCENE: {}}))
+    drive_scheduler(scheduler, steps=100)
+    assert _deadlines(p) == [], 'a deadline went out while the rig was still readying'
+
+    scene.release = True
+    drive_scheduler(scheduler, steps=100)
+    assert _deadlines(p) and _deadlines(p)[0] is not None, 'the readied rig never got its deadline'
+
+
+@pytest.mark.timeout(3.0)
+def test_the_deadline_clears_when_the_episode_ends(world):
+    """``None`` at the close is what tells a display the countdown is over, and it is published only
+    there: cleared mid-episode it would stop a countdown the harness is still enforcing."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    driver = ManualDriver([
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.2),
+        (partial(p['done_em'].emit, {keys.EVAL_SUCCESS: True}), 100.0),
+    ])
+    scheduler = world.start([harness, driver])
+    p['perform_task'](Task(instruction_source='t', timeout_sec=5.0))
+    drive_scheduler(scheduler, steps=200)
+
+    assert [c.type for c in _ds_commands(p)].count(DsWriterCommandType.STOP_EPISODE) == 1, 'the episode never ended'
+    assert _deadlines(p)[-1] is None
+    assert _deadlines(p).count(None) == 1, 'a deadline was withdrawn while the episode was still running'
+
+
+@pytest.mark.timeout(3.0)
+def test_an_episode_with_no_timeout_publishes_no_deadline(world):
+    """A task with no ``timeout_sec`` publishes ``None``, which corrects a reader still holding the
+    previous episode's deadline. Silence would leave it counting down against one that has lapsed."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    driver = ManualDriver([
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 100.0)
+    ])
+    scheduler = world.start([harness, driver])
+    p['perform_task'](Task(instruction_source='t', timeout_sec=None))
+    drive_scheduler(scheduler, steps=200)
+
+    assert _deadlines(p) == [None]
+
+
+@pytest.mark.timeout(3.0)
+def test_a_world_stopping_mid_episode_withdraws_the_deadline(world):
+    """A run that ends with an episode still live withdraws its deadline like any other close: a receiver
+    latches what it last got, and there is no later episode to correct it."""
+    harness = Harness(StubPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    # The script runs out while the episode is live; a control system returning is what stops the world.
+    driver = ManualDriver([(partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.1)])
+    scheduler = world.start([harness, driver])
+    # A budget far longer than the run, so expiry cannot be what withdraws the deadline.
+    p['perform_task'](Task(instruction_source='t', timeout_sec=100.0))
+    drive_scheduler(scheduler, steps=200)
+
+    assert _deadlines(p)[0] is not None, 'no deadline was ever armed, so nothing here was under test'
+    assert _deadlines(p)[-1] is None
+
+
+@pytest.mark.timeout(3.0)
+def test_an_episode_abandoned_by_a_raise_withdraws_the_deadline(world):
+    """An episode a raise abandons withdraws its deadline like any other close."""
+
+    class _BoomSession(Session):
+        def __call__(self, obs):
+            raise RuntimeError('inference boom')
+
+    class _BoomPolicy(Policy):
+        def new_session(self, context=None, now=None, rt=None):
+            return _BoomSession()
+
+    harness = Harness(_BoomPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+
+    driver = ManualDriver([
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 100.0)
+    ])
+    scheduler = world.start([harness, driver])
+    p['perform_task'](Task(instruction_source='t', timeout_sec=100.0))
+    with pytest.raises(RuntimeError, match='inference boom'):
+        drive_scheduler(scheduler, steps=200)
+
+    assert _deadlines(p)[0] is not None, 'no deadline was ever armed, so nothing here was under test'
+    assert _deadlines(p)[-1] is None
 
 
 @pytest.mark.timeout(3.0)
@@ -1796,8 +1950,8 @@ def test_a_reply_is_scheduled_only_while_the_trial_still_has_budget(world, expir
     """A trial advertises the instant it stops at. A chunk answered after the world passed that instant is
     dropped instead of placed, and ``_run`` finishes the trial on the next round."""
     harness = Harness(StubPolicy(), make_embodiment())
-    now = world.clock.now()
-    harness._deadline = now - 1.0 if expired else now + 1.0
+    now_ns = world.clock.now_ns()
+    harness._deadline_ns = now_ns - 1_000_000_000 if expired else now_ns + 1_000_000_000
 
     harness._reschedule(slow_chunk(), world.clock)
 

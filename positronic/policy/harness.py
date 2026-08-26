@@ -167,7 +167,7 @@ class Harness(pimm.ControlSystem):
         # An inference let go of with a function still running.
         self._retired: _EpisodeInference | None = None
         # ``task.timeout_sec``, armed per episode; a task without one has no deadline and ends on ``done`` alone.
-        self._deadline: float | None = None
+        self._deadline_ns: int | None = None
         # Wall-clock telemetry for the live rollout, opened under ``--timing`` and inert otherwise.
         self._telemetry = _EpisodeTelemetry()
 
@@ -181,6 +181,8 @@ class Harness(pimm.ControlSystem):
         self.perform_task = pimm.calls.ControlSystemHandler[Task, dict[str, Any]](self)
         self.manual_command = pimm.ControlSystemReceiver(self)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
+        # The instant on the world's clock the live episode ends at, ``None`` while no deadline stands.
+        self.deadline_ns = pimm.ControlSystemEmitter[int | None](self)
         self.robot_meta_in = pimm.DefaultingReceiver(self, default={})
         # Stop-signal: a truthy payload within the trial's budget ends it.
         self.done = pimm.DefaultingReceiver[dict](self, default={})
@@ -261,6 +263,7 @@ class Harness(pimm.ControlSystem):
     ) -> Generator[pimm.Command, None, None]:
         """Commit the live episode: cancel the in-flight chunk, stop the recorder — stamping the
         episode's full static meta (plus any terminal payload) — then close its span."""
+        self._set_deadline(None)
         # Stamped before the inference is retired: the meta overlays what its session reports.
         stop = DsWriterCommand.STOP({**self._build_episode_meta(), **(payload or {})})
         for schedule in self._schedules.values():  # devices hold their last commanded position
@@ -275,6 +278,11 @@ class Harness(pimm.ControlSystem):
         # After that round, so the recorder's STOP-time record.io span still parents to the episode. Skew: a
         # producer stepping in that shared round charges ≤ one control period to the closing episode.
         self._telemetry.end(virtual_now)
+
+    def _set_deadline(self, deadline_ns: int | None) -> None:
+        """Arm the live episode's deadline and publish it, so the enforced one and the published one agree."""
+        self._deadline_ns = deadline_ns
+        self.deadline_ns.emit(deadline_ns)
 
     def _begin_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, call: pimm.calls.Call[Task, dict[str, Any]]
@@ -297,7 +305,7 @@ class Harness(pimm.ControlSystem):
             self.policy, {keys.TASK: self._task.instruction}, self._charges_wall_time, clock
         )
         budget = self._task.timeout_sec
-        self._deadline = clock.now() + budget if budget is not None else None
+        self._set_deadline(clock.now_ns() + round(budget * 1e9) if budget is not None else None)
         self._telemetry.start_rollout(clock.now())
         self.ds_command.emit(DsWriterCommand.START())
         # The fresh data is here, later round would read a frame the recording did not open on.
@@ -386,14 +394,13 @@ class Harness(pimm.ControlSystem):
         channel's waypoints; one it omits is cleared and holds. The timestamps are already absolute, stamped
         by the scheduling layer against the harness clock.
         """
-        if self._deadline is not None and clock.now() >= self._deadline:
+        if self._deadline_ns is not None and clock.now_ns() >= self._deadline_ns:
             # The world reached the deadline while the function was in flight, so its chunk is dropped rather
             # than placed past the point the trial advertises it stops at; ``_run`` finishes the trial next round.
             return
         self._assert_anchored(trajectory, clock.now())
         self._telemetry.step()
-        # The single explicit seconds->ns seam: layers time actions in float seconds, the schedules and
-        # every pimm channel are in ns.
+        # Layers time actions in float seconds; the schedules and every pimm channel are in ns.
         for name, schedule in self._schedules.items():
             schedule.clear()
             schedule.extend((int(a[keys.ACTION_TIMESTAMP] * 1e9), a[name]) for a in trajectory if name in a)
@@ -420,10 +427,10 @@ class Harness(pimm.ControlSystem):
         a late success. A task without a timeout has no budget and ends on ``done`` alone. Only a truthy
         ``done`` counts, so a producer can clear a stale terminal off the wire with an empty payload.
         """
-        deadline = self._deadline
-        if done is not None and done.data and (deadline is None or done.ts <= deadline * 1e9):
+        deadline_ns = self._deadline_ns
+        if done is not None and done.data and (deadline_ns is None or done.ts <= deadline_ns):
             return {**done.data, keys.EVAL_TERMINATED: True}
-        if deadline is not None and clock.now() >= deadline:
+        if deadline_ns is not None and clock.now_ns() >= deadline_ns:
             return {keys.EVAL_TERMINATED: False}
         return None
 
@@ -440,6 +447,9 @@ class Harness(pimm.ControlSystem):
             # A no-op once the block above has answered: the world coming down under a live episode is the
             # one way a call goes unanswered, and it is the caller's to hear about.
             self._fail_call(RuntimeError('The world stopped before the episode ended'))
+            # An episode abandoned by a raise never reaches ``_finalize_recording``, and would leave a
+            # deadline standing that nothing will ever meet.
+            self._set_deadline(None)
             self._retire_inference()
             self._reap_inference()
 
