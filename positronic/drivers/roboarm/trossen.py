@@ -1,0 +1,456 @@
+"""Driver for the Trossen WidowX AI arm — one Ethernet link carrying six joints plus the gripper.
+
+The controller firmware runs the servo loop and solves its own kinematics, so this driver streams joint
+setpoints and reads back the end-effector pose the firmware reports, rather than solving FK/IK itself.
+A streamed setpoint is applied without interpolation; a synchronous move hands the firmware a goal time
+and lets it plan the trajectory.
+
+The gripper is the 7th joint, a prismatic finger drive the controller reports in meters. positronic
+speaks a normalized grip where 1 is closed, so grip converts against the travel the arm reports for that
+joint instead of a constant.
+
+Station bring-up is not verifiable off-hardware and must be re-checked on the rig: gripper polarity (this
+driver reads joint position 0 as closed), the mount pose, and the setpoint rate the link sustains.
+"""
+
+import contextlib
+import logging
+from collections.abc import Callable, Iterator
+from types import SimpleNamespace
+from typing import Any
+
+import numpy as np
+
+import pimm
+from positronic import geom
+from positronic.drivers import vendor_import
+from positronic.drivers.utils import DriverRun, MoveStatus, log_failure
+
+from . import RobotStatus, State, command
+
+# trossen_arm lives in the `trossen` extra, which the type-check environment does not install.
+with vendor_import(
+    'trossen_arm', 'Trossen arm support', hint='Re-run with the trossen extra:\n  uv run --locked --extra trossen ...\n'
+):
+    import trossen_arm  # pyright: ignore[reportMissingImports]
+
+logger = logging.getLogger(__name__)
+
+_ARM_JOINTS = 6
+_GRIPPER_JOINT = 6
+_HZ = 100
+# Goal time for a streamed setpoint. At or below 0.001 s the firmware applies the goal without interpolation,
+# which is what a setpoint that is already one tick away needs.
+_STREAM_GOAL_TIME_S = 0.0
+# Goal time for a synchronous move, which the firmware plans as a quintic trajectory above 0.2 s.
+_MOVE_GOAL_TIME_S = 2.0
+_MOVE_TIMEOUT_S = _MOVE_GOAL_TIME_S + 3.0
+_ARRIVED_TOL = 0.02  # radians; the firmware reports position, so arrival is judged from the reading
+
+
+class TrossenState(State, pimm.shared_memory.NumpySMAdapter):
+    Q_OFFSET = 0
+    DQ_OFFSET = Q_OFFSET + _ARM_JOINTS
+    EE_POSE_OFFSET = DQ_OFFSET + _ARM_JOINTS
+    STATUS_OFFSET = EE_POSE_OFFSET + 7
+    TOTAL = STATUS_OFFSET + 1
+
+    def __init__(self):
+        super().__init__(shape=(TrossenState.TOTAL,), dtype=np.dtype(np.float32))
+
+    def instantiation_params(self) -> tuple[Any, ...]:
+        return ()
+
+    @property
+    def q(self) -> np.ndarray:
+        return self.array[TrossenState.Q_OFFSET : TrossenState.Q_OFFSET + _ARM_JOINTS].copy()
+
+    @property
+    def dq(self) -> np.ndarray:
+        return self.array[TrossenState.DQ_OFFSET : TrossenState.DQ_OFFSET + _ARM_JOINTS].copy()
+
+    @property
+    def ee_pose(self) -> geom.Transform3D:
+        pose = self.array[TrossenState.EE_POSE_OFFSET : TrossenState.EE_POSE_OFFSET + 7].copy()
+        return geom.Transform3D(pose[:3], geom.Rotation.from_quat(pose[3:7]))
+
+    @property
+    def status(self) -> RobotStatus:
+        return RobotStatus(int(self.array[TrossenState.STATUS_OFFSET]))
+
+    def encode(self, q: np.ndarray, dq: np.ndarray, ee_pose: geom.Transform3D, status: RobotStatus) -> None:
+        self.array[TrossenState.Q_OFFSET : TrossenState.Q_OFFSET + _ARM_JOINTS] = q
+        self.array[TrossenState.DQ_OFFSET : TrossenState.DQ_OFFSET + _ARM_JOINTS] = dq
+        self.array[TrossenState.EE_POSE_OFFSET : TrossenState.EE_POSE_OFFSET + 3] = ee_pose.translation
+        self.array[TrossenState.EE_POSE_OFFSET + 3 : TrossenState.EE_POSE_OFFSET + 7] = ee_pose.rotation.as_quat
+        self.array[TrossenState.STATUS_OFFSET] = status.value
+
+
+def _connect(ip: str) -> Any:
+    """Open the arm controller and take ownership of it, clearing an error a previous run left behind."""
+    driver = trossen_arm.TrossenArmDriver()
+    driver.configure(trossen_arm.Model.wxai_v0, trossen_arm.StandardEndEffector.wxai_v0_follower, ip, True)
+    return driver
+
+
+@contextlib.contextmanager
+def _opened(connect: Callable[[str], Any], ip: str) -> Iterator[Any]:
+    """The arm, left idle and its handle given back however the run ends — including one that never starts."""
+    driver = connect(ip)
+    try:
+        yield driver
+    finally:
+        try:
+            driver.set_all_modes(trossen_arm.Mode.idle)
+        finally:  # an arm that will not go idle still has a handle to give back
+            driver.cleanup()
+
+
+class _Arm(DriverRun[command.CommandType]):
+    """The arm the driver drives: the controller handle, the reading it takes each tick, and the setpoint
+    it holds the arm at.
+
+    The controller reports position but not whether it is tracking a goal, so arrival is judged from the
+    reading. A setpoint is written only when something has asked for a new one: a goal time re-sent every
+    tick restarts the trajectory it plans, and the arm would never arrive.
+    """
+
+    def __init__(
+        self,
+        driver: Any,
+        ip: str,
+        sync_move: pimm.calls.ControlSystemHandler[command.CommandType, None],
+        async_move: pimm.SignalReceiver[command.CommandType],
+        out: pimm.SignalEmitter[TrossenState],
+        grip_out: pimm.SignalEmitter[float],
+        should_stop: pimm.SignalReceiver,
+        clock: pimm.Clock,
+    ):
+        super().__init__(sync_move, async_move, should_stop, clock, hz=_HZ)
+        self.driver = driver
+        self.ip = ip
+        self.out = out
+        self.grip_out = grip_out
+        self.state = TrossenState()
+        limits = driver.get_joint_limits()
+        self._q_lower = np.array([limits[i].position_min for i in range(_ARM_JOINTS)])
+        self._q_upper = np.array([limits[i].position_max for i in range(_ARM_JOINTS)])
+        # The gripper joint's own travel, which grip is normalized against
+        self._grip_travel = float(limits[_GRIPPER_JOINT].position_max - limits[_GRIPPER_JOINT].position_min)
+        self._grip_closed = float(limits[_GRIPPER_JOINT].position_min)
+        self._output = driver.get_robot_output()
+        self._q_target = np.asarray(self._output.joint.arm.positions, dtype=np.float64)
+        self._grip_target = self._grip_of(self._output)
+        self._goal_time = _STREAM_GOAL_TIME_S
+        self._unsent = False
+        # Whether the last reading arrived. Not `Moves.errored`, which says the arm is not where the driver
+        # put it: a link that drops says nothing about the move, and the two clear on different events.
+        self.link_down = False
+
+    def _grip_of(self, output: Any) -> float:
+        """How closed the fingers are, from the joint position the controller reports."""
+        return 1.0 - (float(output.joint.gripper.position) - self._grip_closed) / self._grip_travel
+
+    def _grip_metres(self, grip: float) -> float:
+        """The gripper joint position that holds the fingers at ``grip``."""
+        return self._grip_closed + (1.0 - grip) * self._grip_travel
+
+    def __enter__(self) -> '_Arm':
+        """Put the arm in position mode holding where it reads.
+
+        The mode change comes first and the setpoint immediately after, so the servo has a goal from the
+        tick it starts servoing.
+        """
+        self.driver.set_all_modes(trossen_arm.Mode.position)
+        self._unsent = True
+        self.write()
+        return self
+
+    def __exit__(self, exc_type, exc: BaseException | None, tb) -> None:
+        """Answer whatever was waiting on a move; ``_opened`` takes the arm back to idle."""
+        self.moves.abandon(exc)
+
+    def read(self) -> bool:
+        """Take the whole arm off the link, once a tick: every step below wants the same instant.
+
+        A link that does not answer leaves the last reading standing, and says so.
+        """
+        try:
+            self._output = self.driver.get_robot_output()
+        # rules-allow: swallowed-error — a link that drops reads ERROR; the run outlives it, and the next
+        # reading that arrives clears it
+        except trossen_arm.RuntimeError as exc:
+            logger.error(f'The arm at {self.ip} did not answer: {exc}')
+            self.link_down = True
+            return False
+        self.link_down = False
+        return True
+
+    @property
+    def q(self) -> np.ndarray:
+        return np.asarray(self._output.joint.arm.positions, dtype=np.float64)
+
+    @property
+    def ee_pose(self) -> geom.Transform3D:
+        """The end-effector pose the firmware reports, in the arm base frame.
+
+        The controller speaks angle-axis where positronic speaks a rotation.
+        """
+        cartesian = np.asarray(self._output.cartesian.positions, dtype=np.float64)
+        return geom.Transform3D(cartesian[:3], geom.Rotation.from_rotvec(cartesian[3:6]))
+
+    def settle(self) -> None:
+        """Judge a move in flight against what the controller reports."""
+        if not self.moves.active:
+            return
+        if self.moves.settle(self.q, self.clock.now()) is MoveStatus.GAVE_UP:
+            # Holding the target the arm stopped short of would resume the move once whatever blocked it
+            # goes away, long after its asker was told it failed.
+            self._q_target, self._goal_time, self._unsent = self.q, _STREAM_GOAL_TIME_S, True
+
+    def hold_grip(self, grip: float) -> None:
+        """Hold the fingers at ``grip``."""
+        self._grip_target = float(np.clip(grip, 0.0, 1.0))
+        self._unsent = True
+
+    def _target_q(self, cmd: command.CommandType) -> np.ndarray:
+        """The joints ``cmd`` asks the arm to hold, clipped to the range the controller reports."""
+        # TODO: accept the modes the arm can run instead of leaving them to what a command omits. Its joints
+        # are position-servoed, so `PositionControl` names the law already running.
+        command.require_native_mode(cmd, 'Trossen')
+        match cmd:
+            case command.JointPosition(positions):
+                target = np.asarray(positions, dtype=np.float64)
+            case command.JointDelta(velocities=delta):
+                target = self.q + np.asarray(delta, dtype=np.float64)
+            case other:
+                raise NotImplementedError(f'Unsupported command {other}')
+        return np.clip(target, self._q_lower, self._q_upper)
+
+    def track(self, cmd: command.CommandType) -> None:
+        """Hold the arm at the setpoint ``cmd`` asks for, with nobody waiting on the arrival."""
+        self._q_target, self._goal_time, self._unsent = self._target_q(cmd), _STREAM_GOAL_TIME_S, True
+
+    def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
+        """Hand the firmware the trajectory ``call`` asks for; ``settle`` answers it once the arm reads
+        back there."""
+        with pimm.calls.raise_to(call):
+            target = self._target_q(call.request)
+            self._q_target, self._goal_time, self._unsent = target, _MOVE_GOAL_TIME_S, True
+            self.moves.accept(call, target, _ARRIVED_TOL, self.clock.now(), _MOVE_TIMEOUT_S)
+
+    def write(self) -> None:
+        """Put the setpoint on the link, if anything has asked for one since it was last written.
+
+        Arm and fingers are one goal vector but arrive as two channels, so either one writes the whole
+        vector. All seven joints are in position mode, which ``set_all_positions`` requires.
+        """
+        if not self._unsent:
+            return
+        goal = [*self._q_target, self._grip_metres(self._grip_target)]
+        self.driver.set_all_positions(goal, self._goal_time, False)
+        self._unsent = False
+
+    def publish(self) -> None:
+        """Ship the arm as the controller last reported it, arm and fingers."""
+        if self.link_down or self.moves.errored:  # not where the driver put it, or not answering at all
+            status = RobotStatus.ERROR
+        elif self.moves.active:  # the driver owns the arm until the move settles
+            status = RobotStatus.BUSY
+        else:
+            status = RobotStatus.AVAILABLE
+        velocities = np.asarray(self._output.joint.arm.velocities, dtype=np.float64)
+        self.state.encode(self.q, velocities, self.ee_pose, status)
+        self.out.emit(self.state)
+        self.grip_out.emit(self._grip_of(self._output))
+
+
+class Robot(pimm.ControlSystem):
+    """Drives one Trossen WidowX AI arm over Ethernet, in the arm base frame.
+
+    The gripper shares the arm's controller, so this driver carries the ``grip``/``target_grip`` ports
+    (SO-101 precedent).
+    """
+
+    def __init__(self, ip: str = '192.168.1.4', *, connect: Callable[[str], Any] = _connect) -> None:
+        """
+        :param ip: Address of the arm controller.
+        :param connect: ``ip -> TrossenArmDriver`` factory; the fake-mode smoke injects ``_FakeTrossen``.
+        """
+        self._ip = ip
+        self._connect = connect
+
+        self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
+        self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
+        self.target_grip = pimm.ControlSystemReceiver[float](self)
+        self.state = pimm.ControlSystemEmitter[TrossenState](self)
+        self.grip = pimm.ControlSystemEmitter[float](self)
+        self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
+        with _opened(self._connect, self._ip) as driver:
+            arm = _Arm(driver, self._ip, self.sync_move, self.commands, self.state, self.grip, should_stop, clock)
+            with arm:
+                # TODO: carry the URDF and the joint names, which live in `trossen_arm_description`.
+                self.robot_meta.emit({'robot': 'trossen_wxai'})
+
+                while not should_stop.value:
+                    if not arm.read():
+                        arm.publish()
+                        yield arm.limiter.wait()
+                        continue
+
+                    if (grip := pimm.value_updated(self.target_grip)) is not None:
+                        arm.hold_grip(grip)
+                    arm.settle()
+                    asked = arm.moves.next_request()
+                    if isinstance(asked, pimm.calls.Call):
+                        arm.sync_move(asked)
+                    elif asked is not None:
+                        with log_failure(asked):
+                            arm.track(asked)
+
+                    with log_failure('setpoint'):
+                        arm.write()
+                    arm.publish()
+                    arm.moves.answer()  # the state a settled move is answered with is out
+
+                    yield arm.limiter.wait()
+
+
+class _FakeTrossen:
+    """First-order-lag echo of the 7-joint arm, so the ``--fake`` smoke runs without hardware.
+
+    Duck-types the slice of ``TrossenArmDriver`` the driver uses. It models the link and the servo, not
+    the kinematics: the Cartesian reading it reports is a constant.
+    """
+
+    # What the arm reports for itself, read off a wxai_v0 controller on firmware 1.11.1
+    _LIMITS = [
+        (-3.141593, 3.141593),
+        (0.0, 3.141593),
+        (0.0, 2.356194),
+        (-1.570796, 1.570796),
+        (-1.570796, 1.570796),
+        (-3.141593, 3.141593),
+        (0.0, 0.04),
+    ]
+    _CARTESIAN = [0.254, -0.0039, 0.1618, -0.0086, 0.009, -0.0179]
+
+    class _Limit:
+        def __init__(self, lower: float, upper: float):
+            self.position_min = lower
+            self.position_max = upper
+
+    def __init__(self, alpha: float = 0.3):
+        self._alpha = alpha
+        self._position = np.zeros(7)  # the arm boots with the fingers closed
+        self._velocity = np.zeros(7)
+        self.mode: Any = None
+        self.goals: list[list[float]] = []
+        self.goal_times: list[float] = []
+        self.cleaned_up = False
+
+    def get_joint_limits(self) -> list['_FakeTrossen._Limit']:
+        return [_FakeTrossen._Limit(lower, upper) for lower, upper in _FakeTrossen._LIMITS]
+
+    def get_robot_output(self) -> Any:
+        self._servo()
+        arm = SimpleNamespace(positions=self._position[:_ARM_JOINTS].copy(), velocities=self._velocity[:6].copy())
+        gripper = SimpleNamespace(position=float(self._position[_GRIPPER_JOINT]))
+        return SimpleNamespace(
+            joint=SimpleNamespace(arm=arm, gripper=gripper),
+            cartesian=SimpleNamespace(positions=list(_FakeTrossen._CARTESIAN)),
+            header=SimpleNamespace(timestamp=0),
+        )
+
+    def set_all_modes(self, mode: Any) -> None:
+        self.mode = mode
+
+    def set_all_positions(self, goal_positions, goal_time=2.0, blocking=True) -> None:
+        if self.mode is not trossen_arm.Mode.position:
+            raise trossen_arm.RuntimeError(f'set_all_positions needs every joint in position mode, not {self.mode}')
+        self.goals.append([float(v) for v in goal_positions])
+        self.goal_times.append(float(goal_time))
+
+    def _servo(self) -> None:
+        """Advance the joints towards the goal they were last given, as the controller's own loop does."""
+        if not self.goals:
+            return
+        step = self._alpha * (np.asarray(self.goals[-1]) - self._position)
+        self._velocity = step * _HZ
+        self._position = self._position + step
+
+    def cleanup(self, reboot_controller: bool = False) -> None:
+        self.cleaned_up = True
+
+
+if __name__ == '__main__':
+    import argparse
+    import time
+
+    parser = argparse.ArgumentParser(description='Trossen driver smoke: joints and gripper round-trip.')
+    parser.add_argument('--ip', default='192.168.1.4')
+    parser.add_argument('--fake', action='store_true', help='in-process first-order-lag echo; needs no hardware')
+    args = parser.parse_args()
+
+    fake = _FakeTrossen() if args.fake else None
+    robot = Robot(args.ip, connect=(lambda ip: fake) if args.fake else _connect)
+
+    with pimm.World() as world:
+        # `World.pair` cannot express that it returns the counterpart of the port it is given, so the four
+        # payload types are named here.
+        commands = world.pair(robot.commands)
+        sync_move = world.pair(robot.sync_move)
+        target_grip = world.pair(robot.target_grip)
+        state = world.pair(robot.state)
+        grip = world.pair(robot.grip)
+
+        loop = world.start([robot])
+
+        def pump(seconds: float):
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline and not world.should_stop:
+                cmd = next(loop)
+                time.sleep(cmd.seconds if isinstance(cmd, pimm.Sleep) else 0)
+
+        pump(0.2)
+        assert state.read() is not None, 'the driver published no state'
+        assert state.value.status == RobotStatus.AVAILABLE, state.value.status
+
+        # Grip round-trip: polarity inverted on the way out (goal) and on the way back (reading).
+        target_grip.emit(0.0)
+        pump(0.5)
+        if fake is not None:
+            assert abs(fake.goals[-1][_GRIPPER_JOINT] - 0.04) < 1e-6, fake.goals[-1]  # grip 0 open -> full travel
+        assert abs(grip.value) < 0.02, grip.value
+        target_grip.emit(1.0)
+        pump(0.5)
+        if fake is not None:
+            assert abs(fake.goals[-1][_GRIPPER_JOINT]) < 1e-6, fake.goals[-1]
+        assert abs(grip.value - 1.0) < 0.02, grip.value
+
+        # A streamed joint setpoint nobody waits on.
+        jog = np.array([0.2, 0.4, 0.3, 0.0, 0.1, 0.0])
+        commands.emit(command.JointPosition(jog))
+        pump(0.5)
+        assert np.allclose(state.value.q, jog, atol=_ARRIVED_TOL), state.value.q
+
+        # A target outside the joint range is clipped, not refused: joint 1 has no negative half.
+        commands.emit(command.JointPosition(np.array([0.0, -1.0, 0.0, 0.0, 0.0, 0.0])))
+        pump(0.5)
+        assert state.value.q[1] > -_ARRIVED_TOL, state.value.q
+
+        # A synchronous move the firmware plans, answered once the arm reads back at the target.
+        home = np.zeros(_ARM_JOINTS)
+        answer = sync_move(command.JointPosition(home))
+        for _ in range(100):
+            if answer.done():
+                break
+            pump(0.1)
+        answer.result()
+        assert np.allclose(state.value.q, home, atol=_ARRIVED_TOL), state.value.q
+        assert state.value.status == RobotStatus.AVAILABLE, state.value.status
+
+        print(f'ee_pose {state.value.ee_pose}')
+        print('Trossen driver smoke passed')
