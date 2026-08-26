@@ -179,7 +179,10 @@ def test_a_streamed_joint_command_reaches_the_arm():
 
 
 def test_a_setpoint_never_asks_a_joint_for_more_than_it_may_travel_in_a_tick():
-    """Past its velocity limit the controller faults and drops the arm, so no goal may ask for that."""
+    """Past its velocity limit the controller faults and drops the arm, so no goal may ask for that.
+
+    The ramp also comes up to speed rather than starting at it, so the first steps are smaller still.
+    """
     arm = FakeArm()
     driver, _, loop = _driven(arm)
     commands = ManualCommandReceiver()
