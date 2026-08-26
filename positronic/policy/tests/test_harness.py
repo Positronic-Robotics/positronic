@@ -23,7 +23,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import DelegatingSession, Layer, Policy, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import Harness, _InferenceWorker
+from positronic.policy.harness import Harness, _EpisodeInference
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.remote import INFER, RemoteSession, round_trip
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -199,9 +199,39 @@ class _FakeInferenceSession(InferenceSession):
         pass
 
 
-class RemoteStubPolicy(Policy):
-    """A stub policy served through a real ``RemoteSession`` over a fake inference session, so its inference
-    round-trips ``RemoteSession.__call__`` and records the ``policy.infer`` span independent of any layer."""
+class ServedPolicy(Policy):
+    """A policy whose model runs in a served function: a real ``RemoteSession`` over the ``InferenceSession``
+    it is given, so its inference round-trips ``RemoteSession.__call__`` and records the ``policy.infer``
+    span independent of any layer.
+
+    A model that costs wall time, hangs or raises belongs in that session's ``infer``.
+    """
+
+    def __init__(self, session: InferenceSession) -> None:
+        self._session = session
+
+    def new_session(self, context=None, now=None, rt=None) -> RemoteSession:
+        assert rt is not None, 'the harness supplies the runtime'
+        return RemoteSession(self._session, rt)
+
+    @property
+    def functions(self):
+        return {INFER: round_trip}
+
+
+def slow_chunk(span_sec: float = 0.2, steps: int = 10) -> list[dict[str, Any]]:
+    """A chunk of ``steps`` waypoints over ``span_sec``, which a scheduler plays for that long before it
+    asks again."""
+    dt = span_sec / steps
+    pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
+    return [
+        {keys.ROBOT_COMMAND: CartesianPosition(pose=pose), keys.TARGET_GRIP: float(i), keys.ACTION_TIMESTAMP: i * dt}
+        for i in range(steps)
+    ]
+
+
+class RemoteStubPolicy(ServedPolicy):
+    """A stub policy answering a canned chunk after ``wall_sec`` of real time."""
 
     def __init__(
         self,
@@ -213,19 +243,10 @@ class RemoteStubPolicy(Policy):
         if command is None:
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             command = CartesianPosition(pose=pose)
-        self.command = command
-        self.target_grip = float(target_grip)
-        self.wall_sec = wall_sec
-        self._chunk = chunk
-
-    def new_session(self, context=None, now=None, rt=None) -> RemoteSession:
-        assert rt is not None, 'the harness supplies the runtime'
-        action = self._chunk or [{'robot_command': self.command, 'target_grip': self.target_grip, 'timestamp': 0.0}]
-        return RemoteSession(_FakeInferenceSession(action, self.wall_sec), rt)
-
-    @property
-    def functions(self):
-        return {INFER: round_trip}
+        action = chunk or [
+            {keys.ROBOT_COMMAND: command, keys.TARGET_GRIP: float(target_grip), keys.ACTION_TIMESTAMP: 0.0}
+        ]
+        super().__init__(_FakeInferenceSession(action, wall_sec))
 
 
 @pytest.fixture
@@ -651,6 +672,68 @@ def test_the_world_stopping_under_a_live_episode_fails_the_call(world):
         answer.result()
 
 
+@pytest.mark.timeout(10.0)
+def test_an_uncharged_wait_ends_when_the_world_comes_down(world):
+    """An uncharged trial waits its function out, so a model that never answers would hold the loop for ever.
+    The wait ends on ``should_stop`` as well."""
+    never_answers = threading.Event()
+
+    class _HangingPolicy(Policy):
+        class _Session(Session):
+            def __init__(self, rt):
+                self._rt = rt
+
+            def __call__(self, obs):
+                self._rt.fns[INFER]()
+                return None
+
+        def new_session(self, context=None, now=None, rt=None):
+            assert rt is not None
+            return _HangingPolicy._Session(rt)
+
+        @property
+        def functions(self):
+            return {INFER: never_answers.wait}
+
+    inference = _EpisodeInference(_HangingPolicy(), {}, charges_wall_time=False, clock=world.clock)
+    try:
+        inference({})  # starts the function, which never answers
+        world.request_stop()
+        inference.wait(world.should_stop_reader())
+    finally:
+        never_answers.set()
+
+
+@pytest.mark.timeout(3.0)
+def test_a_session_that_raises_fails_the_call_that_asked_for_the_episode(world):
+    """The session is called on the loop thread, so its failure reaches whoever asked for the episode rather
+    than the log."""
+
+    class _RaisingSession(Session):
+        def __call__(self, obs):
+            raise RuntimeError('inference boom')
+
+    class _RaisingPolicy(Policy):
+        def new_session(self, context=None, now=None, rt=None):
+            return _RaisingSession()
+
+    harness = Harness(_RaisingPolicy(), make_embodiment())
+    p = _pair_all(world, harness)
+    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    driver = ManualDriver([
+        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
+        (None, 0.02),
+    ])
+
+    scheduler = world.start([harness, driver])
+    answer = p['perform_task'](Task(instruction_source='test', timeout_sec=None))
+    with pytest.raises(RuntimeError, match='inference boom'):
+        drive_scheduler(scheduler, steps=40)
+
+    with pytest.raises(RuntimeError, match='inference boom'):
+        answer.result()
+
+
 @pytest.mark.timeout(3.0)
 def test_trial_ends_at_its_timeout(world):
     """Nothing ever lands on ``done``, yet the trial still ends at ``task.timeout_sec``: terminated=False."""
@@ -1010,10 +1093,12 @@ def test_trial_seed_reaches_task_reset_and_meta(world):
 
 @pytest.mark.timeout(3.0)
 def test_timeout_during_inference_drops_the_chunk(world):
-    """A trial whose deadline lapses while the model is still inside its call ends with the call in flight:
-    the trajectory it eventually returns is discarded, never emitted past the advertised termination point."""
+    """A trial whose deadline lapses while the model is still inside its function ends with that function in
+    flight: the trajectory it eventually returns is discarded, never emitted past the advertised termination
+    point."""
     harness = Harness(
-        ChunkedSchedule().wrap(SlowPolicy(wall_sec=0.3)),  # the call runs well past the deadline
+        # the function runs well past the deadline
+        ChunkedSchedule().wrap(RemoteStubPolicy(wall_sec=0.3, chunk=slow_chunk())),
         make_embodiment(simulated=True),
     )
     cmd_recorder = RecordingEmitter()
@@ -1086,33 +1171,27 @@ def test_a_call_arriving_mid_episode_is_refused(world):
     assert policy.reset_calls == 1
 
 
-class _FrameWatchingPolicy(Policy):
-    """Reads its camera frame at both ends of a slow call, so a rewrite underneath it shows up as a difference."""
+class _FrameWatchingSession(_FakeInferenceSession):
+    """Reads its camera frame at both ends of a slow function, so a rewrite underneath it shows up as a
+    difference."""
 
     def __init__(self, wall_sec: float):
-        self._wall_sec = wall_sec
+        super().__init__([], wall_sec)
         self.seen: list[tuple[np.ndarray, np.ndarray]] = []
 
-    def new_session(self, context=None, now=None, rt=None):
-        return _FrameWatchingPolicy._Session(self)
-
-    class _Session(Session):
-        def __init__(self, policy: '_FrameWatchingPolicy'):
-            self._policy = policy
-
-        def __call__(self, obs):
-            entry = np.array(obs[CAM])
-            time.sleep(self._policy._wall_sec)
-            self._policy.seen.append((entry, np.array(obs[CAM])))
-            return None
+    def infer(self, obs):
+        entry = np.array(obs[CAM])
+        super().infer(obs)
+        self.seen.append((entry, np.array(obs[CAM])))
+        return []
 
 
 @pytest.mark.timeout(10.0)
 def test_a_producer_reusing_its_buffer_cannot_rewrite_a_pending_observation(world):
-    """A camera renders into the array behind the adapter it re-emits, and a wall-charged call runs while the
-    loop yields — so the observation handed to the worker has to be its own copy."""
-    policy = _FrameWatchingPolicy(wall_sec=0.3)
-    harness = Harness(policy, make_embodiment())
+    """A camera renders into the array behind the adapter it re-emits, and a wall-charged trial keeps the loop
+    stepping while the function runs — so the observation handed to that function has to be its own copy."""
+    watcher = _FrameWatchingSession(wall_sec=0.3)
+    harness = Harness(ServedPolicy(watcher), make_embodiment())
     p = _pair_all(world, harness)
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     frame = pimm.shared_memory.NumpySMAdapter((2, 2, 3), np.dtype(np.uint8))
@@ -1133,36 +1212,38 @@ def test_a_producer_reusing_its_buffer_cannot_rewrite_a_pending_observation(worl
     scheduler = world.start([harness, driver])
     drive_scheduler(scheduler, steps=60)
 
-    assert policy.seen, 'the policy was never called'
-    entry, exit_ = policy.seen[0]
-    np.testing.assert_array_equal(entry, exit_, 'the observation was rewritten while the call was in flight')
+    assert watcher.seen, 'the policy was never called'
+    entry, exit_ = watcher.seen[0]
+    np.testing.assert_array_equal(entry, exit_, 'the observation was rewritten while the function was in flight')
 
 
-class _AbandonedCallPolicy(Policy):
-    """Records the order of session openings and call completions, with a call that outlives its episode."""
+class _AbandonedCallPolicy(ServedPolicy):
+    """Records the order of session openings and function completions, with a function that outlives its
+    episode."""
+
+    class _Infer(_FakeInferenceSession):
+        def __init__(self, events: list[str], wall_sec: float):
+            super().__init__([], wall_sec)
+            self._events = events
+
+        def infer(self, obs):
+            answer = super().infer(obs)
+            self._events.append('answered')
+            return answer
 
     def __init__(self, wall_sec: float):
-        self._wall_sec = wall_sec
         self.events: list[str] = []
+        super().__init__(_AbandonedCallPolicy._Infer(self.events, wall_sec))
 
     def new_session(self, context=None, now=None, rt=None):
         self.events.append('open')
-        return _AbandonedCallPolicy._Session(self)
-
-    class _Session(Session):
-        def __init__(self, policy: '_AbandonedCallPolicy'):
-            self._policy = policy
-
-        def __call__(self, obs):
-            time.sleep(self._policy._wall_sec)
-            self._policy.events.append('answered')
-            return None
+        return super().new_session(context, now, rt)
 
 
 @pytest.mark.timeout(10.0)
 def test_a_new_episode_waits_out_the_call_the_last_one_abandoned(world):
-    """An in-process policy is one model across episodes, so opening a session must not overtake a call
-    still inside the previous one — ``new_session`` resets the object that call is using."""
+    """An in-process policy is one model across episodes, so opening a session must not overtake a function
+    still inside the previous one — ``new_session`` resets the object that function is using."""
     policy = _AbandonedCallPolicy(wall_sec=0.4)
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
@@ -1171,8 +1252,8 @@ def test_a_new_episode_waits_out_the_call_the_last_one_abandoned(world):
 
     driver = ManualDriver([
         (partial(p['perform_task'], Task(instruction_source='ep1', timeout_sec=None)), 0.0),
-        (emit_obs, 0.01),  # the observation that puts a call on the worker
-        (partial(p['done_em'].emit, OPERATOR_DONE), 0.02),  # while that call is still running
+        (emit_obs, 0.01),  # the observation that starts the function
+        (partial(p['done_em'].emit, OPERATOR_DONE), 0.02),  # while that function is still running
         (partial(p['perform_task'], Task(instruction_source='ep2', timeout_sec=None)), 0.02),
         (None, 0.02),
     ])
@@ -1181,7 +1262,7 @@ def test_a_new_episode_waits_out_the_call_the_last_one_abandoned(world):
     drive_scheduler(scheduler, steps=40)
 
     assert policy.events[:3] == ['open', 'answered', 'open'], (
-        f'the second session opened before the abandoned call answered: {policy.events}'
+        f'the second session opened before the abandoned function answered: {policy.events}'
     )
 
 
@@ -1712,52 +1793,15 @@ def test_anchored_chunk_passes():
 
 @pytest.mark.parametrize(('expired', 'scheduled'), [(True, False), (False, True)])
 def test_a_reply_is_scheduled_only_while_the_trial_still_has_budget(world, expired, scheduled):
-    """A trial advertises the instant it stops at. A call whose rounds in flight carried the world past that
-    instant has its chunk dropped instead of placed, and ``_run`` finishes the trial on the next round."""
-    policy = StubPolicy()
-    harness = Harness(policy, make_embodiment())
+    """A trial advertises the instant it stops at. A chunk answered after the world passed that instant is
+    dropped instead of placed, and ``_run`` finishes the trial on the next round."""
+    harness = Harness(StubPolicy(), make_embodiment())
     now = world.clock.now()
     harness._deadline = now - 1.0 if expired else now + 1.0
-    harness._worker = _InferenceWorker(policy, {}, charges_wall_time=True, clock=world.clock)
-    harness._worker.submit({})
 
-    harness._throttle_and_reschedule(harness._worker, world.clock)
+    harness._reschedule(slow_chunk(), world.clock)
 
     assert bool(harness._schedules[keys.ROBOT_COMMAND]) is scheduled
-
-
-def slow_chunk(span_sec: float = 0.2, steps: int = 10) -> list[dict[str, Any]]:
-    """A chunk of ``steps`` waypoints over ``span_sec``, which a scheduler plays for that long before it
-    asks again."""
-    dt = span_sec / steps
-    pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
-    return [
-        {keys.ROBOT_COMMAND: CartesianPosition(pose=pose), keys.TARGET_GRIP: float(i), keys.ACTION_TIMESTAMP: i * dt}
-        for i in range(steps)
-    ]
-
-
-class _SlowSession(Session):
-    """A session whose inference costs ``wall_sec`` of real time and returns a fixed-length chunk."""
-
-    def __init__(self, wall_sec: float, span_sec: float, steps: int):
-        self._wall_sec = wall_sec
-        self._span_sec = span_sec
-        self._steps = steps
-
-    def __call__(self, obs):
-        time.sleep(self._wall_sec)
-        return slow_chunk(self._span_sec, self._steps)
-
-
-class SlowPolicy(Policy):
-    def __init__(self, wall_sec: float = 0.0, span_sec: float = 0.2, steps: int = 10):
-        self._wall_sec = wall_sec
-        self._span_sec = span_sec
-        self._steps = steps
-
-    def new_session(self, context=None, now=None, rt=None):
-        return _SlowSession(self._wall_sec, self._span_sec, self._steps)
 
 
 class _ReplanEarly(Layer):
@@ -1778,7 +1822,8 @@ class _ReplanEarly(Layer):
             if self._replan_at is not None and t0 < self._replan_at:
                 return None
             result = self._inner(obs)
-            assert result is not None, 'the inner policy of this test layer always returns a chunk'
+            if result is None:  # the function it asked has still to answer
+                return None
             anchor = self._now()
             result = [{**action, keys.ACTION_TIMESTAMP: anchor + action[keys.ACTION_TIMESTAMP]} for action in result]
             self._replan_at = t0 + (result[-1][keys.ACTION_TIMESTAMP] - t0) / 2
@@ -1833,50 +1878,37 @@ def _run_episode(
     return grip_recorder.emitted
 
 
-def _slow_policies(wall_sec: float) -> list:
-    """A model that takes ``wall_sec`` in each home it can run in: inside the session call, and inside a
-    function the session starts and returns from at once. The trial pays the same for both.
-
-    Both answer the same chunk. A shorter chunk is played out sooner, so the home that answered it runs
-    the model more times over the trial and pays more for it.
-    """
-    return [
-        pytest.param(SlowPolicy(wall_sec=wall_sec), id='in-the-call'),
-        pytest.param(RemoteStubPolicy(wall_sec=wall_sec, chunk=slow_chunk()), id='in-a-function'),
-    ]
-
-
 @pytest.mark.timeout(20.0)
-@pytest.mark.parametrize('policy', _slow_policies(0.05))
-def test_an_uncharged_call_pauses_the_world(world, policy):
+def test_an_uncharged_call_pauses_the_world(world):
     """Sim's default charges nothing: the world does not advance while the model runs, so the chunk is
-    anchored at the observation's own instant however long the call really took."""
+    anchored at the observation's own instant however long the function really took."""
+    policy = RemoteStubPolicy(wall_sec=0.05, chunk=slow_chunk())
     played = _run_episode(world, policy, ChunkedSchedule(), charge_inference_time=False)
 
     assert played, 'no command was played'
-    assert played[0][0] < 0.05, f'the world paid for the call: first command at {played[0][0]}s'
+    assert played[0][0] < 0.05, f'the world paid for the function: first command at {played[0][0]}s'
 
 
 @pytest.mark.timeout(20.0)
-@pytest.mark.parametrize('policy', _slow_policies(0.2))
-def test_a_charged_call_costs_its_own_wall_duration(world, policy):
+def test_a_charged_call_costs_its_own_wall_duration(world):
     """``charge_inference_time=True`` charges the world what the model really took, so a slow server is scored
     as slow — at the cost of a trace that inherits the machine's noise."""
+    policy = RemoteStubPolicy(wall_sec=0.2, chunk=slow_chunk())
     played = _run_episode(world, policy, ChunkedSchedule(), charge_inference_time=True)
 
     assert played, 'no command was played'
-    assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the call took'
+    assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the function took'
 
 
 @pytest.mark.timeout(20.0)
-@pytest.mark.parametrize('policy', _slow_policies(0.2))
-def test_a_real_rig_pays_wall_time_whatever_the_trial_asks_for(world, policy):
-    """The knob is sim-only: a real rig pays what its calls take, so a task leaving
+def test_a_real_rig_pays_wall_time_whatever_the_trial_asks_for(world):
+    """The knob is sim-only: a real rig pays what its functions take, so a task leaving
     ``charge_inference_time`` unset does not hold the world for them."""
+    policy = RemoteStubPolicy(wall_sec=0.2, chunk=slow_chunk())
     played = _run_episode(world, policy, ChunkedSchedule(), charge_inference_time=False, simulated=False)
 
     assert played, 'no command was played'
-    assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the call took'
+    assert played[0][0] >= 0.2, f'first command at {played[0][0]}s, under the 0.2s the function took'
 
 
 class _ObservedTicks(Layer):
@@ -1901,13 +1933,16 @@ class _ObservedTicks(Layer):
 @pytest.mark.timeout(30.0)
 def test_the_layers_see_every_tick(world):
     """What a temporal stack records: nothing keeps an observation from the layers above the scheduler —
-    not the machine inside the model call, and not the rounds in between."""
+    not the machine time inside the function, and not the rounds in between.
+
+    The trial charges its inference, because an uncharged one holds the world and leaves no tick to miss.
+    """
     ticks = _ObservedTicks()
     _run_episode(
         world,
-        SlowPolicy(wall_sec=0.01, span_sec=0.3, steps=15),
+        RemoteStubPolicy(wall_sec=0.01, chunk=slow_chunk(0.3, 15)),
         ticks | ChunkedSchedule(),
-        charge_inference_time=False,
+        charge_inference_time=True,
         run_sec=1.0,
     )
 
@@ -1921,7 +1956,7 @@ def test_harness_keeps_playing_while_a_call_is_in_flight(world):
     """A layer that replans before its chunk is exhausted leaves waypoints due during inference, and the
     harness emits them on time instead of standing still until the model answers."""
     played = _run_episode(
-        world, SlowPolicy(wall_sec=0.15, span_sec=0.4, steps=20), _ReplanEarly(), charge_inference_time=True
+        world, RemoteStubPolicy(wall_sec=0.15, chunk=slow_chunk(0.4, 20)), _ReplanEarly(), charge_inference_time=True
     )
 
     # The first chunk lands at ~0.15s and spans 0.4s; the second call starts halfway through it (~0.28s) and
@@ -2011,7 +2046,7 @@ def test_a_stop_clears_the_chunk_in_the_round_the_fault_is_seen(world):
     """A stop has no waypoints to place: an arm that faults mid-chunk stops in the round its fault is seen."""
     fault_at, period = 0.5, 0.005
     stack = StopOnFault() | ChunkedSchedule()
-    harness = Harness(stack.wrap(SlowPolicy(span_sec=1.0, steps=50)), make_embodiment(simulated=True))
+    harness = Harness(stack.wrap(RemoteStubPolicy(chunk=slow_chunk(1.0, 50))), make_embodiment(simulated=True))
     grip_recorder = _TimedRecorder(world.clock)
     harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
     harness.commands[keys.TARGET_GRIP]._bind(grip_recorder)
@@ -2039,23 +2074,20 @@ def test_a_stop_clears_the_chunk_in_the_round_the_fault_is_seen(world):
 @pytest.mark.timeout(20.0)
 def test_finish_does_not_wait_for_the_call_in_flight():
     """Finishing ends the episode where it lands: the recording stops while the model is still inside its
-    call, and the failure that call ends in reaches nobody.
+    function, and the failure that function ends in reaches the log alone.
 
-    Real time, real rig: a wall-charged call is the only one the harness leaves in flight across rounds.
+    Real time, real rig: a wall-charged trial is the one that leaves the loop running while a function is in
+    flight.
     """
     hang_sec = 1.0
 
-    class _HangingSession(Session):
-        def __call__(self, obs):
-            time.sleep(hang_sec)
+    class _HangingInfer(_FakeInferenceSession):
+        def infer(self, obs):
+            super().infer(obs)
             raise RuntimeError('inference boom')
 
-    class _HangingPolicy(Policy):
-        def new_session(self, context=None, now=None, rt=None):
-            return _HangingSession()
-
     with pimm.World() as world:
-        harness = Harness(_HangingPolicy(), make_embodiment())
+        harness = Harness(ServedPolicy(_HangingInfer([], hang_sec)), make_embodiment())
         cmd_recorder = RecordingEmitter()
         ds_recorder = _TimedRecorder(world.clock)
         harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
@@ -2080,28 +2112,24 @@ def test_finish_does_not_wait_for_the_call_in_flight():
 
     stops = [(t, data) for t, data in ds_recorder.emitted if data.type == DsWriterCommandType.STOP_EPISODE]
     assert len(stops) == 1
-    assert stops[0][0] - started < hang_sec, 'the stop waited for the call to answer'
+    assert stops[0][0] - started < hang_sec, 'the stop waited for the function to answer'
 
 
 @pytest.mark.timeout(20.0)
 def test_the_run_ends_only_once_the_call_it_abandoned_is_out_of_the_policy():
-    """A sweep runs a harness per eval over one shared policy, so a call still inside the model when a run
-    ends would meet the next run's ``new_session`` — or ``policy.close()``. The run outlives its own call."""
+    """A sweep runs a harness per eval over one shared policy, so a function still inside the model when a run
+    ends would meet the next run's ``new_session`` — or ``policy.close()``. The run outlives its own work."""
     hang_sec = 1.0
     left_the_model = threading.Event()
 
-    class _HangingSession(Session):
-        def __call__(self, obs):
-            time.sleep(hang_sec)
+    class _HangingInfer(_FakeInferenceSession):
+        def infer(self, obs):
+            answer = super().infer(obs)
             left_the_model.set()
-            return None
-
-    class _HangingPolicy(Policy):
-        def new_session(self, context=None, now=None, rt=None):
-            return _HangingSession()
+            return answer
 
     with pimm.World() as world:
-        harness = Harness(_HangingPolicy(), make_embodiment())
+        harness = Harness(ServedPolicy(_HangingInfer([], hang_sec)), make_embodiment())
         harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
         harness.commands[keys.TARGET_GRIP]._bind(RecordingEmitter())
         harness.ds_command._bind(RecordingEmitter())
@@ -2121,36 +2149,32 @@ def test_the_run_ends_only_once_the_call_it_abandoned_is_out_of_the_policy():
         ])
         drive_scheduler(world.start([harness, driver]), steps=40)
 
-    assert left_the_model.is_set(), 'the run returned with a call still inside the shared policy'
+    assert left_the_model.is_set(), 'the run returned with a function still inside the shared policy'
 
 
 @pytest.mark.timeout(20.0)
 def test_the_session_is_closed_only_once_its_call_has_left_it():
-    """``RemoteSession.close`` shuts the websocket the call in flight is talking over, and ``Session`` asks
-    for no thread safety, so the session is retired with its worker and closed once that worker is joined."""
+    """``RemoteSession.close`` shuts the websocket the function in flight is talking over, and ``Session``
+    asks for no thread safety, so the session is retired with its runtime and closed after it."""
     inside_at_close = []
 
-    class _HangingSession(Session):
+    class _HangingInfer(_FakeInferenceSession):
         def __init__(self):
+            super().__init__([], wall_sec=1.0)
             self.inside = False
 
-        def __call__(self, obs):
+        def infer(self, obs):
             self.inside = True
             try:
-                time.sleep(1.0)
-                return None
+                return super().infer(obs)
             finally:
                 self.inside = False
 
         def close(self):
             inside_at_close.append(self.inside)
 
-    class _HangingPolicy(Policy):
-        def new_session(self, context=None, now=None, rt=None):
-            return _HangingSession()
-
     with pimm.World() as world:
-        harness = Harness(_HangingPolicy(), make_embodiment())
+        harness = Harness(ServedPolicy(_HangingInfer()), make_embodiment())
         harness.commands[keys.ROBOT_COMMAND]._bind(RecordingEmitter())
         harness.commands[keys.TARGET_GRIP]._bind(RecordingEmitter())
         harness.ds_command._bind(RecordingEmitter())
@@ -2170,7 +2194,7 @@ def test_the_session_is_closed_only_once_its_call_has_left_it():
         ])
         drive_scheduler(world.start([harness, driver]), steps=40)
 
-    assert inside_at_close == [False], 'the session was closed while its own call was still inside it'
+    assert inside_at_close == [False], 'the session was closed while its own function was still inside it'
 
 
 @pytest.mark.timeout(3.0)
@@ -2246,7 +2270,8 @@ def test_manual_commands_are_emitted_as_plain_values(world):
 def test_finishing_discards_a_call_that_is_still_in_flight(world):
     """Finishing while the model is still inside its call throws that answer away: the trajectory it carries
     never reaches the devices."""
-    harness = Harness(ChunkedSchedule().wrap(SlowPolicy(wall_sec=1.0)), make_embodiment(simulated=True))
+    policy = RemoteStubPolicy(wall_sec=1.0, chunk=slow_chunk())
+    harness = Harness(ChunkedSchedule().wrap(policy), make_embodiment(simulated=True))
     cmd_recorder = RecordingEmitter()
     harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
     harness.commands[keys.TARGET_GRIP]._bind(RecordingEmitter())
@@ -2262,7 +2287,7 @@ def test_finishing_discards_a_call_that_is_still_in_flight(world):
     driver = ManualDriver([
         (partial(perform_task, Task(instruction_source='t', timeout_sec=None, charge_inference_time=True)), 0.0),
         (partial(emit_ready_payload, frame_em, robot_em, grip_em, robot_state), 0.001),
-        (None, 0.05),  # well inside the 1.0s the call takes
+        (None, 0.05),  # well inside the 1.0s the function takes
         (partial(done_em.emit, OPERATOR_DONE), 0.0),
         (None, 0.05),
     ])

@@ -132,13 +132,14 @@ episode lifecycle — nothing else. Scheduling, blending, history stacking and e
 the layer stack around the policy; a session returning `None` means "keep executing the current
 trajectory".
 
-**Inference cost is a fact of the trial, owned by the harness.** A call costs the trial either the
-wall time it took or nothing: the task's `charge_inference_time` flag asks a sim for the former,
-and a real rig pays it regardless. Only the harness reads the flag. Paying nothing means holding the
-world for the call, which holds a virtual clock still; paying wall time means letting the world run,
-though no further ahead of the call's start than wall time has. The clock the harness hands the
-policy stack (`now`) reads the instant the in-flight call's output takes effect, so a scheduling
-layer stamps its chunk at `now()` and never learns the mode.
+**Inference cost is a fact of the trial, owned by the harness.** The policy declares its heavy work
+as functions, and the framework runs each one off the loop thread. That work costs the trial either
+the wall time it took or nothing: the task's `charge_inference_time` flag asks a sim for the former,
+and a real rig pays it regardless. Only the harness reads the flag. Paying nothing means the loop
+waits for the work, which keeps a virtual clock still; paying wall time means letting the world run,
+though no further ahead of the work's start than wall time has. The clock the harness hands the
+policy stack (`now`) is the world clock, so a scheduling layer stamps its chunk at `now()` and never
+learns the mode.
 
 **Recordings are canonical; codecs bind the dialect late.** The dataset records every run in the
 canonical conventions (frames, key names, absolute time) — never in a model's dialect. Every

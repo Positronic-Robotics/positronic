@@ -70,7 +70,8 @@ class Session(ABC):
 
     @abstractmethod
     def __call__(self, obs: Mapping[str, Any]) -> list[dict[str, Any]] | None:
-        """Predict actions for the given observation."""
+        """Predict actions for the given observation, without waiting: heavy work belongs in
+        ``Policy.functions``."""
 
     @property
     def meta(self) -> dict[str, Any]:
