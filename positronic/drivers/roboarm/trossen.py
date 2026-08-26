@@ -49,11 +49,15 @@ logger = logging.getLogger(__name__)
 _ARM_JOINTS = 6
 _GRIPPER_JOINT = 6
 _HZ = 100
-# Goal time for a setpoint: one tick, so the firmware interpolates linearly across the gap to the next one.
-# At or below 0.001 s it applies the goal as a step instead, and asks the servo for whatever acceleration
-# closes the distance at once. Every setpoint is one tick away by construction, so this is the only one.
-_GOAL_TIME_S = 1.0 / _HZ
-_MOVE_TIMEOUT_S = 5.0  # a joint crosses its whole range well inside this at the speed below
+# Goal time for a streamed setpoint: one tick, so the firmware interpolates linearly across the gap to the
+# next one. At or below 0.001 s it applies the goal as a step instead, and asks the servo for whatever
+# acceleration closes the distance at once.
+_STREAM_GOAL_TIME_S = 1.0 / _HZ
+# What a move somebody waits on travels at. Above 0.2 s of goal time the firmware plans the whole move as a
+# quintic, which starts and stops the arm gently — so a move hands it the time and lets it do that.
+_MOVE_SPEED = 0.6  # rad/s
+_MIN_MOVE_TIME_S = 1.0
+_MOVE_TIMEOUT_S = 15.0  # the whole range of a joint at that speed, and time to settle after it
 # The share of the following error the controller allows within which the arm counts as arrived. It holds
 # itself up with that error, so a tolerance tighter than the droop is one no move ever meets.
 _ARRIVED_SHARE = 0.5
@@ -73,13 +77,9 @@ _RECONNECT_MAX_S = 30.0
 # The share of a joint's own velocity limit at which the driver stops driving. Past its limit the controller
 # faults and drops the arm to idle, so the driver stands down before it gets there.
 _VELOCITY_HEADROOM = 0.8
-# The share of that limit a commanded setpoint may ask for. Well under the guard above, so the arm reaching
-# it is the driver driving rather than something else moving the arm.
-_COMMANDED_SHARE = 0.25
-# The share of the following error the controller allows that the driver will drive with. A position servo
-# needs the error to make force — an arm holding itself up against gravity carries tens of milliradians of
-# it — and past what the controller allows it faults, so the arm's own number is what this is a share of.
-_LEAD_SHARE = 0.8
+# The share of a joint's velocity limit a streamed setpoint may ask for. Teleoperation is paced by the hand
+# it follows, so this only bounds what one wild target can ask for.
+_COMMANDED_SHARE = 0.1
 _MJCF_PATH = 'assets/mujoco/trossen_wxai/wxai_follower.xml'
 _EE_SITE = 'ee_site'
 _JOINT_NAMES = ('joint_0', 'joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5')
@@ -293,15 +293,14 @@ class _Arm(DriverRun[command.CommandType]):
         self._grip_open = float(limits[_GRIPPER_JOINT].position_max)
         self._dq_limit = np.array([limits[i].velocity_max for i in range(_ARM_JOINTS)])
         self._dq_max = self._dq_limit * _VELOCITY_HEADROOM
-        self._step_max = self._dq_limit * _COMMANDED_SHARE / _HZ  # what a joint may travel in one tick
+        self._step_max = self._dq_limit * _COMMANDED_SHARE / _HZ  # what a streamed setpoint may move in a tick
         tolerance = np.array([limits[i].position_tolerance for i in range(_ARM_JOINTS)])
-        self._max_lead = tolerance * _LEAD_SHARE
         self._arrived_tol = float(np.min(tolerance) * _ARRIVED_SHARE)
         self._output = driver.get_robot_output()
         self._kin = _Kinematics()
         self._target = np.asarray(self._output.joint.arm.positions, dtype=np.float64)
-        self._ramp = self._target.copy()
-        self._sent = self._target.copy()
+        self._wanted = self._target.copy()
+        self._goal_time = _STREAM_GOAL_TIME_S
         self._anchor: geom.Transform3D | None = None  # the pose last asked for, which the next steps on from
         self._grip_target = self._grip_of(self._output)
         self._arm_unsent, self._grip_unsent = False, False
@@ -376,8 +375,8 @@ class _Arm(DriverRun[command.CommandType]):
         self._output = self.driver.get_robot_output()
         if outside := self.outside_limits():
             self.complain(f'The arm at {self.ip} may refuse position mode: {outside}')
-        self._target = self.q
-        self._ramp = self.q
+        self._target = self._wanted = self.q
+        self._goal_time = _STREAM_GOAL_TIME_S
         self._grip_target = self._grip_of(self._output)
         self.driver.set_all_modes(trossen_arm.Mode.position)
         self._anchor = None  # wherever the arm is now is what a Cartesian target steps on from
@@ -439,12 +438,34 @@ class _Arm(DriverRun[command.CommandType]):
         if self.moves.settle(self.q, self.clock.now()) is MoveStatus.GAVE_UP:
             # Holding the target the arm stopped short of would resume the move once whatever blocked it
             # goes away, long after its asker was told it failed.
-            self._target, self._ramp, self._arm_unsent = self.q, self.q, True
+            self._target = self._wanted = self.q
+            self._goal_time, self._arm_unsent = _STREAM_GOAL_TIME_S, True
+
+    def advance(self) -> None:
+        """Move the setpoint one tick's travel towards the joints last asked for.
+
+        A move the firmware is planning owns the setpoint until it arrives: it is making its own trajectory
+        there, and a setpoint moved under it would be a new move every tick.
+        """
+        if self._goal_time != _STREAM_GOAL_TIME_S:
+            return
+        step = np.clip(self._wanted - self._target, -self._step_max, self._step_max)
+        if np.any(step):
+            self._target, self._arm_unsent = self._target + step, True
 
     def hold_grip(self, grip: float) -> None:
         """Hold the fingers at ``grip``."""
         self._grip_target = float(np.clip(grip, 0.0, 1.0))
         self._grip_unsent = True
+
+    @property
+    def asked_pose(self) -> geom.Transform3D:
+        """The pose the arm was last asked to hold.
+
+        Not the pose it reads: it stands off from what it is given. A step measured from the reading and
+        solved from the joints last asked for spans that standoff, and asks for a jump a step never needs.
+        """
+        return self._anchor if self._anchor is not None else self._kin.fk(self._target)
 
     def _stepped(self, target: geom.Transform3D) -> geom.Transform3D:
         """``target``, one tick's travel on from the pose the arm was last asked for.
@@ -459,8 +480,7 @@ class _Arm(DriverRun[command.CommandType]):
         returns, and only once it has solved for it: an anchor that walked on past a pose with no solution
         would leave every pose after it further out of reach than the last.
         """
-        anchor = self._anchor if self._anchor is not None else self.ee_pose
-        anchor = _towards(self.ee_pose, anchor, _MAX_STANDOFF_M, _MAX_STANDOFF_RAD)
+        anchor = _towards(self.ee_pose, self.asked_pose, _MAX_STANDOFF_M, _MAX_STANDOFF_RAD)
         return _towards(anchor, target, _MAX_STEP_M, _MAX_STEP_RAD)
 
     def _ik(self, pose: geom.Transform3D, *, streamed: bool) -> np.ndarray:
@@ -497,38 +517,35 @@ class _Arm(DriverRun[command.CommandType]):
             case command.CartesianPosition(pose):
                 target = self._ik(pose, streamed=streamed)
             case command.CartesianDelta() as delta_cmd:
-                target = self._ik(delta_cmd.apply(self.ee_pose), streamed=streamed)
+                from_pose = self.asked_pose if streamed else self.ee_pose
+                target = self._ik(delta_cmd.apply(from_pose), streamed=streamed)
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
         return np.clip(target, self._q_lower, self._q_upper)
 
     def track(self, cmd: command.CommandType) -> None:
-        """Hold the arm at the setpoint ``cmd`` asks for, with nobody waiting on the arrival."""
-        self._target, self._arm_unsent = self._target_of(cmd), True
+        """Hold the arm at the setpoint ``cmd`` asks for, with nobody waiting on the arrival.
+
+        Held to what a joint may travel in a tick. Teleoperation is paced by the hand it follows, so this
+        only bounds what one wild target can ask the arm for.
+        """
+        self._wanted = self._target_of(cmd)
+        self._goal_time = _STREAM_GOAL_TIME_S
 
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
-        """Hold the arm where ``call`` asks; ``settle`` answers it once the controller reads back there."""
+        """Hold the arm where ``call`` asks; ``settle`` answers it once the controller reads back there.
+
+        The whole move goes to the firmware with the time to make it in, so the firmware plans it: above
+        0.2 s of goal time that is a quintic, which starts and stops the arm gently. Nothing this driver
+        does itself is as smooth, and a move somebody waits on is exactly where that shows.
+        """
         with pimm.calls.raise_to(call):
             target = self._target_of(call.request, streamed=False)
-            self._target, self._arm_unsent = target, True
+            travel = float(np.max(np.abs(target - self.q)))
+            self._target = self._wanted = target
+            self._goal_time = max(_MIN_MOVE_TIME_S, travel / _MOVE_SPEED)
+            self._arm_unsent = True
             self.moves.accept(call, target, self._arrived_tol, self.clock.now(), _MOVE_TIMEOUT_S)
-
-    def advance(self) -> None:
-        """Move the ramp one tick's travel towards the target, and no further than the target.
-
-        This is where a joint's own velocity limit is kept. Past it the controller faults and drops the arm,
-        and a goal the arm has to cross the workspace to reach would ask for exactly that.
-        """
-        self._ramp = self._ramp + np.clip(self._target - self._ramp, -self._step_max, self._step_max)
-
-    def _setpoint(self) -> np.ndarray:
-        """The joints to ask for this tick: the ramp, held to within reach of where the arm reads.
-
-        The reading bounds what goes out, and is not what the ramp is measured from. Measured from it, an
-        arm that lags leaves the ramp permanently ahead by the clamp, and each tick that the arm closes some
-        of the gap the ramp moves up again — which walks the arm away rather than holding it anywhere.
-        """
-        return self.q + np.clip(self._ramp - self.q, -self._max_lead, self._max_lead)
 
     def _put_goal(self, setpoint: np.ndarray, move_arm: bool) -> None:
         """Hand the controller this tick's setpoint, fingers included where one call carries both.
@@ -538,18 +555,16 @@ class _Arm(DriverRun[command.CommandType]):
         """
         grip_m = self._grip_metres(self._grip_target)
         if move_arm:
-            self.driver.set_all_positions([*setpoint, grip_m], _GOAL_TIME_S, False)
+            self.driver.set_all_positions([*setpoint, grip_m], self._goal_time, False)
         else:
-            self.driver.set_gripper_position(grip_m, _GOAL_TIME_S, False)
+            self.driver.set_gripper_position(grip_m, _STREAM_GOAL_TIME_S, False)
 
     def write(self) -> None:
-        """Put this tick's setpoint on the link, unless the arm is already being held at it."""
-        setpoint = self._setpoint()
-        move_arm = self._arm_unsent or not np.allclose(setpoint, self._sent, atol=1e-4)
-        if not (move_arm or self._grip_unsent):
+        """Put the setpoint on the link, if anything has asked for one since it was last written."""
+        if not (self._arm_unsent or self._grip_unsent):
             return
         try:
-            self._put_goal(setpoint, move_arm)
+            self._put_goal(self._target, self._arm_unsent)
         # rules-allow: swallowed-error — a link that refuses a write reads ERROR; the setpoint stays unsent
         # and goes out again on the next session
         except trossen_arm.RuntimeError as exc:
@@ -557,9 +572,7 @@ class _Arm(DriverRun[command.CommandType]):
             self._command_dead = True
             self._note_link(self.clock.now())
             return
-        if move_arm:
-            self._sent, self._arm_unsent = setpoint, False
-        self._grip_unsent = False
+        self._arm_unsent, self._grip_unsent = False, False
         self._command_dead = False
         self._note_link(self.clock.now())
 
@@ -595,7 +608,8 @@ class _Arm(DriverRun[command.CommandType]):
 
     def stand_down(self) -> None:
         """Hold the arm where it reads, so nothing is driving it while it runs too fast."""
-        self._target, self._ramp, self._arm_unsent = self.q, self.q, True
+        self._target = self._wanted = self.q
+        self._goal_time, self._arm_unsent = _STREAM_GOAL_TIME_S, True
         self.write()
 
     def publish(self) -> None:
