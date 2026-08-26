@@ -501,3 +501,20 @@ def test_a_cartesian_move_nobody_can_judge_the_arrival_of_is_refused(world):
 
     with pytest.raises(NotImplementedError):
         answer.result()
+
+
+def test_a_cartesian_target_does_not_run_away_from_an_arm_that_is_held_up():
+    """Measured against the last target instead, the goal would store up travel to lunge through."""
+    arm = FakeArm()
+    driver, _, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    next(loop)
+    out_of_reach = geom.Transform3D(HELD_POSE.translation + np.array([5.0, 0.0, 0.0]))
+
+    for _ in range(10):  # the fake has no kinematics, so its arm never leaves the pose it reports
+        commands.push(command.CartesianPosition(out_of_reach))
+        next(loop)
+
+    step = np.linalg.norm(_pose_of(arm.poses[-1]).translation - HELD_POSE.translation)
+    assert step == pytest.approx(trossen_driver._MAX_STEP_M, abs=1e-6)
