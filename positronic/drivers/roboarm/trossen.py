@@ -266,6 +266,7 @@ class _Arm(DriverRun[command.CommandType]):
         # The gripper joint's own travel, which grip is normalized against
         self._grip_travel = float(limits[_GRIPPER_JOINT].position_max - limits[_GRIPPER_JOINT].position_min)
         self._grip_closed = float(limits[_GRIPPER_JOINT].position_min)
+        self._grip_open = float(limits[_GRIPPER_JOINT].position_max)
         self._dq_limit = np.array([limits[i].velocity_max for i in range(_ARM_JOINTS)])
         self._dq_max = self._dq_limit * _VELOCITY_HEADROOM
         self._step_max = self._dq_limit * _COMMANDED_SHARE / _HZ  # what a joint may travel in one tick
@@ -322,6 +323,21 @@ class _Arm(DriverRun[command.CommandType]):
         """The gripper joint position that holds the fingers at ``grip``."""
         return self._grip_closed + (1.0 - grip) * self._grip_travel
 
+    def outside_limits(self) -> str:
+        """What reads outside the range the controller reports for it, if anything.
+
+        The controller takes a margin past what it reports — a gripper reading a millimetre below its zero
+        is driven without complaint — but far enough past, and entering position mode faults it and drops
+        the arm, whatever it is then told to do. How much further is not something the SDK says, so this
+        only says what it sees, next to the fault it may explain.
+        """
+        readings = [*self._output.joint.arm.positions, self._output.joint.gripper.position]
+        limits = [*zip(self._q_lower, self._q_upper, strict=True), (self._grip_closed, self._grip_open)]
+        for i, (value, (lower, upper)) in enumerate(zip(readings, limits, strict=True)):
+            if not lower <= value <= upper:
+                return f'joint {i} reads {value:.4f}, outside [{lower:.4f}, {upper:.4f}]'
+        return ''
+
     def _take_control(self) -> None:
         """Put the arm in position mode holding where it reads.
 
@@ -330,6 +346,8 @@ class _Arm(DriverRun[command.CommandType]):
         the arm is wherever it ended up, not where the last session was driving it.
         """
         self._output = self.driver.get_robot_output()
+        if outside := self.outside_limits():
+            self.complain(f'The arm at {self.ip} may refuse position mode: {outside}')
         self._target = self.q
         self._grip_target = self._grip_of(self._output)
         self.driver.set_all_modes(trossen_arm.Mode.position)

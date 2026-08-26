@@ -538,3 +538,14 @@ def test_a_pose_far_from_where_the_arm_stands_is_solved_only_when_it_may_change_
 
     assert kin.ik(far, HOME, max_jump=trossen_driver._MAX_JOINT_JUMP) is None
     assert kin.ik(far, HOME) is not None
+
+
+def test_an_arm_reading_outside_a_joint_range_says_so_and_is_driven_anyway(caplog):
+    """The controller takes a margin past what it reports, so only it knows whether this one is too far."""
+    arm = FakeArm(position=np.append(np.zeros(6), -0.0062))  # the gripper past its own zero
+
+    _, states, loop = _driven(arm)
+    next(loop)
+
+    assert 'joint 6 reads' in caplog.text
+    assert states.emitted[-1][1].status == RobotStatus.AVAILABLE
