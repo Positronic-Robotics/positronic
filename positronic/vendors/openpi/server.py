@@ -24,6 +24,8 @@ from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer
 
 logger = logging.getLogger(__name__)
 
+PREALLOCATE_ENV = 'XLA_PYTHON_CLIENT_PREALLOCATE'
+
 
 ###########################################################################################
 # Subprocess manager for OpenPI WebSocket server
@@ -75,8 +77,7 @@ class OpenpiSubprocess:
         logger.info(f'Starting OpenPI subprocess: {" ".join(command)}')
         env = os.environ.copy()
         # JAX takes ~75% of the GPU at its first use, so a second server on that GPU finds none free.
-        # With no preallocation ``XLA_PYTHON_CLIENT_MEM_FRACTION`` caps each server. Set it per container.
-        env.setdefault('XLA_PYTHON_CLIENT_PREALLOCATE', 'false')
+        env.setdefault(PREALLOCATE_ENV, 'false')
         # Don't pipeline stdout/stderr so we can see the output
         self.process = subprocess.Popen(command, env=env, cwd=str(self.openpi_root))
         self._wait_for_ready(on_progress)
