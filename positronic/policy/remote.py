@@ -74,8 +74,9 @@ class RemoteSession(Session):
         if not self._answer.done():
             return None
         answer, cancelled = self._answer, self._cancelled
-        # Both are cleared before the read, because ``result`` raises what the round trip raised. A cancel
-        # then ends with the answer it was made against, and does not drop the next chunk.
+        # The answer and the flag are cleared before the read, because ``result`` raises what the round
+        # trip raised. A cancel then ends with the answer it was made against, and never drops the next
+        # chunk.
         self._answer, self._cancelled = None, False
         result = answer.result()
         if cancelled:
@@ -120,10 +121,7 @@ class _Endpoint(Policy):
 
     def new_session(self, context=None, now=None, rt=None) -> RemoteSession:
         if rt is None:
-            raise ValueError(
-                'A remote session runs its inference on a runtime: pass rt to new_session. The harness '
-                'passes one, and a caller that opens a session outside the harness must pass one too.'
-            )
+            raise ValueError('A remote session runs its inference on a runtime: pass rt to new_session.')
         compress = bool(self.server_meta().get(keys.COMPRESS_IMAGES))
         ws_session = self._client.new_session()
         return RemoteSession(ws_session, rt, compress_images=compress)

@@ -34,7 +34,7 @@ from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.drivers.roboarm.command import CartesianPosition, JointDelta
 from positronic.policy import Policy, Recorder, is_action
-from positronic.policy.executor import Executor
+from positronic.policy.executor import blocking
 
 # Tap name; the recorder logs each obs/action entity under ``{_TAP}/{key}`` (see recording.py).
 _TAP = 'raw'
@@ -135,18 +135,12 @@ def main(
     image_keys = [k for k in obs if k.startswith(keys.IMAGE_PREFIX)]
 
     rec = Recorder(pos3.sync(output_dir))
-    tapped = rec.tap(_TAP).wrap(policy)
-    rt = Executor(tapped.functions)
-    session = tapped.new_session({keys.TASK: task} if task else None, time.time, rt)
+    tapped = rec.tap(_TAP).wrap(blocking(policy))
+    session = tapped.new_session({keys.TASK: task} if task else None, time.time)
     meta = dict(session.meta)
     name = label or _recording_name(meta)
     try:
-        # A session that gives its inference to a served function answers on the call after the one that
-        # asked. Ask again once the runtime has nothing in flight.
         actions = session(obs)
-        if actions is None:
-            rt.wait()
-            actions = session(obs)
         if actions is not None:
             actions = [a for a in actions if is_action(a)]  # drop the codec's keyless validity sentinel
         n = 0 if actions is None else len(actions)
@@ -160,8 +154,6 @@ def main(
             # only known after inference — a velocity chunk drops the 3D trajectory view.
             rr.send_blueprint(_blueprint(image_keys, _is_cartesian_chunk(actions)))
     finally:
-        # The runtime closes first: a round trip in flight uses the socket that the session closes.
-        rt.close()
         session.close()
 
 

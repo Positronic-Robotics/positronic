@@ -19,6 +19,7 @@ from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.tests.conftest import round_trip
 from positronic.policy import Codec, Policy, RemotePolicy, Session
+from positronic.policy.base import Runtime
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
@@ -237,16 +238,34 @@ def test_pipeline_with_no_rig_side_half_refused_at_startup(make_mock_policy):
         PolicyServer(remote | _StubSource(stub))
 
 
+_INFER = 'infer'
+
+
 class _ScriptedSession(Session):
+    def __init__(self, rt: Runtime):
+        self._rt = rt
+        self._answer = None
+
     def __call__(self, obs):
-        return [{'a': 1.0}, {'a': 2.0}, {'a': 3.0}]
+        if self._answer is None:
+            self._answer = self._rt.fns[_INFER](obs)
+            return None
+        if not self._answer.done():
+            return None
+        answer, self._answer = self._answer, None
+        return answer.result()
 
 
 class _ScriptedPolicy(Policy):
-    """Deterministic base policy: every session returns the same untimestamped chunk."""
+    """Deterministic base policy: every session serves the same untimestamped chunk from its runtime."""
 
     def new_session(self, context=None, now=None, rt=None) -> Session:
-        return _ScriptedSession()
+        assert rt is not None
+        return _ScriptedSession(rt)
+
+    @property
+    def functions(self):
+        return {_INFER: lambda obs: [{'a': 1.0}, {'a': 2.0}, {'a': 3.0}]}
 
 
 def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
@@ -260,11 +279,10 @@ def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
     host, port, _server = start_server(pipeline())
     remote_session, rt = open_session(RemotePolicy(f'{host}:{port}'), now=lambda: clock[0])
 
-    local_session, _ = open_session(inline(pipeline()), now=lambda: clock[0])
+    local_session, local_rt = open_session(inline(pipeline()), now=lambda: clock[0])
 
-    # The wire half answers on the call after the one that asked. The in-process half answers that call.
     remote_actions = round_trip(remote_session, rt, {keys.OBS_TIME_NS: 0})
-    local_actions = local_session({keys.OBS_TIME_NS: 0})
+    local_actions = round_trip(local_session, local_rt, {keys.OBS_TIME_NS: 0})
     assert remote_actions == local_actions
     # Three scripted actions plus the chunk-closing validity sentinel ActionTimestamp appends.
     assert local_actions == [

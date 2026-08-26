@@ -9,7 +9,16 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
 from typing import Any
 
-from positronic.policy.base import Answer, Fn, NotAnswered, Runtime
+from positronic.policy.base import (
+    Answer,
+    DelegatingPolicy,
+    DelegatingSession,
+    Fn,
+    NotAnswered,
+    Policy,
+    Runtime,
+    Session,
+)
 
 
 class Executor(Runtime):
@@ -22,31 +31,29 @@ class Executor(Runtime):
     class _Answer(Answer):
         def __init__(self, name: str, call: Future[Any], read: Callable[['Executor._Answer'], None]):
             self.name = name
-            self._call = call
+            self.call = call
             self._read = read
 
         def done(self) -> bool:
-            return self._call.done()
+            return self.call.done()
 
         def result(self) -> Any:
-            if not self._call.done():
+            if not self.call.done():
                 raise NotAnswered('The call is not answered yet')
             self._read(self)
-            return self._call.result()
+            return self.call.result()
 
         def failure(self) -> BaseException | None:
             """What the call raised, once it has answered. ``None`` when it returned a value or was cancelled."""
-            return None if self._call.cancelled() else self._call.exception()
+            return None if self.call.cancelled() else self.call.exception()
 
     def __init__(self, functions: Mapping[str, Callable[..., Any]], *, max_workers: int = 1):
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
         self._fns: Mapping[str, Fn] = {name: partial(self._start, name, fn) for name, fn in functions.items()}
-        # Every call made and not answered yet, read from the caller's thread while the workers answer. The
-        # lock is reentrant because a call that answers before it is registered runs ``_answered`` inline.
-        self._pending: set[Future[Any]] = set()
-        # Every answer that no caller has read. What is left at close failed with nobody to raise to.
+        # Every answer that no caller has read. A call that has still to answer is one of these, so
+        # ``in_flight`` and ``owes_an_answer`` read this one set.
         self._unread: set[Executor._Answer] = set()
-        self._lock = threading.RLock()
+        self._lock = threading.Lock()
 
     @property
     def fns(self) -> Mapping[str, Fn]:
@@ -56,12 +63,20 @@ class Executor(Runtime):
     def in_flight(self) -> bool:
         """Whether any call is still to answer."""
         with self._lock:
-            return bool(self._pending)
+            return any(not answer.done() for answer in self._unread)
+
+    @property
+    def owes_an_answer(self) -> bool:
+        """Whether any call's answer has still to be read, whether or not that call has landed."""
+        # TODO(#661): a caller polls this because a session cannot say when it wants the next call. Rung 7
+        # gives the session ``resume_at``, and the poll goes with it.
+        with self._lock:
+            return bool(self._unread)
 
     def wait(self, timeout: float | None = None) -> None:
         """Block until every call made so far has answered, or until ``timeout`` seconds pass."""
         with self._lock:
-            pending = set(self._pending)
+            pending = [answer.call for answer in self._unread]
         concurrent.futures.wait(pending, timeout=timeout)
 
     def _start(self, name: str, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Answer:
@@ -69,18 +84,16 @@ class Executor(Runtime):
         call = self._pool.submit(context.run, fn, *args, **kwargs)
         answer = self._Answer(name, call, self._read)
         with self._lock:
-            self._pending.add(call)
             self._unread.add(answer)
-            call.add_done_callback(self._answered)
         return answer
-
-    def _answered(self, call: Future[Any]) -> None:
-        with self._lock:
-            self._pending.discard(call)
 
     def _read(self, answer: '_Answer') -> None:
         with self._lock:
             self._unread.discard(answer)
+
+    @staticmethod
+    def _closed(*args: Any, **kwargs: Any) -> Answer:
+        raise RuntimeError('The runtime is closed and serves nothing')
 
     def close(self) -> None:
         """Drop the queued calls and wait out those in flight, which may still hold their caller's resources.
@@ -90,9 +103,54 @@ class Executor(Runtime):
         """
         self._pool.shutdown(wait=True, cancel_futures=True)
         with self._lock:
+            # A function holds what it was declared with — model weights, a socket. Nothing reaches them
+            # through this runtime after it closes.
             unread, self._unread = self._unread, set()
+            self._fns = dict.fromkeys(self._fns, self._closed)
         for answer in unread:
             # rules-allow: swallowed-error — the caller dropped the answer, so there is nobody to raise to,
             # and the log is the only place the failure can go.
             if (exc := answer.failure()) is not None:
                 logging.error(f'The function {answer.name} failed and no caller read its answer: {exc}')
+
+
+class _BlockingPolicy(DelegatingPolicy):
+    class _Session(DelegatingSession):
+        def __init__(self, inner: Session, rt: Executor):
+            super().__init__(inner)
+            self._rt = rt
+
+        def __call__(self, obs: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+            # The inner session reads an answer only on a later call. A test of ``in_flight`` would exit
+            # on a call that lands while the session call runs, leaving its answer unread.
+            while (actions := self._inner(obs)) is None and self._rt.owes_an_answer:
+                self._rt.wait()
+            return actions
+
+        def close(self):
+            # The runtime closes first: a call in flight is still using what the session holds.
+            self._rt.close()
+            self._inner.close()
+
+    def new_session(self, context=None, now=None, rt=None) -> Session:
+        assert rt is None, 'a blocking policy serves its own functions; nothing above it runs them'
+        own = Executor(self._inner.functions)
+        try:
+            return _BlockingPolicy._Session(self._inner.new_session(context, now, own), own)
+        except BaseException:
+            own.close()
+            raise
+
+    @property
+    def functions(self) -> Mapping[str, Callable[..., Any]]:
+        return {}
+
+
+def blocking(policy: Policy) -> Policy:
+    """``policy`` with its heavy work waited out: a session answers in the call that asked.
+
+    For a caller with no control loop to give the time back to — a server request, a warmup, a probe.
+    Layers wrap the result rather than the other way round, so each sees one call per answer. Layers that
+    ``policy`` composes itself are inside, so those still run once per call.
+    """
+    return _BlockingPolicy(policy)

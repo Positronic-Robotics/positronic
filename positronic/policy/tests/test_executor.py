@@ -4,13 +4,14 @@ import logging
 import operator
 import threading
 import time
+import weakref
 from contextvars import ContextVar
 from functools import partial
 
 import pytest
 
-from positronic.policy.base import Answer, NotAnswered
-from positronic.policy.executor import Executor
+from positronic.policy.base import Answer, DelegatingSession, Layer, NotAnswered, Policy, Session
+from positronic.policy.executor import Executor, blocking
 
 # How long a test waits for the worker threads before calling the call lost.
 TIMEOUT_SEC = 5.0
@@ -134,6 +135,21 @@ def test_a_call_is_in_flight_until_it_answers(serve):
     assert not executor.in_flight
 
 
+def test_nothing_is_owed_before_a_call(serve):
+    assert not serve(add=operator.add).owes_an_answer
+
+
+def test_an_answer_stays_owed_after_its_call_lands_until_it_is_read(serve):
+    executor = serve(add=operator.add)
+    answer = settled(executor.fns['add'](2, 3))
+
+    assert not executor.in_flight
+    assert executor.owes_an_answer
+
+    answer.result()
+    assert not executor.owes_an_answer
+
+
 def test_wait_returns_once_every_call_has_answered(serve):
     executor = serve(sleep=partial(time.sleep, 0.05), add=operator.add)
 
@@ -216,3 +232,155 @@ def test_close_stays_quiet_about_a_call_that_answered(serve, caplog):
         executor.close()
 
     assert caplog.text == ''
+
+
+class _PlainPolicy(Policy):
+    """Serves nothing: its session answers inside the call that asked."""
+
+    class _Session(Session):
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self, obs):
+            self.calls += 1
+            return [{'action': obs}]
+
+    def __init__(self):
+        self.session = _PlainPolicy._Session()
+
+    def new_session(self, context=None, now=None, rt=None) -> Session:
+        return self.session
+
+
+_ECHO = 'echo'
+
+
+class _EchoPolicy(Policy):
+    """Serves ``echo``, and makes sessions that take ``rounds`` calls of it to answer."""
+
+    class _Session(Session):
+        def __init__(self, rt, rounds: int):
+            self._rt = rt
+            self._answer = None
+            self._left = rounds
+            self.calls = 0
+
+        def __call__(self, obs):
+            self.calls += 1
+            result = None
+            if self._answer is not None:
+                result, self._answer = self._answer.result(), None
+            if self._left > 0:
+                self._left -= 1
+                self._answer = self._rt.fns[_ECHO](obs)
+                return None
+            return result
+
+    def __init__(self, rounds: int):
+        self._rounds = rounds
+        self.session: _EchoPolicy._Session
+
+    def new_session(self, context=None, now=None, rt=None) -> Session:
+        assert rt is not None
+        self.session = _EchoPolicy._Session(rt, self._rounds)
+        return self.session
+
+    @property
+    def functions(self):
+        return {_ECHO: lambda obs: obs}
+
+
+class _CountingLayer(Layer):
+    """Counts the calls that reach the session it wraps."""
+
+    def __init__(self):
+        self.calls = 0
+
+    class _Session(DelegatingSession):
+        def __init__(self, inner: Session, layer: '_CountingLayer'):
+            super().__init__(inner)
+            self._layer = layer
+
+        def __call__(self, obs):
+            self._layer.calls += 1
+            return self._inner(obs)
+
+    def make_session(self, inner, context, now):
+        return self._Session(inner, self)
+
+
+@pytest.fixture
+def opened():
+    """Opens the sessions a test asks for, and closes every one at teardown."""
+    sessions = []
+
+    def make(policy: Policy) -> Session:
+        sessions.append(policy.new_session())
+        return sessions[-1]
+
+    yield make
+    for session in sessions:
+        session.close()
+
+
+class TestBlocking:
+    """A policy whose sessions answer in the call that asked."""
+
+    def test_a_session_that_answers_in_its_own_call_is_called_one_time(self, opened):
+        policy = _PlainPolicy()
+
+        assert opened(blocking(policy))({'x': 1}) == [{'action': {'x': 1}}]
+        assert policy.session.calls == 1
+
+    @pytest.mark.parametrize(('rounds', 'calls'), [(1, 2), (2, 3)])
+    def test_a_session_is_called_again_for_every_function_it_starts(self, opened, rounds, calls):
+        policy = _EchoPolicy(rounds)
+
+        assert opened(blocking(policy))({'x': 1}) == {'x': 1}
+        assert policy.session.calls == calls
+
+    def test_a_session_that_starts_nothing_and_answers_none_is_called_one_time(self, opened):
+        policy = _EchoPolicy(rounds=0)
+
+        assert opened(blocking(policy))({'x': 1}) is None
+        assert policy.session.calls == 1
+
+    def test_a_layer_above_it_is_called_one_time_for_one_answer(self, opened):
+        """A layer above ``blocking`` is called once for one answer. That is why ``blocking`` wraps the
+        policy and not the chain: a layer that encodes the observation, or records it, would otherwise do
+        that work once per call the answer took."""
+        layer, policy = _CountingLayer(), _EchoPolicy(rounds=2)
+
+        assert opened(layer.wrap(blocking(policy)))({'x': 1}) == {'x': 1}
+        assert (layer.calls, policy.session.calls) == (1, 3)
+
+    def test_it_serves_its_functions_itself(self):
+        """A blocking policy runs its own functions, so nothing above it builds a runtime for them."""
+        assert blocking(_EchoPolicy(rounds=1)).functions == {}
+
+    def test_closing_the_session_closes_the_runtime_it_made(self):
+        """The session owns the runtime it was made with, and closing the session is the only way to
+        close it."""
+        policy = _EchoPolicy(rounds=1)
+        session = blocking(policy).new_session()
+        session.close()
+
+        # The session's own runtime is closed, so the function it would start is gone.
+        with pytest.raises(RuntimeError):
+            policy.session({'x': 1})
+
+
+class _Weights:
+    """Stands in for what a function is declared with: model weights, a socket."""
+
+
+def test_close_frees_what_the_functions_held(serve):
+    """A closed runtime drops its functions, so the policy that closes next can free the weights."""
+    weights = _Weights()
+    gone = weakref.ref(weights)
+    executor = serve(infer=partial(operator.is_, weights))
+    del weights
+
+    assert gone() is not None
+    executor.close()
+    assert gone() is None

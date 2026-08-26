@@ -1,3 +1,5 @@
+from collections.abc import Callable, Mapping
+from functools import partial
 from typing import Any
 
 import configuronic as cfn
@@ -13,6 +15,7 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.policy import Codec, Policy, Session
+from positronic.policy.base import Answer, Runtime
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.observation import TASK_FIELD
 from positronic.policy.spec import PolicySource, inline
@@ -39,34 +42,6 @@ def _detect_device() -> str:
     return 'cpu'
 
 
-class _LerobotSession(Session):
-    def __init__(self, policy, device: str, meta: dict[str, Any]):
-        self._policy = policy
-        self._device = device
-        self._meta = meta
-
-    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]]:
-        obs_int = {}
-        for key, val in obs.items():
-            if key == TASK_FIELD:
-                obs_int[key] = val
-            elif isinstance(val, np.ndarray):
-                if key.startswith('observation.images.'):
-                    val = np.transpose(val.astype(np.float32) / 255.0, (2, 0, 1))
-                val = val[np.newaxis, ...]
-                obs_int[key] = torch.from_numpy(val).to(self._device)
-            else:
-                obs_int[key] = torch.as_tensor(val).to(self._device)
-
-        action = self._policy.predict_action_chunk(obs_int)
-        action = action.squeeze(0).cpu().numpy()
-        return [{'action': a} for a in action]
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return self._meta
-
-
 def warm_observation(config: PreTrainedConfig) -> dict[str, Any]:
     """Zero-filled inputs matching the features ``config`` declares.
 
@@ -86,15 +61,74 @@ def warm_observation(config: PreTrainedConfig) -> dict[str, Any]:
     return obs
 
 
+def _infer(policy: PreTrainedPolicy, device: str, obs: dict[str, Any]) -> list[dict[str, Any]]:
+    """One model call: an observation in, an action chunk out."""
+    obs_int = {}
+    for key, val in obs.items():
+        if key == TASK_FIELD:
+            obs_int[key] = val
+        elif isinstance(val, np.ndarray):
+            if key.startswith('observation.images.'):
+                val = np.transpose(val.astype(np.float32) / 255.0, (2, 0, 1))
+            val = val[np.newaxis, ...]
+            obs_int[key] = torch.from_numpy(val).to(device)
+        else:
+            obs_int[key] = torch.as_tensor(val).to(device)
+
+    action = policy.predict_action_chunk(obs_int)
+    action = action.squeeze(0).cpu().numpy()
+    return [{'action': a} for a in action]
+
+
 class LerobotPolicy(Policy):
+    _INFER = 'infer'
+
+    class _Session(Session):
+        """Per-episode session that gives the model call to the runtime, and answers the chunk on a later call."""
+
+        def __init__(self, rt: Runtime, meta: dict[str, Any]):
+            self._rt = rt
+            self._meta = meta
+            self._answer: Answer | None = None
+            self._cancelled = False
+
+        def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+            if self._answer is None:
+                self._answer = self._rt.fns[LerobotPolicy._INFER](obs)
+                return None
+            if not self._answer.done():
+                return None
+            answer, cancelled = self._answer, self._cancelled
+            # The answer and the flag are cleared before the read, because ``result`` raises what the model
+            # call raised. A cancel then ends with the answer it was made against, and never drops the next
+            # chunk.
+            self._answer, self._cancelled = None, False
+            result = answer.result()
+            return None if cancelled else result
+
+        def cancel(self):
+            # The cancel says the world the chunk applies to has gone. The session still reads the model call
+            # for its failure, and drops the chunk that comes with it.
+            self._cancelled = self._answer is not None
+
+        @property
+        def meta(self) -> dict[str, Any]:
+            return self._meta
+
     def __init__(self, policy: PreTrainedPolicy, device: str | None = None, extra_meta: dict[str, Any] | None = None):
         self._device = device or _detect_device()
         self._policy = policy.to(self._device)
         self._meta = extra_meta or {}
 
     def new_session(self, context=None, now=None, rt=None):
+        if rt is None:
+            raise ValueError('A lerobot session runs its model on a runtime: pass rt to new_session.')
         self._policy.reset()
-        return _LerobotSession(self._policy, self._device, self._meta)
+        return LerobotPolicy._Session(rt, self._meta)
+
+    @property
+    def functions(self) -> Mapping[str, Callable[..., Any]]:
+        return {self._INFER: partial(_infer, self._policy, self._device)}
 
     @property
     def meta(self) -> dict[str, Any]:

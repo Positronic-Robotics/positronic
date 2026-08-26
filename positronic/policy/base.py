@@ -127,8 +127,8 @@ class Policy(ABC):
             context: The episode's task description.
             now: The runtime clock (current time in seconds), supplied by the harness and passed down
                 to every wrapped session. ``None`` where no runtime clock exists (server-side, warmup).
-            rt: This session's runtime, serving ``functions``. ``None`` where nothing runs them, as in a
-                server's own session. A session that needs one refuses to open without it.
+            rt: This session's runtime, serving ``functions``. ``None`` only where no caller supplied one.
+                A session that needs one refuses to open without it.
         """
 
     @property

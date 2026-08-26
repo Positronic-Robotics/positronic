@@ -20,6 +20,7 @@ from starlette.datastructures import QueryParams
 from positronic import keys
 from positronic.policy import Policy, Recorder
 from positronic.policy.base import Layer
+from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
 
 from . import protocol
@@ -314,15 +315,18 @@ class PolicyServer:
             rid = self._source.resolve(model_id) if model_id is not None else self._default_id
             assert rid is not None
             policy = await self._manager.get_policy(rid, websocket)
+            # A request has no control loop to answer ``None`` to. This goes innermost, so every layer
+            # above it sees one call per answer rather than one per call the answer took.
+            answered = blocking(policy)
             if self._recording_dir is not None:
                 # Tap both sides: 'raw' is the wire boundary, 'inference' the encoded obs and model output.
                 rec = Recorder(self._recording_dir)
                 if remote_half is not None:
-                    served = (rec.tap('raw') | remote_half | rec.tap('inference')).wrap(policy)
+                    served = (rec.tap('raw') | remote_half | rec.tap('inference')).wrap(answered)
                 else:
-                    served = rec.tap('inference').wrap(policy)
+                    served = rec.tap('inference').wrap(answered)
             else:
-                served = remote_half.wrap(policy) if remote_half is not None else policy
+                served = remote_half.wrap(answered) if remote_half is not None else answered
             # ``new_session`` resets the shared backend client, so it must not interleave with an in-flight
             # inference. Keepalives here: queuing behind a peer would otherwise trip the handshake timeout.
             await _acquire_with_keepalives(self._infer_lock, websocket, 'Waiting for inference slot')
