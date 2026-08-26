@@ -174,7 +174,7 @@ def _declared_stack(local: Layer | None) -> dict[str, Any]:
     if local is None:
         raise ValueError(
             'Nothing sits left of the `remote` marker, so the pipeline declares no rig-side stack. Put the '
-            'layers the rig runs there, starting with a scheduler such as ChunkedSchedule'
+            'layers the rig runs there, starting with a scheduler such as ChunkPlayer'
         )
     return local.to_spec()
 

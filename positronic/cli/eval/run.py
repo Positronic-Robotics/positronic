@@ -20,7 +20,7 @@ from positronic.cli.eval.submit import submit
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.eval import Embodiment, Eval, Task
-from positronic.policy.executor import blocking
+from positronic.policy.executor import Executor
 from positronic.policy.harness import Harness
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 
@@ -194,7 +194,11 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     # empty .rrd plus a bump to the recorder's episode counter — but warmup is not a real episode.
     logger.info('Warming up policy endpoints')
     # The session runs no inference, but a session that serves its model on a runtime needs one to open.
-    blocking(policy).new_session().close()
+    warmup = Executor(policy.functions)
+    try:
+        policy.new_session(None, warmup).close()
+    finally:
+        warmup.close()
     output_dir = prepare_output_dir(output_dir)
 
     try:

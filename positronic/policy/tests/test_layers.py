@@ -1,4 +1,4 @@
-"""Unit tests for Layer composition, ChunkedSchedule, TemporalStack, and the policy-pipeline algebra."""
+"""Unit tests for Layer composition, ChunkPlayer, TemporalStack, and the policy-pipeline algebra."""
 
 from typing import Any
 
@@ -11,7 +11,7 @@ from positronic.drivers.roboarm.command import Impedance, JointDelta
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction, JointDeltaAction
-from positronic.policy.base import Layer, Policy, Session
+from positronic.policy.base import ChunkSession, Layer, Policy, Session
 from positronic.policy.codec import (
     ActionHorizon,
     ActionTimestamp,
@@ -23,11 +23,11 @@ from positronic.policy.codec import (
     RestrictImageSize,
     SetControlMode,
 )
-from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
+from positronic.policy.layers import ChunkPlayer, StopOnFault, TemporalStack
 from positronic.policy.observation import ObservationCodec
 
 
-class _ConstSession(Session):
+class _ConstSession(ChunkSession):
     def __init__(self, actions):
         self._actions = actions
         self.call_count = 0
@@ -40,9 +40,9 @@ class _ConstSession(Session):
 class _ConstPolicy(Policy):
     def __init__(self, actions):
         self._actions = actions
-        self._session: _ConstSession | None = None
+        self._session = _ConstSession(actions)
 
-    def new_session(self, context=None, rt=None):
+    def new_session(self, context=None, rt=None) -> _ConstSession:
         self._session = _ConstSession(self._actions)
         return self._session
 
@@ -51,34 +51,46 @@ def _obs(now_sec=0.0, status=RobotStatus.AVAILABLE):
     return {keys.OBS_TIME_NS: int(now_sec * 1e9), keys.ROBOT_STATUS: status}
 
 
+class _CommandSession(Session):
+    """Answers a fixed command mapping and asks for its next call at once, as a layer above a player does."""
+
+    def __init__(self, commands):
+        self._commands = commands
+        self.call_count = 0
+
+    def __call__(self, obs, time_ns):
+        self.call_count += 1
+        return self._commands, time_ns
+
+
 class TestStopOnFault:
     @pytest.mark.parametrize('unavailable', [RobotStatus.ERROR, RobotStatus.BUSY])
     def test_an_unavailable_arm_stops_what_is_executing(self, unavailable):
-        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        inner = _CommandSession({'v': 1})
         session = StopOnFault().make_session(inner)
 
-        assert session(_obs(0.0, unavailable), 0) == []
+        assert session(_obs(0.0, unavailable), 0) == ({}, 0)
         assert inner.call_count == 0, 'the model was asked about an arm that is not tracking it'
 
     def test_an_available_arm_reaches_the_model(self):
-        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        inner = _CommandSession({'v': 1})
         session = StopOnFault().make_session(inner)
 
-        assert session(_obs(0.0, RobotStatus.AVAILABLE), 0) is not None
+        assert session(_obs(0.0, RobotStatus.AVAILABLE), 0) == ({'v': 1}, 0)
         assert inner.call_count == 1
 
     def test_an_observation_with_no_arm_status_reaches_the_model(self):
         """A probe replaying a recording has no arm to stop for."""
-        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        inner = _CommandSession({'v': 1})
         session = StopOnFault().make_session(inner)
 
-        assert session({keys.OBS_TIME_NS: 0}, 0) is not None
+        assert session({keys.OBS_TIME_NS: 0}, 0) == ({'v': 1}, 0)
         assert inner.call_count == 1
 
     def test_either_arm_of_a_bimanual_rig_stops_the_pair(self):
         """Whichever arm is unavailable stops the pair, and the status counts as its number: a server-side stack
         reads it off a wire with no enum to carry."""
-        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        inner = _CommandSession({'v': 1})
         session = StopOnFault().make_session(inner)
         obs = {
             keys.OBS_TIME_NS: 0,
@@ -86,46 +98,47 @@ class TestStopOnFault:
             f'{keys.ROBOT_STATE}.right.status': int(RobotStatus.ERROR),
         }
 
-        assert session(obs, 0) == []
+        assert session(obs, 0) == ({}, 0)
         assert inner.call_count == 0
 
     def test_the_status_a_recording_carries_for_a_taken_arm_stops_the_policy(self):
         """The numbers are the contract between a rig and a server: 1 is an arm its driver has taken."""
-        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        inner = _CommandSession({'v': 1})
         session = StopOnFault().make_session(inner)
 
         assert (RobotStatus.AVAILABLE, RobotStatus.BUSY, RobotStatus.ERROR) == (0, 1, 3)
-        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 1}, 0) == []
+        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 1}, 0) == ({}, 0)
         assert inner.call_count == 0
 
     def test_the_status_published_for_a_travelling_arm_reaches_the_model(self):
         """The wire protocol publishes 2 for an arm on its way to a setpoint, which is one taking commands."""
-        inner = _ConstSession([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        inner = _CommandSession({'v': 1})
         session = StopOnFault().make_session(inner)
 
-        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 2}, 0) is not None
+        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 2}, 0) == ({'v': 1}, 0)
         assert inner.call_count == 1
 
     def test_a_status_no_arm_answers_to_raises(self):
         """A number outside ``RobotStatus`` is the rig and the server disagreeing about the protocol, which
         is not something to drive an arm through."""
-        session = StopOnFault().make_session(_ConstSession([]))
+        session = StopOnFault().make_session(_CommandSession({}))
 
         with pytest.raises(ValueError):
             session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 99}, 0)
 
     def test_recovery_plans_afresh_instead_of_resuming(self):
-        """The stop resets the scheduler below it, so the first observation from an available arm infers
-        again rather than waiting out the chunk stamped before."""
+        """The stop drops the chunk the player holds, so the first observation from an available arm plans
+        again rather than playing out the chunk stamped before."""
         inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 1.0}])
-        session = (StopOnFault() | ChunkedSchedule()).wrap(inner).new_session()
+        session = (StopOnFault() | ChunkPlayer()).wrap(inner).new_session()
 
-        assert session(_obs(0.0), 0) is not None  # a chunk that runs until 1.0
-        assert session(_obs(0.2, RobotStatus.ERROR), int(0.2e9)) == []
-        assert session(_obs(0.3), int(0.3e9)) is not None
+        assert session(_obs(0.0), 0) == ({'v': 1}, int(1e9))  # a chunk that runs until 1.0
+        assert session(_obs(0.2, RobotStatus.ERROR), int(0.2e9)) == ({}, int(0.2e9))
+        assert session(_obs(0.3), int(0.3e9)) == ({'v': 1}, int(1.3e9))
+        assert inner._session.call_count == 2
 
 
-class _ScriptedSession(Session):
+class _ScriptedSession(ChunkSession):
     """Answers each of ``script`` in turn — ``None`` where a session has nothing to place yet."""
 
     def __init__(self, script):
@@ -137,99 +150,95 @@ class _ScriptedSession(Session):
         return self._script.pop(0)
 
 
-class TestChunkedSchedule:
+class TestChunkPlayer:
     def test_an_inner_with_no_answer_yet_is_asked_again(self):
-        """A session that waits for a served function answers ``None``, which is no trajectory. The layer
-        passes the ``None`` on and asks again on the next observation."""
+        """A session that waits for a served function answers ``None``, which is no chunk. The player
+        commands nothing, asks for the next call at once, and asks the session again on it."""
         inner = _ScriptedSession([None, None, [{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]])
-        session = ChunkedSchedule().make_session(inner)
+        session = ChunkPlayer().make_session(inner)
 
-        assert session(_obs(0.0), int(1e9)) is None
-        assert session(_obs(0.1), int(1e9)) is None
-        assert session(_obs(0.2), int(1e9)) == [{'v': 1, keys.ACTION_TIMESTAMP: 1.0}]
+        assert session(_obs(0.0), int(1e9)) == ({}, int(1e9))
+        assert session(_obs(0.1), int(1e9)) == ({}, int(1e9))
+        assert session(_obs(0.2), int(1e9)) == ({'v': 1}, int(1e9))
         assert inner.call_count == 3
 
-    def test_first_call_runs_inference(self):
-        # Relative timestamps: trajectory of duration 0.5s
+    def test_a_chunk_plays_one_waypoint_at_a_time(self):
+        """The player anchors the chunk on the call that receives it and asks for a call at each waypoint."""
         inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
-        policy = ChunkedSchedule().wrap(inner)
-        session = policy.new_session()
-        result = session(_obs(), int(1e9))
-        assert result is not None
-        assert len(result) == 2
-        # Timestamps stamped to absolute by ChunkedSchedule.
-        assert result[0][keys.ACTION_TIMESTAMP] == 1.0
-        assert result[1][keys.ACTION_TIMESTAMP] == 1.5
+        session = ChunkPlayer().wrap(inner).new_session()
 
-    def test_returns_none_while_trajectory_active(self):
-        # The trajectory starts at the call time 1.0 and ends at 1.0+0.5=1.5.
-        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
-        policy = ChunkedSchedule().wrap(inner)
-        session = policy.new_session()
-        session(_obs(), int(1e9))
-        assert session(_obs(), int(1.2e9)) is None
-        assert session(_obs(), int(1.4e9)) is None
+        assert session(_obs(), int(1e9)) == ({'v': 1}, int(1.5e9))
+        assert session(_obs(), int(1.2e9)) == ({}, int(1.5e9))
+        assert inner._session.call_count == 1
 
-    def test_re_infers_after_trajectory_consumed(self):
-        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
-        session = ChunkedSchedule().wrap(inner).new_session()
-        session(_obs(1.0), int(1e9))  # trajectory ends at 1.5
-        assert session(_obs(1.3), int(1.3e9)) is None
-        result = session(_obs(1.6), int(1.6e9))
-        assert result is not None
+    def test_a_channel_with_several_waypoints_due_keeps_the_last(self):
+        """A round that finds more than one waypoint due commands the latest of them."""
+        inner = _ConstPolicy([{'v': i, keys.ACTION_TIMESTAMP: i * 0.1} for i in range(4)])
+        session = ChunkPlayer().wrap(inner).new_session()
+
+        assert session(_obs(), int(1e9)) == ({'v': 0}, int(1.1e9))
+        assert session(_obs(), int(1.25e9)) == ({'v': 2}, int(1.3e9))
+
+    def test_the_call_that_drains_the_chunk_asks_for_the_next_one(self):
+        """Draining and re-querying happen in one call, so the chunk after it starts where this one ended."""
+        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {keys.ACTION_TIMESTAMP: 0.5}])
+        session = ChunkPlayer().wrap(inner).new_session()
+
+        assert session(_obs(), int(1e9)) == ({'v': 1}, int(1.5e9))
+        assert session(_obs(), int(1.5e9)) == ({'v': 1}, int(2.0e9))
         assert inner._session.call_count == 2
 
-    def test_single_action_refires_immediately_after(self):
-        """Single action at ts=0 → trajectory_end is the call's time → next tick re-infers."""
-        policy = ChunkedSchedule().wrap(_ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]))
-        session = policy.new_session()
-        session(_obs(1.0), int(1e9))
-        result = session(_obs(1.01), int(1.01e9))
-        assert result is not None
+    def test_a_single_action_asks_for_the_next_chunk_at_once(self):
+        """A chunk of one action at ts=0 is drained by the call that loads it, so the next call re-queries."""
+        session = ChunkPlayer().wrap(_ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])).new_session()
 
-    def test_expiry_is_judged_at_the_observation_instant(self):
-        """Whether the trajectory has run out is a question about the observation, not about the call's time."""
-        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {'v': 2, keys.ACTION_TIMESTAMP: 0.5}])
-        session = ChunkedSchedule().wrap(inner).new_session()
-        session(_obs(1.0), int(2e9))  # anchored at the call's time 2.0, so the trajectory ends at 2.5
-        assert session(_obs(2.4), int(2e9)) is None
-        assert session(_obs(2.6), int(2e9)) is not None
+        assert session(_obs(1.0), int(1e9)) == ({'v': 1}, int(1e9))
+        assert session(_obs(1.01), int(1.01e9)) == ({'v': 1}, int(1.01e9))
+
+    def test_a_waypoint_naming_no_channel_commands_nothing(self):
+        """The codecs close a chunk with a timestamp-only sentinel; it states where the chunk ends."""
+        inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}, {keys.ACTION_TIMESTAMP: 0.5}])
+        session = ChunkPlayer().make_session(inner.new_session())
+
+        assert session(_obs(), int(1e9)) == ({'v': 1}, int(1.5e9))
+        assert session(_obs(), int(1.4e9)) == ({}, int(1.5e9))
+
+    def test_a_chunk_timed_against_another_clock_is_refused(self):
+        """A chunk that reaches the player already anchored would place its waypoints decades out."""
+        session = ChunkPlayer().wrap(_ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 1.77e18 / 1e9}])).new_session()
+
+        with pytest.raises(ValueError, match='clock of their own'):
+            session(_obs(), int(1e9))
 
 
 class TestPipelineComposition:
     """Test | operator across Layer and Codec types."""
 
     def test_layer_pipe_layer(self):
-        pipeline = TemporalStack(keys=('v',), offsets_sec=(0.0,)) | ChunkedSchedule()
+        pipeline = TemporalStack(keys=('v',), offsets_sec=(0.0,)) | ChunkPlayer()
         assert isinstance(pipeline, Layer)
         policy = pipeline.wrap(_ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]))
         session = policy.new_session()
-        result = session({keys.OBS_TIME_NS: int(1e9), 'v': np.array([5.0])}, int(1e9))
-        assert result is not None
-        assert result[0]['v'] == 1
+        assert session({keys.OBS_TIME_NS: int(1e9), 'v': np.array([5.0])}, int(1e9)) == ({'v': 1}, int(1e9))
 
     def test_codec_pipe_layer(self):
-        codec = ActionTimestamp(fps=10.0)
-        pipeline = codec | ChunkedSchedule()
+        """A codec composes above a player, and refuses the commands it would silently corrupt."""
+        pipeline = ActionTimestamp(fps=10.0) | ChunkPlayer()
         assert isinstance(pipeline, Layer)
-        policy = pipeline.wrap(_ConstPolicy([{'action': 'test', keys.ACTION_TIMESTAMP: 0.0}]))
-        session = policy.new_session()
-        result = session(_obs(), int(1e9))
-        assert result is not None
+        session = pipeline.wrap(_ConstPolicy([{'action': 'test'}])).new_session()
+        with pytest.raises(AssertionError, match='under the ChunkPlayer'):
+            session(_obs(), int(1e9))
 
     def test_full_pipeline(self):
         codec = ActionTimestamp(fps=10.0)
-        pipeline = ChunkedSchedule() | codec
+        pipeline = ChunkPlayer() | codec
         assert isinstance(pipeline, Layer)
-        # 5 raw actions → codec stamps relative 0.0, 0.1, 0.2, 0.3, 0.4
-        # → ChunkedSchedule shifts to 1.0, 1.1, 1.2, 1.3, 1.4 (call time 1.0).
+        # 5 raw actions → codec stamps relative 0.0, 0.1, 0.2, 0.3, 0.4 and closes the chunk at 0.5
+        # → ChunkPlayer plays them from the call's time 1.0.
         policy = pipeline.wrap(_ConstPolicy([{'action': f'a{i}'} for i in range(5)]))
         session = policy.new_session()
-        result = session(_obs(), int(1e9))
-        assert result is not None
-        assert result[0][keys.ACTION_TIMESTAMP] == 1.0
-        # Second call within trajectory window returns None (ChunkedSchedule).
-        assert session(_obs(), int(1.2e9)) is None
+        assert session(_obs(), int(1e9)) == ({'action': 'a0'}, int(1.1e9))
+        assert session(_obs(), int(1.2e9)) == ({'action': 'a2'}, int(1.3e9))
 
     def test_codec_and_stays_codec_only(self):
         """& only works between codecs, not layers."""
@@ -267,7 +276,7 @@ class TestPipelineComposition:
         )
 
 
-class _CaptureSession(Session):
+class _CaptureSession(ChunkSession):
     def __init__(self):
         self.seen = []
 
@@ -371,7 +380,7 @@ class TestPipelineSpec:
 
     def test_split_on_marker(self):
         stack = TemporalStack(keys=('v',), offsets_sec=(0.0,))
-        sched = ChunkedSchedule()
+        sched = ChunkPlayer()
         codec = ActionTimestamp(fps=10.0)
         local, border, rem = spec.split(stack | sched | spec.remote | codec)
         assert local is not None and local._layers() == (stack, sched)
@@ -380,12 +389,12 @@ class TestPipelineSpec:
 
     def test_split_empty_halves(self):
         assert spec.split(spec.remote) == (None, spec.remote, None)
-        local, _, rem = spec.split(ChunkedSchedule() | spec.remote)
-        assert rem is None and isinstance(local, ChunkedSchedule)
+        local, _, rem = spec.split(ChunkPlayer() | spec.remote)
+        assert rem is None and isinstance(local, ChunkPlayer)
 
     def test_split_requires_exactly_one_marker(self):
         with pytest.raises(ValueError, match='exactly one'):
-            spec.split(ChunkedSchedule() | ChunkedSchedule())
+            spec.split(ChunkPlayer() | ChunkPlayer())
         with pytest.raises(ValueError, match='exactly one'):
             spec.split(spec.remote | spec.remote)
 
@@ -395,7 +404,7 @@ class TestPipelineSpec:
 
     def test_border_carries_the_wire_settings(self):
         """``remote`` is the plain border; calling it describes the wire without changing the split."""
-        border = spec.split(ChunkedSchedule() | spec.remote(compress_images=True) | ActionTimestamp(fps=10.0))[1]
+        border = spec.split(ChunkPlayer() | spec.remote(compress_images=True) | ActionTimestamp(fps=10.0))[1]
         assert border.compress_images is True
         assert spec.remote.compress_images is False
 
@@ -404,7 +413,7 @@ class TestPipelineSpec:
             spec.remote.wrap(_ConstPolicy([]))
 
     def test_spec_round_trip(self):
-        stack = TemporalStack(keys=('a', 'b'), offsets_sec=(-0.5, 0.0), pad_start=False) | ChunkedSchedule()
+        stack = TemporalStack(keys=('a', 'b'), offsets_sec=(-0.5, 0.0), pad_start=False) | ChunkPlayer()
         rebuilt = spec.from_spec(stack.to_spec())
         assert rebuilt is not None and rebuilt.to_spec() == stack.to_spec()
 
@@ -412,12 +421,12 @@ class TestPipelineSpec:
         obs = ObservationCodec(
             state={'observation.state': {'grip': 1}}, images={'left': (keys.WRIST_IMAGE, (224, 224))}
         )
-        local = ChunkedSchedule() | ActionTimestamp(fps=10.0) | (obs & AbsolutePositionAction('pose', 'grip'))
+        local = ChunkPlayer() | ActionTimestamp(fps=10.0) | (obs & AbsolutePositionAction('pose', 'grip'))
         rebuilt = spec.from_spec(local.to_spec())
         assert rebuilt is not None and rebuilt.to_spec() == local.to_spec()
 
     def test_leaf_without_args_omits_args_key(self):
-        assert ChunkedSchedule().to_spec() == {'name': 'chunked_schedule'}
+        assert ChunkPlayer().to_spec() == {'name': 'chunk_player'}
 
     def test_par_topology_round_trips(self, monkeypatch):
         class _WireCodec(Codec):
@@ -440,13 +449,13 @@ class TestPipelineSpec:
 
     def test_par_of_non_codecs_is_rejected(self):
         with pytest.raises(TypeError):
-            spec.from_spec({'par': [{'name': 'chunked_schedule'}, {'name': 'chunked_schedule'}]})
+            spec.from_spec({'par': [{'name': 'chunk_player'}, {'name': 'chunk_player'}]})
 
     def test_empty_declaration_builds_nothing(self):
         assert spec.from_spec({'seq': []}) is None
 
     def test_unknown_name_lists_vocabulary(self):
-        with pytest.raises(ValueError, match='chunked_schedule'):
+        with pytest.raises(ValueError, match='chunk_player'):
             spec.from_spec({'name': 'not_a_layer'})
 
     def test_unknown_arg_fails(self):
@@ -461,7 +470,7 @@ class TestPipelineSpec:
         """The strings a deployed server already declares its local stack with. Spelled out here rather than
         read off ``WIRE_NAME``, so renaming an attribute cannot quietly rename the wire."""
         instances = {
-            'chunked_schedule': ChunkedSchedule(),
+            'chunk_player': ChunkPlayer(),
             'stop_on_fault': StopOnFault(),
             'temporal_stack': TemporalStack(('v',), (0.0,)),
             'action_timestamp': ActionTimestamp(fps=10.0),
@@ -498,7 +507,7 @@ class TestPipe:
 
     def test_layer_chain_terminates_into_pipe(self):
         stack = TemporalStack(keys=('v',), offsets_sec=(0.0,))
-        sched = ChunkedSchedule()
+        sched = ChunkPlayer()
         codec = ActionTimestamp(fps=10.0)
         source = spec.PolicySource(_ConstPolicy([]))
         pipeline = stack | sched | spec.remote | codec | source
@@ -518,7 +527,7 @@ class TestPipe:
         assert pipeline.components == (spec.remote,)
 
     def test_split_pipe(self):
-        sched = ChunkedSchedule()
+        sched = ChunkPlayer()
         codec = ActionTimestamp(fps=10.0)
         local, border, rem = spec.split(sched | spec.remote | codec | spec.PolicySource(_ConstPolicy([])))
         assert local is sched
@@ -527,7 +536,7 @@ class TestPipe:
 
     def test_split_pipe_requires_exactly_one_marker(self):
         with pytest.raises(ValueError, match='exactly one'):
-            spec.split(ChunkedSchedule() | spec.PolicySource(_ConstPolicy([])))
+            spec.split(ChunkPlayer() | spec.PolicySource(_ConstPolicy([])))
 
     def test_pipe_refuses_a_frame_declared_on_both_sides_of_the_wire(self):
         """Rig-side and server-side conversion are alternatives; running both puts poses at the product."""
@@ -537,30 +546,27 @@ class TestPipe:
             _ = chain | spec.PolicySource(_ConstPolicy([]))
 
     def test_pipe_composes_no_further(self):
-        pipeline: Any = ChunkedSchedule() | spec.remote | spec.PolicySource(_ConstPolicy([]))
+        pipeline: Any = ChunkPlayer() | spec.remote | spec.PolicySource(_ConstPolicy([]))
         with pytest.raises(TypeError):
             _ = pipeline | ActionTimestamp(fps=10.0)
         with pytest.raises(TypeError):
-            _ = ChunkedSchedule() | pipeline
+            _ = ChunkPlayer() | pipeline
         with pytest.raises(TypeError):
             _ = pipeline | spec.PolicySource(_ConstPolicy([]))
 
     def test_inline_full_pipe(self):
         inner = _ConstPolicy([{'action': f'a{i}'} for i in range(5)])
-        policy = spec.inline(ChunkedSchedule() | spec.remote | ActionTimestamp(fps=10.0) | spec.PolicySource(inner))
+        policy = spec.inline(ChunkPlayer() | spec.remote | ActionTimestamp(fps=10.0) | spec.PolicySource(inner))
         assert isinstance(policy, Policy)
         session = policy.new_session()
-        result = session(_obs(), int(1e9))
-        assert result is not None
-        assert result[0][keys.ACTION_TIMESTAMP] == 1.0
-        assert session(_obs(), int(1.2e9)) is None
+        assert session(_obs(), int(1e9)) == ({'action': 'a0'}, int(1.1e9))
+        assert session(_obs(), int(1.2e9)) == ({'action': 'a2'}, int(1.3e9))
 
     def test_inline_tolerates_marker_less_pipe(self):
         inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
-        policy = spec.inline(ChunkedSchedule() | spec.PolicySource(inner))
+        policy = spec.inline(ChunkPlayer() | spec.PolicySource(inner))
         session = policy.new_session()
-        result = session(_obs(), int(1e9))
-        assert result is not None and result[0][keys.ACTION_TIMESTAMP] == 1.0
+        assert session(_obs(), int(1e9)) == ({'v': 1}, int(1e9))
 
     def test_inline_bare_source_pipe_is_the_loaded_policy(self):
         inner = _ConstPolicy([])

@@ -17,11 +17,11 @@ from positronic.offboard.client import InferenceClient, InferenceSession, _Conne
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
-from positronic.offboard.tests.conftest import round_trip
-from positronic.policy import Codec, Policy, RemotePolicy, Session
+from positronic.offboard.tests.conftest import ANSWER_SEC
+from positronic.policy import ChunkSession, Codec, Policy, RemotePolicy
 from positronic.policy.base import Runtime
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.layers import ChunkedSchedule, TemporalStack
+from positronic.policy.layers import ChunkPlayer, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
 
 
@@ -48,7 +48,7 @@ class _StubSource(ModelSource):
 @pytest.fixture
 def stub_server(start_server, make_mock_policy) -> tuple[str, int, PolicyServer, MagicMock]:
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, server = start_server(ChunkedSchedule() | remote | _StubSource(policy))
+    host, port, server = start_server(ChunkPlayer() | remote | _StubSource(policy))
     return host, port, server, policy
 
 
@@ -59,7 +59,7 @@ def test_full_inference_cycle(stub_server):
     try:
         assert session.metadata['model_name'] == 'stub'
         assert session.metadata['type'] == 'stub'
-        assert session.metadata['local_stack'] == {'name': 'chunked_schedule'}
+        assert session.metadata['local_stack'] == {'name': 'chunk_player'}
         assert keys.POSITRONIC_VERSION in session.metadata
 
         obs = {'image': 'test'}
@@ -125,7 +125,7 @@ class _LatestSource(ModelSource):
 
 def test_latest_checkpoint_pinned_once_at_startup(start_server, make_mock_policy):
     source = _LatestSource(make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'}))
-    host, port, _server = start_server(ChunkedSchedule() | remote | source)
+    host, port, _server = start_server(ChunkPlayer() | remote | source)
     # A newer checkpoint lands after startup (e.g. a training job writes it)...
     source.latest = '200'
     client = InferenceClient(f'{host}:{port}')
@@ -154,7 +154,7 @@ class _ProgressSource(_StubSource):
 
 def test_load_progress_frames_reach_the_client(start_server, make_mock_policy):
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(ChunkedSchedule() | remote | _ProgressSource(policy))
+    host, port, _server = start_server(ChunkPlayer() | remote | _ProgressSource(policy))
     # Requesting a non-pinned id forces a load inside the handshake; the source's progress
     # callbacks must arrive as ``loading`` frames before ``ready``.
     ws = connect(f'ws://{host}:{port}/api/v1/session/other')
@@ -183,7 +183,7 @@ class _IdentityCodec(Codec):
 @pytest.fixture
 def codec_server(start_server, make_mock_policy) -> tuple[str, int, MagicMock]:
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(ChunkedSchedule() | remote | _IdentityCodec() | _StubSource(policy))
+    host, port, _server = start_server(ChunkPlayer() | remote | _IdentityCodec() | _StubSource(policy))
     return host, port, policy
 
 
@@ -221,12 +221,12 @@ def test_a_backend_that_cannot_answer_its_warmup_raises_and_still_ends_its_sessi
 
 def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
     stub = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    pipeline = ChunkedSchedule() | remote | _IdentityCodec() | _StubSource(stub)
+    pipeline = ChunkPlayer() | remote | _IdentityCodec() | _StubSource(stub)
     host, port, _server = start_server(pipeline)
     client = InferenceClient(f'{host}:{port}')
     session = client.new_session()
     try:
-        assert session.metadata['local_stack'] == {'name': 'chunked_schedule'}
+        assert session.metadata['local_stack'] == {'name': 'chunk_player'}
     finally:
         session.close()
 
@@ -241,7 +241,7 @@ def test_pipeline_with_no_rig_side_half_refused_at_startup(make_mock_policy):
 _INFER = 'infer'
 
 
-class _ScriptedSession(Session):
+class _ScriptedSession(ChunkSession):
     def __init__(self, rt: Runtime):
         self._rt = rt
         self._answer = None
@@ -259,7 +259,7 @@ class _ScriptedSession(Session):
 class _ScriptedPolicy(Policy):
     """Deterministic base policy: every session serves the same untimestamped chunk from its runtime."""
 
-    def new_session(self, context=None, rt=None) -> Session:
+    def new_session(self, context=None, rt=None) -> ChunkSession:
         assert rt is not None
         return _ScriptedSession(rt)
 
@@ -272,33 +272,43 @@ def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
     """The same pipeline must behave identically served in-process and over the wire."""
 
     def pipeline():
-        return ChunkedSchedule() | remote | ActionTimestamp(fps=10.0) | PolicySource(_ScriptedPolicy())
+        return ChunkPlayer() | remote | ActionTimestamp(fps=10.0) | PolicySource(_ScriptedPolicy())
 
     host, port, _server = start_server(pipeline())
     remote_session, rt = open_session(RemotePolicy(f'{host}:{port}'))
 
     local_session, local_rt = open_session(inline(pipeline()))
 
-    remote_actions = round_trip(remote_session, rt, {keys.OBS_TIME_NS: 0}, int(100e9))
-    local_actions = round_trip(local_session, local_rt, {keys.OBS_TIME_NS: 0}, int(100e9))
-    assert remote_actions == local_actions
-    # Three scripted actions plus the chunk-closing validity sentinel ActionTimestamp appends.
-    assert local_actions == [
-        {'a': 1.0, 'timestamp': 100.0},
-        {'a': 2.0, 'timestamp': 100.1},
-        {'a': 3.0, 'timestamp': 100.2},
-        {'timestamp': 100.3},
-    ]
+    def play_out(session, runtime):
+        """Every waypoint the session plays, walked by the instants it asks to be called at."""
+        at_ns = int(100e9)
+        assert session({keys.OBS_TIME_NS: 0}, at_ns) == ({}, at_ns), 'a round trip was already in flight'
+        runtime.wait(ANSWER_SEC)
+        played = []
+        for _ in range(4):
+            commands, resume_at_ns = session({keys.OBS_TIME_NS: 0}, at_ns)
+            played.append((at_ns, commands))
+            if resume_at_ns <= at_ns:
+                break
+            at_ns = resume_at_ns
+        return played
 
-    # Both gate identically while the chunk plays out.
-    assert remote_session({keys.OBS_TIME_NS: 0}, int(100.15e9)) is None
-    assert local_session({keys.OBS_TIME_NS: 0}, int(100.15e9)) is None
+    played = play_out(local_session, local_rt)
+    assert play_out(remote_session, rt) == played
+    # Three scripted actions, then the chunk-closing validity sentinel ActionTimestamp appends, which
+    # commands nothing.
+    assert [commands for _, commands in played] == [{'a': 1.0}, {'a': 2.0}, {'a': 3.0}, {}]
+    gaps = [round((b - a) / 1e9, 6) for (a, _), (b, _) in zip(played, played[1:], strict=False)]
+    assert gaps == [0.1, 0.1, 0.1], 'the waypoints are one action period apart'
 
+    # The call that drained the chunk asked for the next one, so the runtime closes first, as the harness
+    # closes an episode.
+    rt.close()
     remote_session.close()
 
 
 def _tunable_pipe(source: ModelSource, offsets: tuple[float, ...] = (-0.1, 0.0), pad_start: bool = True):
-    return TemporalStack(keys=('x',), offsets_sec=offsets, pad_start=pad_start) | ChunkedSchedule() | remote | source
+    return TemporalStack(keys=('x',), offsets_sec=offsets, pad_start=pad_start) | ChunkPlayer() | remote | source
 
 
 def _param_session(host: str, port: int, query: list[tuple[str, str]]) -> InferenceSession:
@@ -335,7 +345,7 @@ def test_session_params_coerce_json_values(param_server):
 
 
 def _fps_pipe(source: ModelSource, fps: float = 10.0):
-    return ChunkedSchedule() | remote | ActionTimestamp(fps=fps) | source
+    return ChunkPlayer() | remote | ActionTimestamp(fps=fps) | source
 
 
 def test_session_param_retunes_the_served_remote_half(start_server):
@@ -430,7 +440,7 @@ def authed_endpoint(start_server, make_mock_policy) -> tuple[str, str]:
     if _LIVE_ENDPOINT:
         return _LIVE_ENDPOINT, os.environ[AUTH_TOKEN_ENV]
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(ChunkedSchedule() | remote | _StubSource(policy), auth_token=_TOKEN)
+    host, port, _server = start_server(ChunkPlayer() | remote | _StubSource(policy), auth_token=_TOKEN)
     return f'{host}:{port}', _TOKEN
 
 
@@ -505,14 +515,14 @@ def test_server_without_a_token_serves_open(stub_server):
 )
 def test_a_token_that_could_never_gate_fails_closed_at_startup(make_mock_policy, token):
     with pytest.raises(ValueError, match='ASCII'):
-        PolicyServer(ChunkedSchedule() | remote | _StubSource(make_mock_policy([], {})), auth_token=token)
+        PolicyServer(ChunkPlayer() | remote | _StubSource(make_mock_policy([], {})), auth_token=token)
 
 
 def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_server, make_mock_policy):
     """A header carries bytes, and Starlette hands them over latin-1 decoded, so a peer can put a
     non-ASCII ``str`` in front of the token comparison."""
     policy = make_mock_policy([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    host, port, _server = start_server(ChunkedSchedule() | remote | _StubSource(policy), auth_token=_TOKEN)
+    host, port, _server = start_server(ChunkPlayer() | remote | _StubSource(policy), auth_token=_TOKEN)
     with socket.create_connection((host, port), timeout=5.0) as sock:
         sock.sendall(
             b'GET /api/v1/models HTTP/1.1\r\nHost: localhost\r\n'

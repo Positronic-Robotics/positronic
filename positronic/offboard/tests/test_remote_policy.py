@@ -12,17 +12,17 @@ from websockets.http11 import Response
 from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import command
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, _ConnectRetries
-from positronic.offboard.tests.conftest import ANSWER_SEC, round_trip
+from positronic.offboard.tests.conftest import ANSWER_SEC, played_round_trip, round_trip
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
-from positronic.policy.layers import ChunkedSchedule
+from positronic.policy.layers import ChunkPlayer
 from positronic.policy.remote import _prepare_obs
 from positronic.policy.spec import PolicySource, remote
 
 # These fixtures stand in for a server, so they spell the handshake fields rather than importing the
 # ``keys`` constants the client reads: sharing a constant makes the two agree whatever its value, which
 # would leave nothing pinning the client to the wire.
-CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule'}}
+CHUNKED_STACK = {'local_stack': {'name': 'chunk_player'}}
 
 
 def _mock_ws_session(metadata=None):
@@ -496,7 +496,7 @@ def test_declared_stack_built_at_session_open(open_session):
     policy, mock_ws = _mock_remote_policy(CHUNKED_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}])
     session, rt = open_session(policy)
 
-    assert round_trip(session, rt, {keys.OBS_TIME_NS: 0}, int(1e9)) == [{'a': 1, 'timestamp': 1.0}]
+    assert played_round_trip(session, rt, {keys.OBS_TIME_NS: 0}, int(1e9)) == {'a': 1}
 
 
 def test_unknown_declared_entry_fails_before_motion():
@@ -531,19 +531,19 @@ def test_a_command_crossing_a_live_websocket_arrives_typed(start_server, make_mo
     pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]  # translation + a 3x3 rotation, the wire's own layout
     wire_action = [{keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}, 'timestamp': 0.0}]
     served = make_mock_policy(wire_action, {'model_name': 'm'})
-    host, port, _ = start_server(ChunkedSchedule() | remote | PolicySource(served))
+    host, port, _ = start_server(ChunkPlayer() | remote | PolicySource(served))
 
     session, rt = open_session(RemotePolicy(f'{host}:{port}'))
-    actions = round_trip(session, rt, {keys.OBS_TIME_NS: 0})
+    commands = played_round_trip(session, rt, {keys.OBS_TIME_NS: 0})
 
-    assert actions is not None, 'the chunk was swallowed before any command reached a driver'
-    decoded = actions[0][keys.ROBOT_COMMAND]
+    assert commands, 'the chunk was swallowed before any command reached a driver'
+    decoded = commands[keys.ROBOT_COMMAND]
     assert isinstance(decoded, command.CartesianPosition), f'the driver would be handed {decoded!r}'
     np.testing.assert_allclose(decoded.pose.translation, [0.4, 0.0, 0.6], atol=1e-6)
 
 
 def test_remote_policy_lifecycle(inference_server, mock_policy, open_session):
-    """RemotePolicy against a live server whose pipeline declares a chunked_schedule local stack."""
+    """RemotePolicy against a live server whose pipeline declares a chunk_player local stack."""
     host, port = inference_server
 
     policy = RemotePolicy(f'{host}:{port}')
@@ -553,10 +553,10 @@ def test_remote_policy_lifecycle(inference_server, mock_policy, open_session):
     assert meta['server.model_name'] == 'test_model'
     assert meta['type'] == 'remote'
 
-    action = round_trip(session, rt, {'dataset': 'test'})
-    # Single-dict server response is normalized to a 1-element list (Session contract) and
-    # anchored to absolute time by the declared ChunkedSchedule.
-    assert action == [{'action_data': [1, 2, 3], 'timestamp': 0.0}]
+    commands = played_round_trip(session, rt, {'dataset': 'test'})
+    # A single-dict server answer is one waypoint, anchored to the call by the declared ChunkPlayer and
+    # commanded at once.
+    assert commands == {'action_data': [1, 2, 3]}
 
     session.close()
 

@@ -6,7 +6,7 @@ from starlette.datastructures import QueryParams
 
 from positronic.offboard.protocol import deserialise
 from positronic.offboard.server import PolicyServer
-from positronic.policy.layers import ChunkedSchedule
+from positronic.policy.layers import ChunkPlayer
 from positronic.policy.spec import remote
 
 pytest.importorskip('lerobot', minversion='0.4')
@@ -44,7 +44,7 @@ class _DummyWebSocket:
 async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
     monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path: ['42'])
 
-    server = PolicyServer(ChunkedSchedule() | remote | LerobotSource('s3://bucket/exp', checkpoint='42'))
+    server = PolicyServer(ChunkPlayer() | remote | LerobotSource('s3://bucket/exp', checkpoint='42'))
 
     requested = {}
 
@@ -74,7 +74,7 @@ async def test_lerobot_server_uses_configured_checkpoint(monkeypatch):
 async def test_lerobot_server_reports_missing_checkpoint(monkeypatch):
     monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path: ['41'])
 
-    server = PolicyServer(ChunkedSchedule() | remote | LerobotSource('s3://bucket/exp', checkpoint='42'))
+    server = PolicyServer(ChunkPlayer() | remote | LerobotSource('s3://bucket/exp', checkpoint='42'))
     server._manager.get_policy = AsyncMock()
 
     with pytest.raises(ValueError, match=r"Configured checkpoint not found: 42. Available: \['41'\]"):
@@ -88,7 +88,7 @@ async def test_lerobot_server_reports_unknown_checkpoint_id(monkeypatch):
     monkeypatch.setattr('positronic.utils.checkpoints.list_checkpoints', lambda _path: ['41'])
     monkeypatch.setattr('positronic.utils.checkpoints.get_latest_checkpoint', lambda _path: '41')
 
-    server = PolicyServer(ChunkedSchedule() | remote | LerobotSource('s3://bucket/exp'))
+    server = PolicyServer(ChunkPlayer() | remote | LerobotSource('s3://bucket/exp'))
     server._manager.get_policy = AsyncMock(return_value=MagicMock())
     server._manager.release_session = AsyncMock()
     await server._startup()

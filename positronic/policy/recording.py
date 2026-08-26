@@ -60,7 +60,7 @@ import rerun.blueprint as rrb
 from positronic import geom
 from positronic import keys as obs_keys
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.policy.base import DelegatingSession, Layer, Session
+from positronic.policy.base import AnySession, Layer, Session
 from positronic.policy.codec import is_action
 from positronic.utils.rerun_compat import log_numeric_series, set_timeline_sequence, set_timeline_time
 
@@ -361,16 +361,20 @@ class _RecordingTap(Layer):
         self._rec = rec
         self._name = name
 
-    def make_session(self, inner: Session) -> Session:
+    def make_session(self, inner: AnySession) -> AnySession:
         stream = self._rec._open_stream()
         return _RecordingTapSession(inner, self._rec, self._name, stream)
 
 
-class _RecordingTapSession(DelegatingSession):
-    """Logs the observation flowing down and the action chunk flowing up at one point."""
+class _RecordingTapSession(Session):
+    """Logs the observation flowing down and the actions flowing up at one point.
 
-    def __init__(self, inner: Session, rec: Recorder, name: str, stream: rr.RecordingStream):
-        super().__init__(inner)
+    A tap sits on either side of a ``ChunkPlayer``, so it forwards whatever its inner answers and reads the
+    side off that. TODO(#661): the framework records each boundary it carries, and a tap stops guessing.
+    """
+
+    def __init__(self, inner: AnySession, rec: Recorder, name: str, stream: rr.RecordingStream):
+        self._inner = inner
         self._rec = rec
         self._name = name
         self._stream = stream
@@ -385,7 +389,7 @@ class _RecordingTapSession(DelegatingSession):
             set_timeline_time(timeline, value)
         set_timeline_sequence('step', self._step)
 
-    def _log(self, prefix: str, data: dict) -> None:
+    def _log(self, prefix: str, data: Mapping[str, Any]) -> None:
         """Recursively log obs *data* under *prefix*, recording entity paths on the Recorder."""
         for key, value in data.items():
             if key.endswith('_time_ns') or isinstance(value, str):
@@ -400,7 +404,7 @@ class _RecordingTapSession(DelegatingSession):
                 log_numeric_series(path, num)
                 self._rec._numeric_paths.append(path)
 
-    def _log_action_chunk(self, prefix: str, actions: list[dict], obs: dict) -> None:  # noqa: C901
+    def _log_action_chunk(self, prefix: str, actions: list[dict], obs: Mapping[str, Any]) -> None:  # noqa: C901
         """Log the action chunk as an enriched 3D trajectory + ``action_time`` time series."""
         # Skip validity sentinels: they carry no command to plot and would flip the ``all(... in a)`` checks below.
         actions = [a for a in actions if is_action(a)]
@@ -450,6 +454,18 @@ class _RecordingTapSession(DelegatingSession):
                 _log_action_series(f'{prefix}/series/{suffix}', field_arr, group_h, base_ns, names=None)
                 self._rec._series_paths.append(f'{prefix}/series/{suffix}')
 
+    @staticmethod
+    def _actions(answer) -> list[dict]:
+        """The actions in what a session answered: a chunk under a ``ChunkPlayer``, one command above one.
+
+        Above the player the answer holds the commands of one round, so a plot reads a point per round
+        rather than a chunk per inference.
+        """
+        if isinstance(answer, tuple):
+            commands, _ = answer
+            return [dict(commands)] if commands else []
+        return answer or []
+
     def _send_blueprint(self) -> None:
         rec = self._rec
         bp = rec._blueprint or _build_blueprint(
@@ -458,7 +474,7 @@ class _RecordingTapSession(DelegatingSession):
         if bp is not None:
             rr.send_blueprint(bp)
 
-    def __call__(self, obs, time_ns):
+    def __call__(self, obs, time_ns) -> Any:
         rec = self._rec
         outermost = rec._depth == 0
         if outermost:
@@ -469,9 +485,9 @@ class _RecordingTapSession(DelegatingSession):
                 self._set_timelines()
                 self._log(self._name, obs)
 
-            actions = self._inner(obs, time_ns)
+            answer = self._inner(obs, time_ns)
 
-            if actions is not None:
+            if actions := self._actions(answer):
                 with self._stream:
                     self._set_timelines()
                     # TODO(#661): the chunk is logged against the observation and the timelines of this
@@ -484,12 +500,15 @@ class _RecordingTapSession(DelegatingSession):
                 with self._stream:
                     self._send_blueprint()
             self._step += 1
-            return actions
+            return answer
         finally:
             rec._depth -= 1
             if rec._depth == 0:
                 rec._timeline_values = {}
 
+    def cancel(self):
+        self._inner.cancel()
+
     def close(self):
-        super().close()
+        self._inner.close()
         self._rec._release_stream()

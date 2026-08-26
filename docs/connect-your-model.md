@@ -82,7 +82,7 @@ How the client fills the delay and merges successive predictions is a swappable 
 
 Four small concepts make up the API. You meet them whether you use a built-in server or write your own.
 
-**Policy and Session.** A `Policy` is your loaded model: it holds the weights and knows how to start an episode. `policy.new_session()` begins one episode and returns a `Session`. You call the session once per timestep with the latest observation and your clock reading, and it returns the next actions to run. Per-episode state (history, the trajectory in flight) lives in the session — so one `Policy` can serve several robots at once, each with its own `Session`.
+**Policy and Session.** A `Policy` is your loaded model: it holds the weights and knows how to start an episode. `policy.new_session()` begins one episode and returns a session. You call it once per timestep with the latest observation and your clock reading, and it answers the actions to run. A policy served behind the `remote` marker answers a chunk, so its sessions are `ChunkSession`s; the rig's `ChunkPlayer` holds that chunk and emits each waypoint at its own time. Per-episode state (history, the chunk in flight) lives in the session — so one `Policy` can serve several robots at once, each with its own session.
 
 **Codec.** Different models want different inputs: end-effector pose vs joint angles, absolute targets vs deltas, 224×224 vs 512×512 images. A `Codec` translates between the robot's raw data (what is on the wire) and your model's format — `encode` on the way in, `decode` on the way out. The same codec prepares the training data, so a model is served exactly the way it was trained. The full catalog is in the [Codecs Guide](codecs.md).
 
@@ -172,12 +172,12 @@ Implement a `Policy`, close a pipeline over it with `PolicySource`, and hand the
 ```python
 from positronic.drivers.roboarm import command
 from positronic.offboard import PolicyServer
-from positronic.policy import Policy, Session
+from positronic.policy import ChunkSession, Policy
 from positronic.policy.spec import PolicySource, remote
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
+from positronic.policy.layers import ChunkPlayer, StopOnFault
 
 
-class MySession(Session):
+class MySession(ChunkSession):
     def __init__(self, model):
         self._model = model
 
@@ -205,20 +205,20 @@ class MyPolicy(Policy):
         return {'type': 'my_model'}
 
 
-pipeline = StopOnFault() | ChunkedSchedule() | remote | PolicySource(MyPolicy(load_my_model()))
+pipeline = StopOnFault() | ChunkPlayer() | remote | PolicySource(MyPolicy(load_my_model()))
 PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()
 ```
 
-The pipeline reads left to right: everything left of the `remote` marker is the client-side stack the server declares in its handshake (here the standard `StopOnFault` and `ChunkedSchedule`); everything right of it runs on the server. `PolicySource` is the pipeline's terminal — a model source that serves one already-built policy.
+The pipeline reads left to right: everything left of the `remote` marker is the client-side stack the server declares in its handshake (here the standard `StopOnFault` and `ChunkPlayer`); everything right of it runs on the server. `PolicySource` is the pipeline's terminal — a model source that serves one already-built policy.
 
-The left side is not optional: a pipeline with nothing there is refused when the server starts, and a rig refuses a handshake that declares nothing. It needs a scheduler in particular, and `StopOnFault` outside that scheduler — an arm that is faulted or busy is not taking the plan it was given, so the layer answers the empty trajectory and the rig stops rather than resuming a chunk stamped before. Actions come back timestamped relative to their chunk, and `ChunkedSchedule` is what turns those into times on the rig's clock; a stack that leaves them relative — or anchors them twice — makes the harness reject the chunk at the first inference, since it schedules nothing more than `MAX_ACTION_SKEW_SEC` from now.
+The left side is not optional: a pipeline with nothing there is refused when the server starts, and a rig refuses a handshake that declares nothing. It needs a player in particular, and `StopOnFault` outside that player — an arm that is faulted or busy is not taking the plan it was given, so the layer commands nothing and drops the chunk rather than playing one stamped before. Actions come back timestamped relative to their chunk, and `ChunkPlayer` is what holds the chunk and emits each waypoint at its own time on the rig's clock; a stack with no player answers a chunk where the harness expects commands, and the episode refuses to open. A chunk that reaches the player already anchored is refused too, since the player places nothing more than `MAX_ACTION_SKEW_SEC` from the call.
 
 The session's `time_ns` argument is the caller's clock reading in nanoseconds, the same unit the observation's `obs_time_ns` carries. A session reads no clock of its own, and a policy that schedules nothing accepts the value and ignores it.
 
-If you put a `Codec` right of the marker (`ChunkedSchedule() | remote | codec | PolicySource(...)`), your session works entirely in *model space* — it receives encoded observations and returns model-native actions, and the codec handles the wire format. A codec that encodes images should also bound them on the rig, so full-resolution frames never cross the wire — that is what the built-in vendor pipelines do:
+If you put a `Codec` right of the marker (`ChunkPlayer() | remote | codec | PolicySource(...)`), your session works entirely in *model space* — it receives encoded observations and returns model-native actions, and the codec handles the wire format. A codec that encodes images should also bound them on the rig, so full-resolution frames never cross the wire — that is what the built-in vendor pipelines do:
 
 ```python
-StopOnFault() | ChunkedSchedule() | RestrictImageSize() | remote | codec | source
+StopOnFault() | ChunkPlayer() | RestrictImageSize() | remote | codec | source
 ```
 
 Give it the geometry your codec encodes to — `RestrictImageSize(224, 224)` for a 224x224 model — so a frame is shrunk once, on the rig. The default is a loose 640x640, for a codec that resizes to nothing in particular. Leaving it out costs bandwidth, not correctness.
@@ -257,7 +257,7 @@ import time
 
 from positronic.offboard.protocol import serialise, deserialise
 
-session = policy.new_session()           # one Session per episode/connection
+session = policy.new_session()           # one session per episode/connection
 async for message in websocket.iter_bytes():
     obs = deserialise(message)           # dict with numpy arrays
     actions = session(obs, time.time_ns())  # list of action dicts (or None)

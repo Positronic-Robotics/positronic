@@ -10,7 +10,7 @@ from functools import partial
 
 import pytest
 
-from positronic.policy.base import Answer, DelegatingSession, Layer, NotAnswered, Policy, Session
+from positronic.policy.base import Answer, ChunkSession, DelegatingChunkSession, Layer, NotAnswered, Policy
 from positronic.policy.executor import Executor, blocking
 
 # How long a test waits for the worker threads before calling the call lost.
@@ -237,7 +237,7 @@ def test_close_stays_quiet_about_a_call_that_answered(serve, caplog):
 class _PlainPolicy(Policy):
     """Serves nothing: its session answers inside the call that asked."""
 
-    class _Session(Session):
+    class _Session(ChunkSession):
         def __init__(self):
             self.calls = 0
 
@@ -248,7 +248,7 @@ class _PlainPolicy(Policy):
     def __init__(self):
         self.session = _PlainPolicy._Session()
 
-    def new_session(self, context=None, rt=None) -> Session:
+    def new_session(self, context=None, rt=None) -> ChunkSession:
         return self.session
 
 
@@ -258,7 +258,7 @@ _ECHO = 'echo'
 class _EchoPolicy(Policy):
     """Serves ``echo``, and makes sessions that take ``rounds`` calls of it to answer."""
 
-    class _Session(Session):
+    class _Session(ChunkSession):
         def __init__(self, rt, rounds: int):
             self._rt = rt
             self._answer = None
@@ -280,7 +280,7 @@ class _EchoPolicy(Policy):
         self._rounds = rounds
         self.session: _EchoPolicy._Session
 
-    def new_session(self, context=None, rt=None) -> Session:
+    def new_session(self, context=None, rt=None) -> ChunkSession:
         assert rt is not None
         self.session = _EchoPolicy._Session(rt, self._rounds)
         return self.session
@@ -296,8 +296,8 @@ class _CountingLayer(Layer):
     def __init__(self):
         self.calls = 0
 
-    class _Session(DelegatingSession):
-        def __init__(self, inner: Session, layer: '_CountingLayer'):
+    class _Session(DelegatingChunkSession):
+        def __init__(self, inner: ChunkSession, layer: '_CountingLayer'):
             super().__init__(inner)
             self._layer = layer
 
@@ -314,7 +314,7 @@ def opened():
     """Opens the sessions a test asks for, and closes every one at teardown."""
     sessions = []
 
-    def make(policy: Policy) -> Session:
+    def make(policy: Policy) -> ChunkSession:
         sessions.append(policy.new_session())
         return sessions[-1]
 

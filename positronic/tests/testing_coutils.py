@@ -128,7 +128,7 @@ class IdleSession(Session):
 
     def __call__(self, obs, time_ns):
         self._policy.observations.append(obs)
-        return []
+        return {}, time_ns
 
     @property
     def meta(self):

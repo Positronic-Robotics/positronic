@@ -21,7 +21,7 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
-from positronic.policy.layers import ChunkedSchedule
+from positronic.policy.layers import ChunkPlayer
 from positronic.policy.tests.test_harness import RemoteStubPolicy, StubPolicy
 from positronic.simulator.env_server import telemetry as env_telemetry
 from positronic.simulator.mujoco.sim import MujocoSim
@@ -82,7 +82,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
         )
         trials = number_trials(next(iter(ev.tasks())), [{keys.EVAL_SEED: 100 + i} for i in range(2)])
         main(
-            policy=ChunkedSchedule().wrap(policy),
+            policy=ChunkPlayer().wrap(policy),
             evals=[replace(ev, tasks=partial(iter, trials))],
             output_dir=str(tmp_path),
         )
@@ -218,9 +218,9 @@ def test_every_trial_records_from_its_own_reset(tmp_path):
     trials = number_trials(next(iter(ev.tasks())), [{keys.EVAL_SEED: i} for i in range(2)])
     with pos3.mirror():
         main(
-            policy=StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0),
+            policy=ChunkPlayer().wrap(StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)),
             evals=[replace(ev, tasks=partial(iter, trials))],
-            # the degenerate obs is not Franka-shaped, so run the policy unwrapped
+            # the degenerate obs is not Franka-shaped, so nothing but the player wraps the policy
             output_dir=str(tmp_path),
         )
 
@@ -241,7 +241,7 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     trials = number_trials(next(iter(ev.tasks())), [{}, {}])
     with pos3.mirror():
         main(
-            policy=ChunkedSchedule().wrap(
+            policy=ChunkPlayer().wrap(
                 RemoteStubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
             ),
             evals=[replace(ev, tasks=partial(iter, trials))],
@@ -289,7 +289,7 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     trial = number_trials(next(iter(ev.tasks())), [{keys.EVAL_SEED: 100}])[0]
     with pos3.mirror():
         main(
-            policy=StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0),
+            policy=ChunkPlayer().wrap(StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)),
             evals=[replace(ev, tasks=partial(iter, [trial]))],
             output_dir=str(tmp_path),
         )

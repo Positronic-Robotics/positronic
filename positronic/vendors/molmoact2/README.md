@@ -76,5 +76,5 @@ ships one, `droid` (source: [`codecs.py`](./codecs.py)):
   command (no IK at runtime).
 - **Observation**: 3 cameras (2 exterior + 1 wrist) + 8-D state + language prompt.
 - **Inference**: `norm_tag='franka_droid'`, continuous action mode; the model emits a 15-step action chunk at
-  15 Hz, executed in full by the client's declared `ChunkedSchedule`.
+  15 Hz, played in full by the client's declared `ChunkPlayer`.
 - **Wire protocol**: Positronic's standard WebSocket protocol — see [Connect Your Model](../../../docs/connect-your-model.md).

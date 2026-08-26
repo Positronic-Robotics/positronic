@@ -4,18 +4,19 @@ from positronic import keys
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Rotation, Transform3D
-from positronic.policy.base import Policy, Session
+from positronic.policy.base import ChunkSession, Policy
 from positronic.policy.recording import (
     Recorder,
     _build_blueprint,
     _command_field_arrays,
     _flat_wire,
+    _RecordingTapSession,
     _squeeze_batch,
     _stack_numeric,
 )
 
 
-class _TrackingSession(Session):
+class _TrackingSession(ChunkSession):
     def __init__(self, actions, meta):
         self._actions = actions
         self._meta = meta
@@ -44,7 +45,7 @@ class _TrackingPolicy(Policy):
         return {'policy_key': 'policy_value'}
 
 
-class _CapturingSession(Session):
+class _CapturingSession(ChunkSession):
     """Innermost session that snapshots the Recorder's carried timeline state when called."""
 
     def __init__(self, rec, actions):
@@ -207,11 +208,12 @@ def test_logs_command_chunk_without_mutating(tmp_path):
     ]
     session = Recorder(tmp_path).tap('t').wrap(_TrackingPolicy(actions)).new_session()
     result = session({'x': 1.0, keys.WALL_TIME_NS: 1}, 0)
+    assert isinstance(result, list)
     assert result[0][keys.ROBOT_COMMAND] is actions[0][keys.ROBOT_COMMAND]  # unchanged on return
 
 
 def test_handles_none_actions(tmp_path):
-    class _NoneSession(Session):
+    class _NoneSession(ChunkSession):
         def __call__(self, obs, time_ns):
             return None
 
@@ -220,6 +222,7 @@ def test_handles_none_actions(tmp_path):
             return _NoneSession()
 
     session = Recorder(tmp_path).tap('t').wrap(_NonePolicy()).new_session()
+    assert isinstance(session, _RecordingTapSession)
     assert session({'x': 1.0}, 0) is None
     assert session._step == 1
 

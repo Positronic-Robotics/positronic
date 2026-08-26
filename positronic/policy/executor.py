@@ -7,12 +7,13 @@ import threading
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
-from typing import Any
+from typing import Any, cast
 
 from positronic.policy.base import (
     Answer,
+    ChunkSession,
+    DelegatingChunkSession,
     DelegatingPolicy,
-    DelegatingSession,
     Fn,
     NotAnswered,
     Policy,
@@ -115,12 +116,12 @@ class Executor(Runtime):
 
 
 class _BlockingPolicy(DelegatingPolicy):
-    class _Session(DelegatingSession):
-        def __init__(self, inner: Session, rt: Executor):
+    class _Session(DelegatingChunkSession):
+        def __init__(self, inner: ChunkSession, rt: Executor):
             super().__init__(inner)
             self._rt = rt
 
-        def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict[str, Any]] | None:
+        def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict[str, Any]] | dict[str, Any] | None:
             # The inner session reads an answer only on a later call. A test of ``in_flight`` would exit
             # on a call that lands while the session call runs, leaving its answer unread.
             while (actions := self._inner(obs, time_ns)) is None and self._rt.owes_an_answer:
@@ -132,11 +133,14 @@ class _BlockingPolicy(DelegatingPolicy):
             self._rt.close()
             self._inner.close()
 
-    def new_session(self, context=None, rt=None) -> Session:
+    def new_session(self, context=None, rt=None) -> ChunkSession:
         assert rt is None, 'a blocking policy serves its own functions; nothing above it runs them'
         own = Executor(self._inner.functions)
         try:
-            return _BlockingPolicy._Session(self._inner.new_session(context, own), own)
+            inner = self._inner.new_session(context, own)
+            # Waiting out the work is a question about a chunk, so nothing above a ``ChunkPlayer`` blocks.
+            assert not isinstance(inner, Session), f'{type(inner).__name__} answers commands, not a chunk'
+            return _BlockingPolicy._Session(cast(ChunkSession, inner), own)
         except BaseException:
             own.close()
             raise

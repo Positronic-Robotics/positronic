@@ -1,7 +1,7 @@
 """Replay one recorded observation through a live inference endpoint and save an ``.rrd``.
 
 Point this at a recorded episode and a moment in it; the observation at that moment is
-sent to a remote policy endpoint and the returned action chunk is written to a rerun
+sent to a remote policy endpoint and the commands it plays back are written to a rerun
 recording, with the predicted end-effector trajectory overlaid on the robot's actual
 pose at that moment. Open the ``.rrd`` to see whether the predicted chunk descends
 toward the object or rises away.
@@ -33,13 +33,16 @@ from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.drivers.roboarm.command import CartesianPosition, JointDelta
-from positronic.policy import Policy, Recorder, is_action
-from positronic.policy.executor import blocking
+from positronic.policy import Policy, Recorder
+from positronic.policy.executor import Executor
 
 # Tap name; the recorder logs each obs/action entity under ``{_TAP}/{key}`` (see recording.py).
 _TAP = 'raw'
 # Observation keys the endpoint expects, mirroring the inference harness, plus every image.*.
 _STATE_KEYS = (keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP)
+# How long to wait for the endpoint, and how often to ask the session again while it is out.
+_ANSWER_TIMEOUT_SEC = 120.0
+_POLL_PERIOD_SEC = 0.01
 
 
 def _build_wire_obs(sample: dict, task: str | None, now_ns: int, recorded_ts: int) -> dict:
@@ -68,35 +71,63 @@ def _meta_doc(name: str, meta: dict) -> str:
     return f'## {name}\n\n{rows}'
 
 
-def _is_cartesian_chunk(actions: list[dict] | None) -> bool:
-    """Whether every action carries a Cartesian end-effector command (so a 3D trajectory exists)."""
-    return bool(actions) and all(isinstance(a.get(keys.ROBOT_COMMAND), CartesianPosition) for a in actions)
+def _play(session, obs: dict) -> list[tuple[int, dict]]:
+    """Every command the session emits for ``obs``, from the endpoint's answer to the end of that chunk.
 
-
-def _log_commands(actions: list[dict], wall_ns: int, inf_ns: int) -> None:
-    """Log the chunk's per-step fields as one named time-series on the obs's live timelines.
-
-    Plots EE pose fields for a Cartesian chunk or joint velocities for a DROID chunk. The tap
-    already logs this on ``action_time``, but a rerun time-series view plots only the active
-    timeline, and the images live on ``wall_time`` — so to read the chunk on the same timeline as
-    the scene we re-stamp each waypoint on ``wall_time`` / ``obs_time`` (offset by its horizon),
-    with a relative ``chunk_time`` axis alongside.
+    The observation is one frozen frame, so the walk moves the clock rather than the world. The session
+    anchors the chunk on the call that receives it and asks for a call at each waypoint; a resume time that
+    has not moved past the call says it holds nothing — the endpoint is still out, or the chunk has run out.
     """
-    if _is_cartesian_chunk(actions):
-        commands = [a[keys.ROBOT_COMMAND] for a in actions]
+    played: list[tuple[int, dict]] = []
+    deadline = time.monotonic() + _ANSWER_TIMEOUT_SEC
+    now_ns = time.time_ns()
+    while True:
+        commands, resume_at_ns = session(obs, now_ns)
+        if commands:
+            played.append((now_ns, dict(commands)))
+        if resume_at_ns > now_ns:
+            now_ns = resume_at_ns
+        elif played:
+            return played
+        elif time.monotonic() >= deadline:
+            raise TimeoutError(f'the endpoint commanded nothing in {_ANSWER_TIMEOUT_SEC:.0f}s')
+        else:
+            time.sleep(_POLL_PERIOD_SEC)
+            now_ns = time.time_ns()
+
+
+def _is_cartesian_chunk(played: list[tuple[int, dict]]) -> bool:
+    """Whether every command is a Cartesian end-effector pose (so a 3D trajectory exists)."""
+    return bool(played) and all(isinstance(c.get(keys.ROBOT_COMMAND), CartesianPosition) for _, c in played)
+
+
+def _log_commands(played: list[tuple[int, dict]], obs: dict, wall_ns: int, inf_ns: int) -> None:
+    """Log the commanded fields as one named time-series on the obs's live timelines, and the predicted
+    end-effector path in 3D beside the pose the robot was actually at.
+
+    Plots EE pose fields for a Cartesian chunk or joint velocities for a DROID chunk. A rerun time-series
+    view plots only the active timeline, and the images live on ``wall_time`` — so each command is stamped
+    on ``wall_time`` / ``obs_time`` offset by its horizon, with a relative ``chunk_time`` axis alongside.
+    """
+    commands = [c for _, c in played]
+    if _is_cartesian_chunk(played):
+        poses = [c[keys.ROBOT_COMMAND].pose for c in commands]
         labels = ['tx', 'ty', 'tz', 'qw', 'qx', 'qy', 'qz']
-        rows = [[*c.pose.translation, *c.pose.rotation.as_quat] for c in commands]
-    elif all(isinstance(a.get(keys.ROBOT_COMMAND), JointDelta) for a in actions):
-        deltas = [a[keys.ROBOT_COMMAND].velocities for a in actions]
+        rows = [[*p.translation, *p.rotation.as_quat] for p in poses]
+        path = np.array([p.translation for p in poses], dtype=np.float64)
+        rr.log('trajectory/path', rr.LineStrips3D([path], radii=0.0012, colors=[120, 120, 120]), static=True)
+        actual = np.asarray(obs[keys.EE_POSE], dtype=np.float64).reshape(-1)[:3]
+        rr.log('trajectory/actual', rr.Points3D([actual], radii=0.006, colors=[245, 245, 245]), static=True)
+    elif all(isinstance(c.get(keys.ROBOT_COMMAND), JointDelta) for c in commands):
+        deltas = [c[keys.ROBOT_COMMAND].velocities for c in commands]
         labels = [f'dq{i}' for i in range(len(deltas[0]))]
         rows = [list(d) for d in deltas]
     else:
         return
-    horizon = np.array([float(a.get(keys.ACTION_TIMESTAMP, i)) for i, a in enumerate(actions)])
-    horizon -= horizon[0]
-    if all(keys.TARGET_GRIP in a for a in actions):
+    horizon = np.array([(at_ns - played[0][0]) / 1e9 for at_ns, _ in played])
+    if all(keys.TARGET_GRIP in c for c in commands):
         labels.append(keys.TARGET_GRIP)
-        rows = [row + [a[keys.TARGET_GRIP]] for row, a in zip(rows, actions, strict=True)]
+        rows = [row + [c[keys.TARGET_GRIP]] for row, c in zip(rows, commands, strict=True)]
     data = np.array(rows, float)
 
     rr.log('commands', rr.SeriesLines(names=labels), static=True)
@@ -114,7 +145,7 @@ def _blueprint(image_keys: list[str], has_trajectory: bool) -> rrb.Blueprint:
     images = [rrb.Spatial2DView(origin=f'{_TAP}/{key}', name=key) for key in image_keys]
     top = rrb.Horizontal(*images, rrb.TextDocumentView(origin='meta', name='server'))
     commands = rrb.TimeSeriesView(origin='commands', name='commands')
-    trajectory = rrb.Spatial3DView(origin=f'{_TAP}/robot_command/trajectory', name='trajectory')
+    trajectory = rrb.Spatial3DView(origin='trajectory', name='trajectory')
     bottom = rrb.Horizontal(trajectory, commands) if has_trajectory else commands
     return rrb.Blueprint(rrb.Vertical(top, bottom))
 
@@ -135,25 +166,24 @@ def main(
     image_keys = [k for k in obs if k.startswith(keys.IMAGE_PREFIX)]
 
     rec = Recorder(pos3.sync(output_dir))
-    tapped = rec.tap(_TAP).wrap(blocking(policy))
-    session = tapped.new_session({keys.TASK: task} if task else None)
+    tapped = rec.tap(_TAP).wrap(policy)
+    runtime = Executor(policy.functions)
+    session = tapped.new_session({keys.TASK: task} if task else None, runtime)
     meta = dict(session.meta)
     name = label or _recording_name(meta)
     try:
-        actions = session(obs, now_ns)
-        if actions is not None:
-            actions = [a for a in actions if is_action(a)]  # drop the codec's keyless validity sentinel
-        n = 0 if actions is None else len(actions)
-        print(f'episode {episode} @ {at:.3f}s (ts={ts}) [{name}]: {n} action(s); rrd -> {output_dir}')
+        played = _play(session, obs)
+        print(f'episode {episode} @ {at:.3f}s (ts={ts}) [{name}]: {len(played)} command(s); rrd -> {output_dir}')
         with rec.stream:
             rec.stream.send_recording_name(name)
             rr.log('meta', rr.TextDocument(_meta_doc(name, meta), media_type=rr.MediaType.MARKDOWN), static=True)
-            if actions:
-                _log_commands(actions, now_ns, ts)
+            _log_commands(played, obs, now_ns, ts)
             # Sent here, not at Recorder construction: the layout depends on the chunk type, which is
             # only known after inference — a velocity chunk drops the 3D trajectory view.
-            rr.send_blueprint(_blueprint(image_keys, _is_cartesian_chunk(actions)))
+            rr.send_blueprint(_blueprint(image_keys, _is_cartesian_chunk(played)))
     finally:
+        # The runtime closes first: the call the last waypoint started is still using the session's socket.
+        runtime.close()
         session.close()
 
 

@@ -16,7 +16,7 @@ from positronic import keys
 from positronic.cfg import codecs
 from positronic.policy import Codec, Policy, Session
 from positronic.policy.base import Answer, Runtime
-from positronic.policy.layers import ChunkedSchedule, StopOnFault
+from positronic.policy.layers import ChunkPlayer, StopOnFault
 from positronic.policy.observation import TASK_FIELD
 from positronic.policy.spec import PolicySource, inline
 from positronic.utils.checkpoints import resolve_checkpoint
@@ -161,4 +161,4 @@ def act(checkpoints_dir: str, checkpoint: str | None, n_action_steps: int | None
 )
 def act_absolute(base: Policy, codec: Codec):
     """ACT with the absolute-position codec, composed in-process."""
-    return inline(StopOnFault() | ChunkedSchedule() | codec | PolicySource(base))
+    return inline(StopOnFault() | ChunkPlayer() | codec | PolicySource(base))

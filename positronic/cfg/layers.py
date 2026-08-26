@@ -1,9 +1,9 @@
 import configuronic as cfn
 
 from positronic import keys as obs_keys
-from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
+from positronic.policy.layers import ChunkPlayer, StopOnFault, TemporalStack
 
-chunked_schedule = cfn.Config(ChunkedSchedule)
+chunk_player = cfn.Config(ChunkPlayer)
 temporal_stack = cfn.Config(TemporalStack)
 
 
@@ -47,4 +47,4 @@ def video_context_layers(history_frames: int, stride: int, keys: tuple[str, ...]
     stack = TemporalStack(
         keys=tuple(keys), offsets_sec=_frame_offsets_sec(history_frames, stride, fps), pad_start=pad_start
     )
-    return StopOnFault() | stack | ChunkedSchedule()
+    return StopOnFault() | stack | ChunkPlayer()

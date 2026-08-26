@@ -8,7 +8,7 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.geom import Rotation
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction
-from positronic.policy.base import Policy, Session
+from positronic.policy.base import ChunkSession, Policy
 from positronic.policy.codec import (
     ActionHorizon,
     ActionTimestamp,
@@ -115,7 +115,7 @@ def test_absolute_joints_action_encode_decode():
     assert np.isclose(target_grip, g[0])
 
 
-class _FixedSession(Session):
+class _FixedSession(ChunkSession):
     def __init__(self, result):
         self._result = result
 
@@ -127,12 +127,12 @@ class _ChunkPolicy(Policy):
     def __init__(self, actions: list[dict]):
         self._actions = actions
 
-    def new_session(self, context=None, rt=None):
+    def new_session(self, context=None, rt=None) -> ChunkSession:
         return _FixedSession(list(self._actions))
 
 
 class _SinglePolicy(Policy):
-    def new_session(self, context=None, rt=None):
+    def new_session(self, context=None, rt=None) -> ChunkSession:
         return _FixedSession({'v': 42})
 
 
@@ -146,7 +146,7 @@ class _PassthroughCodec(Codec):
 
 
 class _MetaPolicy(Policy):
-    def new_session(self, context=None, rt=None):
+    def new_session(self, context=None, rt=None) -> ChunkSession:
         return _FixedSession({})
 
     @property
@@ -163,6 +163,7 @@ def test_action_horizon_sec_truncates_chunk():
     codec = ActionTiming(fps=30.0, horizon_sec=0.1)
     policy = codec.wrap(_ChunkPolicy(actions))
     result = policy.new_session()(_T0_OBS, 0)
+    assert isinstance(result, list)
     assert [r['v'] for r in result if 'v' in r] == [0, 1, 2]
     assert result[-1] == {'timestamp': pytest.approx(0.1)}  # horizon sentinel
 
@@ -189,7 +190,7 @@ def test_timestamps_embedded_in_actions():
     codec = ActionTiming(fps=10.0)
     policy = codec.wrap(_ChunkPolicy(actions))
     result = policy.new_session()(_T0_OBS, 0)
-    assert len(result) == 5  # 4 actions + timestamp sentinel
+    assert isinstance(result, list) and len(result) == 5  # 4 actions + timestamp sentinel
     for i, action in enumerate(result):
         assert action['timestamp'] == pytest.approx(i * 0.1)
 
@@ -200,7 +201,7 @@ def test_action_horizon_sec_seconds_truncates():
     codec = ActionTiming(fps=30.0, horizon_sec=0.1)
     policy = codec.wrap(_ChunkPolicy(actions))
     result = policy.new_session()(_T0_OBS, 0)
-    assert len(result) == 4  # 3 actions + horizon sentinel
+    assert isinstance(result, list) and len(result) == 4  # 3 actions + horizon sentinel
     dt = 1.0 / 30.0
     for i, action in enumerate(result):
         assert action['timestamp'] == pytest.approx(i * dt)
@@ -251,7 +252,7 @@ def test_action_timestamp_and_horizon_compose():
     codec = ActionHorizon(0.3) | ActionTimestamp(fps=10.0)
     policy = codec.wrap(_ChunkPolicy(actions))
     result = policy.new_session()(_T0_OBS, 0)
-    assert len(result) == 4  # 3 actions + horizon sentinel
+    assert isinstance(result, list) and len(result) == 4  # 3 actions + horizon sentinel
     assert [r['v'] for r in result if 'v' in r] == [0, 1, 2]
     assert result[-1] == {'timestamp': pytest.approx(0.3)}  # horizon sentinel
 

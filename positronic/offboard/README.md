@@ -92,7 +92,7 @@ Upon connection, the server sends a ready packet with metadata:
     "action_fps": 15.0,
     "action_horizon_sec": 1.0,
     "local_stack": {"seq": [
-      {"name": "chunked_schedule"},
+      {"name": "chunk_player"},
       {"name": "restrict_image_size", "args": {"width": 224, "height": 224}}
     ]},
     "compress_images": false,
@@ -113,8 +113,9 @@ This metadata tells the client:
   `positronic.policy.spec.WIRE_LAYERS` — an unknown entry fails at connect, before the robot moves.
   Never empty and never absent: a pipeline with nothing left of the marker is refused when the server
   starts, and a handshake declaring nothing is refused by the client. In practice it names at least a
-  `chunked_schedule`, which turns the chunk-relative timestamps a codec stamps into times on the rig's
-  clock — a stack that fails to leaves the harness rejecting the chunk at the first inference.
+  `chunk_player`, which holds the chunk a codec stamps and emits each waypoint at its own time on the
+  rig's clock — a stack without one answers a chunk where the harness expects commands, and the episode
+  refuses to open.
 - `compress_images` — the `remote` marker's own wire setting: whether the rig JPEG-encodes frames before
   sending, for an endpoint behind a proxy with a message-size cap
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
@@ -214,9 +215,9 @@ The one server implementation behind every vendor. It serves a **policy pipeline
 ```python
 from positronic.offboard import PolicyServer
 from positronic.policy.spec import PolicySource, remote
-from positronic.policy.layers import ChunkedSchedule
+from positronic.policy.layers import ChunkPlayer
 
-pipeline = ChunkedSchedule() | remote | PolicySource(my_policy)
+pipeline = ChunkPlayer() | remote | PolicySource(my_policy)
 PolicyServer(pipeline, host='0.0.0.0', port=8000).serve()
 ```
 

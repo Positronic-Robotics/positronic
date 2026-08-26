@@ -3,7 +3,7 @@
 A policy pipeline is one layer chain with a ``remote`` marker naming the client/server border,
 closed by a ``ModelSource`` terminal::
 
-    pipeline = TemporalStack(...) | ChunkedSchedule() | remote | codec | source
+    pipeline = TemporalStack(...) | ChunkPlayer() | remote | codec | source
 
 Everything left of the marker is the *local* half — the stack the rig runs in front of the
 connection; everything right of it is the *remote* half — what the inference server runs around
@@ -40,7 +40,7 @@ from positronic.policy.codec import (
     FlipGrip,
     RestrictImageSize,
 )
-from positronic.policy.layers import ChunkedSchedule, StopOnFault, TemporalStack
+from positronic.policy.layers import ChunkPlayer, StopOnFault, TemporalStack
 from positronic.policy.observation import ObservationCodec
 
 
@@ -53,7 +53,7 @@ class RemoteMarker(Layer):
 
     ``remote`` is the plain border; call it to describe the wire::
 
-        ChunkedSchedule() | remote(compress_images=True) | codec | source
+        ChunkPlayer() | remote(compress_images=True) | codec | source
     """
 
     def __init__(self, compress_images: bool = False):
@@ -140,7 +140,7 @@ class PolicySource(ModelSource):
 WIRE_LAYERS: dict[str, type[Layer]] = {
     layer.WIRE_NAME: layer
     for layer in (
-        ChunkedSchedule,
+        ChunkPlayer,
         StopOnFault,
         TemporalStack,
         ActionTimestamp,

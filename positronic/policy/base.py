@@ -43,35 +43,12 @@ class Runtime(ABC):
         """The policy's functions, under the names it declared them by."""
 
 
-class Session(ABC):
-    """Per-episode inference session. Created by ``Policy.new_session()``.
+class _SessionBase:
+    """Per-episode state a policy opens: what the framework holds, cancels and closes.
 
-    Sessions hold per-episode state (trajectory buffers, latency tracking, etc.)
-    and are the primary interface for running inference. Call the session like
-    a function to get actions::
-
-        session = policy.new_session(context)
-        trajectory = session(obs, time_ns)
-
-    **Plain-data contract**: sessions accept and return only plain data
-    (dicts, lists, numpy arrays, scalars). No tensors or custom objects.
-
-    **Return contract**: ``list[dict] | None``. ``None`` means "no new
-    trajectory, keep executing the current one" — what a scheduling layer
-    answers while its chunk plays, and what a session answers while the
-    function it asked is still in flight.
-    An empty list means "stop whatever is executing now". A non-empty list is
-    a new trajectory. Single-action returns must be wrapped into a 1-element
-    list by the producer.
+    ``Session`` and ``ChunkSession`` add the call. Both are opened and ended the same way, so the
+    lifecycle lives here.
     """
-
-    @abstractmethod
-    def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict[str, Any]] | None:
-        """Predict actions for the given observation, without waiting: heavy work belongs in
-        ``Policy.functions``.
-
-        ``time_ns`` is the caller's clock reading in nanoseconds. A session reads no clock of its own.
-        """
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -80,7 +57,7 @@ class Session(ABC):
 
     def cancel(self):
         """Drop any in-flight trajectory state. Layers that buffer/schedule a
-        trajectory (e.g. ``ChunkedSchedule``) should reset so the next call
+        trajectory (e.g. ``ChunkPlayer``) should reset so the next call
         triggers a fresh inference. Override and propagate via ``super().cancel()``.
         """
         return None
@@ -90,10 +67,83 @@ class Session(ABC):
         return None
 
 
+class Session(_SessionBase, ABC):
+    """Per-episode control session. Created by ``Policy.new_session()``.
+
+    Sessions hold per-episode state (the chunk being played, latency tracking) and are what a caller
+    controls a robot through. Call the session like a function::
+
+        session = policy.new_session(context)
+        commands, resume_at_ns = session(obs, time_ns)
+
+    **Plain-data contract**: sessions accept and return only plain data
+    (dicts, lists, numpy arrays, scalars). No tensors or custom objects.
+    """
+
+    @abstractmethod
+    def __call__(self, obs: Mapping[str, Any], time_ns: int) -> tuple[Mapping[str, Any], int]:
+        """The commands to run now and the time this session wants its next call, without waiting:
+        heavy work belongs in ``Policy.functions``.
+
+        ``time_ns`` is the caller's clock reading in nanoseconds. A session reads no clock of its own.
+        ``commands`` names a command channel per entry; an empty mapping asks for nothing this call.
+        ``resume_at_ns`` is on the clock of ``time_ns``. The caller aims at it and may call earlier.
+        """
+
+
+class ChunkSession(_SessionBase, ABC):
+    """Session that answers action chunks: what a ``ChunkPlayer`` holds and plays.
+
+    A call answers a list of actions, each naming command channels and carrying its own
+    ``keys.ACTION_TIMESTAMP`` in seconds from the call. ``None`` means "no new chunk" — what a session
+    answers while the work it asked for is still in flight. An empty list drops what is playing. One
+    action may come back bare, and the player wraps it.
+
+    TODO(#661): the chunk becomes the answer of a served function, and this class goes with the
+    session-serving wire.
+    """
+
+    @abstractmethod
+    def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict[str, Any]] | dict[str, Any] | None:
+        """The chunk to play from now, or ``None`` while the work is in flight.
+
+        ``time_ns`` is the caller's clock reading in nanoseconds. A session reads no clock of its own.
+        """
+
+
+# What a layer wraps: a session on either side of a ``ChunkPlayer``.
+# TODO(#661): the chunk side goes, and this alias with it.
+AnySession = Session | ChunkSession
+
+
 class DelegatingSession(Session):
-    """Session that delegates all methods to an inner session. Subclass and override what you need."""
+    """Session that delegates all methods to an inner ``Session``. Subclass and override what you need."""
 
     def __init__(self, inner: Session):
+        self._inner = inner
+
+    def __call__(self, obs, time_ns):
+        return self._inner(obs, time_ns)
+
+    @property
+    def meta(self):
+        return self._inner.meta
+
+    def cancel(self):
+        self._inner.cancel()
+
+    def close(self):
+        self._inner.close()
+
+
+class DelegatingChunkSession(ChunkSession):
+    """Chunk session that delegates all methods to an inner ``ChunkSession``.
+
+    The body repeats ``DelegatingSession`` because the two answer different calls, and each one's ``_inner``
+    is the side it forwards to. TODO(#661): it goes with ``ChunkSession``.
+    """
+
+    def __init__(self, inner: ChunkSession):
         self._inner = inner
 
     def __call__(self, obs, time_ns):
@@ -114,12 +164,12 @@ class Policy(ABC):
     """Factory for inference sessions.
 
     A Policy holds shared resources (model weights, connections) and creates
-    per-episode ``Session`` instances. One Policy can serve multiple robots
+    per-episode session instances. One Policy can serve multiple robots
     by creating independent sessions.
     """
 
     @abstractmethod
-    def new_session(self, context: dict[str, Any] | None = None, rt: Runtime | None = None) -> Session:
+    def new_session(self, context: dict[str, Any] | None = None, rt: Runtime | None = None) -> AnySession:
         """Create a new inference session for an episode.
 
         Args:
@@ -174,7 +224,7 @@ class Layer:
     ``codec | layer`` all produce a Layer pipeline that ``wrap(policy)``
     applies right-to-left::
 
-        pipeline = TemporalStack(...) | ChunkedSchedule() | codec
+        pipeline = TemporalStack(...) | ChunkPlayer() | codec
         wrapped = pipeline.wrap(RemotePolicy(...))
 
     **Extension points**: subclasses override *one* of ``make_session`` (the
@@ -186,8 +236,8 @@ class Layer:
         """Apply this layer to a policy. Default: wrap every session it creates via ``make_session``."""
         return _LayerPolicy(policy, self)
 
-    def make_session(self, inner: Session) -> Session:
-        """Make this layer's session around ``inner``."""
+    def make_session(self, inner: Any) -> AnySession:
+        """Make this layer's session around ``inner``, on the side of a ``ChunkPlayer`` the layer sits on."""
         raise NotImplementedError('Override make_session or wrap')
 
     # The name this layer travels under, set by every deliverable subclass. ``WIRE_LAYERS`` is keyed by

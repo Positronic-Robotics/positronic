@@ -62,7 +62,7 @@ claim an outsider can check.
 ## Positronic owns the control loop
 
 The world runner and harness execute every episode: they drive the clock, deliver observations to
-the policy, schedule and play back action chunks, and own resets and episode boundaries. This holds
+the policy, emit the commands it answers, and own resets and episode boundaries. This holds
 for every evaluation and data-collection run — in simulation and on real hardware, for any
 embodiment, scene source, or scoring method. A foreign component never runs the loop and calls into
 Positronic; Positronic runs the loop and calls into it.
@@ -116,21 +116,21 @@ control system its clock, and no component reads time at point of use. Trajector
 the same time frame the observations carry, so a virtual clock, a slowed sim, or a replayed episode
 changes nothing downstream.
 
-**The layer owns the plan, the harness plays it, the driver executes.** A policy speaks in
-trajectories — waypoints with absolute timestamps — because a model predicts a horizon, not an
-instant. But a trajectory on the wire makes every driver buffer the future, and makes the recording
-guess which prefix of that buffer actually ran. So the plan stops at the harness: a command channel
-carries the single command due at the moment it is emitted, the driver executes the latest one and
+**The layer owns the plan and plays it, the driver executes.** A policy predicts a horizon, not an
+instant, so a chunk of waypoints is what a model answers. But a trajectory on the wire makes every
+driver buffer the future, and makes the recording guess which prefix of that buffer actually ran. So
+the plan stops inside the policy stack: a session answers the commands due at the moment it is
+called, a command channel carries one command per emission, the driver executes the latest one and
 holds otherwise, and emission time *is* execution time. Continuous-update schemes (RTC, temporal
-ensembling) therefore need no special mechanism: they are layers that hand back a new trajectory
-more often, and the harness keeps playing the old one until they do.
+ensembling) therefore need no special mechanism: they are layers that re-query before the chunk they
+hold runs out.
 
 **The harness stays thin.** It is the one layer standing between any policy and any embodiment, so
 anything it encodes about either side breaks the any-to-any goal. It assembles the observation
-dict, calls the session, plays the returned trajectory one command per channel per round, and runs
-episode lifecycle — nothing else. Scheduling, blending, history stacking and error recovery live in
-the layer stack around the policy; a session returning `None` means "keep executing the current
-trajectory".
+dict, calls the session, emits the commands it answers, and runs episode lifecycle — nothing else.
+Scheduling, blending, history stacking and error recovery live in the layer stack around the policy.
+A call answers `(commands, resume_at_ns)`: what to emit now, and the instant the session wants its
+next call. The harness aims at that instant and may call earlier.
 
 **Inference cost is a fact of the trial, owned by the harness.** The policy declares its heavy work
 as functions, and the framework runs each one off the loop thread. That work costs the trial either

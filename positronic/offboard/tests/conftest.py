@@ -3,15 +3,16 @@ import socket
 import threading
 import time
 from collections.abc import Callable, Generator, Mapping
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 import uvicorn
 
 from positronic.offboard.server import PolicyServer
-from positronic.policy import Policy, Session
+from positronic.policy import AnySession, ChunkSession, Policy, Session
 from positronic.policy.executor import Executor
-from positronic.policy.layers import ChunkedSchedule
+from positronic.policy.layers import ChunkPlayer
 from positronic.policy.spec import ModelSource, PolicySource, remote
 
 
@@ -57,11 +58,11 @@ def start_server() -> Generator[StartServer, None, None]:
 
 
 @pytest.fixture
-def open_session() -> Generator[Callable[..., tuple[Session, Executor]], None, None]:
+def open_session() -> Generator[Callable[..., tuple[AnySession, Executor]], None, None]:
     """Opens a policy's session against a runtime that serves its functions, as the harness does."""
     runtimes: list[Executor] = []
 
-    def make(policy: Policy) -> tuple[Session, Executor]:
+    def make(policy: Policy) -> tuple[AnySession, Executor]:
         runtimes.append(Executor(policy.functions))
         return policy.new_session(None, runtimes[-1]), runtimes[-1]
 
@@ -74,7 +75,7 @@ def open_session() -> Generator[Callable[..., tuple[Session, Executor]], None, N
 ANSWER_SEC = 5.0
 
 
-def round_trip(session: Session, rt: Executor, obs, time_ns: int = 0) -> list[dict] | None:
+def round_trip(session: ChunkSession, rt: Executor, obs, time_ns: int = 0) -> list[dict] | dict | None:
     """What ``session`` answers for ``obs``, over the two calls one round trip takes.
 
     Both calls get the same ``time_ns``, so a chunk comes back anchored at the value the test passed.
@@ -83,6 +84,18 @@ def round_trip(session: Session, rt: Executor, obs, time_ns: int = 0) -> list[di
     rt.wait(ANSWER_SEC)
     assert not rt.in_flight, 'the round-trip never came back'
     return session(obs, time_ns)
+
+
+def played_round_trip(session: Session, rt: Executor, obs, time_ns: int = 0) -> Mapping[str, Any]:
+    """What ``session`` commands for ``obs``, over the two calls one round trip takes.
+
+    For a session topped by a ``ChunkPlayer``: both calls get the same ``time_ns``, so the chunk comes back
+    anchored at the value the test passed and the answer is the waypoints due at it.
+    """
+    assert session(obs, time_ns) == ({}, time_ns), 'a round-trip was already in flight'
+    rt.wait(ANSWER_SEC)
+    assert not rt.in_flight, 'the round-trip never came back'
+    return session(obs, time_ns)[0]
 
 
 def _make_mock_policy(action, meta):
@@ -146,7 +159,7 @@ def inference_server(start_server: StartServer, mock_policy: MagicMock) -> tuple
     Returns:
         tuple[str, int]: (host, port)
     """
-    host, port, _server = start_server(ChunkedSchedule() | remote | PolicySource(mock_policy))
+    host, port, _server = start_server(ChunkPlayer() | remote | PolicySource(mock_policy))
     return host, port
 
 
@@ -154,5 +167,5 @@ def inference_server(start_server: StartServer, mock_policy: MagicMock) -> tuple
 def multi_policy_server(
     start_server: StartServer, mock_policy_registry: dict[str, MagicMock]
 ) -> tuple[str, int, dict[str, MagicMock]]:
-    host, port, _server = start_server(ChunkedSchedule() | remote | _DictSource(mock_policy_registry))
+    host, port, _server = start_server(ChunkPlayer() | remote | _DictSource(mock_policy_registry))
     return host, port, mock_policy_registry

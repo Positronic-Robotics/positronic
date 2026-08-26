@@ -1,17 +1,22 @@
-"""Composable policy layers — scheduling, fault handling and temporal frame stacking.
+"""Composable policy layers — chunk playback, fault handling and temporal frame stacking.
 
-Layers are serving-time concerns wrapped around a policy with ``|`` (left is outermost). Most read time
-from the observation (``obs_time_ns``); ``ChunkedSchedule`` anchors a chunk with the ``time_ns`` of the
-call, which is the caller's clock reading in nanoseconds.
+Layers are serving-time concerns wrapped around a policy with ``|`` (left is outermost). ``ChunkPlayer``
+converts a chunk into the commands a caller runs; the layers around it read time from the observation
+(``obs_time_ns``) or from the call's ``time_ns``, both in nanoseconds.
 """
 
 from collections import deque
+from typing import Any
 
 import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.policy.base import DelegatingSession, Layer, Session
+from positronic.policy.base import ChunkSession, DelegatingSession, Layer, Session
+
+# How far from the call a waypoint may sit: past any real chunk, short of the decades a chunk is off by
+# when it reaches the player already anchored.
+MAX_ACTION_SKEW_SEC = 60.0
 
 
 def _obs_time(obs) -> float:
@@ -37,10 +42,10 @@ def _arms_available(obs) -> bool:
 class StopOnFault(Layer):
     """Stop the arm while it will not take a command, and plan afresh once it will.
 
-    An arm the driver has taken, or that is faulted, is not tracking the plan it was given: this answers the
-    empty trajectory and resets the sessions below. It goes outside the scheduling layer, which would
-    otherwise answer "keep playing" without seeing the status. Every arm is checked, so a bimanual rig stops
-    on either.
+    An arm the driver has taken, or that is faulted, is not tracking the plan it was given: this commands
+    nothing and resets the sessions below, which drops the chunk being played. It goes outside the player,
+    which would otherwise keep emitting waypoints without seeing the status. Every arm is checked, so a
+    bimanual rig stops on either.
     """
 
     WIRE_NAME = 'stop_on_fault'
@@ -50,58 +55,97 @@ class StopOnFault(Layer):
             if _arms_available(obs):
                 return self._inner(obs, time_ns)
             self.cancel()
-            return []
+            return {}, time_ns
 
-    def make_session(self, inner: Session):
+    def make_session(self, inner: Session) -> Session:
         return StopOnFault._Session(inner)
 
     def to_spec(self):
         return {'name': self.WIRE_NAME}
 
 
-class ChunkedSchedule(Layer):
-    """Wait for the current trajectory to finish before calling the inner policy again.
+class ChunkPlayer(Layer):
+    """Hold the chunk the sessions below answer, and emit each waypoint at its own time.
 
-    Owns relative→absolute time conversion: the sessions below (codecs, models) emit relative timestamps;
-    this layer anchors them to the call's ``time_ns``, in the seconds a timestamp is written in. Returns
-    ``None`` ("keep executing the current trajectory") until the last action's timestamp is reached, then
-    calls the inner policy.
-
-    The call's ``time_ns`` and the observation's ``obs_time_ns`` must be readings of one clock: the anchor
-    comes from the first, and the test for a complete chunk uses the second.
+    Owns relative→absolute time conversion: the sessions below (codecs, models) emit timestamps relative to
+    the call; this layer anchors them to the call's ``time_ns``. Each call answers the waypoints that have
+    come due, and asks to be called again at the next one. The call that drains the last waypoint asks the
+    sessions below for a new chunk, and plays whatever of it is already due.
     """
 
-    WIRE_NAME = 'chunked_schedule'
+    WIRE_NAME = 'chunk_player'
 
-    class _Session(DelegatingSession):
-        """Skips inner calls while the current trajectory plays; stamps absolute on emit."""
+    class _Session(Session):
+        """Plays the chunk it holds; re-queries in the call that drains it.
 
-        def __init__(self, inner: Session):
-            super().__init__(inner)
-            self._trajectory_end: float | None = None
+        The one session with a different contract on each side, so it forwards rather than delegates.
+        """
+
+        def __init__(self, inner: ChunkSession):
+            self._inner = inner
+            self._waypoints: deque[tuple[int, dict[str, Any]]] = deque()
 
         def __call__(self, obs, time_ns):
-            if self._trajectory_end is not None and _obs_time(obs) < self._trajectory_end:
-                return None
-            result = self._inner(obs, time_ns)
-            if result is not None:
-                # A single-action session may return a bare dict, and a no-codec path may omit
-                # ``timestamp`` (servers can stamp/truncate themselves); normalize both so an
-                # immediate action executes instead of raising.
-                if isinstance(result, dict):
-                    result = [result]
-                # Copy dicts so we don't mutate caller-owned data (sessions may reuse templates).
-                anchor = time_ns / 1e9
-                result = [{**r, keys.ACTION_TIMESTAMP: anchor + r.get(keys.ACTION_TIMESTAMP, 0.0)} for r in result]
-                self._trajectory_end = result[-1][keys.ACTION_TIMESTAMP] if result else None
-            return result
+            commands = self._due(time_ns)
+            if not self._waypoints:
+                chunk = self._inner(obs, time_ns)
+                if chunk is not None:
+                    self._load(chunk, time_ns)
+                    commands = {**commands, **self._due(time_ns)}
+            # A spent chunk asks for the next call at once: the work for the chunk after it is in flight.
+            return commands, self._waypoints[0][0] if self._waypoints else time_ns
+
+        def _due(self, time_ns: int) -> dict[str, Any]:
+            """The waypoints reached at ``time_ns``, taken off the chunk.
+
+            A channel with several waypoints due keeps the last: exact for an absolute setpoint, lossy for
+            a relative one.
+            """
+            commands: dict[str, Any] = {}
+            while self._waypoints and self._waypoints[0][0] <= time_ns:
+                commands.update(self._waypoints.popleft()[1])
+            return commands
+
+        def _load(self, chunk: list[dict[str, Any]] | dict[str, Any], time_ns: int) -> None:
+            """Anchor ``chunk`` to ``time_ns`` and hold it.
+
+            A single-action session may answer a bare dict, and a no-codec path may omit ``timestamp``
+            (servers can stamp and truncate themselves); both are normalized here so an immediate action
+            plays instead of raising.
+            """
+            if isinstance(chunk, dict):
+                chunk = [chunk]
+            anchor = time_ns / 1e9
+            skew = max((abs(action.get(keys.ACTION_TIMESTAMP, 0.0)) for action in chunk), default=0.0)
+            if skew > MAX_ACTION_SKEW_SEC:
+                raise ValueError(
+                    f'Action scheduled {skew:.0f}s from the call, over the {MAX_ACTION_SKEW_SEC:.0f}s bound: '
+                    f'the sessions below are timing actions against a clock of their own'
+                )
+            # The single explicit seconds->ns seam: the sessions below time actions in float seconds, and
+            # every pimm channel is in ns. A waypoint naming no channel — the codecs' end-of-chunk sentinel —
+            # commands nothing and states where the chunk ends.
+            self._waypoints = deque(
+                (
+                    int((anchor + action.get(keys.ACTION_TIMESTAMP, 0.0)) * 1e9),
+                    {name: value for name, value in action.items() if name != keys.ACTION_TIMESTAMP},
+                )
+                for action in chunk
+            )
+
+        @property
+        def meta(self):
+            return self._inner.meta
 
         def cancel(self):
-            self._trajectory_end = None
-            super().cancel()
+            self._waypoints.clear()
+            self._inner.cancel()
 
-    def make_session(self, inner: Session):
-        return ChunkedSchedule._Session(inner)
+        def close(self):
+            self._inner.close()
+
+    def make_session(self, inner: ChunkSession) -> Session:
+        return ChunkPlayer._Session(inner)
 
     def to_spec(self):
         return {'name': self.WIRE_NAME}
@@ -156,7 +200,7 @@ class TemporalStack(Layer):
     A model that conditions on a short window of history (e.g. DreamZero's video context) needs several
     samples spanning the just-executed chunk at the cadence seen in training, but the harness only
     forwards an observation to the policy at re-query boundaries. This layer sits outside the
-    scheduling layer so it sees every control tick: it records the named ``keys`` and substitutes, for
+    player so it sees every control tick: it records the named ``keys`` and substitutes, for
     each, a ``(len(offsets_sec), ...)`` stack sampled at ``offsets_sec`` (ascending negative seconds
     relative to now), so every stacked step carries its own value at that time rather than the current
     one repeated across history.
@@ -196,7 +240,7 @@ class TemporalStack(Layer):
             'in-range targets and the stack would be empty'
         )
 
-    def make_session(self, inner: Session):
+    def make_session(self, inner: Session) -> Session:
         return TemporalStack._Session(inner, self._keys, self._offsets_sec, self._pad_start)
 
     def to_spec(self):

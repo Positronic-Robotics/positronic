@@ -20,9 +20,9 @@ from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Task
-from positronic.policy import Policy, Session
+from positronic.policy import ChunkSession, Policy
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.layers import ChunkedSchedule
+from positronic.policy.layers import ChunkPlayer
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.simulator.env_server.adapter import EnvAdapter, _in_env_control_frame, _wire_command
 from positronic.simulator.env_server.client import _CLOSE_ACK_TIMEOUT, EnvConnection
@@ -330,7 +330,7 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
         trial = number_trials(replace(next(iter(ev.tasks())), timeout_sec=0.1), [{keys.EVAL_SEED: 100}])[0]
         policy = StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
         main(
-            policy=ChunkedSchedule().wrap(policy),
+            policy=ChunkPlayer().wrap(policy),
             evals=[replace(ev, tasks=partial(iter, [trial]))],
             output_dir=str(tmp_path),
         )
@@ -373,7 +373,7 @@ class _JointposChunks(Policy):
         return _JointposChunkSession(self)
 
 
-class _JointposChunkSession(Session):
+class _JointposChunkSession(ChunkSession):
     def __init__(self, policy: _JointposChunks):
         self._policy = policy
 
@@ -389,7 +389,7 @@ class _JointposChunkSession(Session):
 def test_full_chunk_executes_between_replans(env_server, tmp_path):
     """The recording proves the contract the DROID jointpos codec makes with RoboLab's client: every action
     of every chunk lands on the wire — including the final one, which ``ActionTimestamp``'s validity
-    sentinel gives a full period before ``ChunkedSchedule`` re-infers — and replans arrive exactly
+    sentinel gives a full period before ``ChunkPlayer`` re-infers — and replans arrive exactly
     ``chunk_len`` control periods apart."""
     host, port = env_server
     probe = make_mujoco_env([])
@@ -398,7 +398,7 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
 
     chunk_len = 5
     raw = _JointposChunks(roboarm_command.JointPosition(np.zeros(7)), chunk_len)
-    policy = (ChunkedSchedule() | ActionTimestamp(fps=1.0 / control_dt)).wrap(raw)
+    policy = (ChunkPlayer() | ActionTimestamp(fps=1.0 / control_dt)).wrap(raw)
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
         trial = number_trials(replace(next(iter(ev.tasks())), timeout_sec=20 * control_dt), [{keys.EVAL_SEED: 100}])[0]

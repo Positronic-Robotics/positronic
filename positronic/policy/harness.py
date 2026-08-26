@@ -1,6 +1,5 @@
 import time
-from collections import deque
-from collections.abc import Generator, Iterator
+from collections.abc import Generator, Iterator, Mapping
 from typing import Any
 
 import numpy as np
@@ -12,16 +11,12 @@ from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
-from positronic.policy.base import Policy
+from positronic.policy.base import Policy, Session
 from positronic.policy.executor import Executor
 from positronic.utils import flatten_dict, frozen_view
 
-# How far from now an action may be scheduled: past any real chunk, short of the decades a rig-side stack is
-# off by when it leaves timestamps chunk-relative or anchors them twice.
-MAX_ACTION_SKEW_SEC = 60.0
-
-# How long a real-time round may last when no waypoint is due sooner. It bounds how late a call is noticed,
-# and with it the granularity every command timestamp is quantized to.
+# How long a real-time round may last when the session asks for nothing sooner. It bounds how late a call is
+# noticed, and with it the granularity every command timestamp is quantized to.
 POLL_PERIOD_SEC = 0.01
 
 
@@ -35,7 +30,12 @@ class _EpisodeInference:
         self._t0_ns, self._wall_t0 = clock.now_ns(), time.monotonic()
         self._runtime = Executor(policy.functions)
         try:
-            self._session = policy.new_session(context, self._runtime)
+            session = policy.new_session(context, self._runtime)
+            # A stack that answers chunks has no player in it, so nothing turns them into commands.
+            assert isinstance(session, Session), (
+                f'{type(session).__name__} answers a chunk; a policy played here needs a ChunkPlayer in its stack'
+            )
+            self._session = session
         except BaseException:
             self._runtime.close()
             raise
@@ -53,7 +53,7 @@ class _EpisodeInference:
         """
         return {name: value.copy() if isinstance(value, np.ndarray) else value for name, value in obs.items()}
 
-    def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
+    def __call__(self, obs: dict[str, Any]) -> tuple[Mapping[str, Any], int]:
         now_ns = self._clock.now_ns()
         # A call that joins work already in flight keeps its anchor, so the trial pays for that work one time.
         if not self._runtime.in_flight:
@@ -109,6 +109,7 @@ class _EpisodeTelemetry:
         self._virtual_start = virtual_now
 
     def step(self) -> None:
+        """Count one control round: the harness read an observation, called the session and emitted its answer."""
         self._steps += 1
 
     def end(self, virtual_now: float) -> None:
@@ -144,12 +145,12 @@ class _EpisodeTelemetry:
 
 
 class Harness(pimm.ControlSystem):
-    """Control system that runs the episode lifecycle and plays the policy's trajectory to the drivers.
+    """Control system that runs the episode lifecycle and emits what the policy commands.
 
-    The layer owns the trajectory, the harness plays it, one command per channel per round. The session is
-    called on the loop thread and answers inside the round; the functions it starts run on the runtime's own,
-    so playing continues while the model runs. That work costs the trial either the wall time it took or
-    nothing, with the world held still for it.
+    The session owns the trajectory and answers the commands to run now; the harness emits them and comes
+    back when the session asked. The session is called on the loop thread and answers inside the round; the
+    functions it starts run on the runtime's own, so playing continues while the model runs. That work costs
+    the trial either the wall time it took or nothing, with the world held still for it.
 
     An episode runs one ``Task``, asked for by a ``perform_task`` call and answered with the terminal
     payload it ended on. The task's ``timeout_sec`` bounds it and a truthy ``done`` within budget ends it
@@ -169,14 +170,14 @@ class Harness(pimm.ControlSystem):
         self._retired: _EpisodeInference | None = None
         # ``task.timeout_sec``, armed per episode; a task without one has no deadline and ends on ``done`` alone.
         self._deadline_ns: int | None = None
+        # When the live session asked for its next call. ``None`` while no session has answered.
+        self._resume_at_ns: int | None = None
         # Wall-clock telemetry for the live rollout, opened under ``--timing`` and inert otherwise.
         self._telemetry = _EpisodeTelemetry()
 
         self.observations = pimm.ReceiverDict(self, names=embodiment.observations)
         self.commands = pimm.EmitterDict(self, names=embodiment.commands)
         self.prepare = pimm.calls.CallerDict[Any, None](self, names=embodiment.prepare_handlers)
-        # Each channel's waypoints not yet played, stamped with absolute clock ns and ascending.
-        self._schedules: dict[str, deque[tuple[int, Any]]] = {name: deque() for name in embodiment.commands}
 
         # One episode per call, answered with the terminal payload it ended on.
         self.perform_task = pimm.calls.ControlSystemHandler[Task, dict[str, Any]](self)
@@ -239,20 +240,21 @@ class Harness(pimm.ControlSystem):
 
     def _pace(self, clock: pimm.Clock) -> pimm.Command:
         """Sim: yield, so the simulator's control-period sleep is the sole time-master and the policy reads
-        each observation instantly. Real: sleep to the next waypoint, capped at the poll period, so a
-        waypoint is emitted at its own time and a round rarely finds more than one due."""
+        each observation instantly. Real: sleep to the moment the session asked for, capped at the poll
+        period, so a waypoint is emitted at its own time and a round rarely finds more than one due. A
+        session that names a moment already reached asks for the next round, one poll period away.
+        """
         if self._embodiment.simulated:
             return pimm.Yield()
-        due = min((sched[0][0] for sched in self._schedules.values() if sched), default=None)
-        if due is None:
-            return pimm.Sleep(POLL_PERIOD_SEC)
-        return pimm.Sleep(min(POLL_PERIOD_SEC, max(due - clock.now_ns(), 1) / 1e9))
+        due_in_sec = (self._resume_at_ns - clock.now_ns()) / 1e9 if self._resume_at_ns is not None else 0.0
+        return pimm.Sleep(min(POLL_PERIOD_SEC, due_in_sec) if due_in_sec > 0 else POLL_PERIOD_SEC)
 
     def _retire_inference(self) -> None:
         """Let go of this episode's inference, keeping it for ``_reap_inference``: ending an episode must not
         wait for a model that hangs."""
         if self._inference is not None:
             self._retired, self._inference = self._inference, None
+        self._resume_at_ns = None
 
     def _reap_inference(self) -> None:
         if self._retired is not None:
@@ -262,13 +264,12 @@ class Harness(pimm.ControlSystem):
     def _finalize_recording(
         self, clock: pimm.Clock, payload: dict[str, Any] | None = None
     ) -> Generator[pimm.Command, None, None]:
-        """Commit the live episode: cancel the in-flight chunk, stop the recorder — stamping the
+        """Commit the live episode: end the session playing it, stop the recorder — stamping the
         episode's full static meta (plus any terminal payload) — then close its span."""
         self._set_deadline(None)
         # Stamped before the inference is retired: the meta overlays what its session reports.
         stop = DsWriterCommand.STOP({**self._build_episode_meta(), **(payload or {})})
-        for schedule in self._schedules.values():  # devices hold their last commanded position
-            schedule.clear()
+        # Retiring the session ends the chunk it was playing; devices hold their last commanded position.
         self._retire_inference()
         self.ds_command.emit(stop)
         virtual_now = clock.now()  # before the round below, whose sim-clock advance belongs to no rollout
@@ -376,49 +377,11 @@ class Harness(pimm.ControlSystem):
             obs = self._build_obs(clock)
         except pimm.NoValueException:
             return  # no function is in flight yet, so this skips no wait
-        if (trajectory := inference(obs)) is not None:
-            self._reschedule(trajectory, clock)
-        inference.wait(should_stop)
-
-    @staticmethod
-    def _assert_anchored(trajectory: list[dict[str, Any]], now: float) -> None:
-        """Reject a chunk whose timestamps are not times on the harness clock."""
-        skew = max((abs(action[keys.ACTION_TIMESTAMP] - now) for action in trajectory), default=0.0)
-        if skew > MAX_ACTION_SKEW_SEC:
-            raise ValueError(
-                f'Action scheduled {skew:.0f}s from now, over the {MAX_ACTION_SKEW_SEC:.0f}s bound: the '
-                f'rig-side stack is not anchoring chunks to the harness clock'
-            )
-
-    def _reschedule(self, trajectory: list[dict[str, Any]], clock: pimm.Clock) -> None:
-        """Replace the schedule being played with the session's trajectory. Every channel it names gets that
-        channel's waypoints; one it omits is cleared and holds. The timestamps are already absolute, stamped
-        by the scheduling layer against the harness clock.
-        """
-        if self._deadline_ns is not None and clock.now_ns() >= self._deadline_ns:
-            # The world reached the deadline while the function was in flight, so its chunk is dropped rather
-            # than placed past the point the trial advertises it stops at; ``_run`` finishes the trial next round.
-            return
-        self._assert_anchored(trajectory, clock.now())
+        commands, self._resume_at_ns = inference(obs)
         self._telemetry.step()
-        # Layers time actions in float seconds; the schedules and every pimm channel are in ns.
-        for name, schedule in self._schedules.items():
-            schedule.clear()
-            schedule.extend((int(a[keys.ACTION_TIMESTAMP] * 1e9), a[name]) for a in trajectory if name in a)
-
-    def _play(self, clock: pimm.Clock) -> None:
-        """Emit each channel's command due this round, and nothing on a channel with none.
-
-        A channel with several waypoints due emits the last: exact for an absolute setpoint, lossy for a
-        relative one. Pacing keeps one due per round wherever a round is shorter than the waypoint spacing.
-        """
-        now_ns = clock.now_ns()
-        for name, schedule in self._schedules.items():
-            value = None
-            while schedule and schedule[0][0] <= now_ns:
-                value = schedule.popleft()[1]
-            if value is not None:
-                self.commands[name].emit(value)
+        # The key-filtered demux: a command this rig declares no channel for reaches no driver.
+        self._emit({name: commands[name] for name in self.commands if name in commands})
+        inference.wait(should_stop)
 
     def _trial_terminal(self, done: pimm.Message[dict] | None, clock: pimm.Clock) -> dict[str, Any] | None:
         """The terminal static payload if the live trial has ended this round, else ``None``.
@@ -472,7 +435,6 @@ class Harness(pimm.ControlSystem):
                 yield from self._begin_episode(clock, should_stop, call)
             elif manual is not None:
                 self._emit(manual)
-            self._play(clock)
             yield self._pace(clock)
 
         if self._inference is not None:

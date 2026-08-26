@@ -10,7 +10,7 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, I
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
-from .base import Answer, Layer, Policy, Runtime, Session
+from .base import Answer, AnySession, ChunkSession, Layer, Policy, Runtime
 from .recording import Recorder
 from .spec import from_spec
 
@@ -53,7 +53,7 @@ def round_trip(
         telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns())
 
 
-class RemoteSession(Session):
+class RemoteSession(ChunkSession):
     """Per-episode session that forwards observations to a remote inference server.
 
     One round trip is in flight at a time. The call that starts it answers ``None``, and so does every
@@ -197,7 +197,7 @@ class RemotePolicy(Policy):
             self._stacked = stack.wrap(self._endpoint)
         return self._stacked
 
-    def new_session(self, context=None, rt=None) -> Session:
+    def new_session(self, context=None, rt=None) -> AnySession:
         return self._policy().new_session(context, rt)
 
     @property
