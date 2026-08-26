@@ -108,8 +108,8 @@ class Eval:
     """An eval = embodiment + the tasks to run on it, produced by a single config.
 
     ``privileged`` and ``done`` are per-run, not per-task: the World wires the signals once, before it runs.
-    ``tasks`` makes the sweep — one entry per (scenario, seed) — and the driver calls it on its first turn,
-    so a source that asks its env what tasks it has reaches a live one.
+    ``tasks`` makes the sweep — one entry per (scenario, seed). A driver calls it when it starts, so a
+    source that asks its env what tasks it has reaches a live one.
     """
 
     embodiment: Embodiment

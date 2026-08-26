@@ -51,9 +51,8 @@ class TaskDriver(pimm.ControlSystem):
     """Walks a plan of tasks, asking for each as an episode through ``perform_task``, and returns —
     stopping the world — once the last has ended.
 
-    The plan is made on the first turn, so a source that asks its env what tasks it has reaches a live one.
-    One task is in flight at a time: the next is asked for only when the previous episode's terminal comes
-    back, so the plan never overlaps two episodes.
+    It makes the plan on its first turn, not when it is built. One task is in flight at a time: the next is
+    asked for only when the previous episode's terminal comes back, so the plan never overlaps two episodes.
     """
 
     def __init__(self, tasks: Callable[[], Iterable[Task]]):
@@ -206,11 +205,6 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
         policy.close()
 
 
-def _charged(tasks: Callable[[], Iterable[Task]], charge: bool) -> Iterator[Task]:
-    """Every task the source makes, stamped with the run's inference-time policy."""
-    return (replace(task, charge_inference_time=charge) for task in tasks())
-
-
 def _refuse(inapplicable: dict[str, object], where: str) -> None:
     """Stop on an argument the chosen half of `run` cannot honour.
 
@@ -220,6 +214,11 @@ def _refuse(inapplicable: dict[str, object], where: str) -> None:
     asked = sorted(flag for flag, value in inapplicable.items() if value)
     if asked:
         raise SystemExit(f'a {where} run has no {", ".join(asked)}')
+
+
+def _charged(tasks: Callable[[], Iterable[Task]], charge: bool) -> Iterator[Task]:
+    """Every task the source makes, stamped with the run's inference-time policy."""
+    return (replace(task, charge_inference_time=charge) for task in tasks())
 
 
 @cfn.config(eval=placeholder, policy=policy_cfg.unset)
