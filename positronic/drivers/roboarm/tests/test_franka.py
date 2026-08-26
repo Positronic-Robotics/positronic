@@ -775,6 +775,84 @@ def test_the_driver_logs_the_move_the_arm_refused_with_the_reason_it_gave(desk, 
     assert caplog.text.count('The arm refused a move: scripted') == 1, 'the wall of refusals was logged in full'
 
 
+def test_a_move_the_driver_cannot_attribute_to_a_safe_input_is_not_made_again(desk):
+    """A trip over the top of some other fault does not license a recovery: that fault may have moved the arm."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    arm.raises_once = ConnectionError('the control box stopped answering')
+    readings = iter([STOPPED] + [CLEAR] * 8)  # and a safe input trips and clears while it does
+    desk.safety_status = lambda: {franka.SAFE_INPUT_STATE: {'x31': next(readings)}}
+    travel = _arm(driver, clock).move_to(JOGGED, None)
+
+    with pytest.raises(ConnectionError):
+        _run_move(travel, clock)
+
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == 0, 'a fault of another kind was answered with a recovery'
+    assert arm.calls.count(Call.SET_TARGET_JOINTS) == 0, 'a fault of another kind was answered with a move'
+
+
+def test_a_safe_input_triggered_before_the_move_started_still_answers_for_its_refusal(desk):
+    """The watch reads on its own clock, so the trip that refuses a move is usually on the record already."""
+    arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    watch = driver._safe_inputs()
+    desk.safe_inputs['x31'] = STOPPED
+    watch.sample()  # the watch reads the trip before the move is ever dispatched
+    desk.safe_inputs['x31'] = CLEAR  # and it clears before the failed move reads for itself
+    travel = driver._arm(StopFlag(), clock, watch).move_to(JOGGED, None)
+
+    with pytest.raises(RuntimeError, match='stopped short'):
+        _run_move(travel, clock)
+
+    np.testing.assert_allclose(arm.targets, [JOGGED, JOGGED], err_msg='the trip the watch had already read')
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == 1
+
+
+def test_a_world_that_comes_down_as_the_safe_input_clears_ends_the_move(desk):
+    """The reading that finds the input clear is not licence to move: the stop is read after it, before the retry."""
+    arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    stop = StopFlag()
+    clock = MockClock()
+    readings = iter([STOPPED] + [CLEAR] * 8)
+
+    def read() -> dict[str, Any]:
+        reading = next(readings)
+        stop.stopped = reading is CLEAR  # the world comes down as the reading finds the input clear
+        return {franka.SAFE_INPUT_STATE: {'x31': reading}}
+
+    desk.safety_status = read
+    travel = driver._arm(stop, clock, driver._safe_inputs()).move_to(JOGGED, None)
+
+    with pytest.raises(RuntimeError, match='stopped short'):
+        _run_move(travel, clock)
+
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == 0, 'a shutdown was answered with a recovery'
+    assert arm.calls.count(Call.SET_TARGET_JOINTS) == 1, 'a move was commanded on the way out'
+
+
+def test_a_second_move_the_arm_refuses_is_counted_with_the_first(desk, caplog):
+    """The count is the diagnosis, so refusals spanning two moves must not read as one."""
+    arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    watching = _arm(driver, clock)
+
+    watching.note_refusals()  # the arm refuses one move
+    watching.command_target(PARK, None)  # the next is dispatched
+    watching.note_refusals()  # and refused in its turn
+    clock.advance(franka._Arm._REFUSAL_QUIET_S)
+    watching.note_refusals()
+
+    assert 'The arm refused 2 moves in a row' in caplog.text
+
+
 def test_a_run_carries_on_after_a_safe_input_stopped_a_move(desk, world):
     """The failure that ends a run reaches the driver through a sync move, which is the one this saves."""
     arm = FakeArm(PARK)

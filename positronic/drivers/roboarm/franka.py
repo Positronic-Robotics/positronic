@@ -7,7 +7,7 @@ import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Generator, Iterator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -109,6 +109,14 @@ _SAFE_INPUT_POLL_S = 0.5
 SAFE_INPUT_STATE = 'safeInputState'
 
 
+class _Reading(NamedTuple):
+    """One reading of the safe inputs, published in one assignment so a reader never sees half of it."""
+
+    sampled: bool
+    trips: int
+    triggered: frozenset[str]
+
+
 class _SafeInputs:
     """The control box's safe inputs, which libfranka does not report and Desk does.
 
@@ -125,9 +133,7 @@ class _SafeInputs:
         self._ip = ip
         self._credentials = credentials
         self._desk: Desk | None = None
-        self._triggered_inputs: frozenset[str] = frozenset()
-        self._sampled = False
-        self._trips = 0
+        self._reading = _Reading(False, 0, frozenset())
         self._unreadable = False
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -136,19 +142,32 @@ class _SafeInputs:
     @property
     def trips(self) -> int:
         """How many times a reading found a safe input triggered after one that found none."""
-        return self._trips
+        return self._reading.trips
+
+    @property
+    def mark(self) -> int:
+        """What a move about to be made hands ``tripped_since`` when it fails.
+
+        One below the count where an input reads triggered already, so the trip under way counts as
+        during the move it is about to refuse: it may clear again before anything samples next, and
+        nothing would then attribute the refusal to it.
+        """
+        reading = self._reading
+        return reading.trips - 1 if reading.triggered else reading.trips
 
     @property
     def motion_permitted(self) -> bool:
         """Whether the last reading found every safe input clear."""
-        return self._sampled and not self._triggered_inputs
+        reading = self._reading
+        return reading.sampled and not reading.triggered
 
     def tripped_since(self, since: int) -> bool:
         """Whether a safe input has been triggered since ``since`` trips, or is triggered now.
 
         False while no reading is in hand: without one there is nothing to attribute anything to.
         """
-        return self._sampled and (self._trips > since or bool(self._triggered_inputs))
+        reading = self._reading
+        return reading.sampled and (reading.trips > since or bool(reading.triggered))
 
     @staticmethod
     def _triggered(reading: object) -> bool:
@@ -177,23 +196,24 @@ class _SafeInputs:
         except Exception as exc:
             if not self._unreadable:
                 logger.error(f'Cannot read the safe inputs: {exc}')
-            self._desk, self._sampled, self._unreadable = None, False, True
+            self._desk, self._unreadable = None, True
+            self._reading = self._reading._replace(sampled=False)
 
     def _note(self, state: Mapping[str, object]) -> None:
         """Record a reading, and log a safe input whose state changed."""
-        if not self._sampled:
+        sampled, trips, was_triggered = self._reading
+        if not sampled:
             logger.info(f'The control box reports its safe inputs as {dict(state)}')
-        self._sampled, self._unreadable = True, False
+        self._unreadable = False
         triggered = frozenset(name for name, reading in state.items() if self._triggered(reading))
-        if triggered == self._triggered_inputs:
-            return
-        if triggered and not self._triggered_inputs:
-            self._trips += 1
-        if triggered:
-            logger.warning(f'The control box prohibits motion: safe inputs {sorted(triggered)} are triggered')
-        else:
-            logger.info('The control box permits motion: every safe input is clear')
-        self._triggered_inputs = triggered
+        if triggered != was_triggered:
+            if triggered and not was_triggered:
+                trips += 1
+            if triggered:
+                logger.warning(f'The control box prohibits motion: safe inputs {sorted(triggered)} are triggered')
+            else:
+                logger.info('The control box permits motion: every safe input is clear')
+        self._reading = _Reading(True, trips, triggered)
 
     def __enter__(self) -> '_SafeInputs':
         if self._credentials is not None:
@@ -210,6 +230,14 @@ class _SafeInputs:
     def _sample_until_stopped(self) -> None:
         while not self._stop.wait(_SAFE_INPUT_POLL_S):
             self.sample()
+
+
+class _StoppedShort(RuntimeError):
+    """The arm ended a goal without reaching it: how it reports a command it would not take.
+
+    Its own type because it is the failure a triggered safe input produces — the control box refuses
+    every command while one is triggered — and so the only one ``_Arm.move_to`` makes a move again after.
+    """
 
 
 class _Arm(DriverRun[command.CommandType]):
@@ -280,6 +308,7 @@ class _Arm(DriverRun[command.CommandType]):
         """Put the arm under ``mode`` and publish ``target`` to it, in that order with nothing in between."""
         self.robot.set_control_mode(self._to_pf_mode(mode))  # the robot no-ops a mode already running
         self.robot.set_target_joints(target)
+        self._refused = False  # the goal just dispatched is not the one the last reading found refused
 
     def await_goal(
         self, should_stop: Callable[[], bool], pace: Callable[[], pimm.Command]
@@ -293,7 +322,7 @@ class _Arm(DriverRun[command.CommandType]):
             if goal.status == pf.GoalStatus.REACHED:
                 return MoveStatus.ARRIVED
             if goal.status != pf.GoalStatus.IN_FLIGHT:
-                raise RuntimeError(f'the arm stopped short of its target: {goal.reason or goal.status}')
+                raise _StoppedShort(f'the arm stopped short of its target: {goal.reason or goal.status}')
             yield pace()
         return MoveStatus.GAVE_UP
 
@@ -334,34 +363,39 @@ class _Arm(DriverRun[command.CommandType]):
         wait_s = self._SAFE_STOP_WAIT_S
         logger.warning(f'A safe input stopped the move; waiting up to {wait_s:.0f}s for it to clear')
         deadline = self.clock.now() + wait_s
-        while not watch.motion_permitted:
+        while True:
+            # The stop is read before the reading, so a world coming down as the input clears fails the
+            # move rather than commanding a fresh one on its way out.
             if self.should_stop.value and not at_teardown:
-                logger.warning('The world stopped while a safe input was triggered; the move fails')
+                logger.warning('The world stopped before the move could be made again; the move fails')
                 return False
+            if watch.motion_permitted:
+                return True
             if self.clock.now() >= deadline:
                 logger.error(f'A safe input stayed triggered for {wait_s:.0f}s; the move fails')
                 return False
             yield pimm.Sleep(_SAFE_INPUT_POLL_S)
             watch.sample()
-        return True
 
     def move_to(
         self, target: np.ndarray, mode: command.ControlModeType | None, *, at_teardown: bool = False
     ) -> Generator[pimm.Command, None, MoveStatus]:
         """Travel to ``target`` under ``mode``, yielding until it arrives.
 
-        A move a safe input stopped is made again, up to ``_SAFE_STOP_RETRIES`` times. It is the one fault
-        answered with a recovery, because a real stop LATCHES the input triggered until a person releases
-        it, so one that clears on its own moved nothing.
+        A move the arm stopped short of its target is made again, up to ``_SAFE_STOP_RETRIES`` times, and
+        only where a safe input was triggered during it and has since cleared. A real stop LATCHES the
+        input until a person releases it, so one that clears on its own moved nothing. Every other
+        failure — a deadline the arm ran past, a control box that stopped answering — reaches the caller
+        as it always did, since one the driver cannot attribute may have moved the arm.
 
         ``at_teardown`` is for the move the driver makes on its way out. The stop is already set by then, so
         heeding it would abandon the move before it began, and recovering from a fault cancels the goal.
         """
         for _ in range(self._SAFE_STOP_RETRIES):
-            since = self.safe_inputs.trips
+            since = self.safe_inputs.mark
             try:
                 return (yield from self._travel_to(target, mode, at_teardown=at_teardown))
-            except Exception:
+            except _StoppedShort:
                 if not (yield from self._safe_stop_cleared(since, at_teardown=at_teardown)):
                     raise
                 self.robot.recover_from_errors()  # the stop faulted the arm; the target is unchanged
