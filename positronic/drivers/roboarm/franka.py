@@ -352,7 +352,7 @@ class _Arm(DriverRun[command.CommandType]):
 
         A move a safe input stopped is made again, up to ``_SAFE_STOP_RETRIES`` times. It is the one fault
         answered with a recovery, because a real stop LATCHES the input triggered until a person releases
-        it: one that clears on its own moved nothing, so the target below is still where the arm was going.
+        it, so one that clears on its own moved nothing.
 
         ``at_teardown`` is for the move the driver makes on its way out. The stop is already set by then, so
         heeding it would abandon the move before it began, and recovering from a fault cancels the goal.
