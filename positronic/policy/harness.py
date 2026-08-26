@@ -31,7 +31,7 @@ class _EpisodeInference:
     def __init__(self, policy: Policy, context: dict[str, Any], charges_wall_time: bool, clock: pimm.Clock) -> None:
         self._charges_wall_time = charges_wall_time
         self._clock = clock
-        # One instant on two clocks, so ``hold`` adds a wall duration to a world instant.
+        # One instant on two clocks, so ``wait`` adds a wall duration to a world instant.
         self._t0_ns, self._wall_t0 = clock.now_ns(), time.monotonic()
         self._runtime = Executor(policy.functions)
         try:
@@ -59,8 +59,8 @@ class _EpisodeInference:
             self._t0_ns, self._wall_t0 = self._clock.now_ns(), time.monotonic()
         return self._session(frozen_view(self._owned(obs)))
 
-    def hold(self) -> None:
-        """Hold the loop for the function in flight, as the trial's mode requires."""
+    def wait(self) -> None:
+        """Wait for the function in flight, for as long as the trial charges the loop for it."""
         timeout = None
         if self._charges_wall_time:
             # Wall time cannot be held still, so the loop waits out only the time the world is already ahead by.
@@ -362,9 +362,9 @@ class Harness(pimm.ControlSystem):
     def _infer(self, inference: _EpisodeInference, clock: pimm.Clock) -> None:
         """One round of inference.
 
-        The hold comes last. A hold at the top of the round lets the round that starts a function reach the
+        The wait comes last. A wait at the top of the round lets the round that starts a function reach the
         yield that ends it, and a yield moves a virtual clock. A channel the rig has never published to
-        defers the round, before any function exists to hold for.
+        defers the round, before any function exists to wait for.
         """
         try:
             obs = self._build_obs(clock)
@@ -372,7 +372,7 @@ class Harness(pimm.ControlSystem):
             return
         if (trajectory := inference(obs)) is not None:
             self._reschedule(trajectory, clock)
-        inference.hold()
+        inference.wait()
 
     @staticmethod
     def _assert_anchored(trajectory: list[dict[str, Any]], now: float) -> None:

@@ -135,8 +135,8 @@ trajectory".
 **Inference cost is a fact of the trial, owned by the harness.** The policy declares its heavy work
 as functions, and the framework runs each one off the loop thread. That work costs the trial either
 the wall time it took or nothing: the task's `charge_inference_time` flag asks a sim for the former,
-and a real rig pays it regardless. Only the harness reads the flag. Paying nothing means holding the
-loop for the work, which holds a virtual clock still; paying wall time means letting the world run,
+and a real rig pays it regardless. Only the harness reads the flag. Paying nothing means the loop
+waits for the work, which keeps a virtual clock still; paying wall time means letting the world run,
 though no further ahead of the work's start than wall time has. The clock the harness hands the
 policy stack (`now`) is the world clock, so a scheduling layer stamps its chunk at `now()` and never
 learns the mode.
