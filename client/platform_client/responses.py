@@ -29,12 +29,23 @@ def _public(status: SubmissionStatus) -> SubmissionStatus:
 PublicStatus = Annotated[Slugged[SubmissionStatus], AfterValidator(_public)]
 
 
+class TaskScore(BaseModel):
+    """One task's trials, with the count beside the share."""
+
+    trials: int
+    successes: int
+    success_rate: float
+
+
 class Scores(BaseModel):
-    """The scorer's output for a finished run. `primary` is the value a board ranks on."""
+    """The scorer's output for a finished run. `primary` is the value a board ranks on.
+
+    `per_task` pairs each rate with the counts it rests on.
+    """
 
     primary: float | None = None
     success_rate: float | None = None
-    per_task: dict[str, float] = Field(default_factory=dict)
+    per_task: dict[str, TaskScore] = Field(default_factory=dict)
     episodes: int = 0
     unscored: int = 0
 

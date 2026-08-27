@@ -39,7 +39,7 @@ dependencies = [
     # (.github/workflows/release.yaml). Pinned exactly, because that package guarantees no
     # backwards compatibility: a floating requirement would let a fresh install of THIS release
     # resolve a contract it was never built against.
-    "positronic-platform-client==0.2.0",
+    "positronic-platform-client==0.3.0",
     "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
     "pydantic",
