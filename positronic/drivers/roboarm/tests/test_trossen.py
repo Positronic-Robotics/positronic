@@ -75,6 +75,22 @@ class FakeArm(trossen_driver._FakeTrossen):
             super()._servo()
 
 
+class SaggingArm(FakeArm):
+    """The arm's fake, holding itself up with a following error, as the real one does.
+
+    The joints settle a fixed distance short of every goal. The values are what the arm at the rig reads
+    against what it was asked for at the nominal pose.
+    """
+
+    DROOP = np.array([0.0, 0.071, -0.064, -0.051, 0.0, 0.0])
+
+    def _servo(self) -> None:
+        super()._servo()
+        if self.goals:
+            settled = np.append(np.asarray(self.goals[-1])[:ARM] + SaggingArm.DROOP, self._position[ARM])
+            self._position = self._position + 0.1 * (settled - self._position)
+
+
 def _driven(arm: FakeArm, clock: MockClock | None = None, stop: StopFlag | None = None):
     """A driver over ``arm`` with its state recorded, and its loop ready to pump."""
     driver = trossen_driver.Robot('192.168.1.4', connect=lambda ip: arm)
@@ -507,6 +523,27 @@ def test_a_cartesian_target_out_of_reach_is_solved_one_step_at_a_time():
 
     step = np.linalg.norm(_ee(states).translation - started)
     assert step < trossen_driver._MAX_STEP_M + 1e-6
+
+
+def test_a_streamed_turn_is_walked_the_whole_way_by_an_arm_that_sags():
+    """A teleoperator turns the end effector over many ticks, and the setpoint moves a fraction of a degree
+    in each: the turn arrives however many that takes, on an arm holding itself up with a following error."""
+    arm = SaggingArm(position=np.append(HOME, 0.0))
+    driver, states, loop = _driven(arm)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    _at_home(commands, loop)
+    here = _ee(states)
+    asked = geom.Transform3D(
+        here.translation, geom.Rotation.from_rotvec(np.array([0.0, np.radians(30), 0.0])) * here.rotation
+    )
+
+    for _ in range(1500):  # a teleoperator's stream: the same target, tick after tick
+        commands.push(command.CartesianPosition(asked))
+        next(loop)
+
+    turned = np.degrees(np.linalg.norm((here.rotation.inv * _ee(states).rotation).as_rotvec))
+    assert turned > 25, turned
 
 
 def test_a_sync_move_to_a_pose_is_answered_like_any_other(world):
