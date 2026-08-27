@@ -18,11 +18,15 @@ def _controller(buttons):
 def test_gamepad_buttons_reach_the_caller():
     _, buttons = _parse_controller_data(_payload(right=_controller(TOUCH_BUTTONS)))
 
-    np.testing.assert_allclose(buttons['right'], TOUCH_BUTTONS)
+    right = buttons['right']
+    assert right is not None
+    np.testing.assert_allclose(right, TOUCH_BUTTONS)
 
 
 def test_input_source_without_gamepad_has_no_buttons():
     positions, buttons = _parse_controller_data(_payload(right=_controller([])))
 
+    right = positions['right']
     assert buttons['right'] is None
-    np.testing.assert_allclose(positions['right'].translation, [0.1, 0.2, 0.3])
+    assert right is not None
+    np.testing.assert_allclose(right.translation, [0.1, 0.2, 0.3])
