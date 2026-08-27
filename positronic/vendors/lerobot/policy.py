@@ -7,7 +7,7 @@ from lerobot.configs.types import FeatureType
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 
 from positronic import keys
-from positronic.policy import Policy, Session
+from positronic.policy import ChunkSession, Policy
 from positronic.policy.observation import TASK_FIELD
 
 
@@ -30,7 +30,7 @@ def _detect_device() -> str:
     return 'cpu'
 
 
-class _LerobotSession(Session):
+class _LerobotSession(ChunkSession):
     def __init__(self, policy, preprocessor, postprocessor, device: str, meta: dict[str, Any]):
         self._policy = policy
         self._preprocessor = preprocessor

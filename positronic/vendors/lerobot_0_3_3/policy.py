@@ -14,7 +14,7 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 
 from positronic import keys
 from positronic.cfg import codecs
-from positronic.policy import Codec, Policy, Session
+from positronic.policy import ChunkSession, Codec, Policy
 from positronic.policy.base import Answer, Runtime
 from positronic.policy.layers import ChunkPlayer, StopOnFault
 from positronic.policy.observation import TASK_FIELD
@@ -83,7 +83,7 @@ def _infer(policy: PreTrainedPolicy, device: str, obs: dict[str, Any]) -> list[d
 class LerobotPolicy(Policy):
     _INFER = 'infer'
 
-    class _Session(Session):
+    class _Session(ChunkSession):
         """Per-episode session that gives the model call to the runtime, and answers the chunk on a later call."""
 
         def __init__(self, rt: Runtime, meta: dict[str, Any]):

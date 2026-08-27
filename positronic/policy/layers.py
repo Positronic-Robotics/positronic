@@ -115,7 +115,6 @@ class ChunkPlayer(Layer):
             """
             if isinstance(chunk, dict):
                 chunk = [chunk]
-            anchor = time_ns / 1e9
             skew = max((abs(action.get(keys.ACTION_TIMESTAMP, 0.0)) for action in chunk), default=0.0)
             if skew > MAX_ACTION_SKEW_SEC:
                 raise ValueError(
@@ -123,11 +122,12 @@ class ChunkPlayer(Layer):
                     f'the sessions below are timing actions against a clock of their own'
                 )
             # The single explicit seconds->ns seam: the sessions below time actions in float seconds, and
-            # every pimm channel is in ns. A waypoint naming no channel — the codecs' end-of-chunk sentinel —
-            # commands nothing and states where the chunk ends.
+            # every pimm channel is in ns. The offset converts, not the sum, so a waypoint at 0.0 lands on the
+            # call itself whatever the clock reads. A waypoint naming no channel — the codecs' end-of-chunk
+            # sentinel — commands nothing and states where the chunk ends.
             self._waypoints = deque(
                 (
-                    int((anchor + action.get(keys.ACTION_TIMESTAMP, 0.0)) * 1e9),
+                    time_ns + int(action.get(keys.ACTION_TIMESTAMP, 0.0) * 1e9),
                     {name: value for name, value in action.items() if name != keys.ACTION_TIMESTAMP},
                 )
                 for action in chunk

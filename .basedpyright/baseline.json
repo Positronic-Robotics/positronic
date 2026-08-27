@@ -5276,22 +5276,6 @@
                     "endColumn": 28,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportOptionalContextManager",
-                "range": {
-                    "startColumn": 13,
-                    "endColumn": 23,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 23,
-                    "endColumn": 42,
-                    "lineCount": 1
-                }
             }
         ],
         "./positronic/replay_record.py": [

@@ -14,7 +14,7 @@ from pimm.logging import init_logging
 from positronic import geom, keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
-from positronic.policy import Codec, Policy, Session
+from positronic.policy import ChunkSession, Codec, Policy
 from positronic.policy.codec import ChangeEEFrame, RestrictImageSize
 from positronic.policy.layers import ChunkPlayer, StopOnFault
 from positronic.policy.spec import ModelSource, remote
@@ -124,7 +124,7 @@ class OpenpiSubprocess:
 ###########################################################################################
 
 
-class _OpenpiSession(Session):
+class _OpenpiSession(ChunkSession):
     def __init__(self, client: WebsocketClientPolicy):
         self._client = client
 

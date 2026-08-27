@@ -5,7 +5,7 @@ import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from positronic import keys
-from positronic.policy import Policy, Session
+from positronic.policy import ChunkSession, Policy
 from positronic.vendors import molmoact2
 
 # The three views and the 8-D ``[joint_positions(7), grip(1)]`` state of the DROID action space this vendor
@@ -24,7 +24,7 @@ def warm_observation() -> dict[str, Any]:
     }
 
 
-class _MolmoAct2Session(Session):
+class _MolmoAct2Session(ChunkSession):
     def __init__(self, model, processor, norm_tag: str, num_steps: int, meta: dict[str, Any]):
         self._model = model
         self._processor = processor
@@ -66,7 +66,7 @@ class MolmoAct2Policy(Policy):
         self._num_steps = num_steps
         self._meta = {keys.TYPE: 'molmoact2', 'norm_tag': norm_tag}
 
-    def new_session(self, context=None, rt=None) -> Session:
+    def new_session(self, context=None, rt=None) -> ChunkSession:
         return _MolmoAct2Session(self._model, self._processor, self._norm_tag, self._num_steps, self._meta)
 
     @property

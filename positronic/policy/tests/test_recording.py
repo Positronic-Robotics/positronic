@@ -5,10 +5,12 @@ from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import ChunkSession, Policy
+from positronic.policy.layers import ChunkPlayer
 from positronic.policy.recording import (
     Recorder,
     _build_blueprint,
     _command_field_arrays,
+    _CommandTapSession,
     _flat_wire,
     _RecordingTapSession,
     _squeeze_batch,
@@ -225,6 +227,18 @@ def test_handles_none_actions(tmp_path):
     assert isinstance(session, _RecordingTapSession)
     assert session({'x': 1.0}, 0) is None
     assert session._step == 1
+
+
+def test_a_tap_above_the_player_logs_the_command_of_each_round(tmp_path):
+    """Above a ``ChunkPlayer`` a session answers commands, so the tap plots a point per round."""
+    actions = [{'v': 1.0, 'timestamp': 0.0}, {'v': 2.0, 'timestamp': 0.5}]
+    rec = Recorder(tmp_path)
+    session = (rec.tap('raw') | ChunkPlayer()).wrap(_TrackingPolicy(actions)).new_session()
+    assert isinstance(session, _CommandTapSession)
+
+    assert session({'x': 1.0, keys.WALL_TIME_NS: 1}, 0) == ({'v': 1.0}, int(0.5e9))
+    assert session({'x': 1.0, keys.WALL_TIME_NS: 2}, int(0.25e9)) == ({}, int(0.5e9))
+    assert 'raw/series/v' in rec._series_paths
 
 
 def test_two_taps_share_one_file_per_episode(tmp_path):

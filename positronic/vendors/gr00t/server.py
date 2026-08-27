@@ -17,7 +17,7 @@ from positronic import keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
-from positronic.policy import Policy, Session
+from positronic.policy import ChunkSession, Policy
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkPlayer, StopOnFault
 from positronic.policy.spec import ModelSource, remote
@@ -200,7 +200,7 @@ class Gr00tSubprocess:
 ###########################################################################################
 
 
-class _Gr00tSession(Session):
+class _Gr00tSession(ChunkSession):
     def __init__(self, client: PolicyClient):
         self._client = client
 

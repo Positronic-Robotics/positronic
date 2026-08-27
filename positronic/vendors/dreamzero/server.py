@@ -20,7 +20,7 @@ from pimm.logging import init_logging
 from positronic import keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
-from positronic.policy import Codec, Layer, Policy, Session
+from positronic.policy import ChunkSession, Codec, Layer, Policy
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import list_checkpoints
@@ -256,7 +256,7 @@ class DreamZeroSubprocess:
             self.process = None
 
 
-class _DreamZeroSession(Session):
+class _DreamZeroSession(ChunkSession):
     def __init__(self, client: RoboarenaClient, session_id: str):
         self._client = client
         self._session_id = session_id

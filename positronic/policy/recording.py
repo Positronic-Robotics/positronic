@@ -14,8 +14,8 @@ correlated recording::
     pipeline = rec.tap('raw') | codec | rec.tap('server')
     policy = pipeline.wrap(remote_policy)
 
-- the ``raw`` tap (outermost) logs the observation as received and the final action
-  chunk;
+- the ``raw`` tap (outermost) logs the observation as received and, above a ``ChunkPlayer``,
+  the command of each round rather than a chunk;
 - the ``server`` tap (innermost, next to the remote policy) logs the observation as
   sent to the server and the chunk as received back.
 
@@ -60,7 +60,7 @@ import rerun.blueprint as rrb
 from positronic import geom
 from positronic import keys as obs_keys
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.policy.base import AnySession, Layer, Session
+from positronic.policy.base import AnySession, ChunkSession, Layer, Session
 from positronic.policy.codec import is_action
 from positronic.utils.rerun_compat import log_numeric_series, set_timeline_sequence, set_timeline_time
 
@@ -363,14 +363,15 @@ class _RecordingTap(Layer):
 
     def make_session(self, inner: AnySession) -> AnySession:
         stream = self._rec._open_stream()
-        return _RecordingTapSession(inner, self._rec, self._name, stream)
+        # The side a tap sits on is the side its inner is on, so a chain of taps carries it outwards.
+        tap = _CommandTapSession if isinstance(inner, Session) else _ChunkTapSession
+        return tap(inner, self._rec, self._name, stream)
 
 
-class _RecordingTapSession(Session):
+class _RecordingTapSession:
     """Logs the observation flowing down and the actions flowing up at one point.
 
-    A tap sits on either side of a ``ChunkPlayer``, so it forwards whatever its inner answers and reads the
-    side off that. TODO(#661): the framework records each boundary it carries, and a tap stops guessing.
+    ``_CommandTapSession`` and ``_ChunkTapSession`` add the call, one per side of a ``ChunkPlayer``.
     """
 
     def __init__(self, inner: AnySession, rec: Recorder, name: str, stream: rr.RecordingStream):
@@ -461,10 +462,13 @@ class _RecordingTapSession(Session):
         Above the player the answer holds the commands of one round, so a plot reads a point per round
         rather than a chunk per inference.
         """
-        if isinstance(answer, tuple):
-            commands, _ = answer
-            return [dict(commands)] if commands else []
-        return answer or []
+        match answer:
+            case (commands, _):
+                return [dict(commands)] if commands else []
+            case dict():
+                return [answer]
+            case _:
+                return answer or []
 
     def _send_blueprint(self) -> None:
         rec = self._rec
@@ -474,7 +478,7 @@ class _RecordingTapSession(Session):
         if bp is not None:
             rr.send_blueprint(bp)
 
-    def __call__(self, obs, time_ns) -> Any:
+    def _tapped(self, obs, time_ns) -> Any:
         rec = self._rec
         outermost = rec._depth == 0
         if outermost:
@@ -512,3 +516,17 @@ class _RecordingTapSession(Session):
     def close(self):
         self._inner.close()
         self._rec._release_stream()
+
+
+class _CommandTapSession(_RecordingTapSession, Session):
+    """A tap above a ``ChunkPlayer``: it logs the command of each round."""
+
+    def __call__(self, obs, time_ns) -> tuple[Mapping[str, Any], int]:
+        return self._tapped(obs, time_ns)
+
+
+class _ChunkTapSession(_RecordingTapSession, ChunkSession):
+    """A tap under a ``ChunkPlayer``: it logs the chunk a session answers."""
+
+    def __call__(self, obs, time_ns) -> list[dict[str, Any]] | dict[str, Any] | None:
+        return self._tapped(obs, time_ns)

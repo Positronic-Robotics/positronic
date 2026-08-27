@@ -196,9 +196,11 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     # The session runs no inference, but a session that serves its model on a runtime needs one to open.
     warmup = Executor(policy.functions)
     try:
-        policy.new_session(None, warmup).close()
+        session = policy.new_session(None, warmup)
     finally:
+        # The runtime closes first: a call the session started still uses what the session holds.
         warmup.close()
+    session.close()
     output_dir = prepare_output_dir(output_dir)
 
     try:

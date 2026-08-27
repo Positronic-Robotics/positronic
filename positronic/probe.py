@@ -40,9 +40,8 @@ from positronic.policy.executor import Executor
 _TAP = 'raw'
 # Observation keys the endpoint expects, mirroring the inference harness, plus every image.*.
 _STATE_KEYS = (keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP)
-# How long to wait for the endpoint, and how often to ask the session again while it is out.
+# How long to wait for the endpoint before calling the round trip lost.
 _ANSWER_TIMEOUT_SEC = 120.0
-_POLL_PERIOD_SEC = 0.01
 
 
 def _build_wire_obs(sample: dict, task: str | None, now_ns: int, recorded_ts: int) -> dict:
@@ -71,29 +70,26 @@ def _meta_doc(name: str, meta: dict) -> str:
     return f'## {name}\n\n{rows}'
 
 
-def _play(session, obs: dict) -> list[tuple[int, dict]]:
+def _play(session, obs: dict, runtime: Executor) -> list[tuple[int, dict]]:
     """Every command the session emits for ``obs``, from the endpoint's answer to the end of that chunk.
 
-    The observation is one frozen frame, so the walk moves the clock rather than the world. The session
-    anchors the chunk on the call that receives it and asks for a call at each waypoint; a resume time that
-    has not moved past the call says it holds nothing — the endpoint is still out, or the chunk has run out.
+    The observation is one frozen frame, so the walk moves the clock rather than the world. The first call
+    asks the endpoint and the wait is what that round trip takes. The session anchors the chunk on the call
+    that receives it and asks for a call at each waypoint, so the walk follows the instants it names.
     """
+    session(obs, time.time_ns())
+    runtime.wait(_ANSWER_TIMEOUT_SEC)
+    if runtime.in_flight:
+        raise TimeoutError(f'the endpoint answered nothing in {_ANSWER_TIMEOUT_SEC:.0f}s')
     played: list[tuple[int, dict]] = []
-    deadline = time.monotonic() + _ANSWER_TIMEOUT_SEC
     now_ns = time.time_ns()
     while True:
         commands, resume_at_ns = session(obs, now_ns)
         if commands:
             played.append((now_ns, dict(commands)))
-        if resume_at_ns > now_ns:
-            now_ns = resume_at_ns
-        elif played:
+        if resume_at_ns <= now_ns:  # the chunk has run out, and the session is asking the endpoint again
             return played
-        elif time.monotonic() >= deadline:
-            raise TimeoutError(f'the endpoint commanded nothing in {_ANSWER_TIMEOUT_SEC:.0f}s')
-        else:
-            time.sleep(_POLL_PERIOD_SEC)
-            now_ns = time.time_ns()
+        now_ns = resume_at_ns
 
 
 def _is_cartesian_chunk(played: list[tuple[int, dict]]) -> bool:
@@ -172,19 +168,23 @@ def main(
     meta = dict(session.meta)
     name = label or _recording_name(meta)
     try:
-        played = _play(session, obs)
-        print(f'episode {episode} @ {at:.3f}s (ts={ts}) [{name}]: {len(played)} command(s); rrd -> {output_dir}')
-        with rec.stream:
-            rec.stream.send_recording_name(name)
-            rr.log('meta', rr.TextDocument(_meta_doc(name, meta), media_type=rr.MediaType.MARKDOWN), static=True)
-            _log_commands(played, obs, now_ns, ts)
-            # Sent here, not at Recorder construction: the layout depends on the chunk type, which is
-            # only known after inference — a velocity chunk drops the 3D trajectory view.
-            rr.send_blueprint(_blueprint(image_keys, _is_cartesian_chunk(played)))
+        played = _play(session, obs, runtime)
     finally:
-        # The runtime closes first: the call the last waypoint started is still using the session's socket.
+        # The call that drained the chunk asked the endpoint again; closing the runtime waits that answer
+        # out. It goes before the session, whose socket the call still holds.
         runtime.close()
         session.close()
+
+    print(f'episode {episode} @ {at:.3f}s (ts={ts}) [{name}]: {len(played)} command(s); rrd -> {output_dir}')
+    stream = rec.stream
+    assert stream is not None, 'the tap opened the recording when the session was made'
+    with stream:
+        stream.send_recording_name(name)
+        rr.log('meta', rr.TextDocument(_meta_doc(name, meta), media_type=rr.MediaType.MARKDOWN), static=True)
+        _log_commands(played, obs, now_ns, ts)
+        # Sent here, not at Recorder construction: the layout depends on the chunk type, which is
+        # only known after inference — a velocity chunk drops the 3D trajectory view.
+        rr.send_blueprint(_blueprint(image_keys, _is_cartesian_chunk(played)))
 
 
 @pos3.with_mirror()

@@ -7,7 +7,7 @@ import threading
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
-from typing import Any, cast
+from typing import Any
 
 from positronic.policy.base import (
     Answer,
@@ -140,7 +140,7 @@ class _BlockingPolicy(DelegatingPolicy):
             inner = self._inner.new_session(context, own)
             # Waiting out the work is a question about a chunk, so nothing above a ``ChunkPlayer`` blocks.
             assert not isinstance(inner, Session), f'{type(inner).__name__} answers commands, not a chunk'
-            return _BlockingPolicy._Session(cast(ChunkSession, inner), own)
+            return _BlockingPolicy._Session(inner, own)
         except BaseException:
             own.close()
             raise

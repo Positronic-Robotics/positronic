@@ -171,6 +171,31 @@ class TestChunkPlayer:
         assert session(_obs(), int(1.2e9)) == ({}, int(1.5e9))
         assert inner._session.call_count == 1
 
+    def test_waypoints_due_together_keep_every_channel_they_name(self):
+        """A round that reaches two waypoints commands both channels, not only the ones the later names."""
+        inner = _ConstPolicy([
+            {'arm': 1, 'grip': 0.5, keys.ACTION_TIMESTAMP: 0.0},
+            {'grip': 0.9, keys.ACTION_TIMESTAMP: 0.01},
+            {'arm': 2, keys.ACTION_TIMESTAMP: 0.02},
+            {keys.ACTION_TIMESTAMP: 0.03},
+        ])
+        session = ChunkPlayer().wrap(inner).new_session()
+
+        assert session(_obs(), int(1e9)) == ({'arm': 1, 'grip': 0.5}, int(1.01e9))
+        assert session(_obs(), int(1.025e9)) == ({'grip': 0.9, 'arm': 2}, int(1.03e9))
+
+    def test_the_last_waypoint_of_a_chunk_survives_the_call_that_loads_the_next(self):
+        """The call that drains a chunk loads the next one, and a channel only the drained waypoint names
+        still reaches the driver."""
+        inner = _ScriptedSession([
+            [{'arm': 1, keys.ACTION_TIMESTAMP: 0.0}, {'grip': 0.9, keys.ACTION_TIMESTAMP: 0.5}],
+            [{'arm': 2, keys.ACTION_TIMESTAMP: 0.2}],
+        ])
+        session = ChunkPlayer().make_session(inner)
+
+        assert session(_obs(), int(1e9)) == ({'arm': 1}, int(1.5e9))
+        assert session(_obs(), int(1.5e9)) == ({'grip': 0.9}, int(1.7e9))
+
     def test_a_channel_with_several_waypoints_due_keeps_the_last(self):
         """A round that finds more than one waypoint due commands the latest of them."""
         inner = _ConstPolicy([{'v': i, keys.ACTION_TIMESTAMP: i * 0.1} for i in range(4)])

@@ -29,16 +29,19 @@ class _EpisodeInference:
         # One instant on two clocks, so ``wait`` adds a wall duration to a world instant.
         self._t0_ns, self._wall_t0 = clock.now_ns(), time.monotonic()
         self._runtime = Executor(policy.functions)
+        session = None
         try:
             session = policy.new_session(context, self._runtime)
             # A stack that answers chunks has no player in it, so nothing turns them into commands.
             assert isinstance(session, Session), (
                 f'{type(session).__name__} answers a chunk; a policy played here needs a ChunkPlayer in its stack'
             )
-            self._session = session
         except BaseException:
             self._runtime.close()
+            if session is not None:
+                session.close()
             raise
+        self._session = session
 
     @property
     def meta(self) -> dict[str, Any]:

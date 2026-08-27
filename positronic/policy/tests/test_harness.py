@@ -1931,6 +1931,23 @@ def test_episode_virtual_duration_starts_when_the_rig_is_ready(world, tmp_path):
     assert virtual_s < draw_s
 
 
+@pytest.mark.parametrize(
+    ('resume_in_sec', 'sleep_sec'),
+    [(0.002, 0.002), (0.05, POLL_PERIOD_SEC), (-0.001, POLL_PERIOD_SEC), (None, POLL_PERIOD_SEC)],
+)
+def test_a_real_rig_wakes_at_the_moment_the_session_asked_for(world, resume_in_sec, sleep_sec):
+    """The harness sleeps to the instant the session named, and no longer than its own poll period. An
+    instant already reached asks for the next round."""
+    harness = Harness(ChunkPlayer().wrap(StubPolicy()), make_embodiment())
+    now_ns = world.clock.now_ns()
+    harness._resume_at_ns = None if resume_in_sec is None else now_ns + int(resume_in_sec * 1e9)
+
+    command = harness._pace(world.clock)
+
+    assert isinstance(command, pimm.Sleep)
+    assert command.seconds == pytest.approx(sleep_sec, abs=1e-3)
+
+
 def test_a_policy_that_answers_chunks_refuses_to_open(world):
     """Nothing turns a chunk into commands without a player, and an episode must not start on one."""
     harness = Harness(StubPolicy(), make_embodiment())
@@ -2067,7 +2084,7 @@ class _ObservedTicks(Layer):
     def __init__(self):
         self.seen: list[float] = []
 
-    class _Session(DelegatingSession, Session):
+    class _Session(DelegatingSession):
         def __init__(self, inner: Session, seen: list[float]):
             super().__init__(inner)
             self._seen = seen
