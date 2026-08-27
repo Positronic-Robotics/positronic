@@ -32,7 +32,7 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers import vendor_import
-from positronic.drivers.utils import DriverRun, MoveStatus, log_failure
+from positronic.drivers.utils import DriverRun, MoveStatus
 from positronic.utils import package_assets_path
 
 from . import RobotStatus, State, command
@@ -317,12 +317,17 @@ class _Arm(DriverRun[command.CommandType]):
         self._complaint = ''
         self._complained_at = -_COMPLAIN_EVERY_S
 
-    def complain(self, message: str) -> None:
-        """Say what is wrong, but not on every tick of a fault that stands."""
+    def complain(self, message: str, key: str | None = None) -> None:
+        """Say what is wrong, but not on every tick of a fault that stands.
+
+        ``key`` names the fault where the message alone cannot: a refused setpoint carries the pose, which
+        differs every tick, and the fault that refuses it does not.
+        """
         now = self.clock.now()
-        if message == self._complaint and now - self._complained_at < _COMPLAIN_EVERY_S:
+        key = key if key is not None else message
+        if key == self._complaint and now - self._complained_at < _COMPLAIN_EVERY_S:
             return
-        self._complaint, self._complained_at = message, now
+        self._complaint, self._complained_at = key, now
         logger.error(message)
 
     @property
@@ -681,8 +686,12 @@ class Robot(pimm.ControlSystem):
                     if isinstance(asked, pimm.calls.Call):
                         arm.sync_move(asked)
                     elif asked is not None:
-                        with log_failure(asked):
+                        try:
                             arm.track(asked)
+                        # rules-allow: swallowed-error — a command stream cannot end the run; the next
+                        # setpoint supersedes this one
+                        except Exception as exc:
+                            arm.complain(f'{asked} not applied: {exc}', key='setpoint refused')
 
                     arm.advance()
                     arm.write()

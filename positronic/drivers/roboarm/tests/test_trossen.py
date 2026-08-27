@@ -544,6 +544,24 @@ def test_a_pose_far_from_where_the_arm_stands_is_solved_only_when_it_may_change_
     assert kin.ik(far, HOME) is not None
 
 
+def test_a_stream_of_poses_the_arm_cannot_follow_says_so_once(caplog, monkeypatch):
+    """The pose differs every tick and the fault that refuses it does not, so one complaint stands for all."""
+    arm = FakeArm()
+    clock = MockClock()
+    driver, _, loop = _driven(arm, clock)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+    _at_home(commands, loop)
+
+    monkeypatch.setattr(trossen_driver._Kinematics, 'ik', lambda self, target, current_q, max_jump=None: None)
+    for tick in range(5):
+        commands.push(command.CartesianPosition(geom.Transform3D(np.array([0.4, 0.001 * tick, 0.2]))))
+        next(loop)
+        clock.advance(1.0 / trossen_driver._HZ)
+
+    assert caplog.text.count('not applied') == 1
+
+
 def test_an_arm_reading_outside_a_joint_range_says_so_and_is_driven_anyway(caplog):
     """The controller takes a margin past what it reports, so only it knows whether this one is too far."""
     arm = FakeArm(position=np.append(np.zeros(6), -0.0062))  # the gripper past its own zero
