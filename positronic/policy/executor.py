@@ -136,14 +136,17 @@ class _BlockingPolicy(DelegatingPolicy):
     def new_session(self, context=None, rt=None) -> ChunkSession:
         assert rt is None, 'a blocking policy serves its own functions; nothing above it runs them'
         own = Executor(self._inner.functions)
+        inner = None
         try:
             inner = self._inner.new_session(context, own)
             # Waiting out the work is a question about a chunk, so nothing above a ``ChunkPlayer`` blocks.
             assert not isinstance(inner, Session), f'{type(inner).__name__} answers commands, not a chunk'
-            return _BlockingPolicy._Session(inner, own)
         except BaseException:
             own.close()
+            if inner is not None:
+                inner.close()
             raise
+        return _BlockingPolicy._Session(inner, own)
 
     @property
     def functions(self) -> Mapping[str, Callable[..., Any]]:

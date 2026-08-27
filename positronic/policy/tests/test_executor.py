@@ -10,7 +10,7 @@ from functools import partial
 
 import pytest
 
-from positronic.policy.base import Answer, ChunkSession, DelegatingChunkSession, Layer, NotAnswered, Policy
+from positronic.policy.base import Answer, ChunkSession, DelegatingChunkSession, Layer, NotAnswered, Policy, Session
 from positronic.policy.executor import Executor, blocking
 
 # How long a test waits for the worker threads before calling the call lost.
@@ -325,6 +325,30 @@ def opened():
 
 class TestBlocking:
     """A policy whose sessions answer in the call that asked."""
+
+    def test_a_session_that_answers_commands_is_refused_and_closed(self):
+        """Nothing above a ``ChunkPlayer`` has work to wait out, and the session opened to find that out
+        holds a connection of its own."""
+
+        class _Commanding(Session):
+            def __init__(self):
+                self.closed = False
+
+            def __call__(self, obs, time_ns):
+                return {}, time_ns
+
+            def close(self):
+                self.closed = True
+
+        session = _Commanding()
+
+        class _Commander(Policy):
+            def new_session(self, context=None, rt=None):
+                return session
+
+        with pytest.raises(AssertionError, match='answers commands'):
+            blocking(_Commander()).new_session()
+        assert session.closed, 'the session it opened to check was dropped without closing'
 
     def test_a_session_that_answers_in_its_own_call_is_called_one_time(self, opened):
         policy = _PlainPolicy()
