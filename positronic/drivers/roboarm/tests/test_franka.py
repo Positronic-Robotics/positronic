@@ -941,6 +941,32 @@ def test_a_trip_left_on_a_stale_reading_does_not_answer_for_a_later_refusal(desk
     assert arm.calls.count(Call.SET_TARGET_JOINTS) == 1, 'a stale trip was answered with a fresh target'
 
 
+def test_a_trip_that_cleared_before_the_target_went_out_does_not_answer_for_the_move(desk):
+    """The mark is taken as the command is published, so a trip that had already cleared refused nothing."""
+    arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    watch = driver._safe_inputs()
+    desk.safe_inputs['x31'] = STOPPED
+    watch.sample()  # the trip is on the record when the move begins
+    desk.safe_inputs['x31'] = CLEAR
+    set_control_mode = arm.set_control_mode
+
+    def read_the_watch_first(mode) -> None:
+        watch.sample()  # and the watch finds it clear again before the target is published
+        set_control_mode(mode)
+
+    arm.set_control_mode = read_the_watch_first
+    travel = driver._arm(StopFlag(), clock, watch).move_to(JOGGED, None)
+
+    with pytest.raises(RuntimeError, match='stopped short'):
+        _run_move(travel, clock)
+
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == 0, 'a trip that cleared before dispatch was recovered'
+    assert arm.calls.count(Call.SET_TARGET_JOINTS) == 1, 'a trip that cleared before dispatch was re-commanded'
+
+
 def test_a_failed_reading_is_published_under_the_sampling_lock(desk, monkeypatch):
     """The watch thread and a failed move both sample, so a failure published after the lock is released
     can land on top of a good reading another sampler took meanwhile."""

@@ -141,7 +141,7 @@ class _SafeInputs:
 
     @property
     def mark(self) -> int:
-        """What a move about to be made hands ``tripped_since`` when it fails.
+        """What the command going out hands ``tripped_since`` when it fails.
 
         One below the count where a live reading finds an input triggered, so the trip under way counts
         as during the move it is about to refuse: it may clear again before anything samples next, and
@@ -273,6 +273,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._refusals = 0
         self._refused = False
         self._quiet_at = 0.0
+        self._mark = 0
 
     def __enter__(self) -> '_Arm':
         return self
@@ -303,6 +304,8 @@ class _Arm(DriverRun[command.CommandType]):
     def command_target(self, target: np.ndarray, mode: command.ControlModeType | None) -> None:
         """Put the arm under ``mode`` and publish ``target`` to it, in that order with nothing in between."""
         self.robot.set_control_mode(self._to_pf_mode(mode))  # the robot no-ops a mode already running
+        # Taken as the command goes out, so only an input triggered then can be what refuses this one.
+        self._mark = self.safe_inputs.mark
         self.robot.set_target_joints(target)
         self._refused = False  # the goal just dispatched is not the one the last reading found refused
 
@@ -389,14 +392,13 @@ class _Arm(DriverRun[command.CommandType]):
         heeding it would abandon the move before it began, and recovering from a fault cancels the goal.
         """
         for _ in range(self._SAFE_STOP_RETRIES):
-            since = self.safe_inputs.mark
             try:
                 return (yield from self._travel_to(target, mode, at_teardown=at_teardown))
             except _StoppedShort:
                 # Read while the refused goal still carries its reason: the run loop does not tick inside a
                 # move, and both the wait below and the retry after it leave nothing for it to find.
                 self.note_refusals()
-                if not (yield from self._safe_stop_cleared(since, at_teardown=at_teardown)):
+                if not (yield from self._safe_stop_cleared(self._mark, at_teardown=at_teardown)):
                     raise
                 self.robot.recover_from_errors()  # the stop faulted the arm; the target is unchanged
                 logger.warning('Every safe input is clear; making the move again')
