@@ -1964,7 +1964,7 @@ def test_a_command_is_emitted_only_while_the_trial_still_has_budget(world, expir
     assert harness._inference is not None, 'the episode never opened'
 
     # Armed after the round's terminal check, which is the window a slow session call opens.
-    harness._deadline = world.clock.now() + (-1.0 if expired else 1.0)
+    harness._deadline_ns = world.clock.now_ns() + (-1_000_000_000 if expired else 1_000_000_000)
     p['command_rx'].read()  # drop what the opening round played
     harness._infer(harness._inference, world.clock, _NEVER_STOPS)
 

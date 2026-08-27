@@ -384,7 +384,7 @@ class Harness(pimm.ControlSystem):
         self._telemetry.step()
         # The world can reach the deadline while the session runs, and a command placed after the point the
         # trial advertises it stops at outlives the trial; ``_run`` finishes it next round.
-        if self._deadline is None or clock.now() < self._deadline:
+        if self._deadline_ns is None or clock.now_ns() < self._deadline_ns:
             # The key-filtered demux: a command this rig declares no channel for reaches no driver.
             self._emit({name: commands[name] for name in self.commands if name in commands})
         inference.wait(should_stop)
