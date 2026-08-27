@@ -232,6 +232,10 @@ def _wrench_to_level(state: RoboarmState) -> float | None:
     return np.linalg.norm(state.ee_wrench)
 
 
+def _frame_array(frame: pimm.shared_memory.NumpySMAdapter) -> np.ndarray:
+    return frame.array
+
+
 def _wire(
     world: pimm.World,
     ds_agent: DsWriterAgent | None,
@@ -319,7 +323,7 @@ def main(
             world.connect(
                 camera_emitters[stream_video_to_webxr],
                 webxr.frame,
-                receiver_wrapper=pimm.map(lambda adapter: adapter.array),
+                receiver_wrapper=pimm.map(_frame_array),
             )
 
         world.run(data_collection, bg_cs)
@@ -443,10 +447,10 @@ def yamcfg(robot_arm, **kwargs):
     # TODO: confirm on the rig which way round the operator stands, by moving the controller along one axis
     # and watching which way the arm goes. Neither enum member is the answer until that is done.
     operator_position=OperatorPosition.FRONT,
-    # No camera and no sound yet: the RealSense driver and its wiring into the headset are still to come, and
-    # the station has no audio device, so the operator reads the recording state off the terminal.
+    # The station has no audio device, so the operator reads the recording state off the terminal.
     sound=None,
-    cameras={},
+    cameras={keys.WRIST_IMAGE: positronic.cfg.hardware.camera.realsense_wrist},
+    stream_video_to_webxr=keys.WRIST_IMAGE,
     nominal_joints=positronic.cfg.hardware.roboarm.TROSSEN_NOMINAL_JOINTS,
 )
 def trossencfg(robot_arm, **kwargs):
