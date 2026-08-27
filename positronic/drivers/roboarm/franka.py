@@ -143,12 +143,13 @@ class _SafeInputs:
     def mark(self) -> int:
         """What a move about to be made hands ``tripped_since`` when it fails.
 
-        One below the count where an input reads triggered already, so the trip under way counts as
-        during the move it is about to refuse: it may clear again before anything samples next, and
-        nothing would then attribute the refusal to it.
+        One below the count where a live reading finds an input triggered, so the trip under way counts
+        as during the move it is about to refuse: it may clear again before anything samples next, and
+        nothing would then attribute the refusal to it. A stale reading backdates nothing: the trip it
+        holds may have cleared long before the move began.
         """
         reading = self._reading
-        return reading.trips - 1 if reading.triggered else reading.trips
+        return reading.trips - 1 if reading.sampled and reading.triggered else reading.trips
 
     @property
     def motion_permitted(self) -> bool:

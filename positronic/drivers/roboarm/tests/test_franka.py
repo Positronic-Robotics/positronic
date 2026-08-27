@@ -913,6 +913,34 @@ def test_a_desk_that_stops_answering_leaves_the_move_the_outcome_it_had(desk):
     assert arm.calls.count(Call.SET_TARGET_JOINTS) == 1
 
 
+def test_a_trip_left_on_a_stale_reading_does_not_answer_for_a_later_refusal(desk):
+    """A move is marked against the same live reading the gate needs, so a trip nobody has confirmed since
+    attributes nothing once the control box answers again."""
+    arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
+    driver = _driver(arm)
+    driver.state._bind(RecordingEmitter())
+    clock = MockClock()
+    answers = iter([{'x31': STOPPED}, ConnectionError('the control box stopped answering')])
+
+    def read() -> dict[str, Any]:
+        answer = next(answers, {'x31': CLEAR})  # and every reading after the quiet spell finds it clear
+        if isinstance(answer, Exception):
+            raise answer
+        return {franka.SAFE_INPUT_STATE: answer}
+
+    desk.safety_status = read
+    watch = driver._safe_inputs()
+    watch.sample()  # a trip is on the record
+    watch.sample()  # and the reading goes stale still holding it
+    travel = driver._arm(StopFlag(), clock, watch).move_to(JOGGED, None)
+
+    with pytest.raises(RuntimeError, match='stopped short'):
+        _run_move(travel, clock)
+
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == 0, 'a stale trip was answered with a recovery'
+    assert arm.calls.count(Call.SET_TARGET_JOINTS) == 1, 'a stale trip was answered with a fresh target'
+
+
 def test_a_run_carries_on_after_a_safe_input_stopped_a_move(desk, world):
     """The failure that ends a run reaches the driver through a sync move, which is the one this saves."""
     arm = FakeArm(PARK)
