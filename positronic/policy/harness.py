@@ -382,8 +382,11 @@ class Harness(pimm.ControlSystem):
             return  # no function is in flight yet, so this skips no wait
         commands, self._resume_at_ns = inference(obs)
         self._telemetry.step()
-        # The key-filtered demux: a command this rig declares no channel for reaches no driver.
-        self._emit({name: commands[name] for name in self.commands if name in commands})
+        # The world can reach the deadline while the session runs, and a command placed after the point the
+        # trial advertises it stops at outlives the trial; ``_run`` finishes it next round.
+        if self._deadline is None or clock.now() < self._deadline:
+            # The key-filtered demux: a command this rig declares no channel for reaches no driver.
+            self._emit({name: commands[name] for name in self.commands if name in commands})
         inference.wait(should_stop)
 
     def _trial_terminal(self, done: pimm.Message[dict] | None, clock: pimm.Clock) -> dict[str, Any] | None:

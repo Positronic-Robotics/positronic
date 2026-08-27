@@ -296,6 +296,9 @@ class _Scene(pimm.ControlSystem):
             yield pimm.Sleep(0.001)
 
 
+_NEVER_STOPS: pimm.SignalReceiver[bool] = pimm.NoOpReceiver()
+
+
 def _pair_all(world, harness):
     """Pair all harness signals and return a dict of test handles."""
     ds_recorder = RecordingEmitter()
@@ -1946,6 +1949,27 @@ def test_a_real_rig_wakes_at_the_moment_the_session_asked_for(world, resume_in_s
 
     assert isinstance(command, pimm.Sleep)
     assert command.seconds == pytest.approx(sleep_sec, abs=1e-3)
+
+
+@pytest.mark.parametrize(('expired', 'emitted'), [(True, False), (False, True)])
+def test_a_command_is_emitted_only_while_the_trial_still_has_budget(world, expired, emitted):
+    """A trial advertises the instant it stops at. A session call the world passes that instant during
+    commands nothing, and ``_run`` finishes the trial on the next round."""
+    harness = Harness(ChunkPlayer().wrap(StubPolicy()), make_embodiment())
+    p = _pair_all(world, harness)
+    scheduler = world.start([harness])
+    p['perform_task'](Task(instruction_source='t', timeout_sec=None))
+    emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], make_robot_state([0.1] * 3, [0.2] * 7))
+    drive_scheduler(scheduler, steps=6)
+    assert harness._inference is not None, 'the episode never opened'
+
+    # Armed after the round's terminal check, which is the window a slow session call opens.
+    harness._deadline = world.clock.now() + (-1.0 if expired else 1.0)
+    p['command_rx'].read()  # drop what the opening round played
+    harness._infer(harness._inference, world.clock, _NEVER_STOPS)
+
+    message = p['command_rx'].read()
+    assert (message is not None and message.updated) is emitted
 
 
 def test_a_policy_that_answers_chunks_refuses_to_open(world):
