@@ -18,6 +18,8 @@ JOGGED = np.array([0.2, 0.4, 0.3, 0.0, 0.1, 0.0])
 # no solution in half the directions, so every Cartesian test starts from here instead.
 HOME = np.array([0.0, 1.571, 1.178, 0.0, 0.0, 0.0])
 ARM = trossen_driver._ARM_JOINTS
+# What the wxai_v0 controller reports as the following error it allows, and what caps a streamed solution
+TOLERANCE = np.array([0.2, 0.2, 0.2, 0.4, 0.4, 0.4])
 
 
 class FakeArm(trossen_driver._FakeTrossen):
@@ -540,8 +542,16 @@ def test_a_pose_far_from_where_the_arm_stands_is_solved_only_when_it_may_change_
     here = kin.fk(HOME)
     far = geom.Transform3D(here.translation + np.array([-0.15, 0.15, -0.1]), here.rotation)
 
-    assert kin.ik(far, HOME, max_jump=trossen_driver._MAX_JOINT_JUMP) is None
+    assert kin.ik(far, HOME, max_jump=TOLERANCE) is None
     assert kin.ik(far, HOME) is not None
+
+
+def test_a_target_the_arm_has_drooped_away_from_is_still_solved():
+    """A teleoperator's target starts at what the arm reads, which stands off from what it was asked for."""
+    kin = trossen_driver._Kinematics()
+    drooped = HOME + np.array([0.0, 0.08, -0.06, -0.05, 0.0, 0.0])  # the following error measured on the arm
+
+    assert kin.ik(kin.fk(drooped), HOME, max_jump=TOLERANCE) is not None
 
 
 def test_a_stream_of_poses_the_arm_cannot_follow_says_so_once(caplog, monkeypatch):

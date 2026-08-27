@@ -85,11 +85,6 @@ _EE_SITE = 'ee_site'
 _JOINT_NAMES = ('joint_0', 'joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5')
 _IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after clamping
 _IK_ROT_TOL = 1e-2  # radians
-# How far a streamed target's solution may sit from where the arm stands. A target a step away has a
-# solution a step away — a centimetre at half a metre of reach is hundredths of a radian — and anything
-# further reaches the same pose with the arm in another shape. Moving into one swings the end effector far
-# from where it was asked to be, so the room here is what a step needs and no more.
-_MAX_JOINT_JUMP = 0.05
 # How far a streamed Cartesian target may move in one tick. At the tick rate this allows 1.5 m/s, which is
 # faster than a hand moves, so it does not shape teleoperation.
 _MAX_STEP_M = 0.015
@@ -187,11 +182,14 @@ class _Kinematics:
         mj.mju_mat2Quat(quat, self._data.site_xmat[self._site_id].copy())
         return geom.Transform3D(self._data.site_xpos[self._site_id].copy(), geom.Rotation.from_quat(quat))
 
-    def ik(self, target: geom.Transform3D, current_q: np.ndarray, max_jump: float | None = None) -> np.ndarray | None:
+    def ik(
+        self, target: geom.Transform3D, current_q: np.ndarray, max_jump: float | np.ndarray | None = None
+    ) -> np.ndarray | None:
         """LM IK for ``target``, warm-started from where the arm stands.
 
-        ``max_jump`` bounds how far the solution may sit from ``current_q``, and searching stops there: the
-        arm keeps the shape it has, and a pose it can only reach in another one comes back as nothing.
+        ``max_jump`` bounds how far the solution may sit from ``current_q``, per joint or over all of them,
+        and searching stops there: the arm keeps the shape it has, and a pose it can only reach in another
+        one comes back as nothing.
         Without it the reach postures are tried too, so the arm may change shape to get there — which
         swings the end effector, and is only for a move somebody asked for and waits on.
 
@@ -217,7 +215,7 @@ class _Kinematics:
             if not success:
                 continue
             q = np.clip(qpos[self._qpos_ids].copy(), self.lower, self.upper)
-            if max_jump is not None and np.max(np.abs(q - current_q)) > max_jump:
+            if max_jump is not None and np.any(np.abs(q - current_q) > max_jump):
                 continue
             reached = self.fk(q)
             turn = (reached.rotation.inv * target.rotation).as_rotvec
@@ -296,6 +294,13 @@ class _Arm(DriverRun[command.CommandType]):
         self._step_max = self._dq_limit * _COMMANDED_SHARE / _HZ  # what a streamed setpoint may move in a tick
         tolerance = np.array([limits[i].position_tolerance for i in range(_ARM_JOINTS)])
         self._arrived_tol = float(np.min(tolerance) * _ARRIVED_SHARE)
+        # How far a streamed target's solution may sit from the joints last asked for. Further than this the
+        # same pose is reached with the arm in another shape, and moving into one swings the end effector.
+        # The arm holds itself up with a following error, so what it reads stands off from what it was asked
+        # for by as much as the controller allows — and a teleoperator's target starts at what the arm reads.
+        # A cap tighter than that error refuses every one of those targets, so the error the controller
+        # reports is the cap.
+        self._jump_max = tolerance
         self._output = driver.get_robot_output()
         self._kin = _Kinematics()
         self._target = np.asarray(self._output.joint.arm.positions, dtype=np.float64)
@@ -503,7 +508,7 @@ class _Arm(DriverRun[command.CommandType]):
         # it is given, and measuring against the reading would make the room for a step have to cover that
         # standoff too — which is room enough to change the arm's shape in.
         stepped = self._stepped(pose)
-        solution = self._kin.ik(stepped, self._target, max_jump=_MAX_JOINT_JUMP)
+        solution = self._kin.ik(stepped, self._target, max_jump=self._jump_max)
         if solution is None:
             raise ValueError(f'{pose} is out of reach')
         self._anchor = stepped
