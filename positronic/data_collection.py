@@ -183,6 +183,7 @@ class DataCollectionController(pimm.ControlSystem):
                         tracker.turn_off()
                     else:
                         tracker.turn_on(self.robot_state.value.ee_pose)
+                    logging.info('Tracking is %s', 'on' if tracker.on else 'off')
                 elif button_handler.just_pressed('right_stick') and not tracker.umi_mode:
                     if recording:
                         self.ds_agent_commands.emit(DsWriterCommand.ABORT())
@@ -206,6 +207,7 @@ class DataCollectionController(pimm.ControlSystem):
                         self.robot_state.value.status == roboarm.RobotStatus.ERROR, in_error
                     )
                     if entered_error:
+                        logging.error('The arm is in error. It holds still until a reset clears the error.')
                         self.sound.emit(error_wav_path)
                     if not in_error and cp_msg.updated:
                         cmd = roboarm.command.CartesianPosition(target_robot_pos)
