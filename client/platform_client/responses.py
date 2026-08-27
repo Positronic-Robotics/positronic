@@ -29,25 +29,16 @@ def _public(status: SubmissionStatus) -> SubmissionStatus:
 PublicStatus = Annotated[Slugged[SubmissionStatus], AfterValidator(_public)]
 
 
-class TaskScore(BaseModel):
-    """One task's trials, with the count beside the share."""
-
-    trials: int
-    successes: int
-    success_rate: float
-
-
 class Scores(BaseModel):
-    """The scorer's output for a finished run. `primary` is the value a board ranks on.
+    """A finished run's published score. `primary` holds the value a board ranks on.
 
-    `per_task` pairs each rate with the counts it rests on.
+    The run's own `scores.json` holds more: the per-task counts, the episode count, and the number
+    of episodes that recorded no outcome. None of them changes a rank. A board is public, so a
+    field here goes to every competitor, and the per-task counts would tell them which task of the
+    eval is the hard one. A submitter reads their own per-task detail from the episodes they get.
     """
 
     primary: float | None = None
-    success_rate: float | None = None
-    per_task: dict[str, TaskScore] = Field(default_factory=dict)
-    episodes: int = 0
-    unscored: int = 0
 
 
 # The rule keys a caller matches on: a 429 names one in its `details`, and `quota_for` takes one.

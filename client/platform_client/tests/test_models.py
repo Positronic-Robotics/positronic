@@ -51,7 +51,6 @@ from platform_client.responses import (
     SubmissionListResponse,
     SubmissionListRow,
     SubmissionView,
-    TaskScore,
 )
 from platform_client.slug import slug_of
 from pydantic import BaseModel, Tag, TypeAdapter, ValidationError
@@ -60,13 +59,7 @@ AT = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
 SUB = SubmissionId(0x1F)
 USER = UserId(0xA0)
 
-SCORES = Scores(
-    primary=0.75,
-    success_rate=0.5,
-    per_task={'banana_in_bowl': TaskScore(trials=4, successes=3, success_rate=0.75)},
-    episodes=4,
-    unscored=0,
-)
+SCORES = Scores(primary=0.75)
 
 DAILY = QuotaLimit(
     key=QUOTA_SUBMISSIONS_DAY,
