@@ -941,8 +941,25 @@ def test_a_trip_left_on_a_stale_reading_does_not_answer_for_a_later_refusal(desk
     assert arm.calls.count(Call.SET_TARGET_JOINTS) == 1, 'a stale trip was answered with a fresh target'
 
 
+def test_a_failed_reading_is_published_under_the_sampling_lock(desk, monkeypatch):
+    """The watch thread and a failed move both sample, so a failure published after the lock is released
+    can land on top of a good reading another sampler took meanwhile."""
+    watch = _driver(FakeArm(PARK))._safe_inputs()
+    locked_while_publishing: list[bool] = []
+    monkeypatch.setattr(franka.logger, 'error', lambda *_: locked_while_publishing.append(watch._lock.locked()))
+
+    def unreachable() -> dict[str, Any]:
+        raise ConnectionError('the control box stopped answering')
+
+    desk.safety_status = unreachable
+    watch.sample()
+
+    assert locked_while_publishing == [True], 'the failed reading was published with the lock released'
+    assert watch._reading.sampled is False
+
+
 def test_a_run_carries_on_after_a_safe_input_stopped_a_move(desk, world):
-    """The failure that ends a run reaches the driver through a sync move, which is the one this saves."""
+    """A stopped move reaches the driver through a sync move, so the recovery has to keep the run alive there."""
     arm = FakeArm(PARK)
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())

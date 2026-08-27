@@ -179,21 +179,21 @@ class _SafeInputs:
         credentials = self._credentials
         if credentials is None:
             return
-        try:
-            with self._lock:
+        with self._lock:
+            try:
                 desk = self._desk
                 if desk is None:
                     desk = Desk(self._ip, *credentials)
                     desk._authenticate()  # Desk publishes the read; the login behind it stays underscored
                     self._desk = desk
                 self._note(desk.safety_status()[SAFE_INPUT_STATE])
-        # rules-allow: swallowed-error — a control box that stops answering must not end the run. The reading
-        # goes stale instead, which leaves every move the outcome it has where Desk is unmanaged.
-        except Exception as exc:
-            if not self._unreadable:
-                logger.error(f'Cannot read the safe inputs: {exc}')
-            self._desk, self._unreadable = None, True
-            self._reading = self._reading._replace(sampled=False)
+            # rules-allow: swallowed-error — a control box that stops answering must not end the run. The reading
+            # goes stale instead, which leaves every move the outcome it has where Desk is unmanaged.
+            except Exception as exc:
+                if not self._unreadable:
+                    logger.error(f'Cannot read the safe inputs: {exc}')
+                self._desk, self._unreadable = None, True
+                self._reading = self._reading._replace(sampled=False)
 
     def _note(self, state: Mapping[str, object]) -> None:
         """Record a reading, and log a safe input whose state changed."""
