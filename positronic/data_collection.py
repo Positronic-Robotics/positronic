@@ -446,8 +446,8 @@ def yamcfg(robot_arm, **kwargs):
 @cfn.config(
     robot_arm=positronic.cfg.hardware.roboarm.trossen,
     webxr=positronic.cfg.webxr.oculus,
-    # TODO: confirm on the rig which way round the operator stands, by moving the controller along one axis
-    # and watching which way the arm goes. Neither enum member is the answer until that is done.
+    # Measured at the rig: the controller moved right takes the arm right, away takes it out over the
+    # table, and up takes it up.
     operator_position=OperatorPosition.FRONT,
     # The station has no audio device, so the operator reads the recording state off the terminal.
     sound=None,
