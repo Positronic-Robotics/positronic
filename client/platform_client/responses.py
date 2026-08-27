@@ -32,10 +32,9 @@ PublicStatus = Annotated[Slugged[SubmissionStatus], AfterValidator(_public)]
 class Scores(BaseModel):
     """A finished run's published score. `primary` holds the value a board ranks on.
 
-    The run's own `scores.json` holds more: the per-task counts, the episode count, and the number
-    of episodes that recorded no outcome. None of them changes a rank. A board is public, so a
-    field here goes to every competitor, and the per-task counts would tell them which task of the
-    eval is the hard one. A submitter reads their own per-task detail from the episodes they get.
+    The run's own `scores.json` holds the full record: the per-task counts, the episode count and
+    the number of episodes that recorded no outcome. A board is public and ranks on `primary`
+    alone, so this model publishes none of them.
     """
 
     primary: float | None = None
