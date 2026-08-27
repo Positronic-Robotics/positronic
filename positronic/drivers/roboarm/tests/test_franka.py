@@ -665,7 +665,7 @@ def test_a_move_a_safe_input_stopped_is_made_again_once_it_clears(desk):
 
 
 def test_a_safe_input_that_stays_triggered_ends_the_move(desk):
-    """A real stop latches the input, so one that never clears is a person's and the move fails as it did."""
+    """A real stop latches the input, so one that never clears is a person's and the move fails."""
     arm = FakeArm(PARK, goal_status=franka.pf.GoalStatus.ABORTED)
     driver = _driver(arm)
     driver.state._bind(RecordingEmitter())
