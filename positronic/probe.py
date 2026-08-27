@@ -40,8 +40,6 @@ from positronic.policy.executor import Executor
 _TAP = 'raw'
 # Observation keys the endpoint expects, mirroring the inference harness, plus every image.*.
 _STATE_KEYS = (keys.JOINTS, keys.JOINT_VEL, keys.EE_POSE, keys.GRIP)
-# How long to wait for the endpoint before calling the round trip lost.
-_ANSWER_TIMEOUT_SEC = 120.0
 
 
 def _build_wire_obs(sample: dict, task: str | None, now_ns: int, recorded_ts: int) -> dict:
@@ -75,12 +73,13 @@ def _play(session, obs: dict, runtime: Executor) -> list[tuple[int, dict]]:
 
     The observation is one frozen frame, so the walk moves the clock rather than the world. The first call
     asks the endpoint and the wait is what that round trip takes. The session anchors the chunk on the call
-    that receives it and asks for a call at each waypoint, so the walk follows the instants it names.
+    that receives it and asks for a call at each waypoint, so the walk follows the instants it names. An
+    endpoint that commands nothing gives an empty list.
     """
     session(obs, time.time_ns())
-    runtime.wait(_ANSWER_TIMEOUT_SEC)
-    if runtime.in_flight:
-        raise TimeoutError(f'the endpoint answered nothing in {_ANSWER_TIMEOUT_SEC:.0f}s')
+    # The endpoint's own ``infer_timeout`` bounds the wait, and a round trip that fails raises out of the
+    # call below rather than here.
+    runtime.wait()
     played: list[tuple[int, dict]] = []
     now_ns = time.time_ns()
     while True:
@@ -105,6 +104,8 @@ def _log_commands(played: list[tuple[int, dict]], obs: dict, wall_ns: int, inf_n
     view plots only the active timeline, and the images live on ``wall_time`` — so each command is stamped
     on ``wall_time`` / ``obs_time`` offset by its horizon, with a relative ``chunk_time`` axis alongside.
     """
+    if not played:
+        return
     commands = [c for _, c in played]
     if _is_cartesian_chunk(played):
         poses = [c[keys.ROBOT_COMMAND].pose for c in commands]

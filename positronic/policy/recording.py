@@ -455,20 +455,9 @@ class _RecordingTapSession:
                 _log_action_series(f'{prefix}/series/{suffix}', field_arr, group_h, base_ns, names=None)
                 self._rec._series_paths.append(f'{prefix}/series/{suffix}')
 
-    @staticmethod
-    def _actions(answer) -> list[dict]:
-        """The actions in what a session answered: a chunk under a ``ChunkPlayer``, one command above one.
-
-        Above the player the answer holds the commands of one round, so a plot reads a point per round
-        rather than a chunk per inference.
-        """
-        match answer:
-            case (commands, _):
-                return [dict(commands)] if commands else []
-            case dict():
-                return [answer]
-            case _:
-                return answer or []
+    def _actions(self, answer) -> list[dict]:
+        """The actions the chunk logger plots out of what the inner answered."""
+        raise NotImplementedError
 
     def _send_blueprint(self) -> None:
         rec = self._rec
@@ -519,10 +508,15 @@ class _RecordingTapSession:
 
 
 class _CommandTapSession(_RecordingTapSession, Session):
-    """A tap above a ``ChunkPlayer``: it logs the command of each round."""
+    """A tap above a ``ChunkPlayer``: it logs the command of each round, so a plot reads a point per round
+    rather than a chunk per inference."""
 
     def __call__(self, obs, time_ns) -> tuple[Mapping[str, Any], int]:
         return self._tapped(obs, time_ns)
+
+    def _actions(self, answer) -> list[dict]:
+        commands, _ = answer
+        return [dict(commands)] if commands else []
 
 
 class _ChunkTapSession(_RecordingTapSession, ChunkSession):
@@ -530,3 +524,6 @@ class _ChunkTapSession(_RecordingTapSession, ChunkSession):
 
     def __call__(self, obs, time_ns) -> list[dict[str, Any]] | dict[str, Any] | None:
         return self._tapped(obs, time_ns)
+
+    def _actions(self, answer) -> list[dict]:
+        return [dict(answer)] if isinstance(answer, Mapping) else (answer or [])

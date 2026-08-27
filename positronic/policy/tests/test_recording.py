@@ -9,6 +9,7 @@ from positronic.policy.layers import ChunkPlayer
 from positronic.policy.recording import (
     Recorder,
     _build_blueprint,
+    _ChunkTapSession,
     _command_field_arrays,
     _CommandTapSession,
     _flat_wire,
@@ -227,6 +228,17 @@ def test_handles_none_actions(tmp_path):
     assert isinstance(session, _RecordingTapSession)
     assert session({'x': 1.0}, 0) is None
     assert session._step == 1
+
+
+def test_a_two_action_chunk_is_not_read_as_a_command_pair(tmp_path):
+    """A two-action chunk has the shape of the ``(commands, resume_at_ns)`` pair a session above the player
+    answers, and a tap under the player must plot both actions."""
+    chunk = [{'v': 1.0, 'timestamp': 0.0}, {'v': 2.0, 'timestamp': 0.5}]
+    session = Recorder(tmp_path).tap('t').wrap(_TrackingPolicy(chunk)).new_session()
+    assert isinstance(session, _ChunkTapSession)
+
+    assert session._actions(chunk) == chunk
+    assert session._actions({'v': 1.0}) == [{'v': 1.0}]  # one action may come back bare
 
 
 def test_a_tap_above_the_player_logs_the_command_of_each_round(tmp_path):
