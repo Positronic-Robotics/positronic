@@ -184,9 +184,9 @@ class TestChunkPlayer:
         assert session(_obs(), int(1e9)) == ({'arm': 1, 'grip': 0.5}, int(1.01e9))
         assert session(_obs(), int(1.025e9)) == ({'grip': 0.9, 'arm': 2}, int(1.03e9))
 
-    def test_the_last_waypoint_of_a_chunk_survives_the_call_that_loads_the_next(self):
-        """The call that drains a chunk loads the next one, and a channel only the drained waypoint names
-        still reaches the driver."""
+    def test_a_new_chunk_supersedes_the_one_it_replaces(self):
+        """The call that drains a chunk loads the next one, and a channel only the drained chunk named
+        commands nothing: the driver holds what it last took until the new chunk names that channel."""
         inner = _ScriptedSession([
             [{'arm': 1, keys.ACTION_TIMESTAMP: 0.0}, {'grip': 0.9, keys.ACTION_TIMESTAMP: 0.5}],
             [{'arm': 2, keys.ACTION_TIMESTAMP: 0.2}],
@@ -194,7 +194,7 @@ class TestChunkPlayer:
         session = ChunkPlayer().make_session(inner)
 
         assert session(_obs(), int(1e9)) == ({'arm': 1}, int(1.5e9))
-        assert session(_obs(), int(1.5e9)) == ({'grip': 0.9}, int(1.7e9))
+        assert session(_obs(), int(1.5e9)) == ({}, int(1.7e9))
 
     def test_a_channel_with_several_waypoints_due_keeps_the_last(self):
         """A round that finds more than one waypoint due commands the latest of them."""

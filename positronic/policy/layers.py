@@ -91,16 +91,12 @@ class ChunkPlayer(Layer):
                 chunk = self._inner(obs, time_ns)
                 if chunk is not None:
                     self._load(chunk, time_ns)
-                    commands = {**commands, **self._due(time_ns)}
+                    commands = self._due(time_ns)
             # A spent chunk asks for the next call at once: the work for the chunk after it is in flight.
             return commands, self._waypoints[0][0] if self._waypoints else time_ns
 
         def _due(self, time_ns: int) -> dict[str, Any]:
-            """The waypoints reached at ``time_ns``, taken off the chunk.
-
-            A channel with several waypoints due keeps the last: exact for an absolute setpoint, lossy for
-            a relative one.
-            """
+            """The waypoints reached at ``time_ns``, taken off the chunk; several on a channel keep the last."""
             commands: dict[str, Any] = {}
             while self._waypoints and self._waypoints[0][0] <= time_ns:
                 commands.update(self._waypoints.popleft()[1])
