@@ -108,11 +108,7 @@ yam = [
 ]
 trossen = [
     # Trossen WidowX AI arm, over Ethernet. The SDK version must match the arm firmware version.
-    "trossen-arm>=1.11",
-]
-realsense = [
-    # RealSense cameras. PyPI carries no macOS wheel and no sdist, so the marker keeps the lock resolvable there.
-    "pyrealsense2>=2.58.3; sys_platform != 'darwin'",
+    "trossen-arm>=1.11,<1.12",
 ]
 telemetry = [
     # `positronic eval run --timing` only: the OTel SDK + exporter that write the span sidecars, and the

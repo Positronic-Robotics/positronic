@@ -4969,9 +4969,6 @@ molmoact2 = [
 openpi = [
     { name = "openpi-client" },
 ]
-realsense = [
-    { name = "pyrealsense2", marker = "sys_platform != 'darwin' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
-]
 telemetry = [
     { name = "nvidia-ml-py" },
     { name = "opentelemetry-exporter-otlp-json-file" },
@@ -5044,7 +5041,6 @@ requires-dist = [
     { name = "pydantic" },
     { name = "pylance", marker = "extra == 'lance'" },
     { name = "pymodbus", marker = "extra == 'hardware'" },
-    { name = "pyrealsense2", marker = "sys_platform != 'darwin' and extra == 'realsense'", specifier = ">=2.58.3" },
     { name = "pyserial", marker = "extra == 'hardware'" },
     { name = "pyturbojpeg", specifier = "<2" },
     { name = "pyyaml" },
@@ -5064,12 +5060,12 @@ requires-dist = [
     { name = "torch", marker = "extra == 'molmoact2'" },
     { name = "torchvision", marker = "extra == 'molmoact2'" },
     { name = "transformers", marker = "extra == 'molmoact2'", specifier = ">=5.3,<6" },
-    { name = "trossen-arm", marker = "extra == 'trossen'", specifier = ">=1.11" },
+    { name = "trossen-arm", marker = "extra == 'trossen'", specifier = ">=1.11,<1.12" },
     { name = "uvicorn", extras = ["standard"] },
     { name = "websockets", specifier = ">=15.0.1" },
     { name = "zmq" },
 ]
-provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "trossen", "realsense", "telemetry"]
+provides-extras = ["openpi", "hardware", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "trossen", "telemetry"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5595,20 +5591,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/0f/49/4cea918a08f02817aabae639e3d0ac046fef9f9180518a3ad394e22da148/pyreadline3-3.5.4.tar.gz", hash = "sha256:8d57d53039a1c75adba8e50dd3d992b28143480816187ea5efbd5c78e6c885b7", size = 99839, upload-time = "2024-09-19T02:40:10.062Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5a/dc/491b7661614ab97483abf2056be1deee4dc2490ecbf7bff9ab5cdbac86e1/pyreadline3-3.5.4-py3-none-any.whl", hash = "sha256:eaf8e6cc3c49bcccf145fc6067ba8643d1df34d604a1ec0eccbf7a18e6d3fae6", size = 83178, upload-time = "2024-09-19T02:40:08.598Z" },
-]
-
-[[package]]
-name = "pyrealsense2"
-version = "2.58.3.10794"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/db/12/476b5fc6d7fcaca0572a1971150337d3af7b869d59900bd7ff4ba93a9f46/pyrealsense2-2.58.3.10794-cp311-cp311-manylinux1_x86_64.whl", hash = "sha256:e1eda83ca51827c9fe206f006e4b094c5baadeb39148dbba3b1fa4ffa1956130", size = 12968749, upload-time = "2026-07-19T15:54:47.942Z" },
-    { url = "https://files.pythonhosted.org/packages/59/0b/a1c82e6bef48cf304cab1f6a1233891ae3d167455fe116a1a7cb8a5074a6/pyrealsense2-2.58.3.10794-cp311-cp311-win_amd64.whl", hash = "sha256:93879d534b0e5c0926ebcfabe2efd0ecd66c7a49bf786070e1767b7ff236d431", size = 9052047, upload-time = "2026-07-19T15:54:53.02Z" },
-    { url = "https://files.pythonhosted.org/packages/b6/1e/e6e1a87775d20ced66674ecd5f1ac80425e38911c94780bf6dc6704b7b56/pyrealsense2-2.58.3.10794-cp312-cp312-manylinux1_x86_64.whl", hash = "sha256:39b5b733b310affefe1c09bab067e7d01f72f7ca7aa2cbe66ce09eeee4899ca6", size = 12964952, upload-time = "2026-07-19T15:54:58.876Z" },
-    { url = "https://files.pythonhosted.org/packages/fc/f6/2a82258bf7d398473bc1a2fc53f28788e4c65a929b51c44a07abee7421ad/pyrealsense2-2.58.3.10794-cp312-cp312-manylinux2014_aarch64.whl", hash = "sha256:c9d6979157e1cc566cbabb93be5b1ae75a78b3b8c40d37262031182527e4f9a0", size = 6484257, upload-time = "2026-07-19T15:55:02.246Z" },
-    { url = "https://files.pythonhosted.org/packages/59/39/44caee19f02e5c52f110299653e06ab5dc3573489b6991b9a74d5c680f97/pyrealsense2-2.58.3.10794-cp312-cp312-win_amd64.whl", hash = "sha256:c51f6ee6527c1d6f1e0bbee8c1e45b05431ac1b5340d78fb6d3157d541a555e7", size = 9055011, upload-time = "2026-07-19T15:55:06.242Z" },
-    { url = "https://files.pythonhosted.org/packages/04/18/db78ff0e1506932144db7b2dd4dd6e90eb774871db3a65a297eb046d75b5/pyrealsense2-2.58.3.10794-cp313-cp313-manylinux1_x86_64.whl", hash = "sha256:83c78abf536029feec35166391e7ac45547a9c39257b8ab843213b6b2d79ba49", size = 12965397, upload-time = "2026-07-19T15:55:11.836Z" },
-    { url = "https://files.pythonhosted.org/packages/43/57/a16a1686e45560610937d0228da4857577053cedea6da4343085d5843008/pyrealsense2-2.58.3.10794-cp313-cp313-win_amd64.whl", hash = "sha256:5d97e0d23bddb2b0b12a5a11914e7b5152030b155579046ba3e459b4a1578f70", size = 9055133, upload-time = "2026-07-19T15:55:16.139Z" },
 ]
 
 [[package]]

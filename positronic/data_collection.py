@@ -234,10 +234,6 @@ def _wrench_to_level(state: RoboarmState) -> float | None:
     return np.linalg.norm(state.ee_wrench)
 
 
-def _frame_array(frame: pimm.shared_memory.NumpySMAdapter) -> np.ndarray:
-    return frame.array
-
-
 def _wire(
     world: pimm.World,
     ds_agent: DsWriterAgent | None,
@@ -265,6 +261,10 @@ def _wire(
         world.connect(data_collection.ds_agent_commands, ds_agent.command)
 
     return ds_agent
+
+
+def _frame_array(frame: pimm.shared_memory.NumpySMAdapter) -> np.ndarray:
+    return frame.array
 
 
 def main(
@@ -449,10 +449,10 @@ def yamcfg(robot_arm, **kwargs):
     # Measured at the rig: the controller moved right takes the arm right, away takes it out over the
     # table, and up takes it up.
     operator_position=OperatorPosition.FRONT,
-    # The station has no audio device, so the operator reads the recording state off the terminal.
+    # No camera and no sound yet: the camera driver is still to come, and the station has no audio device,
+    # so the operator reads the recording state off the terminal.
     sound=None,
-    cameras={keys.WRIST_IMAGE: positronic.cfg.hardware.camera.realsense_wrist},
-    stream_video_to_webxr=keys.WRIST_IMAGE,
+    cameras={},
     nominal_joints=positronic.cfg.hardware.roboarm.TROSSEN_NOMINAL_JOINTS,
 )
 def trossencfg(robot_arm, **kwargs):
