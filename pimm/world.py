@@ -6,6 +6,7 @@ import logging
 import multiprocessing as mp
 import multiprocessing.shared_memory
 import os
+import signal
 import sys
 import time
 import traceback
@@ -142,6 +143,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
         return self._mode
 
     def _emit_queue(self, data: T, ts: int) -> bool:
+        if _interrupted:
+            return False
         msg = Message(data, ts)
         success = False
 
@@ -221,6 +224,18 @@ class MultiprocessEmitter(SignalEmitter[T]):
         self.close()
 
 
+# Set in a process that has taken an interrupt. An interrupt can land inside a call to the manager, and
+# that connection then holds half a message: the next call over it returns what another one asked for, so
+# a reader takes a value from a channel it never subscribed to. Nothing may be sent or read after it.
+_interrupted = False
+
+
+def _note_interrupt(signum, frame):
+    global _interrupted
+    _interrupted = True
+    raise KeyboardInterrupt
+
+
 class MultiprocessReceiver(SignalReceiver[T]):
     """Signal receiver companion for :class:`MultiprocessEmitter`.
 
@@ -271,6 +286,8 @@ class MultiprocessReceiver(SignalReceiver[T]):
         return self.transport_mode is TransportMode.SHARED_MEMORY
 
     def _read_queue(self) -> Message[T] | None:
+        if _interrupted:
+            return None
         try:
             message = self._queue.get_nowait()
         except Empty:
@@ -479,6 +496,7 @@ class _CallAnsweringLoop:
 def _bg_wrapper(
     run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str, parent_component_levels: Mapping[str, int]
 ):
+    signal.signal(signal.SIGINT, _note_interrupt)
     try:
         # A freshly spawned subprocess carries no logging configuration, so set one up. It is inside
         # the `try` because a failure here must still reach the `finally` that stops the World.
