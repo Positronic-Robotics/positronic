@@ -19,9 +19,10 @@ class LinuxVideo(pimm.ControlSystem):
         self.fps = fps
         self.pixel_format = pixel_format
         self.fps_counter = pimm.utils.RateCounter(f'LinuxVideo {device_path}')
-        self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
+        self.frame = pimm.ControlSystemEmitter[pimm.shared_memory.NumpySMAdapter](self)
+        self._frame_adapter = None  # Lazy init
 
-    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:  # noqa: C901
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         codec_mapping = {
             PixelFormat.H264: 'h264',
             PixelFormat.HEVC: 'hevc',
@@ -49,33 +50,31 @@ class LinuxVideo(pimm.ControlSystem):
                 break
 
             data = np.frombuffer(frame.data, dtype=np.uint8)
-            result = None
 
             match frame.pixel_format:
                 case PixelFormat.YUYV:
                     data = data.reshape((frame.height, frame.width, 2))
-                    result = {'image': cv2.cvtColor(data, cv2.COLOR_YUV2RGB_YUYV)}
+                    images = [cv2.cvtColor(data, cv2.COLOR_YUV2RGB_YUYV)]
                 case PixelFormat.UYVY:
                     data = data.reshape((frame.height, frame.width, 2))
-                    result = {'image': cv2.cvtColor(data, cv2.COLOR_YUV2RGB_UYVY)}
+                    images = [cv2.cvtColor(data, cv2.COLOR_YUV2RGB_UYVY)]
                 case _ if frame.pixel_format in codec_mapping:
-                    codec_name = codec_mapping[frame.pixel_format]
-                    codec_ctx = get_codec_context(codec_name)
-                    packets = codec_ctx.parse(data)
-                    for packet in packets:
-                        frames = codec_ctx.decode(packet)
-                        if len(frames) == 1:
-                            result = {'image': frames[0].to_ndarray(format='rgb24')}
-                        else:
-                            for i, decoded_frame in enumerate(frames):
-                                result[f'image_{i}'] = decoded_frame.to_ndarray(format='rgb24')
+                    codec_ctx = get_codec_context(codec_mapping[frame.pixel_format])
+                    # `av` types what it parses as `bytes` and carries `decode` on the subclasses of
+                    # `CodecContext`, so the buffer the device hands over and the base class both read wrong.
+                    packets = codec_ctx.parse(data)  # pyright: ignore[reportArgumentType]
+                    images = [
+                        decoded.to_ndarray(format='rgb24')
+                        for packet in packets
+                        for decoded in codec_ctx.decode(packet)  # pyright: ignore[reportAttributeAccessIssue]
+                    ]
                 case _:
                     # Assume 3 bytes per pixel (RGB/BGR)
-                    rgb_data = data.reshape((frame.height, frame.width, 3))
-                    result = {'image': rgb_data}
+                    images = [data.reshape((frame.height, frame.width, 3))]
 
-            if result is not None:
-                self.frame.emit(result)
+            for image in images:
+                self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(image, self._frame_adapter)
+                self.frame.emit(self._frame_adapter)
                 self.fps_counter.tick()
 
             yield pimm.Yield()  # Give control back to the world
