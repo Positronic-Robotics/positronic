@@ -43,6 +43,7 @@ from .utils import identity
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T')
+U = TypeVar('U')
 Req = TypeVar('Req')
 Res = TypeVar('Res')
 
@@ -667,10 +668,10 @@ class World:
     def connect(
         self,
         source: ControlSystemEmitter[T] | ControlSystemCaller[Req, Res],
-        target: ControlSystemReceiver[T] | ControlSystemHandler[Req, Res],
+        target: ControlSystemReceiver[U] | ControlSystemHandler[Req, Res],
         *,
         emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = identity,
-        receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[T]] = identity,
+        receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[U]] = identity,
     ) -> None:
         """Declare a logical connection: an Emitter feeding a Receiver, or a Caller invoking a Handler.
 
