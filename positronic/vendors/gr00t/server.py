@@ -201,9 +201,9 @@ class Gr00tSubprocess:
 
 
 class _Gr00tSession(Session):
-    def __init__(self, client: PolicyClient, checkpoint_path: str):
+    def __init__(self, client: PolicyClient, meta: dict[str, Any]):
         self._client = client
-        self._checkpoint_path = checkpoint_path
+        self._meta = meta
 
     def __call__(self, obs, time_ns):
         action_response, _info = self._client.get_action(obs)
@@ -215,7 +215,7 @@ class _Gr00tSession(Session):
 
     @property
     def meta(self):
-        return {keys.CHECKPOINT_PATH: self._checkpoint_path}
+        return self._meta
 
 
 class Gr00tPolicy(Policy):
@@ -223,11 +223,11 @@ class Gr00tPolicy(Policy):
 
     def __init__(self, groot: Gr00tSubprocess, checkpoint_path: str):
         self._groot = groot
-        self._checkpoint_path = checkpoint_path
+        self._meta = {keys.CHECKPOINT_PATH: checkpoint_path}
 
     def new_session(self, context=None, rt=None):
         self._groot.client.reset()
-        return _Gr00tSession(self._groot.client, self._checkpoint_path)
+        return _Gr00tSession(self._groot.client, self._meta)
 
     def close(self):
         self._groot.stop()
