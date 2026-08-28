@@ -103,6 +103,41 @@ next idea fits without a new interface.
 
 ## Design
 
+### The life of an episode
+
+The code on the rig is given one URL, and that is all it knows about the
+policy. It connects and receives a description of the policy's pieces —
+which run near the robot and which stay remote. It assembles the local
+half: a chain of parts that shape observations on the way to the model
+and commands on the way back.
+
+An episode begins, and the assembled half comes alive as a session — the
+running instance of the policy, controlling this robot for this particular
+episode. The framework calls the session repeatedly, sending the sensor
+information and the current world time. Every call returns commands and
+the moment the next one should come. The commands go to the robot at
+once.
+
+The session holds everything the episode remembers between calls, and it
+lives on the rig. A reaction that crosses a wire arrives late, and when
+the network fails it does not arrive at all — the world next to the
+robot waits for neither.
+
+The model is heavy — it wants a GPU and a machine of its own, which the
+rig rarely has. Pieces like it stay remote. The model is also too slow
+for this loop, so the session never waits: it starts the model call,
+keeps controlling while the answer is on its way, then turns it into
+commands over the calls that follow. The server's whole job is answering
+such calls, and it is stateless: every call is a pure function of its
+arguments.
+
+Everything that crosses a boundary is recorded as it happens — what each
+session saw, decided, and asked of its model, on every machine involved.
+The framework closes the session, and the episode's record is what
+remains.
+
+The sections below take these pieces one at a time.
+
 ### Policies and sessions
 
 Controlling a robot is stateful work, and one algorithm may drive several
