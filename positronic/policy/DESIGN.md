@@ -5,34 +5,36 @@ reasoning that shaped it and the API itself.
 
 ## Introduction
 
-- As AI changed the software, when we evolved from hand written code to general purpose models, we believe that the AI will change the robotics the similar way.
-- Robotics has big difference with software -- the systems are inherently asynchronous, and the world keeps changing every second, whether the AI is ready for it or not.
-- In LLM-based agentic systems, we have three parts - an AI that is responsible for generating actions, software responsible for executing those actions (command line, MCPs, 3rd party services available through API), and a harness that connects the first two.
-- Both interfaces between LLM and harness (completion API) and harness and actions are standardized, which makes both AI and actions interchangeable.
-- Interchangeability is good for end user, the guy who wants to apply AI on a robot to solve a problem. [Horisontal is better than vertical for them, may be we can get some examples of how OS decoupled hardware and software]
-- Agentic frameworks make different models easy to interchange.
-- Agentic frameworks have a standard
-- The other big difference is that there's no defined architecture
+AI changed how software is built. Hand-written code gave way to
+general-purpose models, and a simple architecture carried the change: an
+agentic system is a model that decides, tools that act, and a harness that
+connects the two. Both interfaces are standardized, so the parts are
+interchangeable: any model works with any tools, and swapping one never
+touches the other.
 
-In Positronic Robotics our goal is to let any AI model control any robot, in simulation and
-in reality. The two "any"s rule out hand-wiring: nobody writes a control
-loop per model per robot per world. The goal requires a single interface
-between models and robots, and this document designs it.
+Robotics has no such architecture. AI already makes decisions on robots, but
+each stack binds one model to one robot with bespoke code — the way software
+was bound to hardware before operating systems decoupled them. A model
+cannot move to a new robot, and a robot cannot pick up a better model.
 
-Different sensors do have different frequencies, data may lag or come
-unevenly, and commands are not executed instantaneously. Moreover, there are
-plenty of different "species" of robots, and they have different bodies,
-different sensors, different command languages, different control
-strategies.
+In Positronic Robotics our goal is to let any AI model control any robot, in
+simulation and in reality. Interchangeability is the point: the person with
+a problem picks the model and the robot, and the two connect. The two "any"s
+rule out hand-wiring: nobody writes a control loop per model per robot per
+world. The goal requires a single interface between models and robots, and
+this document designs it.
 
-These constraints make the API harder to design than the ones digital AI
-settled on. A completions API is synchronous: the client asks, waits, and the
-answer ends the exchange. A robot is inherently asynchronous: the world keeps
-moving while the model thinks, so an answer arrives to a world that has
-already changed. The model is heavy and usually runs on another machine, while
+This interface is harder to design than the ones digital AI settled on. A
+completions API is synchronous: the client asks, waits, and the answer ends
+the exchange. A robot is inherently asynchronous: the world keeps moving
+while the model thinks, so an answer arrives to a world that has already
+changed. Sensors run at their own rates, data lags or arrives unevenly, and
+a command takes time to execute. Robots themselves are diverse: different
+bodies, different sensors, different command languages, different control
+strategies. The model is heavy and usually runs on another machine, while
 the robot must be controlled here and now. And a physical episode cannot be
-re-run: understanding what happened relies on what was recorded, across every
-machine involved.
+re-run: understanding what happened relies on what was recorded, across
+every machine involved.
 
 Simulators are how policies are tested before they reach a robot, and a
 simulator is a much more structured world than a rig: synchronous,
