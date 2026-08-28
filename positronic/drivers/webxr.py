@@ -30,6 +30,10 @@ _LOG_CONFIG = {
 }
 
 
+# Every teleoperation control is a button, and the highest index one of them reads is the B button's.
+_TELEOP_BUTTONS = 6
+
+
 def _parse_controller_data(data: dict):
     controller_positions: dict[str, geom.Transform3D | None] = {'left': None, 'right': None}
     buttons_dict: dict[str, np.ndarray | None] = {'left': None, 'right': None}
@@ -39,9 +43,11 @@ def _parse_controller_data(data: dict):
             rotation = np.array(data['controllers'][side]['orientation'], dtype=np.float64)
             buttons = np.array(data['controllers'][side]['buttons'], dtype=np.float64)
             controller_positions[side] = geom.Transform3D(translation, geom.Rotation.from_quat(rotation))
-            # An input source with no gamepad sends an empty array. Hand tracking is one such source.
-            if buttons.size > 0:
-                buttons_dict[side] = buttons
+            if buttons.size < _TELEOP_BUTTONS:
+                raise ValueError(
+                    f'The {side} controller sends {buttons.size} buttons; teleoperation needs {_TELEOP_BUTTONS}'
+                )
+            buttons_dict[side] = buttons
 
     return controller_positions, buttons_dict
 
