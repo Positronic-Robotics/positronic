@@ -67,6 +67,8 @@ ACTION_TIMESTAMP = 'timestamp'
 URDF = 'urdf'
 CONTROL_FRAME = 'control_frame'
 JOINT_NAMES = 'joint_names'
+# What the arm is, as its driver names it. Every driver writes it into the metadata it publishes.
+ROBOT = 'robot'
 
 # Where the episode's poses sit relative to ``models.DEFAULT_FRAME``, as a ``[tx,ty,tz,qw,qx,qy,qz]``
 # transform. Absent means they are in that frame itself; ``ChangeEEFrame`` writes it when it moves them.
