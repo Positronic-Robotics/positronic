@@ -6,11 +6,13 @@ reasoning that shaped it and the API itself.
 ## Introduction
 
 AI changed how software is built. Hand-written code gave way to
-general-purpose models, and a simple architecture carried the change: an
-agentic system is a model that decides, tools that act, and a harness that
-connects the two. Both interfaces are standardized, so the parts are
-interchangeable: any model works with any tools, and swapping one never
-touches the other.
+general-purpose models. An agentic system has three parts — a model that
+decides, tools that act, and a harness that connects the two. Both
+interfaces are standardized. The harness reaches any model through the same
+completions API, and calls any tool the same way, whether the tool is a
+shell command, an MCP server, or a third-party service. The standards make
+the parts interchangeable. Any model works with any tools, and swapping one
+never touches the other.
 
 Robotics has no such architecture. AI already makes decisions on robots, but
 each stack binds one model to one robot with bespoke code — the way software
@@ -18,31 +20,30 @@ was bound to hardware before operating systems decoupled them. A model
 cannot move to a new robot, and a robot cannot pick up a better model.
 
 In Positronic Robotics our goal is to let any AI model control any robot, in
-simulation and in reality. Interchangeability is the point: the person with
-a problem picks the model and the robot, and the two connect. The two "any"s
-rule out hand-wiring: nobody writes a control loop per model per robot per
-world. The goal requires a single interface between models and robots, and
-this document designs it.
+simulation and in reality. The person with a problem picks the model and the
+robot, and the two connect. The two "any"s rule out hand-wiring — nobody
+writes a control loop per model per robot per world. The goal requires a
+single interface between models and robots, and this document designs it.
 
 This interface is harder to design than the ones digital AI settled on. A
 completions API is synchronous: the client asks, waits, and the answer ends
 the exchange. A robot is inherently asynchronous: the world keeps moving
 while the model thinks, so an answer arrives to a world that has already
 changed. Sensors run at their own rates, data lags or arrives unevenly, and
-a command takes time to execute. Robots themselves are diverse: different
-bodies, different sensors, different command languages, different control
-strategies. The model is heavy and usually runs on another machine, while
-the robot must be controlled here and now. And a physical episode cannot be
-re-run: understanding what happened relies on what was recorded, across
-every machine involved.
+a command takes time to execute. Robots themselves are diverse, with
+different bodies, different sensors, different command languages, different
+control strategies. The model is heavy and usually runs on another machine,
+while the robot must be controlled here and now. And a physical episode
+cannot be re-run: understanding what happened relies on what was recorded,
+across every machine involved.
 
-Simulators are how policies are tested before they reach a robot, and a
-simulator is a much more structured world than a rig: synchronous,
-deterministic, time under the program's control. A policy that can sense this
-structure comes to depend on it and loses it on the robot. So the API must not
-reveal which world it runs against, and the framework must be able to charge a
-model call's real duration to simulated time — otherwise inference is free in
-simulation and costly on the robot.
+Simulation is hard for the opposite reason. The rig's world is messy, and
+the simulator's world is too tidy — synchronous, deterministic, time under
+the program's control. Policies are tested in simulation before they reach
+a robot, and a policy that can sense this tidiness comes to depend on it
+and loses it on the robot. So the API must not reveal which world it runs
+against, and the framework must be able to charge a model call's real
+duration to simulated time.
 
 The rest of the document is the design: the goals, the design decisions, and
 the API itself.
@@ -54,11 +55,11 @@ the API itself.
   into the motion underway, choosing when to re-plan — is where policies
   differ most. New schemes appear constantly and each must fit without a
   framework change.
-- **Embodiment-agnostic.** The API assumes nothing about the robot: what a
-  policy must know about its body reaches it as data, so a new robot is new
-  data, not a new API.
-- **Interchangeable.** To a policy, simulation and the real robot are the
-  same world: the same code runs in both, behaves the same, and pays for its
+- **Any robot.** The API assumes nothing about the robot: what a policy
+  must know about its body reaches it as data, so a new robot is new data,
+  not a new API.
+- **Any world.** To a policy, simulation and the real robot are the same
+  world: the same code runs in both, behaves the same, and pays for its
   model calls in both.
 - **Composable.** Building a new policy must be easy: a policy is assembled
   from parts written once, so a developer writes only what is new.
