@@ -192,6 +192,10 @@ class MySession(Session):
             for pose in predicted_poses
         ]
 
+    @property
+    def meta(self):
+        return {'type': 'my_model'}
+
 
 class MyPolicy(Policy):
     def __init__(self, model):
@@ -199,10 +203,6 @@ class MyPolicy(Policy):
 
     def new_session(self, context=None, rt=None):
         return MySession(self._model)  # per-episode setup goes here
-
-    @property
-    def meta(self):
-        return {'type': 'my_model'}
 
 
 pipeline = StopOnFault() | ChunkedSchedule() | remote | PolicySource(MyPolicy(load_my_model()))

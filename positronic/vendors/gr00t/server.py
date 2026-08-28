@@ -201,8 +201,9 @@ class Gr00tSubprocess:
 
 
 class _Gr00tSession(Session):
-    def __init__(self, client: PolicyClient):
+    def __init__(self, client: PolicyClient, checkpoint_path: str):
         self._client = client
+        self._checkpoint_path = checkpoint_path
 
     def __call__(self, obs, time_ns):
         action_response, _info = self._client.get_action(obs)
@@ -211,6 +212,10 @@ class _Gr00tSession(Session):
         assert len(lengths) == 1, f'All values in action must have the same length, got {lengths}'
         time_horizon = lengths.pop()
         return [{k: v[i] for k, v in action.items()} for i in range(time_horizon)]
+
+    @property
+    def meta(self):
+        return {keys.CHECKPOINT_PATH: self._checkpoint_path}
 
 
 class Gr00tPolicy(Policy):
@@ -222,11 +227,7 @@ class Gr00tPolicy(Policy):
 
     def new_session(self, context=None, rt=None):
         self._groot.client.reset()
-        return _Gr00tSession(self._groot.client)
-
-    @property
-    def meta(self):
-        return {keys.CHECKPOINT_PATH: self._checkpoint_path}
+        return _Gr00tSession(self._groot.client, self._checkpoint_path)
 
     def close(self):
         self._groot.stop()

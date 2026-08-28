@@ -340,7 +340,6 @@ class PolicyServer:
                 **self.metadata,
                 **self._source.meta(rid),
                 keys.CHECKPOINT_ID: rid,
-                **served.meta,
                 **session.meta,
                 keys.LOCAL_STACK: local_spec,
                 keys.COMPRESS_IMAGES: border.compress_images,

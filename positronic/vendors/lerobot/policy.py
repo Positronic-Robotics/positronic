@@ -106,10 +106,6 @@ class LerobotPolicy(Policy):
         self._policy.reset()
         return _LerobotSession(self._policy, self._preprocessor, self._postprocessor, self._device, self._meta)
 
-    @property
-    def meta(self) -> dict[str, Any]:
-        return self._meta.copy()
-
     def close(self):
         if self._policy is not None:
             del self._policy

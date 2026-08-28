@@ -130,10 +130,6 @@ class LerobotPolicy(Policy):
     def functions(self) -> Mapping[str, Callable[..., Any]]:
         return {self._INFER: partial(_infer, self._policy, self._device)}
 
-    @property
-    def meta(self) -> dict[str, Any]:
-        return self._meta.copy()
-
     def close(self):
         if self._policy is not None:
             del self._policy

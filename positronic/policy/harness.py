@@ -210,10 +210,8 @@ class Harness(pimm.ControlSystem):
         meta[keys.EVAL_CHARGE_INFERENCE_TIME] = self._charges_wall_time
         if self._task.timeout_sec is not None:  # the recorder takes no nulls, and an unbounded episode has none
             meta[keys.EVAL_TIMEOUT] = self._task.timeout_sec
-        # ``policy.meta`` is the static baseline; the session overlays per-episode specifics (e.g. the
-        # sampled sub-policy) and wins on conflict.
-        session_meta = self.policy.meta | (self._inference.meta if self._inference else {})
-        for k, v in flatten_dict(session_meta).items():
+        assert self._inference is not None, 'only a live episode has meta'
+        for k, v in flatten_dict(self._inference.meta).items():
             meta[f'{keys.POLICY_META}.{k}'] = v
         meta.update(self._task.meta)
         meta[keys.TASK] = self._task.instruction
