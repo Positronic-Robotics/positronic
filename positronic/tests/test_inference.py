@@ -30,10 +30,6 @@ class _IdlePolicy(Policy):
         self.warmed = True
         return IdleSession(self)
 
-    @property
-    def meta(self):
-        return {}
-
     def close(self):
         self.closed = True
 

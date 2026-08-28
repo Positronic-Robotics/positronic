@@ -140,10 +140,6 @@ class StubPolicy(Policy):
         self.last_reset_context: dict[str, Any] | None = None
         self._meta: dict[str, object] = meta or {}
 
-    @property
-    def meta(self) -> dict[str, object]:
-        return self._meta
-
     def new_session(self, context=None, rt=None) -> Session:
         self.reset_calls += 1
         self.last_reset_context = context
@@ -585,49 +581,6 @@ def test_episode_meta_stamped_at_finalize(world):
     assert meta['inference.policy.type'] == 'stub'
     assert meta['inference.policy.checkpoint'] == 'v1'
     assert meta[keys.TASK] == 'test'
-
-
-@pytest.mark.timeout(3.0)
-def test_episode_meta_includes_policy_static_meta(world):
-    """Static fields exposed only via ``Policy.meta`` (empty ``Session.meta``) must
-    still reach episode metadata once the policy is wrapped."""
-
-    class _StaticMetaSession(Session):
-        def __init__(self, command):
-            self._command = command
-
-        def __call__(self, obs, time_ns):
-            return [{keys.ROBOT_COMMAND: self._command, 'target_grip': 0.0, 'timestamp': 0.0}]
-
-    class _StaticMetaPolicy(Policy):
-        def __init__(self):
-            pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
-            self._command = CartesianPosition(pose=pose)
-
-        def new_session(self, context=None, rt=None):
-            return _StaticMetaSession(self._command)  # Session.meta defaults to {}
-
-        @property
-        def meta(self):
-            return {'checkpoint': 'v1', 'type': 'static'}
-
-    harness = Harness(_StaticMetaPolicy(), make_embodiment())
-    p = _pair_all(world, harness)
-    robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    driver = ManualDriver([
-        (partial(p['perform_task'], Task(instruction_source='t', timeout_sec=None)), 0.0),
-        (partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state), 0.01),
-        (partial(p['done_em'].emit, OPERATOR_DONE), 0.02),
-        (None, 0.02),
-    ])
-    scheduler = world.start([harness, driver])
-    drive_scheduler(scheduler, steps=25)
-
-    stops = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.STOP_EPISODE]
-    assert len(stops) == 1
-    meta = stops[0].static_data
-    assert meta['inference.policy.checkpoint'] == 'v1'
-    assert meta['inference.policy.type'] == 'static'
 
 
 @pytest.mark.timeout(3.0)
