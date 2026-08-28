@@ -61,8 +61,7 @@ def file_headers(path: str) -> dict[str, str]:
     raise ValueError(f'{file}: {problem}') from None
 
 
-# None of these carries a default URL: each names one specific endpoint, and a credential must not be
-# handed to whichever host a stale default points at.
+# The caller names the URL: a default would hand the credential to whatever host it points at.
 authed_remote = cfn.Config(RemotePolicy, headers=bearer_headers)
 nebius_remote = cfn.Config(RemotePolicy, headers=nebius_bearer_headers)
 file_authed_remote = cfn.Config(RemotePolicy, headers=file_headers)
