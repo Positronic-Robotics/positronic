@@ -201,11 +201,22 @@ def test_episode_static_accepts_tuple_but_rejects_set(tmp_path):
     assert ep['coords'] == [1, 2]
 
 
-def test_episode_static_rejects_none(tmp_path):
+def test_episode_static_round_trips_none(tmp_path):
     ep_dir = tmp_path / 'ep_static_none'
+    payload = {
+        'maybe': None,
+        'server': {'base_frame_prefix': None, 'serve_mode': 'chunked'},
+        'mixed': [None, 1, 'a', {'k': None}],
+    }
     with DiskEpisodeWriter(ep_dir) as w:
-        with np.testing.assert_raises_regex(ValueError, 'JSON-serializable'):
-            w.set_static('maybe', None)
+        for k, v in payload.items():
+            w.set_static(k, v)
+
+    static = DiskEpisode(ep_dir).static
+    assert static == payload
+    assert static['maybe'] is None
+    assert static['server']['base_frame_prefix'] is None
+    assert static['mixed'][0] is None
 
 
 def test_episode_writer_abort_cleans_up_and_blocks_further_use(tmp_path):

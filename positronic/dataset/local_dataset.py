@@ -184,7 +184,8 @@ class DiskEpisodeWriter(EpisodeWriter):
         # Validate restricted JSON structure
         if not _is_valid_static_value(data):
             raise ValueError(
-                f'Static item must be JSON-serializable: dict/list over numbers and strings, but got {name}\n{data=!r}'
+                f'Static item must be JSON-serializable: null, or dict/list over numbers and strings, '
+                f'but got {name}\n{data=!r}'
             )
         self._static_items[name] = data
 
