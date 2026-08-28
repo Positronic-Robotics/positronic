@@ -140,7 +140,8 @@ After installation, the following command-line scripts will be available:
 - `positronic-data-collection`: Collect demonstrations in simulation or on hardware
 - `positronic-server`: Browse and inspect datasets
 - `lerobot-0_3_3-convert`: Convert datasets to model format
-- `positronic-inference`: Run trained policies in simulation or on hardware
+- `positronic`: Run evals in simulation or on hardware, and read back the ones sent to the platform
+- `positronic-inference`: Run an attended keyboard session on hardware
 
 All commands work both inside an activated virtual environment and with `uv run --locked` prefix (e.g., `uv run --locked positronic-server`). Use `--locked` so the installed environment matches the committed `uv.lock` — uv errors loudly if you edited `pyproject.toml` without re-running `uv lock`.
 
@@ -248,10 +249,10 @@ Progress to OpenPI or GR00T when you need more capable models. See:
 
 ### 4. Run Inference and Iterate
 
-Run trained policies through the [inference script](positronic/inference.py):
+Run trained policies through the [eval runner](positronic/cli/eval/run.py):
 
 ```bash
-uv run --locked positronic-inference sim \
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
     --policy=@positronic.vendors.lerobot_0_3_3.policy.act_absolute \
     --policy.base.checkpoints_dir=~/checkpoints/lerobot/<run_id> \
     --eval.timeout=60 \
@@ -266,7 +267,7 @@ cd docker && docker compose run --rm --service-ports lerobot-server ee \
     --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/<run_id>
 
 # On the simulator machine:
-uv run --locked positronic-inference sim \
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
     --policy=.remote \
     --policy.url=<server-ip>:8000
 ```

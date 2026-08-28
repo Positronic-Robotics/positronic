@@ -265,11 +265,11 @@ curl -H "Authorization: Bearer $AUTH_TOKEN" https://<endpoint-managed-url>/api/v
 # → {"models": ["050000"]}
 ```
 
-Run inference from your laptop or robot host using the existing `positronic-inference` CLI
+Run inference from your laptop or robot host with `positronic eval run`
 ([docs/inference.md](../../docs/inference.md)); `.authed_remote` attaches the token:
 
 ```bash
-uv run positronic-inference sim \
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.authed_remote \
   --policy.url=https://<endpoint-managed-url> \
   --output_dir=.data/inference/<run-name>/
@@ -309,7 +309,7 @@ SECRET_ID=$(nebius mysterybox secret get-by-name --parent-id "$PARENT_ID" \
 export AUTH_TOKEN=$(nebius mysterybox payload get-by-key \
   --secret-id "$SECRET_ID" --key "$AUTH_TOKEN_KEY" --format json | jq -r '.data.string_value')
 
-uv run positronic-inference sim \
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.authed_remote \
   --policy.url=https://<endpoint-managed-url> \
   --output_dir=.data/inference/<run-name>/
@@ -331,7 +331,7 @@ cold checkpoint's first inference, so the client holds sessions open with pings 
 [rotated](#rotating-the-token) token is picked up on the next run:
 
 ```bash
-uv run positronic-inference sim \
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.nebius_remote \
   --policy.url=https://<endpoint-managed-url> \
   --output_dir=.data/inference/<run-name>/

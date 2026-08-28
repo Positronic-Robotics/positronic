@@ -47,7 +47,7 @@ curl http://localhost:8000/api/v1/models
 Point the unified `.remote` client at the server (same client as every other vendor):
 
 ```bash
-uv run --locked positronic-inference sim \
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote --policy.url=localhost:8000 \
   --output_dir=~/datasets/molmoact2_run
 ```

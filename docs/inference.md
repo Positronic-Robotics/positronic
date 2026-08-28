@@ -46,7 +46,7 @@ uv run positronic eval run --eval=.real.droid.pick_place \
   --output_dir=~/datasets/inference_logs/franka_eval
 ```
 
-`--eval` names what runs: a whole benchmark, a suite, or one task. [Evaluation](evaluation.md) lists the targets and the flags that shape a sweep — `--eval.trial_count`, `--charge_inference_time`, `--timing`. `positronic-inference sim` is the same command with `--eval=.sim.positronic.stack_cubes` fixed, which is the shorthand the vendor quickstarts use.
+`--eval` names what runs: a whole benchmark, a suite, or one task. [Evaluation](evaluation.md) lists the targets and the flags that shape a sweep — `--eval.trial_count`, `--charge_inference_time`, `--timing`. (`positronic-inference sim` is a shorthand for the same command with `--eval=.sim.positronic.stack_cubes` fixed.)
 
 **One URL is the whole endpoint.** `--policy.url` carries the host, port, TLS, model id, and session params, so a server can be handed out as a single string:
 
