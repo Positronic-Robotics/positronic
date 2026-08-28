@@ -56,7 +56,12 @@ class KeyboardOperator(KeyboardControl):
             case 's' if self._pending is not None:
                 logger.warning('An episode is already running: press [p] to stop it')
             case 's':
-                self._pending = self.perform_task(Rollout(self._next_task(), self._policy))
+                # A model that will not open a session ends the episode, not the run: the operator hears it
+                # and presses again.
+                try:  # rules-allow: swallowed-error — the operator is who this failure is for
+                    self._pending = self.perform_task(Rollout(self._next_task(), self._policy))
+                except Exception as e:
+                    logger.error(f'Episode failed to open: {e}')
             case 'p':
                 self.done.emit({keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR})
 

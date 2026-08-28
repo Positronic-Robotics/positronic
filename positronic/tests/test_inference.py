@@ -134,6 +134,25 @@ def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, caplog):
     assert policy.closed
 
 
+def test_a_press_that_cannot_open_a_session_keeps_the_run(monkeypatch, caplog):
+    """A model that refuses a session ends the press, not the run: the operator hears it and the rig stays
+    up for the next one."""
+
+    class _RefusingPolicy(Policy):
+        def new_session(self, *_args, **_kwargs):
+            raise RuntimeError('endpoint down')
+
+    presses = iter(['s'])
+    monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
+    operator = KeyboardOperator(lambda: Task(instruction_source='pick', timeout_sec=None), _RefusingPolicy())
+    with pimm.World(virtual_time=True) as world:
+        world.pair(operator.perform_task)
+        with caplog.at_level(logging.ERROR):
+            drive_scheduler(world.start([operator, scripted_driver((None, 0.05), (None, 0.05))]))
+
+    assert 'endpoint down' in caplog.text
+
+
 def test_the_operator_declines_a_press_while_an_episode_runs(monkeypatch, caplog):
     """One episode at a time is the operator's own rule: the second press never reaches the harness."""
     task = Task(instruction_source='pick', timeout_sec=None)

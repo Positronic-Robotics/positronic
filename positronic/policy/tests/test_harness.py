@@ -1298,6 +1298,25 @@ def test_a_call_arriving_mid_episode_is_refused(world):
     assert policy.closed_sessions == 1, 'the refused ask left its session open'
 
 
+@pytest.mark.timeout(3.0)
+def test_an_ask_the_world_stops_before_is_closed(world):
+    """A queued ask still carries a live session, so the Harness closes it on the way down rather than
+    leaving the model open for the rest of the process."""
+    policy = StubPolicy()
+    harness = Harness(make_embodiment())
+    p = _pair_all(world, harness, policy)
+
+    scheduler = world.start([harness])
+    answer = p['perform_task'](Task(instruction_source='never-runs', timeout_sec=None))
+    world.request_stop()
+    drive_scheduler(scheduler, steps=5)
+
+    assert policy.opened_sessions == 1
+    assert policy.closed_sessions == 1, 'the ask went down with its session open'
+    with pytest.raises(RuntimeError):
+        answer.result()
+
+
 class _FrameWatchingSession(_FakeInferenceSession):
     """Reads its camera frame at both ends of a slow function, so a rewrite underneath it shows up as a
     difference."""

@@ -467,6 +467,11 @@ class Harness(pimm.ControlSystem):
             self._set_deadline(None)
             self._retire_inference()
             self._reap_inference()
+            # An ask this loop never reached still carries a live session, and the Harness closes what it is
+            # handed. The world answers what is left queued, so these calls are answered here as well.
+            for call in self.perform_task.incoming():
+                call.request.close()
+                call.set_exception(pimm.calls.HandlerStopped())
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         while not should_stop.value:
