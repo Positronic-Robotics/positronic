@@ -102,10 +102,8 @@ class SpyPolicy(Policy):
         self.command = command
         self.target_grip = float(target_grip)
         self.last_obs: dict[str, Any] | None = None
-        self.reset_calls: int = 0
 
     def new_session(self, context=None, rt=None):
-        self.reset_calls += 1
         return _SpySession(self)
 
 
@@ -143,12 +141,12 @@ class StubPolicy(Policy):
         self.target_grip = float(target_grip)
         self.last_obs: dict[str, Any] | None = None
         self.observations: list[dict[str, Any]] = []
-        self.reset_calls = 0
+        self.opened_sessions = 0
         self.closed_sessions = 0
         self._meta: dict[str, object] = meta or {}
 
     def new_session(self, context=None, rt=None) -> Session:
-        self.reset_calls += 1
+        self.opened_sessions += 1
         return _StubSession(self)
 
 
@@ -177,7 +175,7 @@ class ChunkPolicy(StubPolicy):
         self.counter = 0
 
     def new_session(self, context=None, rt=None):
-        self.reset_calls += 1
+        self.opened_sessions += 1
         return _ChunkSession(self)
 
 
@@ -297,8 +295,8 @@ class _Scene(pimm.ControlSystem):
 
 
 def _pair_all(world, harness, policy):
-    """Pair all harness signals and return a dict of test handles. ``perform_task`` asks for a task the way
-    a driver does, on a session opened from ``policy``."""
+    """Pair all harness signals and return a dict of test handles. ``perform_task`` opens a session from
+    ``policy`` and asks for the episode, the way a driver does."""
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
     deadline_recorder = RecordingEmitter()
@@ -1296,7 +1294,7 @@ def test_a_call_arriving_mid_episode_is_refused(world):
         refused.result()
     assert not live.done()
     assert _ds_types(p).count(DsWriterCommandType.START_EPISODE) == 1
-    assert policy.reset_calls == 2, 'each ask opens its own session'
+    assert policy.opened_sessions == 2, 'each ask opens its own session'
     assert policy.closed_sessions == 1, 'the refused ask left its session open'
 
 
@@ -1380,17 +1378,16 @@ def test_an_episode_answers_only_once_the_call_it_abandoned_has(world):
     p = _pair_all(world, harness, policy)
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     emit_obs = partial(emit_ready_payload, p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
-    answers = []
 
     driver = ManualDriver([
-        (lambda: answers.append(p['perform_task'](Task(instruction_source='ep1', timeout_sec=None))), 0.0),
         (emit_obs, 0.01),  # the observation that starts the function
         (partial(p['done_em'].emit, OPERATOR_DONE), 0.02),  # while that function is still running
         (None, 0.02),
     ])
 
     scheduler = world.start([harness, driver])
-    drive_until(scheduler, lambda: answers and answers[0].done(), max_steps=400)
+    answer = p['perform_task'](Task(instruction_source='ep1', timeout_sec=None))
+    drive_until(scheduler, answer.done, max_steps=400)
 
     assert policy.events == ['open', 'answered'], f'the episode answered mid-function: {policy.events}'
 
@@ -1435,8 +1432,7 @@ class _LabeledRecorder(pimm.SignalEmitter):
 def test_finish_stops_playing_the_live_chunk(world):
     """Finishing drops the schedule the harness is playing: the chunk's remaining waypoints never reach the
     devices, so nothing is emitted past the recorder's STOP."""
-    policy = ChunkPolicy()
-    wrapped = ActionTimestamp(fps=5.0).wrap(policy)  # 1.8 s chunk — won't drain before the episode ends
+    policy = ActionTimestamp(fps=5.0).wrap(ChunkPolicy())  # 1.8 s chunk — won't drain before the episode ends
     harness = Harness(make_embodiment())
     events: list[tuple[str, object]] = []
     harness.commands[keys.ROBOT_COMMAND]._bind(_LabeledRecorder(keys.ROBOT_COMMAND, events))
@@ -1446,7 +1442,7 @@ def test_finish_stops_playing_the_live_chunk(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = episode_caller(world, harness, wrapped)
+    perform_task = episode_caller(world, harness, policy)
     done_em = world.pair(harness.done)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
@@ -1637,7 +1633,7 @@ def test_shutdown_stops_playing_the_live_chunk(world):
     """Shutdown while recording drops the schedule too: the unplayed tail of the live chunk never reaches
     the devices after the recorder's STOP."""
     events: list[tuple[str, object]] = []
-    wrapped = ActionTimestamp(fps=5.0).wrap(ChunkPolicy())  # 1.8 s chunk — won't drain before shutdown
+    policy = ActionTimestamp(fps=5.0).wrap(ChunkPolicy())  # 1.8 s chunk — won't drain before shutdown
     harness = Harness(make_embodiment())
     harness.commands[keys.ROBOT_COMMAND]._bind(_LabeledRecorder(keys.ROBOT_COMMAND, events))
     harness.commands[keys.TARGET_GRIP]._bind(_LabeledRecorder(keys.TARGET_GRIP, events))
@@ -1646,7 +1642,7 @@ def test_shutdown_stops_playing_the_live_chunk(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = episode_caller(world, harness, wrapped)
+    perform_task = episode_caller(world, harness, policy)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
     # A call + a complete obs schedules a chunk; the driver then ends, which makes the
@@ -2388,8 +2384,7 @@ def test_manual_commands_are_emitted_as_plain_values(world):
 def test_finishing_discards_a_call_that_is_still_in_flight(world):
     """Finishing while the model is still inside its call throws that answer away: the trajectory it carries
     never reaches the devices."""
-    policy = RemoteStubPolicy(wall_sec=1.0, chunk=slow_chunk())
-    wrapped = ChunkedSchedule().wrap(policy)
+    policy = ChunkedSchedule().wrap(RemoteStubPolicy(wall_sec=1.0, chunk=slow_chunk()))
     harness = Harness(make_embodiment(simulated=True))
     cmd_recorder = RecordingEmitter()
     harness.commands[keys.ROBOT_COMMAND]._bind(cmd_recorder)
@@ -2399,7 +2394,7 @@ def test_finishing_discards_a_call_that_is_still_in_flight(world):
     frame_em = world.pair(harness.observations[CAM])
     robot_em = world.pair(harness.observations[keys.ROBOT_STATE])
     grip_em = world.pair(harness.observations[keys.GRIP])
-    perform_task = episode_caller(world, harness, wrapped)
+    perform_task = episode_caller(world, harness, policy)
     done_em = world.pair(harness.done)
 
     robot_state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])

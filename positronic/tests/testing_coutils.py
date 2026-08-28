@@ -57,11 +57,13 @@ def scripted_driver(*steps: ScriptStep) -> ManualDriver:
     return ManualDriver(script=steps)
 
 
-def episode_caller(world: pimm.World, harness: Harness, policy: Policy) -> Callable[[Task], pimm.calls.Answer]:
+def episode_caller(
+    world: pimm.World, harness: Harness, policy: Policy
+) -> Callable[[Task], pimm.calls.Answer[dict[str, Any]]]:
     """A caller that asks ``harness`` for a task the way a driver does: it opens the session that runs it."""
     perform_task = world.pair(harness.perform_task)
 
-    def ask(task: Task) -> pimm.calls.Answer[dict[str, Any]]:
+    def ask(task: Task):
         return perform_task(Rollout(task, policy))
 
     return ask

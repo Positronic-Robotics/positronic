@@ -207,11 +207,11 @@ def _run_pipeline(tmp_path: Path) -> dict:
             # runs in.
             simulated=True,
         )
-        served = _SimulatedLatency((StopOnFault() | ChunkedSchedule()).wrap(policy), INFERENCE_LATENCY_S)
+        wrapped = _SimulatedLatency((StopOnFault() | ChunkedSchedule()).wrap(policy), INFERENCE_LATENCY_S)
         harness = Harness(embodiment)
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
-        perform_task = episode_caller(world, harness, served)
+        perform_task = episode_caller(world, harness, wrapped)
         done_em = world.pair(harness.done)
 
         # Robot/gripper emit state every tick, so the script only drives the
