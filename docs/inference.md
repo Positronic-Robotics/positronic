@@ -106,40 +106,39 @@ Something has to say when an episode starts and when it finishes. `positronic-in
 
 ### A console of your own
 
-Anything richer — a web console, a foot pedal, a rig UI — is a binary of its own rather than a plug-in: it composes its own `pimm.World` out of the public pieces, and nothing in the library needs to know which surface is driving. The shape, for a **hardware** embodiment:
+Anything richer — a web console, a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller: it decides when an episode starts, and `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. A driver reads what it decides from itself — the keyboard operator reads the terminal in its own loop — so the runner wires nothing of it but that call and `done`.
 
 ```python
-from contextlib import nullcontext
-
 import pimm
-from positronic import wire
-from positronic.cli.eval.run import prepare_output_dir
-from positronic.dataset.local_dataset import LocalDatasetWriter
-from positronic.policy.harness import Harness
+from positronic.cli.eval.run import prepare_output_dir, run_world
+from positronic.eval import Task
 
-# The setup under the `try` can raise — `prepare_output_dir` syncs a directory and snapshots
-# sources into it, `LocalDatasetWriter` scans the one it is given — and the policy is yours to
-# close from the moment you first touch it.
+
+class MyConsole(pimm.ControlSystem):
+    """Asks `perform_task` for a `Task` per episode, and emits the episode's terminal on `done`."""
+
+    def __init__(self):
+        self.perform_task = pimm.calls.ControlSystemCaller[Task, dict](self)
+        self.done = pimm.ControlSystemEmitter[dict](self)
+
+    def run(self, should_stop, clock):
+        ...
+
+
+# `prepare_output_dir` syncs a directory and snapshots the sources into it, and it can raise. The
+# policy is yours to close from the moment you first touch it. `None` records nothing.
 try:
-    # `None` where the run records nothing, which is why the writer is a nullcontext below.
-    output_dir = prepare_output_dir(output_dir)
-    harness = Harness(policy, embodiment)
-    console = MyConsole()  # asks `perform_task` for a `Task` per episode and emits its terminal on `done`
-
-    writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
-    with writer_cm as writer, pimm.World() as world:
-        ds_agent = wire.wire_embodiment(world, harness, embodiment, writer, done=console.done)
-        world.connect(console.perform_task, harness.perform_task)
-        if ds_agent is not None:
-            world.connect(harness.ds_command, ds_agent.command)
-        world.run([harness, console], [*embodiment.control_systems, ds_agent])
+    console = MyConsole()
+    run_world(policy, embodiment, console, prepare_output_dir(output_dir), done=console.done)
 finally:
     policy.close()
 ```
 
-**A simulated embodiment is not this.** Three things change together, and a copy of the shape above records a sim run against the wall clock: the world takes `virtual_time=True`, `wire_embodiment` takes `TimeMode.MESSAGE`, and the producers are scheduled in the foreground beside the harness rather than as background processes, so one scheduler round is one control period. `_run_world` in [`positronic/cli/eval/run.py`](../positronic/cli/eval/run.py) is the worked version, including why the ordering within a round is what it is.
+The same runner takes a **simulated** embodiment: it reads `embodiment.simulated`, and gives a sim world virtual time, message-stamped recording and foreground producers. One scheduler round is then one control period. The world stops when any of its control systems returns, so the console ends the run by returning from its loop.
 
-The world stops when any of its control systems returns, so the console ends the run by returning from its loop. To show the cameras, connect every observation whose name starts with `positronic.keys.IMAGE_PREFIX` into a viewer's `cameras` — `positronic.gui.dpg_ui()` is one, and the naming convention is what identifies a camera on the wire. To let the operator jog the arm between episodes, emit robot commands into `harness.manual_command`, which the harness applies only while idle. To count down an episode's remaining time, read `harness.deadline_ns`: it carries the instant on the world's clock the live episode ends at, so the time left is that value minus your own `clock.now_ns()`. An episode publishes its deadline once the rig is ready — after the task's prepare handlers answer, so the reset costs the episode nothing. It is `None` whenever no deadline stands — no episode running, or one whose task has no `timeout_sec`.
+A surface that brings a control system of its own — a camera viewer, a pedal on a socket — composes its own world instead, because only whoever builds a world can wire what runs in it. `run_world` is the shape to copy. To show the cameras, connect every observation named with the `positronic.keys.IMAGE_PREFIX` convention into a viewer's `cameras`; `positronic.gui.dpg_ui()` is one. To let the operator jog the arm between episodes, emit robot commands into `harness.manual_command`, which the harness applies only while it is idle.
+
+To count down an episode's remaining time, read `harness.deadline_ns`: it carries the instant on the world's clock the live episode ends at, so the time left is that value minus your own `clock.now_ns()`. An episode publishes its deadline once the rig is ready — after the task's prepare handlers answer, so the reset costs the episode nothing. It is `None` whenever no deadline stands — no episode running, or one whose task has no `timeout_sec`.
 
 ## Recording and Replay
 

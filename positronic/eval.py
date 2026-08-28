@@ -97,7 +97,7 @@ class Task:
 # [✓] The recorder keeps what is on the wire when it opens, and a producer publishes the scene as it answers.
 # [✓] A config makes each attended trial, so the keyboard path makes none of its own.
 # [✓] A task source makes the plan when the world starts.
-# [ ] One runner builds the world for both.
+# [✓] One runner builds the world for both.
 # [ ] A benchmark answers ``tasks(spec)``, so positronic holds no task table of its own.
 # [ ] A task carries its instruction as data, so no trial reads it after the reset.
 # [ ] A sim eval config names a selection, and a spec flag narrows it to one task.

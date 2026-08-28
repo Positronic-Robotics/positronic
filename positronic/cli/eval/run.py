@@ -19,7 +19,7 @@ from positronic.cfg.eval import placeholder
 from positronic.cli.eval.submit import submit
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
-from positronic.eval import Embodiment, Eval, Task
+from positronic.eval import Embodiment, Eval, Observation, Task
 from positronic.policy.executor import blocking
 from positronic.policy.harness import Harness
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
@@ -71,20 +71,30 @@ class TaskDriver(pimm.ControlSystem):
         yield pimm.Sleep(0.5)
 
 
-def _run_world(policy, ev: Eval, output_dir: Path | None):
-    """Wire one eval's embodiment under a fresh Harness + World and run it to completion.
+def run_world(
+    policy,
+    embodiment: Embodiment,
+    driver,
+    output_dir: Path | None,
+    *,
+    privileged: dict[str, Observation] | None = None,
+    done: pimm.ControlSystemEmitter | None = None,
+) -> None:
+    """Wire one embodiment under a fresh Harness + World, and run it until a control system returns.
 
-    The driver walks ``ev.tasks``; the shared ``policy``'s lifetime stays with ``main``.
+    Every trial runs here, whoever asks for it: the driver is what an attended run and an unattended one
+    differ by. A driver is any control system with a ``perform_task`` caller — a plan walked to its end, a
+    person at a keyboard, a console of somebody's own — and it reads what it decides from itself, so the
+    runner wires nothing of it but that call. ``done`` is what ends an episode from outside the policy: the
+    env's terminal in a sim eval, the operator in an attended run. The ``policy``'s lifetime stays with the
+    caller.
     """
-    embodiment = ev.embodiment
     harness = Harness(policy, embodiment)
-    driver = TaskDriver(ev.tasks)
-
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(virtual_time=embodiment.simulated) as world:
         ds_agent = wire.wire_embodiment(
-            world, harness, embodiment, dataset_writer, time_mode, privileged=ev.privileged, done=ev.done
+            world, harness, embodiment, dataset_writer, time_mode, privileged=privileged, done=done
         )
         world.connect(driver.perform_task, harness.perform_task)
         if ds_agent is not None:
@@ -200,7 +210,8 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     try:
         with timed_pass(output_dir, timing, policy):
             for ev in evals:
-                _run_world(policy, ev, output_dir)
+                driver = TaskDriver(ev.tasks)
+                run_world(policy, ev.embodiment, driver, output_dir, privileged=ev.privileged, done=ev.done)
     finally:
         policy.close()
 
