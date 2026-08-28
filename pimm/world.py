@@ -275,6 +275,10 @@ class MultiprocessReceiver(SignalReceiver[T]):
         except Empty:
             message = None
         else:
+            if message is None:
+                # An interrupt that lands inside a manager call leaves that connection holding half a
+                # message, and every read after it comes back as something the queue never carried.
+                raise ConnectionError('the queue was read after an interrupt tore its connection')
             self._last_queue_message = Message(message.data, message.ts, True)
             if self._mode is TransportMode.UNDECIDED:
                 self._mode = TransportMode.QUEUE
