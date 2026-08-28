@@ -310,12 +310,19 @@ class _Brakes:
             self._idle_since = self._clock.now()
 
     def close_if_idle(self) -> None:
-        """Close the brakes once the idle time passes."""
+        """Close the brakes once the idle time passes with the arm at rest.
+
+        A streamed setpoint is published and done with, so the goal is the only thing that says the arm is
+        still travelling towards it.
+        """
         if self._closed or self._desk is None or self._after_idle_s is None:
+            return
+        if self._robot.goal().status is pf.GoalStatus.IN_FLIGHT:
+            self._idle_since = self._clock.now()
             return
         if self._clock.now() - self._idle_since < self._after_idle_s:
             return
-        logger.info(f'No command for {self._after_idle_s}s, closing the brakes')
+        logger.info(f'No command and no move for {self._after_idle_s}s, closing the brakes')
         self._robot.stop()  # the brakes cannot engage on an arm the control loop still drives
         self._desk.close_brakes()
         self._closed = True
@@ -344,8 +351,9 @@ class Robot(pimm.ControlSystem):
         :param reboot_on_safety_error: When the control box is in an unrecoverable ``SafetyError`` on start, reboot
             it, wait for it to come back, and try once more before giving up. Only applies when ``manage_desk`` is
             set.
-        :param brake_after_idle_s: How long the driver waits for a command before it closes the brakes; the next
-            command opens them again. None holds the brakes open for the whole run. Needs ``manage_desk``.
+        :param brake_after_idle_s: How long the arm may sit with no command and no move in flight before the driver
+            closes the brakes; the next command opens them again. None holds the brakes open for the whole run.
+            Needs ``manage_desk``.
         """
         assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
         assert brake_after_idle_s is None or brake_after_idle_s > 0, brake_after_idle_s

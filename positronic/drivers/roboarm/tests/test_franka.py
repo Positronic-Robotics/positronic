@@ -447,6 +447,34 @@ def test_a_command_opens_the_brakes_the_idle_time_closed(desk):
     np.testing.assert_allclose(arm.targets[-1], JOGGED)
 
 
+def test_a_streamed_command_holds_the_brakes_open_until_the_arm_arrives(desk):
+    """A streamed setpoint is published and done with, so only the goal says the arm is still travelling."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm, brake_after_idle_s=30.0)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    clock = MockClock()
+    loop = driver.run(StopFlag(), clock)
+
+    for _ in range(3):  # init + the opening move
+        next(loop)
+    arm.polls_to_reach = 4  # from here the streamed move takes a few ticks to land
+    feed.push(command.JointPosition(positions=JOGGED, mode=IMPEDANCE))
+    for _ in range(2):
+        next(loop)
+    clock.advance(30.0)
+    next(loop)
+    assert desk.calls == [], 'the brakes closed on an arm still travelling'
+
+    for _ in range(3):  # the arm arrives
+        next(loop)
+    clock.advance(30.0)
+    next(loop)
+
+    assert desk.calls == [Call.CLOSE_BRAKES]
+    np.testing.assert_allclose(arm.q, JOGGED)
+
+
 def test_a_travel_longer_than_the_idle_time_leaves_the_brakes_open(desk, world):
     """The idle time is time with nothing to do, and an arm still travelling has something to do."""
     arm = FakeArm(PARK)
