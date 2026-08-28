@@ -12,7 +12,9 @@ from pimm.core import ControlSystem
 def _optional_import(module: str, symbol: str) -> Any | None:
     try:
         return getattr(import_module(module), symbol)
-    except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    # A vendor that is installed but cannot load — its own native library is missing — leaves this station
+    # without the component just as an absent package does.
+    except ImportError:  # pragma: no cover - optional dependency
         return None
 
 
