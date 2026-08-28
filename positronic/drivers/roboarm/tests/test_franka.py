@@ -20,7 +20,7 @@ IMPEDANCE = command.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, k
 
 
 class Call(StrEnum):
-    """The vendor calls ``FakeArm`` records."""
+    """The calls the fakes record: the vendor calls of ``FakeArm``, and the brake operations of ``FakeDesk``."""
 
     STATE = 'state'
     GOAL = 'goal'
@@ -127,7 +127,8 @@ class FakeArm:
 
 
 class FakeDesk:
-    """In-memory ``Desk``: records that the session opened the brakes and released control.
+    """In-memory ``Desk``: records that the session prepared the robot and released control, and every brake
+    operation the driver asked for.
 
     ``calls`` is its own log; a test that needs the brakes ordered against the vendor calls points both at
     one list.
