@@ -1,6 +1,7 @@
 """What the WebXR driver makes of the payload from the headset."""
 
 import numpy as np
+import pytest
 
 from positronic.drivers.webxr import _parse_controller_data
 
@@ -23,10 +24,12 @@ def test_gamepad_buttons_reach_the_caller():
     np.testing.assert_allclose(right, TOUCH_BUTTONS)
 
 
-def test_input_source_without_gamepad_has_no_buttons():
-    positions, buttons = _parse_controller_data(_payload(right=_controller([])))
+def test_an_input_source_that_cannot_drive_the_arm_is_refused():
+    """Every teleoperation control is a button, so a source with none of them controls nothing."""
+    with pytest.raises(ValueError, match='sends 0 buttons'):
+        _parse_controller_data(_payload(right=_controller([])))
 
-    right = positions['right']
-    assert buttons['right'] is None
-    assert right is not None
-    np.testing.assert_allclose(right.translation, [0.1, 0.2, 0.3])
+
+def test_a_controller_short_of_a_button_is_refused():
+    with pytest.raises(ValueError, match='sends 5 buttons'):
+        _parse_controller_data(_payload(right=_controller(TOUCH_BUTTONS[:5])))
