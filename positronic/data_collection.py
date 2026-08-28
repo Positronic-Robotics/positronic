@@ -446,9 +446,10 @@ def yamcfg(robot_arm, **kwargs):
 @cfn.config(
     robot_arm=positronic.cfg.hardware.roboarm.trossen,
     webxr=positronic.cfg.webxr.oculus,
-    # Measured at the rig: the controller moved right takes the arm right, away takes it out over the
-    # table, and up takes it up.
-    operator_position=OperatorPosition.FRONT,
+    # The operator stands behind the arm, and it reaches away from them over the table. Solved from the
+    # rig: the controller moved away from the base runs along -z of the headset's frame, and only `BACK`
+    # takes that to +x of the arm's.
+    operator_position=OperatorPosition.BACK,
     # No camera and no sound yet: the camera driver is still to come, and the station has no audio device,
     # so the operator reads the recording state off the terminal.
     sound=None,
