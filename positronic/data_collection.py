@@ -449,10 +449,15 @@ def yamcfg(robot_arm, **kwargs):
     # Measured at the rig: the controller moved right takes the arm right, away takes it out over the
     # table, and up takes it up.
     operator_position=OperatorPosition.FRONT,
-    # No camera and no sound yet: the camera driver is still to come, and the station has no audio device,
-    # so the operator reads the recording state off the terminal.
+    # The station has no audio device, so the operator reads the recording state off the terminal.
     sound=None,
-    cameras={},
+    # The wrist camera of the arm this configuration drives, and the one that looks down on the table. The
+    # station carries two more, `d405_wrist_left` and `d405_scene_bottom`, which belong to the other arm.
+    cameras={
+        keys.WRIST_IMAGE: positronic.cfg.hardware.camera.d405_wrist_right,
+        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.d405_scene_top,
+    },
+    stream_video_to_webxr=keys.WRIST_IMAGE,
     nominal_joints=positronic.cfg.hardware.roboarm.TROSSEN_NOMINAL_JOINTS,
 )
 def trossencfg(robot_arm, **kwargs):
