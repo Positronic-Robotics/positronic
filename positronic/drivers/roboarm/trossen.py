@@ -78,8 +78,11 @@ _RECONNECT_MAX_S = 30.0
 # faults and drops the arm to idle, so the driver stands down before it gets there.
 _VELOCITY_HEADROOM = 0.8
 # The share of a joint's velocity limit a streamed setpoint may ask for. Teleoperation is paced by the hand
-# it follows, so this only bounds what one wild target can ask for.
-_COMMANDED_SHARE = 0.1
+# it follows, so this only bounds what one wild target can ask for. Turning the end effector costs four to
+# six times the joint travel that moving it the same distance does — the tool sits 0.156 m off the flange,
+# so a turn about it is a swing of the wrist and a correction by everything else. At a tenth of each
+# limit the operator sees that as an end effector that follows the hand but keeps its own heading.
+_COMMANDED_SHARE = 0.3
 _MJCF_PATH = 'assets/mujoco/trossen_wxai/wxai_follower.xml'
 _EE_SITE = 'ee_site'
 _JOINT_NAMES = ('joint_0', 'joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5')
