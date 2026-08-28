@@ -23,7 +23,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import DelegatingSession, Layer, Policy, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout, _EpisodeInference, open_rollout
+from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout, _EpisodeInference
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.remote import INFER, RemoteSession, round_trip
 from positronic.tests.testing_coutils import (
@@ -667,7 +667,7 @@ def test_an_uncharged_wait_ends_when_the_world_comes_down(world):
         def functions(self):
             return {INFER: never_answers.wait}
 
-    rollout = open_rollout(Task(instruction_source='t', timeout_sec=None), _HangingPolicy())
+    rollout = Rollout(Task(instruction_source='t', timeout_sec=None), _HangingPolicy())
     inference = _EpisodeInference(rollout, charges_wall_time=False, clock=world.clock)
     try:
         inference({})  # starts the function, which never answers
@@ -1683,7 +1683,7 @@ def _ask(world: pimm.World, harness: Harness, policy: Policy, task: Task) -> Non
     """Deliver one ``perform_task``, for a test that drives the harness's generator rather than a World."""
     caller = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](harness)
     wire_call(world, caller, harness.perform_task)
-    caller(open_rollout(task, policy))
+    caller(Rollout(task, policy))
 
 
 @pytest.mark.timeout(3.0)

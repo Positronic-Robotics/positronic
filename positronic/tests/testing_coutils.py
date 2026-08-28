@@ -9,7 +9,7 @@ from typing import Any, TypeVar
 import pimm
 from positronic.eval import Task
 from positronic.policy import Policy, Session
-from positronic.policy.harness import Harness, open_rollout
+from positronic.policy.harness import Harness, Rollout
 
 # The driver runs a step for its effect, so a step that hands something back — a call's answer — is one too.
 ScriptStep = tuple[Callable[[], object] | None, float]
@@ -62,7 +62,7 @@ def episode_caller(world: pimm.World, harness: Harness, policy: Policy) -> Calla
     perform_task = world.pair(harness.perform_task)
 
     def ask(task: Task) -> pimm.calls.Answer[dict[str, Any]]:
-        return perform_task(open_rollout(task, policy))
+        return perform_task(Rollout(task, policy))
 
     return ask
 

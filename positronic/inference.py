@@ -21,7 +21,7 @@ from positronic.dataset.local_dataset import load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment, Task
 from positronic.policy import Policy
-from positronic.policy.harness import Rollout, open_rollout
+from positronic.policy.harness import Rollout
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class KeyboardOperator(KeyboardControl):
             case 's' if self._pending is not None:
                 logger.warning('An episode is already running: press [p] to stop it')
             case 's':
-                self._pending = self.perform_task(open_rollout(self._next_task(), self._policy))
+                self._pending = self.perform_task(Rollout(self._next_task(), self._policy))
             case 'p':
                 self.done.emit({keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR})
 

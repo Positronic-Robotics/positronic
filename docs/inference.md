@@ -108,12 +108,12 @@ Something has to say when an episode starts and when it finishes. `positronic-in
 
 Anything richer — a web console, a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller: it decides when an episode starts, and `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. A driver reads what it decides from itself — the keyboard operator reads the terminal in its own loop — so the runner wires nothing of it but that call and `done`.
 
-The driver also brings the policy: each ask carries the session the episode runs on. `open_rollout(task, policy)` opens that session on a runtime of its own, and the harness closes it — the episode it ran, or the ask it refused.
+The driver also brings the policy: each ask carries the session the episode runs on. `Rollout(task, policy)` opens that session on a runtime of its own, and the harness closes it — the episode it ran, or the ask it refused.
 
 ```python
 import pimm
 from positronic.cli.eval.run import prepare_output_dir, run_world
-from positronic.policy.harness import Rollout, open_rollout
+from positronic.policy.harness import Rollout
 
 
 class MyConsole(pimm.ControlSystem):
@@ -125,7 +125,7 @@ class MyConsole(pimm.ControlSystem):
         self.done = pimm.ControlSystemEmitter[dict](self)
 
     def run(self, should_stop, clock):
-        ...  # each episode: `self.perform_task(open_rollout(task, self._policy))`
+        ...  # each episode: `self.perform_task(Rollout(task, self._policy))`
 
 
 # `prepare_output_dir` syncs a directory and snapshots the sources into it, and it can raise. The

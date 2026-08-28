@@ -1,7 +1,6 @@
 import time
 from collections import deque
 from collections.abc import Generator, Iterator
-from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -13,7 +12,7 @@ from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
-from positronic.policy.base import Policy, Session
+from positronic.policy.base import Policy
 from positronic.policy.executor import Executor
 from positronic.utils import flatten_dict, frozen_view
 
@@ -26,18 +25,22 @@ MAX_ACTION_SKEW_SEC = 60.0
 POLL_PERIOD_SEC = 0.01
 
 
-@dataclass
 class Rollout:
     """What one ``perform_task`` call asks for: the trial to run, the session that runs it, and the runtime
-    serving that session.
+    that serves the policy's functions to that session.
 
-    Whoever asks opens the session, and so decides which model runs the trial. The Harness closes it: the
-    episode it ran, or the ask it refused.
+    Whoever asks opens it, and so decides which model runs the trial. The Harness closes it: the episode it
+    ran, or the ask it refused.
     """
 
-    task: Task
-    session: Session
-    rt: Executor
+    def __init__(self, task: Task, policy: Policy):
+        self.task = task
+        self.rt = Executor(policy.functions)
+        try:
+            self.session = policy.new_session(rt=self.rt)
+        except BaseException:
+            self.rt.close()
+            raise
 
     def close(self) -> None:
         """Close the runtime, then the session it was serving.
@@ -46,16 +49,6 @@ class Rollout:
         """
         self.rt.close()
         self.session.close()
-
-
-def open_rollout(task: Task, policy: Policy) -> Rollout:
-    """Open a session to run ``task``, on a runtime that serves ``policy``'s functions to it."""
-    rt = Executor(policy.functions)
-    try:
-        return Rollout(task, policy.new_session(rt=rt), rt)
-    except BaseException:
-        rt.close()
-        raise
 
 
 class _EpisodeInference:

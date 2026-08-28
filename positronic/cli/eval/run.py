@@ -22,7 +22,7 @@ from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.eval import Embodiment, Eval, Observation, Task
 from positronic.policy import Policy
 from positronic.policy.executor import blocking
-from positronic.policy.harness import Harness, Rollout, open_rollout
+from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ class TaskDriver(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         for task in self._tasks():
-            answer = self.perform_task(open_rollout(task, self._policy))
+            answer = self.perform_task(Rollout(task, self._policy))
             while not answer.done():
                 if should_stop.value:
                     return
