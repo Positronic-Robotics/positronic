@@ -30,7 +30,7 @@ import mujoco as mj
 import numpy as np
 
 import pimm
-from positronic import geom
+from positronic import geom, keys
 from positronic.drivers import vendor_import
 from positronic.drivers.utils import DriverRun, MoveStatus
 from positronic.utils import package_assets_path
@@ -49,10 +49,13 @@ logger = logging.getLogger(__name__)
 _ARM_JOINTS = 6
 _GRIPPER_JOINT = 6
 _HZ = 100
-# Goal time for a streamed setpoint: one tick, so the firmware interpolates linearly across the gap to the
-# next one. At or below 0.001 s it applies the goal as a step instead, and asks the servo for whatever
-# acceleration closes the distance at once.
-_STREAM_GOAL_TIME_S = 1.0 / _HZ
+# Goal time for a streamed setpoint, in ticks: the firmware interpolates linearly to the goal over it. At
+# or below 0.001 s it applies the goal as a step instead, and asks the servo for whatever acceleration
+# closes the distance at once. Two ticks rather than one, because a tick is not exactly a tick: measured
+# over three minutes of teleoperation, 29% of them take longer than 12 ms and 1% longer than 20 ms. A goal
+# time of one tick leaves the arm standing still for the rest of every one of those, which the operator
+# feels as a judder; a goal the next setpoint supersedes half way through keeps the motion continuous.
+_STREAM_GOAL_TIME_S = 2.0 / _HZ
 # What a move somebody waits on travels at. Above 0.2 s of goal time the firmware plans the whole move as a
 # quintic, which starts and stops the arm gently — so a move hands it the time and lets it do that.
 _MOVE_SPEED = 0.6  # rad/s
@@ -132,21 +135,6 @@ class TrossenState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[TrossenState.EE_POSE_OFFSET : TrossenState.EE_POSE_OFFSET + 3] = ee_pose.translation
         self.array[TrossenState.EE_POSE_OFFSET + 3 : TrossenState.EE_POSE_OFFSET + 7] = ee_pose.rotation.as_quat
         self.array[TrossenState.STATUS_OFFSET] = status.value
-
-
-def _towards(frm: geom.Transform3D, to: geom.Transform3D, max_m: float, max_rad: float) -> geom.Transform3D:
-    """``to``, brought within ``max_m`` and ``max_rad`` of ``frm``."""
-    step = to.translation - frm.translation
-    distance = float(np.linalg.norm(step))
-    if distance > max_m:
-        step = step * (max_m / distance)
-    turn = (frm.rotation.inv * to.rotation).as_rotvec
-    angle = float(np.linalg.norm(turn))
-    if angle > np.pi:  # `as_rotvec` keeps the way round it was given; the other one is the short way
-        turn, angle = turn * (1.0 - 2.0 * np.pi / angle), 2.0 * np.pi - angle
-    if angle > max_rad:
-        turn = turn * (max_rad / angle)
-    return geom.Transform3D(frm.translation + step, frm.rotation * geom.Rotation.from_rotvec(turn))
 
 
 def _reach_postures(x: float, y: float) -> list[np.ndarray]:
@@ -322,6 +310,8 @@ class _Arm(DriverRun[command.CommandType]):
         self._complaint = ''
         self._complained_at = -_COMPLAIN_EVERY_S
 
+    # TODO(#686): a rate limit on a log line belongs in the logging layer, as `log_every_n_sec`, where every
+    # driver reaches it.
     def complain(self, message: str, key: str | None = None) -> None:
         """Say what is wrong, but not on every tick of a fault that stands.
 
@@ -360,7 +350,7 @@ class _Arm(DriverRun[command.CommandType]):
         """The gripper joint position that holds the fingers at ``grip``."""
         return self._grip_closed + (1.0 - grip) * self._grip_travel
 
-    def outside_limits(self) -> str:
+    def limit_violation(self) -> str:
         """What reads outside the range the controller reports for it, if anything.
 
         The controller takes a margin past what it reports — a gripper reading a millimetre below its zero
@@ -383,7 +373,7 @@ class _Arm(DriverRun[command.CommandType]):
         the arm is wherever it ended up, not where the last session was driving it.
         """
         self._output = self.driver.get_robot_output()
-        if outside := self.outside_limits():
+        if outside := self.limit_violation():
             self.complain(f'The arm at {self.ip} may refuse position mode: {outside}')
         self._target = self._wanted = self.q
         self._goal_time = _STREAM_GOAL_TIME_S
@@ -477,6 +467,21 @@ class _Arm(DriverRun[command.CommandType]):
         """
         return self._anchor if self._anchor is not None else self._kin.fk(self._target)
 
+    @staticmethod
+    def _towards(frm: geom.Transform3D, to: geom.Transform3D, max_m: float, max_rad: float) -> geom.Transform3D:
+        """``to``, brought within ``max_m`` and ``max_rad`` of ``frm``."""
+        step = to.translation - frm.translation
+        distance = float(np.linalg.norm(step))
+        if distance > max_m:
+            step = step * (max_m / distance)
+        turn = (frm.rotation.inv * to.rotation).as_rotvec
+        angle = float(np.linalg.norm(turn))
+        if angle > np.pi:  # `as_rotvec` keeps the way round it was given; the other one is the short way
+            turn, angle = turn * (1.0 - 2.0 * np.pi / angle), 2.0 * np.pi - angle
+        if angle > max_rad:
+            turn = turn * (max_rad / angle)
+        return geom.Transform3D(frm.translation + step, frm.rotation * geom.Rotation.from_rotvec(turn))
+
     def _stepped(self, target: geom.Transform3D) -> geom.Transform3D:
         """``target``, one tick's travel on from the pose the arm was last asked for.
 
@@ -490,9 +495,11 @@ class _Arm(DriverRun[command.CommandType]):
         returns, and only once it has solved for it: an anchor that walked on past a pose with no solution
         would leave every pose after it further out of reach than the last.
         """
-        anchor = _towards(self.ee_pose, self.asked_pose, _MAX_STANDOFF_M, _MAX_STANDOFF_RAD)
-        return _towards(anchor, target, _MAX_STEP_M, _MAX_STEP_RAD)
+        anchor = self._towards(self.ee_pose, self.asked_pose, _MAX_STANDOFF_M, _MAX_STANDOFF_RAD)
+        return self._towards(anchor, target, _MAX_STEP_M, _MAX_STEP_RAD)
 
+    # TODO(#685): take which kinematics to use as a constructor argument. The controller solves Cartesian
+    # goals itself, through `set_cartesian_positions`, and a station may want that path.
     def _ik(self, pose: geom.Transform3D, *, streamed: bool) -> np.ndarray:
         """The joints that reach ``pose``; raises what the arm cannot reach.
 
@@ -664,7 +671,7 @@ class Robot(pimm.ControlSystem):
             arm = _Arm(driver, self._ip, self.sync_move, self.commands, self.state, self.grip, should_stop, clock)
             with arm:
                 # TODO: carry the URDF and the joint names, which live in `trossen_arm_description`.
-                self.robot_meta.emit({'robot': 'trossen_wxai'})
+                self.robot_meta.emit({keys.ROBOT: 'trossen_wxai'})
 
                 while not should_stop.value:
                     arm.read()

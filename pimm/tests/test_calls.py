@@ -281,8 +281,7 @@ class TestWorldConnect:
     def test_a_handler_the_operator_interrupts_answers_nothing(self):
         """An interrupt can land inside a manager call, and the connection then carries half a message.
 
-        Reading it again returns the tail of another, so an interrupted system says nothing at all. The
-        asker takes the same interrupt.
+        Reading it again returns the tail of another, so an interrupted system says nothing at all.
         """
         client, interrupted = Client([(1, 2)]), Interrupted()
         with World(virtual_time=True) as world:
