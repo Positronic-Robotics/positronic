@@ -56,7 +56,7 @@ uv run positronic-inference sim \
 
 Accepted forms: `host`, `host:port`, and `https://host[:port][/api/v1/session[/<model_id>]]` (`http`, `ws` and `wss` work too), each with an optional query. `https`/`wss` enable TLS. An omitted port is the scheme's own — 443 for TLS and 80 otherwise — so name the port a server listens on (`:8000` for every vendor server's default). Naming no model id serves the checkpoint the server pinned at startup.
 
-**Credentials stay out of the URL**, which is meant to be safe to paste around: they ride headers instead. A server gated on a bearer token — whether it checks the token itself, as every endpoint [`workflows/nebius/serve.sh`](../workflows/nebius/README.md) creates does, or sits behind a proxy that checks it — is reached with `.authed_remote`, which reads the token from `AUTH_TOKEN` and raises if it is unset. For any other scheme, name the headers yourself: `--policy.headers='{"Modal-Key": "..."}'`.
+**Credentials stay out of the URL**, which is meant to be safe to paste around: they ride headers instead. A server gated on a bearer token — whether it checks the token itself, as every endpoint [`workflows/nebius/serve.sh`](../workflows/nebius/README.md) creates does, or sits behind a proxy that checks it — is reached with `.authed_remote`, which reads the token from `AUTH_TOKEN` and raises if it is unset. For any other scheme, write the headers as a JSON object in a file and name the file: `.file_authed_remote` with `--policy.headers.path=~/.config/endpoint/headers.json`.
 
 ```bash
 uv run positronic-inference sim \
@@ -69,7 +69,15 @@ uv run positronic-inference sim \
 
 The model source (`checkpoints_dir`, `checkpoint`, device...) is fixed at server launch — `source.*` params are rejected; name a checkpoint in the URL path instead. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).
 
-**Credentials stay out of the URL.** `--policy.headers='{"Modal-Key": "..."}'` passes auth headers for a fronted endpoint, so the URL itself is safe to paste around. Against a Nebius endpoint use `.authed_remote` or `.nebius_remote`, which build the bearer header for you (see [the Nebius workflow README](../workflows/nebius/README.md#authenticated-inference)).
+**Credentials stay out of the URL, and out of the command line.** `.file_authed_remote` reads a fronted endpoint's auth headers from the JSON file at `--policy.headers.path`, so neither the URL nor `sys.argv` carries one — and `save_run_metadata()` writes `sys.argv` beside the run's episodes. Against a Nebius endpoint use `.authed_remote` or `.nebius_remote`, which build the bearer header for you (see [the Nebius workflow README](../workflows/nebius/README.md#authenticated-inference)).
+
+```bash
+uv run positronic-inference sim \
+  --policy=.file_authed_remote \
+  --policy.url=https://<endpoint-managed-url> \
+  --policy.headers.path=~/.config/endpoint/headers.json \
+  --output_dir=~/datasets/inference_logs/exp_v1
+```
 
 **What crosses the wire is the server's call, not the client's.** A server that wants smaller frames declares `RestrictImageSize` in its rig-side stack (640x640 by default); one behind a proxy with a message-size cap declares `remote(compress_images=True)` and the rig JPEG-encodes frames before sending. A server whose checkpoint speaks a different end-effector frame declares `ChangeEEFrame` with the transform placing that frame relative to the rig's `default`, and the rig converts poses (see [End-effector frames](codecs.md#end-effector-frames)). The client builds whatever the handshake declares, and only that — connecting to a server that declares no stack fails with an error naming the version it runs. What the declared stack must achieve is checked where it matters: the harness refuses to emit an action scheduled further than `MAX_ACTION_SKEW_SEC` from now, which is what a stack that never anchored its chunk to the rig's clock produces.
 
