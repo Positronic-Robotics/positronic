@@ -49,13 +49,10 @@ logger = logging.getLogger(__name__)
 _ARM_JOINTS = 6
 _GRIPPER_JOINT = 6
 _HZ = 100
-# Goal time for a streamed setpoint, in ticks: the firmware interpolates linearly to the goal over it. At
-# or below 0.001 s it applies the goal as a step instead, and asks the servo for whatever acceleration
-# closes the distance at once. Two ticks rather than one, because a tick is not exactly a tick: measured
-# over three minutes of teleoperation, 29% of them take longer than 12 ms and 1% longer than 20 ms. A goal
-# time of one tick leaves the arm standing still for the rest of every one of those, which the operator
-# feels as a judder; a goal the next setpoint supersedes half way through keeps the motion continuous.
-_STREAM_GOAL_TIME_S = 2.0 / _HZ
+# Goal time for a streamed setpoint: one tick, so the firmware interpolates linearly across the gap to the
+# next one. At or below 0.001 s it applies the goal as a step instead, and asks the servo for whatever
+# acceleration closes the distance at once.
+_STREAM_GOAL_TIME_S = 1.0 / _HZ
 # What a move somebody waits on travels at. Above 0.2 s of goal time the firmware plans the whole move as a
 # quintic, which starts and stops the arm gently — so a move hands it the time and lets it do that.
 _MOVE_SPEED = 0.6  # rad/s
