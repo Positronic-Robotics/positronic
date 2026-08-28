@@ -2,12 +2,11 @@
 
 Robot description (MJCF) of the Trossen WidowX AI arm, from
 [trossen_arm_mujoco](https://github.com/TrossenRobotics/trossen_arm_mujoco)
-(`trossen_arm_mujoco/assets/wxai/wxai_follower.xml`), BSD 3-Clause, see [LICENSE](./LICENSE).
+(`trossen_arm_mujoco/assets/wxai/wxai_follower.xml` at revision
+[`8d9389b`](https://github.com/TrossenRobotics/trossen_arm_mujoco/commit/8d9389b46ba02bdbf6d5e086e09d20717ccfed68)),
+BSD 3-Clause, see [LICENSE](./LICENSE).
 
-Vendored whole apart from one change: `meshdir` names `assets`, where the meshes it uses now sit.
-
-`scene.xml` is not from upstream. It puts the arm on a lit ground plane, for a viewer to open: upstream's
-own scene wraps `wxai_base.xml`, which is a different arm.
+`meshdir` names `assets`, the directory beside this file that holds the meshes.
 
 `ee_site` is the frame the arm controller reports its Cartesian position in: the site sits 0.156 m along
 the flange's x axis, which is the `t_flange_tool` offset the `trossen_arm` SDK carries for the standard
