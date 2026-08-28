@@ -317,7 +317,7 @@ class _Brakes:
         """
         if self._closed or self._desk is None or self._after_idle_s is None:
             return
-        if self._robot.goal().status is pf.GoalStatus.IN_FLIGHT:
+        if self._robot.goal().status == pf.GoalStatus.IN_FLIGHT:
             self._idle_since = self._clock.now()
             return
         if self._clock.now() - self._idle_since < self._after_idle_s:

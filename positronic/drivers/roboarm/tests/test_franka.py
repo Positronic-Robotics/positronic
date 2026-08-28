@@ -128,11 +128,7 @@ class FakeArm:
 
 class FakeDesk:
     """In-memory ``Desk``: records that the session prepared the robot and released control, and every brake
-    operation the driver asked for.
-
-    ``calls`` is its own log; a test that needs the brakes ordered against the vendor calls points both at
-    one list.
-    """
+    operation the driver asked for."""
 
     def __init__(self):
         self.prepared = False
