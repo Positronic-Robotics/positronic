@@ -1,4 +1,5 @@
 import io
+import logging
 import sys
 import time
 from collections.abc import Callable
@@ -122,23 +123,23 @@ class _ScriptedKeys:
 
 
 @pytest.mark.timeout(30.0)
-def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, capsys):
+def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, caplog):
     """The press is the whole start signal: the rig's devices ready, the episode opens on the instruction it
     was given, and it runs until the operator stops it."""
     policy = _IdlePolicy()
     monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, _ScriptedKeys(policy)))
 
-    real(policy=policy, embodiment=_embodiment(), next_task=_trial('pick up the cube'))
+    with caplog.at_level(logging.INFO):
+        real(policy=policy, embodiment=_embodiment(), next_task=_trial('pick up the cube'))
 
     assert policy.observations, 'the episode never opened'
     assert policy.observations[0][keys.TASK] == 'pick up the cube'
-    assert keys.ENDED_BY_OPERATOR in capsys.readouterr().out
+    assert keys.ENDED_BY_OPERATOR in caplog.text
     assert policy.closed
 
 
-def test_the_operator_reports_an_ask_the_harness_refuses(monkeypatch, capsys):
-    """The operator does not police who may start an episode: every press is asked for, and what comes back
-    is printed as it lands."""
+def test_the_operator_declines_a_press_while_an_episode_runs(monkeypatch, caplog):
+    """One episode at a time is the operator's own rule: the second press never reaches the harness."""
     task = Task(instruction_source='pick', timeout_sec=None)
     presses = iter(['s', 's'])
     monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
@@ -147,15 +148,12 @@ def test_the_operator_reports_an_ask_the_harness_refuses(monkeypatch, capsys):
         harness = world.pair(operator.perform_task)
         received = []
 
-        def refuse_a_second_ask():
-            """Stand in for the harness's one-episode-at-a-time rule: hold the first call, refuse the rest."""
-            for call in harness.incoming():
-                received.append(call.request)
-                if len(received) > 1:
-                    call.set_exception(RuntimeError('An episode is already running'))
+        def hold_the_ask():
+            """Stand in for a harness running the episode it was asked for: take the call, answer nothing."""
+            received.extend(call.request for call in harness.incoming())
 
-        driver = scripted_driver((refuse_a_second_ask, 0.05), (refuse_a_second_ask, 0.05))
+        driver = scripted_driver((hold_the_ask, 0.05), (hold_the_ask, 0.05))
         drive_scheduler(world.start([operator, driver]))
 
-    assert received == [task, task]
-    assert 'already running' in capsys.readouterr().out
+    assert received == [task]
+    assert 'already running' in caplog.text

@@ -1,6 +1,7 @@
 """Legacy ``positronic-inference`` CLI: the attended keyboard ``real`` path plus the ``sim`` and ``stats``
 aliases over ``cli.eval.run``."""
 
+import logging
 from collections import Counter
 from collections.abc import Callable
 from typing import Any
@@ -20,44 +21,40 @@ from positronic.dataset.local_dataset import load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment, Task
 
+logger = logging.getLogger(__name__)
+
 
 class KeyboardOperator(KeyboardControl):
     """The keyboard that runs episodes: ``s`` asks for one through ``perform_task``, ``p`` ends the live one,
     ``q`` ends the run.
 
-    It holds the pending answers because that is where an episode's terminal — and any refused ask —
-    arrives; both are printed as they land. ``next_task`` is called once per press.
+    One episode is in flight at a time: a press while one runs is declined here, with a warning. It holds
+    the pending answer because that is where the episode's terminal — or a refused ask — arrives, and it
+    logs that as it lands. ``next_task`` is called once per accepted press.
     """
 
     def __init__(self, next_task: Callable[[], Task]):
         super().__init__(quit_key='q')
         self._next_task = next_task
-        self._pending: list[pimm.calls.Answer[dict[str, Any]]] = []
+        self._pending: pimm.calls.Answer[dict[str, Any]] | None = None
         self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
     def _each_round(self, key: str | None) -> None:
         super()._each_round(key)
+        if self._pending is not None and self._pending.done():
+            try:  # rules-allow: swallowed-error — the operator is who this failure is for
+                logger.info(f'Episode ended: {self._pending.result()}')
+            except Exception as e:
+                logger.error(f'Episode failed: {e}')
+            self._pending = None
         match key:
+            case 's' if self._pending is not None:
+                logger.warning('An episode is already running: press [p] to stop it')
             case 's':
-                self._pending.append(self.perform_task(self._next_task()))
+                self._pending = self.perform_task(self._next_task())
             case 'p':
                 self.done.emit({keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR})
-        running = []
-        for answer in self._pending:
-            if answer.done():
-                self._report(answer)
-            else:
-                running.append(answer)
-        self._pending = running
-
-    @staticmethod
-    def _report(answer: pimm.calls.Answer[dict[str, Any]]) -> None:
-        """Print what the episode ended on, or why it never will."""
-        try:  # rules-allow: swallowed-error — the operator is who this failure is for
-            print(f'Episode ended: {answer.result()}')
-        except Exception as e:
-            print(f'Episode failed: {e}')
 
 
 def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_dir=None):
@@ -76,7 +73,7 @@ def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_d
     # dataset it is given.
     try:
         operator = KeyboardOperator(next_task)
-        print('Keyboard controls: [s]tart, sto[p], [q]uit')
+        logger.info('Keyboard controls: [s]tart, sto[p], [q]uit')
         run_world(policy, embodiment, operator, prepare_output_dir(output_dir), done=operator.done)
     finally:
         policy.close()
