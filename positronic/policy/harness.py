@@ -35,6 +35,8 @@ class Rollout:
 
     def __init__(self, task: Task, policy: Policy):
         self.task = task
+        # TODO(#661): rung 8 gives the session chain and its close order to the framework. Only the charge —
+        # ``in_flight`` and ``wait`` — keeps a runtime here after that, if anything does.
         self.rt = Executor(policy.functions)
         try:
             self.session = policy.new_session(rt=self.rt)
