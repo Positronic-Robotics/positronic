@@ -139,14 +139,14 @@ def test_the_operator_declines_a_press_while_an_episode_runs(monkeypatch, caplog
     task = Task(instruction_source='pick', timeout_sec=None)
     presses = iter(['s', 's'])
     monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
-    operator = KeyboardOperator(lambda: task)
+    operator = KeyboardOperator(lambda: task, _IdlePolicy())
     with pimm.World(virtual_time=True) as world:
         harness = world.pair(operator.perform_task)
         received = []
 
         def hold_the_ask():
             """Stand in for a harness running the episode it was asked for: take the call, answer nothing."""
-            received.extend(call.request for call in harness.incoming())
+            received.extend(call.request.task for call in harness.incoming())
 
         driver = scripted_driver((hold_the_ask, 0.05), (hold_the_ask, 0.05))
         drive_scheduler(world.start([operator, driver]))

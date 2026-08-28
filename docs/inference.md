@@ -108,28 +108,31 @@ Something has to say when an episode starts and when it finishes. `positronic-in
 
 Anything richer — a web console, a foot pedal, a rig UI — is a driver of its own rather than a plug-in. A driver is any control system with a `perform_task` caller: it decides when an episode starts, and `run_world` builds the world around it — the harness, the recorder, the devices, and every wire between them. A driver reads what it decides from itself — the keyboard operator reads the terminal in its own loop — so the runner wires nothing of it but that call and `done`.
 
+The driver also brings the policy: each ask carries the session the episode runs on. `open_rollout(task, policy)` opens that session on a runtime of its own, and the harness closes it — the episode it ran, or the ask it refused.
+
 ```python
 import pimm
 from positronic.cli.eval.run import prepare_output_dir, run_world
-from positronic.eval import Task
+from positronic.policy.harness import Rollout, open_rollout
 
 
 class MyConsole(pimm.ControlSystem):
-    """Asks `perform_task` for a `Task` per episode, and emits the episode's terminal on `done`."""
+    """Asks `perform_task` for an episode per `Task`, and emits the episode's terminal on `done`."""
 
-    def __init__(self):
-        self.perform_task = pimm.calls.ControlSystemCaller[Task, dict](self)
+    def __init__(self, policy):
+        self._policy = policy
+        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict](self)
         self.done = pimm.ControlSystemEmitter[dict](self)
 
     def run(self, should_stop, clock):
-        ...
+        ...  # each episode: `self.perform_task(open_rollout(task, self._policy))`
 
 
 # `prepare_output_dir` syncs a directory and snapshots the sources into it, and it can raise. The
 # policy is yours to close from the moment you first touch it. `None` records nothing.
 try:
-    console = MyConsole()
-    run_world(policy, embodiment, console, prepare_output_dir(output_dir), done=console.done)
+    console = MyConsole(policy)
+    run_world(embodiment, console, prepare_output_dir(output_dir), done=console.done)
 finally:
     policy.close()
 ```
