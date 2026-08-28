@@ -35,8 +35,9 @@ class Rollout:
 
     def __init__(self, task: Task, policy: Policy):
         self.task = task
-        # TODO(#661): rung 8 gives the session chain and its close order to the framework. Only the charge —
-        # ``in_flight`` and ``wait`` — keeps a runtime here after that, if anything does.
+        # The Harness closes this runtime before the session, and charges the trial for the model's time
+        # through it. TODO(#661): the framework takes over closing the chain, and only the charge keeps a
+        # runtime here.
         self.rt = Executor(policy.functions)
         try:
             self.session = policy.new_session(rt=self.rt)
