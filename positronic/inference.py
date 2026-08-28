@@ -20,6 +20,8 @@ from positronic.cli.eval.run import prepare_output_dir, run, run_world
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
 from positronic.eval import Embodiment, Task
+from positronic.policy import Policy
+from positronic.policy.harness import Rollout
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +32,16 @@ class KeyboardOperator(KeyboardControl):
 
     One episode is in flight at a time: a press while one runs is declined here, with a warning. It holds
     the pending answer because that is where the episode's terminal — or a refused ask — arrives, and it
-    logs that as it lands. ``next_task`` is called once per accepted press.
+    logs that as it lands. ``next_task`` makes the trial and the policy opens its session, once per accepted
+    press.
     """
 
-    def __init__(self, next_task: Callable[[], Task]):
+    def __init__(self, next_task: Callable[[], Task], policy: Policy):
         super().__init__(quit_key='q')
         self._next_task = next_task
+        self._policy = policy
         self._pending: pimm.calls.Answer[dict[str, Any]] | None = None
-        self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
+        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
 
     def _each_round(self, key: str | None) -> None:
@@ -52,7 +56,12 @@ class KeyboardOperator(KeyboardControl):
             case 's' if self._pending is not None:
                 logger.warning('An episode is already running: press [p] to stop it')
             case 's':
-                self._pending = self.perform_task(self._next_task())
+                # A model that will not open a session ends the episode, not the run: the operator hears it
+                # and presses again.
+                try:  # rules-allow: swallowed-error — the operator is who this failure is for
+                    self._pending = self.perform_task(Rollout(self._next_task(), self._policy))
+                except Exception as e:
+                    logger.error(f'Episode failed to open: {e}')
             case 'p':
                 self.done.emit({keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR})
 
@@ -72,9 +81,9 @@ def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_d
     # `prepare_output_dir` syncs a directory and snapshots sources into it, and `run_world` opens the
     # dataset it is given.
     try:
-        operator = KeyboardOperator(next_task)
+        operator = KeyboardOperator(next_task, policy)
         logger.info('Keyboard controls: [s]tart, sto[p], [q]uit')
-        run_world(policy, embodiment, operator, prepare_output_dir(output_dir), done=operator.done)
+        run_world(embodiment, operator, prepare_output_dir(output_dir), done=operator.done)
     finally:
         policy.close()
 

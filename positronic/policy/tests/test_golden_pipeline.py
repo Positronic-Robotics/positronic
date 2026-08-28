@@ -45,7 +45,7 @@ from positronic.policy.base import DelegatingPolicy, DelegatingSession, Policy, 
 from positronic.policy.codec import ActionTiming
 from positronic.policy.harness import Harness
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
-from positronic.tests.testing_coutils import ManualDriver, drive_scheduler
+from positronic.tests.testing_coutils import ManualDriver, drive_scheduler, episode_caller
 
 GOLDEN_FILE = Path(__file__).parent / 'golden_pipeline.json.gz'
 
@@ -207,12 +207,11 @@ def _run_pipeline(tmp_path: Path) -> dict:
             # runs in.
             simulated=True,
         )
-        harness = Harness(
-            _SimulatedLatency((StopOnFault() | ChunkedSchedule()).wrap(policy), INFERENCE_LATENCY_S), embodiment
-        )
+        wrapped = _SimulatedLatency((StopOnFault() | ChunkedSchedule()).wrap(policy), INFERENCE_LATENCY_S)
+        harness = Harness(embodiment)
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)
-        perform_task = world.pair(harness.perform_task)
+        perform_task = episode_caller(world, harness, wrapped)
         done_em = world.pair(harness.done)
 
         # Robot/gripper emit state every tick, so the script only drives the

@@ -11,6 +11,7 @@ from positronic import keys, telemetry, telemetry_keys
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, timed_pass
 from positronic.eval import Embodiment, Eval, Task
 from positronic.policy import Policy, Session
+from positronic.policy.harness import Rollout
 from positronic.tests.testing_coutils import IdleSession, drive_scheduler
 
 
@@ -54,18 +55,20 @@ def test_an_exhausted_trial_plan_ends_the_sweep():
 
 
 class _EpisodeStub(pimm.ControlSystem):
-    """Stands in for the harness: records the task it was asked for and answers a round later."""
+    """Stands in for the harness: records the task it was asked for, closes the session that came with it,
+    and answers a round later."""
 
     def __init__(self):
         self.asked: list[Task] = []
-        self.perform_task = pimm.calls.ControlSystemHandler[Task, dict](self)
+        self.perform_task = pimm.calls.ControlSystemHandler[Rollout, dict](self)
 
     def run(self, should_stop, clock):
         while not should_stop.value:
             for call in self.perform_task.incoming():
-                self.asked.append(call.request)
+                self.asked.append(call.request.task)
                 yield pimm.Sleep(0.01)  # an episode takes a round to run
                 assert not list(self.perform_task.incoming()), 'a task was asked for while one was running'
+                call.request.close()
                 call.set_result({})
             yield pimm.Sleep(0.01)
 
@@ -76,7 +79,7 @@ def test_the_driver_asks_for_its_tasks_one_at_a_time():
     answered."""
     tasks = [Task(instruction_source='stack', timeout_sec=0.05, meta={keys.EVAL_TRIAL_INDEX: i}) for i in range(2)]
     stub = _EpisodeStub()
-    driver = TaskDriver(partial(iter, tasks))
+    driver = TaskDriver(partial(iter, tasks), _IdlePolicy())
     with pimm.World(virtual_time=True) as world:
         world.connect(driver.perform_task, stub.perform_task)
         drive_scheduler(world.start([driver, stub]), steps=200)

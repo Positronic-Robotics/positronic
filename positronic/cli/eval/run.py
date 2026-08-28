@@ -20,8 +20,9 @@ from positronic.cli.eval.submit import submit
 from positronic.dataset.ds_writer_agent import TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.eval import Embodiment, Eval, Observation, Task
+from positronic.policy import Policy
 from positronic.policy.executor import blocking
-from positronic.policy.harness import Harness
+from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 
 logger = logging.getLogger(__name__)
@@ -51,17 +52,20 @@ class TaskDriver(pimm.ControlSystem):
     """Walks a plan of tasks, asking for each as an episode through ``perform_task``, and returns —
     stopping the world — once the last has ended.
 
-    It makes the plan on its first turn, not when it is built. One task is in flight at a time: the next is
-    asked for only when the previous episode's terminal comes back, so the plan never overlaps two episodes.
+    It makes the plan on its first turn, not when it is built. It opens a session per task, and asks for the
+    episode that runs it. One task is in flight at a time: the next is asked for only when the previous
+    episode's terminal comes back, so the plan never overlaps two episodes, and each session opens on a model
+    the last episode has let go of.
     """
 
-    def __init__(self, tasks: Callable[[], Iterable[Task]]):
+    def __init__(self, tasks: Callable[[], Iterable[Task]], policy: Policy):
         self._tasks = tasks
-        self.perform_task = pimm.calls.ControlSystemCaller[Task, dict[str, Any]](self)
+        self._policy = policy
+        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         for task in self._tasks():
-            answer = self.perform_task(task)
+            answer = self.perform_task(Rollout(task, self._policy))
             while not answer.done():
                 if should_stop.value:
                     return
@@ -72,7 +76,6 @@ class TaskDriver(pimm.ControlSystem):
 
 
 def run_world(
-    policy,
     embodiment: Embodiment,
     driver,
     output_dir: Path | None,
@@ -85,11 +88,11 @@ def run_world(
     Every trial runs here, whoever asks for it: the driver is what an attended run and an unattended one
     differ by. A driver is any control system with a ``perform_task`` caller — a plan walked to its end, a
     person at a keyboard, a console of somebody's own — and it reads what it decides from itself, so the
-    runner wires nothing of it but that call. ``done`` is what ends an episode from outside the policy: the
-    env's terminal in a sim eval, the operator in an attended run. The ``policy``'s lifetime stays with the
-    caller.
+    runner wires nothing of it but that call. The driver brings the policy: it opens the session each
+    episode runs on. ``done`` is what ends an episode from outside the policy: the env's terminal in a sim
+    eval, the operator in an attended run.
     """
-    harness = Harness(policy, embodiment)
+    harness = Harness(embodiment)
     time_mode = TimeMode.MESSAGE if embodiment.simulated else TimeMode.CLOCK
     writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext(None)
     with writer_cm as dataset_writer, pimm.World(virtual_time=embodiment.simulated) as world:
@@ -210,8 +213,8 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     try:
         with timed_pass(output_dir, timing, policy):
             for ev in evals:
-                driver = TaskDriver(ev.tasks)
-                run_world(policy, ev.embodiment, driver, output_dir, privileged=ev.privileged, done=ev.done)
+                driver = TaskDriver(ev.tasks, policy)
+                run_world(ev.embodiment, driver, output_dir, privileged=ev.privileged, done=ev.done)
     finally:
         policy.close()
 

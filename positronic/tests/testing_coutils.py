@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import pimm
-from positronic.policy import Session
+from positronic.eval import Task
+from positronic.policy import Policy, Session
+from positronic.policy.harness import Harness, Rollout
 
 # The driver runs a step for its effect, so a step that hands something back — a call's answer — is one too.
 ScriptStep = tuple[Callable[[], object] | None, float]
@@ -53,6 +55,18 @@ class ManualDriver(pimm.ControlSystem):
 def scripted_driver(*steps: ScriptStep) -> ManualDriver:
     """Convenience factory mirroring ``ManualDriver`` construction."""
     return ManualDriver(script=steps)
+
+
+def episode_caller(
+    world: pimm.World, harness: Harness, policy: Policy
+) -> Callable[[Task], pimm.calls.Answer[dict[str, Any]]]:
+    """A caller that asks ``harness`` for a task the way a driver does: it opens the session that runs it."""
+    perform_task = world.pair(harness.perform_task)
+
+    def ask(task: Task):
+        return perform_task(Rollout(task, policy))
+
+    return ask
 
 
 class RecordingEmitter(pimm.SignalEmitter[T]):

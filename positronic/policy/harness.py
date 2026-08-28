@@ -25,24 +25,48 @@ MAX_ACTION_SKEW_SEC = 60.0
 POLL_PERIOD_SEC = 0.01
 
 
-class _EpisodeInference:
-    """One episode's policy session, and the runtime that serves the policy's functions to it."""
+class Rollout:
+    """What one ``perform_task`` call asks for: the trial to run, the session that runs it, and the runtime
+    that serves the policy's functions to that session.
 
-    def __init__(self, policy: Policy, context: dict[str, Any], charges_wall_time: bool, clock: pimm.Clock) -> None:
+    Whoever asks opens it, and so decides which model runs the trial. The Harness closes it: the episode it
+    ran, or the ask it refused.
+    """
+
+    def __init__(self, task: Task, policy: Policy):
+        self.task = task
+        # The Harness closes this runtime before the session, and charges the trial for the model's time
+        # through it. TODO(#661): the framework takes over closing the chain, and only the charge keeps a
+        # runtime here.
+        self.rt = Executor(policy.functions)
+        try:
+            self.session = policy.new_session(rt=self.rt)
+        except BaseException:
+            self.rt.close()
+            raise
+
+    def close(self) -> None:
+        """Close the runtime, then the session it was serving.
+
+        Until ``Executor.close`` returns, the function in flight still holds the session's websocket or model.
+        """
+        self.rt.close()
+        self.session.close()
+
+
+class _EpisodeInference:
+    """One episode's rollout, charged the way its trial asks and anchored on the world's clock."""
+
+    def __init__(self, rollout: Rollout, charges_wall_time: bool, clock: pimm.Clock) -> None:
+        self._rollout = rollout
         self._charges_wall_time = charges_wall_time
         self._clock = clock
         # One instant on two clocks, so ``wait`` adds a wall duration to a world instant.
         self._t0_ns, self._wall_t0 = clock.now_ns(), time.monotonic()
-        self._runtime = Executor(policy.functions)
-        try:
-            self._session = policy.new_session(context, self._runtime)
-        except BaseException:
-            self._runtime.close()
-            raise
 
     @property
     def meta(self) -> dict[str, Any]:
-        return self._session.meta
+        return self._rollout.session.meta
 
     @staticmethod
     def _owned(obs: dict[str, Any]) -> dict[str, Any]:
@@ -56,29 +80,24 @@ class _EpisodeInference:
     def __call__(self, obs: dict[str, Any]) -> list[dict[str, Any]] | None:
         now_ns = self._clock.now_ns()
         # A call that joins work already in flight keeps its anchor, so the trial pays for that work one time.
-        if not self._runtime.in_flight:
+        if not self._rollout.rt.in_flight:
             self._t0_ns, self._wall_t0 = now_ns, time.monotonic()
-        return self._session(frozen_view(self._owned(obs)), now_ns)
+        return self._rollout.session(frozen_view(self._owned(obs)), now_ns)
 
     def wait(self, should_stop: pimm.SignalReceiver[bool]) -> None:
         """Wait for the function in flight, for as long as the trial charges the loop for it."""
         if self._charges_wall_time:
             # Wall time cannot be held still, so the loop waits out only the time the world is already ahead by.
             paid_through = self._t0_ns / 1e9 + (time.monotonic() - self._wall_t0)
-            self._runtime.wait(max(self._clock.now() - paid_through, 0.0))
+            self._rollout.rt.wait(max(self._clock.now() - paid_through, 0.0))
             return
         # A trial that pays nothing waits the function out. It waits in steps, because a model that never
         # answers must not also keep the world from coming down.
-        while self._runtime.in_flight and not should_stop.value:
-            self._runtime.wait(POLL_PERIOD_SEC)
+        while self._rollout.rt.in_flight and not should_stop.value:
+            self._rollout.rt.wait(POLL_PERIOD_SEC)
 
     def close(self) -> None:
-        """Close the runtime, then the session it was serving.
-
-        Until ``Executor.close`` returns, the function in flight still holds the session's websocket or model.
-        """
-        self._runtime.close()
-        self._session.close()
+        self._rollout.close()
 
 
 class _EpisodeTelemetry:
@@ -151,20 +170,20 @@ class Harness(pimm.ControlSystem):
     so playing continues while the model runs. That work costs the trial either the wall time it took or
     nothing, with the world held still for it.
 
-    An episode runs one ``Task``, asked for by a ``perform_task`` call and answered with the terminal
-    payload it ended on. The task's ``timeout_sec`` bounds it and a truthy ``done`` within budget ends it
-    early — ``eval.terminated`` records which; a task without one ends on ``done`` alone. Which tasks run,
-    and in what order, belongs to whoever makes the calls.
+    An episode runs one ``Rollout``, asked for by a ``perform_task`` call and answered with the terminal
+    payload it ended on. The rollout's task ``timeout_sec`` bounds it and a truthy ``done`` within budget
+    ends it early — ``eval.terminated`` records which; a task without one ends on ``done`` alone. Which
+    tasks run, in what order, and on which model, belongs to whoever makes the calls.
     """
 
-    def __init__(self, policy: Policy, embodiment: Embodiment, *, static_meta: dict[str, Any] | None = None):
+    def __init__(self, embodiment: Embodiment, *, static_meta: dict[str, Any] | None = None):
         self._embodiment = embodiment
-        self.policy: Policy = policy
         self._static_meta = static_meta or {}
-        # This episode's session and the runtime serving it. ``None`` while no episode is live.
+        # This episode's rollout, on the clock and under the charge its trial asks for. ``None`` while no
+        # episode is live.
         self._inference: _EpisodeInference | None = None
         # The call this episode answers when it ends.
-        self._call: pimm.calls.Call[Task, dict[str, Any]] | None = None
+        self._call: pimm.calls.Call[Rollout, dict[str, Any]] | None = None
         # An inference let go of with a function still running.
         self._retired: _EpisodeInference | None = None
         # ``task.timeout_sec``, armed per episode; a task without one has no deadline and ends on ``done`` alone.
@@ -179,7 +198,7 @@ class Harness(pimm.ControlSystem):
         self._schedules: dict[str, deque[tuple[int, Any]]] = {name: deque() for name in embodiment.commands}
 
         # One episode per call, answered with the terminal payload it ended on.
-        self.perform_task = pimm.calls.ControlSystemHandler[Task, dict[str, Any]](self)
+        self.perform_task = pimm.calls.ControlSystemHandler[Rollout, dict[str, Any]](self)
         self.manual_command = pimm.ControlSystemReceiver(self)
         self.ds_command = pimm.ControlSystemEmitter[DsWriterCommand](self)
         # The instant on the world's clock the live episode ends at, ``None`` while no deadline stands.
@@ -196,7 +215,7 @@ class Harness(pimm.ControlSystem):
     def _task(self) -> Task:
         """The live episode's task. An episode runs for the call that asked for it, so the call carries it."""
         assert self._call is not None, 'only a live episode has a task'
-        return self._call.request
+        return self._call.request.task
 
     @property
     def _charges_wall_time(self) -> bool:
@@ -247,8 +266,8 @@ class Harness(pimm.ControlSystem):
         return pimm.Sleep(min(POLL_PERIOD_SEC, max(due - clock.now_ns(), 1) / 1e9))
 
     def _retire_inference(self) -> None:
-        """Let go of this episode's inference, keeping it for ``_reap_inference``: ending an episode must not
-        wait for a model that hangs."""
+        """Let go of this episode's inference, keeping it for ``_reap_inference``: the recording stops and the
+        rig goes back without waiting for a model that hangs."""
         if self._inference is not None:
             self._retired, self._inference = self._inference, None
 
@@ -284,25 +303,18 @@ class Harness(pimm.ControlSystem):
         self.deadline_ns.emit(deadline_ns)
 
     def _begin_episode(
-        self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, call: pimm.calls.Call[Task, dict[str, Any]]
+        self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, call: pimm.calls.Call[Rollout, dict[str, Any]]
     ) -> Generator[pimm.Command, None, None]:
-        """Open a fresh episode: ready the rig and the scene, read the instruction, open the session, the
-        recording and the first inference."""
-        # Before anything that can raise, so an episode that fails to open still answers whoever asked for it.
+        """Open a fresh episode: take the rollout, ready the rig and the scene, open the recording and the
+        first inference."""
+        # Before anything that can raise, so an episode that fails to open still answers whoever asked for
+        # it, and still closes the session it was handed.
         self._call = call
+        self._inference = _EpisodeInference(call.request, self._charges_wall_time, clock)
         # The episode span opens first, so the prepare and the rollout's other phase spans parent to it.
         self._telemetry.begin(self._task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
             yield from self._ready(should_stop, self._task.prepare_args)
-        # The reap waits out the function the last episode left running. It runs after the rig is readied, so
-        # a model that hangs does not leave the devices at the policy's last setpoint, and before the session
-        # below, because an in-process policy is one model across every episode.
-        self._reap_inference()
-        # Read after the reset: an embodiment that learns its task from the scene reports it only once the
-        # scene is set up.
-        self._inference = _EpisodeInference(
-            self.policy, {keys.TASK: self._task.instruction}, self._charges_wall_time, clock
-        )
         budget = self._task.timeout_sec
         self._set_deadline(clock.now_ns() + round(budget * 1e9) if budget is not None else None)
         self._telemetry.start_rollout(clock.now())
@@ -313,11 +325,11 @@ class Harness(pimm.ControlSystem):
     def _end_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, payload: dict[str, Any]
     ) -> Generator[pimm.Command, None, None]:
-        """Close the live episode: finalize the recording, put the rig back, retire the session, hand the
+        """Close the live episode: finalize the recording, put the rig back, close the session, and hand the
         terminal back to whoever asked for the episode.
 
-        The inference is retired rather than closed here, so a ``RemoteSession``'s websocket outlives the
-        function still using it.
+        The session is closed after the rig has moved, so a model still inside its function costs the
+        recording and the move nothing.
         """
         yield from self._finalize_recording(clock, payload)
         # A powered arm holds the policy's last setpoint until the next trial, so each device the trial placed
@@ -325,6 +337,10 @@ class Harness(pimm.ControlSystem):
         # up, and is not asked again. The terminal waits on the move: a scene the next trial draws rebuilds
         # the model an unfinished one is still travelling under, which nothing but its timeout would end.
         yield from self._ready(should_stop, {k: v for k, v in self._task.prepare_args.items() if k != keys.SCENE})
+        # The answer waits until the model is out of this episode's function. An in-process policy is one
+        # model across every episode, so the session that the next ask opens must not overtake it. The move
+        # back above gives the function that time.
+        self._reap_inference()
         assert self._call is not None, 'an episode exists only for the call that asked for it'
         self._call.set_result(payload)
         self._call = None
@@ -451,6 +467,11 @@ class Harness(pimm.ControlSystem):
             self._set_deadline(None)
             self._retire_inference()
             self._reap_inference()
+            # An ask this loop never reached still carries a live session, and the Harness closes what it is
+            # handed. The world answers what is left queued, so these calls are answered here as well.
+            for call in self.perform_task.incoming():
+                call.request.close()
+                call.set_exception(pimm.calls.HandlerStopped())
 
     def _run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         while not should_stop.value:
@@ -464,6 +485,7 @@ class Harness(pimm.ControlSystem):
             done = pimm.read_updated(self.done)
             if self._inference is not None:
                 if call is not None:  # the live episode is the one that finishes; a second ask is refused
+                    call.request.close()  # the session came with the ask, and nothing here will run it
                     call.set_exception(RuntimeError('An episode is already running'))
                 yield from self._advance_episode(self._inference, done, clock, should_stop)
             elif call is not None:

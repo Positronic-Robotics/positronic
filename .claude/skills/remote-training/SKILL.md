@@ -228,11 +228,11 @@ nebius ai endpoint list --parent-id "$NEBIUS_PARENT_ID" --format json \
      | .status.public_endpoints[] | select(startswith("https://"))'
 ```
 
-Point the `positronic-inference` CLI at it; `.authed_remote` sends `AUTH_TOKEN`
+Point `positronic eval run` at it; `.authed_remote` sends `AUTH_TOKEN`
 as the bearer token and fails fast if the variable is unset:
 
 ```bash
-uv run --locked positronic-inference sim \
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.authed_remote --policy.url=https://<managed-url> \
   --output_dir=s3://inference/sim_stack_validation/<run_name>/<vendor>/
 ```
@@ -281,7 +281,7 @@ Run detached with `-d` for a background server; `docker --context <ctx> ps` /
 hostname:
 
 ```bash
-uv run --locked positronic-inference sim \
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote --policy.url=desktop:8000 \
   --output_dir=<...>
 ```
