@@ -463,7 +463,6 @@ class _CallAnsweringLoop:
             # An interrupt lands in every process at once, and it can land inside a manager call, which
             # leaves that connection in the middle of a message. Reading it again returns the tail of
             # somebody else's, so a call is left unanswered here rather than answered from a torn stream.
-            # The asker takes the same interrupt.
             interrupted = True
             raise
         finally:
