@@ -45,8 +45,8 @@ and loses it on the robot. So the API must not reveal which world it runs
 against, and the framework must be able to charge a model call's real
 duration to simulated time.
 
-The rest of the document is the design: the goals, the design decisions, and
-the API itself.
+The rest of the document is the design: the goals, where existing
+interfaces fall short, the design decisions, and the API itself.
 
 ## Goals
 
@@ -70,6 +70,36 @@ the API itself.
   what was recorded. From the records alone one can reconstruct what the
   policy saw, what it decided, and what it asked of its model — even when
   those happened on different machines.
+
+## Existing interfaces
+
+Robot policies are already served over the wire. Physical Intelligence's
+openpi server (also behind RoboArena), NVIDIA's GR00T inference service,
+LeRobot's serving stack and academic platforms like XPolicyLab all share
+the same shape - the client sends observations, the server returns a chunk
+of actions, and the client runs the loop. This shape traces back to
+the gym environment loop — `action = policy(obs); obs = env.step(action)` —
+where the world truly waits while the policy thinks. A robot's world keeps
+moving, and the interface cannot express what that demands:
+
+- Act while thinking. Between request and reply the policy cannot see or
+  do anything. A policy that watches the force sensor and freezes the arm
+  while its model computes cannot be written.
+- Choose the next moment. The client asks on a schedule of its own: every
+  k steps, or when the action queue drains. A policy that wants to re-plan
+  early because the object slipped has no way to ask for that.
+- Know the time. Chunks are timestamped by presuming a fixed control
+  period, latency is measured and then only logged, and in simulation
+  thinking is free. The policy never learns how stale its observations are
+  or when its answers take effect.
+
+LeRobot's hand-written inference thread, openpi's blocking chunk client and
+hand-tuned replan constants are all patches around these limits, written
+again at every robot.
+
+This design starts from the moving world instead. A policy acts, watches
+and paces itself in it, so the list of expressible schemes has no end: the
+next idea fits without a new interface.
 
 ## Design
 
@@ -287,36 +317,6 @@ class Codec(Protocol):
 sessions are the chained sessions, with a handle between each pair. The
 framework closes every session it made, and a session closes what it made
 itself. `close` never travels through the chain.
-
-## Related APIs
-
-Robot policies are already served over the wire. Physical Intelligence's
-openpi server (also behind RoboArena), NVIDIA's GR00T inference service,
-LeRobot's serving stack and academic platforms like XPolicyLab all share
-the same shape - the client sends observations, the server returns a chunk
-of actions, and the client runs the loop. This shape traces back to
-the gym environment loop — `action = policy(obs); obs = env.step(action)` —
-where the world truly waits while the policy thinks. A robot's world keeps
-moving, and the interface cannot express what that demands:
-
-- Act while thinking. Between request and reply the policy cannot see or
-  do anything. A policy that watches the force sensor and freezes the arm
-  while its model computes cannot be written.
-- Choose the next moment. The client asks on a schedule of its own: every
-  k steps, or when the action queue drains. A policy that wants to re-plan
-  early because the object slipped has no way to ask for that.
-- Know the time. Chunks are timestamped by presuming a fixed control
-  period, latency is measured and then only logged, and in simulation
-  thinking is free. The policy never learns how stale its observations are
-  or when its answers take effect.
-
-LeRobot's hand-written inference thread, openpi's blocking chunk client and
-hand-tuned replan constants are all patches around these limits, written
-again at every robot.
-
-This design starts from the moving world instead. A session acts, watches
-and paces itself in it, so the list of expressible schemes has no end: the
-next idea fits without a new interface.
 
 ## Deferred, not to decide now
 
