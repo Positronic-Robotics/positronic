@@ -1163,11 +1163,11 @@ def test_an_episode_abandoned_by_a_raise_withdraws_the_deadline(world):
     """An episode a raise abandons withdraws its deadline like any other close."""
 
     class _BoomSession(Session):
-        def __call__(self, obs):
+        def __call__(self, obs, time_ns):
             raise RuntimeError('inference boom')
 
     class _BoomPolicy(Policy):
-        def new_session(self, context=None, now=None, rt=None):
+        def new_session(self, context=None, rt=None):
             return _BoomSession()
 
     harness = Harness(_BoomPolicy(), make_embodiment())
