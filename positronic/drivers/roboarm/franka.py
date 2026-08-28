@@ -293,16 +293,17 @@ class _Brakes:
         self._robot = robot
         self._clock = clock
         self._after_idle_s = after_idle_s
-        self._closed_by: Desk | None = None
+        self._closed = False
         self._idle_since = clock.now()
 
     @contextlib.contextmanager
     def opened(self) -> Iterator[None]:
         """Open the brakes for the block, and count the idle time from the moment the block ends."""
-        if self._closed_by is not None:
+        if self._closed:
+            assert self._desk is not None, 'only a Desk session closes the brakes'
             logger.info('A command arrived, opening the brakes')
-            self._closed_by.open_brakes()
-            self._closed_by = None
+            self._desk.open_brakes()
+            self._closed = False
         try:
             yield
         finally:
@@ -310,14 +311,14 @@ class _Brakes:
 
     def close_if_idle(self) -> None:
         """Close the brakes once the idle time passes."""
-        if self._desk is None or self._after_idle_s is None or self._closed_by is not None:
+        if self._closed or self._desk is None or self._after_idle_s is None:
             return
         if self._clock.now() - self._idle_since < self._after_idle_s:
             return
         logger.info(f'No command for {self._after_idle_s}s, closing the brakes')
         self._robot.stop()  # the brakes cannot engage on an arm the control loop still drives
         self._desk.close_brakes()
-        self._closed_by = self._desk
+        self._closed = True
 
 
 class Robot(pimm.ControlSystem):
