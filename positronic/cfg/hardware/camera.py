@@ -50,16 +50,3 @@ def opencv(camera_id: int = 0, width: int = 640, height: int = 480, fps: int = 3
     from positronic.drivers.camera.opencv import OpenCVCamera
 
     return OpenCVCamera(camera_id, (width, height), fps)
-
-
-@cfn.config()
-def realsense(**kwargs):
-    from positronic.drivers.camera.realsense import RealSenseCamera
-
-    return RealSenseCamera(**kwargs)
-
-
-# The D405s on the Trossen station, by the serial each reports. One camera fits 640x480@30 comfortably;
-# four of them streaming that on one USB controller do not, and start timing out waiting for frames.
-realsense_wrist = realsense.override(serial_number='419122270018')
-realsense_scene_top = realsense.override(serial_number='260322273403')

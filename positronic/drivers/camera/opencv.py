@@ -1,9 +1,12 @@
+import logging
 import sys
 import time
 
 import cv2
 
 import pimm
+
+logger = logging.getLogger(__name__)
 
 
 class OpenCVCamera(pimm.ControlSystem):
@@ -40,7 +43,35 @@ class OpenCVCamera(pimm.ControlSystem):
 
 
 if __name__ == '__main__':
-    from positronic.drivers.camera.video_writer import VideoWriter
+    import av
+
+    # We could implement this as a plain function
+    # TODO: Extract this into utilities
+    class VideoWriter(pimm.ControlSystem):
+        def __init__(self, filename: str, fps: int, codec: str = 'libx264'):
+            self.filename = filename
+            self.fps = fps
+            self.codec = codec
+            self.frame = pimm.ControlSystemReceiver[pimm.shared_memory.NumpySMAdapter](self)
+
+        def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock):
+            logger.info(f'Writing to {self.filename}')
+            fps_counter = pimm.utils.RateCounter('VideoWriter')
+            with av.open(self.filename, mode='w', format='mp4') as container:
+                stream = container.add_stream(self.codec, rate=self.fps)
+                stream.pix_fmt = 'yuv420p'
+                stream.options = {'crf': '27', 'g': '2', 'preset': 'ultrafast', 'tune': 'zerolatency'}
+
+                while not should_stop.value:
+                    frame_msg = pimm.read_updated(self.frame)
+                    if frame_msg is None:
+                        yield pimm.Sleep(0.5 / self.fps)
+                        continue
+
+                    frame = av.VideoFrame.from_ndarray(frame_msg.data.array, format='rgb24')
+                    packet = stream.encode(frame)
+                    container.mux(packet)
+                    fps_counter.tick()
 
     with pimm.World() as world:
         camera = OpenCVCamera(0, (640, 480), fps=30)
