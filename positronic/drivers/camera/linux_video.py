@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterator
 
 import av
@@ -9,6 +10,18 @@ from positronic.drivers import vendor_import
 
 with vendor_import('linuxpy', 'Linux video capture', platforms=('linux',)):
     from linuxpy.video.device import Device, PixelFormat
+
+logger = logging.getLogger(__name__)
+
+# The formats a camera may compress in, and what decodes each of them.
+_CODECS = {
+    PixelFormat.H264: 'h264',
+    PixelFormat.HEVC: 'hevc',
+    PixelFormat.VP8: 'vp8',
+    PixelFormat.VP9: 'vp9',
+    PixelFormat.MPEG4: 'mpeg4',
+    PixelFormat.MJPEG: 'mjpeg',
+}
 
 
 class LinuxVideo(pimm.ControlSystem):
@@ -22,18 +35,46 @@ class LinuxVideo(pimm.ControlSystem):
         self.frame = pimm.ControlSystemEmitter[pimm.shared_memory.NumpySMAdapter](self)
         self._frame_adapter = None  # Lazy init
 
+    @staticmethod
+    def _framed(data: np.ndarray, frame, bytes_per_pixel: int) -> np.ndarray | None:
+        """``data`` shaped as the frame it belongs to, or ``None`` where the buffer arrived short.
+
+        A camera hands over a buffer with its tail missing when the bus is busy, and several cameras on one
+        controller are enough to see it. A partial frame has nothing to read, and the next one is a
+        thirtieth of a second away.
+        """
+        if data.size != frame.height * frame.width * bytes_per_pixel:
+            return None
+        return data.reshape((frame.height, frame.width, bytes_per_pixel))
+
+    def _images(self, frame, codec_context) -> list[np.ndarray]:
+        """Every image the buffer ``frame`` carries, as RGB. Empty where the buffer arrived short."""
+        data = np.frombuffer(frame.data, dtype=np.uint8)
+        match frame.pixel_format:
+            case PixelFormat.YUYV:
+                raw = self._framed(data, frame, 2)
+                return [] if raw is None else [cv2.cvtColor(raw, cv2.COLOR_YUV2RGB_YUYV)]
+            case PixelFormat.UYVY:
+                raw = self._framed(data, frame, 2)
+                return [] if raw is None else [cv2.cvtColor(raw, cv2.COLOR_YUV2RGB_UYVY)]
+            case _ if frame.pixel_format in _CODECS:
+                codec_ctx = codec_context(_CODECS[frame.pixel_format])
+                # `av` types what it parses as `bytes` and carries `decode` on the subclasses of
+                # `CodecContext`, so the buffer the device hands over and the base class both read wrong.
+                packets = codec_ctx.parse(data)  # pyright: ignore[reportArgumentType]
+                return [
+                    decoded.to_ndarray(format='rgb24')
+                    for packet in packets
+                    for decoded in codec_ctx.decode(packet)  # pyright: ignore[reportAttributeAccessIssue]
+                ]
+            case _:
+                raw = self._framed(data, frame, 3)  # assume 3 bytes per pixel (RGB/BGR)
+                return [] if raw is None else [raw]
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        codec_mapping = {
-            PixelFormat.H264: 'h264',
-            PixelFormat.HEVC: 'hevc',
-            PixelFormat.VP8: 'vp8',
-            PixelFormat.VP9: 'vp9',
-            PixelFormat.MPEG4: 'mpeg4',
-            PixelFormat.MJPEG: 'mjpeg',
-        }
         codec_contexts = {}
 
-        def get_codec_context(codec_name: str) -> av.CodecContext:
+        def codec_context(codec_name: str) -> av.CodecContext:
             """Lazily initialize and return codec context for given codec"""
             if codec_name not in codec_contexts:
                 codec_contexts[codec_name] = av.CodecContext.create(codec_name, 'r')
@@ -45,32 +86,16 @@ class LinuxVideo(pimm.ControlSystem):
         device.set_format(device.info.buffers[0], self.width, self.height, self.pixel_format)
         device.set_fps(device.info.buffers[0], self.fps)
 
+        short = 0
         for frame in device:
             if should_stop.value:
                 break
 
-            data = np.frombuffer(frame.data, dtype=np.uint8)
-
-            match frame.pixel_format:
-                case PixelFormat.YUYV:
-                    data = data.reshape((frame.height, frame.width, 2))
-                    images = [cv2.cvtColor(data, cv2.COLOR_YUV2RGB_YUYV)]
-                case PixelFormat.UYVY:
-                    data = data.reshape((frame.height, frame.width, 2))
-                    images = [cv2.cvtColor(data, cv2.COLOR_YUV2RGB_UYVY)]
-                case _ if frame.pixel_format in codec_mapping:
-                    codec_ctx = get_codec_context(codec_mapping[frame.pixel_format])
-                    # `av` types what it parses as `bytes` and carries `decode` on the subclasses of
-                    # `CodecContext`, so the buffer the device hands over and the base class both read wrong.
-                    packets = codec_ctx.parse(data)  # pyright: ignore[reportArgumentType]
-                    images = [
-                        decoded.to_ndarray(format='rgb24')
-                        for packet in packets
-                        for decoded in codec_ctx.decode(packet)  # pyright: ignore[reportAttributeAccessIssue]
-                    ]
-                case _:
-                    # Assume 3 bytes per pixel (RGB/BGR)
-                    images = [data.reshape((frame.height, frame.width, 3))]
+            images = self._images(frame, codec_context)
+            if not images:
+                short += 1
+                if short == 1:
+                    logger.warning('%s handed over a buffer short of a frame', self.device_path)
 
             for image in images:
                 self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(image, self._frame_adapter)
@@ -79,4 +104,6 @@ class LinuxVideo(pimm.ControlSystem):
 
             yield pimm.Yield()  # Give control back to the world
 
+        if short:
+            logger.warning('%s handed over %d buffers short of a frame', self.device_path, short)
         device.close()
