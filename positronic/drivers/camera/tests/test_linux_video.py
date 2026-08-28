@@ -114,6 +114,18 @@ def test_the_device_is_closed_when_the_frames_run_out(device):
     assert opened.closed
 
 
+def test_a_buffer_short_of_a_frame_is_dropped(device, caplog):
+    """A busy bus hands over a buffer with its tail missing, and a run outlives it."""
+    short = FakeFrame(_yuyv(200)[: WIDTH * HEIGHT], linux_video.PixelFormat.YUYV)
+    whole = FakeFrame(_yuyv(200), linux_video.PixelFormat.YUYV)
+
+    emitted, _ = _driven([short, whole, short])
+
+    assert len(emitted.emitted) == 1
+    assert 'short of a frame' in caplog.text
+    assert 'handed over 2 buffers' in caplog.text
+
+
 def test_a_buffer_of_three_bytes_a_pixel_is_taken_as_it_is(device):
     raw = bytes(range(WIDTH * HEIGHT * 3))
 
