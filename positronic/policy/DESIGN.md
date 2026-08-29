@@ -108,20 +108,19 @@ next idea fits without a new interface.
 The code on the rig is given one URL, and that is all it knows about the
 policy. It connects and receives a description of the policy's pieces —
 which run near the robot and which stay remote. It assembles the local
-half: a chain of parts that shape observations on the way to the model
-and commands on the way back.
+half: a chain of parts that transform observations on the way to the
+model and commands on the way back.
 
-An episode begins, and the assembled half comes alive as a session — the
-running instance of the policy, controlling this robot for this particular
+An episode begins, and the assembled half becomes a session — the
+running instance of the policy that controls this robot for this
 episode. The framework calls the session repeatedly, sending the sensor
-information and the current world time. Every call returns commands and
-the moment the next one should come. The commands go to the robot at
-once.
+data and the current world time. Every call returns commands and the
+time of the next call. The framework sends the commands to the robot
+immediately.
 
-The session holds everything the episode remembers between calls, and it
-lives on the rig. A reaction that crosses a wire arrives late, and when
-the network fails it does not arrive at all — the world next to the
-robot waits for neither.
+The session holds everything the episode remembers between calls. This
+state lives on the rig: a reaction that crosses a wire arrives late,
+and when the network fails it does not arrive at all.
 
 The model is heavy: it needs a GPU and a machine of its own, and the rig
 rarely has them. Heavy pieces stay remote. The model is also too slow for
@@ -130,12 +129,12 @@ model call and continues to control the robot. The session acts on the
 answer when it arrives. The server only answers these calls. It is
 stateless: every call is a pure function of its arguments.
 
-Everything that crosses a boundary is recorded as it happens — what each
-session saw, decided, and asked of its model, on every machine involved.
-The framework closes the session, and the episode's record is what
-remains.
+The framework records everything that crosses a boundary, as it
+happens: what the session saw, what it decided, and what it asked of
+the model, on every machine involved. The episode ends when the
+framework closes the session. The record remains.
 
-The sections below take these pieces one at a time.
+The sections below describe each piece.
 
 ### Policies and sessions
 
