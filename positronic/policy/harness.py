@@ -220,13 +220,6 @@ class Harness(pimm.ControlSystem):
         return self._call.request.task
 
     @property
-    def _output_path(self) -> Path | None:
-        """Where the live episode records. The call that asked for it names the path, and ``None`` names
-        nowhere: that trial runs, and the recorder hears nothing of it."""
-        assert self._call is not None, 'only a live episode records'
-        return self._call.request.output_path
-
-    @property
     def _charges_wall_time(self) -> bool:
         """Whether each model call costs the trial the wall time it took. A real rig has no other option."""
         return self._task.charge_inference_time or not self._embodiment.simulated
@@ -291,9 +284,8 @@ class Harness(pimm.ControlSystem):
         """Commit the live episode: cancel the in-flight chunk, stop the recorder — stamping the
         episode's full static meta (plus any terminal payload) — then close its span."""
         self._set_deadline(None)
-        if self._output_path is not None:
-            # Stamped before the inference is retired: the meta overlays what its session reports.
-            self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(), **(payload or {})}))
+        # Stamped before the inference is retired: the meta overlays what its session reports.
+        self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(), **(payload or {})}))
         for schedule in self._schedules.values():  # devices hold their last commanded position
             schedule.clear()
         self._retire_inference()
@@ -327,8 +319,7 @@ class Harness(pimm.ControlSystem):
         budget = self._task.timeout_sec
         self._set_deadline(clock.now_ns() + round(budget * 1e9) if budget is not None else None)
         self._telemetry.start_rollout(clock.now())
-        if self._output_path is not None:
-            self.ds_command.emit(DsWriterCommand.START(self._output_path))
+        self.ds_command.emit(DsWriterCommand.START(call.request.output_path))
         # The fresh data is here, later round would read a frame the recording did not open on.
         self._infer(self._inference, clock, should_stop)
 

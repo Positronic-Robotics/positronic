@@ -632,7 +632,7 @@ def test_the_episode_records_into_the_dataset_its_call_named(world, tmp_path):
 
 @pytest.mark.timeout(3.0)
 def test_a_call_that_names_no_dataset_runs_the_trial_and_records_nothing(world):
-    """A trial the caller wants unrecorded still runs and still answers; the recorder hears nothing of it."""
+    """A trial the caller wants unrecorded still runs and still answers; its START names no dataset."""
     policy = StubPolicy()
     harness = Harness(make_embodiment())
     p = _pair_all(world, harness, policy, output_path=None)
@@ -646,7 +646,8 @@ def test_a_call_that_names_no_dataset_runs_the_trial_and_records_nothing(world):
 
     assert answer.result() == {keys.EVAL_SUCCESS: True, keys.EVAL_TERMINATED: True}
     assert policy.observations, 'the trial never reached the policy'
-    assert not _ds_commands(p)
+    starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
+    assert [c.output_path for c in starts] == [None]
 
 
 @pytest.mark.timeout(3.0)

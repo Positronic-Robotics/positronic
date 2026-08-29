@@ -43,7 +43,8 @@ class DsWriterCommand:
 
     Args:
         type: Desired episode action (start/stop/abort).
-        output_path: Which dataset `START_EPISODE` records into; the other actions name none.
+        output_path: Which dataset `START_EPISODE` records into. `None` records nowhere: the episode runs
+            and nothing is written. The other actions name no dataset.
         static_data: Optional static key/value pairs to set on the episode
             when starting or right before stopping.
     """
@@ -75,40 +76,41 @@ class TimeMode(IntEnum):
 class _Recording:
     """The episode a run has open, and the datasets it opened to hold them.
 
-    One command moves it: a START opens an episode, a STOP finishes it, an ABORT discards it. A command that
-    does not fit the state it finds is ignored with a log message.
+    One command moves it: a START opens an episode, a STOP finishes it, an ABORT discards it. An episode a
+    START named no dataset for records nowhere, and its ``writer`` stays ``None``. A command that does not fit
+    the state it finds is ignored with a log message.
     """
 
     def __init__(self, dataset_factory: DatasetFactory, serializers: dict[str, StatefulSerializer]):
         self._dataset_factory = dataset_factory
         self._serializers = serializers
         self._datasets: dict[Path, DatasetWriter] = {}
+        self._open = False
         self.writer: EpisodeWriter | None = None
 
     def handle(self, cmd: DsWriterCommand) -> None:
-        match cmd.type, self.writer:
-            case DsWriterCommandType.START_EPISODE, None:
+        match cmd.type, self._open:
+            case DsWriterCommandType.START_EPISODE, False:
                 self._start(cmd)
-            case DsWriterCommandType.START_EPISODE, _:
+            case DsWriterCommandType.START_EPISODE, True:
                 logger.warning('Episode already started, ignoring start command')
-            case _, None:
+            case _, False:
                 logger.warning(f'Episode not started, ignoring {cmd.type.value} command')
-            case DsWriterCommandType.STOP_EPISODE, writer:
-                self._stop(writer, cmd.static_data)
-            case _, writer:
-                self._abort(writer)
+            case DsWriterCommandType.STOP_EPISODE, True:
+                self._stop(cmd.static_data)
+            case _, True:
+                self._abort()
 
     def close(self) -> None:
         """Discard an episode still open, and close every dataset this recording opened."""
-        if self.writer is not None:
-            self._abort(self.writer)
+        self._abort()
         for ds_writer in self._datasets.values():
             ds_writer.__exit__(None, None, None)
 
     def _start(self, cmd: DsWriterCommand) -> None:
         """Open an episode in the dataset the command names, stamped with its static data."""
+        self._open = True
         if cmd.output_path is None:
-            logger.warning('Start command names no dataset, ignoring start command')
             return
         for ser in self._serializers.values():
             ser.reset()
@@ -118,15 +120,21 @@ class _Recording:
         self._set_statics(self.writer, cmd.static_data)
         logger.info(f'DsWriterAgent: [START] {self._episode_path(self.writer)}')
 
-    def _stop(self, writer: EpisodeWriter, static_data: dict[str, Any]) -> None:
+    def _stop(self, static_data: dict[str, Any]) -> None:
         """Finish the open episode, stamped with the command's static data."""
+        self._open = False
+        if (writer := self.writer) is None:
+            return
         self._set_statics(writer, static_data)
         writer.__exit__(None, None, None)
         logger.info(f'DsWriterAgent: [STOP] {self._episode_path(writer)}')
         self.writer = None
 
-    def _abort(self, writer: EpisodeWriter) -> None:
+    def _abort(self) -> None:
         """Discard the open episode."""
+        self._open = False
+        if (writer := self.writer) is None:
+            return
         try:
             writer.abort()
         finally:  # the writer holds a file handle per signal; release them even if the discard fails
@@ -152,7 +160,8 @@ class DsWriterAgent(pimm.ControlSystem):
     episode lifecycle.
 
     On `START_EPISODE`, opens a new `EpisodeWriter` in the dataset the command names — ``dataset_factory``
-    opens that dataset, once per name — and applies `static_data`. The opening turn records what each
+    opens that dataset, once per name — and applies `static_data`. A `START_EPISODE` that names no dataset
+    opens an episode that records nowhere. The opening turn records what each
     input holds, whenever that value was produced. While open, each updated input
     signal (from `inputs`) is appended with the current timestamp from `clock`.
     `STOP_EPISODE` and `ABORT_EPISODE` are handled after that turn's inputs, so
