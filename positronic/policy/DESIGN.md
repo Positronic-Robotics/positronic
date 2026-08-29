@@ -123,13 +123,12 @@ lives on the rig. A reaction that crosses a wire arrives late, and when
 the network fails it does not arrive at all — the world next to the
 robot waits for neither.
 
-The model is heavy — it wants a GPU and a machine of its own, which the
-rig rarely has. Pieces like it stay remote. The model is also too slow
-for this loop, so the session never waits: it starts the model call,
-keeps controlling while the answer is on its way, then turns it into
-commands over the calls that follow. The server's whole job is answering
-such calls, and it is stateless: every call is a pure function of its
-arguments.
+The model is heavy: it needs a GPU and a machine of its own, and the rig
+rarely has them. Heavy pieces stay remote. The model is also too slow for
+this loop, so the session never waits for it. The session starts the
+model call and continues to control the robot. The session acts on the
+answer when it arrives. The server only answers these calls. It is
+stateless: every call is a pure function of its arguments.
 
 Everything that crosses a boundary is recorded as it happens — what each
 session saw, decided, and asked of its model, on every machine involved.
@@ -140,8 +139,7 @@ The sections below take these pieces one at a time.
 
 ### Policies and sessions
 
-Controlling a robot is stateful work, and one algorithm may drive several
-robots at once.
+One algorithm may drive several robots at once.
 
 - A `Policy` is the algorithm that controls a robot from observed data.
 - Control happens in a `Session`; a `Policy` makes them.
@@ -178,15 +176,12 @@ itself is called synchronously — a plain function call, repeated:
 
 ### Served functions
 
-The remote-native goal splits a policy in two: heavy computation on its own
-machine, control close to the robot. Served functions are that split in the
-API. The policy defines its heavy work as functions, and the framework runs
-every call. The session stays plain synchronous code, and control keeps
-running while a call is in flight. The same function may run in-process
-today and on a GPU server tomorrow: placement is a deployment choice, and
-the plumbing — serialization, the wire — is the framework's job. This also
-allows the framework to charge the call to the right clock in simulation and
-to log it for the record.
+The policy defines its heavy work as stateless functions,
+`infer(obs) -> actions`, and gives them to the framework. The session
+starts a call and does not wait — control continues while the framework
+runs the function, in process or on a GPU server. The framework runs
+every call, so it can charge the call to the right clock in simulation
+and record it.
 
 - The session cannot tell where a function runs.
 - Between calls the framework promises nothing: not the same process, not
