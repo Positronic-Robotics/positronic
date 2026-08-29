@@ -1,11 +1,9 @@
 import functools
-from collections.abc import Callable, Mapping
-from pathlib import Path
+from collections.abc import Mapping
 
 import pimm
 from positronic import keys, telemetry, telemetry_keys
-from positronic.dataset import DatasetWriter
-from positronic.dataset.ds_writer_agent import DsWriterAgent, TimeMode
+from positronic.dataset.ds_writer_agent import DatasetFactory, DsWriterAgent, TimeMode
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers, StatefulSerializer
 from positronic.eval import ROBOT_STATIC_META, Embodiment, Observation
@@ -17,7 +15,7 @@ __all__ = ['ROBOT_STATIC_META', 'wire', 'wire_embodiment']
 def wire(  # noqa: C901
     world: pimm.World,
     harness: pimm.ControlSystem,
-    new_dataset: Callable[[Path], DatasetWriter] | None,
+    dataset_factory: DatasetFactory | None,
     cameras: Mapping[str, pimm.SignalEmitter] | None,
     robot_arm: pimm.ControlSystem | None,
     gripper: pimm.ControlSystem | None,
@@ -37,11 +35,11 @@ def wire(  # noqa: C901
         world.connect(emitter, harness.frames[signal_name])
 
     ds_agent = None
-    if new_dataset is not None:
+    if dataset_factory is not None:
         # A partial, never a lambda: the recorder may be spawned as a background process, and `World`
         # pickles a background control system whole.
         ds_agent = DsWriterAgent(
-            new_dataset,
+            dataset_factory,
             time_mode=time_mode,
             telemetry_span=functools.partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
         )

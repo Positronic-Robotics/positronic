@@ -59,14 +59,14 @@ def scripted_driver(*steps: ScriptStep) -> ManualDriver:
 
 
 def episode_caller(
-    world: pimm.World, harness: Harness, policy: Policy, dataset: Path | None = Path('dataset')
+    world: pimm.World, harness: Harness, policy: Policy, output_path: Path | None = Path('dataset')
 ) -> Callable[[Task], pimm.calls.Answer[dict[str, Any]]]:
     """A caller that asks ``harness`` for a task the way a driver does: it opens the session that runs it and
-    names the dataset it records into. Nothing writes there unless the test runs a recorder of its own."""
+    names the path it records into. Nothing writes there unless the test runs a recorder of its own."""
     perform_task = world.pair(harness.perform_task)
 
     def ask(task: Task):
-        return perform_task(Rollout(task, policy, dataset))
+        return perform_task(Rollout(task, policy, output_path))
 
     return ask
 

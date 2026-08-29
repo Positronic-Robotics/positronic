@@ -295,9 +295,9 @@ class _Scene(pimm.ControlSystem):
             yield pimm.Sleep(0.001)
 
 
-def _pair_all(world, harness, policy, dataset: Path | None = Path('dataset')):
+def _pair_all(world, harness, policy, output_path: Path | None = Path('dataset')):
     """Pair all harness signals and return a dict of test handles. ``perform_task`` opens a session from
-    ``policy``, names ``dataset`` as where the episode records, and asks for it, the way a driver does."""
+    ``policy``, names ``output_path`` as where the episode records, and asks for it, the way a driver does."""
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
     deadline_recorder = RecordingEmitter()
@@ -306,7 +306,7 @@ def _pair_all(world, harness, policy, dataset: Path | None = Path('dataset')):
         'frame_em': world.pair(harness.observations[CAM]),
         'robot_em': world.pair(harness.observations[keys.ROBOT_STATE]),
         'grip_em': world.pair(harness.observations[keys.GRIP]),
-        'perform_task': episode_caller(world, harness, policy, dataset),
+        'perform_task': episode_caller(world, harness, policy, output_path),
         'done_em': world.pair(harness.done),
         'command_rx': world.pair(harness.commands[keys.ROBOT_COMMAND]),
         'grip_rx': world.pair(harness.commands['target_grip']),
@@ -615,7 +615,7 @@ def test_the_episode_records_into_the_dataset_its_call_named(world, tmp_path):
     """The call names where the episode records, so the recorder's START carries that dataset."""
     policy = StubPolicy()
     harness = Harness(make_embodiment())
-    p = _pair_all(world, harness, policy, dataset=tmp_path / 'trials')
+    p = _pair_all(world, harness, policy, output_path=tmp_path / 'trials')
 
     driver = ManualDriver([
         (partial(p['perform_task'], Task(instruction_source='test', timeout_sec=None)), 0.0),
@@ -627,7 +627,7 @@ def test_the_episode_records_into_the_dataset_its_call_named(world, tmp_path):
     drive_scheduler(scheduler, steps=20)
 
     starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
-    assert [c.dataset for c in starts] == [tmp_path / 'trials']
+    assert [c.output_path for c in starts] == [tmp_path / 'trials']
 
 
 @pytest.mark.timeout(3.0)
@@ -635,7 +635,7 @@ def test_a_call_that_names_no_dataset_runs_the_trial_and_records_nothing(world):
     """A trial the caller wants unrecorded still runs and still answers; the recorder hears nothing of it."""
     policy = StubPolicy()
     harness = Harness(make_embodiment())
-    p = _pair_all(world, harness, policy, dataset=None)
+    p = _pair_all(world, harness, policy, output_path=None)
 
     scheduler = world.start([harness])
     answer = p['perform_task'](Task(instruction_source='test', timeout_sec=None))

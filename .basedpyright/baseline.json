@@ -1282,6 +1282,22 @@
                     "endColumn": 71,
                     "lineCount": 1
                 }
+            },
+            {
+                "code": "reportAssignmentType",
+                "range": {
+                    "startColumn": 14,
+                    "endColumn": 83,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 70,
+                    "endColumn": 77,
+                    "lineCount": 1
+                }
             }
         ],
         "./positronic/dataset/dataset.py": [
@@ -1298,14 +1314,6 @@
                 "range": {
                     "startColumn": 12,
                     "endColumn": 30,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportReturnType",
-                "range": {
-                    "startColumn": 15,
-                    "endColumn": 17,
                     "lineCount": 1
                 }
             },

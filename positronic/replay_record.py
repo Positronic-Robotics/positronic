@@ -123,8 +123,8 @@ def main(
     # Apply dataset transform once
     dataset = transforms.TransformedDataset(dataset, Group(RestoreCommand(), Identity()))
 
-    dataset_dir = Path(output_dir) if output_dir is not None else None
-    new_dataset = LocalDatasetWriter if dataset_dir is not None else None
+    output_path = Path(output_dir) if output_dir is not None else None
+    dataset_factory = LocalDatasetWriter if output_path is not None else None
     # Process each episode
     for ep_index in indices:
         episode = dataset[ep_index]
@@ -139,7 +139,7 @@ def main(
 
         with pimm.World(virtual_time=True) as world:
             # The sim carries both the arm and the gripper ports, so it fills both slots.
-            ds_agent = wire.wire(world, replay, new_dataset, cameras_mapped, sim, sim, gui, TimeMode.MESSAGE)
+            ds_agent = wire.wire(world, replay, dataset_factory, cameras_mapped, sim, sim, gui, TimeMode.MESSAGE)
             player_cmd = world.pair(replay.command)
 
             ds_cmd = pimm.NoOpEmitter()
@@ -156,7 +156,7 @@ def main(
             _ = world.pair(replay.finished, emitter_wrapper=pimm.map(call_stop))
 
             sim_iter = world.start([sim, replay, ds_agent], gui)
-            ds_cmd.emit(DsWriterCommand.START(dataset_dir, episode.static))
+            ds_cmd.emit(DsWriterCommand.START(output_path, episode.static))
             player_cmd.emit(DsPlayerStartCommand(episode))
 
             p_bar = tqdm.tqdm(total=round(episode.duration_ns / 1e9, 1), unit='s')

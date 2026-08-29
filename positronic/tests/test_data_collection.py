@@ -50,7 +50,7 @@ class DummyRobot(pimm.ControlSystem):
 
 def build_collection(world, out_dir: Path, *, metadata_getter: Callable[[], dict[str, object]] | None = None):
     dc = DataCollectionController(
-        operator_position=None, nominal_joints=(), dataset=out_dir, metadata_getter=metadata_getter
+        operator_position=None, nominal_joints=(), output_path=out_dir, metadata_getter=metadata_getter
     )
     robot = DummyRobot()
 
@@ -312,7 +312,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
     # Virtual time: the sim advances the world clock as physics steps
     with pimm.World(virtual_time=True) as world:
         dc = DataCollectionController(
-            operator_position=OperatorPosition.FRONT.value, nominal_joints=sim.initial_joints, dataset=tmp_path
+            operator_position=OperatorPosition.FRONT.value, nominal_joints=sim.initial_joints, output_path=tmp_path
         )
 
         agent = DsWriterAgent(LocalDatasetWriter)

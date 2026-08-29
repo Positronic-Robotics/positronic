@@ -28,15 +28,15 @@ POLL_PERIOD_SEC = 0.01
 
 class Rollout:
     """What one ``perform_task`` call asks for: the trial to run, the session that runs it, the runtime that
-    serves the policy's functions to that session, and the dataset the episode records into.
+    serves the policy's functions to that session, and the path the episode records into.
 
-    Whoever asks opens it, and so decides which model runs the trial and where the recording lands. A
-    ``dataset`` of ``None`` records nothing. The Harness closes it: the episode it ran, or the ask it refused.
+    Whoever asks opens it, and so decides which model runs the trial and where the recording lands. An
+    ``output_path`` of ``None`` records nothing. The Harness closes it: the episode it ran, or the ask it refused.
     """
 
-    def __init__(self, task: Task, policy: Policy, dataset: Path | None):
+    def __init__(self, task: Task, policy: Policy, output_path: Path | None):
         self.task = task
-        self.dataset = dataset
+        self.output_path = output_path
         # The Harness closes this runtime before the session, and charges the trial for the model's time
         # through it. TODO(#661): the framework takes over closing the chain, and only the charge keeps a
         # runtime here.
@@ -220,11 +220,11 @@ class Harness(pimm.ControlSystem):
         return self._call.request.task
 
     @property
-    def _dataset(self) -> Path | None:
-        """Where the live episode records. The call that asked for it names the dataset, and ``None`` names
+    def _output_path(self) -> Path | None:
+        """Where the live episode records. The call that asked for it names the path, and ``None`` names
         nowhere: that trial runs, and the recorder hears nothing of it."""
         assert self._call is not None, 'only a live episode records'
-        return self._call.request.dataset
+        return self._call.request.output_path
 
     @property
     def _charges_wall_time(self) -> bool:
@@ -291,7 +291,7 @@ class Harness(pimm.ControlSystem):
         """Commit the live episode: cancel the in-flight chunk, stop the recorder — stamping the
         episode's full static meta (plus any terminal payload) — then close its span."""
         self._set_deadline(None)
-        if self._dataset is not None:
+        if self._output_path is not None:
             # Stamped before the inference is retired: the meta overlays what its session reports.
             self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(), **(payload or {})}))
         for schedule in self._schedules.values():  # devices hold their last commanded position
@@ -327,8 +327,8 @@ class Harness(pimm.ControlSystem):
         budget = self._task.timeout_sec
         self._set_deadline(clock.now_ns() + round(budget * 1e9) if budget is not None else None)
         self._telemetry.start_rollout(clock.now())
-        if self._dataset is not None:
-            self.ds_command.emit(DsWriterCommand.START(self._dataset))
+        if self._output_path is not None:
+            self.ds_command.emit(DsWriterCommand.START(self._output_path))
         # The fresh data is here, later round would read a frame the recording did not open on.
         self._infer(self._inference, clock, should_stop)
 

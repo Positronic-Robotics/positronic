@@ -1,5 +1,4 @@
 import pickle
-from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -11,7 +10,7 @@ import pytest
 import pimm
 from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.dataset import DatasetWriter, EpisodeWriter
-from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand, TimeMode
+from positronic.dataset.ds_writer_agent import DatasetFactory, DsWriterAgent, DsWriterCommand, TimeMode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import RobotStatus
@@ -19,8 +18,8 @@ from positronic.drivers.roboarm import command as rcmd
 from positronic.drivers.roboarm.tests.fakes import FakeRobotState
 from positronic.tests.testing_coutils import run_scripted_agent
 
-# The dataset a scripted episode names; a fake opens the same one whatever the path.
-DATASET = Path('dataset')
+# Where a scripted episode records; a fake dataset opens the same one whatever the path.
+OUTPUT_PATH = Path('dataset')
 
 
 @pytest.fixture
@@ -55,7 +54,7 @@ class FakeDatasetWriter(DatasetWriter):
     def __init__(self) -> None:
         self.created: list[FakeEpisodeWriter] = []
 
-    def __call__(self, path: Path) -> 'FakeDatasetWriter':
+    def __call__(self, output_path: Path) -> 'FakeDatasetWriter':
         return self
 
     def new_episode(self) -> FakeEpisodeWriter:
@@ -69,7 +68,7 @@ class FakeDatasetWriter(DatasetWriter):
 
 def build_agent_with_pipes(
     signals_spec: dict[str, Any],
-    new_dataset: Callable[[Path], DatasetWriter],
+    dataset_factory: DatasetFactory,
     world: pimm.World,
     *,
     time_mode: TimeMode = TimeMode.CLOCK,
@@ -83,7 +82,7 @@ def build_agent_with_pipes(
         * return None to drop the sample (not recorded at all).
     Returns (agent, cmd_emitter, emitters_by_name).
     """
-    agent = DsWriterAgent(new_dataset, time_mode=time_mode)
+    agent = DsWriterAgent(dataset_factory, time_mode=time_mode)
     for name, serializer in signals_spec.items():
         agent.add_signal(name, serializer)
     emitters: dict[str, pimm.SignalEmitter[Any]] = {name: world.pair(agent.inputs[name]) for name in signals_spec}
@@ -98,7 +97,7 @@ def test_start_stop_happy_path(world):
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None, 'b': None}, ds, world)
 
     script = [
-        (partial(cmd_em.emit, DsWriterCommand.START(DATASET, {'user': 'alice'})), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH, {'user': 'alice'})), 0.001),
         (partial(emitters['a'].emit, 1), 0.001),
         (partial(emitters['b'].emit, 2), 0.001),
         (partial(cmd_em.emit, DsWriterCommand.STOP({'done': True})), 0.001),
@@ -118,7 +117,10 @@ def test_episode_finalizes_when_run_stops(world):
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
 
-    script = [(partial(cmd_em.emit, DsWriterCommand.START(DATASET)), 0.001), (partial(emitters['a'].emit, 42), 0.001)]
+    script = [
+        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
+        (partial(emitters['a'].emit, 42), 0.001),
+    ]
 
     run_scripted_agent(agent, script, world=world)
 
@@ -134,8 +136,8 @@ def test_ignore_duplicate_commands_and_empty_stop(world):
 
     script = [
         (partial(cmd_em.emit, DsWriterCommand.STOP()), 0.001),
-        (partial(cmd_em.emit, DsWriterCommand.START(DATASET)), 0.001),
-        (partial(cmd_em.emit, DsWriterCommand.START(DATASET)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
         (partial(cmd_em.emit, DsWriterCommand.STOP()), 0.001),
     ]
 
@@ -151,10 +153,10 @@ def test_abort_flow_then_restart(world):
     agent, cmd_em, emitters = build_agent_with_pipes({'s': None}, ds, world)
 
     script = [
-        (partial(cmd_em.emit, DsWriterCommand.START(DATASET)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
         (partial(emitters['s'].emit, 10), 0.001),
         (partial(cmd_em.emit, DsWriterCommand.ABORT()), 0.001),
-        (partial(cmd_em.emit, DsWriterCommand.START(DATASET)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
         (partial(emitters['s'].emit, 11), 0.001),
     ]
 
@@ -171,7 +173,7 @@ def test_appends_only_on_updates_and_timestamps_from_clock(world):
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
 
     script = [
-        (partial(cmd_em.emit, DsWriterCommand.START(DATASET)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
         (partial(emitters['a'].emit, 1), 0.001),
         (None, 0.001),
         (partial(emitters['a'].emit, 2), 0.001),
@@ -192,7 +194,7 @@ def test_records_what_the_inputs_hold_when_the_episode_opens(world):
 
     script = [
         (partial(emitters['a'].emit, 99), 0.001),  # latched on the channel before the episode opens
-        (partial(cmd_em.emit, DsWriterCommand.START(DATASET)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
         (partial(emitters['a'].emit, 7), 0.001),  # the first value that arrives in-episode
         (partial(cmd_em.emit, DsWriterCommand.STOP()), 0.001),
     ]
@@ -211,7 +213,7 @@ def test_time_mode_message_uses_signal_timestamp(world):
     ts_second = 456_000_000
 
     script = [
-        (partial(cmd_em.emit, DsWriterCommand.START(DATASET)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
         (partial(emitters['a'].emit, 1, ts=ts_first), 0.001),
         (partial(emitters['a'].emit, 2, ts=ts_second), 0.001),
         (partial(cmd_em.emit, DsWriterCommand.STOP()), 0.001),
@@ -316,7 +318,7 @@ def test_serializer_scalar_transform(world):
     agent, cmd_em, emitters = build_agent_with_pipes({'x': double}, ds, world)
 
     script = [
-        (partial(cmd_em.emit, DsWriterCommand.START(DATASET)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
         (partial(emitters['x'].emit, 3), 0.001),
         (partial(cmd_em.emit, DsWriterCommand.STOP()), 0.001),
     ]
@@ -339,7 +341,7 @@ def test_serializer_dict_expansion(world):
     agent, cmd_em, emitters = build_agent_with_pipes({'img': expand}, ds, world)
 
     script = [
-        (lambda: cmd_em.emit(DsWriterCommand.START(DATASET)), 0.001),
+        (lambda: cmd_em.emit(DsWriterCommand.START(OUTPUT_PATH)), 0.001),
         (lambda: emitters['img'].emit(10), 0.001),
         (lambda: cmd_em.emit(DsWriterCommand.STOP()), 0.001),
     ]
@@ -362,7 +364,7 @@ def test_serializer_none_drops_sample(world):
     agent, cmd_em, emitters = build_agent_with_pipes({'x': drop_negative}, ds, world)
 
     script = [
-        (lambda: cmd_em.emit(DsWriterCommand.START(DATASET)), 0.001),
+        (lambda: cmd_em.emit(DsWriterCommand.START(OUTPUT_PATH)), 0.001),
         (lambda: emitters['x'].emit(3), 0.001),
         (lambda: emitters['x'].emit(-1), 0.001),
         (lambda: cmd_em.emit(DsWriterCommand.STOP()), 0.001),
@@ -384,7 +386,7 @@ def test_transform_3d_serializer(world):
     pose = geom.Transform3D(translation=t, rotation=q)
 
     script = [
-        (lambda: cmd_em.emit(DsWriterCommand.START(DATASET)), 0.001),
+        (lambda: cmd_em.emit(DsWriterCommand.START(OUTPUT_PATH)), 0.001),
         (lambda: emitters['pose'].emit(pose), 0.001),
         (lambda: cmd_em.emit(DsWriterCommand.STOP()), 0.001),
     ]
@@ -408,7 +410,7 @@ def test_robot_state_serializer_records_a_busy_arm_beside_its_pose(world):
     pose = geom.Transform3D(translation=t, rotation=geom.Rotation.identity)
 
     script = [
-        (lambda: cmd_em.emit(DsWriterCommand.START(DATASET)), 0.001),
+        (lambda: cmd_em.emit(DsWriterCommand.START(OUTPUT_PATH)), 0.001),
         (lambda: emitters[keys.ROBOT_STATE].emit(FakeRobotState(q, dq, pose, RobotStatus.BUSY)), 0.001),
         (lambda: emitters[keys.ROBOT_STATE].emit(FakeRobotState(q, dq, pose, RobotStatus.AVAILABLE)), 0.001),
         (lambda: cmd_em.emit(DsWriterCommand.STOP()), 0.001),
@@ -439,7 +441,7 @@ def test_robot_command_serializer_variants(world):
     impedance = rcmd.Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)
 
     script = [
-        (lambda: cmd_em.emit(DsWriterCommand.START(DATASET)), 0.001),
+        (lambda: cmd_em.emit(DsWriterCommand.START(OUTPUT_PATH)), 0.001),
         (lambda: emitters['cmd'].emit(rcmd.CartesianPosition(pose)), 0.001),
         (lambda: emitters['cmd'].emit(rcmd.CartesianDelta(delta, delta_frame)), 0.001),
         (lambda: emitters['cmd'].emit(rcmd.JointPosition(joints)), 0.001),
@@ -474,7 +476,7 @@ def test_multiple_timelines_recorded(world):
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
 
     script = [
-        (partial(cmd_em.emit, DsWriterCommand.START(DATASET)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
         (partial(emitters['a'].emit, 42), 0.001),
         (partial(cmd_em.emit, DsWriterCommand.STOP()), 0.001),
     ]
@@ -531,7 +533,7 @@ def test_serializer_plain_list_value(world):
 
     agent, cmd_em, emitters = build_agent_with_pipes({'v': to_list}, ds, world)
     script = [
-        (partial(cmd_em.emit, DsWriterCommand.START(DATASET)), 0.001),
+        (partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001),
         (partial(emitters['v'].emit, 0), 0.001),
         (partial(cmd_em.emit, DsWriterCommand.STOP()), 0.001),
     ]

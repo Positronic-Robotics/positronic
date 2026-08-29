@@ -127,10 +127,8 @@ class _LazyMergedEpisode(Episode):
 
     def __getitem__(self, name: str) -> Any:
         for ep in self._episodes:
-            try:
+            if name in ep:
                 return ep[name]
-            except KeyError:
-                continue
         raise KeyError(name)
 
     @property

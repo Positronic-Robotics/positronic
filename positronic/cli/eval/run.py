@@ -36,9 +36,9 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
 
     Returns the local path each episode records into, or ``None`` when the run records nothing.
 
-    TODO(Positronic-Robotics/internal#378): take ``Path | None``. configuronic parses a CLI value with
-    ``ast.literal_eval`` and falls back to ``str``, so ``--output_dir=s3://…`` arrives here as a ``str``
-    whatever this says; narrowing before it coerces would make the annotation lie about what arrives.
+    TODO(Positronic-Robotics/configuronic#40): take ``Path | None``. configuronic builds a CLI value with
+    ``ast.literal_eval`` and keeps a ``str`` when that read fails, so ``--output_dir=s3://…`` arrives here as a
+    ``str`` whatever this says. A narrower annotation disagrees with the value that arrives.
     """
     if output_dir is None:
         return None
@@ -52,20 +52,20 @@ class TaskDriver(pimm.ControlSystem):
     stopping the world — once the last has ended.
 
     It makes the plan on its first turn, not when it is built. It opens a session per task, and asks for the
-    episode that runs it, recording into ``dataset`` — the whole plan lands in one. One task is in flight at
-    a time: the next is asked for only when the previous episode's terminal comes back, so the plan never
+    episode that runs it, recording into ``output_path`` — the whole plan lands in one. One task is in flight
+    at a time: the next is asked for only when the previous episode's terminal comes back, so the plan never
     overlaps two episodes, and each session opens on a model the last episode has let go of.
     """
 
-    def __init__(self, tasks: Callable[[], Iterable[Task]], policy: Policy, dataset: Path | None):
+    def __init__(self, tasks: Callable[[], Iterable[Task]], policy: Policy, output_path: Path | None):
         self._tasks = tasks
         self._policy = policy
-        self._dataset = dataset
+        self._output_path = output_path
         self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         for task in self._tasks():
-            answer = self.perform_task(Rollout(task, self._policy, self._dataset))
+            answer = self.perform_task(Rollout(task, self._policy, self._output_path))
             while not answer.done():
                 if should_stop.value:
                     return
@@ -88,7 +88,7 @@ def run_world(
     Every trial runs here, whoever asks for it: the driver is what an attended run and an unattended one
     differ by. A driver is any control system with a ``perform_task`` caller — a plan walked to its end, a
     person at a keyboard, a console of somebody's own — and it reads what it decides from itself, so the
-    runner wires nothing of it but that call. The driver brings the policy and the dataset: it opens the
+    runner wires nothing of it but that call. The driver brings the policy and the output path: it opens the
     session each episode runs on, and names where each episode records. ``record`` off keeps the recorder
     out of the world, so a run that writes nothing costs the producers nothing. ``done`` is what ends an
     episode from outside the policy: the env's terminal in a sim eval, the operator in an attended run.
@@ -208,13 +208,13 @@ def main(policy, *, evals: list[Eval], output_dir: str | Path | None = None, tim
     logger.info('Warming up policy endpoints')
     # The session runs no inference, but a session that serves its model on a runtime needs one to open.
     blocking(policy).new_session().close()
-    dataset = prepare_output_dir(output_dir)
+    output_path = prepare_output_dir(output_dir)
 
     try:
-        with timed_pass(dataset, timing, policy):
+        with timed_pass(output_path, timing, policy):
             for ev in evals:
-                driver = TaskDriver(ev.tasks, policy, dataset)
-                run_world(ev.embodiment, driver, record=dataset is not None, privileged=ev.privileged, done=ev.done)
+                driver = TaskDriver(ev.tasks, policy, output_path)
+                run_world(ev.embodiment, driver, record=output_path is not None, privileged=ev.privileged, done=ev.done)
     finally:
         policy.close()
 
