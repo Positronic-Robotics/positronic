@@ -123,12 +123,14 @@ class IdleSession(Session):
     The recording lands on its policy's ``observations`` list.
     """
 
+    POLL_SEC = 0.01
+
     def __init__(self, policy):
         self._policy = policy
 
     def __call__(self, obs, time_ns):
         self._policy.observations.append(obs)
-        return {}, time_ns
+        return {}, time_ns + int(self.POLL_SEC * 1e9)
 
     @property
     def meta(self):

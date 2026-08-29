@@ -52,7 +52,9 @@ def _obs(now_sec=0.0, status=RobotStatus.AVAILABLE):
 
 
 class _CommandSession(Session):
-    """Answers a fixed command mapping and asks for its next call at once, as a layer above a player does."""
+    """Answers a fixed command mapping, and asks for its next call one period later."""
+
+    POLL_SEC = 0.001
 
     def __init__(self, commands):
         self._commands = commands
@@ -60,7 +62,7 @@ class _CommandSession(Session):
 
     def __call__(self, obs, time_ns):
         self.call_count += 1
-        return self._commands, time_ns
+        return self._commands, time_ns + int(self.POLL_SEC * 1e9)
 
 
 class TestStopOnFault:
@@ -69,14 +71,14 @@ class TestStopOnFault:
         inner = _CommandSession({'v': 1})
         session = StopOnFault().make_session(inner)
 
-        assert session(_obs(0.0, unavailable), 0) == ({}, 0)
+        assert session(_obs(0.0, unavailable), 0) == ({}, int(StopOnFault.POLL_SEC * 1e9))
         assert inner.call_count == 0, 'the model was asked about an arm that is not tracking it'
 
     def test_an_available_arm_reaches_the_model(self):
         inner = _CommandSession({'v': 1})
         session = StopOnFault().make_session(inner)
 
-        assert session(_obs(0.0, RobotStatus.AVAILABLE), 0) == ({'v': 1}, 0)
+        assert session(_obs(0.0, RobotStatus.AVAILABLE), 0) == ({'v': 1}, int(_CommandSession.POLL_SEC * 1e9))
         assert inner.call_count == 1
 
     def test_an_observation_with_no_arm_status_reaches_the_model(self):
@@ -84,7 +86,7 @@ class TestStopOnFault:
         inner = _CommandSession({'v': 1})
         session = StopOnFault().make_session(inner)
 
-        assert session({keys.OBS_TIME_NS: 0}, 0) == ({'v': 1}, 0)
+        assert session({keys.OBS_TIME_NS: 0}, 0) == ({'v': 1}, int(_CommandSession.POLL_SEC * 1e9))
         assert inner.call_count == 1
 
     def test_either_arm_of_a_bimanual_rig_stops_the_pair(self):
@@ -98,7 +100,7 @@ class TestStopOnFault:
             f'{keys.ROBOT_STATE}.right.status': int(RobotStatus.ERROR),
         }
 
-        assert session(obs, 0) == ({}, 0)
+        assert session(obs, 0) == ({}, int(StopOnFault.POLL_SEC * 1e9))
         assert inner.call_count == 0
 
     def test_the_status_a_recording_carries_for_a_taken_arm_stops_the_policy(self):
@@ -107,7 +109,7 @@ class TestStopOnFault:
         session = StopOnFault().make_session(inner)
 
         assert (RobotStatus.AVAILABLE, RobotStatus.BUSY, RobotStatus.ERROR) == (0, 1, 3)
-        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 1}, 0) == ({}, 0)
+        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 1}, 0) == ({}, int(StopOnFault.POLL_SEC * 1e9))
         assert inner.call_count == 0
 
     def test_the_status_published_for_a_travelling_arm_reaches_the_model(self):
@@ -115,7 +117,10 @@ class TestStopOnFault:
         inner = _CommandSession({'v': 1})
         session = StopOnFault().make_session(inner)
 
-        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 2}, 0) == ({'v': 1}, 0)
+        assert session({keys.OBS_TIME_NS: 0, keys.ROBOT_STATUS: 2}, 0) == (
+            {'v': 1},
+            int(_CommandSession.POLL_SEC * 1e9),
+        )
         assert inner.call_count == 1
 
     def test_a_status_no_arm_answers_to_raises(self):
@@ -133,7 +138,7 @@ class TestStopOnFault:
         session = (StopOnFault() | ChunkPlayer()).wrap(inner).new_session()
 
         assert session(_obs(0.0), 0) == ({'v': 1}, int(1e9))  # a chunk that runs until 1.0
-        assert session(_obs(0.2, RobotStatus.ERROR), int(0.2e9)) == ({}, int(0.2e9))
+        assert session(_obs(0.2, RobotStatus.ERROR), int(0.2e9)) == ({}, int(0.2e9) + int(StopOnFault.POLL_SEC * 1e9))
         assert session(_obs(0.3), int(0.3e9)) == ({'v': 1}, int(1.3e9))
         assert inner._session.call_count == 2
 
@@ -153,13 +158,13 @@ class _ScriptedSession(ChunkSession):
 class TestChunkPlayer:
     def test_an_inner_with_no_answer_yet_is_asked_again(self):
         """A session that waits for a served function answers ``None``, which is no chunk. The player
-        commands nothing, asks for the next call at once, and asks the session again on it."""
+        commands nothing, waits its own poll period, and asks the session again."""
         inner = _ScriptedSession([None, None, [{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]])
         session = ChunkPlayer().make_session(inner)
 
-        assert session(_obs(0.0), int(1e9)) == ({}, int(1e9))
-        assert session(_obs(0.1), int(1e9)) == ({}, int(1e9))
-        assert session(_obs(0.2), int(1e9)) == ({'v': 1}, int(1e9))
+        assert session(_obs(0.0), int(1e9)) == ({}, int(1e9) + int(ChunkPlayer.POLL_SEC * 1e9))
+        assert session(_obs(0.1), int(1e9)) == ({}, int(1e9) + int(ChunkPlayer.POLL_SEC * 1e9))
+        assert session(_obs(0.2), int(1e9)) == ({'v': 1}, int(1e9) + int(ChunkPlayer.POLL_SEC * 1e9))
         assert inner.call_count == 3
 
     def test_a_chunk_plays_one_waypoint_at_a_time(self):
@@ -213,12 +218,12 @@ class TestChunkPlayer:
         assert session(_obs(), int(1.5e9)) == ({'v': 1}, int(2.0e9))
         assert inner._session.call_count == 2
 
-    def test_a_single_action_asks_for_the_next_chunk_at_once(self):
+    def test_a_single_action_is_drained_by_the_call_that_loads_it(self):
         """A chunk of one action at ts=0 is drained by the call that loads it, so the next call re-queries."""
         session = ChunkPlayer().wrap(_ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])).new_session()
 
-        assert session(_obs(1.0), int(1e9)) == ({'v': 1}, int(1e9))
-        assert session(_obs(1.01), int(1.01e9)) == ({'v': 1}, int(1.01e9))
+        assert session(_obs(1.0), int(1e9)) == ({'v': 1}, int(1e9) + int(ChunkPlayer.POLL_SEC * 1e9))
+        assert session(_obs(1.01), int(1.01e9)) == ({'v': 1}, int(1.01e9) + int(ChunkPlayer.POLL_SEC * 1e9))
 
     def test_a_waypoint_naming_no_channel_commands_nothing(self):
         """The codecs close a chunk with a timestamp-only sentinel; it states where the chunk ends."""
@@ -244,7 +249,10 @@ class TestPipelineComposition:
         assert isinstance(pipeline, Layer)
         policy = pipeline.wrap(_ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]))
         session = policy.new_session()
-        assert session({keys.OBS_TIME_NS: int(1e9), 'v': np.array([5.0])}, int(1e9)) == ({'v': 1}, int(1e9))
+        assert session({keys.OBS_TIME_NS: int(1e9), 'v': np.array([5.0])}, int(1e9)) == (
+            {'v': 1},
+            int(1e9) + int(ChunkPlayer.POLL_SEC * 1e9),
+        )
 
     def test_codec_pipe_layer(self):
         """A codec composes above a player, and refuses the commands it would silently corrupt."""
@@ -591,7 +599,7 @@ class TestPipe:
         inner = _ConstPolicy([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
         policy = spec.inline(ChunkPlayer() | spec.PolicySource(inner))
         session = policy.new_session()
-        assert session(_obs(), int(1e9)) == ({'v': 1}, int(1e9))
+        assert session(_obs(), int(1e9)) == ({'v': 1}, int(1e9) + int(ChunkPlayer.POLL_SEC * 1e9))
 
     def test_inline_bare_source_pipe_is_the_loaded_policy(self):
         inner = _ConstPolicy([])

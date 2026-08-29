@@ -86,7 +86,7 @@ def _play(session, obs: dict, runtime: Executor) -> list[tuple[int, dict]]:
         commands, resume_at_ns = session(obs, now_ns)
         if commands:
             played.append((now_ns, dict(commands)))
-        if resume_at_ns <= now_ns:  # the chunk has run out, and the session is asking the endpoint again
+        if runtime.owes_an_answer:  # the chunk has run out, and the session is asking the endpoint again
             return played
         now_ns = resume_at_ns
 

@@ -282,14 +282,12 @@ def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
     def play_out(session, runtime):
         """Every waypoint the session plays, walked by the instants it asks to be called at."""
         at_ns = int(100e9)
-        assert session({keys.OBS_TIME_NS: 0}, at_ns) == ({}, at_ns), 'a round trip was already in flight'
+        assert session({keys.OBS_TIME_NS: 0}, at_ns)[0] == {}, 'a round trip was already in flight'
         runtime.wait(ANSWER_SEC)
         played = []
         for _ in range(4):
             commands, resume_at_ns = session({keys.OBS_TIME_NS: 0}, at_ns)
             played.append((at_ns, commands))
-            if resume_at_ns <= at_ns:
-                break
             at_ns = resume_at_ns
         return played
 

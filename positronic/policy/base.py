@@ -87,7 +87,8 @@ class Session(_SessionBase, ABC):
 
         ``time_ns`` is the caller's clock reading in nanoseconds. A session reads no clock of its own.
         ``commands`` names a command channel per entry; an empty mapping asks for nothing this call.
-        ``resume_at_ns`` is on the clock of ``time_ns``. The caller aims at it and may call earlier.
+        ``resume_at_ns`` is after ``time_ns``, on the same clock. The caller aims at it and may call
+        earlier. A session that waits for work it cannot time names a poll period of its own.
         """
 
 

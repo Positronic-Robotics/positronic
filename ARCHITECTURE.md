@@ -130,7 +130,8 @@ anything it encodes about either side breaks the any-to-any goal. It assembles t
 dict, calls the session, emits the commands it answers, and runs episode lifecycle — nothing else.
 Scheduling, blending, history stacking and error recovery live in the layer stack around the policy.
 A call answers `(commands, resume_at_ns)`: what to emit now, and the instant the session wants its
-next call. The harness aims at that instant and may call earlier.
+next call. That instant is what paces the loop. The harness may call earlier: the episode deadline
+cuts a round short, and a floor and a ceiling of its own bound every one of them.
 
 **Inference cost is a fact of the trial, owned by the harness.** The policy declares its heavy work
 as functions, and the framework runs each one off the loop thread. That work costs the trial either

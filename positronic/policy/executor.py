@@ -69,8 +69,6 @@ class Executor(Runtime):
     @property
     def owes_an_answer(self) -> bool:
         """Whether any call's answer has still to be read, whether or not that call has landed."""
-        # TODO(#661): a caller polls this because a session cannot say when it wants the next call. Rung 7
-        # gives the session ``resume_at``, and the poll goes with it.
         with self._lock:
             return bool(self._unread)
 

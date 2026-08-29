@@ -6,7 +6,7 @@ converts a chunk into the commands a caller runs; the layers around it read time
 """
 
 from collections import deque
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -49,13 +49,14 @@ class StopOnFault(Layer):
     """
 
     WIRE_NAME = 'stop_on_fault'
+    POLL_SEC = 0.01
 
     class _Session(DelegatingSession):
         def __call__(self, obs, time_ns):
             if _arms_available(obs):
                 return self._inner(obs, time_ns)
             self.cancel()
-            return {}, time_ns
+            return {}, time_ns + int(StopOnFault.POLL_SEC * 1e9)
 
     def make_session(self, inner: Session) -> Session:
         return StopOnFault._Session(inner)
@@ -65,42 +66,33 @@ class StopOnFault(Layer):
 
 
 class ChunkPlayer(Layer):
-    """Hold the chunk the sessions below answer, and emit each waypoint at its own time.
-
-    Owns relative→absolute time conversion: the sessions below (codecs, models) emit timestamps relative to
-    the call; this layer anchors them to the call's ``time_ns``. Each call answers the waypoints that have
-    come due, and asks to be called again at the next one. The call that drains the last waypoint asks the
-    sessions below for a new chunk, and plays whatever of it is already due.
-    """
+    """Hold the chunk the sessions below answer, anchor it to the call that received it, and emit each
+    waypoint at its own time."""
 
     WIRE_NAME = 'chunk_player'
+    POLL_SEC = 0.01
 
     class _Session(Session):
-        """Plays the chunk it holds; re-queries in the call that drains it.
-
-        The one session with a different contract on each side, so it forwards rather than delegates.
-        """
+        class _Waypoint(NamedTuple):
+            cmd: dict[str, Any]
+            time_ns: int
 
         def __init__(self, inner: ChunkSession):
             self._inner = inner
-            self._waypoints: deque[tuple[int, dict[str, Any]]] = deque()
+            self._waypoints: deque[ChunkPlayer._Session._Waypoint] = deque()
 
         def __call__(self, obs, time_ns):
-            commands = self._due(time_ns)
-            if not self._waypoints:
+            """Plays the chunk it holds; re-queries in the call that drains it."""
+            if not self._waypoints or self._waypoints[-1].time_ns <= time_ns:
                 chunk = self._inner(obs, time_ns)
                 if chunk is not None:
                     self._load(chunk, time_ns)
-                    commands = self._due(time_ns)
-            # A spent chunk asks for the next call at once: the work for the chunk after it is in flight.
-            return commands, self._waypoints[0][0] if self._waypoints else time_ns
-
-        def _due(self, time_ns: int) -> dict[str, Any]:
-            """The waypoints reached at ``time_ns``, taken off the chunk; several on a channel keep the last."""
             commands: dict[str, Any] = {}
-            while self._waypoints and self._waypoints[0][0] <= time_ns:
-                commands.update(self._waypoints.popleft()[1])
-            return commands
+            while self._waypoints and self._waypoints[0].time_ns <= time_ns:
+                commands.update(self._waypoints.popleft().cmd)
+            if not self._waypoints:
+                return commands, time_ns + int(ChunkPlayer.POLL_SEC * 1e9)
+            return commands, self._waypoints[0].time_ns
 
         def _load(self, chunk: list[dict[str, Any]] | dict[str, Any], time_ns: int) -> None:
             """Anchor ``chunk`` to ``time_ns`` and hold it.
@@ -122,9 +114,9 @@ class ChunkPlayer(Layer):
             # call itself whatever the clock reads. A waypoint naming no channel — the codecs' end-of-chunk
             # sentinel — commands nothing and states where the chunk ends.
             self._waypoints = deque(
-                (
-                    time_ns + int(action.get(keys.ACTION_TIMESTAMP, 0.0) * 1e9),
+                self._Waypoint(
                     {name: value for name, value in action.items() if name != keys.ACTION_TIMESTAMP},
+                    time_ns + int(action.get(keys.ACTION_TIMESTAMP, 0.0) * 1e9),
                 )
                 for action in chunk
             )

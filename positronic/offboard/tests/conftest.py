@@ -92,7 +92,7 @@ def played_round_trip(session: Session, rt: Executor, obs, time_ns: int = 0) -> 
     For a session topped by a ``ChunkPlayer``: both calls get the same ``time_ns``, so the chunk comes back
     anchored at the value the test passed and the answer is the waypoints due at it.
     """
-    assert session(obs, time_ns) == ({}, time_ns), 'a round-trip was already in flight'
+    assert session(obs, time_ns)[0] == {}, 'a round-trip was already in flight'
     rt.wait(ANSWER_SEC)
     assert not rt.in_flight, 'the round-trip never came back'
     return session(obs, time_ns)[0]

@@ -24,12 +24,12 @@ from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
 from positronic.policy.base import ChunkSession, DelegatingSession, Layer, Policy, Session
 from positronic.policy.codec import ActionTimestamp
-from positronic.policy.harness import POLL_PERIOD_SEC, Harness, _EpisodeInference
+from positronic.policy.harness import MAX_ROUND_SEC, MIN_ROUND_SEC, WAIT_PERIOD_SEC, Harness, _EpisodeInference
 from positronic.policy.layers import ChunkPlayer, StopOnFault
 from positronic.policy.remote import INFER, RemoteSession, round_trip
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
-POLL_PERIOD_NS = round(POLL_PERIOD_SEC * 1e9)
+WAIT_PERIOD_NS = round(WAIT_PERIOD_SEC * 1e9)
 
 
 @contextmanager
@@ -1063,8 +1063,8 @@ def test_the_deadline_is_published_once_the_rig_is_ready(world):
     drive_scheduler(scheduler, steps=20)
     # The world is already past zero here, so the published instant and a bare ``timeout_sec`` are
     # different numbers, which is what this pins.
-    assert _deadlines(p) == [pytest.approx(asked_at_ns + 5e9, abs=2 * POLL_PERIOD_NS)]
-    assert asked_at_ns > 2 * POLL_PERIOD_NS, 'the two would be indistinguishable at a clock still near zero'
+    assert _deadlines(p) == [pytest.approx(asked_at_ns + 5e9, abs=2 * WAIT_PERIOD_NS)]
+    assert asked_at_ns > 2 * WAIT_PERIOD_NS, 'the two would be indistinguishable at a clock still near zero'
 
 
 @pytest.mark.timeout(3.0)
@@ -1936,11 +1936,12 @@ def test_episode_virtual_duration_starts_when_the_rig_is_ready(world, tmp_path):
 
 @pytest.mark.parametrize(
     ('resume_in_sec', 'sleep_sec'),
-    [(0.002, 0.002), (0.05, POLL_PERIOD_SEC), (-0.001, POLL_PERIOD_SEC), (None, POLL_PERIOD_SEC)],
+    [(0.002, 0.002), (5.0, MAX_ROUND_SEC), (0.0002, MIN_ROUND_SEC), (-0.001, MIN_ROUND_SEC), (None, WAIT_PERIOD_SEC)],
+    ids=['asked_for', 'over_the_ceiling', 'under_the_floor', 'already_passed', 'no_answer_yet'],
 )
 def test_a_real_rig_wakes_at_the_moment_the_session_asked_for(world, resume_in_sec, sleep_sec):
-    """The harness sleeps to the instant the session named, and no longer than its own poll period. An
-    instant already reached asks for the next round."""
+    """The harness sleeps to the instant the session named, inside its own floor and ceiling. A round the
+    live session has not answered waits on the call the harness made."""
     harness = Harness(ChunkPlayer().wrap(StubPolicy()), make_embodiment())
     now_ns = world.clock.now_ns()
     harness._resume_at_ns = None if resume_in_sec is None else now_ns + int(resume_in_sec * 1e9)
@@ -1948,7 +1949,19 @@ def test_a_real_rig_wakes_at_the_moment_the_session_asked_for(world, resume_in_s
     command = harness._pace(world.clock)
 
     assert isinstance(command, pimm.Sleep)
-    assert command.seconds == pytest.approx(sleep_sec, abs=1e-3)
+    assert command.seconds == pytest.approx(sleep_sec, abs=1e-4)
+
+
+def test_a_real_rig_never_sleeps_past_the_deadline(world):
+    harness = Harness(ChunkPlayer().wrap(StubPolicy()), make_embodiment())
+    now_ns = world.clock.now_ns()
+    harness._resume_at_ns = now_ns + 500_000_000
+    harness._deadline_ns = now_ns + 20_000_000
+
+    command = harness._pace(world.clock)
+
+    assert isinstance(command, pimm.Sleep)
+    assert command.seconds == pytest.approx(0.02, abs=1e-4)
 
 
 @pytest.mark.parametrize(('expired', 'emitted'), [(True, False), (False, True)])
@@ -1993,6 +2006,8 @@ class _ReplanEarly(Layer):
     """
 
     class _Session(Session):
+        POLL_SEC = 0.001
+
         def __init__(self, inner: ChunkSession):
             self._inner = inner
             self._waypoints: deque[tuple[int, dict[str, Any]]] = deque()
@@ -2005,8 +2020,8 @@ class _ReplanEarly(Layer):
             if self._replan_at_ns is None or time_ns >= self._replan_at_ns:
                 self._replan(obs, time_ns)
             next_waypoint_ns = self._waypoints[0][0] if self._waypoints else None
-            due = [at_ns for at_ns in (self._replan_at_ns, next_waypoint_ns) if at_ns is not None]
-            return commands, min(due, default=time_ns)
+            due = [at_ns for at_ns in (self._replan_at_ns, next_waypoint_ns) if at_ns is not None and at_ns > time_ns]
+            return commands, min(due, default=time_ns + int(self.POLL_SEC * 1e9))
 
         def _replan(self, obs, time_ns: int) -> None:
             chunk = self._inner(obs, time_ns)

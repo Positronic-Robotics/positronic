@@ -15,9 +15,12 @@ from positronic.policy.base import Policy, Session
 from positronic.policy.executor import Executor
 from positronic.utils import flatten_dict, frozen_view
 
-# How long a real-time round may last when the session asks for nothing sooner. It bounds how late a call is
-# noticed, and with it the granularity every command timestamp is quantized to.
-POLL_PERIOD_SEC = 0.01
+# How long the harness waits between looks at a call it made.
+WAIT_PERIOD_SEC = 0.01
+# The shortest and the longest real-time round. The floor caps how fast a session drives the loop, the
+# ceiling how late the harness reads ``done`` and the stop signal.
+MIN_ROUND_SEC = 0.001
+MAX_ROUND_SEC = 1.0
 
 
 class _EpisodeInference:
@@ -61,7 +64,9 @@ class _EpisodeInference:
         # A call that joins work already in flight keeps its anchor, so the trial pays for that work one time.
         if not self._runtime.in_flight:
             self._t0_ns, self._wall_t0 = now_ns, time.monotonic()
-        return self._session(frozen_view(self._owned(obs)), now_ns)
+        commands, resume_at_ns = self._session(frozen_view(self._owned(obs)), now_ns)
+        assert resume_at_ns > now_ns, f'resume time must be in the future: {resume_at_ns} <= {now_ns}'
+        return commands, resume_at_ns
 
     def wait(self, should_stop: pimm.SignalReceiver[bool]) -> None:
         """Wait for the function in flight, for as long as the trial charges the loop for it."""
@@ -73,7 +78,7 @@ class _EpisodeInference:
         # A trial that pays nothing waits the function out. It waits in steps, because a model that never
         # answers must not also keep the world from coming down.
         while self._runtime.in_flight and not should_stop.value:
-            self._runtime.wait(POLL_PERIOD_SEC)
+            self._runtime.wait(WAIT_PERIOD_SEC)
 
     def close(self) -> None:
         """Close the runtime, then the session it was serving.
@@ -235,22 +240,22 @@ class Harness(pimm.ControlSystem):
             raise ValueError(f'{unknown} is not something {rig} readies; it readies {sorted(self.prepare)}')
         ready = pimm.calls.all_of([self.prepare[name](arg) for name, arg in args.items()])
         while not ready.done() and not should_stop.value:
-            yield pimm.Yield() if self._embodiment.simulated else pimm.Sleep(POLL_PERIOD_SEC)
+            yield pimm.Yield() if self._embodiment.simulated else pimm.Sleep(WAIT_PERIOD_SEC)
         # An episode must not open on a rig that never got ready, and its asker must hear that rather than wait
         if not ready.done():
             raise RuntimeError('The world stopped before every device was ready')
         ready.result()
 
     def _pace(self, clock: pimm.Clock) -> pimm.Command:
-        """Sim: yield, so the simulator's control-period sleep is the sole time-master and the policy reads
-        each observation instantly. Real: sleep to the moment the session asked for, capped at the poll
-        period, so a waypoint is emitted at its own time and a round rarely finds more than one due. A
-        session that names a moment already reached asks for the next round, one poll period away.
-        """
+        """The command that ends this round: a yield in sim, where the simulator's control-period sleep is
+        the sole time-master, and a sleep to the moment the live session asked for on a real rig."""
         if self._embodiment.simulated:
             return pimm.Yield()
-        due_in_sec = (self._resume_at_ns - clock.now_ns()) / 1e9 if self._resume_at_ns is not None else 0.0
-        return pimm.Sleep(min(POLL_PERIOD_SEC, due_in_sec) if due_in_sec > 0 else POLL_PERIOD_SEC)
+        if self._resume_at_ns is None:
+            return pimm.Sleep(WAIT_PERIOD_SEC)
+        until_ns = self._resume_at_ns if self._deadline_ns is None else min(self._resume_at_ns, self._deadline_ns)
+        due_sec = (until_ns - clock.now_ns()) / 1e9
+        return pimm.Sleep(min(max(due_sec, MIN_ROUND_SEC), MAX_ROUND_SEC))
 
     def _retire_inference(self) -> None:
         """Let go of this episode's inference, keeping it for ``_reap_inference``: ending an episode must not
