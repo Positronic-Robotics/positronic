@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import configuronic as cfn
 import pos3
@@ -23,7 +23,7 @@ import psutil
 import rerun as rr
 import uvicorn
 from fastapi import FastAPI, HTTPException, Response
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
@@ -33,7 +33,13 @@ from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.server.dataset_utils import get_dataset_root, get_episodes_list, stream_episode_rrd
+from positronic.server.dataset_utils import (
+    DEFAULT_MAX_HZ,
+    DEFAULT_MAX_RESOLUTION,
+    get_dataset_root,
+    get_episodes_list,
+    stream_episode_rrd,
+)
 
 # Response cache for api_groups and api_episodes (dataset is immutable once loaded)
 _api_cache: dict[tuple, dict] = {}
@@ -45,7 +51,8 @@ app_state: dict[str, object] = {
     'root': '',
     'cache_dir': '',
     'episode_keys': {},
-    'max_resolution': 640,
+    'max_resolution': DEFAULT_MAX_RESOLUTION,
+    'max_hz': DEFAULT_MAX_HZ,
     'group_tables_cfg': {},
     'home_page': None,  # None = episodes, or group name like 'tasks'
 }
@@ -106,15 +113,6 @@ async def cache_rerun_assets(request: Request, call_next):
     if request.url.path.startswith('/static/rerun/'):
         response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
     return response
-
-
-def _iter_file_chunks(path: str, *, chunk_size: int = 128 * 1024):
-    with open(path, 'rb') as source:
-        while True:
-            chunk = source.read(chunk_size)
-            if not chunk:
-                break
-            yield chunk
 
 
 def _get_nav_context() -> dict[str, Any]:
@@ -489,22 +487,25 @@ async def api_episode_static_field(episode_id: int, field_path: str):
 @app.get('/api/episode_rrd/{episode_id}')
 @require_dataset
 async def api_episode_rrd(episode_id: int):
-    ds = app_state.get('dataset')
+    ds = cast(Dataset, app_state['dataset'])
     cache_path = _get_rrd_cache_path(episode_id)
 
     if os.path.exists(cache_path):
         logging.debug(f'Serving cached RRD for episode {episode_id} from {cache_path}')
-        return StreamingResponse(
-            _iter_file_chunks(cache_path),
-            media_type='application/octet-stream',
-            headers={'Content-Disposition': f'attachment; filename=episode_{episode_id}.rrd'},
-        )
+        # FileResponse sets Content-Length and answers range requests. The generating path below
+        # can do neither, so a first view shows no progress.
+        return FileResponse(cache_path, media_type='application/octet-stream', filename=f'episode_{episode_id}.rrd')
 
     def _stream_and_cache():
         success = False
         try:
             with open(cache_path, 'wb') as cache_file:
-                for chunk in stream_episode_rrd(ds, episode_id):
+                for chunk in stream_episode_rrd(
+                    ds,
+                    episode_id,
+                    max_hz=cast(float, app_state['max_hz']),
+                    max_resolution=cast(int, app_state['max_resolution']),
+                ):
                     cache_file.write(chunk)
                     yield chunk
             success = True
@@ -627,11 +628,17 @@ def _generate_self_signed_cert(hosts: list[str]) -> _SelfSignedCert:
     return _SelfSignedCert(keyfile, certfile)
 
 
-@cfn.config(dataset=positronic.cfg.ds.local_all, ep_table_cfg=default_table, max_resolution=640, group_tables=None)
+@cfn.config(
+    dataset=positronic.cfg.ds.local_all,
+    ep_table_cfg=default_table,
+    max_resolution=DEFAULT_MAX_RESOLUTION,
+    group_tables=None,
+)
 def main(
     dataset: Dataset,
     ep_table_cfg: TableConfig | None,
     max_resolution: int,
+    max_hz: float = DEFAULT_MAX_HZ,
     cache_dir: str = '~/.cache/positronic/server/',
     host: str = '0.0.0.0',
     port: int = 8400,
@@ -649,6 +656,8 @@ def main(
 
     Args:
         dataset: Dataset to visualize
+        max_resolution: Long side an episode RRD's videos are re-encoded down to
+        max_hz: Rate an episode RRD's numeric signals are thinned to; 0 keeps every sample
         cache_dir: Directory to cache generated RRD files
         host: Server host
         port: Server port
@@ -697,6 +706,7 @@ def main(
     app_state['episode_table_cfg'] = ep_table_cfg or {}
     app_state['group_tables_cfg'] = group_tables or {}
     app_state['max_resolution'] = max_resolution
+    app_state['max_hz'] = max_hz
     app_state['home_page'] = home_page
 
     if reset_cache and os.path.exists(cache_dir):
