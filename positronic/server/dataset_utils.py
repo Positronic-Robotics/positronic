@@ -348,9 +348,7 @@ _DOWNSCALE_OPTIONS = {'crf': '28', 'preset': 'veryfast'}
 def _mp4_downscaled_to(src: Path, max_resolution: int) -> bytes:
     """Re-encode ``src`` with its long side at most ``max_resolution``, or return it unchanged if it fits.
 
-    Frame count and presentation times survive the re-encode: the caller pairs the asset's frame
-    timestamps with the signal's own keys positionally, so a dropped frame would shift the video
-    against every other signal.
+    Frame count and presentation times survive the re-encode.
     """
     with av.open(str(src)) as inp:
         in_stream = inp.streams.video[0]
