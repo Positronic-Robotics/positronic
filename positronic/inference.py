@@ -4,6 +4,7 @@ aliases over ``cli.eval.run``."""
 import logging
 from collections import Counter
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
@@ -33,13 +34,14 @@ class KeyboardOperator(KeyboardControl):
     One episode is in flight at a time: a press while one runs is declined here, with a warning. It holds
     the pending answer because that is where the episode's terminal — or a refused ask — arrives, and it
     logs that as it lands. ``next_task`` makes the trial and the policy opens its session, once per accepted
-    press.
+    press. Every episode records into ``dataset``, and none records when that is ``None``.
     """
 
-    def __init__(self, next_task: Callable[[], Task], policy: Policy):
+    def __init__(self, next_task: Callable[[], Task], policy: Policy, dataset: Path | None):
         super().__init__(quit_key='q')
         self._next_task = next_task
         self._policy = policy
+        self._dataset = dataset
         self._pending: pimm.calls.Answer[dict[str, Any]] | None = None
         self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
         self.done = pimm.ControlSystemEmitter[dict[str, Any]](self)
@@ -59,7 +61,7 @@ class KeyboardOperator(KeyboardControl):
                 # A model that will not open a session ends the episode, not the run: the operator hears it
                 # and presses again.
                 try:  # rules-allow: swallowed-error — the operator is who this failure is for
-                    self._pending = self.perform_task(Rollout(self._next_task(), self._policy))
+                    self._pending = self.perform_task(Rollout(self._next_task(), self._policy, self._dataset))
                 except Exception as e:
                     logger.error(f'Episode failed to open: {e}')
             case 'p':
@@ -78,12 +80,13 @@ def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_d
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
 
     # The policy is this function's to close from here on, and everything below can raise:
-    # `prepare_output_dir` syncs a directory and snapshots sources into it, and `run_world` opens the
-    # dataset it is given.
+    # `prepare_output_dir` syncs a directory and snapshots sources into it, and `run_world` builds the
+    # world the rig runs in.
     try:
-        operator = KeyboardOperator(next_task, policy)
+        dataset = prepare_output_dir(output_dir)
+        operator = KeyboardOperator(next_task, policy, dataset)
         logger.info('Keyboard controls: [s]tart, sto[p], [q]uit')
-        run_world(embodiment, operator, prepare_output_dir(output_dir), done=operator.done)
+        run_world(embodiment, operator, record=dataset is not None, done=operator.done)
     finally:
         policy.close()
 

@@ -1,9 +1,12 @@
 import functools
+from collections.abc import Callable, Mapping
+from pathlib import Path
 
 import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset import DatasetWriter
 from positronic.dataset.ds_writer_agent import DsWriterAgent, TimeMode
+from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers, StatefulSerializer
 from positronic.eval import ROBOT_STATIC_META, Embodiment, Observation
 from positronic.policy.harness import Harness
@@ -14,8 +17,8 @@ __all__ = ['ROBOT_STATIC_META', 'wire', 'wire_embodiment']
 def wire(  # noqa: C901
     world: pimm.World,
     harness: pimm.ControlSystem,
-    dataset_writer: DatasetWriter | None,
-    cameras: dict[str, pimm.SignalEmitter] | None,
+    new_dataset: Callable[[Path], DatasetWriter] | None,
+    cameras: Mapping[str, pimm.SignalEmitter] | None,
     robot_arm: pimm.ControlSystem | None,
     gripper: pimm.ControlSystem | None,
     gui: pimm.ControlSystem | None,
@@ -34,11 +37,11 @@ def wire(  # noqa: C901
         world.connect(emitter, harness.frames[signal_name])
 
     ds_agent = None
-    if dataset_writer is not None:
+    if new_dataset is not None:
         # A partial, never a lambda: the recorder may be spawned as a background process, and `World`
         # pickles a background control system whole.
         ds_agent = DsWriterAgent(
-            dataset_writer,
+            new_dataset,
             time_mode=time_mode,
             telemetry_span=functools.partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
         )
@@ -68,16 +71,12 @@ def wire(  # noqa: C901
 
 
 def _recorder(
-    world: pimm.World,
-    harness: Harness,
-    embodiment: Embodiment,
-    dataset_writer: DatasetWriter,
-    time_mode: TimeMode,
-    privileged: dict[str, Observation],
+    world: pimm.World, harness: Harness, embodiment: Embodiment, time_mode: TimeMode, privileged: dict[str, Observation]
 ) -> DsWriterAgent:
-    """An embodiment's observations, command chunks and privileged ground-truth, recorded into a dataset."""
+    """An embodiment's observations, command chunks and privileged ground-truth, recorded into the dataset
+    each episode names."""
     ds_agent = DsWriterAgent(
-        dataset_writer,
+        LocalDatasetWriter,
         time_mode=time_mode,
         virtual_time=embodiment.simulated,
         telemetry_span=functools.partial(telemetry.span, telemetry_keys.SPAN_RECORD_IO),
@@ -100,8 +99,9 @@ def wire_embodiment(
     world: pimm.World,
     harness: Harness,
     embodiment: Embodiment,
-    dataset_writer: DatasetWriter | None,
     time_mode: TimeMode = TimeMode.CLOCK,
+    *,
+    record: bool = True,
     privileged: dict[str, Observation] | None = None,
     done: pimm.SignalEmitter | None = None,
 ):
@@ -109,9 +109,10 @@ def wire_embodiment(
 
     Connects device observation sources -> ``harness.observations``, ``harness.commands`` -> device
     receivers, ``harness.prepare`` -> everything a trial readies, and records observations, command chunks,
-    and the eval's privileged ground-truth into the dataset. The ``done`` terminating signal, when present,
-    is connected to ``harness.done``. GUI camera wiring stays with the caller — it is a presentation
-    concern, not part of the embodiment contract.
+    and the eval's privileged ground-truth into the dataset each episode names. ``record`` off leaves the
+    recorder out, so the episode commands reach nobody and the producers keep one consumer each. The ``done``
+    terminating signal, when present, is connected to ``harness.done``. GUI camera wiring stays with the
+    caller — it is a presentation concern, not part of the embodiment contract.
     """
     privileged = privileged or {}
     for name, obs in embodiment.observations.items():
@@ -125,6 +126,6 @@ def wire_embodiment(
     if done is not None:
         world.connect(done, harness.done)
 
-    if dataset_writer is None:
+    if not record:
         return None
-    return _recorder(world, harness, embodiment, dataset_writer, time_mode, privileged)
+    return _recorder(world, harness, embodiment, time_mode, privileged)

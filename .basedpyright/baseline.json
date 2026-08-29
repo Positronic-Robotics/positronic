@@ -1276,74 +1276,10 @@
                 }
             },
             {
-                "code": "reportAssignmentType",
-                "range": {
-                    "startColumn": 21,
-                    "endColumn": 62,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 32,
-                    "endColumn": 42,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 35,
-                    "endColumn": 45,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportAttributeAccessIssue",
                 "range": {
                     "startColumn": 66,
                     "endColumn": 71,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAssignmentType",
-                "range": {
-                    "startColumn": 14,
-                    "endColumn": 83,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAssignmentType",
-                "range": {
-                    "startColumn": 21,
-                    "endColumn": 62,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 32,
-                    "endColumn": 42,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 35,
-                    "endColumn": 45,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 69,
-                    "endColumn": 76,
                     "lineCount": 1
                 }
             }
@@ -5372,48 +5308,6 @@
                 "range": {
                     "startColumn": 23,
                     "endColumn": 42,
-                    "lineCount": 1
-                }
-            }
-        ],
-        "./positronic/replay_record.py": [
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 35,
-                    "endColumn": 41,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 68,
-                    "endColumn": 82,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 58,
-                    "endColumn": 64,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 53,
-                    "endColumn": 60,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 54,
-                    "endColumn": 65,
                     "lineCount": 1
                 }
             }
