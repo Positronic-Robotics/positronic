@@ -17,7 +17,7 @@ from positronic import keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
-from positronic.policy import ChunkSession, Policy
+from positronic.policy import ChunkSession, Done, Policy
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkPlayer, StopOnFault
 from positronic.policy.spec import ModelSource, remote
@@ -210,7 +210,7 @@ class _Gr00tSession(ChunkSession):
         lengths = {len(v) for v in action.values()}
         assert len(lengths) == 1, f'All values in action must have the same length, got {lengths}'
         time_horizon = lengths.pop()
-        return [{k: v[i] for k, v in action.items()} for i in range(time_horizon)]
+        return Done([{k: v[i] for k, v in action.items()} for i in range(time_horizon)])
 
 
 class Gr00tPolicy(Policy):

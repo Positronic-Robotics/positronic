@@ -4,7 +4,7 @@ from positronic import keys
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.geom import Rotation, Transform3D
-from positronic.policy.base import ChunkSession, Policy
+from positronic.policy.base import Answer, ChunkSession, Done, Policy
 from positronic.policy.layers import ChunkPlayer
 from positronic.policy.recording import (
     Recorder,
@@ -19,13 +19,20 @@ from positronic.policy.recording import (
 )
 
 
+def _chunk(session, obs, time_ns: int = 0):
+    """The chunk a session under a player answers for ``obs``."""
+    answer = session(obs, time_ns)
+    assert isinstance(answer, Answer), 'the session answers commands, not a chunk'
+    return answer.result()
+
+
 class _TrackingSession(ChunkSession):
     def __init__(self, actions, meta):
         self._actions = actions
         self._meta = meta
 
     def __call__(self, obs, time_ns):
-        return list(self._actions)
+        return Done(list(self._actions))
 
     @property
     def meta(self):
@@ -60,7 +67,7 @@ class _CapturingSession(ChunkSession):
     def __call__(self, obs, time_ns):
         self.seen_timeline_values = dict(self._rec._timeline_values)
         self.seen_depth = self._rec._depth
-        return list(self._actions)
+        return Done(list(self._actions))
 
 
 class _CapturingPolicy(Policy):
@@ -120,7 +127,7 @@ def test_a_cartesian_chunk_records_the_mode_beside_its_trajectory(tmp_path):
     actions = [{keys.ROBOT_COMMAND: CartesianPosition(pose=pose, mode=mode), 'timestamp': 0.0}]
 
     rec = Recorder(tmp_path)
-    rec.tap('t').wrap(_TrackingPolicy(actions)).new_session()({'x': 1.0, keys.WALL_TIME_NS: 1}, 0)
+    _chunk(rec.tap('t').wrap(_TrackingPolicy(actions)).new_session(), {'x': 1.0, keys.WALL_TIME_NS: 1})
 
     assert any('mode.impedance.kq' in path for path in rec._series_paths), rec._series_paths
     assert not any(path.endswith('cartesian_pos/pose') for path in rec._series_paths), 'the pose is the trajectory'
@@ -166,7 +173,7 @@ def test_tap_delegates_inner_call(tmp_path):
     actions = [{'v': 1, 'timestamp': 0.0}, {'v': 2, 'timestamp': 0.1}]
     policy = Recorder(tmp_path).tap('t').wrap(_TrackingPolicy(actions))
     session = policy.new_session()
-    result = session({'x': 1.0, keys.WALL_TIME_NS: 1_000_000}, 0)
+    result = _chunk(session, {'x': 1.0, keys.WALL_TIME_NS: 1_000_000})
     assert result == actions
 
 
@@ -210,23 +217,23 @@ def test_logs_command_chunk_without_mutating(tmp_path):
         {keys.ROBOT_COMMAND: CartesianPosition(pose=pose), 'target_grip': 0.6, 'timestamp': 0.1},
     ]
     session = Recorder(tmp_path).tap('t').wrap(_TrackingPolicy(actions)).new_session()
-    result = session({'x': 1.0, keys.WALL_TIME_NS: 1}, 0)
+    result = _chunk(session, {'x': 1.0, keys.WALL_TIME_NS: 1})
     assert isinstance(result, list)
     assert result[0][keys.ROBOT_COMMAND] is actions[0][keys.ROBOT_COMMAND]  # unchanged on return
 
 
-def test_handles_none_actions(tmp_path):
-    class _NoneSession(ChunkSession):
+def test_handles_an_empty_chunk(tmp_path):
+    class _EmptySession(ChunkSession):
         def __call__(self, obs, time_ns):
-            return None
+            return Done([])
 
-    class _NonePolicy(Policy):
+    class _EmptyPolicy(Policy):
         def new_session(self, context=None, rt=None):
-            return _NoneSession()
+            return _EmptySession()
 
-    session = Recorder(tmp_path).tap('t').wrap(_NonePolicy()).new_session()
+    session = Recorder(tmp_path).tap('t').wrap(_EmptyPolicy()).new_session()
     assert isinstance(session, _RecordingTapSession)
-    assert session({'x': 1.0}, 0) is None
+    assert _chunk(session, {'x': 1.0}) == []
     assert session._step == 1
 
 
@@ -237,8 +244,7 @@ def test_a_two_action_chunk_is_not_read_as_a_command_pair(tmp_path):
     session = Recorder(tmp_path).tap('t').wrap(_TrackingPolicy(chunk)).new_session()
     assert isinstance(session, _ChunkTapSession)
 
-    assert session._actions(chunk) == chunk
-    assert session._actions({'v': 1.0}) == [{'v': 1.0}]  # one action may come back bare
+    assert session({'x': 1.0}, 0).result() == chunk
 
 
 def test_a_tap_above_the_player_logs_the_command_of_each_round(tmp_path):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
-from typing import Any, ClassVar
+from typing import Any, ClassVar, final
 
 # Structural keys of the wire spec: ``|`` serializes as ``{SEQ: [...]}``, ``&`` as ``{PAR: [...]}``.
 SEQ = 'seq'
@@ -25,6 +25,36 @@ class Answer(ABC):
     @abstractmethod
     def result(self) -> Any:
         """What the function returned. Raises what the function raised, or ``NotAnswered`` before it answers."""
+
+    @final
+    def map(self, fn: Callable[[Any], Any]) -> Answer:
+        """This answer with ``fn`` applied to what it carries, at the moment it is read."""
+        return _Mapped(self, fn)
+
+
+class _Mapped(Answer):
+    def __init__(self, inner: Answer, fn: Callable[[Any], Any]):
+        self._inner = inner
+        self._fn = fn
+
+    def done(self) -> bool:
+        return self._inner.done()
+
+    def result(self) -> Any:
+        return self._fn(self._inner.result())
+
+
+class Done(Answer):
+    """The answer to a call whose work ran inside it."""
+
+    def __init__(self, value: Any):
+        self._value = value
+
+    def done(self) -> bool:
+        return True
+
+    def result(self) -> Any:
+        return self._value
 
 
 # A call to an ``Fn`` starts the work and returns at once.
@@ -95,20 +125,21 @@ class Session(_SessionBase, ABC):
 class ChunkSession(_SessionBase, ABC):
     """Session that answers action chunks: what a ``ChunkPlayer`` holds and plays.
 
-    A call answers a list of actions, each naming command channels and carrying its own
-    ``keys.ACTION_TIMESTAMP`` in seconds from the call. ``None`` means "no new chunk" — what a session
-    answers while the work it asked for is still in flight. An empty list drops what is playing. One
-    action may come back bare, and the player wraps it.
+    A chunk is a list of actions, each naming command channels and carrying its own
+    ``keys.ACTION_TIMESTAMP`` in seconds from the call. An empty list drops what is playing. One action
+    may come back bare, and the player wraps it.
 
     TODO(#661): the chunk becomes the answer of a served function, and this class goes with the
     session-serving wire.
     """
 
     @abstractmethod
-    def __call__(self, obs: Mapping[str, Any], time_ns: int) -> list[dict[str, Any]] | dict[str, Any] | None:
-        """The chunk to play from now, or ``None`` while the work is in flight.
+    def __call__(self, obs: Mapping[str, Any], time_ns: int) -> Answer:
+        """Start the work for one chunk, and answer the caller's handle on it.
 
         ``time_ns`` is the caller's clock reading in nanoseconds. A session reads no clock of its own.
+        The caller decides how many calls it keeps in flight, and reads each handle when it wants the
+        chunk. A session that runs the work inside the call answers a ``Done``.
         """
 
 

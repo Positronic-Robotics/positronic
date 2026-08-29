@@ -244,16 +244,9 @@ _INFER = 'infer'
 class _ScriptedSession(ChunkSession):
     def __init__(self, rt: Runtime):
         self._rt = rt
-        self._answer = None
 
     def __call__(self, obs, time_ns):
-        if self._answer is None:
-            self._answer = self._rt.fns[_INFER](obs)
-            return None
-        if not self._answer.done():
-            return None
-        answer, self._answer = self._answer, None
-        return answer.result()
+        return self._rt.fns[_INFER](obs)
 
 
 class _ScriptedPolicy(Policy):
@@ -280,15 +273,18 @@ def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):
     local_session, local_rt = open_session(inline(pipeline()))
 
     def play_out(session, runtime):
-        """Every waypoint the session plays, walked by the instants it asks to be called at."""
+        """Every waypoint the session plays, and how long after the chunk loaded each one went out."""
         at_ns = int(100e9)
-        assert session({keys.OBS_TIME_NS: 0}, at_ns)[0] == {}, 'a round trip was already in flight'
-        runtime.wait(ANSWER_SEC)
-        played = []
-        for _ in range(4):
-            commands, resume_at_ns = session({keys.OBS_TIME_NS: 0}, at_ns)
-            played.append((at_ns, commands))
+        commands, resume_at_ns = session({keys.OBS_TIME_NS: 0}, at_ns)
+        while not commands:  # the round trip has to land before the chunk plays
+            runtime.wait(ANSWER_SEC)
             at_ns = resume_at_ns
+            commands, resume_at_ns = session({keys.OBS_TIME_NS: 0}, at_ns)
+        loaded_at_ns, played = at_ns, [(0, commands)]
+        for _ in range(3):
+            at_ns = resume_at_ns
+            commands, resume_at_ns = session({keys.OBS_TIME_NS: 0}, at_ns)
+            played.append((at_ns - loaded_at_ns, commands))
         return played
 
     played = play_out(local_session, local_rt)

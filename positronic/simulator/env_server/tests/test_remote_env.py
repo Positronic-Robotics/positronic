@@ -20,7 +20,7 @@ from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Task
-from positronic.policy import ChunkSession, Policy
+from positronic.policy import ChunkSession, Done, Policy
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkPlayer
 from positronic.policy.tests.test_harness import StubPolicy
@@ -379,10 +379,10 @@ class _JointposChunkSession(ChunkSession):
 
     def __call__(self, obs, time_ns):
         self._policy.chunks += 1
-        return [
+        return Done([
             {keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.chunks * 100.0 + i}
             for i in range(self._policy.chunk_len)
-        ]
+        ])
 
 
 @pytest.mark.timeout(60.0)

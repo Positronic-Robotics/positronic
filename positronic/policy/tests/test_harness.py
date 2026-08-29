@@ -22,7 +22,7 @@ from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
-from positronic.policy.base import ChunkSession, DelegatingSession, Layer, Policy, Session
+from positronic.policy.base import Answer, ChunkSession, DelegatingSession, Done, Layer, Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import MAX_ROUND_SEC, MIN_ROUND_SEC, WAIT_PERIOD_SEC, Harness, _EpisodeInference
 from positronic.policy.layers import ChunkPlayer, StopOnFault
@@ -86,7 +86,9 @@ class _SpySession(ChunkSession):
 
     def __call__(self, obs, time_ns):
         self._policy.last_obs = obs
-        return [{keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}]
+        return Done([
+            {keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}
+        ])
 
 
 class SpyPolicy(Policy):
@@ -114,7 +116,9 @@ class _StubSession(ChunkSession):
     def __call__(self, obs, time_ns):
         self._policy.last_obs = obs
         self._policy.observations.append(obs)
-        return [{keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}]
+        return Done([
+            {keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}
+        ])
 
     @property
     def meta(self):
@@ -158,14 +162,14 @@ class _ChunkSession(ChunkSession):
     def __call__(self, obs, time_ns):
         self._policy.counter += 1
         dt = 0.005
-        return [
+        return Done([
             {
                 keys.ROBOT_COMMAND: self._policy.command,
                 'target_grip': self._policy.counter * 100.0 + i,
                 'timestamp': i * dt,
             }
             for i in range(10)
-        ]
+        ])
 
 
 class ChunkPolicy(StubPolicy):
@@ -601,7 +605,7 @@ def test_episode_meta_includes_policy_static_meta(world):
             self._command = command
 
         def __call__(self, obs, time_ns):
-            return [{keys.ROBOT_COMMAND: self._command, 'target_grip': 0.0, 'timestamp': 0.0}]
+            return Done([{keys.ROBOT_COMMAND: self._command, 'target_grip': 0.0, 'timestamp': 0.0}])
 
     class _StaticMetaPolicy(Policy):
         def __init__(self):
@@ -698,8 +702,7 @@ def test_an_uncharged_wait_ends_when_the_world_comes_down(world):
                 self._rt = rt
 
             def __call__(self, obs, time_ns):
-                self._rt.fns[INFER]()
-                return None
+                return self._rt.fns[INFER]()
 
         def new_session(self, context=None, rt=None):
             assert rt is not None
@@ -1518,7 +1521,7 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
 
     class _EmptyChunkSession(ChunkSession):
         def __call__(self, obs, time_ns):
-            return []
+            return Done([])
 
     class EmptyChunkPolicy(Policy):
         def new_session(self, context=None, rt=None):
@@ -2012,6 +2015,7 @@ class _ReplanEarly(Layer):
             self._inner = inner
             self._waypoints: deque[tuple[int, dict[str, Any]]] = deque()
             self._replan_at_ns: int | None = None
+            self._answer: Answer | None = None
 
         def __call__(self, obs, time_ns):
             commands: dict[str, Any] = {}
@@ -2024,9 +2028,11 @@ class _ReplanEarly(Layer):
             return commands, min(due, default=time_ns + int(self.POLL_SEC * 1e9))
 
         def _replan(self, obs, time_ns: int) -> None:
-            chunk = self._inner(obs, time_ns)
-            if not isinstance(chunk, list):  # the function it asked has still to answer
+            if self._answer is None:
+                self._answer = self._inner(obs, time_ns)
+            if not self._answer.done():  # the call it made has still to answer
                 return
+            chunk, self._answer = self._answer.result(), None
             anchor = time_ns / 1e9
             self._waypoints = deque(
                 (int((anchor + action[keys.ACTION_TIMESTAMP]) * 1e9), {keys.TARGET_GRIP: action[keys.TARGET_GRIP]})
@@ -2419,11 +2425,11 @@ def test_a_rescheduled_trajectory_clears_the_channels_it_omits(world):
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             command = CartesianPosition(pose=pose)
             if self._calls == 1:
-                return [
+                return Done([
                     {keys.ROBOT_COMMAND: command, keys.TARGET_GRIP: 0.5, keys.ACTION_TIMESTAMP: i * 0.01}
                     for i in range(10)
-                ]
-            return [{keys.ROBOT_COMMAND: command, keys.ACTION_TIMESTAMP: i * 0.01} for i in range(10)]
+                ])
+            return Done([{keys.ROBOT_COMMAND: command, keys.ACTION_TIMESTAMP: i * 0.01} for i in range(10)])
 
     class _GripThenArmPolicy(Policy):
         def new_session(self, context=None, rt=None):

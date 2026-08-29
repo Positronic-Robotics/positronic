@@ -24,7 +24,7 @@ from positronic.dataset.transforms.episode import Derive, EpisodeTransform, From
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee_frame
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
-from positronic.policy.base import PAR, SEQ, ChunkSession, DelegatingChunkSession, Layer, _ComposedLayer
+from positronic.policy.base import PAR, SEQ, Answer, ChunkSession, DelegatingChunkSession, Layer, _ComposedLayer
 from positronic.utils import merge_dicts
 
 _QUAT = geom.Rotation.Representation.QUAT
@@ -108,14 +108,11 @@ class _CodecSession(DelegatingChunkSession):
         self._codec = codec
 
     def __call__(self, obs, time_ns):
-        encoded = self._codec.encode(obs)
-        action = self._inner(encoded, time_ns)
+        answer = self._inner(self._codec.encode(obs), time_ns)
         # A codec decodes a chunk, so it belongs under the player. Above one it would be handed commands
         # paired with a resume time, and each codec would drop or corrupt them in its own way.
-        assert not isinstance(action, tuple), 'compose a Codec under the ChunkPlayer, not above it'
-        if action is None:
-            return None
-        return self._codec.decode(action)
+        assert isinstance(answer, Answer), 'compose a Codec under the ChunkPlayer, not above it'
+        return answer.map(self._codec.decode)
 
     @property
     def meta(self):

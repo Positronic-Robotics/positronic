@@ -41,7 +41,7 @@ from positronic.drivers.roboarm.command import CartesianPosition, CommandType
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
-from positronic.policy.base import ChunkSession, DelegatingChunkSession, DelegatingPolicy, Policy
+from positronic.policy.base import Answer, ChunkSession, DelegatingChunkSession, DelegatingPolicy, Done, Policy
 from positronic.policy.codec import ActionTiming
 from positronic.policy.harness import Harness
 from positronic.policy.layers import ChunkPlayer, StopOnFault
@@ -73,7 +73,7 @@ class _ScriptedSession(ChunkSession):
             step = current + delta * 0.5 * ((i + 1) / 10.0)
             pose = Transform3D(translation=step.astype(np.float32), rotation=Rotation.identity)
             chunk.append({keys.ROBOT_COMMAND: CartesianPosition(pose=pose), 'target_grip': round(0.50 + 0.01 * i, 4)})
-        return chunk
+        return Done(chunk)
 
 
 class ScriptedProportionalPolicy(Policy):
@@ -88,42 +88,44 @@ class ScriptedProportionalPolicy(Policy):
 
 
 class _SimulatedLatency(DelegatingPolicy):
-    """A fixed inference latency in world time: every chunk is stamped for, and reaches the player at,
-    ``latency_sec`` after the call that produced it, whatever the machine took. Sits under the player, so
-    nothing below it sees an observation while a chunk is held. A skip or a stop passes through at once."""
+    """A fixed inference latency in world time: every chunk is stamped for, and answers at, ``latency_sec``
+    after the call that produced it, whatever the machine took. Sits under the player, so nothing below it
+    sees an observation while a chunk is in flight."""
 
-    def __init__(self, inner: Policy, latency_sec: float):
+    def __init__(self, inner: Policy, latency_sec: float, clock: pimm.Clock):
         super().__init__(inner)
         self._latency_ns = round(latency_sec * 1e9)
+        self._clock = clock
+
+    class _Held(Answer):
+        """The chunk under it, held back until the world reaches ``release_at_ns``."""
+
+        def __init__(self, inner: Answer, release_at_ns: int, clock: pimm.Clock):
+            self._inner = inner
+            self._release_at_ns = release_at_ns
+            self._clock = clock
+
+        def done(self) -> bool:
+            return self._clock.now_ns() >= self._release_at_ns and self._inner.done()
+
+        def result(self):
+            return self._inner.result()
 
     class _Session(DelegatingChunkSession):
-        def __init__(self, inner: ChunkSession, latency_ns: int):
+        def __init__(self, inner: ChunkSession, latency_ns: int, clock: pimm.Clock):
             super().__init__(inner)
             self._latency_ns = latency_ns
-            self._held: list | dict | None = None
-            self._release_at_ns = 0
+            self._clock = clock
 
         def __call__(self, obs, time_ns):
-            if self._held is not None:
-                if time_ns < self._release_at_ns:
-                    return None
-                held, self._held = self._held, None
-                return held
-            # The chunk is held for ``latency_ns``, so the sessions below time it from the release instant.
-            result = self._inner(obs, time_ns + self._latency_ns)
-            if not result:
-                return result
-            self._held, self._release_at_ns = result, time_ns + self._latency_ns
-            return None
-
-        def cancel(self):
-            self._held = None
-            super().cancel()
+            # The chunk answers at ``latency_ns``, so the sessions below time it from that instant.
+            release_at_ns = time_ns + self._latency_ns
+            return _SimulatedLatency._Held(self._inner(obs, release_at_ns), release_at_ns, self._clock)
 
     def new_session(self, context=None, rt=None) -> ChunkSession:
         inner = self._inner.new_session(context, rt)
         assert isinstance(inner, ChunkSession)
-        return _SimulatedLatency._Session(inner, self._latency_ns)
+        return _SimulatedLatency._Session(inner, self._latency_ns, self._clock)
 
 
 class FakeRobot(pimm.ControlSystem):
@@ -210,7 +212,8 @@ def _run_pipeline(tmp_path: Path) -> dict:
             simulated=True,
         )
         harness = Harness(
-            (StopOnFault() | ChunkPlayer()).wrap(_SimulatedLatency(policy, INFERENCE_LATENCY_S)), embodiment
+            (StopOnFault() | ChunkPlayer()).wrap(_SimulatedLatency(policy, INFERENCE_LATENCY_S, world.clock)),
+            embodiment,
         )
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)
         world.connect(harness.ds_command, ds_agent.command)

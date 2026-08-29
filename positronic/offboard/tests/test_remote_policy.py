@@ -1,4 +1,3 @@
-import threading
 import time
 from http import HTTPStatus
 from unittest.mock import MagicMock, patch
@@ -12,7 +11,7 @@ from websockets.http11 import Response
 from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import command
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, _ConnectRetries
-from positronic.offboard.tests.conftest import ANSWER_SEC, played_round_trip, round_trip
+from positronic.offboard.tests.conftest import played_round_trip, round_trip
 from positronic.policy import RemotePolicy
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.layers import ChunkPlayer
@@ -320,31 +319,6 @@ def test_remote_session_passes_through_none(open_session):
     assert round_trip(session, rt, {}) is None
 
 
-def test_a_call_while_a_round_trip_is_in_flight_answers_none(open_session):
-    """A session never waits. Every call while the round trip is in flight answers ``None``, and none of
-    them starts a second round trip."""
-    chunk = [{'a': 1, 'timestamp': 0.0}]
-    endpoint, mock_ws = _mock_endpoint()
-    started, release = threading.Event(), threading.Event()
-
-    def blocked(obs):
-        started.set()
-        assert release.wait(ANSWER_SEC), 'the test never released the round-trip'
-        return chunk
-
-    mock_ws.infer.side_effect = blocked
-    session, rt = open_session(endpoint)
-
-    assert session({}, 0) is None
-    assert started.wait(ANSWER_SEC), 'the round-trip never started'
-    assert session({}, 0) is None
-    assert mock_ws.infer.call_count == 1
-
-    release.set()
-    rt.wait(ANSWER_SEC)
-    assert session({}, 0) == chunk
-
-
 def test_opening_a_session_without_a_runtime_is_refused():
     """Nothing serves the round trip without a runtime, so the session is refused where it is opened, and not
     at the first observation it is given."""
@@ -352,73 +326,6 @@ def test_opening_a_session_without_a_runtime_is_refused():
 
     with pytest.raises(ValueError, match='runs its inference on a runtime'):
         endpoint.new_session()
-
-
-def test_cancel_drops_the_chunk_of_the_round_trip_in_flight(open_session):
-    """A cancelled session drops the chunk it waited for, because that chunk applies to a world the cancel
-    says has gone, and it asks for a new one."""
-    endpoint, mock_ws = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
-    session, rt = open_session(endpoint)
-
-    assert session({}, 0) is None
-    rt.wait(ANSWER_SEC)
-    session.cancel()
-
-    assert session({}, 0) is None  # the cancelled answer, read and thrown away
-    assert session({}, 0) is None  # a round-trip of its own
-    rt.wait(ANSWER_SEC)
-    assert mock_ws.infer.call_count == 2
-
-
-def test_a_cancelled_round_trip_still_raises_what_it_failed_with(open_session):
-    """A dropped chunk drops no failure. The session reads a cancelled answer, so a stalled server raises
-    to the caller that asked for the episode."""
-    endpoint, mock_ws = _mock_endpoint()
-    mock_ws.infer.side_effect = TimeoutError('server stalled')
-    session, rt = open_session(endpoint)
-
-    assert session({}, 0) is None
-    rt.wait(ANSWER_SEC)
-    session.cancel()
-
-    with pytest.raises(TimeoutError, match='server stalled'):
-        session({}, 0)
-
-
-def test_a_cancel_dies_with_the_answer_it_was_made_against(open_session):
-    """A cancel ends with the round trip it was made against, even when that round trip fails. A caller
-    that catches the failure and keeps the session gets the next chunk."""
-    endpoint, mock_ws = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
-    mock_ws.infer.side_effect = [TimeoutError('server stalled'), [{'a': 1, 'timestamp': 0.0}]]
-    session, rt = open_session(endpoint)
-
-    assert session({}, 0) is None
-    rt.wait(ANSWER_SEC)
-    session.cancel()
-    with pytest.raises(TimeoutError, match='server stalled'):
-        session({}, 0)
-
-    assert round_trip(session, rt, {}) == [{'a': 1, 'timestamp': 0.0}]
-
-
-def test_closing_a_session_with_a_round_trip_in_flight_is_refused(open_session):
-    """A runtime closes before the session it serves. A caller that closes the websocket under a round trip
-    gets an error that names the order, and not a failure on a dead socket."""
-    endpoint, mock_ws = _mock_endpoint()
-    release = threading.Event()
-
-    def blocked(obs):
-        assert release.wait(ANSWER_SEC), 'the test never released the round-trip'
-        return None
-
-    mock_ws.infer.side_effect = blocked
-    session, _rt = open_session(endpoint)
-
-    assert session({}, 0) is None
-    with pytest.raises(AssertionError, match='close the runtime'):
-        session.close()
-
-    release.set()
 
 
 def test_records_infer_span_without_scheduling_layer(tmp_path, open_session):

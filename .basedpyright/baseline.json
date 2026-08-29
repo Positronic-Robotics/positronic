@@ -4875,14 +4875,6 @@
                 "code": "reportIncompatibleMethodOverride",
                 "range": {
                     "startColumn": 8,
-                    "endColumn": 16,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportIncompatibleMethodOverride",
-                "range": {
-                    "startColumn": 8,
                     "endColumn": 14,
                     "lineCount": 1
                 }
@@ -5062,22 +5054,6 @@
                 "range": {
                     "startColumn": 55,
                     "endColumn": 60,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 15,
-                    "endColumn": 21,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 15,
-                    "endColumn": 21,
                     "lineCount": 1
                 }
             },

@@ -56,10 +56,6 @@ def round_trip(
 class RemoteSession(ChunkSession):
     """Per-episode session that forwards observations to a remote inference server.
 
-    One round trip is in flight at a time. The call that starts it answers ``None``, and so does every
-    call until the round trip comes back. The call that finds it answered returns its trajectory, or drops
-    that trajectory after a ``cancel``.
-
     ``compress_images`` comes from what the server declared (see ``RemoteMarker``).
     """
 
@@ -67,43 +63,20 @@ class RemoteSession(ChunkSession):
         self._session = ws_session
         self._rt = rt
         self._compress_images = compress_images
-        self._answer: Answer | None = None
-        self._cancelled = False
 
-    def __call__(self, obs: cabc.Mapping[str, Any], time_ns: int) -> list[dict[str, Any]] | None:
-        """The trajectory of a round trip that has come back, and ``None`` while one is in flight.
+    def __call__(self, obs: cabc.Mapping[str, Any], time_ns: int) -> Answer:
+        """One round trip to the server, and the caller's handle on the trajectory it brings back.
 
-        A server answer of one action becomes a 1-element list, which is the form ``ChunkSession.__call__``
-        returns.
+        A server answer of one action becomes a 1-element list, which is the form a chunk takes.
         """
-        if self._answer is None:
-            self._answer = self._rt.fns[INFER](self._session, obs, self._compress_images)
-            return None
-        if not self._answer.done():
-            return None
-        answer, cancelled = self._answer, self._cancelled
-        # The answer and the flag are cleared before the read, because ``result`` raises what the round
-        # trip raised. A cancel then ends with the answer it was made against, and never drops the next
-        # chunk.
-        self._answer, self._cancelled = None, False
-        result = answer.result()
-        if cancelled:
-            return None
-        return [result] if isinstance(result, dict) else result
-
-    def cancel(self):
-        # The cancel says the world the chunk applies to has gone. The session still reads the round trip
-        # for its failure, and drops the chunk that comes with it.
-        self._cancelled = self._answer is not None
+        answer = self._rt.fns[INFER](self._session, obs, self._compress_images)
+        return answer.map(lambda result: [result] if isinstance(result, dict) else result)
 
     @property
     def meta(self) -> dict[str, Any]:
         return flatten_dict({keys.TYPE: 'remote', keys.SERVER: self._session.metadata})
 
     def close(self):
-        assert self._answer is None or self._answer.done(), (
-            'close the runtime serving this session first: the round trip in flight uses the websocket that this closes'
-        )
         self._session.close()
 
 

@@ -1,9 +1,11 @@
 from .base import (
+    Answer,
     AnySession,
     ChunkSession,
     DelegatingChunkSession,
     DelegatingPolicy,
     DelegatingSession,
+    Done,
     Layer,
     Policy,
     Session,
@@ -28,4 +30,6 @@ __all__ = [
     'ActionTiming',
     'is_action',
     'Recorder',
+    'Answer',
+    'Done',
 ]

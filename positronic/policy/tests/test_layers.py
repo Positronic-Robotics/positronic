@@ -11,7 +11,7 @@ from positronic.drivers.roboarm.command import Impedance, JointDelta
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction, JointDeltaAction
-from positronic.policy.base import ChunkSession, Layer, Policy, Session
+from positronic.policy.base import Answer, ChunkSession, Done, Layer, Policy, Session
 from positronic.policy.codec import (
     ActionHorizon,
     ActionTimestamp,
@@ -27,6 +27,26 @@ from positronic.policy.layers import ChunkPlayer, StopOnFault, TemporalStack
 from positronic.policy.observation import ObservationCodec
 
 
+class _Pending(Answer):
+    """A call the test answers by hand, so a player can be watched while it waits."""
+
+    def __init__(self, value=None, failure: BaseException | None = None):
+        self._value = value
+        self._failure = failure
+        self._done = False
+
+    def answer(self):
+        self._done = True
+
+    def done(self):
+        return self._done
+
+    def result(self):
+        if self._failure is not None:
+            raise self._failure
+        return self._value
+
+
 class _ConstSession(ChunkSession):
     def __init__(self, actions):
         self._actions = actions
@@ -34,7 +54,7 @@ class _ConstSession(ChunkSession):
 
     def __call__(self, obs, time_ns):
         self.call_count += 1
-        return self._actions
+        return Done(self._actions)
 
 
 class _ConstPolicy(Policy):
@@ -144,7 +164,7 @@ class TestStopOnFault:
 
 
 class _ScriptedSession(ChunkSession):
-    """Answers each of ``script`` in turn — ``None`` where a session has nothing to place yet."""
+    """Answers each of ``script`` in turn, each entry a handle the player holds."""
 
     def __init__(self, script):
         self._script = list(script)
@@ -156,16 +176,61 @@ class _ScriptedSession(ChunkSession):
 
 
 class TestChunkPlayer:
-    def test_an_inner_with_no_answer_yet_is_asked_again(self):
-        """A session that waits for a served function answers ``None``, which is no chunk. The player
-        commands nothing, waits its own poll period, and asks the session again."""
-        inner = _ScriptedSession([None, None, [{'v': 1, keys.ACTION_TIMESTAMP: 0.0}]])
+    def test_a_call_that_has_not_answered_leaves_the_player_holding(self):
+        """The player asks one time and holds the handle, so a round it waits through costs no second call."""
+        pending = _Pending([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        inner = _ScriptedSession([pending])
         session = ChunkPlayer().make_session(inner)
 
         assert session(_obs(0.0), int(1e9)) == ({}, int(1e9) + int(ChunkPlayer.POLL_SEC * 1e9))
         assert session(_obs(0.1), int(1e9)) == ({}, int(1e9) + int(ChunkPlayer.POLL_SEC * 1e9))
+        pending.answer()
         assert session(_obs(0.2), int(1e9)) == ({'v': 1}, int(1e9) + int(ChunkPlayer.POLL_SEC * 1e9))
-        assert inner.call_count == 3
+        assert inner.call_count == 1
+
+    def test_a_cancel_drops_the_chunk_of_the_call_in_flight(self):
+        """A cancelled player drops the chunk it waited for, because that chunk describes a world the cancel
+        says has gone, and it asks for a new one."""
+        pending = _Pending([{'v': 1, keys.ACTION_TIMESTAMP: 0.0}])
+        inner = _ScriptedSession([pending, Done([{'v': 2, keys.ACTION_TIMESTAMP: 0.0}])])
+        session = ChunkPlayer().make_session(inner)
+        poll_ns = int(1e9) + int(ChunkPlayer.POLL_SEC * 1e9)
+
+        assert session(_obs(), int(1e9)) == ({}, poll_ns)
+        pending.answer()
+        session.cancel()
+
+        assert session(_obs(), int(1e9)) == ({}, poll_ns), 'the cancelled chunk was read and thrown away'
+        assert session(_obs(), int(1e9)) == ({'v': 2}, poll_ns)
+        assert inner.call_count == 2
+
+    def test_a_cancelled_call_still_raises_what_it_failed_with(self):
+        """A dropped chunk drops no failure. The player reads a cancelled call, so a stalled server raises
+        to the caller that asked for the episode."""
+        pending = _Pending(failure=TimeoutError('server stalled'))
+        session = ChunkPlayer().make_session(_ScriptedSession([pending]))
+
+        session(_obs(), int(1e9))
+        pending.answer()
+        session.cancel()
+
+        with pytest.raises(TimeoutError, match='server stalled'):
+            session(_obs(), int(1e9))
+
+    def test_a_cancel_ends_with_the_call_it_was_made_against(self):
+        """A cancel ends with the call it was made against, even when that call fails. A caller that catches
+        the failure and keeps the session gets the next chunk."""
+        pending = _Pending(failure=TimeoutError('server stalled'))
+        inner = _ScriptedSession([pending, Done([{'v': 2, keys.ACTION_TIMESTAMP: 0.0}])])
+        session = ChunkPlayer().make_session(inner)
+
+        session(_obs(), int(1e9))
+        pending.answer()
+        session.cancel()
+        with pytest.raises(TimeoutError, match='server stalled'):
+            session(_obs(), int(1e9))
+
+        assert session(_obs(), int(1e9)) == ({'v': 2}, int(1e9) + int(ChunkPlayer.POLL_SEC * 1e9))
 
     def test_a_chunk_plays_one_waypoint_at_a_time(self):
         """The player anchors the chunk on the call that receives it and asks for a call at each waypoint."""
@@ -193,8 +258,8 @@ class TestChunkPlayer:
         """The call that drains a chunk loads the next one, and a channel only the drained chunk named
         commands nothing: the driver holds what it last took until the new chunk names that channel."""
         inner = _ScriptedSession([
-            [{'arm': 1, keys.ACTION_TIMESTAMP: 0.0}, {'grip': 0.9, keys.ACTION_TIMESTAMP: 0.5}],
-            [{'arm': 2, keys.ACTION_TIMESTAMP: 0.2}],
+            Done([{'arm': 1, keys.ACTION_TIMESTAMP: 0.0}, {'grip': 0.9, keys.ACTION_TIMESTAMP: 0.5}]),
+            Done([{'arm': 2, keys.ACTION_TIMESTAMP: 0.2}]),
         ])
         session = ChunkPlayer().make_session(inner)
 
@@ -315,7 +380,7 @@ class _CaptureSession(ChunkSession):
 
     def __call__(self, obs, time_ns):
         self.seen.append(obs)
-        return []
+        return Done([])
 
 
 class _CapturePolicy(Policy):

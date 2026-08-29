@@ -12,7 +12,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.policy.base import ChunkSession, DelegatingSession, Layer, Session
+from positronic.policy.base import Answer, ChunkSession, DelegatingSession, Layer, Session
 
 # How far from the call a waypoint may sit: past any real chunk, short of the decades a chunk is off by
 # when it reaches the player already anchored.
@@ -80,19 +80,38 @@ class ChunkPlayer(Layer):
         def __init__(self, inner: ChunkSession):
             self._inner = inner
             self._waypoints: deque[ChunkPlayer._Session._Waypoint] = deque()
+            # The one call this layer keeps in flight, and whether a ``cancel`` has orphaned the chunk it
+            # will bring back.
+            self._answer: Answer | None = None
+            self._orphaned = False
 
         def __call__(self, obs, time_ns):
-            """Plays the chunk it holds; re-queries in the call that drains it."""
+            """Plays the chunk it holds; asks for the next one in the call that drains it."""
             if not self._waypoints or self._waypoints[-1].time_ns <= time_ns:
-                chunk = self._inner(obs, time_ns)
-                if chunk is not None:
-                    self._load(chunk, time_ns)
+                if self._answer is None:
+                    self._answer = self._inner(obs, time_ns)
+                if self._answer.done():
+                    chunk = self._take()
+                    if chunk is not None:
+                        self._load(chunk, time_ns)
             commands: dict[str, Any] = {}
             while self._waypoints and self._waypoints[0].time_ns <= time_ns:
                 commands.update(self._waypoints.popleft().cmd)
             if not self._waypoints:
                 return commands, time_ns + int(ChunkPlayer.POLL_SEC * 1e9)
             return commands, self._waypoints[0].time_ns
+
+        def _take(self) -> list[dict[str, Any]] | dict[str, Any] | None:
+            """The chunk the call brought back, and ``None`` for one a ``cancel`` orphaned.
+
+            An orphaned call is read too, so its failure reaches the caller. The state clears before that
+            read, so a cancel ends with the call it was made against and never drops the chunk after it.
+            """
+            assert self._answer is not None, 'only a call this layer made brings a chunk back'
+            answer, orphaned = self._answer, self._orphaned
+            self._answer, self._orphaned = None, False
+            chunk = answer.result()
+            return None if orphaned else chunk
 
         def _load(self, chunk: list[dict[str, Any]] | dict[str, Any], time_ns: int) -> None:
             """Anchor ``chunk`` to ``time_ns`` and hold it.
@@ -127,6 +146,8 @@ class ChunkPlayer(Layer):
 
         def cancel(self):
             self._waypoints.clear()
+            # The chunk in flight describes a world that has gone. The call is still read, for its failure.
+            self._orphaned = self._answer is not None
             self._inner.cancel()
 
         def close(self):

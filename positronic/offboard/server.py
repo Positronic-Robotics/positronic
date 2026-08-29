@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocke
 from starlette.datastructures import QueryParams
 
 from positronic import keys
-from positronic.policy import Policy, Recorder
+from positronic.policy import ChunkSession, Policy, Recorder
 from positronic.policy.base import Layer
 from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
@@ -334,7 +334,8 @@ class PolicyServer:
                 session = await asyncio.to_thread(served.new_session)
             finally:
                 self._infer_lock.release()
-            assert session is not None
+            # The wire carries chunks, so a stack that answers commands has nothing this server can send.
+            assert isinstance(session, ChunkSession), f'{type(session).__name__} answers commands, not a chunk'
             # Later entries win: per-episode session facts over static ones, the server's own last.
             meta = {
                 **self.metadata,
@@ -358,7 +359,8 @@ class PolicyServer:
                         # would mis-parse a ``waiting`` message. Its ``infer_timeout`` bounds the wait.
                         async with self._infer_lock:
                             # The server's clock is not the rig's.
-                            actions = await asyncio.to_thread(session, raw_obs, time.time_ns())
+                            answer = await asyncio.to_thread(session, raw_obs, time.time_ns())
+                        actions = answer.result()
                         await websocket.send_bytes(serialise({protocol.RESULT: actions}))
                     except Exception as e:
                         logger.error(f'Error processing message: {e}', exc_info=True)

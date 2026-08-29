@@ -20,7 +20,7 @@ from pimm.logging import init_logging
 from positronic import keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
-from positronic.policy import ChunkSession, Codec, Layer, Policy
+from positronic.policy import ChunkSession, Codec, Done, Layer, Policy
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import list_checkpoints
@@ -268,8 +268,8 @@ class _DreamZeroSession(ChunkSession):
 
         # Response is (N, 8) — 7 joints + 1 gripper
         if action_array.ndim == 1:
-            return [{'action': action_array}]
-        return [{'action': action_array[i]} for i in range(action_array.shape[0])]
+            return Done([{'action': action_array}])
+        return Done([{'action': action_array[i]} for i in range(action_array.shape[0])])
 
     def close(self):
         try:

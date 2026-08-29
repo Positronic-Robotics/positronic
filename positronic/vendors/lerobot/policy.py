@@ -7,7 +7,7 @@ from lerobot.configs.types import FeatureType
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 
 from positronic import keys
-from positronic.policy import ChunkSession, Policy
+from positronic.policy import ChunkSession, Done, Policy
 from positronic.policy.observation import TASK_FIELD
 
 
@@ -38,7 +38,7 @@ class _LerobotSession(ChunkSession):
         self._device = device
         self._meta = meta
 
-    def __call__(self, obs: dict[str, Any], time_ns: int) -> list[dict[str, Any]]:
+    def __call__(self, obs: dict[str, Any], time_ns: int) -> Done:
         obs_int = {}
         for key, val in obs.items():
             if key == TASK_FIELD:
@@ -62,8 +62,8 @@ class _LerobotSession(ChunkSession):
 
         action = action.cpu().numpy().squeeze(0)
         if action.ndim == 1:
-            return [{'action': action}]
-        return [{'action': a} for a in action]
+            return Done([{'action': action}])
+        return Done([{'action': a} for a in action])
 
     @property
     def meta(self) -> dict[str, Any]:

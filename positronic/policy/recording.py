@@ -42,16 +42,16 @@ outgoing action keys share that namespace; in the rare case the same key appears
 both sides, the later write overwrites at that timestamp.
 
 TODO(#661): this module becomes the recording the framework offers a session, and stops being a layer a
-pipeline composes. The framework then records every boundary it carries, a session appends series of its
-own, and a served function records against the call it answers. A tap around a session cannot do the
-last of those: it sees an answer on a later call than the observation that produced it.
+pipeline composes. The framework then records every boundary it carries, and a session appends series of
+its own.
 """
 
 import itertools
 from collections.abc import Mapping
 from datetime import datetime
+from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import rerun as rr
@@ -60,7 +60,7 @@ import rerun.blueprint as rrb
 from positronic import geom
 from positronic import keys as obs_keys
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.policy.base import AnySession, ChunkSession, Layer, Session
+from positronic.policy.base import Answer, AnySession, ChunkSession, Layer, Session
 from positronic.policy.codec import is_action
 from positronic.utils.rerun_compat import log_numeric_series, set_timeline_sequence, set_timeline_time
 
@@ -368,6 +368,17 @@ class _RecordingTap(Layer):
         return tap(inner, self._rec, self._name, stream)
 
 
+class _Frame(NamedTuple):
+    """What one call is logged against: its observation, the rerun timelines it set, and its step.
+
+    A chunk is logged when the caller reads it, so its frame outlives the call that started the work.
+    """
+
+    obs: Mapping[str, Any]
+    timelines: dict[str, Any]
+    step: int
+
+
 class _RecordingTapSession:
     """Logs the observation flowing down and the actions flowing up at one point.
 
@@ -385,10 +396,10 @@ class _RecordingTapSession:
     def meta(self):
         return {**self._inner.meta, 'recording.rrd': str(self._rec._rrd_path)}
 
-    def _set_timelines(self) -> None:
-        for timeline, value in self._rec._timeline_values.items():
+    def _set_timelines(self, frame: '_Frame') -> None:
+        for timeline, value in frame.timelines.items():
             set_timeline_time(timeline, value)
-        set_timeline_sequence('step', self._step)
+        set_timeline_sequence('step', frame.step)
 
     def _log(self, prefix: str, data: Mapping[str, Any]) -> None:
         """Recursively log obs *data* under *prefix*, recording entity paths on the Recorder."""
@@ -405,20 +416,21 @@ class _RecordingTapSession:
                 log_numeric_series(path, num)
                 self._rec._numeric_paths.append(path)
 
-    def _log_action_chunk(self, prefix: str, actions: list[dict], obs: Mapping[str, Any]) -> None:  # noqa: C901
+    def _log_action_chunk(self, prefix: str, actions: list[dict], frame: '_Frame') -> None:  # noqa: C901
         """Log the action chunk as an enriched 3D trajectory + ``action_time`` time series."""
         # Skip validity sentinels: they carry no command to plot and would flip the ``all(... in a)`` checks below.
         actions = [a for a in actions if is_action(a)]
         horizon = _horizon(actions)
-        tv = self._rec._timeline_values
+        tv = frame.timelines
         base_ns = int(tv.get('obs_time', tv.get('wall_time', next(iter(tv.values()), 0))))
         grip = (
             _stack_numeric([a[obs_keys.TARGET_GRIP] for a in actions])
             if all(obs_keys.TARGET_GRIP in a for a in actions)
             else None
         )
-        actual_pos = obs.get(obs_keys.EE_POSE) if isinstance(obs, Mapping) else None
-        actual_grip = obs.get(obs_keys.GRIP) if isinstance(obs, Mapping) else None
+        obs = frame.obs
+        actual_pos = obs.get(obs_keys.EE_POSE)
+        actual_grip = obs.get(obs_keys.GRIP)
         # Under TemporalStack these arrive as (T, 7) / (T,) stacks; the overlay draws the current pose,
         # which is the last frame (offsets end at 0 = now), mirroring the image collapse in `_as_image`.
         if actual_pos is not None:
@@ -467,37 +479,36 @@ class _RecordingTapSession:
         if bp is not None:
             rr.send_blueprint(bp)
 
-    def _tapped(self, obs, time_ns) -> Any:
+    def _tapped(self, obs, time_ns) -> tuple[Any, _Frame]:
+        """What the inner answered, and the frame this call is logged against."""
         rec = self._rec
         outermost = rec._depth == 0
         if outermost:
             rec._timeline_values = {t: obs[k] for t, k in rec._timelines.items() if k in obs}
         rec._depth += 1
         try:
+            frame = _Frame(obs, dict(rec._timeline_values), self._step)
             with self._stream:
-                self._set_timelines()
+                self._set_timelines(frame)
                 self._log(self._name, obs)
-
-            answer = self._inner(obs, time_ns)
-
-            if actions := self._actions(answer):
-                with self._stream:
-                    self._set_timelines()
-                    # TODO(#661): the chunk is logged against the observation and the timelines of this
-                    # call, which a session that answers from a served function makes a later call than the
-                    # one the chunk was computed from. See the module docstring.
-                    self._log_action_chunk(self._name, actions, obs)
-            # Send a combined blueprint (all taps' paths) once, from the outermost
-            # tap, after inner taps have logged their first obs.
-            if outermost and self._step == 0:
-                with self._stream:
-                    self._send_blueprint()
-            self._step += 1
-            return answer
+            return self._inner(obs, time_ns), frame
         finally:
             rec._depth -= 1
             if rec._depth == 0:
                 rec._timeline_values = {}
+
+    def _log_actions(self, actions: list[dict], frame: _Frame) -> None:
+        if actions:
+            with self._stream:
+                self._set_timelines(frame)
+                self._log_action_chunk(self._name, actions, frame)
+
+    def _end_step(self) -> None:
+        """Close the round: send the combined blueprint once, from the outermost tap."""
+        if self._rec._depth == 0 and self._step == 0:
+            with self._stream:
+                self._send_blueprint()
+        self._step += 1
 
     def cancel(self):
         self._inner.cancel()
@@ -512,18 +523,21 @@ class _CommandTapSession(_RecordingTapSession, Session):
     rather than a chunk per inference."""
 
     def __call__(self, obs, time_ns) -> tuple[Mapping[str, Any], int]:
-        return self._tapped(obs, time_ns)
-
-    def _actions(self, answer) -> list[dict]:
+        answer, frame = self._tapped(obs, time_ns)
         commands, _ = answer
-        return [dict(commands)] if commands else []
+        self._log_actions([dict(commands)] if commands else [], frame)
+        self._end_step()
+        return answer
 
 
 class _ChunkTapSession(_RecordingTapSession, ChunkSession):
-    """A tap under a ``ChunkPlayer``: it logs the chunk a session answers."""
+    """A tap under a ``ChunkPlayer``: it logs the chunk a call brings back, when the caller reads it."""
 
-    def __call__(self, obs, time_ns) -> list[dict[str, Any]] | dict[str, Any] | None:
-        return self._tapped(obs, time_ns)
+    def __call__(self, obs, time_ns) -> Answer:
+        answer, frame = self._tapped(obs, time_ns)
+        self._end_step()
+        return answer.map(partial(self._log_chunk, frame))
 
-    def _actions(self, answer) -> list[dict]:
-        return [dict(answer)] if isinstance(answer, Mapping) else (answer or [])
+    def _log_chunk(self, frame: _Frame, chunk):
+        self._log_actions([dict(chunk)] if isinstance(chunk, Mapping) else (chunk or []), frame)
+        return chunk

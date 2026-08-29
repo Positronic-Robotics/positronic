@@ -84,32 +84,14 @@ class LerobotPolicy(Policy):
     _INFER = 'infer'
 
     class _Session(ChunkSession):
-        """Per-episode session that gives the model call to the runtime, and answers the chunk on a later call."""
+        """Per-episode session that gives the model call to the runtime."""
 
         def __init__(self, rt: Runtime, meta: dict[str, Any]):
             self._rt = rt
             self._meta = meta
-            self._answer: Answer | None = None
-            self._cancelled = False
 
-        def __call__(self, obs: dict[str, Any], time_ns: int) -> list[dict[str, Any]] | None:
-            if self._answer is None:
-                self._answer = self._rt.fns[LerobotPolicy._INFER](obs)
-                return None
-            if not self._answer.done():
-                return None
-            answer, cancelled = self._answer, self._cancelled
-            # The answer and the flag are cleared before the read, because ``result`` raises what the model
-            # call raised. A cancel then ends with the answer it was made against, and never drops the next
-            # chunk.
-            self._answer, self._cancelled = None, False
-            result = answer.result()
-            return None if cancelled else result
-
-        def cancel(self):
-            # The cancel says the world the chunk applies to has gone. The session still reads the model call
-            # for its failure, and drops the chunk that comes with it.
-            self._cancelled = self._answer is not None
+        def __call__(self, obs: dict[str, Any], time_ns: int) -> Answer:
+            return self._rt.fns[LerobotPolicy._INFER](obs)
 
         @property
         def meta(self) -> dict[str, Any]:

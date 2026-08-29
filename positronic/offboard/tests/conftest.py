@@ -10,7 +10,7 @@ import pytest
 import uvicorn
 
 from positronic.offboard.server import PolicyServer
-from positronic.policy import AnySession, ChunkSession, Policy, Session
+from positronic.policy import AnySession, ChunkSession, Done, Policy, Session
 from positronic.policy.executor import Executor
 from positronic.policy.layers import ChunkPlayer
 from positronic.policy.spec import ModelSource, PolicySource, remote
@@ -76,23 +76,22 @@ ANSWER_SEC = 5.0
 
 
 def round_trip(session: ChunkSession, rt: Executor, obs, time_ns: int = 0) -> list[dict] | dict | None:
-    """What ``session`` answers for ``obs``, over the two calls one round trip takes.
-
-    Both calls get the same ``time_ns``, so a chunk comes back anchored at the value the test passed.
-    """
-    assert session(obs, time_ns) is None, 'a round-trip was already in flight'
+    """What ``session`` answers for ``obs``, once its round trip has come back."""
+    answer = session(obs, time_ns)
     rt.wait(ANSWER_SEC)
     assert not rt.in_flight, 'the round-trip never came back'
-    return session(obs, time_ns)
+    return answer.result()
 
 
 def played_round_trip(session: Session, rt: Executor, obs, time_ns: int = 0) -> Mapping[str, Any]:
-    """What ``session`` commands for ``obs``, over the two calls one round trip takes.
+    """What ``session`` commands for ``obs`` once the call under its ``ChunkPlayer`` has come back.
 
-    For a session topped by a ``ChunkPlayer``: both calls get the same ``time_ns``, so the chunk comes back
-    anchored at the value the test passed and the answer is the waypoints due at it.
+    Every call gets the same ``time_ns``, so the chunk comes back anchored at the value the test passed and
+    the answer is the waypoints due at it.
     """
-    assert session(obs, time_ns)[0] == {}, 'a round-trip was already in flight'
+    commands, _ = session(obs, time_ns)
+    if commands:
+        return commands
     rt.wait(ANSWER_SEC)
     assert not rt.in_flight, 'the round-trip never came back'
     return session(obs, time_ns)[0]
@@ -101,7 +100,7 @@ def played_round_trip(session: Session, rt: Executor, obs, time_ns: int = 0) -> 
 def _make_mock_policy(action, meta):
     """Create a mock policy with session-based API."""
     session = MagicMock()
-    session.return_value = action
+    session.return_value = Done(action)
     session.meta = meta
     session.close = MagicMock()
 

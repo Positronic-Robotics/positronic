@@ -10,7 +10,16 @@ from functools import partial
 
 import pytest
 
-from positronic.policy.base import Answer, ChunkSession, DelegatingChunkSession, Layer, NotAnswered, Policy, Session
+from positronic.policy.base import (
+    Answer,
+    ChunkSession,
+    DelegatingChunkSession,
+    Done,
+    Layer,
+    NotAnswered,
+    Policy,
+    Session,
+)
 from positronic.policy.executor import Executor, blocking
 
 # How long a test waits for the worker threads before calling the call lost.
@@ -243,7 +252,7 @@ class _PlainPolicy(Policy):
 
         def __call__(self, obs, time_ns):
             self.calls += 1
-            return [{'action': obs}]
+            return Done([{'action': obs}])
 
     def __init__(self):
         self.session = _PlainPolicy._Session()
@@ -256,33 +265,23 @@ _ECHO = 'echo'
 
 
 class _EchoPolicy(Policy):
-    """Serves ``echo``, and makes sessions that take ``rounds`` calls of it to answer."""
+    """Serves ``echo``: its session hands the caller the handle on one call of it."""
 
     class _Session(ChunkSession):
-        def __init__(self, rt, rounds: int):
+        def __init__(self, rt):
             self._rt = rt
-            self._answer = None
-            self._left = rounds
             self.calls = 0
 
         def __call__(self, obs, time_ns):
             self.calls += 1
-            result = None
-            if self._answer is not None:
-                result, self._answer = self._answer.result(), None
-            if self._left > 0:
-                self._left -= 1
-                self._answer = self._rt.fns[_ECHO](obs)
-                return None
-            return result
+            return self._rt.fns[_ECHO](obs)
 
-    def __init__(self, rounds: int):
-        self._rounds = rounds
+    def __init__(self):
         self.session: _EchoPolicy._Session
 
     def new_session(self, context=None, rt=None) -> ChunkSession:
         assert rt is not None
-        self.session = _EchoPolicy._Session(rt, self._rounds)
+        self.session = _EchoPolicy._Session(rt)
         return self.session
 
     @property
@@ -353,39 +352,36 @@ class TestBlocking:
     def test_a_session_that_answers_in_its_own_call_is_called_one_time(self, opened):
         policy = _PlainPolicy()
 
-        assert opened(blocking(policy))({'x': 1}, 0.0) == [{'action': {'x': 1}}]
+        assert opened(blocking(policy))({'x': 1}, 0.0).result() == [{'action': {'x': 1}}]
         assert policy.session.calls == 1
 
-    @pytest.mark.parametrize(('rounds', 'calls'), [(1, 2), (2, 3)])
-    def test_a_session_is_called_again_for_every_function_it_starts(self, opened, rounds, calls):
-        policy = _EchoPolicy(rounds)
+    def test_the_handle_a_call_answers_is_already_done(self, opened):
+        """The wait is what ``blocking`` adds: the caller reads the chunk without asking a second time."""
+        policy = _EchoPolicy()
 
-        assert opened(blocking(policy))({'x': 1}, 0.0) == {'x': 1}
-        assert policy.session.calls == calls
+        answer = opened(blocking(policy))({'x': 1}, 0.0)
 
-    def test_a_session_that_starts_nothing_and_answers_none_is_called_one_time(self, opened):
-        policy = _EchoPolicy(rounds=0)
-
-        assert opened(blocking(policy))({'x': 1}, 0.0) is None
+        assert answer.done()
+        assert answer.result() == {'x': 1}
         assert policy.session.calls == 1
 
     def test_a_layer_above_it_is_called_one_time_for_one_answer(self, opened):
         """A layer above ``blocking`` is called once for one answer. That is why ``blocking`` wraps the
         policy and not the chain: a layer that encodes the observation, or records it, would otherwise do
         that work once per call the answer took."""
-        layer, policy = _CountingLayer(), _EchoPolicy(rounds=2)
+        layer, policy = _CountingLayer(), _EchoPolicy()
 
-        assert opened(layer.wrap(blocking(policy)))({'x': 1}, 0.0) == {'x': 1}
-        assert (layer.calls, policy.session.calls) == (1, 3)
+        assert opened(layer.wrap(blocking(policy)))({'x': 1}, 0.0).result() == {'x': 1}
+        assert (layer.calls, policy.session.calls) == (1, 1)
 
     def test_it_serves_its_functions_itself(self):
         """A blocking policy runs its own functions, so nothing above it builds a runtime for them."""
-        assert blocking(_EchoPolicy(rounds=1)).functions == {}
+        assert blocking(_EchoPolicy()).functions == {}
 
     def test_closing_the_session_closes_the_runtime_it_made(self):
         """The session owns the runtime it was made with, and closing the session is the only way to
         close it."""
-        policy = _EchoPolicy(rounds=1)
+        policy = _EchoPolicy()
         session = blocking(policy).new_session()
         session.close()
 

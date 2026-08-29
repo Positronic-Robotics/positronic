@@ -14,7 +14,7 @@ from pimm.logging import init_logging
 from positronic import geom, keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
-from positronic.policy import ChunkSession, Codec, Policy
+from positronic.policy import ChunkSession, Codec, Done, Policy
 from positronic.policy.codec import ChangeEEFrame, RestrictImageSize
 from positronic.policy.layers import ChunkPlayer, StopOnFault
 from positronic.policy.spec import ModelSource, remote
@@ -131,7 +131,7 @@ class _OpenpiSession(ChunkSession):
     def __call__(self, obs, time_ns):
         response = self._client.infer(obs)
         actions = response['actions']
-        return [{'action': a} for a in actions]
+        return Done([{'action': a} for a in actions])
 
 
 class OpenpiPolicy(Policy):

@@ -5,7 +5,7 @@ import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from positronic import keys
-from positronic.policy import ChunkSession, Policy
+from positronic.policy import ChunkSession, Done, Policy
 from positronic.vendors import molmoact2
 
 # The three views and the 8-D ``[joint_positions(7), grip(1)]`` state of the DROID action space this vendor
@@ -32,7 +32,7 @@ class _MolmoAct2Session(ChunkSession):
         self._num_steps = num_steps
         self._meta = meta
 
-    def __call__(self, obs: dict[str, Any], time_ns: int) -> list[dict[str, Any]]:
+    def __call__(self, obs: dict[str, Any], time_ns: int) -> Done:
         # predict_action is decorated @torch.no_grad() and manages its own precision: the model loads
         # in bfloat16 and runs bf16 throughout (its autocast path only guards fp32 inputs), so an
         # external torch.inference_mode() / torch.autocast wrap or a detach() would all be redundant.
@@ -49,7 +49,7 @@ class _MolmoAct2Session(ChunkSession):
             enable_cuda_graph=False,
         )
         actions = out.actions[0].float().cpu().numpy()
-        return [{'action': action} for action in actions]
+        return Done([{'action': action} for action in actions])
 
     @property
     def meta(self) -> dict[str, Any]:
