@@ -150,15 +150,15 @@ One algorithm may drive several robots at once.
 
 ### Control
 
-The robot moves continuously, but code acts in moments. The framework bridges
-the two with signals, a concept it takes from
-[pimm](../../pimm/README.md), Positronic's runtime. A
-signal is a single value that its owner updates at its own rate. A reader
-takes the latest value whenever it looks. Nothing queues and nothing waits.
+The robot moves continuously, but code acts in moments. The framework
+connects the two with signals, a concept from
+[pimm](../../pimm/README.md), Positronic's runtime. A signal is a single
+value that its owner updates at its own rate. A reader takes the latest
+value whenever it looks. Nothing queues and nothing waits.
 
-The policy session lives in this world as a reader of observations and a
-writer of commands. Everything around it is asynchronous, but the session
-itself is called synchronously — a plain function call, repeated:
+The session is a reader of observations and a writer of commands.
+Everything around the session is asynchronous, but the framework calls it
+synchronously — a plain function call, repeated:
 
 - One call: `(observations, time) -> (commands, resume_at)` — the current
   observations and time in, the commands to execute now (possibly none) out.
@@ -195,13 +195,13 @@ and record it.
 
 ### Composability
 
-A neural policy is never just the model. Around it sit data transforms —
+A neural policy is never just the model. Data transforms surround it —
 normalize, change frames, encode actions — the pre- and post-processing
 every ML pipeline has. Physical AI adds a second kind of part, one that
-works in time: decide when to call the model, execute the chunk it
+works in time: decide when to call the model, execute the actions it
 returned, blend a late plan into the motion underway. The API gives each
-kind its own shape. A `Codec` transforms data and knows nothing of time. A
-`Layer` wraps a session and lives on the same clock it does.
+kind its own shape. A `Codec` transforms data and does not see time. A
+`Layer` wraps a session and runs on the session's clock.
 
 - A `Layer` is a recipe fixed at configuration time. When a policy session
   is created, each layer makes its session, wrapping the one inside it.
@@ -226,19 +226,19 @@ its session directly against the call itself.
 Execution splits between the rig and the server. The definition does not:
 the layers and codecs on the rig belong to the same design as the functions
 behind the wire, and halves defined apart drift apart. The server owns the
-whole definition and hands it to the rig as a declaration.
+whole definition and sends it to the rig as a description.
 
-- One URL is enough to use a policy: the declaration carries everything the
+- One URL is enough to use a policy: the description carries everything the
   rig needs to assemble its half.
-- Declarations are backward compatible: the framework evolves without
+- Descriptions are backward compatible: the framework evolves without
   changing what an already-served policy does (as much as possible).
-- A declaration the rig cannot honor is refused at the handshake.
+- A description the rig cannot honor is refused at the handshake.
 
 ### Recording
 
-A system split between a rig and a server is challenging to debug. Data flows
-in two dimensions — through time and through the layers — and the recording
-exists to reconstruct both flows after the fact.
+A system split between a rig and a server is hard to debug. Data flows
+in two dimensions — through time and through the layers — and the
+recording reconstructs both flows after the episode.
 
 Each session produces one recording on the rig: a set of named series, where
 a series holds values of one type — arrays, images, numbers. A recording is
@@ -311,7 +311,7 @@ class Runtime(Protocol):
 
 ```python
 class Policy(Protocol):
-    # The policy's heavy work: plain callables, declared by name, served
+    # The policy's heavy work: plain callables, given by name, served
     # back as `rt.fns`.
     @property
     def functions(self) -> Mapping[str, Callable]: ...
@@ -350,5 +350,5 @@ itself. `close` never travels through the chain.
 ## Deferred, not to decide now
 
 - The shape of the robot description, and a server's ability to refuse one.
-- The protocol delivering the declared stack to the rig — versioning and
+- The protocol delivering the description to the rig — versioning and
   compatibility.
