@@ -125,7 +125,6 @@ def main(
 
     output_path = Path(output_dir) if output_dir is not None else None
     dataset_factory = LocalDatasetWriter if output_path is not None else None
-    # Process each episode
     for ep_index in indices:
         episode = dataset[ep_index]
         assert isinstance(episode, Episode), 'an integer index names one episode'

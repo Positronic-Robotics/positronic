@@ -353,7 +353,7 @@ Each line of `edits.jsonl` is one JSON record carrying its op. `{"op": "set_stat
 
 Key ideas
 - Inputs are registered explicitly through `DsWriterAgent.add_signal(name, serializer=None)`.
-- Each `START_EPISODE` names the path its episode records into. The agent holds no dataset of its own: it opens each named one through the factory it was built with (`DsWriterAgent(LocalDatasetWriter)`), once per name, and closes them all when it stops.
+- Each `START_EPISODE` names the path its episode records into, and `None` names nowhere. The agent holds no dataset of its own: it opens each named one through the factory it was built with (`DsWriterAgent(LocalDatasetWriter)`), once per name, and closes them all when it stops.
 - The agent polls inputs at a configurable rate and appends only on updates.
 - Recording is best effort, and this is a deliberate trade rather than an oversight. Each input arrives over a one-slot `pimm` signal where a new value overwrites one still unread, so a recorder that stalls for longer than the gap between two samples loses the older one — commands exactly as much as camera frames or arm state. An episode is what the recorder managed to observe, not a guaranteed-complete log of what happened; treat a missing sample as possible in any analysis that counts them.
 - A separate `command` channel controls episode lifecycle.
@@ -379,7 +379,8 @@ Built‑in serializers (`positronic.dataset.serializers.Serializers`)
 
 Lifecycle
 - `START_EPISODE`: opens a new episode in the dataset the command names and applies provided static
-  metadata (`DsWriterCommand.START(output_path, static_data)`). A command that names no path opens nothing.
+  metadata (`DsWriterCommand.START(output_path, static_data)`). A command that names no path opens an episode
+  that records nowhere, so the `STOP_EPISODE` that ends it is as ordinary as any other.
 - `STOP_EPISODE`: finalizes the episode (applies static data then closes).
 - `ABORT_EPISODE`: aborts and discards the episode directory.
 

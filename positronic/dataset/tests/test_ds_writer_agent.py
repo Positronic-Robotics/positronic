@@ -276,7 +276,7 @@ def test_each_episode_records_into_the_dataset_its_start_names(tmp_path, world):
     assert second_ep['a'][-1][0] == 20
 
 
-def test_a_start_that_names_no_dataset_opens_no_episode(world):
+def test_a_start_that_names_no_dataset_writes_no_episode(world):
     """The episode runs, and the STOP that ends it finishes an episode that recorded nowhere."""
     ds = FakeDatasetWriter()
     agent, cmd_em, emitters = build_agent_with_pipes({'a': None}, ds, world)
