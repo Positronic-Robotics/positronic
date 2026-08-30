@@ -1,8 +1,8 @@
 import logging
 import time
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import nullcontext
 from enum import Enum
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -106,10 +106,12 @@ class DataCollectionController(pimm.ControlSystem):
         nominal_joints: Sequence[float] | np.ndarray,
         joints_spread: Sequence[float] | np.ndarray = (),
         *,
+        output_path: Path | None = None,
         static_meta: dict | None = None,
         metadata_getter: Callable[[], dict] | None = None,
     ):
         self.operator_position = operator_position
+        self._output_path = output_path
         self._nominal_joints = np.asarray(nominal_joints, dtype=np.float64)
         # A station that measured no jitter sends the arm exactly to its nominal.
         spread = joints_spread if len(joints_spread) else np.zeros_like(self._nominal_joints)
@@ -172,7 +174,7 @@ class DataCollectionController(pimm.ControlSystem):
                         meta = dict(self._static_meta)
                         meta.update(self.robot_meta_in.value)
                         meta.update(self.metadata_getter())
-                        self.ds_agent_commands.emit(DsWriterCommand.START(meta))
+                        self.ds_agent_commands.emit(DsWriterCommand.START(self._output_path, meta))
                         self.sound.emit(start_wav_path)
                     else:
                         self.ds_agent_commands.emit(DsWriterCommand.STOP())
@@ -299,16 +301,17 @@ def main(
         static_meta[keys.TASK] = task
     if robot_arm is not None:
         static_meta.update(wire.ROBOT_STATIC_META)
+    output_path = None
+    if output_dir is not None:
+        output_path = pos3.sync(output_dir, sync_on_error=True)
+        utils.save_run_metadata(output_path, patterns=['*.py', '*.toml'])
     data_collection = DataCollectionController(
-        operator_position.value, nominal_joints, joints_spread, static_meta=static_meta
+        operator_position.value, nominal_joints, joints_spread, output_path=output_path, static_meta=static_meta
     )
 
-    if output_dir is not None:
-        output_dir = pos3.sync(output_dir, sync_on_error=True)
-        utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
-    writer_cm = LocalDatasetWriter(output_dir, video_options=video_options) if output_dir is not None else nullcontext()
-    with writer_cm as dataset_writer, pimm.World() as world:
-        ds_agent = wire.wire(world, data_collection, dataset_writer, camera_emitters, robot_arm, gripper, None)
+    dataset_factory = partial(LocalDatasetWriter, video_options=video_options) if output_path is not None else None
+    with pimm.World() as world:
+        ds_agent = wire.wire(world, data_collection, dataset_factory, camera_emitters, robot_arm, gripper, None)
         _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
 
         # SO-101 fills both the arm and gripper slots with one object; a control system runs in exactly one process.
@@ -359,20 +362,22 @@ def main_sim(
     if task is not None:
         static_meta[keys.TASK] = task
 
+    output_path = None
+    if output_dir is not None:
+        output_path = pos3.sync(output_dir, sync_on_error=True)
+        utils.save_run_metadata(output_path, patterns=['*.py', '*.toml'])
     data_collection = DataCollectionController(
         operator_position.value,
         sim.initial_joints,
+        output_path=output_path,
         static_meta=static_meta,
         metadata_getter=lambda: {k: v.tolist() for k, v in sim.save_state().items()},
     )
 
-    if output_dir is not None:
-        output_dir = pos3.sync(output_dir, sync_on_error=True)
-        utils.save_run_metadata(output_dir, patterns=['*.py', '*.toml'])
-    writer_cm = LocalDatasetWriter(output_dir) if output_dir is not None else nullcontext()
-    with writer_cm as dataset_writer, pimm.World(virtual_time=True) as world:
+    dataset_factory = LocalDatasetWriter if output_path is not None else None
+    with pimm.World(virtual_time=True) as world:
         # The sim carries both the arm and the gripper ports, so it fills both slots.
-        ds_agent = wire.wire(world, data_collection, dataset_writer, cameras, sim, sim, gui, TimeMode.MESSAGE)
+        ds_agent = wire.wire(world, data_collection, dataset_factory, cameras, sim, sim, gui, TimeMode.MESSAGE)
         _wire(world, ds_agent, data_collection, webxr, sim, sound)
         world.connect(data_collection.redraw_scene, sim.env_reset)
 

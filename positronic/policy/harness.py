@@ -1,6 +1,7 @@
 import time
 from collections import deque
 from collections.abc import Generator, Iterator
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -26,15 +27,16 @@ POLL_PERIOD_SEC = 0.01
 
 
 class Rollout:
-    """What one ``perform_task`` call asks for: the trial to run, the session that runs it, and the runtime
-    that serves the policy's functions to that session.
+    """What one ``perform_task`` call asks for: the trial to run, the session that runs it, the runtime that
+    serves the policy's functions to that session, and the path the episode records into.
 
-    Whoever asks opens it, and so decides which model runs the trial. The Harness closes it: the episode it
-    ran, or the ask it refused.
+    Whoever asks opens it, and so decides which model runs the trial and where the recording lands. An
+    ``output_path`` of ``None`` records nothing. The Harness closes it: the episode it ran, or the ask it refused.
     """
 
-    def __init__(self, task: Task, policy: Policy):
+    def __init__(self, task: Task, policy: Policy, output_path: Path | None):
         self.task = task
+        self.output_path = output_path
         # The Harness closes this runtime before the session, and charges the trial for the model's time
         # through it. TODO(#661): the framework takes over closing the chain, and only the charge keeps a
         # runtime here.
@@ -283,11 +285,10 @@ class Harness(pimm.ControlSystem):
         episode's full static meta (plus any terminal payload) — then close its span."""
         self._set_deadline(None)
         # Stamped before the inference is retired: the meta overlays what its session reports.
-        stop = DsWriterCommand.STOP({**self._build_episode_meta(), **(payload or {})})
+        self.ds_command.emit(DsWriterCommand.STOP({**self._build_episode_meta(), **(payload or {})}))
         for schedule in self._schedules.values():  # devices hold their last commanded position
             schedule.clear()
         self._retire_inference()
-        self.ds_command.emit(stop)
         virtual_now = clock.now()  # before the round below, whose sim-clock advance belongs to no rollout
         # Give the recorder a round to commit the STOP before the next START (they share ``ds_command``, where
         # last-value-wins would drop one) and before the next trial's prepare, so the moves it asks for stay
@@ -318,7 +319,7 @@ class Harness(pimm.ControlSystem):
         budget = self._task.timeout_sec
         self._set_deadline(clock.now_ns() + round(budget * 1e9) if budget is not None else None)
         self._telemetry.start_rollout(clock.now())
-        self.ds_command.emit(DsWriterCommand.START())
+        self.ds_command.emit(DsWriterCommand.START(call.request.output_path))
         # The fresh data is here, later round would read a frame the recording did not open on.
         self._infer(self._inference, clock, should_stop)
 

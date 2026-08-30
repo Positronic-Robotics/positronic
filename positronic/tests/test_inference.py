@@ -144,7 +144,7 @@ def test_a_press_that_cannot_open_a_session_keeps_the_run(monkeypatch, caplog):
 
     presses = iter(['s'])
     monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
-    operator = KeyboardOperator(lambda: Task(instruction_source='pick', timeout_sec=None), _RefusingPolicy())
+    operator = KeyboardOperator(lambda: Task(instruction_source='pick', timeout_sec=None), _RefusingPolicy(), None)
     with pimm.World(virtual_time=True) as world:
         world.pair(operator.perform_task)
         with caplog.at_level(logging.ERROR):
@@ -158,7 +158,7 @@ def test_the_operator_declines_a_press_while_an_episode_runs(monkeypatch, caplog
     task = Task(instruction_source='pick', timeout_sec=None)
     presses = iter(['s', 's'])
     monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
-    operator = KeyboardOperator(lambda: task, _IdlePolicy())
+    operator = KeyboardOperator(lambda: task, _IdlePolicy(), None)
     with pimm.World(virtual_time=True) as world:
         harness = world.pair(operator.perform_task)
         received = []

@@ -100,7 +100,7 @@ class Task:
 # [✓] One runner builds the world for both.
 # [✓] A session reports the model's meta, so a policy holds none.
 # [✓] The episode call carries the session that runs it, so the Harness holds no policy.
-# [ ] The episode call names where it records, so the Harness holds no dataset.
+# [✓] The episode call names where it records, so the Harness holds no dataset.
 # [ ] A benchmark answers ``tasks(spec)``, so positronic holds no task table of its own.
 # [ ] A task carries its instruction as data, so no trial reads it after the reset.
 # [ ] A sim eval config names a selection, and a spec flag narrows it to one task.

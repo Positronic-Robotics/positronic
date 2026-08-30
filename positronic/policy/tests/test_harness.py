@@ -2,6 +2,7 @@ import threading
 import time
 from contextlib import contextmanager
 from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -294,9 +295,9 @@ class _Scene(pimm.ControlSystem):
             yield pimm.Sleep(0.001)
 
 
-def _pair_all(world, harness, policy):
+def _pair_all(world, harness, policy, output_path: Path | None = Path('dataset')):
     """Pair all harness signals and return a dict of test handles. ``perform_task`` opens a session from
-    ``policy`` and asks for the episode, the way a driver does."""
+    ``policy``, names ``output_path`` as where the episode records, and asks for it, the way a driver does."""
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
     deadline_recorder = RecordingEmitter()
@@ -305,7 +306,7 @@ def _pair_all(world, harness, policy):
         'frame_em': world.pair(harness.observations[CAM]),
         'robot_em': world.pair(harness.observations[keys.ROBOT_STATE]),
         'grip_em': world.pair(harness.observations[keys.GRIP]),
-        'perform_task': episode_caller(world, harness, policy),
+        'perform_task': episode_caller(world, harness, policy, output_path),
         'done_em': world.pair(harness.done),
         'command_rx': world.pair(harness.commands[keys.ROBOT_COMMAND]),
         'grip_rx': world.pair(harness.commands['target_grip']),
@@ -610,6 +611,46 @@ def test_finish_emits_ds_stop_with_data(world):
 
 
 @pytest.mark.timeout(3.0)
+def test_the_episode_records_into_the_dataset_its_call_named(world, tmp_path):
+    """The call names where the episode records, so the recorder's START carries that dataset."""
+    policy = StubPolicy()
+    harness = Harness(make_embodiment())
+    p = _pair_all(world, harness, policy, output_path=tmp_path / 'trials')
+
+    driver = ManualDriver([
+        (partial(p['perform_task'], Task(instruction_source='test', timeout_sec=None)), 0.0),
+        (partial(p['done_em'].emit, OPERATOR_DONE), 0.02),
+        (None, 0.02),
+    ])
+
+    scheduler = world.start([harness, driver])
+    drive_scheduler(scheduler, steps=20)
+
+    starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
+    assert [c.output_path for c in starts] == [tmp_path / 'trials']
+
+
+@pytest.mark.timeout(3.0)
+def test_a_call_that_names_no_dataset_runs_the_trial_and_records_nothing(world):
+    """A trial the caller wants unrecorded still runs and still answers; its START names no dataset."""
+    policy = StubPolicy()
+    harness = Harness(make_embodiment())
+    p = _pair_all(world, harness, policy, output_path=None)
+
+    scheduler = world.start([harness])
+    answer = p['perform_task'](Task(instruction_source='test', timeout_sec=None))
+    emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6]))
+    drive_scheduler(scheduler, steps=5)
+    p['done_em'].emit({keys.EVAL_SUCCESS: True})
+    drive_scheduler(scheduler, steps=10)
+
+    assert answer.result() == {keys.EVAL_SUCCESS: True, keys.EVAL_TERMINATED: True}
+    assert policy.observations, 'the trial never reached the policy'
+    starts = [c for c in _ds_commands(p) if c.type == DsWriterCommandType.START_EPISODE]
+    assert [c.output_path for c in starts] == [None]
+
+
+@pytest.mark.timeout(3.0)
 def test_the_call_is_answered_with_the_terminal_the_episode_ended_on(world):
     """A task with no timeout ends on ``done`` alone, and its caller gets what it ended on."""
     policy = StubPolicy()
@@ -665,7 +706,7 @@ def test_an_uncharged_wait_ends_when_the_world_comes_down(world):
         def functions(self):
             return {INFER: never_answers.wait}
 
-    rollout = Rollout(Task(instruction_source='t', timeout_sec=None), _HangingPolicy())
+    rollout = Rollout(Task(instruction_source='t', timeout_sec=None), _HangingPolicy(), None)
     inference = _EpisodeInference(rollout, charges_wall_time=False, clock=world.clock)
     try:
         inference({})  # starts the function, which never answers
@@ -845,7 +886,7 @@ def test_the_policy_opens_on_the_frame_the_reset_published(world):
     policy = StubPolicy()
     harness = Harness(embodiment)
     perform_task = episode_caller(world, harness, policy)
-    wire.wire_embodiment(world, harness, embodiment, None)
+    wire.wire_embodiment(world, harness, embodiment, record=False)
 
     scheduler = world.start([harness, device])
     perform_task(Task(instruction_source='t', timeout_sec=100.0, prepare_args={keys.SCENE: {}}))
@@ -892,7 +933,7 @@ def test_task_done_terminates_through_wire_embodiment(world):
     ds_recorder = RecordingEmitter()
     harness.ds_command._bind(ds_recorder)
     perform_task = episode_caller(world, harness, policy)
-    wire.wire_embodiment(world, harness, embodiment, None, done=device.done)
+    wire.wire_embodiment(world, harness, embodiment, record=False, done=device.done)
 
     scheduler = world.start([harness, device])
     perform_task(Task(instruction_source='t', timeout_sec=100.0))
@@ -1698,7 +1739,7 @@ def _ask(world: pimm.World, harness: Harness, policy: Policy, task: Task) -> Non
     """Deliver one ``perform_task``, for a test that drives the harness's generator rather than a World."""
     caller = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](harness)
     wire_call(world, caller, harness.perform_task)
-    caller(Rollout(task, policy))
+    caller(Rollout(task, policy, Path('dataset')))
 
 
 @pytest.mark.timeout(3.0)

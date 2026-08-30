@@ -79,7 +79,7 @@ def test_the_driver_asks_for_its_tasks_one_at_a_time():
     answered."""
     tasks = [Task(instruction_source='stack', timeout_sec=0.05, meta={keys.EVAL_TRIAL_INDEX: i}) for i in range(2)]
     stub = _EpisodeStub()
-    driver = TaskDriver(partial(iter, tasks), _IdlePolicy())
+    driver = TaskDriver(partial(iter, tasks), _IdlePolicy(), None)
     with pimm.World(virtual_time=True) as world:
         world.connect(driver.perform_task, stub.perform_task)
         drive_scheduler(world.start([driver, stub]), steps=200)

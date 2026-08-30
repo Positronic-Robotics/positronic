@@ -24,6 +24,7 @@ from .dataset import ConcatDataset, Dataset, DatasetWriter
 from .edits import EditedDataset
 from .episode import (
     EPISODE_SCHEMA_VERSION,
+    META_PATH,
     SIGNAL_FACTORY_T,
     Episode,
     EpisodeWriter,
@@ -122,7 +123,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         }
         self._meta['writer'] = _cached_env_writer_info()
         self._meta['writer']['name'] = f'{self.__class__.__module__}.{self.__class__.__qualname__}'
-        self._meta['path'] = str(self._path.resolve(strict=True))
+        self._meta[META_PATH] = str(self._path.resolve(strict=True))
 
     @property
     def path(self) -> Path:
@@ -413,7 +414,7 @@ class DiskEpisode(Episode):
             if 'uid' not in meta and 'created_ts_ns' in meta:
                 meta['uid'] = f'ts-{meta["created_ts_ns"]}'
 
-            meta['path'] = str(self._dir.expanduser().resolve(strict=False))
+            meta[META_PATH] = str(self._dir.expanduser().resolve(strict=False))
 
             lazy_getters: dict[str, Any] = {}
             if 'size_mb' not in meta:
