@@ -188,6 +188,13 @@ and record it.
   from its arguments alone; a cache is a speed-up, never a dependency.
 - Invoking a function starts the work and returns a handle at once, never
   waiting. The session reads the handle when it next has control.
+- A failure the framework can see — a lost connection, a dead worker, a
+  value that does not serialize — ends the handle with an error. Only a
+  function that does not return leaves a handle open.
+- A session may cancel a call it will not read. The framework stops the
+  work where it can: it stops retries and drops the queued call. A call
+  that already runs may run to its end. Functions are pure, so a dropped
+  call loses nothing.
 - A function's inputs and outputs are types the framework can serialize:
   plain types and numpy, selected domain classes. An unsupported type fails
   at the call.
@@ -287,6 +294,10 @@ class Answer(Protocol):
     # earlier is an error: a session never waits.
     def result(self) -> Any: ...
 
+    # The session will not read this answer. The framework stops the work
+    # where it can. Never waits.
+    def cancel(self) -> None: ...
+
 
 # Calling one starts the work and returns the `Answer` at once.
 Fn = Callable[..., Answer]
@@ -352,3 +363,39 @@ itself. `close` never travels through the chain.
 - The shape of the robot description, and a server's ability to refuse one.
 - The protocol delivering the description to the rig — versioning and
   compatibility.
+
+## TODO
+
+Open review comments from #652.
+
+- [x] Promise that every served call ends. A dropped request or a dead
+  worker must not leave a handle that never completes. The handle
+  completes with the result or with an error. A transport failure is an
+  error.
+- [ ] State that `time` never decreases across the chain. A layer can
+  call its inner session twice in one outer call. Both calls then carry
+  the same `time`, but the text promises strict growth.
+- [ ] Decide if the framework stamps each observation with its source
+  time. A session sees only the call `time` and cannot measure the age
+  of a sensor value. The pimm signals already carry timestamps.
+- [ ] Answer the comment on one `Runtime` for a chain. The framework
+  calls each `make_session` itself, so it can give each session its own
+  `Runtime`. The API does not change.
+- [ ] Correct the bullet that says observations can be of any type. The
+  value of each channel can be of any type. The observation itself is a
+  mapping of named channels.
+- [ ] Add the wall-time authority to the recording decisions. Records
+  from two machines share one wall-time timeline only if the clocks
+  agree. This belongs with the deferred recording mechanics and #528.
+- [ ] Define how a remote error crosses the wire. A custom exception
+  needs its class on the rig to be re-raised. A framework-owned error
+  type is the usual answer. This waits for the wire work.
+- [ ] State that `record` copies the value before it returns. A session
+  can change a mutable array after the call, and a late recorder would
+  then store the changed value.
+- [ ] Correct the story sentence about the server. The server also sends
+  the description at the setup. Write: after the setup, the server only
+  answers served calls.
+- [ ] Answer the comment that asks for `time` in `Inner`. The design
+  omits the argument so a layer cannot change the time. The framework
+  stamps it, and the comment above `Inner` says so.
