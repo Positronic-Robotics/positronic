@@ -164,8 +164,8 @@ synchronously — a plain function call, repeated:
   observations and time in, the commands to execute now (possibly none) out.
 - Observations are the freshest the framework has at the moment of the call.
 - Returned commands are emitted towards the robot driver immediately.
-- Observations and commands can be of any type, structured or unstructured (a
-  robot command, an image).
+- Observations and commands are named channels. A channel value can be
+  of any type, structured or unstructured (a robot command, an image).
 - The `time` argument is the only clock a session has. The framework sets
   it, and it strictly grows from call to call.
 - `resume_at` is how the session paces itself: the instant at which it wants
@@ -388,7 +388,7 @@ Open review comments from #652.
 - [x] Answer the comment on one `Runtime` for a chain. The framework
   makes every session in the chain and gives each one its own `Runtime`,
   derived inside the framework. The public API does not change.
-- [ ] Correct the bullet that says observations can be of any type. The
+- [x] Correct the bullet that says observations can be of any type. The
   value of each channel can be of any type. The observation itself is a
   mapping of named channels.
 - [ ] Add the wall-time authority to the recording decisions. Records
