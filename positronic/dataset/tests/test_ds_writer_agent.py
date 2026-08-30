@@ -53,16 +53,23 @@ class FakeDatasetWriter(DatasetWriter):
 
     def __init__(self) -> None:
         self.created: list[FakeEpisodeWriter] = []
+        self.lifecycle: list[str] = []  # 'enter', 'new_episode' and 'exit', in the order they arrive
 
     def __call__(self, output_path: Path) -> 'FakeDatasetWriter':
         return self
 
+    def __enter__(self) -> 'FakeDatasetWriter':
+        self.lifecycle.append('enter')
+        return self
+
     def new_episode(self) -> FakeEpisodeWriter:
+        self.lifecycle.append('new_episode')
         w = FakeEpisodeWriter()
         self.created.append(w)
         return w
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        self.lifecycle.append('exit')
         return False
 
 
@@ -274,6 +281,19 @@ def test_each_episode_records_into_the_dataset_its_start_names(tmp_path, world):
     (second_ep,) = LocalDataset(second)
     assert first_ep['a'][-1][0] == 10
     assert second_ep['a'][-1][0] == 20
+
+
+def test_the_dataset_a_start_names_is_entered_before_it_writes(world):
+    """A backend whose setup is in ``__enter__`` gets that call before its first episode, and the ``__exit__``
+    that matches it when the run ends."""
+    ds = FakeDatasetWriter()
+    agent, cmd_em, _ = build_agent_with_pipes({'a': None}, ds, world)
+
+    script = [(partial(cmd_em.emit, DsWriterCommand.START(OUTPUT_PATH)), 0.001)]
+
+    run_scripted_agent(agent, script, world=world)
+
+    assert ds.lifecycle == ['enter', 'new_episode', 'exit']
 
 
 def test_a_start_that_names_no_dataset_writes_no_episode(world):

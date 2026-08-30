@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Callable
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import AbstractContextManager, ExitStack, nullcontext
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from pathlib import Path
@@ -10,7 +10,7 @@ import pimm
 from positronic.utils import frozen_keys_dict
 
 from .dataset import DatasetWriter
-from .episode import EpisodeWriter
+from .episode import META_PATH, EpisodeWriter
 from .serializers import Serializer, StatefulSerializer, _PureSerializer, expand_suffixed
 
 logger = logging.getLogger(__name__)
@@ -85,11 +85,12 @@ class _Recording:
         self._dataset_factory = dataset_factory
         self._serializers = serializers
         self._datasets: dict[Path, DatasetWriter] = {}
-        self._open = False
+        self._open_datasets = ExitStack()
+        self._episode_open = False
         self.writer: EpisodeWriter | None = None
 
     def handle(self, cmd: DsWriterCommand) -> None:
-        match cmd.type, self._open:
+        match cmd.type, self._episode_open:
             case DsWriterCommandType.START_EPISODE, False:
                 self._start(cmd)
             case DsWriterCommandType.START_EPISODE, True:
@@ -104,25 +105,25 @@ class _Recording:
     def close(self) -> None:
         """Discard an episode still open, and close every dataset this recording opened."""
         self._abort()
-        for ds_writer in self._datasets.values():
-            ds_writer.__exit__(None, None, None)
+        self._open_datasets.close()
 
     def _start(self, cmd: DsWriterCommand) -> None:
         """Open an episode in the dataset the command names, stamped with its static data."""
-        self._open = True
+        self._episode_open = True
         if cmd.output_path is None:
             return
         for ser in self._serializers.values():
             ser.reset()
         if cmd.output_path not in self._datasets:  # a dataset numbers its episodes, off the disk it holds
-            self._datasets[cmd.output_path] = self._dataset_factory(cmd.output_path)
+            ds_writer = self._dataset_factory(cmd.output_path)
+            self._datasets[cmd.output_path] = self._open_datasets.enter_context(ds_writer)
         self.writer = self._datasets[cmd.output_path].new_episode()
         self._set_statics(self.writer, cmd.static_data)
         logger.info(f'DsWriterAgent: [START] {self._episode_path(self.writer)}')
 
     def _stop(self, static_data: dict[str, Any]) -> None:
         """Finish the open episode, stamped with the command's static data."""
-        self._open = False
+        self._episode_open = False
         if (writer := self.writer) is None:
             return
         self._set_statics(writer, static_data)
@@ -132,7 +133,7 @@ class _Recording:
 
     def _abort(self) -> None:
         """Discard the open episode."""
-        self._open = False
+        self._episode_open = False
         if (writer := self.writer) is None:
             return
         try:
@@ -150,7 +151,7 @@ class _Recording:
     @staticmethod
     def _episode_path(writer: EpisodeWriter) -> str:
         """Where the episode is written, as its own writer reports it."""
-        return writer.meta.get('path', 'unknown')
+        return writer.meta.get(META_PATH, 'unknown')
 
 
 class DsWriterAgent(pimm.ControlSystem):
