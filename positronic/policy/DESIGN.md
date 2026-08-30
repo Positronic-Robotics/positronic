@@ -219,6 +219,9 @@ kind its own shape. A `Codec` transforms data and does not see time. A
 - What an inner session sees is its outer's choice — except `time`. The
   framework sets `time` once per outermost call, and every session in the
   chain sees that same value.
+- A layer calls its inner session at most once per outer call. A second
+  call would repeat the same `time`. Sessions depend on strict growth: a
+  session that divides by its time step must not get a zero step.
 - A `Codec` is a pair of transforms — encode and decode, as in a video
   codec. Around a served function, encode converts the arguments and decode
   converts the answer. As a trivial layer, encode converts the observations
@@ -355,14 +358,18 @@ class Codec(Protocol):
 
 `layer_a | layer_b` is a layer. `chain.wrap(policy)` is a policy: its
 sessions are the chained sessions, with a handle between each pair. The
-framework closes every session it made, and a session closes what it made
-itself. `close` never travels through the chain.
+framework makes every session in the chain and gives each one its own
+`Runtime`. The framework closes every session it made, and a session
+closes what it made itself. `close` never travels through the chain.
 
 ## Deferred, not to decide now
 
 - The shape of the robot description, and a server's ability to refuse one.
 - The protocol delivering the description to the rig — versioning and
   compatibility.
+- Source times for observations — whether the framework passes the
+  timestamp of each sensor value to the session. The pimm signals
+  already carry these timestamps.
 
 ## TODO
 
@@ -372,15 +379,15 @@ Open review comments from #652.
   worker must not leave a handle that never completes. The handle
   completes with the result or with an error. A transport failure is an
   error.
-- [ ] State that `time` never decreases across the chain. A layer can
-  call its inner session twice in one outer call. Both calls then carry
-  the same `time`, but the text promises strict growth.
-- [ ] Decide if the framework stamps each observation with its source
-  time. A session sees only the call `time` and cannot measure the age
-  of a sensor value. The pimm signals already carry timestamps.
-- [ ] Answer the comment on one `Runtime` for a chain. The framework
-  calls each `make_session` itself, so it can give each session its own
-  `Runtime`. The API does not change.
+- [x] Keep the strict growth of `time`. A layer calls its inner session
+  at most once per outer call. A second call would repeat the same
+  `time` and break a session that divides by its time step.
+- [x] Decide if the framework stamps each observation with its source
+  time. Moved to the Deferred section: the question is whether the
+  framework provides this data at all.
+- [x] Answer the comment on one `Runtime` for a chain. The framework
+  makes every session in the chain and gives each one its own `Runtime`,
+  derived inside the framework. The public API does not change.
 - [ ] Correct the bullet that says observations can be of any type. The
   value of each channel can be of any type. The observation itself is a
   mapping of named channels.
