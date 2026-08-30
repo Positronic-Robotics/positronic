@@ -16,7 +16,7 @@ def wire(  # noqa: C901
     world: pimm.World,
     harness: pimm.ControlSystem,
     dataset_factory: DatasetFactory | None,
-    cameras: Mapping[str, pimm.SignalEmitter] | None,
+    cameras: Mapping[str, pimm.SignalEmitter],
     robot_arm: pimm.ControlSystem | None,
     gripper: pimm.ControlSystem | None,
     gui: pimm.ControlSystem | None,
