@@ -1,3 +1,4 @@
+import contextlib
 import time
 from collections.abc import Generator, Iterator, Mapping
 from typing import Any
@@ -11,7 +12,7 @@ from positronic.dataset.ds_writer_agent import DsWriterCommand
 from positronic.dataset.serializers import expand_suffixed
 from positronic.drivers.roboarm.ik import assert_default_frame
 from positronic.eval import Embodiment, Task
-from positronic.policy.base import Policy, Session
+from positronic.policy.base import Policy
 from positronic.policy.executor import Executor
 from positronic.utils import flatten_dict, frozen_view
 
@@ -24,31 +25,22 @@ MAX_ROUND_SEC = 1.0
 
 
 class _EpisodeInference:
-    """One episode's policy session, and the runtime that serves the policy's functions to it."""
+    """One episode: the work the policy opens, the runtime that serves it, and the session that plays it."""
 
     def __init__(self, policy: Policy, context: dict[str, Any], charges_wall_time: bool, clock: pimm.Clock) -> None:
         self._charges_wall_time = charges_wall_time
         self._clock = clock
         # One instant on two clocks, so ``wait`` adds a wall duration to a world instant.
         self._t0_ns, self._wall_t0 = clock.now_ns(), time.monotonic()
-        self._runtime = Executor(policy.functions)
-        session = None
+        self._closing = contextlib.ExitStack()
         try:
-            session = policy.new_session(context, self._runtime)
-            # A stack that answers chunks has no player in it, so nothing turns them into commands.
-            assert isinstance(session, Session), (
-                f'{type(session).__name__} answers a chunk; a policy played here needs a ChunkPlayer in its stack'
-            )
+            self._runtime = Executor(self._closing.enter_context(policy.episode(context)))
+            self._closing.callback(self._runtime.close)
+            self._session = policy.new_session(self._runtime)
+            self._closing.callback(self._session.close)
         except BaseException:
-            self._runtime.close()
-            if session is not None:
-                session.close()
+            self._closing.close()
             raise
-        self._session = session
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return self._session.meta
 
     @staticmethod
     def _owned(obs: dict[str, Any]) -> dict[str, Any]:
@@ -81,12 +73,11 @@ class _EpisodeInference:
             self._runtime.wait(WAIT_PERIOD_SEC)
 
     def close(self) -> None:
-        """Close the runtime, then the session it was serving.
+        """End the session, then the runtime, then the work the episode opened.
 
-        Until ``Executor.close`` returns, the function in flight still holds the session's websocket or model.
+        Until ``Executor.close`` returns, the function in flight still holds the episode's websocket or model.
         """
-        self._runtime.close()
-        self._session.close()
+        self._closing.close()
 
 
 class _EpisodeTelemetry:
@@ -219,10 +210,7 @@ class Harness(pimm.ControlSystem):
         meta[keys.EVAL_CHARGE_INFERENCE_TIME] = self._charges_wall_time
         if self._task.timeout_sec is not None:  # the recorder takes no nulls, and an unbounded episode has none
             meta[keys.EVAL_TIMEOUT] = self._task.timeout_sec
-        # ``policy.meta`` is the static baseline; the session overlays per-episode specifics (e.g. the
-        # sampled sub-policy) and wins on conflict.
-        session_meta = self.policy.meta | (self._inference.meta if self._inference else {})
-        for k, v in flatten_dict(session_meta).items():
+        for k, v in flatten_dict(self.policy.meta).items():
             meta[f'{keys.POLICY_META}.{k}'] = v
         meta.update(self._task.meta)
         meta[keys.TASK] = self._task.instruction
@@ -327,8 +315,8 @@ class Harness(pimm.ControlSystem):
         """Close the live episode: finalize the recording, put the rig back, retire the session, hand the
         terminal back to whoever asked for the episode.
 
-        The inference is retired rather than closed here, so a ``RemoteSession``'s websocket outlives the
-        function still using it.
+        The inference is retired rather than closed here, so the episode's websocket outlives the function
+        still using it.
         """
         yield from self._finalize_recording(clock, payload)
         # A powered arm holds the policy's last setpoint until the next trial, so each device the trial placed

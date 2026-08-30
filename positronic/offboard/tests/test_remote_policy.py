@@ -11,8 +11,8 @@ from websockets.http11 import Response
 from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import command
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, _ConnectRetries
-from positronic.offboard.tests.conftest import played_round_trip, round_trip
-from positronic.policy import RemotePolicy
+from positronic.offboard.tests.conftest import played_round_trip
+from positronic.policy import INFER, RemotePolicy
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.layers import ChunkPlayer
 from positronic.policy.remote import _prepare_obs
@@ -276,7 +276,7 @@ def test_remote_policy_hands_the_url_and_headers_to_the_client():
 
 
 class TestActionHorizonWrapping:
-    def test_truncates_action_chunks(self, open_session):
+    def test_truncates_action_chunks(self, open_episode):
         actions = [
             {'a': 1, 'timestamp': 0.0},
             {'a': 2, 'timestamp': 0.25},
@@ -284,67 +284,62 @@ class TestActionHorizonWrapping:
             {'a': 4, 'timestamp': 0.75},
         ]
         endpoint, _ = _mock_endpoint(infer_return=actions)
-        session, rt = open_session(ActionHorizon(0.5).wrap(endpoint))
+        fns = open_episode(ActionHorizon(0.5).wrap(endpoint))
 
-        actions = round_trip(session, rt, {keys.OBS_TIME_NS: 0})
+        actions = fns[INFER]({keys.OBS_TIME_NS: 0})
         assert actions is not None
         assert len(actions) == 3  # 2 within-horizon actions + horizon sentinel
         assert actions[0]['timestamp'] == 0.0
         assert actions[1]['timestamp'] == 0.25
         assert actions[2] == {'timestamp': 0.5}  # horizon sentinel (timestamp = horizon_sec)
 
-    def test_no_truncation_without_horizon(self, open_session):
+    def test_no_truncation_without_horizon(self, open_episode):
         endpoint, _ = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}, {'a': 2, 'timestamp': 1.0}])
 
-        session, rt = open_session(endpoint)
-
-        actions = round_trip(session, rt, {})
+        actions = open_episode(endpoint)[INFER]({})
         assert actions is not None
         assert len(actions) == 2
 
 
-def test_remote_session_normalizes_single_dict(open_session):
-    """Server returning a single action dict is wrapped into a 1-element list."""
+def test_the_wire_answers_a_single_dict_as_it_came(open_episode):
+    """A server answer of one action is what the player normalizes, so the wire passes it through."""
     endpoint, _ = _mock_endpoint(infer_return={keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0})
-    session, rt = open_session(endpoint)
 
-    assert round_trip(session, rt, {}) == [{keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0}]
+    assert open_episode(endpoint)[INFER]({}) == {keys.ROBOT_COMMAND: 'X', 'timestamp': 0.0}
 
 
-def test_remote_session_passes_through_none(open_session):
+def test_remote_inference_passes_through_none(open_episode):
     endpoint, mock_ws = _mock_endpoint()
     mock_ws.infer.return_value = None
-    session, rt = open_session(endpoint)
 
-    assert round_trip(session, rt, {}) is None
+    assert open_episode(endpoint)[INFER]({}) is None
 
 
-def test_opening_a_session_without_a_runtime_is_refused():
-    """Nothing serves the round trip without a runtime, so the session is refused where it is opened, and not
-    at the first observation it is given."""
+def test_a_chunk_policy_has_no_session_of_its_own():
+    """A chunk policy answers ``INFER`` and nothing else; a ``ChunkPlayer`` above it is what plays one."""
     endpoint, _ = _mock_endpoint()
 
-    with pytest.raises(ValueError, match='runs its inference on a runtime'):
-        endpoint.new_session()
+    with pytest.raises(NotImplementedError, match='ChunkPlayer'):
+        endpoint.new_session(MagicMock())
 
 
-def test_records_infer_span_without_scheduling_layer(tmp_path, open_session):
+def test_records_infer_span_without_scheduling_layer(tmp_path, open_episode):
     """The ``policy.infer`` span is recorded at the remote inference boundary itself, not by a layer in
     front of it."""
     endpoint, _ = _mock_endpoint(infer_return=[{'a': 1, 'timestamp': 0.0}])
-    session, rt = open_session(endpoint)
+    infer = open_episode(endpoint)[INFER]
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-span'):
-        assert round_trip(session, rt, {keys.OBS_TIME_NS: 0}) is not None
+        assert infer({keys.OBS_TIME_NS: 0}) is not None
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     assert [s.name for s in spans] == [telemetry_keys.SPAN_POLICY_INFER]
 
 
-def test_infer_span_excludes_client_side_image_preparation(tmp_path, open_session):
+def test_infer_span_excludes_client_side_image_preparation(tmp_path, open_episode):
     """``policy.infer`` is the remote round-trip, so JPEG-encoding the observation stays outside it: folding
     client CPU work into the span would inflate the inference percentiles and the policy-server capacity
     estimate the report derives from them."""
     endpoint, _ = _mock_endpoint({'compress_images': True}, infer_return=[])
-    session, rt = open_session(endpoint)
+    infer = open_episode(endpoint)[INFER]
     encoded_at: list[int] = []
 
     def _stamp_encode(image):
@@ -353,7 +348,7 @@ def test_infer_span_excludes_client_side_image_preparation(tmp_path, open_sessio
 
     with patch('positronic.policy.remote.encode_jpeg', side_effect=_stamp_encode):
         with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-prep'):
-            round_trip(session, rt, {'cam': _make_image(48, 64), keys.OBS_TIME_NS: 0})
+            infer({'cam': _make_image(48, 64), keys.OBS_TIME_NS: 0})
 
     (span,) = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
     assert span.name == telemetry_keys.SPAN_POLICY_INFER
@@ -361,15 +356,14 @@ def test_infer_span_excludes_client_side_image_preparation(tmp_path, open_sessio
     assert span.start_ns >= encoded_at[-1]  # every encode finishes before the span opens, not inside it
 
 
-def test_records_infer_span_when_inference_raises(tmp_path, open_session):
-    """A round trip that raises still records the time it took to fail, and the answer raises it again at
-    the call that reads it."""
+def test_records_infer_span_when_inference_raises(tmp_path, open_episode):
+    """A round trip that raises still records the time it took to fail."""
     endpoint, mock_ws = _mock_endpoint()
     mock_ws.infer.side_effect = TimeoutError('server stalled')
-    session, rt = open_session(endpoint)
+    infer = open_episode(endpoint)[INFER]
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'run-infer-raise'):
         with pytest.raises(TimeoutError):
-            round_trip(session, rt, {keys.OBS_TIME_NS: 0})
+            infer({keys.OBS_TIME_NS: 0})
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     assert [s.name for s in spans] == [telemetry_keys.SPAN_POLICY_INFER]
 
@@ -385,20 +379,20 @@ def test_remote_policy_meta_exposes_server_fields():
 
 
 def test_missing_declaration_fails_before_motion():
-    """A handshake carrying no ``local_stack`` leaves nothing to build, so no session opens."""
+    """A handshake carrying no ``local_stack`` leaves nothing to build, so no episode opens."""
     policy, _ = _mock_remote_policy({'positronic_version': '0.1.0'})
     with pytest.raises(ValueError, match='0.1.0'):
-        policy.new_session()
+        policy.episode().__enter__()
 
 
 def test_empty_declaration_fails_before_motion():
     """An empty stack declares nothing to build, so it is refused like an absent one."""
     policy, _ = _mock_remote_policy({'local_stack': {'seq': []}})
     with pytest.raises(ValueError, match='declares no rig-side stack'):
-        policy.new_session()
+        policy.episode().__enter__()
 
 
-def test_declared_stack_built_at_session_open(open_session):
+def test_declared_stack_built_at_episode_open(open_session):
     """The server-declared local stack runs in front of the connection."""
     policy, mock_ws = _mock_remote_policy(CHUNKED_STACK, infer_return=[{'a': 1, 'timestamp': 0.0}])
     session, rt = open_session(policy)
@@ -409,23 +403,21 @@ def test_declared_stack_built_at_session_open(open_session):
 def test_unknown_declared_entry_fails_before_motion():
     policy, _ = _mock_remote_policy({'local_stack': {'name': 'run_arbitrary_code'}, keys.POSITRONIC_VERSION: '9.9.9'})
     with pytest.raises(ValueError, match='9.9.9'):
-        policy.new_session()
+        policy.episode().__enter__()
 
 
-def test_compression_follows_the_server_declaration(open_session):
+def test_compression_follows_the_server_declaration(open_episode):
     """A server behind a message-size cap declares ``remote(compress_images=True)`` and the rig obeys."""
     endpoint, mock_ws = _mock_endpoint({'compress_images': True}, infer_return=[])
-    session, rt = open_session(endpoint)
 
-    round_trip(session, rt, {'cam': _make_image(48, 64)})
+    open_episode(endpoint)[INFER]({'cam': _make_image(48, 64)})
     assert isinstance(mock_ws.infer.call_args.args[0]['cam'], dict)
 
 
-def test_frames_stay_raw_where_the_server_declares_no_compression(open_session):
+def test_frames_stay_raw_where_the_server_declares_no_compression(open_episode):
     endpoint, mock_ws = _mock_endpoint({'compress_images': False}, infer_return=[])
-    session, rt = open_session(endpoint)
 
-    round_trip(session, rt, {'cam': _make_image(48, 64)})
+    open_episode(endpoint)[INFER]({'cam': _make_image(48, 64)})
     assert isinstance(mock_ws.infer.call_args.args[0]['cam'], np.ndarray)
 
 
@@ -456,7 +448,7 @@ def test_remote_policy_lifecycle(inference_server, mock_policy, open_session):
     policy = RemotePolicy(f'{host}:{port}')
     session, rt = open_session(policy)
 
-    meta = session.meta
+    meta = policy.meta
     assert meta['server.model_name'] == 'test_model'
     assert meta['type'] == 'remote'
 
@@ -472,13 +464,11 @@ def test_remote_policy_lifecycle(inference_server, mock_policy, open_session):
     session2.close()
 
 
-def test_remote_session_meta(inference_server, open_session):
-    """Session meta must include server metadata."""
+def test_remote_policy_meta_carries_the_server_handshake(inference_server):
+    """A remote policy's meta must include the server metadata."""
     host, port = inference_server
-    session, _ = open_session(RemotePolicy(f'{host}:{port}'))
 
-    meta = session.meta
+    meta = RemotePolicy(f'{host}:{port}').meta
+
     assert meta['type'] == 'remote'
     assert meta['server.model_name'] == 'test_model'
-
-    session.close()

@@ -6,6 +6,8 @@ import socket
 import subprocess
 import uuid
 from collections.abc import Callable
+from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +22,7 @@ from pimm.logging import init_logging
 from positronic import keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
-from positronic.policy import ChunkSession, Codec, Done, Layer, Policy
+from positronic.policy import INFER, Codec, Layer, Policy
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import list_checkpoints
@@ -256,40 +258,37 @@ class DreamZeroSubprocess:
             self.process = None
 
 
-class _DreamZeroSession(ChunkSession):
-    def __init__(self, client: RoboarenaClient, session_id: str):
-        self._client = client
-        self._session_id = session_id
-
-    def __call__(self, obs, time_ns):
-        obs = dict(obs)
-        obs[roboarena.SESSION_ID] = self._session_id
-        action_array = np.asarray(self._client.infer(obs))
-
-        # Response is (N, 8) — 7 joints + 1 gripper
-        if action_array.ndim == 1:
-            return Done([{'action': action_array}])
-        return Done([{'action': action_array[i]} for i in range(action_array.shape[0])])
-
-    def close(self):
-        try:
-            self._client.reset(session_id=self._session_id)
-        except (OSError, TimeoutError, ConnectionClosed):
-            logger.info('DreamZero session reset skipped: backend connection already gone')
-        finally:
-            self._client.close()
+def _infer(client: RoboarenaClient, session_id: str, obs):
+    """One model call: an observation in, an action chunk out."""
+    obs = dict(obs)
+    obs[roboarena.SESSION_ID] = session_id
+    action_array = np.asarray(client.infer(obs))
+    # Response is (N, 8) — 7 joints + 1 gripper
+    if action_array.ndim == 1:
+        return [{'action': action_array}]
+    return [{'action': action_array[i]} for i in range(action_array.shape[0])]
 
 
 class DreamZeroPolicy(Policy):
-    """Owns the DreamZero subprocess; every session talks to it over its own roboarena connection."""
+    """Owns the DreamZero subprocess; every episode talks to it over its own roboarena connection."""
 
     def __init__(self, sp: DreamZeroSubprocess):
         self._subprocess = sp
 
-    def new_session(self, context=None, rt=None):
+    @contextmanager
+    def episode(self, context=None):
         client = RoboarenaClient(port=self._subprocess.roboarena_port)
         client.connect()
-        return _DreamZeroSession(client, str(uuid.uuid4()))
+        session_id = str(uuid.uuid4())
+        try:
+            yield {INFER: partial(_infer, client, session_id)}
+        finally:
+            try:
+                client.reset(session_id=session_id)
+            except (OSError, TimeoutError, ConnectionClosed):
+                logger.info('DreamZero session reset skipped: backend connection already gone')
+            finally:
+                client.close()
 
     def close(self):
         self._subprocess.stop()

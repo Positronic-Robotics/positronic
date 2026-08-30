@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 import numpy as np
 import pytest
 
@@ -8,7 +10,7 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.geom import Rotation
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction
-from positronic.policy.base import Answer, ChunkSession, Done, Policy
+from positronic.policy.base import INFER, Policy
 from positronic.policy.codec import (
     ActionHorizon,
     ActionTimestamp,
@@ -115,25 +117,15 @@ def test_absolute_joints_action_encode_decode():
     assert np.isclose(target_grip, g[0])
 
 
-class _FixedSession(ChunkSession):
-    def __init__(self, result):
-        self._result = result
+class _FixedPolicy(Policy):
+    """Answers the same chunk to every call."""
 
-    def __call__(self, obs, time_ns):
-        return Done(self._result)
+    def __init__(self, chunk):
+        self._chunk = chunk
 
-
-class _ChunkPolicy(Policy):
-    def __init__(self, actions: list[dict]):
-        self._actions = actions
-
-    def new_session(self, context=None, rt=None) -> ChunkSession:
-        return _FixedSession(list(self._actions))
-
-
-class _SinglePolicy(Policy):
-    def new_session(self, context=None, rt=None) -> ChunkSession:
-        return _FixedSession({'v': 42})
+    @contextmanager
+    def episode(self, context=None):
+        yield {INFER: lambda obs: self._chunk}
 
 
 class _PassthroughCodec(Codec):
@@ -145,9 +137,9 @@ class _PassthroughCodec(Codec):
         return data
 
 
-class _MetaPolicy(Policy):
-    def new_session(self, context=None, rt=None) -> ChunkSession:
-        return _FixedSession({})
+class _MetaPolicy(_FixedPolicy):
+    def __init__(self):
+        super().__init__({})
 
     @property
     def meta(self):
@@ -157,19 +149,18 @@ class _MetaPolicy(Policy):
 _T0_OBS = {obs_keys.OBS_TIME_NS: 0}
 
 
-def _chunk(session, obs=_T0_OBS, time_ns: int = 0):
-    """The chunk a session under a player answers for ``obs``."""
-    answer = session(obs, time_ns)
-    assert isinstance(answer, Answer), 'the session answers commands, not a chunk'
-    return answer.result()
+def _chunk(policy: Policy, obs=_T0_OBS):
+    """The chunk ``policy``'s inference answers for ``obs``."""
+    with policy.episode() as fns:
+        return fns[INFER](obs)
 
 
 def test_action_horizon_sec_truncates_chunk():
     actions = [{'v': i} for i in range(10)]
     # action_horizon_sec=0.1s at action_fps=30 -> 3 actions
     codec = ActionTiming(fps=30.0, horizon_sec=0.1)
-    policy = codec.wrap(_ChunkPolicy(actions))
-    result = _chunk(policy.new_session())
+    policy = codec.wrap(_FixedPolicy(list(actions)))
+    result = _chunk(policy)
     assert isinstance(result, list)
     assert [r['v'] for r in result if 'v' in r] == [0, 1, 2]
     assert result[-1] == {'timestamp': pytest.approx(0.1)}  # horizon sentinel
@@ -178,8 +169,8 @@ def test_action_horizon_sec_truncates_chunk():
 def test_action_horizon_sec_none_returns_full_chunk():
     actions = [{'v': i} for i in range(5)]
     codec = ActionTiming(fps=30.0)
-    policy = codec.wrap(_ChunkPolicy(actions))
-    result = _chunk(policy.new_session())
+    policy = codec.wrap(_FixedPolicy(list(actions)))
+    result = _chunk(policy)
     assert len(result) == 6  # 5 actions + timestamp sentinel
 
 
@@ -187,16 +178,16 @@ def test_action_horizon_sec_larger_than_chunk():
     actions = [{'v': i} for i in range(3)]
     # action_horizon_sec=10s at action_fps=10 -> 100 actions max, but only 3 available
     codec = ActionTiming(fps=10.0, horizon_sec=10.0)
-    policy = codec.wrap(_ChunkPolicy(actions))
-    result = _chunk(policy.new_session())
+    policy = codec.wrap(_FixedPolicy(list(actions)))
+    result = _chunk(policy)
     assert len(result) == 4  # 3 actions + timestamp sentinel (nothing truncated)
 
 
 def test_timestamps_embedded_in_actions():
     actions = [{'v': i} for i in range(4)]
     codec = ActionTiming(fps=10.0)
-    policy = codec.wrap(_ChunkPolicy(actions))
-    result = _chunk(policy.new_session())
+    policy = codec.wrap(_FixedPolicy(list(actions)))
+    result = _chunk(policy)
     assert isinstance(result, list) and len(result) == 5  # 4 actions + timestamp sentinel
     for i, action in enumerate(result):
         assert action['timestamp'] == pytest.approx(i * 0.1)
@@ -206,8 +197,8 @@ def test_action_horizon_sec_seconds_truncates():
     actions = [{'v': i} for i in range(100)]
     # 0.1s at 30fps -> 3 actions
     codec = ActionTiming(fps=30.0, horizon_sec=0.1)
-    policy = codec.wrap(_ChunkPolicy(actions))
-    result = _chunk(policy.new_session())
+    policy = codec.wrap(_FixedPolicy(list(actions)))
+    result = _chunk(policy)
     assert isinstance(result, list) and len(result) == 4  # 3 actions + horizon sentinel
     dt = 1.0 / 30.0
     for i, action in enumerate(result):
@@ -257,8 +248,8 @@ def test_action_horizon_meta():
 def test_action_timestamp_and_horizon_compose():
     actions = [{'v': i} for i in range(10)]
     codec = ActionHorizon(0.3) | ActionTimestamp(fps=10.0)
-    policy = codec.wrap(_ChunkPolicy(actions))
-    result = _chunk(policy.new_session())
+    policy = codec.wrap(_FixedPolicy(list(actions)))
+    result = _chunk(policy)
     assert isinstance(result, list) and len(result) == 4  # 3 actions + horizon sentinel
     assert [r['v'] for r in result if 'v' in r] == [0, 1, 2]
     assert result[-1] == {'timestamp': pytest.approx(0.3)}  # horizon sentinel
@@ -266,8 +257,8 @@ def test_action_timestamp_and_horizon_compose():
 
 def test_single_action_has_zero_timestamp():
     codec = ActionTiming(fps=15.0)
-    policy = codec.wrap(_SinglePolicy())
-    result = _chunk(policy.new_session())
+    policy = codec.wrap(_FixedPolicy({'v': 42}))
+    result = _chunk(policy)
     assert isinstance(result, dict)
     assert result['timestamp'] == 0.0
     assert result['v'] == 42

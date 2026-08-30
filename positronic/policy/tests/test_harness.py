@@ -22,11 +22,11 @@ from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
 from positronic.offboard.client import InferenceSession
-from positronic.policy.base import Answer, ChunkSession, DelegatingSession, Done, Layer, Policy, Session
+from positronic.policy.base import INFER, Answer, DelegatingPolicy, DelegatingSession, Fn, Layer, Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.harness import MAX_ROUND_SEC, MIN_ROUND_SEC, WAIT_PERIOD_SEC, Harness, _EpisodeInference
 from positronic.policy.layers import ChunkPlayer, StopOnFault
-from positronic.policy.remote import INFER, RemoteSession, round_trip
+from positronic.policy.remote import round_trip
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
 WAIT_PERIOD_NS = round(WAIT_PERIOD_SEC * 1e9)
@@ -80,17 +80,6 @@ def make_embodiment(
     )
 
 
-class _SpySession(ChunkSession):
-    def __init__(self, policy):
-        self._policy = policy
-
-    def __call__(self, obs, time_ns):
-        self._policy.last_obs = obs
-        return Done([
-            {keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}
-        ])
-
-
 class SpyPolicy(Policy):
     def __init__(self, command: roboarm.command.CommandType | None = None, target_grip: float = 0.33) -> None:
         if command is None:
@@ -102,27 +91,15 @@ class SpyPolicy(Policy):
         self.reset_calls: int = 0
         self.last_reset_context = None
 
-    def new_session(self, context=None, rt=None):
+    @contextmanager
+    def episode(self, context=None):
         self.reset_calls += 1
         self.last_reset_context = context
-        return _SpySession(self)
+        yield {INFER: self._infer}
 
-
-class _StubSession(ChunkSession):
-    def __init__(self, policy):
-        self._policy = policy
-        self._meta = dict(policy._meta)
-
-    def __call__(self, obs, time_ns):
-        self._policy.last_obs = obs
-        self._policy.observations.append(obs)
-        return Done([
-            {keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.target_grip, 'timestamp': 0.0}
-        ])
-
-    @property
-    def meta(self):
-        return self._meta
+    def _infer(self, obs):
+        self.last_obs = obs
+        return [{keys.ROBOT_COMMAND: self.command, 'target_grip': self.target_grip, 'timestamp': 0.0}]
 
 
 class StubPolicy(Policy):
@@ -149,27 +126,16 @@ class StubPolicy(Policy):
     def meta(self) -> dict[str, object]:
         return self._meta
 
-    def new_session(self, context=None, rt=None) -> ChunkSession:
+    @contextmanager
+    def episode(self, context=None):
         self.reset_calls += 1
         self.last_reset_context = context
-        return _StubSession(self)
+        yield {INFER: self._infer}
 
-
-class _ChunkSession(ChunkSession):
-    def __init__(self, policy):
-        self._policy = policy
-
-    def __call__(self, obs, time_ns):
-        self._policy.counter += 1
-        dt = 0.005
-        return Done([
-            {
-                keys.ROBOT_COMMAND: self._policy.command,
-                'target_grip': self._policy.counter * 100.0 + i,
-                'timestamp': i * dt,
-            }
-            for i in range(10)
-        ])
+    def _infer(self, obs):
+        self.last_obs = obs
+        self.observations.append(obs)
+        return [{keys.ROBOT_COMMAND: self.command, 'target_grip': self.target_grip, 'timestamp': 0.0}]
 
 
 class ChunkPolicy(StubPolicy):
@@ -179,16 +145,18 @@ class ChunkPolicy(StubPolicy):
         super().__init__(*args, **kwargs)
         self.counter = 0
 
-    def new_session(self, context=None, rt=None):
-        self.reset_calls += 1
-        self.last_reset_context = context
-        return _ChunkSession(self)
+    def _infer(self, obs):
+        self.counter += 1
+        dt = 0.005
+        return [
+            {keys.ROBOT_COMMAND: self.command, 'target_grip': self.counter * 100.0 + i, 'timestamp': i * dt}
+            for i in range(10)
+        ]
 
 
 class _FakeInferenceSession(InferenceSession):
-    """A stub ``InferenceSession`` returning a canned action after ``wall_sec`` of real time, so a
-    ``RemoteSession`` over it round-trips ``RemoteSession.__call__`` — the real inference boundary that records
-    the ``policy.infer`` span."""
+    """A stub ``InferenceSession`` returning a canned action after ``wall_sec`` of real time, so the wire
+    round trip over it is the real inference boundary that records the ``policy.infer`` span."""
 
     def __init__(self, action: list[dict[str, Any]], wall_sec: float = 0.0) -> None:
         self._action = action
@@ -207,9 +175,8 @@ class _FakeInferenceSession(InferenceSession):
 
 
 class ServedPolicy(Policy):
-    """A policy whose model runs in a served function: a real ``RemoteSession`` over the ``InferenceSession``
-    it is given, so its inference round-trips ``RemoteSession.__call__`` and records the ``policy.infer``
-    span independent of any layer.
+    """A policy whose model runs in a served function: a real wire round trip over the ``InferenceSession``
+    it is given, so its inference records the ``policy.infer`` span independent of any layer.
 
     A model that costs wall time, hangs or raises belongs in that session's ``infer``.
     """
@@ -217,13 +184,16 @@ class ServedPolicy(Policy):
     def __init__(self, session: InferenceSession) -> None:
         self._session = session
 
-    def new_session(self, context=None, rt=None) -> RemoteSession:
-        assert rt is not None, 'the harness supplies the runtime'
-        return RemoteSession(self._session, rt)
+    @contextmanager
+    def episode(self, context=None):
+        try:
+            yield {INFER: partial(round_trip, self._session, False)}
+        finally:
+            self._session.close()
 
-    @property
-    def functions(self):
-        return {INFER: round_trip}
+
+def _boom(obs):
+    raise RuntimeError('inference boom')
 
 
 def slow_chunk(span_sec: float = 0.2, steps: int = 10) -> list[dict[str, Any]]:
@@ -600,20 +570,14 @@ def test_episode_meta_includes_policy_static_meta(world):
     """Static fields exposed only via ``Policy.meta`` (empty ``Session.meta``) must
     still reach episode metadata once the policy is wrapped."""
 
-    class _StaticMetaSession(ChunkSession):
-        def __init__(self, command):
-            self._command = command
-
-        def __call__(self, obs, time_ns):
-            return Done([{keys.ROBOT_COMMAND: self._command, 'target_grip': 0.0, 'timestamp': 0.0}])
-
     class _StaticMetaPolicy(Policy):
         def __init__(self):
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             self._command = CartesianPosition(pose=pose)
 
-        def new_session(self, context=None, rt=None):
-            return _StaticMetaSession(self._command)  # Session.meta defaults to {}
+        @contextmanager
+        def episode(self, context=None):
+            yield {INFER: lambda obs: [{keys.ROBOT_COMMAND: self._command, 'target_grip': 0.0, 'timestamp': 0.0}]}
 
         @property
         def meta(self):
@@ -697,20 +661,9 @@ def test_an_uncharged_wait_ends_when_the_world_comes_down(world):
     never_answers = threading.Event()
 
     class _HangingPolicy(Policy):
-        class _Session(ChunkSession):
-            def __init__(self, rt):
-                self._rt = rt
-
-            def __call__(self, obs, time_ns):
-                return self._rt.fns[INFER]()
-
-        def new_session(self, context=None, rt=None):
-            assert rt is not None
-            return _HangingPolicy._Session(rt)
-
-        @property
-        def functions(self):
-            return {INFER: never_answers.wait}
+        @contextmanager
+        def episode(self, context=None):
+            yield {INFER: lambda obs: never_answers.wait()}
 
     inference = _EpisodeInference(ChunkPlayer().wrap(_HangingPolicy()), {}, charges_wall_time=False, clock=world.clock)
     try:
@@ -726,13 +679,10 @@ def test_a_session_that_raises_fails_the_call_that_asked_for_the_episode(world):
     """The session is called on the loop thread, so its failure reaches whoever asked for the episode rather
     than the log."""
 
-    class _RaisingSession(ChunkSession):
-        def __call__(self, obs, time_ns):
-            raise RuntimeError('inference boom')
-
     class _RaisingPolicy(Policy):
-        def new_session(self, context=None, rt=None):
-            return _RaisingSession()
+        @contextmanager
+        def episode(self, context=None):
+            yield {INFER: _boom}
 
     harness = Harness(ChunkPlayer().wrap(_RaisingPolicy()), make_embodiment())
     p = _pair_all(world, harness)
@@ -1169,13 +1119,10 @@ def test_a_world_stopping_mid_episode_withdraws_the_deadline(world):
 def test_an_episode_abandoned_by_a_raise_withdraws_the_deadline(world):
     """An episode a raise abandons withdraws its deadline like any other close."""
 
-    class _BoomSession(ChunkSession):
-        def __call__(self, obs, time_ns):
-            raise RuntimeError('inference boom')
-
     class _BoomPolicy(Policy):
-        def new_session(self, context=None, rt=None):
-            return _BoomSession()
+        @contextmanager
+        def episode(self, context=None):
+            yield {INFER: _boom}
 
     harness = Harness(ChunkPlayer().wrap(_BoomPolicy()), make_embodiment())
     p = _pair_all(world, harness)
@@ -1396,9 +1343,11 @@ class _AbandonedCallPolicy(ServedPolicy):
         self.events: list[str] = []
         super().__init__(_AbandonedCallPolicy._Infer(self.events, wall_sec))
 
-    def new_session(self, context=None, rt=None):
+    @contextmanager
+    def episode(self, context=None):
         self.events.append('open')
-        return super().new_session(context, rt)
+        with super().episode(context) as fns:
+            yield fns
 
 
 @pytest.mark.timeout(10.0)
@@ -1519,13 +1468,10 @@ def test_empty_trajectory_leaves_every_channel_holding(world):
     """A trajectory with no waypoints schedules nothing on any channel, so every device holds where it
     already is rather than one channel draining on while another stops."""
 
-    class _EmptyChunkSession(ChunkSession):
-        def __call__(self, obs, time_ns):
-            return Done([])
-
     class EmptyChunkPolicy(Policy):
-        def new_session(self, context=None, rt=None):
-            return _EmptyChunkSession()
+        @contextmanager
+        def episode(self, context=None):
+            yield {INFER: lambda obs: []}
 
     harness = Harness(ChunkPlayer().wrap(EmptyChunkPolicy()), make_embodiment())
     cmd_recorder = RecordingEmitter()
@@ -1600,7 +1546,7 @@ def test_harness_clears_trajectory_on_run(world):
     drive_scheduler(scheduler, steps=1)
 
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], robot_state)
-    drive_scheduler(scheduler, steps=4)
+    drive_scheduler(scheduler, steps=20)
 
     assert _last_grip(p) >= 200.0, 'Expected chunk 2; trajectory clearing on a new episode failed'
 
@@ -1782,7 +1728,7 @@ def test_timing_spans_recorded_with_taxonomy(world, tmp_path):
     episode parents to the pass, and reset + policy.infer parent to the episode, with the episode carrying its
     index, step count, and virtual duration. Read back from the file so the OTLP encoding is exercised. The
     ``policy.infer`` span is recorded at the remote inference boundary, so the terminal is a ``RemoteStubPolicy``
-    (a real ``RemoteSession`` over a fake inference session)."""
+    (a real wire round trip over a fake inference session)."""
     policy = ChunkPlayer().wrap(RemoteStubPolicy())
     harness = Harness(policy, make_embodiment())
     p = _pair_all(world, harness)
@@ -1996,7 +1942,7 @@ def test_a_policy_that_answers_chunks_refuses_to_open(world):
     call = p['perform_task'](Task(instruction_source='t', timeout_sec=None))
     emit_ready_payload(p['frame_em'], p['robot_em'], p['grip_em'], make_robot_state([0.1] * 3, [0.2] * 7))
 
-    with pytest.raises(AssertionError, match='needs a ChunkPlayer'):
+    with pytest.raises(NotImplementedError, match='put a ChunkPlayer above it'):
         drive_scheduler(scheduler, steps=20)
     assert call.done()
 
@@ -2011,8 +1957,8 @@ class _ReplanEarly(Layer):
     class _Session(Session):
         POLL_SEC = 0.001
 
-        def __init__(self, inner: ChunkSession):
-            self._inner = inner
+        def __init__(self, infer: Fn):
+            self._infer = infer
             self._waypoints: deque[tuple[int, dict[str, Any]]] = deque()
             self._replan_at_ns: int | None = None
             self._answer: Answer | None = None
@@ -2029,7 +1975,7 @@ class _ReplanEarly(Layer):
 
         def _replan(self, obs, time_ns: int) -> None:
             if self._answer is None:
-                self._answer = self._inner(obs, time_ns)
+                self._answer = self._infer(obs)
             if not self._answer.done():  # the call it made has still to answer
                 return
             chunk, self._answer = self._answer.result(), None
@@ -2042,8 +1988,14 @@ class _ReplanEarly(Layer):
             end_ns = self._waypoints[-1][0] if self._waypoints else time_ns
             self._replan_at_ns = time_ns + (end_ns - time_ns) // 2
 
-    def make_session(self, inner: ChunkSession):
-        return _ReplanEarly._Session(inner)
+    class _Policy(DelegatingPolicy):
+        def new_session(self, rt):
+            return _ReplanEarly._Session(rt.fns[INFER])
+
+    PLAYS_CHUNKS = True
+
+    def wrap(self, policy: Policy) -> Policy:
+        return _ReplanEarly._Policy(policy)
 
 
 class _TimedRecorder(pimm.SignalEmitter):
@@ -2366,8 +2318,8 @@ def test_the_run_ends_only_once_the_call_it_abandoned_is_out_of_the_policy():
 
 @pytest.mark.timeout(20.0)
 def test_the_session_is_closed_only_once_its_call_has_left_it():
-    """``RemoteSession.close`` shuts the websocket the function in flight is talking over, and ``Session``
-    asks for no thread safety, so the session is retired with its runtime and closed after it."""
+    """Ending an episode shuts the websocket the function in flight is talking over, so the episode is
+    retired with its runtime and released after it."""
     inside_at_close = []
 
     class _HangingInfer(_FakeInferenceSession):
@@ -2414,26 +2366,26 @@ def test_a_rescheduled_trajectory_clears_the_channels_it_omits(world):
     """A trajectory naming only one channel replaces the whole schedule: the omitted channel stops being
     played rather than draining the previous trajectory's tail."""
 
-    class _GripThenArm(ChunkSession):
+    class _GripThenArmPolicy(Policy):
         """First a two-channel chunk, then an arm-only one that must silence the gripper."""
 
         def __init__(self):
             self._calls = 0
 
-        def __call__(self, obs, time_ns):
+        @contextmanager
+        def episode(self, context=None):
+            yield {INFER: self._infer}
+
+        def _infer(self, obs):
             self._calls += 1
             pose = Transform3D(translation=np.array([0.4, 0.5, 0.6], dtype=np.float32), rotation=Rotation.identity)
             command = CartesianPosition(pose=pose)
             if self._calls == 1:
-                return Done([
+                return [
                     {keys.ROBOT_COMMAND: command, keys.TARGET_GRIP: 0.5, keys.ACTION_TIMESTAMP: i * 0.01}
                     for i in range(10)
-                ])
-            return Done([{keys.ROBOT_COMMAND: command, keys.ACTION_TIMESTAMP: i * 0.01} for i in range(10)])
-
-    class _GripThenArmPolicy(Policy):
-        def new_session(self, context=None, rt=None):
-            return _GripThenArm()
+                ]
+            return [{keys.ROBOT_COMMAND: command, keys.ACTION_TIMESTAMP: i * 0.01} for i in range(10)]
 
     harness = Harness(ChunkPlayer().wrap(_GripThenArmPolicy()), make_embodiment())
     grip_recorder = RecordingEmitter()

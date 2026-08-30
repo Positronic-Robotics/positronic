@@ -1,5 +1,4 @@
 from types import MappingProxyType
-from unittest.mock import ANY
 
 import numpy as np
 import pytest
@@ -34,13 +33,13 @@ def test_inference_client_connect_and_infer(inference_server, mock_policy):
         action = session.infer(obs)
 
         assert action['action_data'] == [1, 2, 3]
-        mock_policy._mock_session.assert_called_with(obs, ANY)
+        assert mock_policy.observations[-1] == obs
     finally:
         session.close()
 
 
 def test_inference_client_new_session(inference_server, mock_policy):
-    """Test that starting a new session calls new_session on the policy."""
+    """Test that starting a new session opens an episode on the policy."""
     host, port = inference_server
     client = InferenceClient(f'{host}:{port}')
 
@@ -52,7 +51,7 @@ def test_inference_client_new_session(inference_server, mock_policy):
     session = client.new_session()
     session.close()
 
-    assert mock_policy.new_session.call_count == 2
+    assert mock_policy.episodes == 2
 
 
 def test_session_url_selects_the_model(multi_policy_server):
@@ -83,9 +82,8 @@ def test_session_url_selects_the_model(multi_policy_server):
     finally:
         beta_session.close()
 
-    policies['alpha']._mock_session.assert_any_call({'obs': 'alpha'}, ANY)
-    policies['beta']._mock_session.assert_any_call({'obs': 'beta'}, ANY)
-    policies['alpha']._mock_session.assert_any_call({'obs': 'default'}, ANY)
+    assert policies['alpha'].observations == [{'obs': 'default'}, {'obs': 'alpha'}]
+    assert policies['beta'].observations == [{'obs': 'beta'}]
 
 
 def test_wire_serialisation_accepts_mappingproxy():

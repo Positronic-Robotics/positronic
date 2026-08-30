@@ -9,17 +9,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
 from typing import Any
 
-from positronic.policy.base import (
-    Answer,
-    ChunkSession,
-    DelegatingChunkSession,
-    DelegatingPolicy,
-    Fn,
-    NotAnswered,
-    Policy,
-    Runtime,
-    Session,
-)
+from positronic.policy.base import Answer, Fn, NotAnswered, Runtime
 
 
 class Executor(Runtime):
@@ -111,50 +101,3 @@ class Executor(Runtime):
             # and the log is the only place the failure can go.
             if (exc := answer.failure()) is not None:
                 logging.error(f'The function {answer.name} failed and no caller read its answer: {exc}')
-
-
-class _BlockingPolicy(DelegatingPolicy):
-    class _Session(DelegatingChunkSession):
-        def __init__(self, inner: ChunkSession, rt: Executor):
-            super().__init__(inner)
-            self._rt = rt
-
-        def __call__(self, obs: Mapping[str, Any], time_ns: int) -> Answer:
-            answer = self._inner(obs, time_ns)
-            self._rt.wait()
-            return answer
-
-        def close(self):
-            # The runtime closes first: a call in flight is still using what the session holds.
-            self._rt.close()
-            self._inner.close()
-
-    def new_session(self, context=None, rt=None) -> ChunkSession:
-        assert rt is None, 'a blocking policy serves its own functions; nothing above it runs them'
-        own = Executor(self._inner.functions)
-        inner = None
-        try:
-            inner = self._inner.new_session(context, own)
-            # Waiting out the work is a question about a chunk, so nothing above a ``ChunkPlayer`` blocks.
-            assert not isinstance(inner, Session), f'{type(inner).__name__} answers commands, not a chunk'
-        except BaseException:
-            own.close()
-            if inner is not None:
-                inner.close()
-            raise
-        return _BlockingPolicy._Session(inner, own)
-
-    @property
-    def functions(self) -> Mapping[str, Callable[..., Any]]:
-        return {}
-
-
-def blocking(policy: Policy) -> Policy:
-    """``policy`` with its heavy work waited out: the handle a call answers is already done.
-
-    For a caller with no control loop to give the time back to — a server request, a warmup, a probe.
-    Layers wrap the result rather than the other way round, so each sees one call per answer. Layers that
-    ``policy`` composes itself are inside, so those still run once per call, each with the ``time_ns`` of
-    the call that asked.
-    """
-    return _BlockingPolicy(policy)

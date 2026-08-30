@@ -3,14 +3,14 @@ import socket
 import threading
 import time
 from collections.abc import Callable, Generator, Mapping
+from contextlib import ExitStack, contextmanager
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 import uvicorn
 
 from positronic.offboard.server import PolicyServer
-from positronic.policy import AnySession, ChunkSession, Done, Policy, Session
+from positronic.policy import INFER, Policy, Session
 from positronic.policy.executor import Executor
 from positronic.policy.layers import ChunkPlayer
 from positronic.policy.spec import ModelSource, PolicySource, remote
@@ -58,29 +58,35 @@ def start_server() -> Generator[StartServer, None, None]:
 
 
 @pytest.fixture
-def open_session() -> Generator[Callable[..., tuple[AnySession, Executor]], None, None]:
-    """Opens a policy's session against a runtime that serves its functions, as the harness does."""
-    runtimes: list[Executor] = []
+def open_episode() -> Generator[Callable[[Policy], Mapping[str, Callable[..., Any]]], None, None]:
+    """Opens a policy's episode; every one it opened is closed at teardown."""
+    closing = ExitStack()
 
-    def make(policy: Policy) -> tuple[AnySession, Executor]:
-        runtimes.append(Executor(policy.functions))
-        return policy.new_session(None, runtimes[-1]), runtimes[-1]
+    def make(policy: Policy) -> Mapping[str, Callable[..., Any]]:
+        return closing.enter_context(policy.episode())
 
     yield make
-    for runtime in runtimes:
-        runtime.close()
+    closing.close()
+
+
+@pytest.fixture
+def open_session() -> Generator[Callable[[Policy], tuple[Session, Executor]], None, None]:
+    """Opens a policy's session against a runtime that serves its episode, as the harness does."""
+    closing = ExitStack()
+
+    def make(policy: Policy) -> tuple[Session, Executor]:
+        rt = Executor(closing.enter_context(policy.episode()))
+        closing.callback(rt.close)
+        session = policy.new_session(rt)
+        closing.callback(session.close)
+        return session, rt
+
+    yield make
+    closing.close()
 
 
 # How long a round trip against a local server may take before a test calls it lost.
 ANSWER_SEC = 5.0
-
-
-def round_trip(session: ChunkSession, rt: Executor, obs, time_ns: int = 0) -> list[dict] | dict | None:
-    """What ``session`` answers for ``obs``, once its round trip has come back."""
-    answer = session(obs, time_ns)
-    rt.wait(ANSWER_SEC)
-    assert not rt.in_flight, 'the round-trip never came back'
-    return answer.result()
 
 
 def played_round_trip(session: Session, rt: Executor, obs, time_ns: int = 0) -> Mapping[str, Any]:
@@ -97,24 +103,39 @@ def played_round_trip(session: Session, rt: Executor, obs, time_ns: int = 0) -> 
     return session(obs, time_ns)[0]
 
 
-def _make_mock_policy(action, meta):
-    """Create a mock policy with session-based API."""
-    session = MagicMock()
-    session.return_value = Done(action)
-    session.meta = meta
-    session.close = MagicMock()
+class MockPolicy(Policy):
+    """Answers one fixed chunk, or raises ``failure``. Records its episodes and the observations it took."""
 
-    policy = MagicMock()
-    policy.new_session.return_value = session
-    policy.meta = meta
-    policy.functions = {}  # `Policy.functions` is a mapping, and MagicMock's stand-in is not
-    policy._mock_session = session  # expose for assertions
-    return policy
+    def __init__(self, action, meta: dict[str, Any], failure: Exception | None = None):
+        self._action = action
+        self._meta = meta
+        self._failure = failure
+        self.episodes = 0
+        self.closed = 0
+        self.observations: list[Any] = []
+
+    @contextmanager
+    def episode(self, context=None):
+        self.episodes += 1
+        try:
+            yield {INFER: self._infer}
+        finally:
+            self.closed += 1
+
+    def _infer(self, obs):
+        self.observations.append(obs)
+        if self._failure is not None:
+            raise self._failure
+        return self._action
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return dict(self._meta)
 
 
 @pytest.fixture
-def make_mock_policy() -> Callable[..., MagicMock]:
-    return _make_mock_policy
+def make_mock_policy() -> Callable[..., MockPolicy]:
+    return MockPolicy
 
 
 class _DictSource(ModelSource):
@@ -138,21 +159,20 @@ class _DictSource(ModelSource):
 
 
 @pytest.fixture
-def mock_policy() -> MagicMock:
-    """Mock policy for testing."""
-    return _make_mock_policy({'action_data': [1, 2, 3]}, {'model_name': 'test_model'})
+def mock_policy() -> MockPolicy:
+    return MockPolicy({'action_data': [1, 2, 3]}, {'model_name': 'test_model'})
 
 
 @pytest.fixture
-def mock_policy_registry() -> dict[str, MagicMock]:
+def mock_policy_registry() -> dict[str, MockPolicy]:
     return {
-        'alpha': _make_mock_policy({'action_data': ['alpha']}, {'model_name': 'alpha'}),
-        'beta': _make_mock_policy({'action_data': ['beta']}, {'model_name': 'beta'}),
+        'alpha': MockPolicy({'action_data': ['alpha']}, {'model_name': 'alpha'}),
+        'beta': MockPolicy({'action_data': ['beta']}, {'model_name': 'beta'}),
     }
 
 
 @pytest.fixture
-def inference_server(start_server: StartServer, mock_policy: MagicMock) -> tuple[str, int]:
+def inference_server(start_server: StartServer, mock_policy: MockPolicy) -> tuple[str, int]:
     """A served single-policy pipeline.
 
     Returns:
@@ -164,7 +184,7 @@ def inference_server(start_server: StartServer, mock_policy: MagicMock) -> tuple
 
 @pytest.fixture
 def multi_policy_server(
-    start_server: StartServer, mock_policy_registry: dict[str, MagicMock]
-) -> tuple[str, int, dict[str, MagicMock]]:
+    start_server: StartServer, mock_policy_registry: dict[str, MockPolicy]
+) -> tuple[str, int, dict[str, MockPolicy]]:
     host, port, _server = start_server(ChunkPlayer() | remote | _DictSource(mock_policy_registry))
     return host, port, mock_policy_registry

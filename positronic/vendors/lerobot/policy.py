@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+from functools import partial
 from typing import Any
 
 import numpy as np
@@ -7,7 +9,7 @@ from lerobot.configs.types import FeatureType
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 
 from positronic import keys
-from positronic.policy import ChunkSession, Done, Policy
+from positronic.policy import INFER, Policy
 from positronic.policy.observation import TASK_FIELD
 
 
@@ -30,44 +32,33 @@ def _detect_device() -> str:
     return 'cpu'
 
 
-class _LerobotSession(ChunkSession):
-    def __init__(self, policy, preprocessor, postprocessor, device: str, meta: dict[str, Any]):
-        self._policy = policy
-        self._preprocessor = preprocessor
-        self._postprocessor = postprocessor
-        self._device = device
-        self._meta = meta
-
-    def __call__(self, obs: dict[str, Any], time_ns: int) -> Done:
-        obs_int = {}
-        for key, val in obs.items():
-            if key == TASK_FIELD:
-                obs_int[key] = val
-            elif isinstance(val, np.ndarray):
-                if key.startswith('observation.images.'):
-                    val = torch.from_numpy(np.transpose(val, (2, 0, 1)).copy()).float() / 255.0
-                else:
-                    val = torch.from_numpy(val).float()
-                obs_int[key] = val
+def _infer(policy, preprocessor, postprocessor, obs: dict[str, Any]) -> list[dict[str, Any]]:
+    """One model call: an observation in, an action chunk out."""
+    obs_int = {}
+    for key, val in obs.items():
+        if key == TASK_FIELD:
+            obs_int[key] = val
+        elif isinstance(val, np.ndarray):
+            if key.startswith('observation.images.'):
+                val = torch.from_numpy(np.transpose(val, (2, 0, 1)).copy()).float() / 255.0
             else:
-                obs_int[key] = torch.as_tensor(val)
+                val = torch.from_numpy(val).float()
+            obs_int[key] = val
+        else:
+            obs_int[key] = torch.as_tensor(val)
 
-        if self._preprocessor is not None:
-            obs_int = self._preprocessor(obs_int)
+    if preprocessor is not None:
+        obs_int = preprocessor(obs_int)
 
-        action = self._policy.select_action(obs_int)
+    action = policy.select_action(obs_int)
 
-        if self._postprocessor is not None:
-            action = self._postprocessor(action)
+    if postprocessor is not None:
+        action = postprocessor(action)
 
-        action = action.cpu().numpy().squeeze(0)
-        if action.ndim == 1:
-            return Done([{'action': action}])
-        return Done([{'action': a} for a in action])
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return self._meta
+    action = action.cpu().numpy().squeeze(0)
+    if action.ndim == 1:
+        return [{'action': action}]
+    return [{'action': a} for a in action]
 
 
 def warm_observation(config: PreTrainedConfig) -> dict[str, Any]:
@@ -102,9 +93,10 @@ class LerobotPolicy(Policy):
         """The checkpoint's own declaration of what this policy takes."""
         return self._policy.config
 
-    def new_session(self, context=None, rt=None):
+    @contextmanager
+    def episode(self, context=None):
         self._policy.reset()
-        return _LerobotSession(self._policy, self._preprocessor, self._postprocessor, self._device, self._meta)
+        yield {INFER: partial(_infer, self._policy, self._preprocessor, self._postprocessor)}
 
     @property
     def meta(self) -> dict[str, Any]:

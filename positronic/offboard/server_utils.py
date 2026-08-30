@@ -9,10 +9,10 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from functools import partial
 from typing import Any
 
-from positronic.policy import ChunkSession, Policy
-from positronic.policy.executor import blocking
+from positronic.policy import INFER, Policy
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +42,8 @@ def warmup(policy: Policy, obs: dict[str, Any], on_progress: Callable[[str], Non
 
     ``obs`` has to be an observation the loaded backend accepts.
     """
-    session = blocking(policy).new_session()
-    assert isinstance(session, ChunkSession), f'{type(session).__name__} answers commands, not a chunk'
-    try:
-        run_with_progress(lambda: session(obs, time.time_ns()).result(), 'Running warmup inference', on_progress)
-    finally:
-        session.close()
+    with policy.episode() as fns:
+        run_with_progress(partial(fns[INFER], obs), 'Running warmup inference', on_progress)
 
 
 def wait_for_subprocess_ready(

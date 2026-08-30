@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+from functools import partial
 from typing import Any
 
 import numpy as np
@@ -5,7 +7,7 @@ import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from positronic import keys
-from positronic.policy import ChunkSession, Done, Policy
+from positronic.policy import INFER, Policy
 from positronic.vendors import molmoact2
 
 # The three views and the 8-D ``[joint_positions(7), grip(1)]`` state of the DROID action space this vendor
@@ -24,36 +26,24 @@ def warm_observation() -> dict[str, Any]:
     }
 
 
-class _MolmoAct2Session(ChunkSession):
-    def __init__(self, model, processor, norm_tag: str, num_steps: int, meta: dict[str, Any]):
-        self._model = model
-        self._processor = processor
-        self._norm_tag = norm_tag
-        self._num_steps = num_steps
-        self._meta = meta
-
-    def __call__(self, obs: dict[str, Any], time_ns: int) -> Done:
-        # predict_action is decorated @torch.no_grad() and manages its own precision: the model loads
-        # in bfloat16 and runs bf16 throughout (its autocast path only guards fp32 inputs), so an
-        # external torch.inference_mode() / torch.autocast wrap or a detach() would all be redundant.
-        out = self._model.predict_action(
-            processor=self._processor,
-            images=obs[molmoact2.IMAGES],
-            task=obs.get(molmoact2.TASK, ''),
-            state=np.asarray(obs[molmoact2.STATE], dtype=np.float32),
-            norm_tag=self._norm_tag,
-            inference_action_mode='continuous',
-            enable_depth_reasoning=False,
-            num_steps=self._num_steps,
-            normalize_language=True,
-            enable_cuda_graph=False,
-        )
-        actions = out.actions[0].float().cpu().numpy()
-        return Done([{'action': action} for action in actions])
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return self._meta
+def _infer(model, processor, norm_tag: str, num_steps: int, obs: dict[str, Any]) -> list[dict[str, Any]]:
+    """One model call: an observation in, an action chunk out."""
+    # predict_action is decorated @torch.no_grad() and manages its own precision: the model loads
+    # in bfloat16 and runs bf16 throughout (its autocast path only guards fp32 inputs), so an
+    # external torch.inference_mode() / torch.autocast wrap or a detach() would all be redundant.
+    out = model.predict_action(
+        processor=processor,
+        images=obs[molmoact2.IMAGES],
+        task=obs.get(molmoact2.TASK, ''),
+        state=np.asarray(obs[molmoact2.STATE], dtype=np.float32),
+        norm_tag=norm_tag,
+        inference_action_mode='continuous',
+        enable_depth_reasoning=False,
+        num_steps=num_steps,
+        normalize_language=True,
+        enable_cuda_graph=False,
+    )
+    return [{'action': action} for action in out.actions[0].float().cpu().numpy()]
 
 
 class MolmoAct2Policy(Policy):
@@ -66,8 +56,9 @@ class MolmoAct2Policy(Policy):
         self._num_steps = num_steps
         self._meta = {keys.TYPE: 'molmoact2', 'norm_tag': norm_tag}
 
-    def new_session(self, context=None, rt=None) -> ChunkSession:
-        return _MolmoAct2Session(self._model, self._processor, self._norm_tag, self._num_steps, self._meta)
+    @contextmanager
+    def episode(self, context=None):
+        yield {INFER: partial(_infer, self._model, self._processor, self._norm_tag, self._num_steps)}
 
     @property
     def meta(self) -> dict[str, Any]:

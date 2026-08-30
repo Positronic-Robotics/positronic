@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
-from typing import Any, ClassVar, final
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from typing import Any, ClassVar
 
 # Structural keys of the wire spec: ``|`` serializes as ``{SEQ: [...]}``, ``&`` as ``{PAR: [...]}``.
 SEQ = 'seq'
 PAR = 'par'
+
+# The name a policy's inference travels under. It takes the observation and answers a chunk: a list of
+# actions, each naming command channels and carrying its own ``keys.ACTION_TIMESTAMP`` in seconds from the
+# call. An empty list drops what is playing, and one action may come back bare.
+INFER = 'infer'
 
 
 class NotAnswered(RuntimeError):
@@ -26,94 +32,40 @@ class Answer(ABC):
     def result(self) -> Any:
         """What the function returned. Raises what the function raised, or ``NotAnswered`` before it answers."""
 
-    @final
-    def map(self, fn: Callable[[Any], Any]) -> Answer:
-        """This answer with ``fn`` applied to what it carries, at the moment it is read."""
-        return _Mapped(self, fn)
-
-
-class _Mapped(Answer):
-    def __init__(self, inner: Answer, fn: Callable[[Any], Any]):
-        self._inner = inner
-        self._fn = fn
-
-    def done(self) -> bool:
-        return self._inner.done()
-
-    def result(self) -> Any:
-        return self._fn(self._inner.result())
-
-
-class Done(Answer):
-    """The answer to a call whose work ran inside it."""
-
-    def __init__(self, value: Any):
-        self._value = value
-
-    def done(self) -> bool:
-        return True
-
-    def result(self) -> Any:
-        return self._value
-
 
 # A call to an ``Fn`` starts the work and returns at once.
 Fn = Callable[..., Answer]
 
 
 class Runtime(ABC):
-    """What the framework offers one session. Every session gets its own.
+    """What the framework offers one episode: its work, started off the loop thread.
 
-    Closed before the session it serves: a call still in flight is using what that session holds.
+    Closed before the work it serves is released: a call still in flight is using what that work holds.
     """
 
     @property
     @abstractmethod
     def fns(self) -> Mapping[str, Fn]:
-        """The policy's functions, under the names it declared them by."""
+        """The episode's work, under the names the policy declared it by."""
 
 
-class _SessionBase:
-    """Per-episode state a policy opens: what the framework holds, cancels and closes.
+class Session(ABC):
+    """Per-episode control session, created by ``Policy.new_session``.
 
-    ``Session`` and ``ChunkSession`` add the call. Both are opened and ended the same way, so the
-    lifecycle lives here.
-    """
+    A session holds what one episode plays — the chunk in flight, the history a stack samples — and is
+    what a caller drives a robot through::
 
-    @property
-    def meta(self) -> dict[str, Any]:
-        """Session metadata (may include policy meta + per-session info)."""
-        return {}
-
-    def cancel(self):
-        """Drop any in-flight trajectory state. Layers that buffer/schedule a
-        trajectory (e.g. ``ChunkPlayer``) should reset so the next call
-        triggers a fresh inference. Override and propagate via ``super().cancel()``.
-        """
-        return None
-
-    def close(self):
-        """End this session and release per-episode resources."""
-        return None
-
-
-class Session(_SessionBase, ABC):
-    """Per-episode control session. Created by ``Policy.new_session()``.
-
-    Sessions hold per-episode state (the chunk being played, latency tracking) and are what a caller
-    controls a robot through. Call the session like a function::
-
-        session = policy.new_session(context)
+        session = policy.new_session(rt)
         commands, resume_at_ns = session(obs, time_ns)
 
-    **Plain-data contract**: sessions accept and return only plain data
-    (dicts, lists, numpy arrays, scalars). No tensors or custom objects.
+    **Plain-data contract**: sessions accept and return only plain data (dicts, lists, numpy arrays,
+    scalars). No tensors or custom objects.
     """
 
     @abstractmethod
     def __call__(self, obs: Mapping[str, Any], time_ns: int) -> tuple[Mapping[str, Any], int]:
         """The commands to run now and the time this session wants its next call, without waiting:
-        heavy work belongs in ``Policy.functions``.
+        heavy work belongs in ``Policy.episode``.
 
         ``time_ns`` is the caller's clock reading in nanoseconds. A session reads no clock of its own.
         ``commands`` names a command channel per entry; an empty mapping asks for nothing this call.
@@ -121,31 +73,13 @@ class Session(_SessionBase, ABC):
         earlier. A session that waits for work it cannot time names a poll period of its own.
         """
 
+    def cancel(self):
+        """Drop what is in flight, so the next call plans afresh. Propagate with ``super().cancel()``."""
+        return None
 
-class ChunkSession(_SessionBase, ABC):
-    """Session that answers action chunks: what a ``ChunkPlayer`` holds and plays.
-
-    A chunk is a list of actions, each naming command channels and carrying its own
-    ``keys.ACTION_TIMESTAMP`` in seconds from the call. An empty list drops what is playing. One action
-    may come back bare, and the player wraps it.
-
-    TODO(#661): the chunk becomes the answer of a served function, and this class goes with the
-    session-serving wire.
-    """
-
-    @abstractmethod
-    def __call__(self, obs: Mapping[str, Any], time_ns: int) -> Answer:
-        """Start the work for one chunk, and answer the caller's handle on it.
-
-        ``time_ns`` is the caller's clock reading in nanoseconds. A session reads no clock of its own.
-        The caller decides how many calls it keeps in flight, and reads each handle when it wants the
-        chunk. A session that runs the work inside the call answers a ``Done``.
-        """
-
-
-# What a layer wraps: a session on either side of a ``ChunkPlayer``.
-# TODO(#661): the chunk side goes, and this alias with it.
-AnySession = Session | ChunkSession
+    def close(self):
+        """End this session and release what it holds."""
+        return None
 
 
 class DelegatingSession(Session):
@@ -157,10 +91,6 @@ class DelegatingSession(Session):
     def __call__(self, obs, time_ns):
         return self._inner(obs, time_ns)
 
-    @property
-    def meta(self):
-        return self._inner.meta
-
     def cancel(self):
         self._inner.cancel()
 
@@ -168,59 +98,33 @@ class DelegatingSession(Session):
         self._inner.close()
 
 
-class DelegatingChunkSession(ChunkSession):
-    """Chunk session that delegates all methods to an inner ``ChunkSession``.
+class Policy:
+    """Factory for episodes.
 
-    The body repeats ``DelegatingSession`` because the two answer different calls, and each one's ``_inner``
-    is the side it forwards to. TODO(#661): it goes with ``ChunkSession``.
+    A Policy holds what every episode shares — model weights, a connection, a subprocess — and opens the
+    per-episode work each one runs. One Policy serves several robots through independent episodes. It
+    declares the work of an episode, the session that plays one, or both.
     """
 
-    def __init__(self, inner: ChunkSession):
-        self._inner = inner
+    @contextmanager
+    def episode(self, context: dict[str, Any] | None = None) -> Iterator[Mapping[str, Callable[..., Any]]]:
+        """The work of one episode, by name, and what it holds for as long as the episode runs.
 
-    def __call__(self, obs, time_ns):
-        return self._inner(obs, time_ns)
-
-    @property
-    def meta(self):
-        return self._inner.meta
-
-    def cancel(self):
-        self._inner.cancel()
-
-    def close(self):
-        self._inner.close()
-
-
-class Policy(ABC):
-    """Factory for inference sessions.
-
-    A Policy holds shared resources (model weights, connections) and creates
-    per-episode session instances. One Policy can serve multiple robots
-    by creating independent sessions.
-    """
-
-    @abstractmethod
-    def new_session(self, context: dict[str, Any] | None = None, rt: Runtime | None = None) -> AnySession:
-        """Create a new inference session for an episode.
-
-        Args:
-            context: The episode's task description.
-            rt: This session's runtime, serving ``functions``. ``None`` only where no caller supplied one.
-                A session that needs one refuses to open without it.
+        The framework serves the work as ``Runtime.fns`` and closes it after the episode. A policy that
+        answers a chunk declares that work under ``INFER``. ``context`` is the episode's task description.
         """
+        yield {}
 
-    @property
-    def functions(self) -> Mapping[str, Callable[..., Any]]:
-        """The work this policy runs off the session's thread, by name. The framework serves it as ``rt.fns``."""
-        return {}
+    def new_session(self, rt: Runtime) -> Session:
+        """The session that plays this episode, over the work ``rt`` serves."""
+        raise NotImplementedError(f'{type(self).__name__} answers a chunk; put a ChunkPlayer above it to play one')
 
     @property
     def meta(self) -> dict[str, Any]:
         """Static metadata about this policy/model."""
         return {}
 
-    def close(self):  # noqa: B027
+    def close(self):
         """Release shared resources (model weights, connections, etc.)."""
 
 
@@ -230,12 +134,11 @@ class DelegatingPolicy(Policy):
     def __init__(self, inner: Policy):
         self._inner = inner
 
-    def new_session(self, context=None, rt=None):
-        return self._inner.new_session(context, rt)
+    def episode(self, context=None):
+        return self._inner.episode(context)
 
-    @property
-    def functions(self):
-        return self._inner.functions
+    def new_session(self, rt):
+        return self._inner.new_session(rt)
 
     @property
     def meta(self):
@@ -261,20 +164,25 @@ class Layer:
 
     **Extension points**: subclasses override *one* of ``make_session`` (the
     common case — transform one session's ``__call__``) or ``wrap`` (for
-    policy-level state across sessions, like composition).
+    policy-level state across sessions, like composition). A layer that sits under a ``ChunkPlayer``
+    subclasses ``ChunkLayer`` instead: there is no session there, only the work ``INFER`` names.
     """
 
     def wrap(self, policy: Policy) -> Policy:
         """Apply this layer to a policy. Default: wrap every session it creates via ``make_session``."""
         return _LayerPolicy(policy, self)
 
-    def make_session(self, inner: Any) -> AnySession:
-        """Make this layer's session around ``inner``, on the side of a ``ChunkPlayer`` the layer sits on."""
+    def make_session(self, inner: Session) -> Session:
+        """Make this layer's session around ``inner``."""
         raise NotImplementedError('Override make_session or wrap')
 
     # The name this layer travels under, set by every deliverable subclass. ``WIRE_LAYERS`` is keyed by
     # it, so the name is written once and both sides of the wire read the same attribute.
     WIRE_NAME: ClassVar[str]
+
+    # Whether this layer turns the chunk work below it into a session. A ``ChunkLayer`` wraps that work, so
+    # a composition puts every one of them under the layer that plays it.
+    PLAYS_CHUNKS: ClassVar[bool] = False
 
     def to_spec(self) -> dict[str, Any]:
         """Plain-data wire spec of this layer, for a server's local-stack declaration.
@@ -300,22 +208,50 @@ class Layer:
         return (self,)
 
 
-class _LayerPolicy(DelegatingPolicy):
-    """Policy produced by ``Layer.wrap()``.
+class ChunkLayer(Layer):
+    """Layer under a ``ChunkPlayer``: it wraps the work ``INFER`` names, for one episode.
 
-    Delegates session creation to the layer's ``make_session`` and merges meta.
+    Below the player there is no session, so a chunk layer has nothing to cancel and no round to pace. It
+    sees the observation on the way down and the chunk on the way up.
     """
+
+    def wrap(self, policy: Policy) -> Policy:
+        return _ChunkLayerPolicy(policy, self)
+
+    @contextmanager
+    def episode_fn(self, infer: Callable[..., Any]) -> Iterator[Callable[..., Any]]:
+        """``infer`` with this layer's work around it, and what that takes for as long as the episode runs."""
+        raise NotImplementedError('Override episode_fn or wrap')
+
+
+class _WrappedPolicy(DelegatingPolicy):
+    """Policy produced by ``Layer.wrap()``: the layer's own metadata joins what it wraps."""
 
     def __init__(self, inner: Policy, layer: Layer):
         super().__init__(inner)
         self._layer = layer
 
-    def new_session(self, context=None, rt=None):
-        return self._layer.make_session(self._inner.new_session(context, rt))
-
     @property
     def meta(self):
         return self._inner.meta | self._layer.meta
+
+
+class _LayerPolicy(_WrappedPolicy):
+    """Every session it creates goes through the layer's ``make_session``."""
+
+    def new_session(self, rt):
+        return self._layer.make_session(self._inner.new_session(rt))
+
+
+class _ChunkLayerPolicy(_WrappedPolicy):
+    """Its episode serves the layer's ``INFER`` in place of the one below it."""
+
+    _layer: ChunkLayer
+
+    @contextmanager
+    def episode(self, context=None):
+        with self._inner.episode(context) as fns, self._layer.episode_fn(fns[INFER]) as infer:
+            yield {**fns, INFER: infer}
 
 
 class _ComposedLayer(Layer):
@@ -325,7 +261,12 @@ class _ComposedLayer(Layer):
         self._components = components
 
     def wrap(self, policy: Policy) -> Policy:
+        played = False
         for component in reversed(self._components):
+            assert not (played and isinstance(component, ChunkLayer)), (
+                f'compose {type(component).__name__} under the layer that plays the chunk, not above it'
+            )
+            played = played or component.PLAYS_CHUNKS
             policy = component.wrap(policy)
         return policy
 

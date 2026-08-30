@@ -3,6 +3,8 @@ import logging
 import os
 import subprocess
 from collections.abc import Callable
+from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +19,7 @@ from positronic import keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
-from positronic.policy import ChunkSession, Done, Policy
+from positronic.policy import INFER, Policy
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkPlayer, StopOnFault
 from positronic.policy.spec import ModelSource, remote
@@ -200,17 +202,14 @@ class Gr00tSubprocess:
 ###########################################################################################
 
 
-class _Gr00tSession(ChunkSession):
-    def __init__(self, client: PolicyClient):
-        self._client = client
-
-    def __call__(self, obs, time_ns):
-        action_response, _info = self._client.get_action(obs)
-        action = {k: v[0] for k, v in action_response.items()}
-        lengths = {len(v) for v in action.values()}
-        assert len(lengths) == 1, f'All values in action must have the same length, got {lengths}'
-        time_horizon = lengths.pop()
-        return Done([{k: v[i] for k, v in action.items()} for i in range(time_horizon)])
+def _infer(client: PolicyClient, obs):
+    """One model call: an observation in, an action chunk out."""
+    action_response, _info = client.get_action(obs)
+    action = {k: v[0] for k, v in action_response.items()}
+    lengths = {len(v) for v in action.values()}
+    assert len(lengths) == 1, f'All values in action must have the same length, got {lengths}'
+    time_horizon = lengths.pop()
+    return [{k: v[i] for k, v in action.items()} for i in range(time_horizon)]
 
 
 class Gr00tPolicy(Policy):
@@ -220,9 +219,10 @@ class Gr00tPolicy(Policy):
         self._groot = groot
         self._checkpoint_path = checkpoint_path
 
-    def new_session(self, context=None, rt=None):
+    @contextmanager
+    def episode(self, context=None):
         self._groot.client.reset()
-        return _Gr00tSession(self._groot.client)
+        yield {INFER: partial(_infer, self._groot.client)}
 
     @property
     def meta(self):

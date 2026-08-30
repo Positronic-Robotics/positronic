@@ -1,8 +1,8 @@
 """Composable policy layers — chunk playback, fault handling and temporal frame stacking.
 
 Layers are serving-time concerns wrapped around a policy with ``|`` (left is outermost). ``ChunkPlayer``
-converts a chunk into the commands a caller runs; the layers around it read time from the observation
-(``obs_time_ns``) or from the call's ``time_ns``, both in nanoseconds.
+turns the chunk the policy answers into the commands a caller runs; the layers above it read time from the
+observation (``obs_time_ns``) or from the call's ``time_ns``, both in nanoseconds.
 """
 
 from collections import deque
@@ -12,7 +12,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.policy.base import Answer, ChunkSession, DelegatingSession, Layer, Session
+from positronic.policy.base import INFER, Answer, DelegatingPolicy, DelegatingSession, Fn, Layer, Policy, Session
 
 # How far from the call a waypoint may sit: past any real chunk, short of the decades a chunk is off by
 # when it reaches the player already anchored.
@@ -66,21 +66,32 @@ class StopOnFault(Layer):
 
 
 class ChunkPlayer(Layer):
-    """Hold the chunk the sessions below answer, anchor it to the call that received it, and emit each
-    waypoint at its own time."""
+    """Hold the chunk ``INFER`` answers, anchor it to the call that received it, and emit each waypoint at
+    its own time.
+
+    The player is the bottom session of a chunk policy: it turns the work below into the commands a caller
+    runs, so the layers under it wrap that work rather than a session.
+    """
 
     WIRE_NAME = 'chunk_player'
+    PLAYS_CHUNKS = True
     POLL_SEC = 0.01
+
+    class _Policy(DelegatingPolicy):
+        """The player is the session of a chunk policy, so nothing below it opens one."""
+
+        def new_session(self, rt):
+            return ChunkPlayer._Session(rt.fns[INFER])
 
     class _Session(Session):
         class _Waypoint(NamedTuple):
             cmd: dict[str, Any]
             time_ns: int
 
-        def __init__(self, inner: ChunkSession):
-            self._inner = inner
+        def __init__(self, infer: Fn):
+            self._infer = infer
             self._waypoints: deque[ChunkPlayer._Session._Waypoint] = deque()
-            # The one call this layer keeps in flight, and whether a ``cancel`` has orphaned the chunk it
+            # The one call this session keeps in flight, and whether a ``cancel`` has orphaned the chunk it
             # will bring back.
             self._answer: Answer | None = None
             self._orphaned = False
@@ -89,7 +100,7 @@ class ChunkPlayer(Layer):
             """Plays the chunk it holds; asks for the next one in the call that drains it."""
             if not self._waypoints or self._waypoints[-1].time_ns <= time_ns:
                 if self._answer is None:
-                    self._answer = self._inner(obs, time_ns)
+                    self._answer = self._infer(obs)
                 if self._answer.done():
                     chunk = self._take()
                     if chunk is not None:
@@ -107,7 +118,7 @@ class ChunkPlayer(Layer):
             An orphaned call is read too, so its failure reaches the caller. The state clears before that
             read, so a cancel ends with the call it was made against and never drops the chunk after it.
             """
-            assert self._answer is not None, 'only a call this layer made brings a chunk back'
+            assert self._answer is not None, 'only a call this session made brings a chunk back'
             answer, orphaned = self._answer, self._orphaned
             self._answer, self._orphaned = None, False
             chunk = answer.result()
@@ -116,7 +127,7 @@ class ChunkPlayer(Layer):
         def _load(self, chunk: list[dict[str, Any]] | dict[str, Any], time_ns: int) -> None:
             """Anchor ``chunk`` to ``time_ns`` and hold it.
 
-            A single-action session may answer a bare dict, and a no-codec path may omit ``timestamp``
+            A single-action policy may answer a bare dict, and a no-codec path may omit ``timestamp``
             (servers can stamp and truncate themselves); both are normalized here so an immediate action
             plays instead of raising.
             """
@@ -126,9 +137,9 @@ class ChunkPlayer(Layer):
             if skew > MAX_ACTION_SKEW_SEC:
                 raise ValueError(
                     f'Action scheduled {skew:.0f}s from the call, over the {MAX_ACTION_SKEW_SEC:.0f}s bound: '
-                    f'the sessions below are timing actions against a clock of their own'
+                    f'the work below is timing actions against a clock of its own'
                 )
-            # The single explicit seconds->ns seam: the sessions below time actions in float seconds, and
+            # The single explicit seconds->ns seam: the work below times actions in float seconds, and
             # every pimm channel is in ns. The offset converts, not the sum, so a waypoint at 0.0 lands on the
             # call itself whatever the clock reads. A waypoint naming no channel — the codecs' end-of-chunk
             # sentinel — commands nothing and states where the chunk ends.
@@ -140,21 +151,13 @@ class ChunkPlayer(Layer):
                 for action in chunk
             )
 
-        @property
-        def meta(self):
-            return self._inner.meta
-
         def cancel(self):
             self._waypoints.clear()
             # The chunk in flight describes a world that has gone. The call is still read, for its failure.
             self._orphaned = self._answer is not None
-            self._inner.cancel()
 
-        def close(self):
-            self._inner.close()
-
-    def make_session(self, inner: ChunkSession) -> Session:
-        return ChunkPlayer._Session(inner)
+    def wrap(self, policy: Policy) -> Policy:
+        return ChunkPlayer._Policy(policy)
 
     def to_spec(self):
         return {'name': self.WIRE_NAME}

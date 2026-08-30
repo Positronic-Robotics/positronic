@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from functools import partial
 from typing import Any
 
@@ -14,8 +14,7 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 
 from positronic import keys
 from positronic.cfg import codecs
-from positronic.policy import ChunkSession, Codec, Policy
-from positronic.policy.base import Answer, Runtime
+from positronic.policy import INFER, Codec, Policy
 from positronic.policy.layers import ChunkPlayer, StopOnFault
 from positronic.policy.observation import TASK_FIELD
 from positronic.policy.spec import PolicySource, inline
@@ -81,36 +80,15 @@ def _infer(policy: PreTrainedPolicy, device: str, obs: dict[str, Any]) -> list[d
 
 
 class LerobotPolicy(Policy):
-    _INFER = 'infer'
-
-    class _Session(ChunkSession):
-        """Per-episode session that gives the model call to the runtime."""
-
-        def __init__(self, rt: Runtime, meta: dict[str, Any]):
-            self._rt = rt
-            self._meta = meta
-
-        def __call__(self, obs: dict[str, Any], time_ns: int) -> Answer:
-            return self._rt.fns[LerobotPolicy._INFER](obs)
-
-        @property
-        def meta(self) -> dict[str, Any]:
-            return self._meta
-
     def __init__(self, policy: PreTrainedPolicy, device: str | None = None, extra_meta: dict[str, Any] | None = None):
         self._device = device or _detect_device()
         self._policy = policy.to(self._device)
         self._meta = extra_meta or {}
 
-    def new_session(self, context=None, rt=None):
-        if rt is None:
-            raise ValueError('A lerobot session runs its model on a runtime: pass rt to new_session.')
+    @contextmanager
+    def episode(self, context=None):
         self._policy.reset()
-        return LerobotPolicy._Session(rt, self._meta)
-
-    @property
-    def functions(self) -> Mapping[str, Callable[..., Any]]:
-        return {self._INFER: partial(_infer, self._policy, self._device)}
+        yield {INFER: partial(_infer, self._policy, self._device)}
 
     @property
     def meta(self) -> dict[str, Any]:

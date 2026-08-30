@@ -1,5 +1,7 @@
 import collections.abc as cabc
 import time
+from contextlib import contextmanager
+from functools import partial
 from typing import Any
 
 import numpy as np
@@ -10,12 +12,9 @@ from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, I
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 
-from .base import Answer, AnySession, ChunkSession, Layer, Policy, Runtime
+from .base import INFER, Layer, Policy, Session
 from .recording import Recorder
 from .spec import from_spec
-
-# The name the wire round trip is served under. A policy whose sessions are ``RemoteSession``s declares it.
-INFER = 'infer'
 
 
 def _prepare_value(value: Any) -> Any:
@@ -37,12 +36,12 @@ def _prepare_obs(obs: cabc.Mapping[str, Any], compress_images: bool) -> dict[str
 
 
 def round_trip(
-    ws_session: InferenceSession, obs: cabc.Mapping[str, Any], compress_images: bool
+    ws_session: InferenceSession, compress_images: bool, obs: cabc.Mapping[str, Any]
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """One inference over the wire, timed as the ``policy.infer`` span.
 
-    The observation is prepared here rather than in the session, because a JPEG encode of an HD frame
-    stack must not run on the thread that calls the session. The span starts after it, because that
+    The observation is prepared here rather than in the caller, because a JPEG encode of an HD frame
+    stack must not run on the thread that drives the control loop. The span starts after it, because that
     encode is not inference.
     """
     prepared = _prepare_obs(obs, compress_images)
@@ -51,33 +50,6 @@ def round_trip(
         return ws_session.infer(prepared)
     finally:
         telemetry.record_span(telemetry_keys.SPAN_POLICY_INFER, infer_start_ns, time.time_ns())
-
-
-class RemoteSession(ChunkSession):
-    """Per-episode session that forwards observations to a remote inference server.
-
-    ``compress_images`` comes from what the server declared (see ``RemoteMarker``).
-    """
-
-    def __init__(self, ws_session: InferenceSession, rt: Runtime, compress_images: bool = False):
-        self._session = ws_session
-        self._rt = rt
-        self._compress_images = compress_images
-
-    def __call__(self, obs: cabc.Mapping[str, Any], time_ns: int) -> Answer:
-        """One round trip to the server, and the caller's handle on the trajectory it brings back.
-
-        A server answer of one action becomes a 1-element list, which is the form a chunk takes.
-        """
-        answer = self._rt.fns[INFER](self._session, obs, self._compress_images)
-        return answer.map(lambda result: [result] if isinstance(result, dict) else result)
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return flatten_dict({keys.TYPE: 'remote', keys.SERVER: self._session.metadata})
-
-    def close(self):
-        self._session.close()
 
 
 class _Endpoint(Policy):
@@ -100,16 +72,15 @@ class _Endpoint(Policy):
                 ws_session.close()
         return self._server_meta
 
-    def new_session(self, context=None, rt=None) -> RemoteSession:
-        if rt is None:
-            raise ValueError('A remote session runs its inference on a runtime: pass rt to new_session.')
+    @contextmanager
+    def episode(self, context=None):
+        """One connection to the server, open for as long as the episode runs."""
         compress = bool(self.server_meta().get(keys.COMPRESS_IMAGES))
         ws_session = self._client.new_session()
-        return RemoteSession(ws_session, rt, compress_images=compress)
-
-    @property
-    def functions(self) -> cabc.Mapping[str, cabc.Callable[..., Any]]:
-        return {INFER: round_trip}
+        try:
+            yield {INFER: partial(round_trip, ws_session, compress)}
+        finally:
+            ws_session.close()
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -170,12 +141,11 @@ class RemotePolicy(Policy):
             self._stacked = stack.wrap(self._endpoint)
         return self._stacked
 
-    def new_session(self, context=None, rt=None) -> AnySession:
-        return self._policy().new_session(context, rt)
+    def episode(self, context=None):
+        return self._policy().episode(context)
 
-    @property
-    def functions(self) -> cabc.Mapping[str, cabc.Callable[..., Any]]:
-        return self._policy().functions
+    def new_session(self, rt) -> Session:
+        return self._policy().new_session(rt)
 
     @property
     def meta(self) -> dict[str, Any]:

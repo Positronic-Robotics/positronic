@@ -164,17 +164,18 @@ def main(
 
     rec = Recorder(pos3.sync(output_dir))
     tapped = rec.tap(_TAP).wrap(policy)
-    runtime = Executor(policy.functions)
-    session = tapped.new_session({keys.TASK: task} if task else None, runtime)
-    meta = dict(session.meta)
-    name = label or _recording_name(meta)
-    try:
-        played = _play(session, obs, runtime)
-    finally:
-        # The call that drained the chunk asked the endpoint again; closing the runtime waits that answer
-        # out. It goes before the session, whose socket the call still holds.
-        runtime.close()
-        session.close()
+    with tapped.episode({keys.TASK: task} if task else None) as fns:
+        runtime = Executor(fns)
+        session = tapped.new_session(runtime)
+        meta = dict(tapped.meta)
+        name = label or _recording_name(meta)
+        try:
+            played = _play(session, obs, runtime)
+        finally:
+            # The call that drained the chunk asked the endpoint again; closing the runtime waits that
+            # answer out. It goes before the episode, whose socket the call still holds.
+            runtime.close()
+            session.close()
 
     print(f'episode {episode} @ {at:.3f}s (ts={ts}) [{name}]: {len(played)} command(s); rrd -> {output_dir}')
     stream = rec.stream

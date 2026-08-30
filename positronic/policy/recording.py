@@ -46,8 +46,10 @@ pipeline composes. The framework then records every boundary it carries, and a s
 its own.
 """
 
+import contextvars
 import itertools
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -60,11 +62,17 @@ import rerun.blueprint as rrb
 from positronic import geom
 from positronic import keys as obs_keys
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.policy.base import Answer, AnySession, ChunkSession, Layer, Session
+from positronic.policy.base import ChunkLayer, DelegatingSession, Layer, Session
 from positronic.policy.codec import is_action
 from positronic.utils.rerun_compat import log_numeric_series, set_timeline_sequence, set_timeline_time
 
 DEFAULT_TIMELINES = {'wall_time': obs_keys.WALL_TIME_NS, 'obs_time': obs_keys.OBS_TIME_NS}
+
+# The timeline values of the inference being logged, set by the tap that opens the round. A runtime runs a
+# function under a copy of the context the call was made in, so a tap on a worker thread reads them too.
+_TIMELINE_VALUES: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    'recording_timeline_values', default=None
+)
 
 # Process-wide episode counter so files stay unique even across concurrent
 # ``Recorder`` instances (e.g. one per websocket session on a server).
@@ -303,11 +311,11 @@ class Recorder:
 
     Taps share the recorder's current episode stream, so taps placed at different
     points in one pipeline write to the same recording. The episode boundary is
-    tracked by a live-session counter: the first tap session to start (when none are
-    active) opens a fresh ``.rrd``; later taps in the same episode write to it; each
-    ``close()`` decrements, and the next session opened after the count returns to
-    zero starts the next file. Episodes are assumed to run one at a time (sessions on
-    one recorder do not overlap).
+    tracked by a live-tap counter: the first tap to open (when none are active)
+    opens a fresh ``.rrd``; later taps in the same episode write to it; each tap
+    that closes decrements, and the next tap opened after the count returns to zero
+    starts the next file. Episodes are assumed to run one at a time (taps on one
+    recorder do not overlap).
 
     ``timelines`` maps rerun timeline names to observation keys. The values are read
     once per inference at the outermost tap and reused by inner taps so every tap
@@ -332,8 +340,13 @@ class Recorder:
         self._path3d_paths: list[str] = []
         self._series_paths: list[str] = []
 
-    def tap(self, name: str) -> '_RecordingTap':
-        return _RecordingTap(self, name)
+    def tap(self, name: str) -> '_CommandTap':
+        """A tap above a ``ChunkPlayer``, logging the command of each round."""
+        return _CommandTap(self, name)
+
+    def chunk_tap(self, name: str) -> '_ChunkTap':
+        """A tap under a ``ChunkPlayer``, logging the observation the model sees and the chunk it answers."""
+        return _ChunkTap(self, name)
 
     @property
     def stream(self) -> rr.RecordingStream | None:
@@ -354,49 +367,33 @@ class Recorder:
         self._live -= 1
 
 
-class _RecordingTap(Layer):
-    """A named tap. Wraps a single session to log its observations and actions."""
-
-    def __init__(self, rec: Recorder, name: str):
-        self._rec = rec
-        self._name = name
-
-    def make_session(self, inner: AnySession) -> AnySession:
-        stream = self._rec._open_stream()
-        # The side a tap sits on is the side its inner is on, so a chain of taps carries it outwards.
-        tap = _CommandTapSession if isinstance(inner, Session) else _ChunkTapSession
-        return tap(inner, self._rec, self._name, stream)
-
-
 class _Frame(NamedTuple):
-    """What one call is logged against: its observation, the rerun timelines it set, and its step.
-
-    A chunk is logged when the caller reads it, so its frame outlives the call that started the work.
-    """
+    """What one call is logged against: its observation, the rerun timelines it set, and its step."""
 
     obs: Mapping[str, Any]
     timelines: dict[str, Any]
     step: int
 
 
-class _RecordingTapSession:
+class _TapLog:
     """Logs the observation flowing down and the actions flowing up at one point.
 
-    ``_CommandTapSession`` and ``_ChunkTapSession`` add the call, one per side of a ``ChunkPlayer``.
+    The timeline values are read once per inference, by the tap that opens the round, and every tap under
+    it stamps that inference identically. A tap whose work runs on a worker thread reads them too: the
+    runtime copies the calling context, and the values travel in it.
     """
 
-    def __init__(self, inner: AnySession, rec: Recorder, name: str, stream: rr.RecordingStream):
-        self._inner = inner
+    def __init__(self, rec: 'Recorder', name: str):
         self._rec = rec
         self._name = name
-        self._stream = stream
+        self._stream = rec._open_stream()
         self._step = 0
 
-    @property
-    def meta(self):
-        return {**self._inner.meta, 'recording.rrd': str(self._rec._rrd_path)}
+    def close(self) -> None:
+        """Give up this tap's hold on the episode's recording."""
+        self._rec._release_stream()
 
-    def _set_timelines(self, frame: '_Frame') -> None:
+    def _set_timelines(self, frame: _Frame) -> None:
         for timeline, value in frame.timelines.items():
             set_timeline_time(timeline, value)
         set_timeline_sequence('step', frame.step)
@@ -416,7 +413,7 @@ class _RecordingTapSession:
                 log_numeric_series(path, num)
                 self._rec._numeric_paths.append(path)
 
-    def _log_action_chunk(self, prefix: str, actions: list[dict], frame: '_Frame') -> None:  # noqa: C901
+    def _log_action_chunk(self, prefix: str, actions: list[dict], frame: _Frame) -> None:  # noqa: C901
         """Log the action chunk as an enriched 3D trajectory + ``action_time`` time series."""
         # Skip validity sentinels: they carry no command to plot and would flip the ``all(... in a)`` checks below.
         actions = [a for a in actions if is_action(a)]
@@ -467,10 +464,6 @@ class _RecordingTapSession:
                 _log_action_series(f'{prefix}/series/{suffix}', field_arr, group_h, base_ns, names=None)
                 self._rec._series_paths.append(f'{prefix}/series/{suffix}')
 
-    def _actions(self, answer) -> list[dict]:
-        """The actions the chunk logger plots out of what the inner answered."""
-        raise NotImplementedError
-
     def _send_blueprint(self) -> None:
         rec = self._rec
         bp = rec._blueprint or _build_blueprint(
@@ -479,65 +472,92 @@ class _RecordingTapSession:
         if bp is not None:
             rr.send_blueprint(bp)
 
-    def _tapped(self, obs, time_ns) -> tuple[Any, _Frame]:
-        """What the inner answered, and the frame this call is logged against."""
-        rec = self._rec
-        outermost = rec._depth == 0
-        if outermost:
-            rec._timeline_values = {t: obs[k] for t, k in rec._timelines.items() if k in obs}
-        rec._depth += 1
+    @contextmanager
+    def round(self, obs: Mapping[str, Any]) -> Iterator[_Frame]:
+        """The frame this call is logged against, with its observation already logged."""
+        values = _TIMELINE_VALUES.get()
+        token = None
+        if values is None:
+            values = {t: obs[k] for t, k in self._rec._timelines.items() if k in obs}
+            token = _TIMELINE_VALUES.set(values)
         try:
-            frame = _Frame(obs, dict(rec._timeline_values), self._step)
+            frame = _Frame(obs, dict(values), self._step)
             with self._stream:
                 self._set_timelines(frame)
                 self._log(self._name, obs)
-            return self._inner(obs, time_ns), frame
+            yield frame
         finally:
-            rec._depth -= 1
-            if rec._depth == 0:
-                rec._timeline_values = {}
+            if token is not None:
+                _TIMELINE_VALUES.reset(token)
 
-    def _log_actions(self, actions: list[dict], frame: _Frame) -> None:
+    def actions(self, actions: list[dict], frame: _Frame) -> None:
         if actions:
             with self._stream:
                 self._set_timelines(frame)
                 self._log_action_chunk(self._name, actions, frame)
 
-    def _end_step(self) -> None:
-        """Close the round: send the combined blueprint once, from the outermost tap."""
-        if self._rec._depth == 0 and self._step == 0:
+    def end_step(self) -> None:
+        """Close the round: send the combined blueprint once, from the tap that opened the round."""
+        if _TIMELINE_VALUES.get() is None and self._step == 0:
             with self._stream:
                 self._send_blueprint()
         self._step += 1
 
-    def cancel(self):
-        self._inner.cancel()
+
+def _log_infer(log: _TapLog, infer, obs):
+    """``infer`` with its observation and the chunk it answers logged."""
+    with log.round(obs) as frame:
+        chunk = infer(obs)
+    log.actions([dict(chunk)] if isinstance(chunk, Mapping) else (chunk or []), frame)
+    log.end_step()
+    return chunk
+
+
+class _CommandTapSession(DelegatingSession):
+    def __init__(self, inner: Session, log: _TapLog):
+        super().__init__(inner)
+        self._log = log
+
+    def __call__(self, obs, time_ns):
+        with self._log.round(obs) as frame:
+            answer = self._inner(obs, time_ns)
+        commands, _ = answer
+        self._log.actions([dict(commands)] if commands else [], frame)
+        self._log.end_step()
+        return answer
 
     def close(self):
         self._inner.close()
-        self._rec._release_stream()
+        self._log.close()
 
 
-class _CommandTapSession(_RecordingTapSession, Session):
+class _Tap:
+    """What a tap holds: the recorder and the name it logs under."""
+
+    def __init__(self, rec: 'Recorder', name: str):
+        self._rec = rec
+        self._name = name
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return {} if self._rec._rrd_path is None else {'recording.rrd': str(self._rec._rrd_path)}
+
+
+class _CommandTap(_Tap, Layer):
     """A tap above a ``ChunkPlayer``: it logs the command of each round, so a plot reads a point per round
     rather than a chunk per inference."""
 
-    def __call__(self, obs, time_ns) -> tuple[Mapping[str, Any], int]:
-        answer, frame = self._tapped(obs, time_ns)
-        commands, _ = answer
-        self._log_actions([dict(commands)] if commands else [], frame)
-        self._end_step()
-        return answer
+    def make_session(self, inner: Session) -> Session:
+        return _CommandTapSession(inner, _TapLog(self._rec, self._name))
 
 
-class _ChunkTapSession(_RecordingTapSession, ChunkSession):
-    """A tap under a ``ChunkPlayer``: it logs the chunk a call brings back, when the caller reads it."""
+class _ChunkTap(_Tap, ChunkLayer):
+    """A tap under a ``ChunkPlayer``: it logs the observation the model sees and the chunk it answers."""
 
-    def __call__(self, obs, time_ns) -> Answer:
-        answer, frame = self._tapped(obs, time_ns)
-        self._end_step()
-        return answer.map(partial(self._log_chunk, frame))
-
-    def _log_chunk(self, frame: _Frame, chunk):
-        self._log_actions([dict(chunk)] if isinstance(chunk, Mapping) else (chunk or []), frame)
-        return chunk
+    @contextmanager
+    def episode_fn(self, infer):
+        log = _TapLog(self._rec, self._name)
+        try:
+            yield partial(_log_infer, log, infer)
+        finally:
+            log.close()

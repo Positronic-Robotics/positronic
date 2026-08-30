@@ -10,6 +10,7 @@ Two composition operators:
 """
 
 import collections.abc as cabc
+from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
 from typing import Any, final
@@ -24,7 +25,7 @@ from positronic.dataset.transforms.episode import Derive, EpisodeTransform, From
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee_frame
 from positronic.drivers.roboarm.models import DEFAULT_FRAME
-from positronic.policy.base import PAR, SEQ, Answer, ChunkSession, DelegatingChunkSession, Layer, _ComposedLayer
+from positronic.policy.base import PAR, SEQ, ChunkLayer, Layer, _ComposedLayer
 from positronic.utils import merge_dicts
 
 _QUAT = geom.Rotation.Representation.QUAT
@@ -48,7 +49,7 @@ def lerobot_action(dim: int) -> dict[str, Any]:
     return {'shape': (dim,), 'names': ['actions'], 'dtype': 'float32'}
 
 
-class Codec(Layer):
+class Codec(ChunkLayer):
     """Base class for observation/action codecs.
 
     Subclasses override ``encode`` (observation encoding) and/or ``_decode_single``
@@ -81,8 +82,13 @@ class Codec(Layer):
     def meta(self) -> dict:
         return {}
 
-    def make_session(self, inner: ChunkSession) -> ChunkSession:
-        return _CodecSession(inner, self)
+    @contextmanager
+    def episode_fn(self, infer):
+        yield partial(self._coded, infer)
+
+    def _coded(self, infer, obs):
+        """The chunk ``infer`` answers for the encoded observation, decoded."""
+        return self.decode(infer(self.encode(obs)))
 
     @final
     def __or__(self, other):
@@ -98,25 +104,6 @@ class Codec(Layer):
         if isinstance(other, Codec):
             return _ParallelCodec(self, other)
         return NotImplemented
-
-
-class _CodecSession(DelegatingChunkSession):
-    """Session wrapped with a codec: encodes observations, decodes actions."""
-
-    def __init__(self, inner: ChunkSession, codec: 'Codec'):
-        super().__init__(inner)
-        self._codec = codec
-
-    def __call__(self, obs, time_ns):
-        answer = self._inner(self._codec.encode(obs), time_ns)
-        # A codec decodes a chunk, so it belongs under the player. Above one it would be handed commands
-        # paired with a resume time, and each codec would drop or corrupt them in its own way.
-        assert isinstance(answer, Answer), 'compose a Codec under the ChunkPlayer, not above it'
-        return answer.map(self._codec.decode)
-
-    @property
-    def meta(self):
-        return self._inner.meta | self._codec.meta
 
 
 def _meta_conflicts(left: dict, right: dict, prefix: str = '') -> list[str]:

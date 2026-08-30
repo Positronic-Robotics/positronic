@@ -20,7 +20,7 @@ from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import Task
-from positronic.policy import ChunkSession, Done, Policy
+from positronic.policy import INFER, Policy
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkPlayer
 from positronic.policy.tests.test_harness import StubPolicy
@@ -369,28 +369,23 @@ class _JointposChunks(Policy):
         self.chunk_len = chunk_len
         self.chunks = 0
 
-    def new_session(self, context=None, rt=None):
-        return _JointposChunkSession(self)
+    @contextmanager
+    def episode(self, context=None):
+        yield {INFER: self._infer}
 
-
-class _JointposChunkSession(ChunkSession):
-    def __init__(self, policy: _JointposChunks):
-        self._policy = policy
-
-    def __call__(self, obs, time_ns):
-        self._policy.chunks += 1
-        return Done([
-            {keys.ROBOT_COMMAND: self._policy.command, 'target_grip': self._policy.chunks * 100.0 + i}
-            for i in range(self._policy.chunk_len)
-        ])
+    def _infer(self, obs):
+        self.chunks += 1
+        return [
+            {keys.ROBOT_COMMAND: self.command, 'target_grip': self.chunks * 100.0 + i} for i in range(self.chunk_len)
+        ]
 
 
 @pytest.mark.timeout(60.0)
 def test_full_chunk_executes_between_replans(env_server, tmp_path):
     """The recording proves the contract the DROID jointpos codec makes with RoboLab's client: every action
     of every chunk lands on the wire — including the final one, which ``ActionTimestamp``'s validity
-    sentinel gives a full period before ``ChunkPlayer`` re-infers — and replans arrive exactly
-    ``chunk_len`` control periods apart."""
+    sentinel gives a full period before ``ChunkPlayer`` re-infers — and replans arrive one control period
+    after that, which is what the answer to the re-infer takes to reach the loop."""
     host, port = env_server
     probe = make_mujoco_env([])
     control_dt = probe.reset(0)['control_dt']
@@ -413,7 +408,8 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     assert values[: len(expected)] == expected
 
     starts = [ts for v, ts in executed if v % 100 == 0]
-    period_ns = chunk_len * control_dt * 1e9
+    # The chunk's own span, plus the round the player spends reading the answer to the call that drained it.
+    period_ns = (chunk_len + 1) * control_dt * 1e9
     for earlier, later in zip(starts, starts[1:], strict=False):
         assert later - earlier == pytest.approx(period_ns, abs=period_ns / (2 * chunk_len))
 

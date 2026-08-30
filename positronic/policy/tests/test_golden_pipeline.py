@@ -25,6 +25,7 @@ Regenerate the golden after an intentional behavior change:
 import gzip
 import json
 import os
+from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 
@@ -41,7 +42,7 @@ from positronic.drivers.roboarm.command import CartesianPosition, CommandType
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
-from positronic.policy.base import Answer, ChunkSession, DelegatingChunkSession, DelegatingPolicy, Done, Policy
+from positronic.policy.base import INFER, Answer, DelegatingPolicy, Fn, Policy, Runtime
 from positronic.policy.codec import ActionTiming
 from positronic.policy.harness import Harness
 from positronic.policy.layers import ChunkPlayer, StopOnFault
@@ -64,18 +65,6 @@ CONTROL_PERIOD_S = 0.005  # fake robot/gripper sampling cadence (200 Hz)
 CAPTURED_SIGNALS = (keys.EE_POSE, keys.JOINTS, keys.GRIP)
 
 
-class _ScriptedSession(ChunkSession):
-    def __call__(self, obs, time_ns):
-        current = np.asarray(obs[keys.EE_POSE][:3], dtype=np.float32)
-        delta = TARGET_POS - current
-        chunk = []
-        for i in range(10):
-            step = current + delta * 0.5 * ((i + 1) / 10.0)
-            pose = Transform3D(translation=step.astype(np.float32), rotation=Rotation.identity)
-            chunk.append({keys.ROBOT_COMMAND: CartesianPosition(pose=pose), 'target_grip': round(0.50 + 0.01 * i, 4)})
-        return Done(chunk)
-
-
 class ScriptedProportionalPolicy(Policy):
     """Pure proportional controller toward ``TARGET_POS``.
 
@@ -83,14 +72,25 @@ class ScriptedProportionalPolicy(Policy):
     clock, no images. The codec stamps and truncates; ``ChunkPlayer`` anchors the chunk and plays it.
     """
 
-    def new_session(self, context=None, rt=None):
-        return _ScriptedSession()
+    @contextmanager
+    def episode(self, context=None):
+        yield {INFER: self._infer}
+
+    def _infer(self, obs):
+        current = np.asarray(obs[keys.EE_POSE][:3], dtype=np.float32)
+        delta = TARGET_POS - current
+        chunk = []
+        for i in range(10):
+            step = current + delta * 0.5 * ((i + 1) / 10.0)
+            pose = Transform3D(translation=step.astype(np.float32), rotation=Rotation.identity)
+            chunk.append({keys.ROBOT_COMMAND: CartesianPosition(pose=pose), 'target_grip': round(0.50 + 0.01 * i, 4)})
+        return chunk
 
 
 class _SimulatedLatency(DelegatingPolicy):
-    """A fixed inference latency in world time: every chunk is stamped for, and answers at, ``latency_sec``
-    after the call that produced it, whatever the machine took. Sits under the player, so nothing below it
-    sees an observation while a chunk is in flight."""
+    """A fixed inference latency in world time: every call answers ``latency_sec`` after it was made,
+    whatever the machine took. It holds back the runtime the session runs on, so a chunk that is ready
+    early still reaches the player at the instant the world says."""
 
     def __init__(self, inner: Policy, latency_sec: float, clock: pimm.Clock):
         super().__init__(inner)
@@ -98,7 +98,7 @@ class _SimulatedLatency(DelegatingPolicy):
         self._clock = clock
 
     class _Held(Answer):
-        """The chunk under it, held back until the world reaches ``release_at_ns``."""
+        """The answer under it, held back until the world reaches ``release_at_ns``."""
 
         def __init__(self, inner: Answer, release_at_ns: int, clock: pimm.Clock):
             self._inner = inner
@@ -111,21 +111,22 @@ class _SimulatedLatency(DelegatingPolicy):
         def result(self):
             return self._inner.result()
 
-    class _Session(DelegatingChunkSession):
-        def __init__(self, inner: ChunkSession, latency_ns: int, clock: pimm.Clock):
-            super().__init__(inner)
+    class _Runtime(Runtime):
+        def __init__(self, inner: Runtime, latency_ns: int, clock: pimm.Clock):
+            self._fns = {name: partial(self._held, fn) for name, fn in inner.fns.items()}
             self._latency_ns = latency_ns
             self._clock = clock
 
-        def __call__(self, obs, time_ns):
-            # The chunk answers at ``latency_ns``, so the sessions below time it from that instant.
-            release_at_ns = time_ns + self._latency_ns
-            return _SimulatedLatency._Held(self._inner(obs, release_at_ns), release_at_ns, self._clock)
+        def _held(self, fn: Fn, *args, **kwargs) -> Answer:
+            release_at_ns = self._clock.now_ns() + self._latency_ns
+            return _SimulatedLatency._Held(fn(*args, **kwargs), release_at_ns, self._clock)
 
-    def new_session(self, context=None, rt=None) -> ChunkSession:
-        inner = self._inner.new_session(context, rt)
-        assert isinstance(inner, ChunkSession)
-        return _SimulatedLatency._Session(inner, self._latency_ns, self._clock)
+        @property
+        def fns(self):
+            return self._fns
+
+    def new_session(self, rt):
+        return self._inner.new_session(_SimulatedLatency._Runtime(rt, self._latency_ns, self._clock))
 
 
 class FakeRobot(pimm.ControlSystem):
@@ -212,7 +213,9 @@ def _run_pipeline(tmp_path: Path) -> dict:
             simulated=True,
         )
         harness = Harness(
-            (StopOnFault() | ChunkPlayer()).wrap(_SimulatedLatency(policy, INFERENCE_LATENCY_S, world.clock)),
+            # The latency wraps the runtime the whole stack runs on, so it goes outside the player that
+            # reads that runtime.
+            _SimulatedLatency((StopOnFault() | ChunkPlayer()).wrap(policy), INFERENCE_LATENCY_S, world.clock),
             embodiment,
         )
         ds_agent = wire.wire_embodiment(world, harness, embodiment, ds_writer, TimeMode.MESSAGE)

@@ -3,8 +3,9 @@ import socket
 import time
 import urllib.parse
 from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from typing import Any
-from unittest.mock import ANY, MagicMock
+from unittest.mock import MagicMock
 
 import configuronic as cfn
 import httpx
@@ -18,8 +19,7 @@ from positronic.offboard.protocol import deserialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.tests.conftest import ANSWER_SEC
-from positronic.policy import ChunkSession, Codec, Policy, RemotePolicy
-from positronic.policy.base import Runtime
+from positronic.policy import INFER, Codec, Policy, RemotePolicy
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkPlayer, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
@@ -65,7 +65,7 @@ def test_full_inference_cycle(stub_server):
         obs = {'image': 'test'}
         result = session.infer(obs)
         assert result == [{'action': [1, 2, 3]}]
-        policy._mock_session.assert_called_with(obs, ANY)
+        assert policy.observations[-1] == obs
     finally:
         session.close()
 
@@ -199,24 +199,23 @@ def test_codec_wrapping(codec_server):
         session.close()
 
 
-def test_warmup_runs_one_inference_and_ends_its_session(make_mock_policy):
+def test_warmup_runs_one_inference_and_ends_its_episode(make_mock_policy):
     policy = make_mock_policy([{'action': [1, 2, 3]}], {})
     obs = {'obs': 'zeros'}
 
     warmup(policy, obs)
 
-    policy._mock_session.assert_called_once_with(obs, ANY)
-    policy._mock_session.close.assert_called_once()
+    assert policy.observations == [obs]
+    assert policy.closed == 1
 
 
-def test_a_backend_that_cannot_answer_its_warmup_raises_and_still_ends_its_session(make_mock_policy):
-    policy = make_mock_policy([], {})
-    policy._mock_session.side_effect = RuntimeError('shape mismatch')
+def test_a_backend_that_cannot_answer_its_warmup_raises_and_still_ends_its_episode(make_mock_policy):
+    policy = make_mock_policy([], {}, failure=RuntimeError('shape mismatch'))
 
     with pytest.raises(RuntimeError, match='shape mismatch'):
         warmup(policy, {})
 
-    policy._mock_session.close.assert_called_once()
+    assert policy.closed == 1
 
 
 def test_local_stack_declared_in_handshake(start_server, make_mock_policy):
@@ -238,27 +237,12 @@ def test_pipeline_with_no_rig_side_half_refused_at_startup(make_mock_policy):
         PolicyServer(remote | _StubSource(stub))
 
 
-_INFER = 'infer'
-
-
-class _ScriptedSession(ChunkSession):
-    def __init__(self, rt: Runtime):
-        self._rt = rt
-
-    def __call__(self, obs, time_ns):
-        return self._rt.fns[_INFER](obs)
-
-
 class _ScriptedPolicy(Policy):
-    """Deterministic base policy: every session serves the same untimestamped chunk from its runtime."""
+    """Deterministic base policy: every episode answers the same untimestamped chunk."""
 
-    def new_session(self, context=None, rt=None) -> ChunkSession:
-        assert rt is not None
-        return _ScriptedSession(rt)
-
-    @property
-    def functions(self):
-        return {_INFER: lambda obs: [{'a': 1.0}, {'a': 2.0}, {'a': 3.0}]}
+    @contextmanager
+    def episode(self, context=None):
+        yield {INFER: lambda obs: [{'a': 1.0}, {'a': 2.0}, {'a': 3.0}]}
 
 
 def test_in_process_equals_remote_for_same_pipeline(start_server, open_session):

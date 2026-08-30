@@ -3,6 +3,8 @@ import os
 import socket
 import subprocess
 from collections.abc import Callable
+from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +16,7 @@ from pimm.logging import init_logging
 from positronic import geom, keys
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
-from positronic.policy import ChunkSession, Codec, Done, Policy
+from positronic.policy import INFER, Codec, Policy
 from positronic.policy.codec import ChangeEEFrame, RestrictImageSize
 from positronic.policy.layers import ChunkPlayer, StopOnFault
 from positronic.policy.spec import ModelSource, remote
@@ -124,14 +126,9 @@ class OpenpiSubprocess:
 ###########################################################################################
 
 
-class _OpenpiSession(ChunkSession):
-    def __init__(self, client: WebsocketClientPolicy):
-        self._client = client
-
-    def __call__(self, obs, time_ns):
-        response = self._client.infer(obs)
-        actions = response['actions']
-        return Done([{'action': a} for a in actions])
+def _infer(client: WebsocketClientPolicy, obs):
+    """One model call: an observation in, an action chunk out."""
+    return [{'action': a} for a in client.infer(obs)['actions']]
 
 
 class OpenpiPolicy(Policy):
@@ -140,10 +137,11 @@ class OpenpiPolicy(Policy):
     def __init__(self, subproc: OpenpiSubprocess):
         self._subproc = subproc
 
-    def new_session(self, context=None, rt=None):
+    @contextmanager
+    def episode(self, context=None):
         client = self._subproc.client
         client.reset()
-        return _OpenpiSession(client)
+        yield {INFER: partial(_infer, client)}
 
     def close(self):
         self._subproc.stop()
