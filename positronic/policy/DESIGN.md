@@ -130,7 +130,7 @@ answer when it arrives. After the setup, the server only answers these
 calls. It is stateless: every call is a pure function of its arguments.
 
 ```mermaid
-flowchart LR
+flowchart TB
     robot[Robot]
     subgraph rig [Rig]
         fw[Framework]
@@ -211,12 +211,12 @@ sequenceDiagram
     activate Fn
     S->>F: commands, resume_at = t₂
     F->>S: obs, time = t₂
-    Note over S: The handle is not done. Control continues.
+    Note over S: The answer is not ready. Control continues.
     S->>F: commands, resume_at = t₃
-    Fn--)S: the handle completes
+    Fn--)S: the answer is ready
     deactivate Fn
     F->>S: obs, time = t₃
-    Note over S: The session reads the actions.
+    Note over S: The session reads the actions from the answer.
     S->>F: commands, resume_at = t₄
 ```
 
