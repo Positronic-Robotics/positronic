@@ -44,6 +44,10 @@ from positronic.server.dataset_utils import (
 # Response cache for api_groups and api_episodes (dataset is immutable once loaded)
 _api_cache: dict[tuple, dict] = {}
 
+# The RRD fidelity caps are written in `main` and read per request, so both ends name them here.
+_MAX_HZ_KEY = 'max_hz'
+_MAX_RESOLUTION_KEY = 'max_resolution'
+
 # Global app state
 app_state: dict[str, object] = {
     'dataset': None,
@@ -51,8 +55,8 @@ app_state: dict[str, object] = {
     'root': '',
     'cache_dir': '',
     'episode_keys': {},
-    'max_resolution': DEFAULT_MAX_RESOLUTION,
-    'max_hz': DEFAULT_MAX_HZ,
+    _MAX_RESOLUTION_KEY: DEFAULT_MAX_RESOLUTION,
+    _MAX_HZ_KEY: DEFAULT_MAX_HZ,
     'group_tables_cfg': {},
     'home_page': None,  # None = episodes, or group name like 'tasks'
 }
@@ -87,7 +91,11 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     os.makedirs(episode_cache_dir, exist_ok=True)
     # Key the cache by episode uid, not position: position is view-dependent, and datasets without a
     # resolvable root (e.g. concatenated ones) all share the 'unknown_dataset' namespace.
-    return os.path.join(episode_cache_dir, f'{ds[episode_id].meta["uid"]}.rrd')
+    # The caps are part of the identity: a file written under other caps holds different samples.
+    uid = cast(Episode, ds[episode_id]).meta['uid']
+    max_hz = cast(float, app_state[_MAX_HZ_KEY])
+    max_resolution = cast(int, app_state[_MAX_RESOLUTION_KEY])
+    return os.path.join(episode_cache_dir, f'{uid}-{max_hz:g}hz-{max_resolution}px.rrd')
 
 
 @asynccontextmanager
@@ -492,8 +500,7 @@ async def api_episode_rrd(episode_id: int):
 
     if os.path.exists(cache_path):
         logging.debug(f'Serving cached RRD for episode {episode_id} from {cache_path}')
-        # FileResponse sets Content-Length and answers range requests. The generating path below
-        # can do neither, so a first view shows no progress.
+        # A cached file has a known length, so this answers with Content-Length and serves ranges.
         return FileResponse(cache_path, media_type='application/octet-stream', filename=f'episode_{episode_id}.rrd')
 
     def _stream_and_cache():
@@ -503,8 +510,8 @@ async def api_episode_rrd(episode_id: int):
                 for chunk in stream_episode_rrd(
                     ds,
                     episode_id,
-                    max_hz=cast(float, app_state['max_hz']),
-                    max_resolution=cast(int, app_state['max_resolution']),
+                    max_hz=cast(float, app_state[_MAX_HZ_KEY]),
+                    max_resolution=cast(int, app_state[_MAX_RESOLUTION_KEY]),
                 ):
                     cache_file.write(chunk)
                     yield chunk
@@ -705,8 +712,8 @@ def main(
     app_state['loading_state'] = True
     app_state['episode_table_cfg'] = ep_table_cfg or {}
     app_state['group_tables_cfg'] = group_tables or {}
-    app_state['max_resolution'] = max_resolution
-    app_state['max_hz'] = max_hz
+    app_state[_MAX_RESOLUTION_KEY] = max_resolution
+    app_state[_MAX_HZ_KEY] = max_hz
     app_state['home_page'] = home_page
 
     if reset_cache and os.path.exists(cache_dir):

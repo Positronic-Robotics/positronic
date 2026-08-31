@@ -2,6 +2,7 @@
 
 import io
 import logging
+import math
 import tempfile
 import warnings
 import xml.etree.ElementTree as ET
@@ -411,6 +412,12 @@ def _send_scalar_columns(key: str, ts_arr: np.ndarray, vals: np.ndarray) -> None
         rr.send_columns(f'/signals/{key}/{i}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals[:, i]))
 
 
+# Nanosecond timestamps hold a round rate only approximately, so a source recorded at a whole
+# multiple of the cap measures a hair above it. Without this relative slack the stride rounds one
+# too far and thins such a signal to half the rate it should keep.
+_RATE_SLACK = 1e-6
+
+
 def _decimation_step(ts_arr: np.ndarray, max_hz: float) -> int:
     """The stride that thins ``ts_arr`` to at most ``max_hz``, or 1 when it is already slower."""
     if max_hz <= 0 or len(ts_arr) < 2:
@@ -418,7 +425,9 @@ def _decimation_step(ts_arr: np.ndarray, max_hz: float) -> int:
     duration_ns = int(ts_arr[-1]) - int(ts_arr[0])
     if duration_ns <= 0:
         return 1
-    return max(1, len(ts_arr) // max(1, int(max_hz * duration_ns / 1e9)))
+    source_hz = (len(ts_arr) - 1) * 1e9 / duration_ns
+    # Round the stride UP, or a rate that is not a whole multiple of the cap thins to above it.
+    return max(1, math.ceil(source_hz / max_hz * (1 - _RATE_SLACK)))
 
 
 def _log_numeric_signals(

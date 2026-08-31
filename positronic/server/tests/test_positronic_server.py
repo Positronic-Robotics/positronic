@@ -1,13 +1,23 @@
 import ipaddress
 import socket
 from collections import namedtuple
+from types import SimpleNamespace
 
 import psutil
 import pytest
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 
-from positronic.server.positronic_server import _access_url, _generate_self_signed_cert, _is_loopback, _served_addresses
+from positronic.server.positronic_server import (
+    _MAX_HZ_KEY,
+    _MAX_RESOLUTION_KEY,
+    _access_url,
+    _generate_self_signed_cert,
+    _get_rrd_cache_path,
+    _is_loopback,
+    _served_addresses,
+    app_state,
+)
 
 _Addr = namedtuple('_Addr', 'family address netmask broadcast ptp')
 
@@ -120,3 +130,31 @@ def test_a_loopback_bind_is_told_from_an_exposed_one(multi_homed):
     assert _is_loopback('localhost')
     assert not _is_loopback('192.168.0.8')
     assert not _is_loopback('rig.local')
+
+
+class _OneEpisodeDataset:
+    def __getitem__(self, index):
+        return SimpleNamespace(meta={'uid': 'ep-uid'})
+
+
+@pytest.fixture
+def rrd_cache(tmp_path, monkeypatch):
+    monkeypatch.setitem(app_state, 'dataset', _OneEpisodeDataset())
+    monkeypatch.setitem(app_state, 'cache_dir', str(tmp_path))
+    monkeypatch.setitem(app_state, 'root', str(tmp_path))
+
+    def path_under(max_hz: float, max_resolution: int) -> str:
+        monkeypatch.setitem(app_state, _MAX_HZ_KEY, max_hz)
+        monkeypatch.setitem(app_state, _MAX_RESOLUTION_KEY, max_resolution)
+        return _get_rrd_cache_path(0)
+
+    return path_under
+
+
+def test_a_cached_rrd_written_under_other_caps_is_not_served(rrd_cache):
+    assert rrd_cache(30.0, 640) != rrd_cache(30.0, 1280)
+    assert rrd_cache(30.0, 640) != rrd_cache(60.0, 640)
+
+
+def test_the_same_caps_reach_the_same_cached_rrd(rrd_cache):
+    assert rrd_cache(30.0, 640) == rrd_cache(30.0, 640)

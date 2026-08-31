@@ -5452,14 +5452,6 @@
         ],
         "./positronic/server/positronic_server.py": [
             {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 61,
-                    "endColumn": 65,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportOperatorIssue",
                 "range": {
                     "startColumn": 21,

@@ -108,6 +108,19 @@ def test_a_signal_above_the_cap_is_thinned_to_it():
     assert 29 <= len(thinned) / seconds <= 31
 
 
+def test_a_rate_that_is_not_a_whole_multiple_of_the_cap_thins_to_below_it():
+    ts = _timestamps_ns(hz=100, seconds=9.99)
+
+    thinned = ts[:: _decimation_step(ts, max_hz=30)]
+
+    seconds = (int(thinned[-1]) - int(thinned[0])) / 1e9
+    assert (len(thinned) - 1) / seconds <= 30
+
+
+def test_a_signal_recorded_at_the_cap_keeps_every_sample():
+    assert _decimation_step(_timestamps_ns(hz=30, seconds=10), max_hz=30) == 1
+
+
 def test_a_signal_below_the_cap_keeps_every_sample():
     ts = _timestamps_ns(hz=10, seconds=10)
 
