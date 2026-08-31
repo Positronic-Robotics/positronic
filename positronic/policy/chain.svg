@@ -1,92 +1,88 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 590" width="1000" height="590" font-family="Verdana, Arial, sans-serif" font-size="15">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 440" width="1000" height="440" font-family="Verdana, Arial, sans-serif" font-size="15">
   <defs>
     <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#333333"/>
     </marker>
   </defs>
-  <rect x="0" y="0" width="1000" height="590" fill="#ffffff"/>
+  <rect x="0" y="0" width="1000" height="440" fill="#ffffff"/>
 
   <!-- row labels, framework at the bottom, functions at the top -->
-  <text x="175" y="85" text-anchor="end" fill="#333333">Served function</text>
-  <text x="175" y="205" text-anchor="end" fill="#333333">Policy session</text>
-  <text x="175" y="305" text-anchor="end" fill="#333333">Codec</text>
-  <text x="175" y="405" text-anchor="end" fill="#333333">Layer session</text>
-  <text x="175" y="505" text-anchor="end" fill="#333333">Framework</text>
+  <text x="175" y="81" text-anchor="end" fill="#333333">Served function</text>
+  <text x="175" y="149" text-anchor="end" fill="#333333">Policy session</text>
+  <text x="175" y="217" text-anchor="end" fill="#333333">Codec</text>
+  <text x="175" y="285" text-anchor="end" fill="#333333">Layer session</text>
+  <text x="175" y="353" text-anchor="end" fill="#333333">Framework</text>
 
   <!-- the framework stays in the stack the whole episode -->
-  <rect x="190" y="484" width="760" height="32" fill="#ECECFF" stroke="#9370DB"/>
+  <rect x="190" y="332" width="760" height="32" fill="#FFE6CC" stroke="#D79B00"/>
 
   <!-- one bar per call in each row -->
-  <rect x="215" y="384" width="90" height="32" fill="#ECECFF" stroke="#9370DB"/>
-  <rect x="405" y="384" width="90" height="32" fill="#ECECFF" stroke="#9370DB"/>
-  <rect x="595" y="384" width="90" height="32" fill="#ECECFF" stroke="#9370DB"/>
-  <rect x="785" y="384" width="90" height="32" fill="#ECECFF" stroke="#9370DB"/>
-  <rect x="215" y="184" width="90" height="32" fill="#ECECFF" stroke="#9370DB"/>
-  <rect x="595" y="184" width="90" height="32" fill="#ECECFF" stroke="#9370DB"/>
+  <rect x="215" y="264" width="90" height="32" fill="#ECECFF" stroke="#9370DB"/>
+  <rect x="405" y="264" width="90" height="32" fill="#ECECFF" stroke="#9370DB"/>
+  <rect x="595" y="264" width="90" height="32" fill="#ECECFF" stroke="#9370DB"/>
+  <rect x="785" y="264" width="90" height="32" fill="#ECECFF" stroke="#9370DB"/>
+  <rect x="215" y="128" width="90" height="32" fill="#ECECFF" stroke="#9370DB"/>
+  <rect x="595" y="128" width="90" height="32" fill="#ECECFF" stroke="#9370DB"/>
 
   <!-- the codec transforms the data on the way up and on the way down -->
-  <rect x="192" y="284" width="66" height="32" rx="6" fill="#DFF0D8" stroke="#7CA97C"/>
-  <text x="225" y="305" text-anchor="middle" fill="#333333" font-size="12">encode</text>
-  <rect x="262" y="284" width="66" height="32" rx="6" fill="#DFF0D8" stroke="#7CA97C"/>
-  <text x="295" y="305" text-anchor="middle" fill="#333333" font-size="12">decode</text>
-  <rect x="572" y="284" width="66" height="32" rx="6" fill="#DFF0D8" stroke="#7CA97C"/>
-  <text x="605" y="305" text-anchor="middle" fill="#333333" font-size="12">encode</text>
-  <rect x="642" y="284" width="66" height="32" rx="6" fill="#DFF0D8" stroke="#7CA97C"/>
-  <text x="675" y="305" text-anchor="middle" fill="#333333" font-size="12">decode</text>
+  <rect x="192" y="196" width="66" height="32" rx="6" fill="#DFF0D8" stroke="#7CA97C"/>
+  <text x="225" y="217" text-anchor="middle" fill="#333333" font-size="12">encode</text>
+  <rect x="262" y="196" width="66" height="32" rx="6" fill="#DFF0D8" stroke="#7CA97C"/>
+  <text x="295" y="217" text-anchor="middle" fill="#333333" font-size="12">decode</text>
+  <rect x="572" y="196" width="66" height="32" rx="6" fill="#DFF0D8" stroke="#7CA97C"/>
+  <text x="605" y="217" text-anchor="middle" fill="#333333" font-size="12">encode</text>
+  <rect x="642" y="196" width="66" height="32" rx="6" fill="#DFF0D8" stroke="#7CA97C"/>
+  <text x="675" y="217" text-anchor="middle" fill="#333333" font-size="12">decode</text>
 
-  <!-- the function runs while control continues -->
-  <rect x="219" y="64" width="361" height="32" fill="#ececec" stroke="#999999"/>
-  <text x="400" y="85" text-anchor="middle" fill="#333333">infer</text>
-  <rect x="599" y="64" width="351" height="32" fill="#ececec" stroke="#999999"/>
-  <text x="775" y="85" text-anchor="middle" fill="#333333">infer</text>
-  <line x1="580" y1="96" x2="652" y2="180" stroke="#333333" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ah)"/>
-  <text x="640" y="145" text-anchor="start" fill="#555555" font-size="13">the answer</text>
+  <!-- the function runs while control continues, and the second policy call reads the answer -->
+  <rect x="219" y="60" width="401" height="32" fill="#ececec" stroke="#999999"/>
+  <text x="420" y="81" text-anchor="middle" fill="#333333">infer</text>
+  <line x1="620" y1="94" x2="620" y2="126" stroke="#333333" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+  <text x="628" y="115" text-anchor="start" fill="#555555" font-size="13">the answer</text>
 
   <!-- the time axis -->
-  <line x1="185" y1="540" x2="955" y2="540" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <text x="962" y="545" text-anchor="start" fill="#333333">time</text>
-  <line x1="260" y1="534" x2="260" y2="546" stroke="#333333"/>
-  <line x1="450" y1="534" x2="450" y2="546" stroke="#333333"/>
-  <line x1="640" y1="534" x2="640" y2="546" stroke="#333333"/>
-  <line x1="830" y1="534" x2="830" y2="546" stroke="#333333"/>
-  <text x="260" y="566" text-anchor="middle" fill="#333333">t₁</text>
-  <text x="450" y="566" text-anchor="middle" fill="#333333">t₂</text>
-  <text x="640" y="566" text-anchor="middle" fill="#333333">t₃</text>
-  <text x="830" y="566" text-anchor="middle" fill="#333333">t₄</text>
+  <line x1="185" y1="388" x2="955" y2="388" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="962" y="393" text-anchor="start" fill="#333333">time</text>
+  <line x1="260" y1="382" x2="260" y2="394" stroke="#333333"/>
+  <line x1="450" y1="382" x2="450" y2="394" stroke="#333333"/>
+  <line x1="640" y1="382" x2="640" y2="394" stroke="#333333"/>
+  <line x1="830" y1="382" x2="830" y2="394" stroke="#333333"/>
+  <text x="260" y="414" text-anchor="middle" fill="#333333">t₁</text>
+  <text x="450" y="414" text-anchor="middle" fill="#333333">t₂</text>
+  <text x="640" y="414" text-anchor="middle" fill="#333333">t₃</text>
+  <text x="830" y="414" text-anchor="middle" fill="#333333">t₄</text>
 
   <!-- call at t1: the whole chain, and a function call starts -->
-  <line x1="225" y1="482" x2="225" y2="420" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <text x="218" y="453" text-anchor="end" fill="#555555" font-size="13">obs, time</text>
-  <line x1="225" y1="382" x2="225" y2="320" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <text x="218" y="355" text-anchor="end" fill="#555555" font-size="13">obs</text>
-  <line x1="225" y1="282" x2="225" y2="220" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <text x="218" y="255" text-anchor="end" fill="#555555" font-size="13">obs′</text>
-  <line x1="225" y1="182" x2="225" y2="100" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <text x="218" y="145" text-anchor="end" fill="#555555" font-size="13">start infer</text>
-  <line x1="295" y1="218" x2="295" y2="280" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <text x="302" y="255" text-anchor="start" fill="#555555" font-size="13">commands′</text>
-  <line x1="295" y1="318" x2="295" y2="380" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <text x="302" y="355" text-anchor="start" fill="#555555" font-size="13">commands</text>
-  <line x1="295" y1="418" x2="295" y2="480" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <text x="302" y="446" text-anchor="start" fill="#555555" font-size="13">commands,</text>
-  <text x="302" y="463" text-anchor="start" fill="#555555" font-size="13">resume_at</text>
+  <line x1="225" y1="330" x2="225" y2="300" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="218" y="318" text-anchor="end" fill="#555555" font-size="13">obs, time</text>
+  <line x1="225" y1="262" x2="225" y2="232" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="218" y="250" text-anchor="end" fill="#555555" font-size="13">obs</text>
+  <line x1="225" y1="194" x2="225" y2="164" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="218" y="182" text-anchor="end" fill="#555555" font-size="13">obs′</text>
+  <line x1="225" y1="126" x2="225" y2="96" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="218" y="114" text-anchor="end" fill="#555555" font-size="13">start infer</text>
+  <line x1="295" y1="162" x2="295" y2="194" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="302" y="182" text-anchor="start" fill="#555555" font-size="13">cmds′, t<tspan font-size="10" dy="4">next</tspan></text>
+  <line x1="295" y1="230" x2="295" y2="262" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="302" y="250" text-anchor="start" fill="#555555" font-size="13">cmds, t<tspan font-size="10" dy="4">next</tspan></text>
+  <line x1="295" y1="298" x2="295" y2="330" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="302" y="318" text-anchor="start" fill="#555555" font-size="13">cmds, t<tspan font-size="10" dy="4">next</tspan></text>
 
   <!-- call at t2: the layer answers from its own state -->
-  <line x1="415" y1="482" x2="415" y2="420" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <line x1="485" y1="418" x2="485" y2="480" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <text x="450" y="374" text-anchor="middle" fill="#888888" font-size="13">no inner call</text>
+  <line x1="415" y1="330" x2="415" y2="300" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="485" y1="298" x2="485" y2="330" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="450" y="256" text-anchor="middle" fill="#888888" font-size="13">no inner call</text>
 
-  <!-- call at t3: the whole chain, the answer is used, the next call starts -->
-  <line x1="605" y1="482" x2="605" y2="420" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <line x1="605" y1="382" x2="605" y2="320" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <line x1="605" y1="282" x2="605" y2="220" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <line x1="605" y1="182" x2="605" y2="100" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <line x1="675" y1="218" x2="675" y2="280" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <line x1="675" y1="318" x2="675" y2="380" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <line x1="675" y1="418" x2="675" y2="480" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <!-- call at t3: the whole chain, and the answer is used -->
+  <line x1="605" y1="330" x2="605" y2="300" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="605" y1="262" x2="605" y2="232" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="605" y1="194" x2="605" y2="164" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="675" y1="162" x2="675" y2="194" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="675" y1="230" x2="675" y2="262" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="675" y1="298" x2="675" y2="330" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
 
   <!-- call at t4: the layer answers from its own state -->
-  <line x1="795" y1="482" x2="795" y2="420" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <line x1="865" y1="418" x2="865" y2="480" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
-  <text x="830" y="374" text-anchor="middle" fill="#888888" font-size="13">no inner call</text>
+  <line x1="795" y1="330" x2="795" y2="300" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="865" y1="298" x2="865" y2="330" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="830" y="256" text-anchor="middle" fill="#888888" font-size="13">no inner call</text>
 </svg>
