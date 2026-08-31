@@ -175,7 +175,7 @@ synchronously — a plain function call, repeated:
 - The framework calls best-effort at `resume_at`: it may be earlier or later,
   and the session reads the actual moment from `time`.
 
-### Served functions
+### Async inference
 
 The policy defines its heavy work (the model inference) as stateless
 functions, `infer(obs) -> actions`, and gives them to the framework. The
@@ -185,7 +185,7 @@ runs every call and records the arguments when the call starts, and the
 result when it arrives. It measures the call's duration, so in simulation
 the call keeps its real latency.
 
-![A served call goes through the framework](docs/served.svg)
+![An inference call goes through the framework](docs/inference.svg)
 
 - The session cannot tell where a function runs.
 - Between calls the framework promises nothing: not the same process, not
@@ -207,7 +207,8 @@ the call keeps its real latency.
 - A function's inputs and outputs are types the framework can serialize:
   plain types and numpy, selected domain classes. An unsupported type fails
   at the call.
-- A session computes only inside its own call or inside a served function.
+- A session computes only inside its own call or inside an inference
+  function.
 
 ### Composability
 
@@ -234,7 +235,7 @@ kind its own shape. A `Codec` transforms data and does not see time. A
   call would repeat the same `time`. Sessions depend on strict growth: a
   session that divides by its time step must not get a zero step.
 - A `Codec` is a pair of transforms — encode and decode, as in a video
-  codec. Around a served function, encode converts the arguments and decode
+  codec. Around an inference function, encode converts the arguments and decode
   converts the answer. As a trivial layer, encode converts the observations
   going down and decode converts the commands coming up, with `resume_at`
   untouched.
@@ -268,12 +269,12 @@ placed on three timelines: the call number, control time, and wall time.
 
 - If requested, the framework records the flow at every boundary it carries:
   what enters and leaves each session in a chain it assembled and each
-  served function, and when.
+  inference function, and when.
 - A session may append values to named series of its own. The framework
   places each value on the timelines.
 - A session names its series locally. The framework keeps the full names
   distinct across sessions and stable across runs.
-- Served functions record too: into the recording itself, or into storage of
+- Inference functions record too: into the recording itself, or into storage of
   their own, joined later.
 - The framework makes the best effort not to consume control time, and recording adds no failure path.
 
@@ -297,7 +298,7 @@ class Session(Protocol):
     def close(self) -> None: ...
 ```
 
-### Served functions
+### Async inference
 
 ```python
 class Answer(Protocol):
@@ -322,7 +323,7 @@ Fn = Callable[..., Answer]
 ```python
 # The framework's standing offer to one session. Every session gets its own.
 class Runtime(Protocol):
-    # The served functions, each wrapped into an `Fn`: a worker pool in
+    # The inference functions, each wrapped into an `Fn`: a worker pool in
     # process, a stub over the wire.
     @property
     def fns(self) -> Mapping[str, Fn]: ...
@@ -336,7 +337,7 @@ class Runtime(Protocol):
 
 ```python
 class Policy(Protocol):
-    # The policy's heavy work: plain callables, given by name, served
+    # The policy's heavy work: plain callables, given by name, offered
     # back as `rt.fns`.
     @property
     def functions(self) -> Mapping[str, Callable]: ...
@@ -377,7 +378,7 @@ closes what it made itself. `close` never travels through the chain.
 
 - The shape of the robot description, and a server's ability to refuse one.
 - The exact wire protocol a server must support — the handshake that
-  delivers the description, the served calls, and the versioning that
+  delivers the description, the inference calls, and the versioning that
   keeps an old server compatible.
 - Source times for observations — whether the framework passes the
   timestamp of each sensor value to the session. The pimm signals
