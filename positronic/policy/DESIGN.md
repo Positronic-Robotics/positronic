@@ -136,17 +136,12 @@ framework closes the session. The record remains.
 
 ```mermaid
 sequenceDiagram
-    box Rig
-        participant F as Framework
-        participant S as Session
-    end
-    box Server
-        participant M as Model
-    end
+    participant M as Model (server)
+    participant F as Framework (rig)
     F->>M: connect to the URL
     M-->>F: the description
+    create participant S as Session (rig)
     F->>S: assemble the session from the description
-    activate S
     F->>S: sensor data, time = t₁
     S-)M: start a model call
     activate M
@@ -159,8 +154,8 @@ sequenceDiagram
     F->>S: sensor data, time = t₃
     Note over S: The session acts on the answer.
     S->>F: commands, the next call at t₄
+    destroy S
     F->>S: close
-    deactivate S
 ```
 
 The sections below describe each piece.
