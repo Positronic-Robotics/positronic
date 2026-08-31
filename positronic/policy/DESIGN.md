@@ -291,10 +291,10 @@ Commands = Mapping[str, Any]
 
 
 class Session(Protocol):
-    # `time` and the returned `resume_at` are seconds on the same clock.
-    def __call__(self, obs: Obs, time: float) -> tuple[Commands, float]: ...
+    # `time_ns` and the returned `resume_at` are nanoseconds on the same clock.
+    def __call__(self, obs: Obs, time_ns: int) -> tuple[Commands, int]: ...
 
-    # Called by the framework, at any moment. There is no other end.
+    # Called by the framework, at any moment.
     def close(self) -> None: ...
 ```
 
@@ -304,13 +304,11 @@ class Session(Protocol):
 class Answer(Protocol):
     def done(self) -> bool: ...
 
-    # The result once done. A failed call raises here — best effort, the
-    # class can differ after the wire. Reading it earlier is an error: a
-    # session never waits.
+    # The result once done. A failed call raises here. Reading it earlier is an error.
     def result(self) -> Any: ...
 
     # The session will not read this answer. The framework stops the work
-    # where it can. Never waits.
+    # where it can.
     def cancel(self) -> None: ...
 
 
@@ -350,22 +348,23 @@ class Policy(Protocol):
 ### Layers and codecs
 
 ```python
-# The framework's handle to the next session in. No `time` parameter: the
+# The framework's handle to the next session in. No `time_ns` parameter: the
 # framework stamps the inner call with the outermost call's time, so the
-# whole chain sees one `time`.
-Inner = Callable[[Obs], tuple[Commands, float]]
+# whole chain sees one time.
+Inner = Callable[[Obs], tuple[Commands, int]]
 
 
 class Layer(Protocol):
     def make_session(self, inner: Inner, rt: Runtime) -> Session: ...
 
 
-class Codec(Protocol):
-    def encode(self, value: Any) -> Any: ...
+# A codec is a layer: its session encodes the observations going down and
+# decodes the commands coming up.
+class Codec(Layer):
+    def encode(self, data: dict) -> dict: ...
 
-    # `context` is the input of the matching `encode` — a decode may need
-    # it (relative commands need the pose the observation carried).
-    def decode(self, value: Any, context: Any) -> Any: ...
+    # `data` may be a list of commands; the codec decodes each one.
+    def decode(self, data: Any) -> Any: ...
 ```
 
 `layer_a | layer_b` is a layer. `chain.wrap(policy)` is a policy: its
