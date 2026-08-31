@@ -136,31 +136,30 @@ framework closes the session. The record remains.
 
 ```mermaid
 sequenceDiagram
-    participant R as Robot
-    participant F as Framework (rig)
     participant M as Model (server)
+    participant F as Framework (rig)
     F->>M: connect to the URL
     M-->>F: the description
     create participant S as Session (rig)
     F->>S: assemble the session from the description
-    R--)F: sensor data
+    Robot--)F: sensor data
     F->>S: sensor data, time = t₁
     S-)M: start a model call
     activate M
     S->>F: commands, the next call at t₂
-    F->>R: commands
-    R--)F: sensor data
+    F->>Robot: commands
+    Robot--)F: sensor data
     F->>S: sensor data, time = t₂
     Note over S: The answer is not ready. Control continues.
     S->>F: commands, the next call at t₃
-    F->>R: commands
+    F->>Robot: commands
     M--)S: the answer is ready
     deactivate M
-    R--)F: sensor data
+    Robot--)F: sensor data
     F->>S: sensor data, time = t₃
     Note over S: The session acts on the answer.
     S->>F: commands, the next call at t₄
-    F->>R: commands
+    F->>Robot: commands
     destroy S
     F->>S: close
 ```
