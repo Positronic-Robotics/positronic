@@ -94,7 +94,7 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     uid = cast(Episode, ds[episode_id]).meta['uid']
     max_hz = cast(float, app_state[_MAX_HZ_KEY])
     max_resolution = cast(int, app_state[_MAX_RESOLUTION_KEY])
-    return os.path.join(episode_cache_dir, f'{uid}-{max_hz:g}hz-{max_resolution}px.rrd')
+    return os.path.join(episode_cache_dir, f'{uid}-{max_hz!r}hz-{max_resolution}px.rrd')
 
 
 @asynccontextmanager

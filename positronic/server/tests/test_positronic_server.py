@@ -154,6 +154,7 @@ def rrd_cache(tmp_path, monkeypatch):
 def test_a_cached_rrd_written_under_other_caps_is_not_served(rrd_cache):
     assert rrd_cache(30.0, 640) != rrd_cache(30.0, 1280)
     assert rrd_cache(30.0, 640) != rrd_cache(60.0, 640)
+    assert rrd_cache(30.000001, 640) != rrd_cache(30.000002, 640)
 
 
 def test_the_same_caps_reach_the_same_cached_rrd(rrd_cache):
