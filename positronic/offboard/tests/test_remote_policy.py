@@ -286,6 +286,135 @@ class TestNewSessionRetriesRefusedConnects:
         assert slept == [deadline], f'a {deadline}s connect deadline slept {slept}'
 
 
+def _ready(session_id: str, meta: dict | None = None) -> bytes:
+    return protocol.serialise({
+        protocol.STATUS: protocol.ServerStatus.READY,
+        protocol.PROTOCOL_VERSION: 2,
+        protocol.META: meta if meta is not None else {'model_name': 'test'},
+        protocol.SESSION_ID: session_id,
+    })
+
+
+def _answer(result) -> bytes:
+    return protocol.serialise({protocol.RESULT: result})
+
+
+def _connection(*received: bytes | Exception) -> MagicMock:
+    """A connection whose ``recv`` returns or raises each of ``received`` in turn."""
+    conn = MagicMock(spec=wire.ClientConnection)
+    conn.recv.side_effect = list(received)
+    return conn
+
+
+def _observations_sent(conn: MagicMock) -> list:
+    return [
+        request[protocol.OBSERVATION]
+        for request in (protocol.deserialise(call.args[0]) for call in conn.send.call_args_list)
+        if protocol.OBSERVATION in request
+    ]
+
+
+class TestADroppedConnectionReconnects:
+    """A connection that drops before the server's first answer opens a new session and sends the observation
+    again. A new session holds no state, so this is safe only while the dropped one had answered nothing."""
+
+    def test_a_drop_before_the_first_answer_sends_the_observation_on_a_new_session(self):
+        dropped = _connection(_ready('first'), wire.PeerDisconnected('dropped'))
+        reopened = _connection(_ready('second'), _answer({'action_data': [1, 2, 3]}))
+        session = InferenceClient(_FakeWire(dropped, reopened), _ADDRESS).new_session()
+
+        assert session.infer({'image': 'test'}) == {'action_data': [1, 2, 3]}
+
+        dropped.close.assert_called_once()
+        assert _observations_sent(reopened) == [{'image': 'test'}]
+        assert protocol.deserialise(reopened.send.call_args.args[0])[protocol.SESSION_ID] == 'second'
+        assert session.session_id == 'second'
+
+    def test_a_drop_after_an_answer_reaches_the_caller(self):
+        """The server's session held state for the episode, and a new session would start without it."""
+        conn = _connection(_ready('first'), _answer({'action_data': [1]}), wire.PeerDisconnected('dropped'))
+        fake = _FakeWire(conn, _connection(_ready('second')))
+        session = InferenceClient(fake, _ADDRESS).new_session()
+        session.infer({'step': 0})
+
+        with pytest.raises(wire.PeerDisconnected, match='dropped'):
+            session.infer({'step': 1})
+
+        assert len(fake.dials) == 1
+
+    def test_a_second_drop_reaches_the_caller(self):
+        fake = _FakeWire(
+            _connection(_ready('first'), wire.PeerDisconnected('dropped')),
+            _connection(_ready('second'), wire.PeerDisconnected('dropped again')),
+        )
+        session = InferenceClient(fake, _ADDRESS).new_session()
+
+        with pytest.raises(wire.PeerDisconnected, match='dropped again'):
+            session.infer({'image': 'test'})
+
+        assert len(fake.dials) == 2
+
+    def test_a_stall_is_not_sent_again(self):
+        """The server may still compute the observation, so a second send doubles the work of a slow backend."""
+        fake = _FakeWire(_connection(_ready('first'), TimeoutError()), _connection(_ready('second')))
+        session = InferenceClient(fake, _ADDRESS).new_session()
+
+        with pytest.raises(TimeoutError):
+            session.infer({'image': 'test'})
+
+        assert len(fake.dials) == 1
+
+    def test_a_new_session_that_declares_other_metadata_is_refused(self):
+        """The caller built its stack from the first handshake, and the episode records it."""
+        end_ack = protocol.serialise({protocol.SESSION_ID: 'second', protocol.END_SESSION: True})
+        reopened = _connection(_ready('second', {'model_name': 'another'}), end_ack)
+        fake = _FakeWire(_connection(_ready('first'), wire.PeerDisconnected('dropped')), reopened)
+        session = InferenceClient(fake, _ADDRESS).new_session()
+
+        with pytest.raises(wire.PeerDisconnected, match='other metadata'):
+            session.infer({'image': 'test'})
+
+        assert _observations_sent(reopened) == []
+        reopened.close.assert_called_once()
+
+    def test_a_reconnect_retries_a_refused_connect(self):
+        """A restarted backend refuses connects for a moment, and the reconnect waits it out."""
+        fake = _FakeWire(
+            _connection(_ready('first'), wire.PeerDisconnected('dropped')),
+            _refused(wire.Refusal.COLD),
+            _connection(_ready('second'), _answer({'action_data': [1]})),
+        )
+        with patch('positronic.offboard.client.time.sleep'):
+            session = InferenceClient(fake, _ADDRESS).new_session()
+            assert session.infer({'image': 'test'}) == {'action_data': [1]}
+
+        assert len(fake.dials) == 3
+
+    def test_the_reconnect_deadline_bounds_a_handshake_that_never_reaches_ready(self):
+        """A server that sends status updates while it loads keeps the arm waiting only for the deadline."""
+        clock = [0.0]
+        loading = protocol.serialise({protocol.STATUS: protocol.ServerStatus.LOADING, protocol.MESSAGE: 'loading'})
+
+        def recv_loading(timeout: float | None = None) -> bytes:
+            clock[0] += 5.0
+            assert clock[0] < 100.0, 'the handshake outlived its deadline'
+            return loading
+
+        loads_for_ever = MagicMock(spec=wire.ClientConnection)
+        loads_for_ever.recv.side_effect = recv_loading
+        fake = _FakeWire(_connection(_ready('first'), wire.PeerDisconnected('dropped')), loads_for_ever)
+        with (
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+            patch('positronic.offboard.client.time.sleep', side_effect=lambda s: clock.__setitem__(0, clock[0] + s)),
+        ):
+            session = InferenceClient(fake, _ADDRESS, reconnect_deadline=20.0).new_session()
+            started = clock[0]
+            with pytest.raises(TimeoutError):
+                session.infer({'image': 'test'})
+
+        assert clock[0] - started <= 20.0
+
+
 def test_remote_policy_hands_the_wire_the_server_and_the_headers_to_the_client():
     headers = {'Modal-Key': 'k'}
     policy = RemotePolicy('websocket_tls', _address('example.com', 443, query='fps=2.5'), headers=headers)
@@ -414,6 +543,8 @@ def test_wrong_session_id_closes_only_the_requesting_session(served, transport, 
         assert protocol.SESSION_ID not in first.metadata
         first._conn.send(protocol.serialise({protocol.SESSION_ID: second.session_id, **payload}))
         response = protocol.deserialise(first._conn.recv(timeout=5))
+        # The server answered on the session's connection, past ``infer``, so a drop now must not reconnect.
+        first._answered = True
         assert response[protocol.STATUS] == protocol.ServerStatus.ERROR
         assert 'session ID' in response[protocol.ERROR]
         with pytest.raises(wire.PeerDisconnected):
