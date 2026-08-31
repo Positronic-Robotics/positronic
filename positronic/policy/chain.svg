@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 590" width="1000" height="590" font-family="Verdana, Arial, sans-serif" font-size="15">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333333"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1000" height="590" fill="#ffffff"/>
+
+  <!-- rows: the chain, framework at the bottom, functions at the top -->
+  <line x1="185" y1="80" x2="960" y2="80" stroke="#cccccc"/>
+  <line x1="185" y1="200" x2="960" y2="200" stroke="#cccccc"/>
+  <line x1="185" y1="300" x2="960" y2="300" stroke="#cccccc"/>
+  <line x1="185" y1="400" x2="960" y2="400" stroke="#cccccc"/>
+  <line x1="185" y1="500" x2="960" y2="500" stroke="#cccccc"/>
+  <text x="175" y="85" text-anchor="end" fill="#333333">Served function</text>
+  <text x="175" y="205" text-anchor="end" fill="#333333">Policy session</text>
+  <text x="175" y="305" text-anchor="end" fill="#333333">Codec</text>
+  <text x="175" y="405" text-anchor="end" fill="#333333">Layer session</text>
+  <text x="175" y="505" text-anchor="end" fill="#333333">Framework</text>
+
+  <!-- the time axis -->
+  <line x1="185" y1="540" x2="955" y2="540" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="962" y="545" text-anchor="start" fill="#333333">time</text>
+  <line x1="260" y1="534" x2="260" y2="546" stroke="#333333"/>
+  <line x1="450" y1="534" x2="450" y2="546" stroke="#333333"/>
+  <line x1="640" y1="534" x2="640" y2="546" stroke="#333333"/>
+  <line x1="830" y1="534" x2="830" y2="546" stroke="#333333"/>
+  <text x="260" y="566" text-anchor="middle" fill="#333333">t₁</text>
+  <text x="450" y="566" text-anchor="middle" fill="#333333">t₂</text>
+  <text x="640" y="566" text-anchor="middle" fill="#333333">t₃</text>
+  <text x="830" y="566" text-anchor="middle" fill="#333333">t₄</text>
+
+  <!-- the function runs while control continues -->
+  <rect x="219" y="64" width="361" height="32" fill="#ececec" stroke="#999999"/>
+  <text x="400" y="85" text-anchor="middle" fill="#333333">infer</text>
+  <rect x="599" y="64" width="351" height="32" fill="#ececec" stroke="#999999"/>
+  <text x="775" y="85" text-anchor="middle" fill="#333333">infer</text>
+  <line x1="580" y1="96" x2="580" y2="197" stroke="#333333" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+  <text x="587" y="150" text-anchor="start" fill="#555555" font-size="13">the answer</text>
+
+  <!-- call at t1: the whole chain, and a function call starts -->
+  <line x1="225" y1="495" x2="225" y2="405" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="218" y="453" text-anchor="end" fill="#555555" font-size="13">obs, time</text>
+  <line x1="225" y1="395" x2="225" y2="316" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="218" y="360" text-anchor="end" fill="#555555" font-size="13">obs</text>
+  <rect x="192" y="287" width="66" height="26" rx="6" fill="#DFF0D8" stroke="#7CA97C"/>
+  <text x="225" y="305" text-anchor="middle" fill="#333333" font-size="12">encode</text>
+  <line x1="225" y1="287" x2="225" y2="205" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="218" y="250" text-anchor="end" fill="#555555" font-size="13">obs′</text>
+  <line x1="225" y1="195" x2="225" y2="100" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="218" y="150" text-anchor="end" fill="#555555" font-size="13">start infer</text>
+  <line x1="295" y1="205" x2="295" y2="287" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="302" y="250" text-anchor="start" fill="#555555" font-size="13">commands′</text>
+  <rect x="262" y="287" width="66" height="26" rx="6" fill="#DFF0D8" stroke="#7CA97C"/>
+  <text x="295" y="305" text-anchor="middle" fill="#333333" font-size="12">decode</text>
+  <line x1="295" y1="313" x2="295" y2="395" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="302" y="360" text-anchor="start" fill="#555555" font-size="13">commands</text>
+  <line x1="295" y1="405" x2="295" y2="495" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="302" y="453" text-anchor="start" fill="#555555" font-size="13">commands, resume_at</text>
+
+  <!-- call at t2: the layer answers from its own state -->
+  <line x1="415" y1="495" x2="415" y2="405" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="485" y1="405" x2="485" y2="495" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="450" y="385" text-anchor="middle" fill="#888888" font-size="13">no inner call</text>
+
+  <!-- call at t3: the whole chain, the answer is used, the next call starts -->
+  <line x1="605" y1="495" x2="605" y2="405" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="605" y1="395" x2="605" y2="316" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <rect x="572" y="287" width="66" height="26" rx="6" fill="#DFF0D8" stroke="#7CA97C"/>
+  <text x="605" y="305" text-anchor="middle" fill="#333333" font-size="12">encode</text>
+  <line x1="605" y1="287" x2="605" y2="205" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="605" y1="195" x2="605" y2="100" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="675" y1="205" x2="675" y2="287" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <rect x="642" y="287" width="66" height="26" rx="6" fill="#DFF0D8" stroke="#7CA97C"/>
+  <text x="675" y="305" text-anchor="middle" fill="#333333" font-size="12">decode</text>
+  <line x1="675" y1="313" x2="675" y2="395" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="675" y1="405" x2="675" y2="495" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+
+  <!-- call at t4: the layer answers from its own state -->
+  <line x1="795" y1="495" x2="795" y2="405" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="865" y1="405" x2="865" y2="495" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="830" y="385" text-anchor="middle" fill="#888888" font-size="13">no inner call</text>
+</svg>

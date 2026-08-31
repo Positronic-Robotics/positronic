@@ -215,21 +215,7 @@ returned, blend a late plan into the motion underway. The API gives each
 kind its own shape. A `Codec` transforms data and does not see time. A
 `Layer` wraps a session and runs on the session's clock.
 
-```mermaid
-flowchart TB
-    fw[Framework]
-    subgraph chain [The session of the chain]
-        a["Layer A's session"]
-        b["Layer B's session"]
-        p["Policy session"]
-    end
-    fw -- "obs, time" --> a
-    a -- "obs'" --> b
-    b -- "obs''" --> p
-    p -- "commands'', resume_at''" --> b
-    b -- "commands', resume_at'" --> a
-    a -- "commands, resume_at" --> fw
-```
+![The chain across time](chain.svg)
 
 - A `Layer` is a recipe fixed at configuration time. When a policy session
   is created, each layer makes its session, wrapping the one inside it.
