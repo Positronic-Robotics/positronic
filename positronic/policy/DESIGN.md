@@ -129,29 +129,33 @@ model call and continues to control the robot. The session acts on the
 answer when it arrives. After the setup, the server only answers these
 calls. It is stateless: every call is a pure function of its arguments.
 
-```mermaid
-flowchart TB
-    robot[Robot]
-    subgraph rig [Rig]
-        fw[Framework]
-        s["Session<br/>(the state of the episode)"]
-    end
-    subgraph server [Server]
-        m["Model<br/>(stateless)"]
-    end
-    robot -- "sensor data" --> fw
-    fw -- "commands" --> robot
-    fw -- "sensor data, time" --> s
-    s -- "commands, the next call time" --> fw
-    s -. "model calls" .-> m
-    m -. "answers" .-> s
-    server -. "the description, at the handshake" .-> rig
-```
-
 The framework records everything that crosses a boundary, as it
 happens: what the session saw, what it decided, and what it asked of
 the model, on every machine involved. The episode ends when the
 framework closes the session. The record remains.
+
+```mermaid
+sequenceDiagram
+    box Rig
+        participant F as Framework
+        participant S as Session
+    end
+    box Server
+        participant M as Model
+    end
+    F->>M: connect to the URL
+    M-->>F: the description
+    F->>S: assemble the session from the description
+    activate S
+    loop the episode
+        F->>S: sensor data, time
+        S-)M: model call
+        M--)S: answer
+        S->>F: commands, the next call time
+    end
+    F->>S: close
+    deactivate S
+```
 
 The sections below describe each piece.
 
