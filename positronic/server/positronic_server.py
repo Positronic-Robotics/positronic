@@ -89,9 +89,8 @@ def _get_rrd_cache_path(episode_id: int) -> str:
     ds_id = str(Path(str(app_state['root'])).resolve()).replace(os.sep, '_').replace(':', '')
     episode_cache_dir = os.path.join(cache_root, ds_id)
     os.makedirs(episode_cache_dir, exist_ok=True)
-    # Key the cache by episode uid, not position: position is view-dependent, and datasets without a
-    # resolvable root (e.g. concatenated ones) all share the 'unknown_dataset' namespace.
-    # The caps are part of the identity: a file written under other caps holds different samples.
+    # The cache identity is the episode uid and both caps: position is view-dependent, and a file
+    # written under other caps holds different samples.
     uid = cast(Episode, ds[episode_id]).meta['uid']
     max_hz = cast(float, app_state[_MAX_HZ_KEY])
     max_resolution = cast(int, app_state[_MAX_RESOLUTION_KEY])
