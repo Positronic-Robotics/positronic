@@ -147,12 +147,18 @@ sequenceDiagram
     M-->>F: the description
     F->>S: assemble the session from the description
     activate S
-    loop the episode
-        F->>S: sensor data, time
-        S-)M: model call
-        M--)S: answer
-        S->>F: commands, the next call time
-    end
+    F->>S: sensor data, time = t₁
+    S-)M: start a model call
+    activate M
+    S->>F: commands, the next call at t₂
+    F->>S: sensor data, time = t₂
+    Note over S: The answer is not ready. Control continues.
+    S->>F: commands, the next call at t₃
+    M--)S: the answer is ready
+    deactivate M
+    F->>S: sensor data, time = t₃
+    Note over S: The session acts on the answer.
+    S->>F: commands, the next call at t₄
     F->>S: close
     deactivate S
 ```
@@ -204,25 +210,6 @@ starts a call and does not wait — control continues while the framework
 runs the function, in process or on a GPU server. The framework runs
 every call, so it can charge the call to the right clock in simulation
 and record it.
-
-```mermaid
-sequenceDiagram
-    participant F as Framework
-    participant S as Session
-    participant Fn as Served function
-    F->>S: obs, time = t₁
-    S-)Fn: start infer(obs)
-    activate Fn
-    S->>F: commands, resume_at = t₂
-    F->>S: obs, time = t₂
-    Note over S: The answer is not ready. Control continues.
-    S->>F: commands, resume_at = t₃
-    Fn--)S: the answer is ready
-    deactivate Fn
-    F->>S: obs, time = t₃
-    Note over S: The session reads the actions from the answer.
-    S->>F: commands, resume_at = t₄
-```
 
 - The session cannot tell where a function runs.
 - Between calls the framework promises nothing: not the same process, not
