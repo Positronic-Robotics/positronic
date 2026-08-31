@@ -126,8 +126,8 @@ The model is heavy: it needs a GPU and a machine of its own, and the rig
 rarely has them. Heavy pieces stay remote. The model is also too slow for
 this loop, so the session never waits for it. The session starts the
 model call and continues to control the robot. The session acts on the
-answer when it arrives. The server only answers these calls. It is
-stateless: every call is a pure function of its arguments.
+answer when it arrives. After the setup, the server only answers these
+calls. It is stateless: every call is a pure function of its arguments.
 
 The framework records everything that crosses a boundary, as it
 happens: what the session saw, what it decided, and what it asked of
@@ -191,6 +191,9 @@ and record it.
 - A failure the framework can see — a lost connection, a dead worker, a
   value that does not serialize — ends the handle with an error. Only a
   function that does not return leaves a handle open.
+- The re-raise is best effort. A failure that crossed the wire loses its
+  class and can arrive as a different type. A session must not select its
+  behavior by the class of a function error.
 - A session may cancel a call it will not read. The framework stops the
   work where it can: it stops retries and drops the queued call. A call
   that already runs may run to its end. Functions are pure, so a dropped
@@ -264,7 +267,7 @@ placed on three timelines: the call number, control time, and wall time.
   distinct across sessions and stable across runs.
 - Served functions record too: into the recording itself, or into storage of
   their own, joined later.
-- Recording never affects control: it adds no waiting and no failure path.
+- The framework makes the best effort not to consume control time, and recording adds no failure path.
 
 ## API
 
@@ -293,8 +296,9 @@ class Session(Protocol):
 class Answer(Protocol):
     def done(self) -> bool: ...
 
-    # The result once done, re-raising what the function raised. Reading it
-    # earlier is an error: a session never waits.
+    # The result once done. A failed call raises here — best effort, the
+    # class can differ after the wire. Reading it earlier is an error: a
+    # session never waits.
     def result(self) -> Any: ...
 
     # The session will not read this answer. The framework stops the work
@@ -370,6 +374,9 @@ closes what it made itself. `close` never travels through the chain.
 - Source times for observations — whether the framework passes the
   timestamp of each sensor value to the session. The pimm signals
   already carry these timestamps.
+- The wall-time timeline across machines — the rig clock and the server
+  clock differ, and the records from both must align. #528 tracks the
+  clock problem in pimm.
 
 ## TODO
 
@@ -391,18 +398,20 @@ Open review comments from #652.
 - [x] Correct the bullet that says observations can be of any type. The
   value of each channel can be of any type. The observation itself is a
   mapping of named channels.
-- [ ] Add the wall-time authority to the recording decisions. Records
+- [x] Add the wall-time authority to the recording decisions. Records
   from two machines share one wall-time timeline only if the clocks
-  agree. This belongs with the deferred recording mechanics and #528.
-- [ ] Define how a remote error crosses the wire. A custom exception
-  needs its class on the rig to be re-raised. A framework-owned error
-  type is the usual answer. This waits for the wire work.
-- [ ] State that `record` copies the value before it returns. A session
-  can change a mutable array after the call, and a late recorder would
-  then store the changed value.
-- [ ] Correct the story sentence about the server. The server also sends
+  agree. Deferred, next to the source-time bullet.
+- [x] Define how a remote error crosses the wire. The re-raise is best
+  effort: a failure that crossed the wire loses its class and can arrive
+  as a different type. A session must not select behavior by the error
+  class.
+- [x] State that `record` copies the value before it returns. We do not
+  state the copy. Recording is guaranteed, and the framework makes the
+  best effort not to consume control time. A copy at the call fits that
+  rule.
+- [x] Correct the story sentence about the server. The server also sends
   the description at the setup. Write: after the setup, the server only
   answers served calls.
-- [ ] Answer the comment that asks for `time` in `Inner`. The design
+- [x] Answer the comment that asks for `time` in `Inner`. The design
   omits the argument so a layer cannot change the time. The framework
   stamps it, and the comment above `Inner` says so.
