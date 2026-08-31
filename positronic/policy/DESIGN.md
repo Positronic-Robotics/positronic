@@ -134,7 +134,7 @@ happens: what the session saw, what it decided, and what it asked of
 the model, on every machine involved. The episode ends when the
 framework closes the session. The record remains.
 
-![The life of an episode](episode.svg)
+![The life of an episode](docs/episode.svg)
 
 The sections below describe each piece.
 
@@ -143,10 +143,10 @@ The sections below describe each piece.
 One algorithm may drive several robots at once.
 
 - A `Policy` is the algorithm that controls a robot from observed data.
-- Control happens in a `Session`; a `Policy` makes them.
+- Control happens in a `Session`; a `Policy` makes one for each episode.
 - Sessions are independent, and several may exist at the same moment.
-- A `Policy` is told which robot it is to control, so the session comes ready
-  for it.
+- Each session is told at its creation which robot it controls, so it comes
+  ready for it.
 - The framework may cancel a session at any moment; a session never ends
   itself.
 
@@ -177,17 +177,21 @@ synchronously — a plain function call, repeated:
 
 ### Served functions
 
-The policy defines its heavy work as stateless functions,
-`infer(obs) -> actions`, and gives them to the framework. The session
-starts a call and does not wait — control continues while the framework
-runs the function, in process or on a GPU server. The framework runs
-every call, so it can charge the call to the right clock in simulation
-and record it.
+The policy defines its heavy work (the model inference) as stateless
+functions, `infer(obs) -> actions`, and gives them to the framework. The
+session starts a call and does not wait — control continues while the
+framework runs the function, in process or on a GPU server. The framework
+runs every call and records the arguments when the call starts, and the
+result when it arrives. It measures the call's duration, so in simulation
+the call keeps its real latency.
+
+![A served call goes through the framework](docs/served.svg)
 
 - The session cannot tell where a function runs.
 - Between calls the framework promises nothing: not the same process, not
   surviving state, not order, not exactly-once delivery. A function answers
-  from its arguments alone; a cache is a speed-up, never a dependency.
+  from its arguments alone. A cache may make it faster, but the function
+  must answer the same without it.
 - Invoking a function starts the work and returns a handle at once, never
   waiting. The session reads the handle when it next has control.
 - A failure the framework can see — a lost connection, a dead worker, a
@@ -215,7 +219,7 @@ returned, blend a late plan into the motion underway. The API gives each
 kind its own shape. A `Codec` transforms data and does not see time. A
 `Layer` wraps a session and runs on the session's clock.
 
-![The chain across time](chain.svg)
+![The chain across time](docs/chain.svg)
 
 - A `Layer` is a recipe fixed at configuration time. When a policy session
   is created, each layer makes its session, wrapping the one inside it.
@@ -296,7 +300,6 @@ class Session(Protocol):
 ### Served functions
 
 ```python
-# This is pimm's `Answer`.
 class Answer(Protocol):
     def done(self) -> bool: ...
 
@@ -373,8 +376,9 @@ closes what it made itself. `close` never travels through the chain.
 ## Deferred, not to decide now
 
 - The shape of the robot description, and a server's ability to refuse one.
-- The protocol delivering the description to the rig — versioning and
-  compatibility.
+- The exact wire protocol a server must support — the handshake that
+  delivers the description, the served calls, and the versioning that
+  keeps an old server compatible.
 - Source times for observations — whether the framework passes the
   timestamp of each sensor value to the session. The pimm signals
   already carry these timestamps.
