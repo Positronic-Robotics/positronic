@@ -129,6 +129,25 @@ model call and continues to control the robot. The session acts on the
 answer when it arrives. After the setup, the server only answers these
 calls. It is stateless: every call is a pure function of its arguments.
 
+```mermaid
+flowchart LR
+    robot[Robot]
+    subgraph rig [Rig]
+        fw[Framework]
+        s["Session<br/>(the state of the episode)"]
+    end
+    subgraph server [Server]
+        m["Model<br/>(stateless)"]
+    end
+    robot -- "sensor data" --> fw
+    fw -- "commands" --> robot
+    fw -- "sensor data, time" --> s
+    s -- "commands, the next call time" --> fw
+    s -. "model calls" .-> m
+    m -. "answers" .-> s
+    server -. "the description, at the handshake" .-> rig
+```
+
 The framework records everything that crosses a boundary, as it
 happens: what the session saw, what it decided, and what it asked of
 the model, on every machine involved. The episode ends when the
@@ -182,6 +201,25 @@ runs the function, in process or on a GPU server. The framework runs
 every call, so it can charge the call to the right clock in simulation
 and record it.
 
+```mermaid
+sequenceDiagram
+    participant F as Framework
+    participant S as Session
+    participant Fn as Served function
+    F->>S: obs, time = t₁
+    S-)Fn: start infer(obs)
+    activate Fn
+    S->>F: commands, resume_at = t₂
+    F->>S: obs, time = t₂
+    Note over S: The handle is not done. Control continues.
+    S->>F: commands, resume_at = t₃
+    Fn--)S: the handle completes
+    deactivate Fn
+    F->>S: obs, time = t₃
+    Note over S: The session reads the actions.
+    S->>F: commands, resume_at = t₄
+```
+
 - The session cannot tell where a function runs.
 - Between calls the framework promises nothing: not the same process, not
   surviving state, not order, not exactly-once delivery. A function answers
@@ -212,6 +250,22 @@ works in time: decide when to call the model, execute the actions it
 returned, blend a late plan into the motion underway. The API gives each
 kind its own shape. A `Codec` transforms data and does not see time. A
 `Layer` wraps a session and runs on the session's clock.
+
+```mermaid
+flowchart TB
+    fw[Framework]
+    subgraph chain [The session of the chain]
+        a["Layer A's session"]
+        b["Layer B's session"]
+        p["Policy session"]
+    end
+    fw -- "obs, time" --> a
+    a -- "obs'" --> b
+    b -- "obs''" --> p
+    p -- "commands'', resume_at''" --> b
+    b -- "commands', resume_at'" --> a
+    a -- "commands, resume_at" --> fw
+```
 
 - A `Layer` is a recipe fixed at configuration time. When a policy session
   is created, each layer makes its session, wrapping the one inside it.
