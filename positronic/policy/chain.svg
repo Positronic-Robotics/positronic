@@ -97,8 +97,8 @@
   <line x1="612" y1="194" x2="612" y2="164" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
   <line x1="620" y1="126" x2="620" y2="96" stroke="#333333" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ah)"/>
   <text x="613" y="114" text-anchor="end" fill="#555555" font-size="13">done?</text>
-  <line x1="650" y1="94" x2="650" y2="126" stroke="#333333" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ah)"/>
-  <text x="658" y="115" text-anchor="start" fill="#555555" font-size="13">the answer</text>
+  <line x1="650" y1="94" x2="650" y2="124" stroke="#333333" stroke-width="3" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+  <text x="662" y="115" text-anchor="start" fill="#555555" font-size="13">the answer</text>
   <line x1="668" y1="162" x2="668" y2="194" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
   <line x1="668" y1="230" x2="668" y2="262" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
   <line x1="668" y1="298" x2="668" y2="330" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
