@@ -13,7 +13,7 @@
   <!-- lifelines -->
   <line x1="100" y1="55" x2="100" y2="1135" stroke="#999999"/>
   <line x1="330" y1="55" x2="330" y2="1135" stroke="#999999"/>
-  <line x1="620" y1="235" x2="620" y2="1100" stroke="#999999"/>
+  <line x1="620" y1="235" x2="620" y2="1130" stroke="#999999"/>
   <line x1="880" y1="55" x2="880" y2="1135" stroke="#999999"/>
 
   <!-- the model computes between the call and the answer -->
@@ -79,8 +79,7 @@
   <text x="215" y="1037" text-anchor="middle" fill="#222222">commands</text>
 
   <!-- the close ends the session -->
-  <line x1="330" y1="1100" x2="605" y2="1100" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="330" y1="1100" x2="617" y2="1100" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
   <text x="455" y="1092" text-anchor="middle" fill="#222222">close</text>
-  <line x1="610" y1="1090" x2="630" y2="1110" stroke="#333333" stroke-width="2.5"/>
-  <line x1="630" y1="1090" x2="610" y2="1110" stroke="#333333" stroke-width="2.5"/>
+  <line x1="602" y1="1130" x2="638" y2="1130" stroke="#333333" stroke-width="3"/>
 </svg>
