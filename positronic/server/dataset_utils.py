@@ -421,8 +421,7 @@ def _send_scalar_columns(key: str, ts_arr: np.ndarray, vals: np.ndarray) -> None
         rr.send_columns(f'/signals/{key}/{i}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals[:, i]))
 
 
-# In nanoseconds a source recorded at a whole multiple of the cap measures a hair above it.
-# FOOTGUN: without this slack the stride rounds one too far and halves such a signal.
+# Integer nanoseconds put a source recorded at a whole multiple of the cap a hair above it.
 _RATE_SLACK = 1e-6
 
 
