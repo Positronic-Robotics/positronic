@@ -70,6 +70,7 @@ def _install_trossen_stub() -> None:
     class Mode(Enum):
         idle = 'idle'
         position = 'position'
+        external_effort = 'external_effort'
 
     class Model(Enum):
         wxai_v0 = 'wxai_v0'
@@ -78,7 +79,7 @@ def _install_trossen_stub() -> None:
     module.__dict__.update(
         Mode=Mode,
         Model=Model,
-        StandardEndEffector=types.SimpleNamespace(wxai_v0_follower=object()),
+        StandardEndEffector=types.SimpleNamespace(wxai_v0_follower=object(), wxai_v0_leader=object()),
         TrossenArmDriver=object,
         RuntimeError=type('RuntimeError', (RuntimeError,), {}),
     )
