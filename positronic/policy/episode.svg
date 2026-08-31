@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1160" width="1000" height="1160" font-family="Verdana, Arial, sans-serif" font-size="15">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333333"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1000" height="1160" fill="#ffffff"/>
+
+  <!-- the rig contour -->
+  <rect x="235" y="8" width="540" height="1142" fill="none" stroke="#888888" stroke-dasharray="8 5" rx="6"/>
+  <text x="505" y="34" text-anchor="middle" fill="#888888">Rig</text>
+
+  <!-- lifelines -->
+  <line x1="100" y1="55" x2="100" y2="1135" stroke="#999999"/>
+  <line x1="330" y1="55" x2="330" y2="1135" stroke="#999999"/>
+  <line x1="620" y1="235" x2="620" y2="1100" stroke="#999999"/>
+  <line x1="880" y1="55" x2="880" y2="1135" stroke="#999999"/>
+
+  <!-- the model computes between the call and the answer -->
+  <rect x="874" y="390" width="12" height="410" fill="#ececec" stroke="#999999"/>
+
+  <!-- headers -->
+  <rect x="50" y="15" width="100" height="40" fill="#ECECFF" stroke="#9370DB"/>
+  <text x="100" y="40" text-anchor="middle">Robot</text>
+  <rect x="255" y="15" width="150" height="40" fill="#ECECFF" stroke="#9370DB"/>
+  <text x="330" y="40" text-anchor="middle">Framework</text>
+  <rect x="795" y="15" width="170" height="40" fill="#ECECFF" stroke="#9370DB"/>
+  <text x="880" y="40" text-anchor="middle">Model (server)</text>
+
+  <!-- the handshake -->
+  <line x1="330" y1="110" x2="877" y2="110" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="605" y="102" text-anchor="middle" fill="#222222">connect to the URL</text>
+  <line x1="880" y1="160" x2="333" y2="160" stroke="#333333" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+  <text x="605" y="152" text-anchor="middle" fill="#222222">the description</text>
+
+  <!-- the session starts here -->
+  <text x="440" y="186" text-anchor="middle" fill="#222222">assemble the session from the description</text>
+  <rect x="550" y="195" width="140" height="40" fill="#ECECFF" stroke="#9370DB"/>
+  <text x="620" y="220" text-anchor="middle">Session</text>
+  <line x1="330" y1="215" x2="547" y2="215" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+
+  <!-- call 1 -->
+  <line x1="100" y1="290" x2="327" y2="290" stroke="#333333" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+  <text x="215" y="282" text-anchor="middle" fill="#222222">sensor data</text>
+  <line x1="330" y1="340" x2="617" y2="340" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="475" y="332" text-anchor="middle" fill="#222222">sensor data, time = t₁</text>
+  <line x1="620" y1="390" x2="871" y2="390" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="750" y="382" text-anchor="middle" fill="#222222">start a model call</text>
+  <line x1="620" y1="440" x2="333" y2="440" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="475" y="432" text-anchor="middle" fill="#222222">commands, the next call at t₂</text>
+  <line x1="330" y1="490" x2="103" y2="490" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="215" y="482" text-anchor="middle" fill="#222222">commands</text>
+
+  <!-- call 2 -->
+  <line x1="100" y1="545" x2="327" y2="545" stroke="#333333" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+  <text x="215" y="537" text-anchor="middle" fill="#222222">sensor data</text>
+  <line x1="330" y1="595" x2="617" y2="595" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="475" y="587" text-anchor="middle" fill="#222222">sensor data, time = t₂</text>
+  <rect x="485" y="620" width="270" height="48" fill="#FFF5AD" stroke="#AAAA33"/>
+  <text x="620" y="640" text-anchor="middle" fill="#222222">The answer is not ready.</text>
+  <text x="620" y="660" text-anchor="middle" fill="#222222">Control continues.</text>
+  <line x1="620" y1="700" x2="333" y2="700" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="475" y="692" text-anchor="middle" fill="#222222">commands, the next call at t₃</text>
+  <line x1="330" y1="750" x2="103" y2="750" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="215" y="742" text-anchor="middle" fill="#222222">commands</text>
+  <line x1="874" y1="800" x2="623" y2="800" stroke="#333333" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+  <text x="750" y="792" text-anchor="middle" fill="#222222">the answer is ready</text>
+
+  <!-- call 3 -->
+  <line x1="100" y1="855" x2="327" y2="855" stroke="#333333" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+  <text x="215" y="847" text-anchor="middle" fill="#222222">sensor data</text>
+  <line x1="330" y1="905" x2="617" y2="905" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="475" y="897" text-anchor="middle" fill="#222222">sensor data, time = t₃</text>
+  <rect x="495" y="930" width="250" height="34" fill="#FFF5AD" stroke="#AAAA33"/>
+  <text x="620" y="952" text-anchor="middle" fill="#222222">The session acts on the answer.</text>
+  <line x1="620" y1="995" x2="333" y2="995" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="475" y="987" text-anchor="middle" fill="#222222">commands, the next call at t₄</text>
+  <line x1="330" y1="1045" x2="103" y2="1045" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="215" y="1037" text-anchor="middle" fill="#222222">commands</text>
+
+  <!-- the close ends the session -->
+  <line x1="330" y1="1100" x2="605" y2="1100" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="455" y="1092" text-anchor="middle" fill="#222222">close</text>
+  <line x1="610" y1="1090" x2="630" y2="1110" stroke="#333333" stroke-width="2.5"/>
+  <line x1="630" y1="1090" x2="610" y2="1110" stroke="#333333" stroke-width="2.5"/>
+</svg>
