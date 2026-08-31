@@ -412,9 +412,8 @@ def _send_scalar_columns(key: str, ts_arr: np.ndarray, vals: np.ndarray) -> None
         rr.send_columns(f'/signals/{key}/{i}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals[:, i]))
 
 
-# Nanosecond timestamps hold a round rate only approximately, so a source recorded at a whole
-# multiple of the cap measures a hair above it. Without this relative slack the stride rounds one
-# too far and thins such a signal to half the rate it should keep.
+# In nanoseconds a source recorded at a whole multiple of the cap measures a hair above it.
+# FOOTGUN: without this slack the stride rounds one too far and halves such a signal.
 _RATE_SLACK = 1e-6
 
 
