@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 350" width="920" height="350" font-family="Verdana, Arial, sans-serif" font-size="15">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333333"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="920" height="350" fill="#ffffff"/>
+
+  <!-- the session and its one channel to the framework -->
+  <rect x="40" y="150" width="150" height="80" fill="#ECECFF" stroke="#9370DB"/>
+  <text x="115" y="195" text-anchor="middle" fill="#333333">Session</text>
+
+  <!-- the framework, with the runtime as its door -->
+  <rect x="300" y="60" width="320" height="260" fill="#FFE6CC" stroke="#D79B00"/>
+  <text x="460" y="88" text-anchor="middle" fill="#333333">Framework</text>
+  <rect x="320" y="150" width="120" height="80" fill="#ffffff" stroke="#D79B00"/>
+  <text x="380" y="195" text-anchor="middle" fill="#333333">Runtime</text>
+  <text x="460" y="262" text-anchor="middle" fill="#555555" font-size="12">records the arguments,</text>
+  <text x="460" y="280" text-anchor="middle" fill="#555555" font-size="12">the result and the time of each;</text>
+  <text x="460" y="298" text-anchor="middle" fill="#555555" font-size="12">in simulation, charges the duration</text>
+
+  <!-- the call goes through the runtime, the handle comes back at once -->
+  <line x1="190" y1="175" x2="317" y2="175" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="253" y="162" text-anchor="middle" fill="#555555" font-size="12">fns["infer"](obs)</text>
+  <line x1="320" y1="205" x2="193" y2="205" stroke="#333333" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+  <text x="253" y="224" text-anchor="middle" fill="#555555" font-size="12">the handle, at once</text>
+
+  <!-- the framework runs the call in one of the two places -->
+  <rect x="700" y="90" width="190" height="60" fill="#ececec" stroke="#999999"/>
+  <text x="795" y="115" text-anchor="middle" fill="#333333" font-size="13">infer</text>
+  <text x="795" y="135" text-anchor="middle" fill="#555555" font-size="12">(in process)</text>
+  <rect x="700" y="230" width="190" height="60" fill="#ececec" stroke="#999999"/>
+  <text x="795" y="255" text-anchor="middle" fill="#333333" font-size="13">infer</text>
+  <text x="795" y="275" text-anchor="middle" fill="#555555" font-size="12">(on a GPU server)</text>
+  <line x1="620" y1="110" x2="697" y2="110" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="697" y1="132" x2="623" y2="132" stroke="#333333" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+  <line x1="620" y1="250" x2="697" y2="250" stroke="#333333" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="697" y1="272" x2="623" y2="272" stroke="#333333" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+  <text x="795" y="315" text-anchor="middle" fill="#888888" font-size="12">the session cannot tell where</text>
+
+  <!-- the result completes the handle -->
+  <text x="253" y="330" text-anchor="middle" fill="#888888" font-size="12">the result completes the handle</text>
+</svg>
