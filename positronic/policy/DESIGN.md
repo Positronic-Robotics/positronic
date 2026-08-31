@@ -138,12 +138,13 @@ framework closes the session. The record remains.
 sequenceDiagram
     participant R as Robot
     participant F as Framework (rig)
-    F->>F: connect to the URL, get the description
+    participant M as Model (server)
+    F->>M: connect to the URL
+    M-->>F: the description
     create participant S as Session (rig)
     F->>S: assemble the session from the description
     R--)F: sensor data
     F->>S: sensor data, time = t₁
-    create participant M as Model (server)
     S-)M: start a model call
     activate M
     S->>F: commands, the next call at t₂
