@@ -16,10 +16,12 @@ frame.
 
 The reset token carries the RoboLab env name and the instruction variant; the env builds that task on the
 first reset and caches it, rebuilding only when the key changes. There is no seed anywhere: RoboLab's eval
-path has no seed hook, so a recorded seed would only mislead.
+path has no seed hook, so a recorded seed would only mislead. ``tasks`` reads RoboLab's own task metadata, so
+the eval asks this server which tasks a selection holds instead of pinning a table of its own.
 """
 
 import argparse
+import json
 import os
 import tempfile
 from collections.abc import Callable
@@ -113,8 +115,28 @@ def _load_robot_meta() -> dict[str, Any]:
         return decode(f.read())
 
 
+def _benchmark_tasks() -> dict[str, dict[str, Any]]:
+    """Every benchmark task by name: the seconds RoboLab gives an episode, and the categories it sits in.
+
+    Reads the metadata RoboLab ships beside its task classes, so it builds no env and registers nothing.
+    ``attributes`` names a task's fine-grained skills; the ones ``BENCHMARK_TASK_CATEGORIES`` maps become its
+    categories, and an attribute outside that map — a phrasing such as ``vague`` — carries no category.
+    """
+    with open(os.path.join(robolab.constants.TASK_DIR, '_metadata', 'task_metadata.json')) as f:
+        entries = json.load(f)
+    remap = robolab.constants.BENCHMARK_TASK_CATEGORIES
+    tasks = {}
+    for entry in entries:
+        attributes = [a.strip() for a in entry['attributes'].split(',')]
+        tasks[entry['task_name']] = {
+            'episode_length_s': float(entry['episode_s']),
+            'categories': {remap[a] for a in attributes if a in remap},
+        }
+    return tasks
+
+
 class RobolabEnv(EnvProtocol):
-    """A RoboLab task behind the gym-style ``reset``/``step``/``close`` the env server serves.
+    """A RoboLab task behind the ``tasks``/``reset``/``step``/``close`` the env server serves.
 
     Built from the reset token's key (RoboLab env name, instruction variant) and cached; ``reset`` rebuilds
     when the key changes and re-randomizes the scene through RoboLab's own reset events, or restores an exact
@@ -152,6 +174,29 @@ class RobolabEnv(EnvProtocol):
                 return method(*args, **kwargs)
 
         return timed
+
+    def tasks(self, spec: Any) -> list[dict[str, Any]]:
+        """The tasks ``spec`` selects: ``'all'``, one of RoboLab's categories, a task name, or a list of names.
+
+        A record names its task as the reset token does, and reports the seconds RoboLab gives its episode.
+        """
+        benchmark = _benchmark_tasks()
+        categories = set(robolab.constants.BENCHMARK_TASK_CATEGORIES.values())
+        if not isinstance(spec, str):
+            names = list(spec)
+        elif spec == 'all':
+            names = list(benchmark)
+        elif spec in categories:
+            names = [name for name, task in benchmark.items() if spec in task['categories']]
+        else:
+            names = [spec]
+        unknown = [name for name in names if name not in benchmark]
+        if unknown:
+            raise ValueError(
+                f'RoboLab does not hold {unknown}; a spec is a task name, a list of names, '
+                f'one of {sorted(categories)}, or "all"'
+            )
+        return [{'name': name, 'episode_length_s': benchmark[name]['episode_length_s']} for name in names]
 
     def _build(self, task: str, instruction_type: str) -> None:
         if self._env is not None:

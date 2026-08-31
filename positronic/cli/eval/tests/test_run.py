@@ -8,6 +8,7 @@ import pytest
 
 import pimm
 from positronic import keys, telemetry, telemetry_keys
+from positronic.cfg.eval import number_trials
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, timed_pass
 from positronic.eval import Embodiment, Eval, Task
 from positronic.policy import Policy, Session
@@ -85,6 +86,21 @@ def test_the_driver_asks_for_its_tasks_one_at_a_time():
         drive_scheduler(world.start([driver, stub]), steps=200)
 
     assert stub.asked == tasks
+
+
+def test_a_sweep_numbers_its_trials_across_every_task():
+    """A sweep runs tasks that differ — each with its own time budget and its own scene params — and numbers
+    the trials once over the whole plan, so a trial's place does not restart with every task."""
+    quick = Task(instruction_source='quick', timeout_sec=1.0)
+    slow = Task(instruction_source='slow', timeout_sec=90.0)
+    pairs = [(quick, {keys.EVAL_TASK: 'quick'}), (slow, {keys.EVAL_TASK: 'slow'}), (slow, {keys.EVAL_TASK: 'slow'})]
+    trials = number_trials(pairs)
+
+    assert [t.timeout_sec for t in trials] == [1.0, 90.0, 90.0]
+    assert [t.meta[keys.EVAL_TRIAL_INDEX] for t in trials] == [0, 1, 2]
+    assert [t.meta[keys.EVAL_TRIAL_COUNT] for t in trials] == [3, 3, 3]
+    assert [t.meta[keys.EVAL_TASK] for t in trials] == ['quick', 'slow', 'slow']
+    assert [t.prepare_args[keys.SCENE] for t in trials] == [params for _, params in pairs]
 
 
 def test_timed_sweep_needs_an_output_dir():

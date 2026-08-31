@@ -4,11 +4,11 @@
 positronic launches the env-server subprocess (RoboLab's own Isaac Lab interpreter) and replays a recorded
 demo's raw joint-position actions through the actual socket — the ``joint_pos`` path is a bit-identical
 passthrough to the 8-dim ``[q1..q7, gripper]`` action RoboLab's own replay feeds its jointpos env. The gate
-asserts the boundary mechanics: the exact-state reset lands the arm on the demo's opening joints, and every
-recorded action round-trips the socket without a wire error. Task success is reported but not asserted: the
-recording RoboLab ships at the pinned commit no longer reaches success under replay — its own
-``examples/run_recorded.py`` reproduces the failure on the same box — so a success oracle needs a
-policy-driven differential, not a demo log.
+asserts the boundary mechanics: the server answers its own task list, the exact-state reset lands the arm on
+the demo's opening joints, and every recorded action round-trips the socket without a wire error. Task
+success is reported but not asserted: the recording RoboLab ships at the pinned commit no longer reaches
+success under replay — its own ``examples/run_recorded.py`` reproduces the failure on the same box — so a
+success oracle needs a policy-driven differential, not a demo log.
 
 The demos come from a tiny committed ``.npz`` fixture — each demo's action log + initial scene state, not the
 multi-GB recording; ``make_fixture.py`` extracts it once from a RoboLab ``data.hdf5``. Run on a RoboLab-capable
@@ -22,7 +22,9 @@ import argparse
 
 import numpy as np
 
+from positronic import keys
 from positronic.simulator.env_server.client import EnvConnection
+from positronic.simulator.robolab.adapter import RobolabAdapter
 from positronic.simulator.robolab.launcher import serve_robolab
 
 # Keep re-sending the last action after the log ends, matching RoboLab's own replay tail: the final placement
@@ -64,13 +66,26 @@ def _replay_episode(conn: EnvConnection, actions: np.ndarray, initial_state: dic
     return False
 
 
+def _check_task_list(conn: EnvConnection, task: str) -> None:
+    """Assert the server answers its own task list, as the adapter reads it. positronic's interpreter cannot
+    import RoboLab, so this is the only gate on ``tasks``; the number of tasks is RoboLab's own and nothing
+    here pins it."""
+    adapter = RobolabAdapter({})
+    params = adapter.task_params(conn.tasks(adapter.task_spec(task)))
+    assert [p[keys.EVAL_TASK] for p in params] == [task], f'{task} asked for, {params} answered'
+    assert params[0][keys.EVAL_EPISODE_LENGTH] > 0, f'{task} reports no episode budget, so a trial has no deadline'
+    whole = adapter.task_params(conn.tasks('all'))
+    assert task in {p[keys.EVAL_TASK] for p in whole}, f'{task} is missing from the whole benchmark'
+
+
 def run_replay(fixture_path: str, *, task: str) -> float:
-    """Replay every episode in ``fixture_path`` through the env server; return the success rate."""
+    """Check the task list, then replay every episode in ``fixture_path``; return the replay success rate."""
     episodes = _load_fixture(fixture_path)
     successes = 0
     with serve_robolab() as (host, port):
         conn = EnvConnection(host, port)
         try:
+            _check_task_list(conn, task)
             for i, (actions, initial_state) in enumerate(episodes):
                 ok = _replay_episode(conn, actions, initial_state, task)
                 successes += int(ok)

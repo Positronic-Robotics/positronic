@@ -1,10 +1,10 @@
 """The ``EnvAdapter`` interface: the per-benchmark canonical<->raw mappings, on the client side.
 
 ``RemoteEnvControlSystem`` is a dumb translator — it moves data between pimm signals and this adapter.
-The adapter is the smart half: it turns the Harness's commands into the env's raw action (owning what to
-hold between them), maps raw observations back to canonical signals — policy-facing and privileged
-ground-truth kept separate — and reads the terminal. Each benchmark ships one adapter (``vendors/``-style);
-the native ``MujocoSim`` fixture is the reference.
+The adapter is the smart half: it maps the env's own task records into trial params, turns the Harness's
+commands into the env's raw action (owning what to hold between them), maps raw observations back to
+canonical signals — policy-facing and privileged ground-truth kept separate — and reads the terminal. Each
+benchmark ships one adapter (``vendors/``-style); the native ``MujocoSim`` fixture is the reference.
 """
 
 from abc import ABC, abstractmethod
@@ -19,6 +19,22 @@ from positronic.drivers.roboarm import command as roboarm_command
 
 class EnvAdapter(ABC):
     """The mappings between the canonical embodiment contract and an env's raw wire payloads."""
+
+    def task_spec(self, selection: Any) -> Any:
+        """An eval's selection -> the spec the env resolves it against.
+
+        A benchmark selected in its own vocabulary — a task name, a category — needs no mapping and gets
+        this one. A benchmark naming a task on more than one axis maps the eval's keys onto its own.
+        """
+        return selection
+
+    @abstractmethod
+    def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The env's own task records -> one trial params dict per task; the mirror of ``reset_token``.
+
+        An eval builds its sweep from these. Each dict carries what a trial of that task needs: what names
+        the task, and the seconds the benchmark gives its episode where the benchmark budgets one.
+        """
 
     @abstractmethod
     def reset_token(self, params: dict[str, Any]) -> Any:
@@ -107,7 +123,7 @@ class WireCommandAdapter(EnvAdapter):
     joint positions, or per-step joint deltas) plus the gripper closure into one payload.
     All action *encoding* — how the tagged command becomes the env's native action — stays server-side with
     the env's own model. Subclasses implement ``_reset_token`` (the base clears the per-trial command state
-    around it) and keep the observation and terminal mappings to themselves.
+    around it) and keep the task, observation and terminal mappings to themselves.
     """
 
     def __init__(self, env_control_frame: geom.Transform3D | None = None):

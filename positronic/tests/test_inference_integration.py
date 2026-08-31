@@ -80,7 +80,8 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
             instruction='integration-test',
             timeout=0.4,
         )
-        trials = number_trials(next(iter(ev.tasks())), [{keys.EVAL_SEED: 100 + i} for i in range(2)])
+        task = next(iter(ev.tasks()))
+        trials = number_trials([(task, {keys.EVAL_SEED: 100 + i}) for i in range(2)])
         main(
             policy=ChunkedSchedule().wrap(policy),
             evals=[replace(ev, tasks=partial(iter, trials))],
@@ -215,7 +216,8 @@ def test_every_trial_records_from_its_own_reset(tmp_path):
     producer quickly between trials, so a stray step from the previous trial would show up as a non-zero
     first sample."""
     ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.35)
-    trials = number_trials(next(iter(ev.tasks())), [{keys.EVAL_SEED: i} for i in range(2)])
+    task = next(iter(ev.tasks()))
+    trials = number_trials([(task, {keys.EVAL_SEED: i}) for i in range(2)])
     with pos3.mirror():
         main(
             policy=StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0),
@@ -238,7 +240,8 @@ def test_timing_writes_telemetry_sidecars(tmp_path):
     and the machine-load stats stream records at least one sample. record.io parenting proves the episode span
     stays in flight while the recorder commits STOP."""
     ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.2)
-    trials = number_trials(next(iter(ev.tasks())), [{}, {}])
+    task = next(iter(ev.tasks()))
+    trials = number_trials([(task, {}), (task, {})])
     with pos3.mirror():
         main(
             policy=ChunkedSchedule().wrap(
@@ -286,7 +289,7 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     """[harness + recorder + sim] with no MuJoCo: a trial ends early when the producer's ``done`` fires,
     recording ``eval.terminated`` True and the delivered payload into the episode's static data."""
     ev = _countdown_eval(_CountdownProducer(done_after=4), timeout=15.0)
-    trial = number_trials(next(iter(ev.tasks())), [{keys.EVAL_SEED: 100}])[0]
+    trial = number_trials([(next(iter(ev.tasks())), {keys.EVAL_SEED: 100})])[0]
     with pos3.mirror():
         main(
             policy=StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0),

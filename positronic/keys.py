@@ -116,6 +116,9 @@ ENDED_BY_OPERATOR = 'operator'
 EVAL_UNIVERSE = 'eval.universe'
 EVAL_EMBODIMENT = 'eval.embodiment'
 EVAL_TIMEOUT = 'eval.timeout'
+# The seconds the benchmark gives an episode of this task, carried in the trial's params. A config reads it
+# to set the trial's deadline, which the harness records as ``EVAL_TIMEOUT``.
+EVAL_EPISODE_LENGTH = 'eval.episode_length'
 
 # A trial's place in its eval's sweep, stamped into every trial's params and recorded in its episode's
 # statics. ``EVAL_SEED`` also rides an env's reset token, where absent means the env draws its own.
@@ -123,9 +126,10 @@ EVAL_SEED = 'eval.seed'
 EVAL_TRIAL_INDEX = 'eval.trial_index'
 EVAL_TRIAL_COUNT = 'eval.trial_count'
 
-# The scene a trial runs, named by its eval config in the trial's params and read back by the benchmark's
-# adapter to build the env's reset token. LIBERO names a task inside a suite plus the render and control
-# settings its server caches an env by; RoboLab names a task and the phrasing of its instruction.
+# The scene a trial runs. The benchmark's adapter names the task in the trial's params, from the task records
+# the env answers with, and reads them back to build the env's reset token; the eval config adds the settings
+# it owns. LIBERO names a task inside a suite plus the render and control settings its server caches an env
+# by; RoboLab names a task and the phrasing of its instruction.
 EVAL_SUITE = 'eval.suite'
 EVAL_TASK_ID = 'eval.task_id'
 EVAL_CAMERA_RESOLUTION = 'eval.camera_resolution'

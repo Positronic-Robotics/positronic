@@ -37,7 +37,8 @@ goal is solved to joints with damped-least-squares IK and a joint goal is turned
 forward kinematics, both on the MuJoCo site Jacobian OSC itself computes. The reset token carries the task spec
 (suite, task_id, camera resolution, control mode) plus the per-trial seed; the env builds that task on the first
 reset and caches it, rebuilding only when the spec changes. The seed selects a saved init-state and re-randomizes
-object positions; a ``None`` seed draws one at random.
+object positions; a ``None`` seed draws one at random. ``tasks`` reads the suites LIBERO registers, so the eval
+asks this server which tasks a selection holds instead of pinning a count of its own.
 """
 
 import argparse
@@ -71,7 +72,7 @@ def _unpack_pose(vec: Any) -> tuple[np.ndarray, np.ndarray]:
 
 
 class LiberoEnv(EnvProtocol):
-    """A LIBERO task behind the gym-style ``reset``/``step``/``close`` the env server serves.
+    """A LIBERO task behind the ``tasks``/``reset``/``step``/``close`` the env server serves.
 
     Built from the reset token's task spec (suite, task_id, resolution, control mode) and cached; ``reset``
     rebuilds when the spec changes, then re-seeds and selects a saved init-state (drawing the seed when the token
@@ -111,6 +112,28 @@ class LiberoEnv(EnvProtocol):
     @property
     def _controller(self):
         return self._env.env.robots[0].controller
+
+    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
+        """The tasks ``spec`` selects: ``suite`` is one name or a list of them, ``task_id`` one id or ``None``.
+
+        A record names its task as the reset token does, by suite and index. Reading the registry builds no
+        env, so the task the server holds stays.
+        """
+        suites = [spec['suite']] if isinstance(spec['suite'], str) else spec['suite']
+        task_id = spec['task_id']
+        registry = benchmark.get_benchmark_dict()
+        records = []
+        for suite_name in suites:
+            if suite_name not in registry:
+                raise ValueError(f'LIBERO holds the suites {sorted(registry)}, not {suite_name!r}')
+            num_tasks = registry[suite_name]().get_num_tasks()
+            if task_id is None:
+                records += [{'suite': suite_name, 'task_id': i} for i in range(num_tasks)]
+            elif 0 <= task_id < num_tasks:
+                records.append({'suite': suite_name, 'task_id': task_id})
+            else:
+                raise ValueError(f'suite {suite_name!r} holds {num_tasks} tasks, so task_id {task_id} does not exist')
+        return records
 
     def _build(self, suite_name: str, task_id: int, camera_resolution: int, control_mode: str) -> None:
         if self._env is not None:

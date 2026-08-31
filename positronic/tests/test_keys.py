@@ -19,6 +19,7 @@ _GUARDED = {
     keys.EVAL_UNIVERSE,
     keys.EVAL_EMBODIMENT,
     keys.EVAL_TIMEOUT,
+    keys.EVAL_EPISODE_LENGTH,
     keys.EVAL_SEED,
     keys.EVAL_TRIAL_INDEX,
     keys.EVAL_TRIAL_COUNT,

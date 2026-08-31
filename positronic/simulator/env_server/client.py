@@ -1,4 +1,4 @@
-"""Synchronous client for the env server: the lockstep ``reset``/``step``/``close`` round-trips.
+"""Synchronous client for the env server: the lockstep ``tasks``/``reset``/``step``/``close`` round-trips.
 
 Positronic-free (``websockets`` + the wire codec). ``RemoteEnvControlSystem`` wraps this as a pimm
 control system; tests use it directly to compare a socket rollout against an in-process one.
@@ -22,7 +22,7 @@ _CLOSE_ACK_TIMEOUT = 5.0
 
 
 class EnvConnection:
-    """One websocket to an ``EnvServer``, opened with retry. ``reset``/``step`` block on the round-trip.
+    """One websocket to an ``EnvServer``, opened with retry. Every command blocks on the round-trip.
 
     There is no handshake: the first ``reset`` constructs the env server-side and returns
     ``{'obs', 'meta', 'control_dt'}``.
@@ -45,6 +45,9 @@ class EnvConnection:
                     raise type(e)(f'{e} (connecting to {host}:{port})') from e
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 5.0)
+
+    def tasks(self, spec: Any) -> list[dict[str, Any]]:
+        return self._request({'cmd': 'tasks', 'spec': spec})['tasks']
 
     def reset(self, token: Any) -> dict[str, Any]:
         return self._request({'cmd': 'reset', 'token': token})

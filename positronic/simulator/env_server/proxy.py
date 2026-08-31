@@ -57,6 +57,35 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         assert self._meta is not None, 'meta read before the first reset'
         return self._meta
 
+    def _connect(self) -> EnvConnection:
+        """The connection to the env server, started and opened on the first call.
+
+        Deferred so positronic can wire the World before the subprocess spawns; whichever of ``tasks`` and
+        ``reset`` runs first starts the server. The connection closes before the server (registered last),
+        so a rollout never races the server's teardown.
+        """
+        if self._conn is None:
+            host, port = self._cleanup.enter_context(self._serve)
+            self._conn = EnvConnection(host, port)
+            self._cleanup.callback(self._conn.close)
+        return self._conn
+
+    def tasks(self, selection: Any) -> list[dict[str, Any]]:
+        """The tasks the env has for ``selection``, as the trial params an eval builds its sweep from."""
+        try:
+            records = self._connect().tasks(self._adapter.task_spec(selection))
+            params = self._adapter.task_params(records)
+            if not params:
+                # A sweep of no trials writes nothing and ends at once, which reads as a run that succeeded.
+                raise ValueError(f'the env has no task for {selection!r}')
+            return params
+        except BaseException:
+            # An eval lists its tasks on the first turn of the world, and the scheduler enters ``run`` — the
+            # only other place that closes the server — later in that same turn. So a listing that raises
+            # stops the server itself; nothing else can.
+            self._cleanup.close()
+            raise
+
     def reset(self, params: dict[str, Any]) -> None:
         """Re-randomize the env from the trial's params and publish the scene it draws.
 
@@ -64,16 +93,10 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         model, a full observation payload and a non-terminal ``done``. Stale commands queued while inactive
         are dropped so the first step doesn't apply them.
         """
-        if self._conn is None:
-            # Start the server and connect on the first reset, not at construction, so positronic can wire the
-            # World before the subprocess spawns. The connection closes before the server (registered last), so a
-            # rollout never races the server's teardown.
-            host, port = self._cleanup.enter_context(self._serve)
-            self._conn = EnvConnection(host, port)
-            self._cleanup.callback(self._conn.close)
+        conn = self._connect()
         for _, receiver in self.commands.items():
             receiver.read()
-        self._frame = self._conn.reset(self._adapter.reset_token(params))
+        self._frame = conn.reset(self._adapter.reset_token(params))
         self._meta = self._frame['meta']
         self._active = True
         self.robot_meta.emit(self._frame['robot_meta'])
@@ -107,7 +130,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                         with telemetry.span(telemetry_keys.SPAN_MATERIALIZE):
                             self._emit_payload(self._frame['obs'])
         finally:
-            # Closes the connection then the server, in that order (reverse of acquisition); a no-op if no reset
+            # Closes the connection then the server, in that order (reverse of acquisition); a no-op if nothing
             # ever connected.
             self._cleanup.close()
 

@@ -16,16 +16,16 @@ def placeholder():
     )
 
 
-def number_trials(task: Task, params: list[dict]) -> list[Task]:
-    """One copy of ``task`` per entry in ``params``: its scene prepare is asked with them, and its episode
-    records them beside the trial's place in the sweep."""
+def number_trials(trials: list[tuple[Task, dict]]) -> list[Task]:
+    """One trial per ``(task, params)`` pair: each task's scene prepare is asked with its own params, and its
+    episode records them beside the trial's place in the whole sweep."""
     return [
         replace(
             task,
-            prepare_args={**task.prepare_args, keys.SCENE: p},
-            meta={**task.meta, **p, keys.EVAL_TRIAL_INDEX: i, keys.EVAL_TRIAL_COUNT: len(params)},
+            prepare_args={**task.prepare_args, keys.SCENE: params},
+            meta={**task.meta, **params, keys.EVAL_TRIAL_INDEX: i, keys.EVAL_TRIAL_COUNT: len(trials)},
         )
-        for i, p in enumerate(params)
+        for i, (task, params) in enumerate(trials)
     ]
 
 
@@ -36,11 +36,8 @@ def build_tasks(task: Task, seed: int | None, trial_count: int, scenes: list[dic
     ``None`` sweeps the seed alone (an eval with no scene axis). ``seed`` ``None`` draws an independent
     random seed per trial; an int runs ``seed .. seed + trial_count - 1`` for every scene.
     """
-    return number_trials(
-        task,
-        [
-            {**scene, keys.EVAL_SEED: seed + s if seed is not None else random.randrange(2**31)}
-            for scene in (scenes if scenes is not None else [{}])
-            for s in range(trial_count)
-        ],
-    )
+    return number_trials([
+        (task, {**scene, keys.EVAL_SEED: seed + s if seed is not None else random.randrange(2**31)})
+        for scene in (scenes if scenes is not None else [{}])
+        for s in range(trial_count)
+    ])
