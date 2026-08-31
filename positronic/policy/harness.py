@@ -315,6 +315,13 @@ class Harness(pimm.ControlSystem):
         # The episode span opens first, so the prepare and the rollout's other phase spans parent to it.
         self._telemetry.begin(self._task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
+            # An empty ask answers at once, so the episode would open on a rig that no device moved.
+            if self.prepare and not self._task.prepare_args:
+                rig = self._embodiment.descriptor or 'this rig'
+                raise ValueError(
+                    f'The trial readies nothing on {rig}, which readies {sorted(self.prepare)}; '
+                    'name what each one gets in prepare_args'
+                )
             yield from self._ready(should_stop, self._task.prepare_args)
         budget = self._task.timeout_sec
         self._set_deadline(clock.now_ns() + round(budget * 1e9) if budget is not None else None)
