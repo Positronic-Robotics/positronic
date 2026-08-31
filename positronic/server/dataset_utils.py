@@ -339,9 +339,7 @@ def _encode_frames_as_video(entity_path: str, sig) -> None:
             rr.log(entity_path, rr.VideoStream.from_fields(sample=bytes(packet)))
 
 
-# Measured on a 191 s 1280x720 PhAIL episode: `veryfast` beat the default preset on both axes,
-# 3.07 MB in 12.9 s against 3.74 MB in 18.7 s, because B-frames are off anyway. `ultrafast` is
-# 9.05 MB.
+# `veryfast` beats the default preset on both size and time here, measured; B-frames are off anyway.
 _DOWNSCALE_OPTIONS = {'crf': '28', 'preset': 'veryfast'}
 
 
@@ -616,8 +614,7 @@ def _log_pose_signals(
         yield from drainer.drain()
 
 
-# An .rrd is a viewer artifact, not the data release — the dataset behind it keeps every sample and
-# the source video. So it ships a plot-legible rate and a screen-sized video by default.
+# The caps shape a viewer artifact only: the dataset behind it keeps every sample and the source video.
 DEFAULT_MAX_HZ = 30.0
 DEFAULT_MAX_RESOLUTION = 640
 
