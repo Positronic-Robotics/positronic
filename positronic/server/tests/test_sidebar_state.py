@@ -55,11 +55,8 @@ def load_sidebar_state(stored: str | None) -> dict:
     return json.loads(result.stdout)
 
 
-# --- a value the browser cannot use must not disable the sidebar ------------------------------
-# Each stored value below is unusable, either as JSON or as a width. `loadSidebarState` returns a
-# usable state rather than raising, and the width it returns is a real number: a `style.width` of
-# "NaNpx" is invalid CSS, so the browser drops it and the sidebar keeps the 0px width from the
-# stylesheet.
+# `style.width = "NaNpx"` is invalid CSS, so the browser drops the declaration and the sidebar
+# keeps the stylesheet's 0px. A width that is not a number therefore closes the sidebar for good.
 
 
 @pytest.mark.parametrize(
