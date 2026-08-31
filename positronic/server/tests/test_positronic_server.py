@@ -9,8 +9,6 @@ from cryptography import x509
 from cryptography.x509.oid import NameOID
 
 from positronic.server.positronic_server import (
-    _MAX_HZ_KEY,
-    _MAX_RESOLUTION_KEY,
     _access_url,
     _generate_self_signed_cert,
     _get_rrd_cache_path,
@@ -144,9 +142,7 @@ def rrd_cache(tmp_path, monkeypatch):
     monkeypatch.setitem(app_state, 'root', str(tmp_path))
 
     def path_under(max_hz: float, max_resolution: int) -> str:
-        monkeypatch.setitem(app_state, _MAX_HZ_KEY, max_hz)
-        monkeypatch.setitem(app_state, _MAX_RESOLUTION_KEY, max_resolution)
-        return _get_rrd_cache_path(0)
+        return _get_rrd_cache_path(0, max_hz, max_resolution)
 
     return path_under
 
