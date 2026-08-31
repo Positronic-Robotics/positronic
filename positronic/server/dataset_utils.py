@@ -312,23 +312,36 @@ class _BinaryStreamDrainer:
             self._buffer.clear()
 
 
-def _encode_frames_as_video(entity_path: str, sig) -> None:
-    """Encode raw image frames into an H.265 video stream via pyav."""
+def _size_capped_to(width: int, height: int, max_resolution: int) -> tuple[int, int]:
+    """``width`` and ``height`` scaled so the long side fits ``max_resolution``, unchanged if it does."""
+    long_side = max(width, height)
+    if long_side <= max_resolution:
+        return width, height
+    scale = max_resolution / long_side
+    # 4:2:0 chroma needs even dimensions.
+    return max(2, int(width * scale) // 2 * 2), max(2, int(height * scale) // 2 * 2)
+
+
+def _encode_frames_as_video(entity_path: str, sig, max_resolution: int) -> None:
+    """Encode raw image frames into an H.265 video stream via pyav, with the long side capped."""
     codec = rr.VideoCodec.H265
     container = av.open('/dev/null', 'w', format='hevc')
 
     first_frame = np.asarray(sig[0][0])
     h, w = first_frame.shape[:2]
+    width, height = _size_capped_to(w, h, max_resolution)
     stream = container.add_stream('libx265', rate=30)
     assert isinstance(stream, av.video.stream.VideoStream)
-    stream.width = w
-    stream.height = h
+    stream.width = width
+    stream.height = height
     stream.max_b_frames = 0
 
     rr.log(entity_path, rr.VideoStream(codec=codec), static=True)
 
     for val, ts in sig:
         frame = av.VideoFrame.from_ndarray(np.asarray(val), format='rgb24')
+        if (width, height) != (w, h):
+            frame = frame.reformat(width=width, height=height)
         for packet in stream.encode(frame):
             if packet.pts is None:
                 continue
@@ -351,14 +364,10 @@ def _mp4_downscaled_to(src: Path, max_resolution: int) -> bytes:
     """
     with av.open(str(src)) as inp:
         in_stream = inp.streams.video[0]
-        long_side = max(in_stream.codec_context.width, in_stream.codec_context.height)
-        if long_side <= max_resolution:
+        source = (in_stream.codec_context.width, in_stream.codec_context.height)
+        width, height = _size_capped_to(*source, max_resolution)
+        if (width, height) == source:
             return src.read_bytes()
-
-        scale = max_resolution / long_side
-        # H.264 4:2:0 chroma needs even dimensions.
-        width = max(2, int(in_stream.codec_context.width * scale) // 2 * 2)
-        height = max(2, int(in_stream.codec_context.height * scale) // 2 * 2)
 
         buffer = io.BytesIO()
         with av.open(buffer, 'w', format='mp4') as out:
@@ -399,7 +408,7 @@ def _log_video_signals(
                 columns=rr.VideoFrameReference.columns_nanos(frame_pts_ns),
             )
         else:
-            _encode_frames_as_video(name, sig)
+            _encode_frames_as_video(name, sig, max_resolution)
         yield from drainer.drain()
 
 
@@ -425,7 +434,7 @@ def _decimation_step(ts_arr: np.ndarray, max_hz: float) -> int:
     if duration_ns <= 0:
         return 1
     source_hz = (len(ts_arr) - 1) * 1e9 / duration_ns
-    # Round the stride UP, or a rate that is not a whole multiple of the cap thins to above it.
+    # A ceiling keeps a rate that is not a whole multiple of the cap at or below it.
     return max(1, math.ceil(source_hz / max_hz * (1 - _RATE_SLACK)))
 
 

@@ -14,6 +14,7 @@ from positronic.server.dataset_utils import (
     _collect_signal_groups,
     _decimation_step,
     _mp4_downscaled_to,
+    _size_capped_to,
     _unplotted_notice,
     _write_urdf_to_dir,
 )
@@ -147,6 +148,17 @@ def _frame_times(data: bytes) -> list[float]:
         time_base = stream.time_base
         assert time_base is not None
         return [float(frame.pts * time_base) for frame in container.decode(stream) if frame.pts is not None]
+
+
+def test_a_frame_size_within_the_cap_is_left_alone():
+    assert _size_capped_to(320, 240, 640) == (320, 240)
+    assert _size_capped_to(640, 480, 640) == (640, 480)
+
+
+def test_a_frame_size_above_the_cap_fits_it_on_even_sides():
+    assert _size_capped_to(1280, 720, 640) == (640, 360)
+    assert _size_capped_to(720, 1280, 640) == (360, 640)
+    assert _size_capped_to(1000, 999, 640) == (640, 638)
 
 
 def test_a_video_within_the_cap_is_embedded_as_recorded(tmp_path):
