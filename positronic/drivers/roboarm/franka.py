@@ -238,9 +238,9 @@ class _Arm(DriverRun[command.CommandType]):
         Solved here so that a malformed command raises before anything changes; ``command_target``
         is what applies the result.
 
-        FOOTGUN: width and finiteness are the whole of the check. ``_ik`` holds a Cartesian command
-        inside the joint position limits, and no joint-space command is bounded at all, so a policy
-        walks a joint out of its range one legal step at a time (internal#887).
+        Width and finiteness are the whole of the check. ``_ik`` holds a Cartesian command inside
+        the joint position limits; nothing bounds a joint-space one, so a policy can walk a joint
+        out of its range one legal step at a time.
         """
         match cmd:
             case command.CartesianPosition(pose):
