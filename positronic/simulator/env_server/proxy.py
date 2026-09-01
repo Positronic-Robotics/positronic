@@ -70,14 +70,13 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
             self._cleanup.callback(self._conn.close)
         return self._conn
 
-    def tasks(self, selection: Any) -> list[dict[str, Any]]:
-        """The tasks the env has for ``selection``, as the trial params an eval builds its sweep from."""
+    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
+        """The tasks the env has for ``spec``, as the trial params an eval builds its sweep from."""
         try:
-            records = self._connect().tasks(self._adapter.task_spec(selection))
-            params = self._adapter.task_params(records)
+            params = self._adapter.task_params(self._connect().tasks(spec))
             if not params:
                 # A sweep of no trials writes nothing and ends at once, which reads as a run that succeeded.
-                raise ValueError(f'the env has no task for {selection!r}')
+                raise ValueError(f'the env has no task for {spec!r}')
             return params
         except BaseException:
             # An eval lists its tasks on the first turn of the world, and the scheduler enters ``run`` — the

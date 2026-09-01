@@ -175,26 +175,28 @@ class RobolabEnv(EnvProtocol):
 
         return timed
 
-    def tasks(self, spec: Any) -> list[dict[str, Any]]:
-        """The tasks ``spec`` selects: ``'all'``, one of RoboLab's categories, a task name, or a list of names.
+    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
+        """The tasks ``spec`` selects: ``task`` is one of RoboLab's categories, a task name, or a list of
+        names. Without a ``task`` the whole benchmark runs.
 
-        A record names its task as the reset token does, and reports the seconds RoboLab gives its episode.
+        A record names its task as the reset token does, which is also the id, and reports the seconds
+        RoboLab gives its episode.
         """
         benchmark = _benchmark_tasks()
         categories = set(robolab.constants.BENCHMARK_TASK_CATEGORIES.values())
-        if not isinstance(spec, str):
-            names = list(spec)
-        elif spec == 'all':
-            names = list(benchmark)
-        elif spec in categories:
-            names = [name for name, task in benchmark.items() if spec in task['categories']]
-        else:
-            names = [spec]
+        match spec.get('task'):
+            case None:  # no task narrows nothing, so the whole benchmark runs
+                names = list(benchmark)
+            case str() as category if category in categories:
+                names = [name for name, task in benchmark.items() if category in task['categories']]
+            case str() as name:
+                names = [name]
+            case selection:
+                names = list(selection)
         unknown = [name for name in names if name not in benchmark]
         if unknown:
             raise ValueError(
-                f'RoboLab does not hold {unknown}; a spec is a task name, a list of names, '
-                f'one of {sorted(categories)}, or "all"'
+                f'RoboLab does not hold {unknown}; a task is a name, a list of names, or one of {sorted(categories)}'
             )
         return [{'name': name, 'episode_length_s': benchmark[name]['episode_length_s']} for name in names]
 

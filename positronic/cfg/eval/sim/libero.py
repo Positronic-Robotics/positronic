@@ -1,7 +1,7 @@
 import configuronic as cfn
 
 from positronic import keys
-from positronic.cfg.eval import build_tasks
+from positronic.cfg.eval import build_tasks, spec
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
@@ -66,7 +66,7 @@ def _libero_eval(
                 keys.EVAL_CONTROL_MODE: control_mode,
                 keys.EVAL_SETTLE_STEPS: settle_steps,
             }
-            for params in proxy.tasks({keys.EVAL_SUITE: suite, keys.EVAL_TASK_ID: task_id})
+            for params in proxy.tasks(spec(suite=suite, task_id=task_id))
         ]
         return build_tasks(task, seed, trial_count, scenes)
 

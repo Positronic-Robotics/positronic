@@ -45,14 +45,16 @@ def test_the_env_lists_the_tasks_a_spec_selects():
     with serve_libero() as (host, port):
         conn = EnvConnection(host, port)
         try:
-            records = conn.tasks({'suite': 'libero_spatial', 'task_id': None})
+            records = conn.tasks({'suite': 'libero_spatial'})
             assert [r['task_id'] for r in records] == list(range(len(records)))
             assert {r['suite'] for r in records} == {'libero_spatial'}
+            assert all(r['name'] for r in records), 'every record carries the id the episode records'
 
             pinned = conn.tasks({'suite': 'libero_spatial', 'task_id': 3})
-            assert pinned == [{'suite': 'libero_spatial', 'task_id': 3}]
+            assert [(r['suite'], r['task_id']) for r in pinned] == [('libero_spatial', 3)]
+            assert pinned[0]['name'] == records[3]['name'], 'the id does not move when the selection narrows'
 
-            pair = conn.tasks({'suite': ['libero_spatial', 'libero_object'], 'task_id': None})
+            pair = conn.tasks({'suite': ['libero_spatial', 'libero_object']})
             assert {r['suite'] for r in pair} == {'libero_spatial', 'libero_object'}
 
             # A task nobody has: the server raises and the client re-raises, so a wrong selection stops the run.

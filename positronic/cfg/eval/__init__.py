@@ -1,5 +1,6 @@
 import random
 from dataclasses import replace
+from typing import Any
 
 import configuronic as cfn
 
@@ -14,6 +15,15 @@ def placeholder():
         '--eval is required: a config to run here (--eval=.sim.positronic.stack_cubes), '
         'or the name of one the platform offers (--eval=robolab.public_subset, with --policy-image)'
     )
+
+
+def spec(**selection) -> dict[str, Any]:
+    """The selection arguments an eval binds, as the spec its env resolves.
+
+    An argument the eval leaves unbound is ``None``, and it is absent from the spec, so the env does not
+    narrow that axis.
+    """
+    return {name: value for name, value in selection.items() if value is not None}
 
 
 def number_trials(trials: list[tuple[Task, dict]]) -> list[Task]:

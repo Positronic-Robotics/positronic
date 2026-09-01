@@ -44,11 +44,14 @@ class EnvProtocol(ABC):
     """
 
     @abstractmethod
-    def tasks(self, spec: Any) -> list[dict[str, Any]]:
-        """The benchmark's own task records for an opaque spec (a task name, a category, a suite, ``'all'``).
+    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
+        """The benchmark's task records for a spec: the selection arguments an eval binds.
 
-        Each record is plain data in the benchmark's own vocabulary — the task's name, the seconds it gives an
-        episode — which the client's ``EnvAdapter`` maps into trial params. An unknown spec raises.
+        Each key narrows one axis, and an absent key does not narrow that axis. The keys are the eval
+        config's own parameter names, so a rename there breaks this method. An unknown value raises.
+
+        Each record is plain data in the benchmark's own vocabulary, which the client's ``EnvAdapter`` maps
+        into trial params. Every record carries ``name``: the id of one task, the same on every run.
         """
 
     @abstractmethod

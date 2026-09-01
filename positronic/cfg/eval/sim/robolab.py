@@ -1,7 +1,7 @@
 import configuronic as cfn
 
 from positronic import keys
-from positronic.cfg.eval import number_trials
+from positronic.cfg.eval import number_trials, spec
 from positronic.eval import Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.robolab.adapter import RobolabAdapter
@@ -24,7 +24,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
     ``procedural`` — and one task can sit on several axes, so the three category sweeps overlap.
 
     ``_robolab_eval`` leaves ``task`` unbound; each named config below is a ``.override`` binding it — to a
-    single task name, a category, or ``all``. A list of names also works. The env resolves that selection when
+    single task name, a category, or ``None`` for every task. A list of names also works. The env resolves it when
     the run starts, so a task name RoboLab does not hold stops the run after the server boots. The instruction
     is never pinned: the task reads its language live from the env, which reports the resolved instruction in
     every reset's meta.
@@ -48,7 +48,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
         # RoboLab truncates an episode at its own budget, so the harness deadline sits above it and the env's
         # verdict is what ends a trial. ``--eval.timeout`` replaces it with one deadline for the whole sweep.
         trials = []
-        for params in proxy.tasks(task):
+        for params in proxy.tasks(spec(task=task)):
             deadline = timeout if timeout is not None else params[keys.EVAL_EPISODE_LENGTH] + 10.0
             trial = Task(instruction_source=instruction, timeout_sec=deadline)
             trials += [(trial, {**params, keys.EVAL_INSTRUCTION_TYPE: instruction_type}) for _ in range(trial_count)]
@@ -59,8 +59,8 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
     )
 
 
-# Every task the benchmark holds, in one run.
-benchmark = _robolab_eval.override(task='all')
+# Every task the benchmark holds, in one run: a spec that names no task narrows nothing.
+benchmark = _robolab_eval.override(task=None)
 
 # One category each — the three axes RoboLab reports scores on.
 visual = _robolab_eval.override(task='visual')

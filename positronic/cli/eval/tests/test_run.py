@@ -8,7 +8,7 @@ import pytest
 
 import pimm
 from positronic import keys, telemetry, telemetry_keys
-from positronic.cfg.eval import number_trials
+from positronic.cfg.eval import number_trials, spec
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, timed_pass
 from positronic.eval import Embodiment, Eval, Task
 from positronic.policy import Policy, Session
@@ -86,6 +86,13 @@ def test_the_driver_asks_for_its_tasks_one_at_a_time():
         drive_scheduler(world.start([driver, stub]), steps=200)
 
     assert stub.asked == tasks
+
+
+def test_a_spec_carries_only_what_the_eval_binds():
+    """An eval leaves an axis unbound to run every value of it, and the env reads an absent key as that."""
+    assert spec(suite='libero_spatial', task_id=None) == {'suite': 'libero_spatial'}
+    assert spec(task_id=0) == {'task_id': 0}, 'zero is a bound task, not an unbound axis'
+    assert spec(task=None) == {}
 
 
 def test_a_sweep_numbers_its_trials_across_every_task():

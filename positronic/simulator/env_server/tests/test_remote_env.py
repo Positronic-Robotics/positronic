@@ -112,9 +112,10 @@ def test_the_env_answers_its_own_task_list(env_server):
     know raises server-side and reaches the client as an error."""
     host, port = env_server
     conn = EnvConnection(host, port)
-    assert conn.tasks(SCENE_NAME) == [{'name': SCENE_NAME}]
+    assert conn.tasks({}) == [{'name': SCENE_NAME}]
+    assert conn.tasks({'task': SCENE_NAME}) == [{'name': SCENE_NAME}]
     with pytest.raises(RuntimeError, match='nosuchscene'):
-        conn.tasks('nosuchscene')
+        conn.tasks({'task': 'nosuchscene'})
     conn.close()
 
 
@@ -268,11 +269,11 @@ class _CountdownEnv(EnvProtocol):
         self._steps = 0
 
     def tasks(self, spec):
-        if isinstance(spec, list):  # a selection of names, which names nothing when it is empty
-            return [{'name': name} for name in spec]
-        if spec != _COUNTDOWN:
-            raise ValueError(f'_CountdownEnv serves {_COUNTDOWN!r}, not {spec!r}')
-        return [{'name': _COUNTDOWN}]
+        selection = spec.get('task', _COUNTDOWN)
+        names = [selection] if isinstance(selection, str) else list(selection)
+        if any(name != _COUNTDOWN for name in names):
+            raise ValueError(f'_CountdownEnv serves {_COUNTDOWN!r}, not {names}')
+        return [{'name': name} for name in names]
 
     def reset(self, token):
         self._steps = 0
@@ -323,7 +324,7 @@ def test_the_proxy_connects_on_a_tasks_call_before_any_reset():
         obs_rx = world.pair(proxy.observations['value'])
         world.start([proxy])
 
-        assert proxy.tasks(_COUNTDOWN) == [{keys.EVAL_TASK: _COUNTDOWN}]
+        assert proxy.tasks({'task': _COUNTDOWN}) == [{keys.EVAL_TASK: _COUNTDOWN}]
 
         proxy.reset({keys.EVAL_SEED: 0})
         np.testing.assert_array_equal(obs_rx.value, np.zeros(7))
@@ -336,7 +337,7 @@ def test_a_selection_naming_no_task_is_refused():
     with serve_env(_CountdownEnv()) as (host, port):
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
         with pytest.raises(ValueError, match='no task'):
-            proxy.tasks([])
+            proxy.tasks({'task': []})
 
 
 @pytest.mark.timeout(60.0)
@@ -356,7 +357,7 @@ def test_a_refused_listing_stops_the_server_it_started():
 
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), serve())
         with pytest.raises(RuntimeError, match='nosuchtask'):
-            proxy.tasks('nosuchtask')
+            proxy.tasks({'task': 'nosuchtask'})
         assert stopped, 'the server stayed up with nobody left to stop it'
 
 

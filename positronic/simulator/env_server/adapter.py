@@ -20,14 +20,6 @@ from positronic.drivers.roboarm import command as roboarm_command
 class EnvAdapter(ABC):
     """The mappings between the canonical embodiment contract and an env's raw wire payloads."""
 
-    def task_spec(self, selection: Any) -> Any:
-        """An eval's selection -> the spec the env resolves it against.
-
-        A benchmark selected in its own vocabulary — a task name, a category — needs no mapping and gets
-        this one. A benchmark naming a task on more than one axis maps the eval's keys onto its own.
-        """
-        return selection
-
     @abstractmethod
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """The env's own task records -> one trial params dict per task; the mirror of ``reset_token``.

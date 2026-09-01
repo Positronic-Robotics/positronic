@@ -52,7 +52,7 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
 
     trials = list(ev.tasks())
 
-    assert asked == ['visual']
+    assert asked == [{'task': 'visual'}]
     scenes = [trial.prepare_args[keys.SCENE] for trial in trials]
     assert [scene[keys.EVAL_TASK] for scene in scenes] == ['BananaInBowlTask'] * 2 + ['CleanUpToysTask'] * 2
     assert [trial.meta[keys.EVAL_TRIAL_INDEX] for trial in trials] == [0, 1, 2, 3]
@@ -61,6 +61,13 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
         keys.EVAL_EPISODE_LENGTH: 50.0,
         keys.EVAL_INSTRUCTION_TYPE: 'specific',
     }
+
+
+def test_a_spec_that_names_no_task_narrows_nothing(asked):
+    """The whole benchmark binds no task, so the spec carries no key and the env selects every task."""
+    list(robolab_cfg.benchmark.instantiate().tasks())
+
+    assert asked == [{}]
 
 
 def test_each_task_runs_under_the_budget_the_benchmark_gives_it(asked):
@@ -83,4 +90,4 @@ def test_the_spec_reaches_the_env_unmapped(asked):
     list(robolab_cfg.procedural.instantiate().tasks())
     list(robolab_cfg.rubiks_cube_and_banana.instantiate().tasks())
 
-    assert asked == ['procedural', 'RubiksCubeAndBananaTask']
+    assert asked == [{'task': 'procedural'}, {'task': 'RubiksCubeAndBananaTask'}]

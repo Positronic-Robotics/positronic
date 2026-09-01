@@ -100,10 +100,12 @@ class MujocoEnv(EnvProtocol):
             'sim_state': dict(self._sim_state_recv.read().data),
         }
 
-    def tasks(self, spec: Any) -> list[dict[str, Any]]:
-        if spec != SCENE_NAME:
-            raise ValueError(f'MujocoEnv serves {SCENE_NAME!r}, not {spec!r}')
-        return [{'name': SCENE_NAME}]
+    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
+        selection = spec.get('task', SCENE_NAME)
+        names = [selection] if isinstance(selection, str) else list(selection)
+        if any(name != SCENE_NAME for name in names):
+            raise ValueError(f'MujocoEnv serves {SCENE_NAME!r}, not {names}')
+        return [{'name': name} for name in names]
 
     def reset(self, token: Any) -> dict[str, Any]:
         # Close the prior generator before rebuilding the scene, so its ``run`` cleanup tears down the old

@@ -114,25 +114,25 @@ class LiberoEnv(EnvProtocol):
         return self._env.env.robots[0].controller
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
-        """The tasks ``spec`` selects: ``suite`` is one name or a list of them, ``task_id`` one id or ``None``.
+        """The tasks ``spec`` selects: ``suite`` is one name or a list of them, ``task_id`` narrows to one.
 
-        A record names its task as the reset token does, by suite and index. Reading the registry builds no
+        A record names its task as the reset token does, by suite and index, and it carries the bddl name as
+        the id. That name holds across task orders, which the index does not. Reading the registry builds no
         env, so the task the server holds stays.
         """
         suites = [spec['suite']] if isinstance(spec['suite'], str) else spec['suite']
-        task_id = spec['task_id']
         registry = benchmark.get_benchmark_dict()
         records = []
         for suite_name in suites:
             if suite_name not in registry:
                 raise ValueError(f'LIBERO holds the suites {sorted(registry)}, not {suite_name!r}')
-            num_tasks = registry[suite_name]().get_num_tasks()
-            if task_id is None:
-                records += [{'suite': suite_name, 'task_id': i} for i in range(num_tasks)]
-            elif 0 <= task_id < num_tasks:
-                records.append({'suite': suite_name, 'task_id': task_id})
-            else:
-                raise ValueError(f'suite {suite_name!r} holds {num_tasks} tasks, so task_id {task_id} does not exist')
+            suite = registry[suite_name]()
+            num_tasks = suite.get_num_tasks()
+            ids = [spec['task_id']] if 'task_id' in spec else range(num_tasks)
+            for task_id in ids:
+                if not 0 <= task_id < num_tasks:
+                    raise ValueError(f'suite {suite_name!r} holds {num_tasks} tasks, so task_id {task_id} is none')
+                records.append({'suite': suite_name, 'task_id': task_id, 'name': suite.get_task(task_id).name})
         return records
 
     def _build(self, suite_name: str, task_id: int, camera_resolution: int, control_mode: str) -> None:

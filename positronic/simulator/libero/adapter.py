@@ -21,15 +21,12 @@ class LiberoAdapter(WireCommandAdapter):
         super().__init__()
         self._camera_dict = camera_dict  # logical observation name -> the LIBERO obs image key
 
-    def task_spec(self, selection: dict[str, Any]) -> Any:
-        # LIBERO names a task on two axes, so an eval selects on both: one suite or a list of them, and one
-        # task id or ``None`` for every task of each suite.
-        return {'suite': selection[keys.EVAL_SUITE], 'task_id': selection[keys.EVAL_TASK_ID]}
-
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # The env names the task and the eval config names how to render and control it, so a record maps to
         # the scene keys that identify a task; the config's scene spec fills the rest of the reset token.
-        return [{keys.EVAL_SUITE: r['suite'], keys.EVAL_TASK_ID: r['task_id']} for r in records]
+        return [
+            {keys.EVAL_TASK: r['name'], keys.EVAL_SUITE: r['suite'], keys.EVAL_TASK_ID: r['task_id']} for r in records
+        ]
 
     def _reset_token(self, params: dict[str, Any]) -> Any:
         # The whole scene spec rides the trial params: the server caches its env by ``(suite, task_id,

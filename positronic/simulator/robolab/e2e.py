@@ -23,6 +23,7 @@ import argparse
 import numpy as np
 
 from positronic import keys
+from positronic.cfg.eval import spec
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.robolab.adapter import RobolabAdapter
 from positronic.simulator.robolab.launcher import serve_robolab
@@ -71,10 +72,10 @@ def _check_task_list(conn: EnvConnection, task: str) -> None:
     import RoboLab, so this is the only gate on ``tasks``; the number of tasks is RoboLab's own and nothing
     here pins it."""
     adapter = RobolabAdapter({})
-    params = adapter.task_params(conn.tasks(adapter.task_spec(task)))
+    params = adapter.task_params(conn.tasks(spec(task=task)))
     assert [p[keys.EVAL_TASK] for p in params] == [task], f'{task} asked for, {params} answered'
     assert params[0][keys.EVAL_EPISODE_LENGTH] > 0, f'{task} reports no episode budget, so a trial has no deadline'
-    whole = adapter.task_params(conn.tasks('all'))
+    whole = adapter.task_params(conn.tasks({}))
     assert task in {p[keys.EVAL_TASK] for p in whole}, f'{task} is missing from the whole benchmark'
 
 
