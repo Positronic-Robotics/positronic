@@ -81,11 +81,9 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
 
 
 # Rows: (link, parent, joint | None, origin xyz, origin rpy, axis | None, mesh | None, visual xyz | None).
-# A row with an axis is a revolute joint whose axis sign sets its closing direction, so one positive
-# ``grip`` drives the 4-bar: driver and spring_link swing the finger in (+X), follower counter-rotates
-# (-X) to keep the pad parallel. FOOTGUN: the coupler is fixed, because the real linkage pins it to the
-# follower and a URDF tree cannot close that loop — give it an axis and the outer link hangs 19 mm out
-# at full grip. Rows without an axis are fixed; rows without a mesh are pure frames, carrying no visual.
+# An axis makes a revolute joint whose sign sets its closing direction; a row without one is fixed, and
+# a row without a mesh is a pure frame. FOOTGUN: the coupler is fixed. Give it an axis and the outer
+# link hangs 19 mm out at full grip.
 _ROBOTIQ_2F85 = [
     ('gripper_base_mount', FLANGE_LINK, None, '0 0 0.007', _2F85_MOUNT_RPY, None, 'base_mount.stl', None),
     ('gripper_base', 'gripper_base_mount', None, '0 0 0.0038', '0 0 -1.5707963268', None, 'base.stl', None),
