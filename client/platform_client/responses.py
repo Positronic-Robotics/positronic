@@ -30,7 +30,7 @@ PublicStatus = Annotated[Slugged[SubmissionStatus], AfterValidator(_public)]
 
 
 class Scores(BaseModel):
-    """A finished run's published score. `primary` holds the value a board ranks on."""
+    """A finished run's published score. `primary` is its value under the eval's primary metric."""
 
     primary: float | None = None
 
