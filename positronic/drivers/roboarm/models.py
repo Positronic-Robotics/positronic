@@ -149,7 +149,7 @@ def _bundled_robotiq_2f85() -> dict:
     return {
         'subtree': subtree,
         'meshes': {f.name: f.read_bytes() for f in sorted(mesh_dir.glob('*.stl'))},
-        'gripper': {'signal': keys.GRIP, 'joints': _2F85_GRIP_ACTUATED_JOINTS, 'travel': 0.8},
+        keys.GRIPPER: {'signal': keys.GRIP, 'joints': _2F85_GRIP_ACTUATED_JOINTS, 'travel': 0.8},
     }
 
 
@@ -168,7 +168,7 @@ def attach_robotiq_2f85(arm_root: ET.Element, meshes: dict[str, bytes]) -> dict:
     gripper = _bundled_robotiq_2f85()
     arm_root.extend(ET.fromstring(f'<robot>{gripper["subtree"]}</robot>'))
     meshes.update(gripper['meshes'])
-    return gripper['gripper']
+    return gripper[keys.GRIPPER]
 
 
 @lru_cache(maxsize=1)
