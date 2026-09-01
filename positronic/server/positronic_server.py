@@ -497,17 +497,20 @@ async def api_episode_rrd(episode_id: int):
         return FileResponse(cache_path, media_type='application/octet-stream', filename=f'episode_{episode_id}.rrd')
 
     def _stream_and_cache():
-        success = False
+        # The rename publishes the cache, so a request arriving mid-generation reads a complete file.
+        fd, name = tempfile.mkstemp(dir=cache_path.parent, prefix=f'{cache_path.name}.', suffix='.partial')
+        partial = Path(name)
+        published = False
         try:
-            with cache_path.open('wb') as cache_file:
+            with os.fdopen(fd, 'wb') as cache_file:
                 for chunk in stream_episode_rrd(ds, episode_id, max_hz=max_hz, max_resolution=max_resolution):
                     cache_file.write(chunk)
                     yield chunk
-            success = True
+            os.replace(partial, cache_path)
+            published = True
         finally:
-            # A half-written file reads as complete on the next request, and gets served as one.
-            if not success:
-                cache_path.unlink(missing_ok=True)
+            if not published:
+                partial.unlink(missing_ok=True)
 
     return StreamingResponse(
         _stream_and_cache(),

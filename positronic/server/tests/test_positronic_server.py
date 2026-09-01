@@ -175,4 +175,6 @@ def test_a_stream_that_dies_partway_leaves_no_cached_rrd(rrd_cache, monkeypatch)
     with pytest.raises(RuntimeError):
         TestClient(app).get('/api/episode_rrd/0')
 
-    assert not rrd_cache(30.0, 640).exists()
+    cache_path = rrd_cache(30.0, 640)
+    assert not cache_path.exists()
+    assert list(cache_path.parent.iterdir()) == []
