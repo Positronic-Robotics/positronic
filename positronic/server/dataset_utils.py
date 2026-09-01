@@ -5,12 +5,12 @@ import logging
 import tempfile
 import warnings
 import xml.etree.ElementTree as ET
-from collections import defaultdict
-from collections.abc import Generator, Iterator
+from collections import defaultdict, deque
+from collections.abc import Generator, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import av
 import numpy as np
@@ -328,11 +328,19 @@ def _encode_frames_as_video(entity_path: str, sig, max_resolution: int) -> None:
     codec = rr.VideoCodec.H265
     container = av.open('/dev/null', 'w', format='hevc')
 
+    # The encoder buffers, so a packet emerges frames after the one it carries, and most of them
+    # emerge from the final flush. With max_b_frames = 0 it emerges in source order, which pairs them.
+    pending_times: deque[int] = deque()
+
+    def _log_encoded(packets: Iterable[av.Packet]) -> None:
+        for packet in packets:
+            set_timeline_time('time', pending_times.popleft())
+            rr.log(entity_path, rr.VideoStream.from_fields(sample=bytes(packet)))
+
     first_frame = np.asarray(sig[0][0])
     h, w = first_frame.shape[:2]
     width, height = _size_capped_to(w, h, max_resolution)
-    stream = container.add_stream('libx265', rate=30)
-    assert isinstance(stream, av.video.stream.VideoStream)
+    stream = cast(VideoStream, container.add_stream('libx265', rate=30))
     stream.width = width
     stream.height = height
     stream.max_b_frames = 0
@@ -343,15 +351,10 @@ def _encode_frames_as_video(entity_path: str, sig, max_resolution: int) -> None:
         frame = av.VideoFrame.from_ndarray(np.asarray(val), format='rgb24')
         if (width, height) != (w, h):
             frame = frame.reformat(width=width, height=height)
-        for packet in stream.encode(frame):
-            if packet.pts is None:
-                continue
-            set_timeline_time('time', ts)
-            rr.log(entity_path, rr.VideoStream.from_fields(sample=bytes(packet)))
+        pending_times.append(ts)
+        _log_encoded(stream.encode(frame))
 
-    for packet in stream.encode():
-        if packet.pts is not None:
-            rr.log(entity_path, rr.VideoStream.from_fields(sample=bytes(packet)))
+    _log_encoded(stream.encode())
 
 
 _DOWNSCALE_OPTIONS = {'crf': '28', 'preset': 'veryfast'}
@@ -470,7 +473,7 @@ def _log_numeric_signals(
         try:
             vals = np.asarray(sig.values(), dtype=np.float64)
         except (TypeError, ValueError):
-            # The view goes on: one unconvertible signal is worth less than the rest of the episode.
+            # Preserve the rest of the episode when one signal cannot be converted.
             logging.error(f'Signal {key!r} holds values that are not numeric: it is absent from the recording')
             continue
         if vals.ndim == 1:

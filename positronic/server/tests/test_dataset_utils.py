@@ -9,6 +9,7 @@ import pytest
 
 from positronic import keys
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
+from positronic.server import dataset_utils
 from positronic.server.dataset_utils import (
     _MAX_PLOTTED_WIDTH,
     _collect_signal_groups,
@@ -146,6 +147,29 @@ def test_a_signal_below_the_cap_keeps_every_sample():
     assert len(_thinned(ts, max_hz=0)) == len(ts)
     assert len(_decimation_indices(ts[:1], max_hz=30)) == 1
     assert len(_decimation_indices(np.array([], dtype='datetime64[ns]'), max_hz=30)) == 0
+
+
+class _RawFrameSignal:
+    def __init__(self, frames: list[np.ndarray], times: list[int]):
+        self._frames, self._times = frames, times
+
+    def __getitem__(self, index):
+        return self._frames[index], self._times[index]
+
+    def __iter__(self):
+        return iter(zip(self._frames, self._times, strict=True))
+
+
+def test_every_encoded_frame_keeps_its_own_episode_time(monkeypatch):
+    times = [i * 33_000_000 for i in range(12)]
+    frames = [np.full((64, 64, 3), i * 20 % 256, dtype=np.uint8) for i in range(12)]
+    logged: list[int] = []
+    monkeypatch.setattr(dataset_utils, 'set_timeline_time', lambda _timeline, ts: logged.append(ts))
+    monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
+
+    dataset_utils._encode_frames_as_video('/video', _RawFrameSignal(frames, times), max_resolution=640)
+
+    assert logged == times
 
 
 def _write_mp4(path: Path, width: int, height: int, frames: int) -> Path:
