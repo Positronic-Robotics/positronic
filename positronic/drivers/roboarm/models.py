@@ -5,6 +5,7 @@ real arm and the live franka driver."""
 import xml.etree.ElementTree as ET
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -30,12 +31,29 @@ DROID_EE_FRAME = geom.Transform3D(np.array([0.0, 0.0, -0.085225977]), geom.Rotat
 _2F85_MOUNT_RPY = '0 0 0.7853981634'
 
 
-def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
+class _Row(NamedTuple):
+    """One link, and the joint that attaches it to its parent.
+
+    ``axis`` names a revolute joint and its sign sets the closing direction; without one the joint is
+    fixed. ``mesh`` absent makes the link a pure frame, carrying no visual.
+    """
+
+    link: str
+    parent: str
+    joint: str | None
+    xyz: str
+    rpy: str
+    axis: str | None
+    mesh: str | None
+    visual_xyz: str | None
+
+
+def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_Row]:
     """One 2F-85 finger as URDF rows. ``sign`` mirrors the y-offsets and ``base_rpy`` (180deg Z on the
     left) mirrors the motion, so one positive ``grip`` closes both fingers. The follower rotates about
     an anchor offset from its body, carried as the follower mesh's visual origin."""
     return [
-        (
+        _Row(
             f'{side}_driver',
             'gripper_base',
             f'{side}_driver_joint',
@@ -45,17 +63,17 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
             'driver.stl',
             None,
         ),
-        (
+        _Row(
             f'{side}_coupler',
             f'{side}_driver',
             f'{side}_coupler_joint',
             '0 0.0315 -0.0041',
             '0 0 0',
-            '-1 0 0',
+            None,
             'coupler.stl',
             None,
         ),
-        (
+        _Row(
             f'{side}_spring_link',
             'gripper_base',
             f'{side}_spring_link_joint',
@@ -65,7 +83,7 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
             'spring_link.stl',
             None,
         ),
-        (
+        _Row(
             f'{side}_follower',
             f'{side}_spring_link',
             f'{side}_follower_joint',
@@ -75,49 +93,47 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
             'follower.stl',
             '0 0.018 -0.0065',
         ),
-        (f'{side}_pad', f'{side}_follower', None, '0 -0.0009 0.00702', '0 0 0', None, 'pad.stl', None),
-        (f'{side}_silicone_pad', f'{side}_pad', None, '0 0 0', '0 0 0', None, 'silicone_pad.stl', None),
+        _Row(f'{side}_pad', f'{side}_follower', None, '0 -0.0009 0.00702', '0 0 0', None, 'pad.stl', None),
+        _Row(f'{side}_silicone_pad', f'{side}_pad', None, '0 0 0', '0 0 0', None, 'silicone_pad.stl', None),
     ]
 
 
-# Rows: (link, parent, joint | None, origin xyz, origin rpy, axis | None, mesh | None, visual xyz | None).
-# A row with an axis is a revolute joint whose axis sign sets its closing direction, so one positive
-# ``grip`` drives the whole 4-bar: driver/spring_link swing the finger in (+X), coupler/follower
-# counter-rotate (-X) to keep the pad parallel. Rows without an axis are fixed; rows without a mesh are pure
-# frames, carrying no visual.
+# FOOTGUN: the coupler is fixed. Give it an axis and the outer link hangs 19 mm out at full grip.
 _ROBOTIQ_2F85 = [
-    ('gripper_base_mount', FLANGE_LINK, None, '0 0 0.007', _2F85_MOUNT_RPY, None, 'base_mount.stl', None),
-    ('gripper_base', 'gripper_base_mount', None, '0 0 0.0038', '0 0 -1.5707963268', None, 'base.stl', None),
+    _Row('gripper_base_mount', FLANGE_LINK, None, '0 0 0.007', _2F85_MOUNT_RPY, None, 'base_mount.stl', None),
+    _Row('gripper_base', 'gripper_base_mount', None, '0 0 0.0038', '0 0 -1.5707963268', None, 'base.stl', None),
     *_2f85_finger('right', 1, '0 0 0'),
     *_2f85_finger('left', -1, '0 0 3.1415926536'),
     # RoboLab's ``eef_frame`` (``Robotiq_2F_85/base_link`` ∘ ``EEF_OFFSET_ROT``), measured off its DROID USD
     # ``franka_robotiq_2f_85_flattened.usd`` as 18.17mm along the flange Z and +90deg about it.
-    (DROID_EEF_LINK, FLANGE_LINK, None, '0 0 0.01817402261', '0 0 1.5707963268', None, None, None),
+    _Row(DROID_EEF_LINK, FLANGE_LINK, None, '0 0 0.01817402261', '0 0 1.5707963268', None, None, None),
 ]
-_ROBOTIQ_2F85_JOINTS = [row[2] for row in _ROBOTIQ_2F85 if row[2]]
+# A fixed joint keeps its rest pose, so ``grip`` does not drive it.
+_2F85_GRIP_ACTUATED_JOINTS = [row.joint for row in _ROBOTIQ_2F85 if row.joint and row.axis]
 
 
 def _build_2f85_elements() -> list[ET.Element]:
     elements = []
-    for link, parent, joint, xyz, rpy, axis, mesh, visual_xyz in _ROBOTIQ_2F85:
-        link_el = ET.Element('link', name=link)
+    for row in _ROBOTIQ_2F85:
+        link_el = ET.Element('link', name=row.link)
         # A nominal inertial keeps each link a valid MuJoCo moving body: ik._prepare_spec strips the
         # visuals and compiles the URDF, which rejects zero-inertia bodies. IK is kinematic and the
         # viewer ignores inertials, so the magnitude is arbitrary.
         inertial = ET.SubElement(link_el, 'inertial')
         ET.SubElement(inertial, 'mass', value='0.01')
         ET.SubElement(inertial, 'inertia', ixx='1e-5', iyy='1e-5', izz='1e-5', ixy='0', ixz='0', iyz='0')
-        if mesh is not None:
+        if row.mesh is not None:
             visual = ET.SubElement(link_el, 'visual')
-            if visual_xyz is not None:
-                ET.SubElement(visual, 'origin', xyz=visual_xyz, rpy='0 0 0')
-            ET.SubElement(ET.SubElement(visual, 'geometry'), 'mesh', filename=mesh)
-        joint_el = ET.Element('joint', name=joint or f'{link}_fixed', type='revolute' if axis else 'fixed')
-        ET.SubElement(joint_el, 'origin', xyz=xyz, rpy=rpy)
-        ET.SubElement(joint_el, 'parent', link=parent)
-        ET.SubElement(joint_el, 'child', link=link)
-        if axis is not None:
-            ET.SubElement(joint_el, 'axis', xyz=axis)
+            if row.visual_xyz is not None:
+                ET.SubElement(visual, 'origin', xyz=row.visual_xyz, rpy='0 0 0')
+            ET.SubElement(ET.SubElement(visual, 'geometry'), 'mesh', filename=row.mesh)
+        name = row.joint or f'{row.link}_fixed'
+        joint_el = ET.Element('joint', name=name, type='revolute' if row.axis else 'fixed')
+        ET.SubElement(joint_el, 'origin', xyz=row.xyz, rpy=row.rpy)
+        ET.SubElement(joint_el, 'parent', link=row.parent)
+        ET.SubElement(joint_el, 'child', link=row.link)
+        if row.axis is not None:
+            ET.SubElement(joint_el, 'axis', xyz=row.axis)
             ET.SubElement(joint_el, 'limit', effort='10', velocity='2', lower='-1.6', upper='0.9')
         elements += [link_el, joint_el]
     return elements
@@ -133,7 +149,7 @@ def _bundled_robotiq_2f85() -> dict:
     return {
         'subtree': subtree,
         'meshes': {f.name: f.read_bytes() for f in sorted(mesh_dir.glob('*.stl'))},
-        'gripper': {'signal': keys.GRIP, 'joints': _ROBOTIQ_2F85_JOINTS, 'travel': 0.8},
+        keys.GRIPPER: {'signal': keys.GRIP, 'joints': _2F85_GRIP_ACTUATED_JOINTS, 'travel': 0.8},
     }
 
 
@@ -152,7 +168,7 @@ def attach_robotiq_2f85(arm_root: ET.Element, meshes: dict[str, bytes]) -> dict:
     gripper = _bundled_robotiq_2f85()
     arm_root.extend(ET.fromstring(f'<robot>{gripper["subtree"]}</robot>'))
     meshes.update(gripper['meshes'])
-    return gripper['gripper']
+    return gripper[keys.GRIPPER]
 
 
 @lru_cache(maxsize=1)
