@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 import pimm
-from positronic import data_collection, keys, wire
+from positronic import data_collection, geom, keys, wire
 from positronic.data_collection import DataCollectionController, OperatorPosition, controller_positions_serializer
 from positronic.dataset.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.dataset.episode import Episode
@@ -65,6 +65,27 @@ def build_collection(world, out_dir: Path, *, metadata_getter: Callable[[], dict
     buttons_em = world.pair(dc.buttons_receiver)
 
     return dc, ds_agent, ctrl_em_dc, ctrl_em_agent, buttons_em, robot
+
+
+def test_the_tracker_takes_the_shake_out_of_a_hand_that_holds_still():
+    """A hand at rest still shakes, and the arm shows every bit of it unless the tracker holds it back."""
+    tracker = data_collection._Tracker(data_collection.OperatorPosition.BACK.value)
+    tracker.turn_on(geom.Transform3D())
+    shake, seen = 0.004, []
+    for tick in range(400):  # four seconds of a hand shaking 10 Hz about one spot
+        at = geom.Transform3D(np.array([shake * np.sin(2 * np.pi * 10 * tick / 100), 0.0, 0.0]))
+        seen.append(tracker.update(at, tick * 10_000_000).translation)
+    left = np.ptp(np.asarray(seen)[100:], axis=0).max()
+    assert left < shake, f'the arm still swings {left * 1000:.1f} mm of the hand\'s {shake * 2000:.1f} mm'
+
+
+def test_the_tracker_follows_a_hand_that_means_it():
+    """What the filter holds back is the shake, not the movement: a hand that goes somewhere arrives."""
+    tracker = data_collection._Tracker(data_collection.OperatorPosition.BACK.value)
+    tracker.turn_on(geom.Transform3D())
+    for tick in range(100):  # one second of holding the hand 20 cm away
+        where = tracker.update(geom.Transform3D(np.array([0.2, 0.0, 0.0])), tick * 10_000_000)
+    assert np.linalg.norm(where.translation) > 0.19
 
 
 def test_data_collection_records_task_metadata(tmp_path, world):

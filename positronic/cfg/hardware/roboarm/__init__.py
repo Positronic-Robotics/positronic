@@ -7,6 +7,9 @@ from positronic.drivers.roboarm import command
 FRANKA_NOMINAL_JOINTS = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
 YAM_NOMINAL_JOINTS = [0.0, 1.047, 1.047, 0.0, 0.0, 0.0]
 SO101_NOMINAL_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0]
+# The Trossen rests on the lower limit of joints 1 and 2, where half the directions out of it have no
+# solution at all. Its start pose is mid-range on every joint instead, end effector at [0.503, 0, 0.232].
+TROSSEN_NOMINAL_JOINTS = [0.0, 1.571, 1.178, 0.0, 0.0, 0.0]
 # How far, per joint, a start pose drawn around the Franka's nominal may sit from it.
 FRANKA_JOINTS_SPREAD = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
 # The gains DROID's Franka ran, which its pretrained checkpoints were trained under.
@@ -73,3 +76,10 @@ def yam(channel: str, sim: bool, base_pose):
     from positronic.drivers.roboarm.yam import Robot
 
     return Robot(channel, base_pose=base_pose, sim=sim)
+
+
+@cfn.config(ip='192.168.1.4')
+def trossen(ip: str):
+    from positronic.drivers.roboarm.trossen import Robot
+
+    return Robot(ip=ip)
