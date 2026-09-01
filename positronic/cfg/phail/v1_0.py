@@ -19,6 +19,7 @@ from positronic.cfg.ds import group, local_all, transform
 from positronic.cfg.ds.internal import REAL_ROBOT_TRANSFORM, ROBOT_SIGNAL_POINTERS
 from positronic.cfg.eval.real.tasks import UNIFIED_TASK
 from positronic.dataset import Episode
+from positronic.dataset.episode import META_CREATED_TS_NS
 from positronic.dataset.transforms.episode import Derive, FromValue, Identity
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig
@@ -84,7 +85,7 @@ phail_with_started = transform.override(
             transforms=[
                 ROBOT_SIGNAL_POINTERS,  # first, so it wins over what the released episodes baked into their static
                 Identity(),
-                Derive(started=lambda ep: datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9)),
+                Derive(started=lambda ep: datetime.fromtimestamp(ep.meta[META_CREATED_TS_NS] / 1e9)),
             ]
         )
     ],
