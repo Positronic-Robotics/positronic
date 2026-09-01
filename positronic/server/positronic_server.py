@@ -497,7 +497,7 @@ async def api_episode_rrd(episode_id: int):
         return FileResponse(cache_path, media_type='application/octet-stream', filename=f'episode_{episode_id}.rrd')
 
     def _stream_and_cache():
-        # The rename publishes the cache, so a request arriving mid-generation reads a complete file.
+        # The final cache path denotes a complete file.
         fd, name = tempfile.mkstemp(dir=cache_path.parent, prefix=f'{cache_path.name}.', suffix='.partial')
         partial = Path(name)
         published = False
@@ -698,9 +698,10 @@ def main(
     deb_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=deb_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    cache_dir = os.path.expanduser(cache_dir)
+    # configuronic hands a CLI value through as a str, so the parameter stays one and the path starts here.
+    cache_root = Path(cache_dir).expanduser()
     app_state['root'] = root
-    app_state['cache_dir'] = cache_dir
+    app_state['cache_dir'] = cache_root
     app_state['loading_state'] = True
     app_state['episode_table_cfg'] = ep_table_cfg or {}
     app_state['group_tables_cfg'] = group_tables or {}
@@ -708,13 +709,13 @@ def main(
     app_state['max_hz'] = max_hz
     app_state['home_page'] = home_page
 
-    if reset_cache and os.path.exists(cache_dir):
-        logging.info(f'Clearing RRD cache directory: {os.path.abspath(cache_dir)}')
-        shutil.rmtree(cache_dir)
-    os.makedirs(cache_dir, exist_ok=True)
+    if reset_cache and cache_root.exists():
+        logging.info(f'Clearing RRD cache directory: {cache_root.resolve()}')
+        shutil.rmtree(cache_root)
+    cache_root.mkdir(parents=True, exist_ok=True)
 
     logging.info(f'Loading dataset from: {root}')
-    logging.info(f'RRD cache directory: {os.path.abspath(cache_dir)}')
+    logging.info(f'RRD cache directory: {cache_root.resolve()}')
 
     def load_dataset():
         try:
