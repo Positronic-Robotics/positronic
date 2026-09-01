@@ -2,7 +2,6 @@
 
 import io
 import logging
-import math
 import tempfile
 import warnings
 import xml.etree.ElementTree as ET
@@ -425,16 +424,21 @@ def _send_scalar_columns(key: str, ts_arr: np.ndarray, vals: np.ndarray) -> None
 _RATE_SLACK = 1e-6
 
 
-def _decimation_step(ts_arr: np.ndarray, max_hz: float) -> int:
-    """The stride that thins ``ts_arr`` to at most ``max_hz``, or 1 when it is already slower."""
+def _decimation_indices(ts_arr: np.ndarray, max_hz: float) -> np.ndarray:
+    """Indices into ``ts_arr`` whose timestamps sit at least ``1 / max_hz`` apart.
+
+    The spacing is read off the timestamps, so a burst either side of a pause stays under the cap.
+    A pause pulls the average rate below the rate inside each burst.
+    """
     if max_hz <= 0 or len(ts_arr) < 2:
-        return 1
-    duration_ns = int(ts_arr[-1]) - int(ts_arr[0])
-    if duration_ns <= 0:
-        return 1
-    source_hz = (len(ts_arr) - 1) * 1e9 / duration_ns
-    # A ceiling keeps a rate that is not a whole multiple of the cap at or below it.
-    return max(1, math.ceil(source_hz / max_hz * (1 - _RATE_SLACK)))
+        return np.arange(len(ts_arr))
+    period = np.timedelta64(max(1, round(1e9 / max_hz * (1 - _RATE_SLACK))), 'ns')
+    kept = []
+    cursor = 0
+    while cursor < len(ts_arr):
+        kept.append(cursor)
+        cursor = int(np.searchsorted(ts_arr, ts_arr[cursor] + period, side='left'))
+    return np.asarray(kept, dtype=np.intp)
 
 
 def _log_numeric_signals(
@@ -466,8 +470,8 @@ def _log_numeric_signals(
         if vals.ndim == 1:
             vals = vals.reshape(-1, 1)
 
-        step = _decimation_step(ts_arr, max_hz)
-        ts_arr, vals = ts_arr[::step], vals[::step]
+        keep = _decimation_indices(ts_arr, max_hz)
+        ts_arr, vals = ts_arr[keep], vals[keep]
 
         if key not in unplotted:
             _send_scalar_columns(key, ts_arr, vals)
@@ -569,8 +573,8 @@ def _log_urdf_robot(
     yield from drainer.drain()
 
     # Robot motion is smooth enough that the model reads well below the plot rate.
-    step = _decimation_step(ts_arr, _URDF_ANIM_HZ)
-    ts_ds, q_ds = ts_arr[::step], q_vals[::step]
+    keep = _decimation_indices(ts_arr, _URDF_ANIM_HZ)
+    ts_ds, q_ds = ts_arr[keep], q_vals[keep]
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
@@ -587,12 +591,12 @@ def _log_urdf_robot(
         gripper = ep.static.get('gripper')
         if gripper and gripper['signal'] in numeric_data:
             grip_ts, grip_vals = numeric_data[gripper['signal']]
-            grip_step = _decimation_step(grip_ts, _URDF_ANIM_HZ)
-            finger_pos = np.clip(grip_vals[::grip_step, 0], 0.0, 1.0) * gripper['travel']
+            grip_keep = _decimation_indices(grip_ts, _URDF_ANIM_HZ)
+            finger_pos = np.clip(grip_vals[grip_keep, 0], 0.0, 1.0) * gripper['travel']
             for name in gripper['joints']:
                 joint = tree.get_joint_by_name(namespace + name)
                 if joint is not None:
-                    _animate_joint(joint, finger_pos, grip_ts[::grip_step], link_path(joint))
+                    _animate_joint(joint, finger_pos, grip_ts[grip_keep], link_path(joint))
                     yield from drainer.drain()
 
 

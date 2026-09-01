@@ -12,7 +12,7 @@ from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
 from positronic.server.dataset_utils import (
     _MAX_PLOTTED_WIDTH,
     _collect_signal_groups,
-    _decimation_step,
+    _decimation_indices,
     _mp4_downscaled_to,
     _size_capped_to,
     _unplotted_notice,
@@ -100,35 +100,47 @@ def _timestamps_ns(hz: float, seconds: float) -> np.ndarray:
     return np.arange(0, int(seconds * 1e9), step_ns, dtype='int64').astype('datetime64[ns]')
 
 
-def test_a_signal_above_the_cap_is_thinned_to_it():
-    ts = _timestamps_ns(hz=300, seconds=10)
+def _thinned(ts: np.ndarray, max_hz: float) -> np.ndarray:
+    return ts[_decimation_indices(ts, max_hz)]
 
-    thinned = ts[:: _decimation_step(ts, max_hz=30)]
+
+def test_a_signal_above_the_cap_is_thinned_to_it():
+    thinned = _thinned(_timestamps_ns(hz=300, seconds=10), max_hz=30)
 
     seconds = (int(thinned[-1]) - int(thinned[0])) / 1e9
     assert 29 <= len(thinned) / seconds <= 31
 
 
 def test_a_rate_that_is_not_a_whole_multiple_of_the_cap_thins_to_below_it():
-    ts = _timestamps_ns(hz=100, seconds=9.99)
-
-    thinned = ts[:: _decimation_step(ts, max_hz=30)]
+    thinned = _thinned(_timestamps_ns(hz=100, seconds=9.99), max_hz=30)
 
     seconds = (int(thinned[-1]) - int(thinned[0])) / 1e9
     assert (len(thinned) - 1) / seconds <= 30
 
 
+def test_a_burst_beside_a_gap_thins_to_the_cap():
+    burst = _timestamps_ns(hz=100, seconds=1)
+    ts = np.concatenate([burst, np.array([int(1.38e9)], dtype='int64').astype('datetime64[ns]')])
+
+    thinned = _thinned(ts, max_hz=30)
+
+    spacing_s = np.diff(thinned).astype('int64') / 1e9
+    assert spacing_s.min() >= 1 / 30 * (1 - 1e-5)
+
+
 def test_a_signal_recorded_at_the_cap_keeps_every_sample():
-    assert _decimation_step(_timestamps_ns(hz=30, seconds=10), max_hz=30) == 1
+    ts = _timestamps_ns(hz=30, seconds=10)
+
+    assert len(_thinned(ts, max_hz=30)) == len(ts)
 
 
 def test_a_signal_below_the_cap_keeps_every_sample():
     ts = _timestamps_ns(hz=10, seconds=10)
 
-    assert _decimation_step(ts, max_hz=30) == 1
-    assert _decimation_step(ts, max_hz=0) == 1
-    assert _decimation_step(ts[:1], max_hz=30) == 1
-    assert _decimation_step(np.array([], dtype='datetime64[ns]'), max_hz=30) == 1
+    assert len(_thinned(ts, max_hz=30)) == len(ts)
+    assert len(_thinned(ts, max_hz=0)) == len(ts)
+    assert len(_decimation_indices(ts[:1], max_hz=30)) == 1
+    assert len(_decimation_indices(np.array([], dtype='datetime64[ns]'), max_hz=30)) == 0
 
 
 def _write_mp4(path: Path, width: int, height: int, frames: int) -> Path:
