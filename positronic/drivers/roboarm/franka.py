@@ -236,11 +236,8 @@ class _Arm(DriverRun[command.CommandType]):
         """The joints ``cmd`` asks for, not applied yet.
 
         Solved here so that a malformed command raises before anything changes; ``command_target``
-        is what applies the result.
-
-        Width and finiteness are the whole of the check. ``_ik`` holds a Cartesian command inside
-        the joint position limits; nothing bounds a joint-space one, so a policy can walk a joint
-        out of its range one legal step at a time.
+        applies the result. ``_ik`` keeps a Cartesian command inside the joint limits; a joint-space
+        one is unbounded.
         """
         match cmd:
             case command.CartesianPosition(pose):
