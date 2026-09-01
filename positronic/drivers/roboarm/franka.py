@@ -235,8 +235,9 @@ class _Arm(DriverRun[command.CommandType]):
     def to_joints(self, cmd: command.CommandType) -> np.ndarray:
         """The joints ``cmd`` asks for, not applied yet.
 
-        Solved here so that a command the arm cannot hold raises before anything changes; ``command_target``
-        is what applies the result.
+        Solved here so that a malformed command raises before anything changes; ``command_target``
+        applies the result. ``_ik`` keeps a Cartesian command inside the joint limits; a joint-space
+        one is unbounded.
         """
         match cmd:
             case command.CartesianPosition(pose):
