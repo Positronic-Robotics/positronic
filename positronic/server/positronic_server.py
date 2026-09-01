@@ -698,7 +698,7 @@ def main(
     deb_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=deb_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    # configuronic hands a CLI value through as a str, so the parameter stays one and the path starts here.
+    # The path starts here: configuronic hands a CLI value through as a str, so the parameter stays one.
     cache_root = Path(cache_dir).expanduser()
     app_state['root'] = root
     app_state['cache_dir'] = cache_root

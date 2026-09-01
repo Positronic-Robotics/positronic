@@ -315,7 +315,7 @@ class _BinaryStreamDrainer:
 # Two pixels is the smallest side an encoder can carry: 4:2:0 chroma needs even dimensions.
 _MIN_ENCODED_SIDE = 2
 
-# A one-second tick leaves a frame index unrescaled, so a packet's pts is the index of its frame.
+# A packet's pts is the index of its frame: a one-second tick leaves the index unrescaled.
 _FRAME_INDEX_TIME_BASE = Fraction(1, 1)
 
 
@@ -333,7 +333,7 @@ def _encode_frames_as_video(entity_path: str, sig, max_resolution: int) -> None:
     container = av.open('/dev/null', 'w', format='hevc')
 
     # A frame may produce 0, 1 or more packets, and the encoder buffers, so most emerge from the
-    # final flush. Each packet carries the pts of the frame it holds, which is what dates it.
+    # final flush. Each packet carries the pts of the frame it holds.
     times_by_pts: dict[int, int] = {}
 
     def _log_encoded(packets: Iterable[av.Packet]) -> None:
