@@ -352,7 +352,6 @@ def _encode_frames_as_video(entity_path: str, sig, max_resolution: int) -> None:
             rr.log(entity_path, rr.VideoStream.from_fields(sample=bytes(packet)))
 
 
-# `veryfast` beats the default preset on both size and time here, measured; B-frames are off anyway.
 _DOWNSCALE_OPTIONS = {'crf': '28', 'preset': 'veryfast'}
 
 
@@ -634,7 +633,6 @@ def _log_pose_signals(
         yield from drainer.drain()
 
 
-# The caps shape a viewer artifact only: the dataset behind it keeps every sample and the source video.
 DEFAULT_MAX_HZ = 30.0
 DEFAULT_MAX_RESOLUTION = 640
 

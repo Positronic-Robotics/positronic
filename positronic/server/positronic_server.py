@@ -494,7 +494,6 @@ async def api_episode_rrd(episode_id: int):
 
     if cache_path.exists():
         logging.debug(f'Serving cached RRD for episode {episode_id} from {cache_path}')
-        # Content-Length and range requests come free from a file of known length.
         return FileResponse(cache_path, media_type='application/octet-stream', filename=f'episode_{episode_id}.rrd')
 
     def _stream_and_cache():
