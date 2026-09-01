@@ -311,7 +311,7 @@ class _BinaryStreamDrainer:
             self._buffer.clear()
 
 
-# 4:2:0 chroma needs even dimensions, so two pixels is the smallest side an encoder can carry.
+# Two pixels is the smallest side an encoder can carry: 4:2:0 chroma needs even dimensions.
 _MIN_ENCODED_SIDE = 2
 
 
@@ -470,7 +470,7 @@ def _log_numeric_signals(
         try:
             vals = np.asarray(sig.values(), dtype=np.float64)
         except (TypeError, ValueError):
-            # One unconvertible signal is worth less than the rest of the episode, so the view goes on.
+            # The view goes on: one unconvertible signal is worth less than the rest of the episode.
             logging.error(f'Signal {key!r} holds values that are not numeric: it is absent from the recording')
             continue
         if vals.ndim == 1:
