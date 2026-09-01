@@ -108,7 +108,7 @@ _ROBOTIQ_2F85 = [
     # ``franka_robotiq_2f_85_flattened.usd`` as 18.17mm along the flange Z and +90deg about it.
     _Row(DROID_EEF_LINK, FLANGE_LINK, None, '0 0 0.01817402261', '0 0 1.5707963268', None, None, None),
 ]
-# A fixed joint keeps its rest pose, so it is not one ``grip`` drives.
+# A fixed joint keeps its rest pose, so ``grip`` does not drive it.
 _2F85_GRIP_ACTUATED_JOINTS = [row.joint for row in _ROBOTIQ_2F85 if row.joint and row.axis]
 
 
