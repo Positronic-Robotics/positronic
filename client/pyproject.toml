@@ -1,6 +1,6 @@
 [project]
 name = "positronic-platform-client"
-version = "0.2.0"
+version = "0.3.0"
 description = "Typed wire contract and HTTP client for the Positronic evaluation platform API"
 readme = "README.md"
 requires-python = ">=3.11"
