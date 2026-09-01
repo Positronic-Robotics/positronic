@@ -173,6 +173,13 @@ def test_a_frame_size_above_the_cap_fits_it_on_even_sides():
     assert _size_capped_to(1000, 999, 640) == (640, 638)
 
 
+def test_a_cap_an_encoder_cannot_carry_is_refused():
+    assert _size_capped_to(1280, 720, 2) == (2, 2)
+    for cap in (1, 0, -640):
+        with pytest.raises(ValueError):
+            _size_capped_to(1280, 720, cap)
+
+
 def test_a_video_within_the_cap_is_embedded_as_recorded(tmp_path):
     src = _write_mp4(tmp_path / 'small.mp4', width=320, height=240, frames=12)
 

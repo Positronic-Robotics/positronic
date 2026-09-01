@@ -311,14 +311,19 @@ class _BinaryStreamDrainer:
             self._buffer.clear()
 
 
+# 4:2:0 chroma needs even dimensions, so two pixels is the smallest side an encoder can carry.
+_MIN_ENCODED_SIDE = 2
+
+
 def _size_capped_to(width: int, height: int, max_resolution: int) -> tuple[int, int]:
     """``width`` and ``height`` scaled so the long side fits ``max_resolution``, unchanged if it does."""
+    if max_resolution < _MIN_ENCODED_SIDE:
+        raise ValueError(f'max_resolution={max_resolution} is below the {_MIN_ENCODED_SIDE}px an encoder can carry')
     long_side = max(width, height)
     if long_side <= max_resolution:
         return width, height
     scale = max_resolution / long_side
-    # 4:2:0 chroma needs even dimensions.
-    return max(2, int(width * scale) // 2 * 2), max(2, int(height * scale) // 2 * 2)
+    return max(_MIN_ENCODED_SIDE, int(width * scale) // 2 * 2), max(_MIN_ENCODED_SIDE, int(height * scale) // 2 * 2)
 
 
 def _encode_frames_as_video(entity_path: str, sig, max_resolution: int) -> None:
