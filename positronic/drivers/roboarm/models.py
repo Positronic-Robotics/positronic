@@ -51,7 +51,7 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
             f'{side}_coupler_joint',
             '0 0.0315 -0.0041',
             '0 0 0',
-            '-1 0 0',
+            None,
             'coupler.stl',
             None,
         ),
@@ -82,9 +82,10 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[tuple]:
 
 # Rows: (link, parent, joint | None, origin xyz, origin rpy, axis | None, mesh | None, visual xyz | None).
 # A row with an axis is a revolute joint whose axis sign sets its closing direction, so one positive
-# ``grip`` drives the whole 4-bar: driver/spring_link swing the finger in (+X), coupler/follower
-# counter-rotate (-X) to keep the pad parallel. Rows without an axis are fixed; rows without a mesh are pure
-# frames, carrying no visual.
+# ``grip`` drives the 4-bar: driver and spring_link swing the finger in (+X), follower counter-rotates
+# (-X) to keep the pad parallel. FOOTGUN: the coupler is fixed, because the real linkage pins it to the
+# follower and a URDF tree cannot close that loop — give it an axis and the outer link hangs 19 mm out
+# at full grip. Rows without an axis are fixed; rows without a mesh are pure frames, carrying no visual.
 _ROBOTIQ_2F85 = [
     ('gripper_base_mount', FLANGE_LINK, None, '0 0 0.007', _2F85_MOUNT_RPY, None, 'base_mount.stl', None),
     ('gripper_base', 'gripper_base_mount', None, '0 0 0.0038', '0 0 -1.5707963268', None, 'base.stl', None),
@@ -94,7 +95,8 @@ _ROBOTIQ_2F85 = [
     # ``franka_robotiq_2f_85_flattened.usd`` as 18.17mm along the flange Z and +90deg about it.
     (DROID_EEF_LINK, FLANGE_LINK, None, '0 0 0.01817402261', '0 0 1.5707963268', None, None, None),
 ]
-_ROBOTIQ_2F85_JOINTS = [row[2] for row in _ROBOTIQ_2F85 if row[2]]
+# The joints ``grip`` actuates: a named joint that also has an axis. A fixed one keeps its rest pose.
+_ROBOTIQ_2F85_JOINTS = [row[2] for row in _ROBOTIQ_2F85 if row[2] and row[5]]
 
 
 def _build_2f85_elements() -> list[ET.Element]:
