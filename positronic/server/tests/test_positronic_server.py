@@ -135,8 +135,11 @@ def test_a_loopback_bind_is_told_from_an_exposed_one(multi_homed):
 
 
 class _OneEpisodeDataset:
+    def __init__(self, uid: str = 'ep-uid'):
+        self._uid = uid
+
     def __getitem__(self, index):
-        return SimpleNamespace(meta={'uid': 'ep-uid'})
+        return SimpleNamespace(meta={'uid': self._uid})
 
 
 @pytest.fixture
@@ -159,6 +162,13 @@ def test_a_cached_rrd_written_under_other_caps_is_not_served(rrd_cache):
 
 def test_the_same_caps_reach_the_same_cached_rrd(rrd_cache):
     assert rrd_cache(30.0, 640) == rrd_cache(30.0, 640)
+
+
+def test_a_uid_carrying_a_separator_stays_in_the_cache_directory(rrd_cache, monkeypatch):
+    inside = rrd_cache(30.0, 640).parent
+    monkeypatch.setitem(app_state, 'dataset', _OneEpisodeDataset('../../etc/ep-uid'))
+
+    assert _get_rrd_cache_path(0, 30.0, 640).parent == inside
 
 
 def test_a_stream_that_dies_partway_leaves_no_cached_rrd(rrd_cache, monkeypatch):

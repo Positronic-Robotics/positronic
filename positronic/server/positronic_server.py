@@ -84,8 +84,8 @@ def _get_rrd_cache_path(episode_id: int, max_hz: float, max_resolution: int) -> 
     ds_id = str(Path(str(app_state['root'])).resolve()).replace(os.sep, '_').replace(':', '')
     episode_cache_dir = Path(str(app_state['cache_dir'])) / ds_id
     episode_cache_dir.mkdir(parents=True, exist_ok=True)
-    # The uid, because an episode's position is view-dependent.
-    uid = cast(Episode, ds[episode_id]).meta['uid']
+    # The uid, because an episode's position is view-dependent. A separator in it would escape the dir.
+    uid = str(cast(Episode, ds[episode_id]).meta['uid']).replace(os.sep, '_').replace('/', '_')
     return episode_cache_dir / f'{uid}-{max_hz!r}hz-{max_resolution}px.rrd'
 
 
