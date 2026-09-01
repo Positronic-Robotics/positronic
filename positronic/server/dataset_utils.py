@@ -331,7 +331,7 @@ def _encode_frames_as_video(entity_path: str, sig, max_resolution: int) -> None:
     codec = rr.VideoCodec.H265
     container = av.open('/dev/null', 'w', format='hevc')
 
-    # A frame may produce 0, 1 or more packets, and most emerge from the final flush.
+    # A frame may produce 0, 1 or more packets, and so may the final flush.
     times_by_pts: dict[int, int] = {}
 
     def _log_encoded(packets: Iterable[av.Packet]) -> None:

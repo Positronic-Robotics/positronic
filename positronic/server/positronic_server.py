@@ -16,6 +16,7 @@ from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import quote
 
 import configuronic as cfn
 import pos3
@@ -84,8 +85,8 @@ def _get_rrd_cache_path(episode_id: int, max_hz: float, max_resolution: int) -> 
     ds_id = str(Path(str(app_state['root'])).resolve()).replace(os.sep, '_').replace(':', '')
     episode_cache_dir = Path(str(app_state['cache_dir'])) / ds_id
     episode_cache_dir.mkdir(parents=True, exist_ok=True)
-    # The uid, because an episode's position is view-dependent. A separator in it would escape the dir.
-    uid = str(cast(Episode, ds[episode_id]).meta['uid']).replace(os.sep, '_').replace('/', '_')
+    # The uid, because an episode's position is view-dependent. Percent-encoding keeps it one component.
+    uid = quote(str(cast(Episode, ds[episode_id]).meta['uid']), safe='')
     return episode_cache_dir / f'{uid}-{max_hz!r}hz-{max_resolution}px.rrd'
 
 
@@ -697,7 +698,7 @@ def main(
     deb_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=deb_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    # The parameter stays a str: configuronic passes a CLI value through uncoerced.
+    # configuronic passes this CLI value through uncoerced.
     cache_root = Path(cache_dir).expanduser()
     app_state['root'] = root
     app_state['cache_dir'] = cache_root

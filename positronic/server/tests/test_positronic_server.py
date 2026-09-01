@@ -171,6 +171,15 @@ def test_a_uid_carrying_a_separator_stays_in_the_cache_directory(rrd_cache, monk
     assert _get_rrd_cache_path(0, 30.0, 640).parent == inside
 
 
+def test_two_uids_that_differ_reach_different_cached_rrds(rrd_cache, monkeypatch):
+    def path_for(uid: str) -> Path:
+        monkeypatch.setitem(app_state, 'dataset', _OneEpisodeDataset(uid))
+        return _get_rrd_cache_path(0, 30.0, 640)
+
+    assert path_for('camera/left') != path_for('camera_left')
+    assert path_for('a%2Fb') != path_for('a/b')
+
+
 def test_a_stream_that_dies_partway_leaves_no_cached_rrd(rrd_cache, monkeypatch):
     monkeypatch.setitem(app_state, 'loading_state', False)
     monkeypatch.setitem(app_state, 'max_hz', 30.0)
