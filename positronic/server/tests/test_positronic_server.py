@@ -11,6 +11,7 @@ from cryptography import x509
 from cryptography.x509.oid import NameOID
 from fastapi.testclient import TestClient
 
+from positronic.dataset.episode import META_UID
 from positronic.server import positronic_server
 from positronic.server.positronic_server import (
     _MAX_COMPONENT_BYTES,
@@ -142,7 +143,7 @@ class _OneEpisodeDataset:
         self._uid = uid
 
     def __getitem__(self, index):
-        return SimpleNamespace(meta={'uid': self._uid})
+        return SimpleNamespace(meta={META_UID: self._uid})
 
 
 @pytest.fixture
