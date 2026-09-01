@@ -506,8 +506,7 @@ async def api_episode_rrd(episode_id: int):
                     yield chunk
             success = True
         finally:
-            # FOOTGUN: a half-written file is indistinguishable from a complete one on the next
-            # request, and FileResponse would serve it under a Content-Length that matches it.
+            # A half-written file reads as complete on the next request, and gets served as one.
             if not success:
                 cache_path.unlink(missing_ok=True)
 
