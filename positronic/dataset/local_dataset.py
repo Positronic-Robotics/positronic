@@ -25,6 +25,7 @@ from .edits import EditedDataset
 from .episode import (
     EPISODE_SCHEMA_VERSION,
     META_PATH,
+    META_UID,
     SIGNAL_FACTORY_T,
     Episode,
     EpisodeWriter,
@@ -118,7 +119,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         # NB: falsy created_ts_ns (including 0) defaults to current time — epoch 0 is not a valid episode timestamp
         self._meta = {
             'schema_version': EPISODE_SCHEMA_VERSION,
-            'uid': uid or uuid.uuid4().hex,
+            META_UID: uid or uuid.uuid4().hex,
             'created_ts_ns': created_ts_ns or time.time_ns(),
         }
         self._meta['writer'] = _cached_env_writer_info()
@@ -411,8 +412,8 @@ class DiskEpisode(Episode):
 
             # Episodes without a stamped uid derive a stable identity from the recording timestamp,
             # which is immutable and travels with the episode across copies
-            if 'uid' not in meta and 'created_ts_ns' in meta:
-                meta['uid'] = f'ts-{meta["created_ts_ns"]}'
+            if META_UID not in meta and 'created_ts_ns' in meta:
+                meta[META_UID] = f'ts-{meta["created_ts_ns"]}'
 
             meta[META_PATH] = str(self._dir.expanduser().resolve(strict=False))
 

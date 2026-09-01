@@ -34,6 +34,7 @@ import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset import CachedDataset, Dataset, Episode
+from positronic.dataset.episode import META_UID
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import (
     DEFAULT_MAX_HZ,
@@ -99,7 +100,7 @@ def _get_rrd_cache_path(episode_id: int, max_hz: float, max_resolution: int) -> 
     episode_cache_dir = Path(str(app_state['cache_dir'])) / ds_id
     episode_cache_dir.mkdir(parents=True, exist_ok=True)
     # The uid, because an episode's position is view-dependent.
-    uid = _path_component(str(cast(Episode, ds[episode_id]).meta['uid']))
+    uid = _path_component(str(cast(Episode, ds[episode_id]).meta[META_UID]))
     return episode_cache_dir / f'{uid}-{max_hz!r}hz-{max_resolution}px.rrd'
 
 
