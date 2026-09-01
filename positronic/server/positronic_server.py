@@ -1,6 +1,7 @@
 """A FastAPI web server for visualizing Positronic LocalDatasets using Rerun."""
 
 import atexit
+import hashlib
 import ipaddress
 import logging
 import os
@@ -78,15 +79,27 @@ def require_dataset(func):
     return wrapper
 
 
+_MAX_COMPONENT_BYTES = 200
+
+
+def _path_component(value: str) -> str:
+    """``value`` as one filename component, injectively and within any filesystem's name limit."""
+    encoded = quote(value, safe='')
+    if len(encoded.encode()) <= _MAX_COMPONENT_BYTES:
+        return encoded
+    # `quote` escapes '=', so a digest can never be read back as an encoded value.
+    return '=' + hashlib.sha256(value.encode()).hexdigest()
+
+
 def _get_rrd_cache_path(episode_id: int, max_hz: float, max_resolution: int) -> Path:
     ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
     if ds is None:
         raise RuntimeError('Dataset not loaded')
-    ds_id = str(Path(str(app_state['root'])).resolve()).replace(os.sep, '_').replace(':', '')
+    ds_id = _path_component(str(Path(str(app_state['root'])).resolve()))
     episode_cache_dir = Path(str(app_state['cache_dir'])) / ds_id
     episode_cache_dir.mkdir(parents=True, exist_ok=True)
-    # The uid, because an episode's position is view-dependent. Percent-encoding keeps it one component.
-    uid = quote(str(cast(Episode, ds[episode_id]).meta['uid']), safe='')
+    # The uid, because an episode's position is view-dependent.
+    uid = _path_component(str(cast(Episode, ds[episode_id]).meta['uid']))
     return episode_cache_dir / f'{uid}-{max_hz!r}hz-{max_resolution}px.rrd'
 
 

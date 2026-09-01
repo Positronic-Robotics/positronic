@@ -1,4 +1,5 @@
 import ipaddress
+import os
 import socket
 from collections import namedtuple
 from pathlib import Path
@@ -12,10 +13,12 @@ from fastapi.testclient import TestClient
 
 from positronic.server import positronic_server
 from positronic.server.positronic_server import (
+    _MAX_COMPONENT_BYTES,
     _access_url,
     _generate_self_signed_cert,
     _get_rrd_cache_path,
     _is_loopback,
+    _path_component,
     _served_addresses,
     app,
     app_state,
@@ -178,6 +181,18 @@ def test_two_uids_that_differ_reach_different_cached_rrds(rrd_cache, monkeypatch
 
     assert path_for('camera/left') != path_for('camera_left')
     assert path_for('a%2Fb') != path_for('a/b')
+    assert path_for('x' * 400) != path_for('y' * 400)
+
+
+def test_a_path_component_is_one_short_injective_name():
+    assert '/' not in _path_component('../../etc/passwd')
+    assert os.sep not in _path_component('../../etc/passwd')
+    assert _path_component('camera/left') != _path_component('camera_left')
+
+    long_name = _path_component('x' * 4000)
+    assert len(long_name.encode()) <= _MAX_COMPONENT_BYTES
+    # A value short enough to survive encoding can never collide with a hashed one.
+    assert _path_component(long_name) != long_name
 
 
 def test_a_stream_that_dies_partway_leaves_no_cached_rrd(rrd_cache, monkeypatch):
