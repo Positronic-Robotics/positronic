@@ -39,17 +39,14 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
     # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
     embodiment = remote_franka_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')
 
-    def instruction() -> str:
-        # rules-allow: hardcoded-keys — the env names this reset-meta field, not positronic's ``keys.TASK``
-        return proxy.meta['task']
-
     def tasks() -> list[Task]:
         trials = []
         for params in proxy.tasks(spec(task=task)):
             # RoboLab truncates an episode at its own budget, so the deadline sits above it and the env's verdict
             # ends a trial.
             deadline = timeout if timeout is not None else params[keys.EVAL_EPISODE_LENGTH] + 10.0
-            trial = Task(instruction_source=instruction, timeout_sec=deadline)
+            # rules-allow: hardcoded-keys — the env names this reset-meta field; it is not positronic's ``keys.TASK``
+            trial = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=deadline)
             trials += [(trial, {**params, keys.EVAL_INSTRUCTION_TYPE: instruction_type}) for _ in range(trial_count)]
         return number_trials(trials)
 
