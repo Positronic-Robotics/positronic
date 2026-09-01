@@ -209,3 +209,25 @@ def test_training_encoder_skips_absent_command_pose():
     assert keys.TARGET_EE_POSE not in list(out), 'absent command pose must not be materialized'
     np.testing.assert_allclose(out[keys.EE_POSE][0][0], (obs_pose * TO_DROID).as_vector(QUAT), atol=1e-9)
     assert keys.TARGET_JOINTS in out
+
+
+def test_training_encoder_skips_a_command_pose_present_only_as_a_null_alias():
+    """``cfg.ds.internal._RENAME_ROBOT_COMMAND`` backfills the canonical command pose from the legacy plural
+    name, so a joint-only dataset that has neither carries the key with a ``None`` value. Converting that
+    yields a signal that raises on dereference, which surfaces far from here."""
+    obs_pose = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
+    ts = [1000, 2000]
+    episode = EpisodeContainer(
+        data={
+            keys.URDF: URDF,
+            keys.CONTROL_FRAME: DEFAULT_FRAME,
+            keys.EE_POSE: DummySignal(ts, np.stack([obs_pose.as_vector(QUAT)] * 2)),
+            keys.TARGET_JOINTS: DummySignal(ts, np.zeros((2, 7), dtype=np.float32)),
+            keys.TARGET_EE_POSE: None,
+        }
+    )
+
+    out = ChangeEEFrame(TO_DROID).training_encoder(episode)
+
+    assert out[keys.TARGET_EE_POSE] is None, 'a null alias must pass through, not become a broken signal'
+    np.testing.assert_allclose(out[keys.EE_POSE][0][0], (obs_pose * TO_DROID).as_vector(QUAT), atol=1e-9)

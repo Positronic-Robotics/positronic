@@ -543,7 +543,9 @@ class ChangeEEFrame(Codec):
                     'episode a codec already moved would train on a frame the checkpoint does not declare'
                 )
             derived: dict[str, Any] = {obs_keys.EE_FRAME: FromValue(codec._transform.as_vector(_QUAT))}
-            derived.update({key: partial(self._derive_pose, key) for key in codec._keys if key in episode})
+            # ``cfg.ds.internal._RENAME_ROBOT_COMMAND`` backfills an absent pose as ``None``, not as a missing key.
+            keys_with_poses = (key for key in codec._keys if key in episode and episode[key] is not None)
+            derived.update({key: partial(self._derive_pose, key) for key in keys_with_poses})
             return Group(Derive(**derived), Identity())(episode)
 
         @property
