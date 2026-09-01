@@ -22,8 +22,6 @@ class LiberoAdapter(WireCommandAdapter):
         self._camera_dict = camera_dict  # logical observation name -> the LIBERO obs image key
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        # The env names the task and the eval config names how to render and control it, so a record maps to
-        # the scene keys that identify a task; the config's scene spec fills the rest of the reset token.
         return [
             {keys.EVAL_TASK: r['name'], keys.EVAL_SUITE: r['suite'], keys.EVAL_TASK_ID: r['task_id']} for r in records
         ]

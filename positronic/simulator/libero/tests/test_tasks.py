@@ -1,8 +1,7 @@
 """Which tasks a LIBERO eval runs: the adapter maps the env's records, the config sweeps them.
 
-``RemoteEnvControlSystem.tasks`` is stubbed here, so the env, the socket and the adapter stay out of the
-config tests — a task list needs LIBERO's own 3.10 interpreter, which the normal suite has no access to. The
-adapter's own mapping is tested below, and ``test_e2e.py`` runs the same command against the real benchmark.
+``RemoteEnvControlSystem.tasks`` is stubbed, since a real task list needs LIBERO's 3.10 interpreter;
+``test_e2e.py`` runs the same command against the real benchmark.
 """
 
 from typing import Any
@@ -34,7 +33,6 @@ def asked(monkeypatch) -> list[Any]:
 
 
 def test_the_adapter_names_a_task_the_way_the_reset_token_does():
-    """A record carries the suite and the index, which is what the token needs to name the task again."""
     adapter = LiberoAdapter({keys.EXTERIOR_IMAGE: 'agentview_image'})
 
     params = adapter.task_params([{'suite': 'libero_goal', 'task_id': 4, 'name': 'KITCHEN_SCENE_open_the_drawer'}])
@@ -51,8 +49,8 @@ def test_the_adapter_names_a_task_the_way_the_reset_token_does():
 
 
 def test_the_env_answers_which_tasks_the_sweep_runs(asked):
-    """The sweep is asked for when the run starts, not when the config is built, so a live env reports its own
-    tasks. The render and control settings are the config's, and join each task the env names."""
+    """The sweep is asked for when the run starts, and the config's render and control settings join each task
+    the env names."""
     ev = libero_cfg.spatial.override(
         seed=7, trial_count=2, camera_resolution=64, control_mode='joint', settle_steps=3
     ).instantiate()
@@ -75,7 +73,6 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
 
 
 def test_a_pinned_task_id_reaches_the_env(asked):
-    """``--eval.task_id`` narrows the selection the env resolves, so only that task comes back."""
     ev = libero_cfg.spatial.override(task_id=3).instantiate()
 
     list(ev.tasks())
@@ -84,7 +81,6 @@ def test_a_pinned_task_id_reaches_the_env(asked):
 
 
 def test_a_suite_list_is_one_selection(asked):
-    """``all`` sweeps four suites in one run, so the env resolves them in one answer."""
     ev = libero_cfg.all.instantiate()
 
     list(ev.tasks())

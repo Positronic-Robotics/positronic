@@ -60,9 +60,8 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
     def _connect(self) -> EnvConnection:
         """The connection to the env server, started and opened on the first call.
 
-        Deferred so positronic can wire the World before the subprocess spawns; whichever of ``tasks`` and
-        ``reset`` runs first starts the server. The connection closes before the server (registered last),
-        so a rollout never races the server's teardown.
+        Deferred so positronic can wire the World before the subprocess spawns. The connection closes before
+        the server (registered last), so a rollout never races the server's teardown.
         """
         if self._conn is None:
             host, port = self._cleanup.enter_context(self._serve)
@@ -79,9 +78,8 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                 raise ValueError(f'the env has no task for {spec!r}')
             return params
         except BaseException:
-            # An eval lists its tasks on the first turn of the world, and the scheduler enters ``run`` — the
-            # only other place that closes the server — later in that same turn. So a listing that raises
-            # stops the server itself; nothing else can.
+            # An eval lists its tasks before the scheduler enters ``run``, whose teardown is the only other place
+            # that closes the server. So a listing that raises stops the server itself.
             self._cleanup.close()
             raise
 

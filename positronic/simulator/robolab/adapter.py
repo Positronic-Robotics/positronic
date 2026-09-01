@@ -24,8 +24,6 @@ class RobolabAdapter(WireCommandAdapter):
         self._camera_dict = camera_dict  # logical observation name -> the RoboLab obs image key
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        # The env names the task and reports the budget RoboLab gives its episode; the eval config joins the
-        # instruction phrasing, which is the config's own and not the benchmark's.
         return [
             {keys.EVAL_TASK: record['name'], keys.EVAL_EPISODE_LENGTH: record['episode_length_s']} for record in records
         ]

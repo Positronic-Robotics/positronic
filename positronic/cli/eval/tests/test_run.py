@@ -96,8 +96,7 @@ def test_a_spec_carries_only_what_the_eval_binds():
 
 
 def test_a_sweep_numbers_its_trials_across_every_task():
-    """A sweep runs tasks that differ — each with its own time budget and its own scene params — and numbers
-    the trials once over the whole plan, so a trial's place does not restart with every task."""
+    """Trials of tasks that differ are numbered once over the whole plan."""
     quick = Task(instruction_source='quick', timeout_sec=1.0)
     slow = Task(instruction_source='slow', timeout_sec=90.0)
     pairs = [(quick, {keys.EVAL_TASK: 'quick'}), (slow, {keys.EVAL_TASK: 'slow'}), (slow, {keys.EVAL_TASK: 'slow'})]

@@ -40,8 +40,7 @@ def test_demo_replay_reaches_success(command_mode):
 
 @pytest.mark.timeout(900)
 def test_the_env_lists_the_tasks_a_spec_selects():
-    """The eval keeps no task count, so LIBERO's own registry is what a sweep is built from. This lane is the
-    only one that reaches it: positronic's interpreter cannot import LIBERO."""
+    """A sweep is built from LIBERO's own registry, which only this lane reaches."""
     with serve_libero() as (host, port):
         conn = EnvConnection(host, port)
         try:
@@ -57,7 +56,6 @@ def test_the_env_lists_the_tasks_a_spec_selects():
             pair = conn.tasks({'suite': ['libero_spatial', 'libero_object']})
             assert {r['suite'] for r in pair} == {'libero_spatial', 'libero_object'}
 
-            # A task nobody has: the server raises and the client re-raises, so a wrong selection stops the run.
             with pytest.raises(RuntimeError):
                 conn.tasks({'suite': 'libero_spatial', 'task_id': 999})
         finally:

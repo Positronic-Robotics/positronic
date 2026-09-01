@@ -18,17 +18,13 @@ def placeholder():
 
 
 def spec(**selection) -> dict[str, Any]:
-    """The selection arguments an eval binds, as the spec its env resolves.
-
-    An argument the eval leaves unbound is ``None``, and it is absent from the spec, so the env does not
-    narrow that axis.
-    """
+    """The spec an env resolves: the selection arguments an eval binds, an unbound (``None``) one absent."""
     return {name: value for name, value in selection.items() if value is not None}
 
 
 def number_trials(trials: list[tuple[Task, dict]]) -> list[Task]:
-    """One trial per ``(task, params)`` pair: each task's scene prepare is asked with its own params, and its
-    episode records them beside the trial's place in the whole sweep."""
+    """One trial per ``(task, params)`` pair: its scene prepare is asked with the params, and its episode records
+    them beside the trial's place in the sweep."""
     return [
         replace(
             task,

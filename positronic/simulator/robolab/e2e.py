@@ -68,9 +68,7 @@ def _replay_episode(conn: EnvConnection, actions: np.ndarray, initial_state: dic
 
 
 def _check_task_list(conn: EnvConnection, task: str) -> None:
-    """Assert the server answers its own task list, as the adapter reads it. positronic's interpreter cannot
-    import RoboLab, so this is the only gate on ``tasks``; the number of tasks is RoboLab's own and nothing
-    here pins it."""
+    """Assert the server answers its own task list, as the adapter reads it."""
     adapter = RobolabAdapter({})
     params = adapter.task_params(conn.tasks(spec(task=task)))
     assert [p[keys.EVAL_TASK] for p in params] == [task], f'{task} asked for, {params} answered'

@@ -37,8 +37,7 @@ goal is solved to joints with damped-least-squares IK and a joint goal is turned
 forward kinematics, both on the MuJoCo site Jacobian OSC itself computes. The reset token carries the task spec
 (suite, task_id, camera resolution, control mode) plus the per-trial seed; the env builds that task on the first
 reset and caches it, rebuilding only when the spec changes. The seed selects a saved init-state and re-randomizes
-object positions; a ``None`` seed draws one at random. ``tasks`` reads the suites LIBERO registers, so the eval
-asks this server which tasks a selection holds instead of pinning a count of its own.
+object positions; a ``None`` seed draws one at random.
 """
 
 import argparse
@@ -116,9 +115,7 @@ class LiberoEnv(EnvProtocol):
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         """The tasks ``spec`` selects: ``suite`` is one name or a list of them, ``task_id`` narrows to one.
 
-        A record names its task as the reset token does, by suite and index, and it carries the bddl name as
-        the id. That name holds across task orders, which the index does not. Reading the registry builds no
-        env, so the task the server holds stays.
+        The id is the bddl name: it holds across task orders, which the index does not.
         """
         suites = [spec['suite']] if isinstance(spec['suite'], str) else spec['suite']
         registry = benchmark.get_benchmark_dict()

@@ -35,10 +35,9 @@ def _libero_eval(
 
     ``_libero_eval`` leaves ``suite`` unbound; each named config below is a ``.override`` binding it — to one
     suite, or to a list (``all``) swept in one run. An unbound ``task_id`` sweeps every task of each bound suite;
-    ``--eval.task_id`` pins one. The env resolves that selection when the run starts, so a suite or a
-    ``task_id`` LIBERO does not hold stops the run after the server boots. The instruction is never pinned: the
-    task reads its language live from the env, which reports it (with ``suite`` and ``task_id``) in every
-    reset's meta.
+    ``--eval.task_id`` pins one. The env resolves that selection when the run starts. The instruction is never
+    pinned: the task reads its language live from the env, which reports it (with ``suite`` and ``task_id``) in
+    every reset's meta.
 
     positronic launches a single task-agnostic env server in its own 3.10 interpreter; the proxy drives it over
     the socket and the whole scene spec — suite, task_id, camera_resolution, control_mode, settle_steps — rides

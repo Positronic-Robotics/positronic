@@ -22,11 +22,7 @@ class EnvAdapter(ABC):
 
     @abstractmethod
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """The env's own task records -> one trial params dict per task; the mirror of ``reset_token``.
-
-        An eval builds its sweep from these. Each dict carries what a trial of that task needs: what names
-        the task, and the seconds the benchmark gives its episode where the benchmark budgets one.
-        """
+        """The env's own task records -> one trial params dict per task; the mirror of ``reset_token``."""
 
     @abstractmethod
     def reset_token(self, params: dict[str, Any]) -> Any:

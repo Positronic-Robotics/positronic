@@ -108,8 +108,7 @@ def test_transport_is_transparent(env_server):
 
 @pytest.mark.timeout(60.0)
 def test_the_env_answers_its_own_task_list(env_server):
-    """``tasks`` crosses like every other command: the env answers its own records, and a spec it does not
-    know raises server-side and reaches the client as an error."""
+    """The env answers its own records, and a spec it does not know raises through to the client."""
     host, port = env_server
     conn = EnvConnection(host, port)
     assert conn.tasks({}) == [{'name': SCENE_NAME}]
@@ -316,9 +315,8 @@ class _CountdownAdapter(EnvAdapter):
 
 @pytest.mark.timeout(60.0)
 def test_the_proxy_connects_on_a_tasks_call_before_any_reset():
-    """An eval asks the env what tasks it has before its first trial, so ``tasks`` is what starts the server
-    and opens the connection. The server serves one client, so the trial that follows proves it shares that
-    connection rather than opening a second one."""
+    """``tasks`` runs before the first trial, so it starts the server; the reset that follows shares its
+    connection."""
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
         obs_rx = world.pair(proxy.observations['value'])
@@ -332,8 +330,7 @@ def test_the_proxy_connects_on_a_tasks_call_before_any_reset():
 
 @pytest.mark.timeout(60.0)
 def test_a_selection_naming_no_task_is_refused():
-    """A sweep of no trials writes nothing and ends at once, which a caller reads as a run that succeeded.
-    So a listing that comes back empty stops the run where the selection is still known."""
+    """A sweep of no trials ends at once and reads as a run that succeeded, so an empty listing raises."""
     with serve_env(_CountdownEnv()) as (host, port):
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
         with pytest.raises(ValueError, match='no task'):
@@ -342,8 +339,7 @@ def test_a_selection_naming_no_task_is_refused():
 
 @pytest.mark.timeout(60.0)
 def test_a_refused_listing_stops_the_server_it_started():
-    """The listing starts the server, and the scheduler enters ``run`` — whose teardown stops it — only later
-    in that same turn. So a spec the env refuses stops the server it just started."""
+    """The scheduler enters ``run``, whose teardown stops the server, only after the listing."""
     with serve_env(_CountdownEnv()) as address:
         stopped = False
 
