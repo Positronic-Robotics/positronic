@@ -312,10 +312,10 @@ class _BinaryStreamDrainer:
             self._buffer.clear()
 
 
-# Two pixels is the smallest side an encoder can carry: 4:2:0 chroma needs even dimensions.
+# 4:2:0 chroma needs even dimensions.
 _MIN_ENCODED_SIDE = 2
 
-# A packet's pts is the index of its frame: a one-second tick leaves the index unrescaled.
+# A 1/1 base is unrescaled, so a packet's pts is its frame's index.
 _FRAME_INDEX_TIME_BASE = Fraction(1, 1)
 
 
@@ -328,17 +328,15 @@ def _size_capped_to(width: int, height: int, max_resolution: int) -> tuple[int, 
 
 
 def _encode_frames_as_video(entity_path: str, sig, max_resolution: int) -> None:
-    """Encode raw image frames into an H.265 video stream via pyav, with the long side capped."""
     codec = rr.VideoCodec.H265
     container = av.open('/dev/null', 'w', format='hevc')
 
-    # A frame may produce 0, 1 or more packets, and the encoder buffers, so most emerge from the
-    # final flush. Each packet carries the pts of the frame it holds.
+    # A frame may produce 0, 1 or more packets, and most emerge from the final flush.
     times_by_pts: dict[int, int] = {}
 
     def _log_encoded(packets: Iterable[av.Packet]) -> None:
         for packet in packets:
-            assert packet.pts is not None  # every frame goes in with one
+            assert packet.pts is not None
             set_timeline_time('time', times_by_pts[packet.pts])
             rr.log(entity_path, rr.VideoStream.from_fields(sample=bytes(packet)))
 
@@ -368,14 +366,11 @@ _DOWNSCALE_OPTIONS = {'crf': '28', 'preset': 'veryfast'}
 
 
 def _mp4_downscaled_to(src: Path, max_resolution: int) -> bytes:
-    """Re-encode ``src`` with its long side at most ``max_resolution``, or return it unchanged if it fits.
-
-    Frame count and presentation times survive the re-encode.
-    """
+    """Re-encode ``src`` with its long side at most ``max_resolution``, or return it unchanged if it fits."""
     with av.open(str(src)) as inp:
         in_stream = inp.streams.video[0]
         source = (in_stream.codec_context.width, in_stream.codec_context.height)
-        # An mp4 within the cap is passed through, odd sides and all: its own encoder already took them.
+        # Odd sides pass through; evening them here would re-encode every source that already fits.
         if max(source) <= max_resolution:
             return src.read_bytes()
         width, height = _size_capped_to(*source, max_resolution)
@@ -432,16 +427,12 @@ def _send_scalar_columns(key: str, ts_arr: np.ndarray, vals: np.ndarray) -> None
         rr.send_columns(f'/signals/{key}/{i}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals[:, i]))
 
 
-# Integer nanoseconds put a source recorded at a whole multiple of the cap a hair above it.
+# Integer nanoseconds put a source recorded at the cap a hair above it.
 _RATE_SLACK = 1e-6
 
 
 def _decimation_indices(ts_arr: np.ndarray, max_hz: float) -> np.ndarray:
-    """Indices into ``ts_arr`` whose timestamps sit at least ``1 / max_hz`` apart.
-
-    A burst either side of a pause stays under the cap: the spacing is read off the timestamps,
-    and a pause pulls the average rate below the rate inside each burst.
-    """
+    """Indices into ``ts_arr`` whose timestamps sit at least ``1 / max_hz`` apart."""
     if max_hz < 0:
         raise ValueError(f'max_hz={max_hz} is not a rate; 0 is the opt-out')
     if max_hz == 0 or len(ts_arr) < 2:
@@ -588,7 +579,6 @@ def _log_urdf_robot(
     rr.log(prefix, rr.Transform3D(translation=mount or np.zeros(3), child_frame=tree.root_link().name), static=True)
     yield from drainer.drain()
 
-    # Robot motion is smooth enough that the model reads well below the plot rate.
     keep = _decimation_indices(ts_arr, _URDF_ANIM_HZ)
     ts_ds, q_ds = ts_arr[keep], q_vals[keep]
 
@@ -660,9 +650,7 @@ def stream_episode_rrd(
 ) -> Iterator[bytes]:
     """Yield an episode RRD as chunks while it is being generated.
 
-    ``max_hz`` thins every numeric signal, ``max_resolution`` caps the long side of each video.
-    Both cost fidelity to cut transfer size; pass ``max_hz=0`` and a resolution above the source
-    to keep the recording as it was captured.
+    ``max_hz=0`` with a resolution above the source keeps the recording as it was captured.
     """
 
     ep = ds[episode_id]

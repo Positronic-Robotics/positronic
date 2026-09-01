@@ -84,8 +84,7 @@ def _get_rrd_cache_path(episode_id: int, max_hz: float, max_resolution: int) -> 
     ds_id = str(Path(str(app_state['root'])).resolve()).replace(os.sep, '_').replace(':', '')
     episode_cache_dir = Path(str(app_state['cache_dir'])) / ds_id
     episode_cache_dir.mkdir(parents=True, exist_ok=True)
-    # The cache identity is the episode uid and both caps: position is view-dependent, and a file
-    # written under other caps holds different samples.
+    # The uid, because an episode's position is view-dependent.
     uid = cast(Episode, ds[episode_id]).meta['uid']
     return episode_cache_dir / f'{uid}-{max_hz!r}hz-{max_resolution}px.rrd'
 
@@ -698,7 +697,7 @@ def main(
     deb_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(level=deb_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    # The path starts here: configuronic hands a CLI value through as a str, so the parameter stays one.
+    # The parameter stays a str: configuronic passes a CLI value through uncoerced.
     cache_root = Path(cache_dir).expanduser()
     app_state['root'] = root
     app_state['cache_dir'] = cache_root
