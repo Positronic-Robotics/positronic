@@ -5,10 +5,11 @@ import logging
 import tempfile
 import warnings
 import xml.etree.ElementTree as ET
-from collections import defaultdict, deque
+from collections import defaultdict
 from collections.abc import Generator, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, cast
 
@@ -314,6 +315,9 @@ class _BinaryStreamDrainer:
 # Two pixels is the smallest side an encoder can carry: 4:2:0 chroma needs even dimensions.
 _MIN_ENCODED_SIDE = 2
 
+# A one-second tick leaves a frame index unrescaled, so a packet's pts is the index of its frame.
+_FRAME_INDEX_TIME_BASE = Fraction(1, 1)
+
 
 def _size_capped_to(width: int, height: int, max_resolution: int) -> tuple[int, int]:
     """``width`` and ``height`` on even sides, scaled down so the long side fits ``max_resolution``."""
@@ -328,13 +332,14 @@ def _encode_frames_as_video(entity_path: str, sig, max_resolution: int) -> None:
     codec = rr.VideoCodec.H265
     container = av.open('/dev/null', 'w', format='hevc')
 
-    # The encoder buffers, so a packet emerges frames after the one it carries, and most of them
-    # emerge from the final flush. With max_b_frames = 0 it emerges in source order, which pairs them.
-    pending_times: deque[int] = deque()
+    # A frame may produce 0, 1 or more packets, and the encoder buffers, so most emerge from the
+    # final flush. Each packet carries the pts of the frame it holds, which is what dates it.
+    times_by_pts: dict[int, int] = {}
 
     def _log_encoded(packets: Iterable[av.Packet]) -> None:
         for packet in packets:
-            set_timeline_time('time', pending_times.popleft())
+            assert packet.pts is not None  # every frame goes in with one
+            set_timeline_time('time', times_by_pts[packet.pts])
             rr.log(entity_path, rr.VideoStream.from_fields(sample=bytes(packet)))
 
     first_frame = np.asarray(sig[0][0])
@@ -344,14 +349,16 @@ def _encode_frames_as_video(entity_path: str, sig, max_resolution: int) -> None:
     stream.width = width
     stream.height = height
     stream.max_b_frames = 0
+    stream.codec_context.time_base = _FRAME_INDEX_TIME_BASE
 
     rr.log(entity_path, rr.VideoStream(codec=codec), static=True)
 
-    for val, ts in sig:
+    for index, (val, ts) in enumerate(sig):
         frame = av.VideoFrame.from_ndarray(np.asarray(val), format='rgb24')
         if (width, height) != (w, h):
             frame = frame.reformat(width=width, height=height)
-        pending_times.append(ts)
+        frame.pts, frame.time_base = index, _FRAME_INDEX_TIME_BASE
+        times_by_pts[index] = ts
         _log_encoded(stream.encode(frame))
 
     _log_encoded(stream.encode())
