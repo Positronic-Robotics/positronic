@@ -315,7 +315,7 @@ class _BinaryStreamDrainer:
 # 4:2:0 chroma needs even dimensions.
 _MIN_ENCODED_SIDE = 2
 
-# A 1/1 base is unrescaled, so a packet's pts is its frame's index.
+# A packet's pts is its frame's index: a 1/1 base is unrescaled.
 _FRAME_INDEX_TIME_BASE = Fraction(1, 1)
 
 

@@ -88,7 +88,7 @@ def _path_component(value: str) -> str:
     encoded = quote(value, safe='')
     if len(encoded.encode()) <= _MAX_COMPONENT_BYTES:
         return encoded
-    # `quote` escapes '=', so a digest can never be read back as an encoded value.
+    # A digest is never read back as an encoded value: `quote` escapes '='.
     return '=' + hashlib.sha256(value.encode()).hexdigest()
 
 
