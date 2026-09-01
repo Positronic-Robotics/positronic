@@ -12,6 +12,10 @@ from .signal import Signal
 EPISODE_SCHEMA_VERSION = 1
 # Where the episode is written, in the meta of both the episode and the writer that made it.
 META_PATH = 'path'
+# The episode's identity, in the meta of both the episode and the writer that made it.
+META_UID = 'uid'
+# When the episode was opened, in the meta of both the episode and the writer that made it.
+META_CREATED_TS_NS = 'created_ts_ns'
 T = TypeVar('T')
 SIGNAL_FACTORY_T = Callable[[], Signal[Any]]
 
