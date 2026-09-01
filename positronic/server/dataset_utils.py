@@ -427,8 +427,8 @@ _RATE_SLACK = 1e-6
 def _decimation_indices(ts_arr: np.ndarray, max_hz: float) -> np.ndarray:
     """Indices into ``ts_arr`` whose timestamps sit at least ``1 / max_hz`` apart.
 
-    The spacing is read off the timestamps, so a burst either side of a pause stays under the cap.
-    A pause pulls the average rate below the rate inside each burst.
+    A burst either side of a pause stays under the cap: the spacing is read off the timestamps,
+    and a pause pulls the average rate below the rate inside each burst.
     """
     if max_hz <= 0 or len(ts_arr) < 2:
         return np.arange(len(ts_arr))
