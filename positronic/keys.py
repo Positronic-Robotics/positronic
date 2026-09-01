@@ -1,10 +1,11 @@
 """Canonical names on the positronic embodiment/inference wire.
 
-Every sim adapter and embodiment produces the signal keys and every vendor codec consumes them;
-every policy reports the handshake fields and the analysis configs read them back off an episode. They
-are defined here once, in a leaf module with no positronic imports, so a rename is a single-site
-change the type checker propagates instead of a string literal duplicated across codecs, evals,
-configs, adapters and datasets.
+Every sim adapter and embodiment produces them and every vendor codec consumes them. They are defined
+here once, in a leaf module with no positronic imports, so a rename is a single-site change the type
+checker propagates instead of a string literal duplicated across codecs, configs, adapters and datasets.
+A key one package owns lives in that package instead: a trial's in ``positronic.eval``, the robot
+model's in ``drivers.roboarm.models``, the inference handshake's in ``policy.base``, a benchmark's in
+its adapter.
 """
 
 # The arm's command channel, and the signals a recorded command unfolds into. The suffixes are the
@@ -16,13 +17,6 @@ TARGET_JOINTS = f'{ROBOT_COMMAND}.joints'
 
 # The gripper's command channel: a scalar target beside the arm's ``ROBOT_COMMAND``.
 TARGET_GRIP = 'target_grip'
-
-# The names of what a trial readies before it opens. ``Embodiment.prepare_handlers`` is keyed by them, and so
-# is what a ``Task`` asks for. A rig with two arms names its arms ``arm.{side}``. ``SCENE`` means the world
-# this trial runs in is ready, drawn by whichever handler the embodiment binds.
-ARM = 'arm'
-GRIPPER = 'gripper'
-SCENE = 'scene'
 
 
 def is_robot_command(name: str) -> bool:
@@ -60,82 +54,3 @@ EXTERIOR_IMAGE = f'{IMAGE_PREFIX}exterior'
 OBS_TIME_NS = 'obs_time_ns'
 WALL_TIME_NS = 'wall_time_ns'
 ACTION_TIMESTAMP = 'timestamp'
-
-# The robot model, carried in episode statics for the transforms that solve against it (``IKJointsAction``).
-# ``CONTROL_FRAME`` names the frame in ``URDF`` that the embodiment reports ``EE_POSE`` in; every embodiment
-# declares it as ``models.DEFAULT_FRAME``, and datasets recorded before that convention name their own frame.
-URDF = 'urdf'
-CONTROL_FRAME = 'control_frame'
-JOINT_NAMES = 'joint_names'
-
-# Where the episode's poses sit relative to ``models.DEFAULT_FRAME``, as a ``[tx,ty,tz,qw,qx,qy,qz]``
-# transform. Absent means they are in that frame itself; ``ChangeEEFrame`` writes it when it moves them.
-EE_FRAME = 'ee_frame'
-
-# The 3D viewer's pointers into an episode: which signals carry joint angles, which carry poses. One arm per
-# ``JOINT_SIGNALS`` entry, each running ``URDF`` and standing where ``MOUNTS`` places it, keyed by that signal.
-JOINT_SIGNALS = 'joint_signals'
-POSE_SIGNALS = 'pose_signals'
-MOUNTS = 'mounts'
-
-# The inference handshake: a policy reports these through its ``meta``, a remote policy nests the serving
-# half under ``SERVER``, and the harness records the result under ``POLICY_META``. ``TYPE`` names the policy
-# at the top level and the vendor under ``SERVER``, so a reader composes a prefix with a field:
-# f'{SERVER_META}.{TYPE}'.
-TYPE = 'type'
-CHECKPOINT_ID = 'checkpoint_id'
-CHECKPOINT_PATH = 'checkpoint_path'
-EXPERIMENT_NAME = 'experiment_name'
-CONFIG_NAME = 'config_name'
-HOST = 'host'
-PORT = 'port'
-SERVER = 'server'
-# The wire half of the handshake: what the server declares for the rig to build and obey.
-LOCAL_STACK = 'local_stack'
-COMPRESS_IMAGES = 'compress_images'
-POSITRONIC_VERSION = 'positronic_version'
-
-POLICY_META = 'inference.policy'
-SERVER_META = f'{POLICY_META}.{SERVER}'
-
-# What a trial reports when it ends, in its episode's statics. The harness writes ``EVAL_TERMINATED``:
-# True when a terminal was delivered inside the budget, False when the budget ran out. ``EVAL_SUCCESS``
-# rides in the terminal payload an env's adapter returns, so an env that reports it only on success
-# leaves it absent on failure — a reader defaults it rather than assuming a False.
-EVAL_SUCCESS = 'eval.success'
-EVAL_TERMINATED = 'eval.terminated'
-# Whether the trial charged each model call the wall time it really took. True on a real rig whatever the
-# task asked, since it cannot hold the world still while the model thinks.
-EVAL_CHARGE_INFERENCE_TIME = 'eval.charge_inference_time'
-# Who ended the trial, when it was not the task's own ground truth. An env's terminal leaves it absent.
-EVAL_ENDED_BY = 'eval.ended_by'
-ENDED_BY_OPERATOR = 'operator'
-
-# The conditions the trial ran under, stamped into its episode's statics. ``EVAL_UNIVERSE`` is ``'sim'`` or
-# ``'real'``; ``EVAL_TIMEOUT`` is absent from an episode whose task set no budget.
-EVAL_UNIVERSE = 'eval.universe'
-EVAL_EMBODIMENT = 'eval.embodiment'
-EVAL_TIMEOUT = 'eval.timeout'
-# The seconds the benchmark gives an episode of this task; a config sets the trial's deadline from it.
-EVAL_EPISODE_LENGTH = 'eval.episode_length'
-
-# A trial's place in its eval's sweep, stamped into every trial's params and recorded in its episode's
-# statics. ``EVAL_SEED`` also rides an env's reset token, where absent means the env draws its own.
-EVAL_SEED = 'eval.seed'
-EVAL_TRIAL_INDEX = 'eval.trial_index'
-EVAL_TRIAL_COUNT = 'eval.trial_count'
-
-# The id of the task a trial runs, as the benchmark names it. The episode records it; positronic never reads
-# inside it.
-EVAL_TASK = 'eval.task'
-
-# The scene a trial runs: the task, as the benchmark's adapter names it from the env's task records, plus the
-# settings the eval config owns; the adapter reads them back into the reset token. LIBERO names a task by
-# suite and index plus the render and control settings its server caches an env by; RoboLab adds the phrasing
-# of its instruction.
-EVAL_SUITE = 'eval.suite'
-EVAL_TASK_ID = 'eval.task_id'
-EVAL_CAMERA_RESOLUTION = 'eval.camera_resolution'
-EVAL_CONTROL_MODE = 'eval.control_mode'
-EVAL_SETTLE_STEPS = 'eval.settle_steps'
-EVAL_INSTRUCTION_TYPE = 'eval.instruction_type'

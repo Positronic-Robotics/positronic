@@ -28,7 +28,7 @@ import operator
 from collections.abc import Callable
 from typing import Any
 
-from positronic import keys
+from positronic.drivers.roboarm.models import EE_FRAME
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, JointDeltaAction
 from positronic.policy.base import PAR, SEQ, Layer, Policy
 from positronic.policy.codec import (
@@ -116,10 +116,10 @@ class Pipeline:
         self.source = source
         # Which side of ``remote`` the conversion sits on is a choice; doing it on both sides is not. Two
         # declarations convert twice, leaving poses at the product while the handshake still names one of them.
-        declared = [c for c in self.components if isinstance(c, Codec) and keys.EE_FRAME in c.meta]
+        declared = [c for c in self.components if isinstance(c, Codec) and EE_FRAME in c.meta]
         if len(declared) > 1:
             raise ValueError(
-                f'{len(declared)} components of this pipeline declare {keys.EE_FRAME}; each converts, so poses '
+                f'{len(declared)} components of this pipeline declare {EE_FRAME}; each converts, so poses '
                 'end up at the product of their transforms. Declare the frame once.'
             )
 

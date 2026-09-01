@@ -20,13 +20,14 @@ import rerun.blueprint as rrb
 from av.video.stream import VideoStream
 from rerun.urdf import UrdfTree
 
-from positronic import keys
 from positronic.dataset.dataset import Dataset
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.signal import Kind
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.video import VideoSignal
+from positronic.drivers.roboarm.models import JOINT_NAMES, URDF
+from positronic.eval import JOINT_SIGNALS, MOUNTS, POSE_SIGNALS
 from positronic.utils.rerun_compat import flatten_numeric, log_series_styles, set_timeline_time
 
 # TODO: 3D visualization roles (pose_signals, joint_signals) are currently read from episode
@@ -168,14 +169,14 @@ def _unplotted_notice(unplotted: dict[str, int]) -> str:
     )
 
 
-# The retired singular spelling of `keys.JOINT_SIGNALS`. It lives here rather than in `keys` because nothing
+# The retired singular spelling of `JOINT_SIGNALS`. It lives here rather than in `keys` because nothing
 # writes it any more — only released data carries it, and only until #587 converts that data.
 _SINGULAR_JOINT_SIGNAL = 'joint_signal'
 
 
 def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
-    pose_set = set(ep.static.get(keys.POSE_SIGNALS, []))
-    joint_set = set(ep.static.get(keys.JOINT_SIGNALS, []))
+    pose_set = set(ep.static.get(POSE_SIGNALS, []))
+    joint_set = set(ep.static.get(JOINT_SIGNALS, []))
     # TODO(#587): drop once the published PhAIL dataset carries the plural key. Its `static.json` has the
     # singular one baked in, so without this a released episode loses its arm model and joint names.
     if _SINGULAR_JOINT_SIGNAL in ep.static:
@@ -269,7 +270,7 @@ def _build_blueprint(signals: EpisodeSignals, ep: Episode) -> rrb.Blueprint:
 
 def _setup_series_names(signals: EpisodeSignals, ep: Episode) -> None:
     joint_set = set(signals.joints)
-    joint_names = ep.static.get(keys.JOINT_NAMES)
+    joint_names = ep.static.get(JOINT_NAMES)
     pose_set = set(signals.poses)
     for key, dim in signals.plotted.items():
         is_joint_vel = key.endswith('.dq') and f'{key[: -len(".dq")]}.q' in joint_set
@@ -552,8 +553,8 @@ def _log_urdf_robot(
     ep: Episode, joint_sig: str, numeric_data: dict[str, tuple[np.ndarray, np.ndarray]], drainer: _BinaryStreamDrainer
 ) -> Iterator[bytes]:
     """Log the episode's robot model, its joints animated by `joint_sig`."""
-    joint_names = ep.static.get(keys.JOINT_NAMES)
-    urdf_str = ep.static.get(keys.URDF)
+    joint_names = ep.static.get(JOINT_NAMES)
+    urdf_str = ep.static.get(URDF)
     meshes = ep.static.get('meshes')
     if not (joint_names and urdf_str and meshes):
         return
@@ -563,7 +564,7 @@ def _log_urdf_robot(
             f'{joint_sig} carries {q_vals.shape[1]} angles for {len(joint_names)} model joints; skipping its model'
         )
         return
-    mount = ep.static.get(keys.MOUNTS, {}).get(joint_sig)
+    mount = ep.static.get(MOUNTS, {}).get(joint_sig)
     namespace = f'{joint_sig}.'
     prefix = f'/3d/robot/{joint_sig}'
 

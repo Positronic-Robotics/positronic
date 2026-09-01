@@ -14,6 +14,7 @@ from positronic.drivers.roboarm import command
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, _ConnectRetries
 from positronic.offboard.tests.conftest import ANSWER_SEC, round_trip
 from positronic.policy import RemotePolicy
+from positronic.policy.base import POSITRONIC_VERSION
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.remote import _prepare_obs
@@ -490,7 +491,7 @@ def test_declared_stack_built_at_session_open(open_session):
 
 
 def test_unknown_declared_entry_fails_before_motion():
-    policy, _ = _mock_remote_policy({'local_stack': {'name': 'run_arbitrary_code'}, keys.POSITRONIC_VERSION: '9.9.9'})
+    policy, _ = _mock_remote_policy({'local_stack': {'name': 'run_arbitrary_code'}, POSITRONIC_VERSION: '9.9.9'})
     with pytest.raises(ValueError, match='9.9.9'):
         policy.new_session()
 

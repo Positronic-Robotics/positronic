@@ -20,7 +20,7 @@ import positronic.cfg.simulator
 from pimm.world import LocalQueueEmitter, LocalQueueReceiver, VirtualClock
 from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.eval import Eval, Observation, Task
+from positronic.eval import EVAL_SEED, EVAL_TASK, Eval, Observation, Task
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
 from positronic.simulator.env_server.server import EnvProtocol
@@ -173,10 +173,10 @@ class StackCubesAdapter(WireCommandAdapter):
         self._camera_dict = camera_dict  # logical observation name -> the env's model camera name
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [{keys.EVAL_TASK: record['name']} for record in records]
+        return [{EVAL_TASK: record['name']} for record in records]
 
     def _reset_token(self, params: dict[str, Any]) -> Any:
-        return params.get(keys.EVAL_SEED)
+        return params.get(EVAL_SEED)
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         state = MujocoFrankaState()

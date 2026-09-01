@@ -5,12 +5,12 @@ from pathlib import Path
 import numpy as np
 
 import pimm
-from positronic import geom, keys
+from positronic import geom
 from positronic.drivers.motors.feetech import MotorBus
 from positronic.drivers.roboarm import RobotStatus, State
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.kinematics import Kinematics
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, add_default_frame
+from positronic.drivers.roboarm.models import CONTROL_FRAME, DEFAULT_FRAME, JOINT_NAMES, URDF, add_default_frame
 from positronic.drivers.utils import DriverRun, MoveStatus, log_failure
 
 
@@ -218,9 +218,9 @@ class Robot(pimm.ControlSystem):
         urdf = ET.fromstring(Path(_SO101_URDF_PATH).read_text())
         add_default_frame(urdf, _SO101_EE_LINK)
         return {
-            keys.URDF: ET.tostring(urdf, encoding='unicode'),
-            keys.JOINT_NAMES: _SO101_JOINT_NAMES,
-            keys.CONTROL_FRAME: DEFAULT_FRAME,
+            URDF: ET.tostring(urdf, encoding='unicode'),
+            JOINT_NAMES: _SO101_JOINT_NAMES,
+            CONTROL_FRAME: DEFAULT_FRAME,
         }
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:

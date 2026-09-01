@@ -6,8 +6,50 @@ import pimm
 from positronic import keys
 from positronic.dataset.serializers import Serializer
 
+# The names of what a trial readies before it opens. ``Embodiment.prepare_handlers`` is keyed by them, and so
+# is what a ``Task`` asks for. A rig with two arms names its arms ``arm.{side}``. ``SCENE`` means the world
+# this trial runs in is ready, drawn by whichever handler the embodiment binds.
+ARM = 'arm'
+GRIPPER = 'gripper'
+SCENE = 'scene'
+
+# The 3D viewer's pointers into an episode: which signals carry joint angles, which carry poses. One arm per
+# ``JOINT_SIGNALS`` entry, each running ``URDF`` and standing where ``MOUNTS`` places it, keyed by that signal.
+JOINT_SIGNALS = 'joint_signals'
+POSE_SIGNALS = 'pose_signals'
+MOUNTS = 'mounts'
+
 # Embodiment-level static meta: how recorded signals map to the canonical robot fields.
-ROBOT_STATIC_META = {keys.JOINT_SIGNALS: [keys.JOINTS], keys.POSE_SIGNALS: [keys.EE_POSE, keys.TARGET_EE_POSE]}
+ROBOT_STATIC_META = {JOINT_SIGNALS: [keys.JOINTS], POSE_SIGNALS: [keys.EE_POSE, keys.TARGET_EE_POSE]}
+
+# What a trial reports when it ends, in its episode's statics. The harness writes ``EVAL_TERMINATED``:
+# True when a terminal was delivered inside the budget, False when the budget ran out. ``EVAL_SUCCESS``
+# rides in the terminal payload an env's adapter returns, so an env that reports it only on success
+# leaves it absent on failure — a reader defaults it rather than assuming a False.
+EVAL_SUCCESS = 'eval.success'
+EVAL_TERMINATED = 'eval.terminated'
+# Whether the trial charged each model call the wall time it really took. True on a real rig whatever the
+# task asked, since it cannot hold the world still while the model thinks.
+EVAL_CHARGE_INFERENCE_TIME = 'eval.charge_inference_time'
+# Who ended the trial, when it was not the task's own ground truth. An env's terminal leaves it absent.
+EVAL_ENDED_BY = 'eval.ended_by'
+ENDED_BY_OPERATOR = 'operator'
+
+# The conditions the trial ran under, stamped into its episode's statics. ``EVAL_UNIVERSE`` is ``'sim'`` or
+# ``'real'``; ``EVAL_TIMEOUT`` is absent from an episode whose task set no budget.
+EVAL_UNIVERSE = 'eval.universe'
+EVAL_EMBODIMENT = 'eval.embodiment'
+EVAL_TIMEOUT = 'eval.timeout'
+
+# A trial's place in its eval's sweep, stamped into every trial's params and recorded in its episode's
+# statics. ``EVAL_SEED`` also rides an env's reset token, where absent means the env draws its own.
+EVAL_SEED = 'eval.seed'
+EVAL_TRIAL_INDEX = 'eval.trial_index'
+EVAL_TRIAL_COUNT = 'eval.trial_count'
+
+# The id of the task a trial runs, as the benchmark names it. The episode records it; positronic never reads
+# inside it.
+EVAL_TASK = 'eval.task'
 
 
 @dataclass
@@ -52,7 +94,7 @@ class Embodiment:
     descriptor: str
     observations: dict[str, Observation]
     commands: dict[str, Command]
-    # Everything a trial readies before it opens, keyed by ``keys.ARM``, ``keys.SCENE`` and the like. One
+    # Everything a trial readies before it opens, keyed by ``ARM``, ``SCENE`` and the like. One
     # handler serves one caller, so a device backing several command channels appears here once.
     prepare_handlers: dict[str, pimm.calls.ControlSystemHandler[Any, None]]
     static_meta: dict[str, Any]

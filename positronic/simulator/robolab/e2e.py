@@ -22,10 +22,10 @@ import argparse
 
 import numpy as np
 
-from positronic import keys
 from positronic.cfg.eval import spec
+from positronic.eval import EVAL_TASK
 from positronic.simulator.env_server.client import EnvConnection
-from positronic.simulator.robolab.adapter import RobolabAdapter
+from positronic.simulator.robolab.adapter import EVAL_EPISODE_LENGTH, RobolabAdapter
 from positronic.simulator.robolab.launcher import serve_robolab
 
 # Keep re-sending the last action after the log ends, matching RoboLab's own replay tail: the final placement
@@ -71,10 +71,10 @@ def _check_task_list(conn: EnvConnection, task: str) -> None:
     """Assert the server answers its own task list, as the adapter reads it."""
     adapter = RobolabAdapter({})
     params = adapter.task_params(conn.tasks(spec(task=task)))
-    assert [p[keys.EVAL_TASK] for p in params] == [task], f'{task} asked for, {params} answered'
-    assert params[0][keys.EVAL_EPISODE_LENGTH] > 0, f'{task} reports no episode budget, so a trial has no deadline'
+    assert [p[EVAL_TASK] for p in params] == [task], f'{task} asked for, {params} answered'
+    assert params[0][EVAL_EPISODE_LENGTH] > 0, f'{task} reports no episode budget, so a trial has no deadline'
     whole = adapter.task_params(conn.tasks({}))
-    assert task in {p[keys.EVAL_TASK] for p in whole}, f'{task} is missing from the whole benchmark'
+    assert task in {p[EVAL_TASK] for p in whole}, f'{task} is missing from the whole benchmark'
 
 
 def run_replay(fixture_path: str, *, task: str) -> float:

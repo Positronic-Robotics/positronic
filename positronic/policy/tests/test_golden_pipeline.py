@@ -39,7 +39,7 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import CartesianPosition, CommandType
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
-from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
+from positronic.eval import ENDED_BY_OPERATOR, EVAL_ENDED_BY, ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.geom import Rotation, Transform3D
 from positronic.policy.base import DelegatingPolicy, DelegatingSession, Policy, Session
 from positronic.policy.codec import ActionTiming
@@ -222,7 +222,7 @@ def _run_pipeline(tmp_path: Path) -> dict:
             (robot.inject_error, 0.0),  # one-shot error: StopOnFault stops the arm for that frame
             (None, 0.5),
             (None, 1.5),  # more cycles after recovery
-            (partial(done_em.emit, {keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR}), 0.0),
+            (partial(done_em.emit, {EVAL_ENDED_BY: ENDED_BY_OPERATOR}), 0.0),
             (None, 0.5),  # let DsWriterAgent commit before world exit
         ]
         scheduler = world.start([harness, ManualDriver(script), robot, gripper, ds_agent])

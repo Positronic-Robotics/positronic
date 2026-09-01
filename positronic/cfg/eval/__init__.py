@@ -4,8 +4,7 @@ from typing import Any
 
 import configuronic as cfn
 
-from positronic import keys
-from positronic.eval import Task
+from positronic.eval import EVAL_SEED, EVAL_TRIAL_COUNT, EVAL_TRIAL_INDEX, SCENE, Task
 
 
 @cfn.config()
@@ -28,8 +27,8 @@ def number_trials(trials: list[tuple[Task, dict]]) -> list[Task]:
     return [
         replace(
             task,
-            prepare_args={**task.prepare_args, keys.SCENE: params},
-            meta={**task.meta, **params, keys.EVAL_TRIAL_INDEX: i, keys.EVAL_TRIAL_COUNT: len(trials)},
+            prepare_args={**task.prepare_args, SCENE: params},
+            meta={**task.meta, **params, EVAL_TRIAL_INDEX: i, EVAL_TRIAL_COUNT: len(trials)},
         )
         for i, (task, params) in enumerate(trials)
     ]
@@ -43,7 +42,7 @@ def build_tasks(task: Task, seed: int | None, trial_count: int, scenes: list[dic
     random seed per trial; an int runs ``seed .. seed + trial_count - 1`` for every scene.
     """
     return number_trials([
-        (task, {**scene, keys.EVAL_SEED: seed + s if seed is not None else random.randrange(2**31)})
+        (task, {**scene, EVAL_SEED: seed + s if seed is not None else random.randrange(2**31)})
         for scene in (scenes if scenes is not None else [{}])
         for s in range(trial_count)
     ])

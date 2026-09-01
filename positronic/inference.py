@@ -15,12 +15,11 @@ import positronic.cfg.embodiment
 import positronic.cfg.eval.real.droid
 import positronic.cfg.policy as policy_cfg
 from pimm.logging import init_logging
-from positronic import keys
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import prepare_output_dir, run, run_world
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
-from positronic.eval import Embodiment, Task
+from positronic.eval import ENDED_BY_OPERATOR, EVAL_ENDED_BY, Embodiment, Task
 from positronic.policy import Policy
 from positronic.policy.harness import Rollout
 
@@ -65,7 +64,7 @@ class KeyboardOperator(KeyboardControl):
                 except Exception as e:
                     logger.error(f'Episode failed to open: {e}')
             case 'p':
-                self.done.emit({keys.EVAL_ENDED_BY: keys.ENDED_BY_OPERATOR})
+                self.done.emit({EVAL_ENDED_BY: ENDED_BY_OPERATOR})
 
 
 def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_dir=None):

@@ -23,7 +23,7 @@ from positronic.dataset.transforms import Elementwise, lazy_sequence
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, FromValue, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import assert_default_frame, change_frame, ee_frame
-from positronic.drivers.roboarm.models import DEFAULT_FRAME
+from positronic.drivers.roboarm.models import DEFAULT_FRAME, EE_FRAME
 from positronic.policy.base import PAR, SEQ, DelegatingSession, Layer, Session, _ComposedLayer
 from positronic.utils import merge_dicts
 
@@ -176,10 +176,10 @@ class _ComposedCodec(Codec):
         # ``ee_frame`` states where poses sit, not how a codec is configured, so declaring it means having moved
         # them. Agreeing on a value buys nothing here: the second move starts where the first left off. Under
         # ``&`` both halves see the same input, which is why the check belongs to sequential composition.
-        if obs_keys.EE_FRAME in left and obs_keys.EE_FRAME in right:
+        if EE_FRAME in left and EE_FRAME in right:
             raise ValueError(
-                f'sequential codecs both declare {obs_keys.EE_FRAME}: poses come out at the product of both '
-                f'moves, which neither {left[obs_keys.EE_FRAME]} nor {right[obs_keys.EE_FRAME]} names'
+                f'sequential codecs both declare {EE_FRAME}: poses come out at the product of both '
+                f'moves, which neither {left[EE_FRAME]} nor {right[EE_FRAME]} names'
             )
         return _merged_meta(left, right)
 
@@ -542,7 +542,7 @@ class ChangeEEFrame(Codec):
                     f'{DEFAULT_FRAME!r}; ``transform`` names the policy frame from there, so re-expressing an '
                     'episode a codec already moved would train on a frame the checkpoint does not declare'
                 )
-            derived: dict[str, Any] = {obs_keys.EE_FRAME: FromValue(codec._transform.as_vector(_QUAT))}
+            derived: dict[str, Any] = {EE_FRAME: FromValue(codec._transform.as_vector(_QUAT))}
             derived.update({key: partial(self._derive_pose, key) for key in codec._keys if key in episode})
             return Group(Derive(**derived), Identity())(episode)
 
@@ -576,7 +576,7 @@ class ChangeEEFrame(Codec):
 
     @property
     def meta(self):
-        return {obs_keys.EE_FRAME: self._transform.as_vector(_QUAT).tolist()}
+        return {EE_FRAME: self._transform.as_vector(_QUAT).tolist()}
 
     def to_spec(self):
         # Lists, not tuples, so the spec is identical before and after a wire round-trip.

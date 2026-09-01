@@ -19,7 +19,7 @@ from positronic.cli.eval.run import main
 from positronic.dataset import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.eval import Task
+from positronic.eval import EVAL_EMBODIMENT, EVAL_SEED, EVAL_SUCCESS, EVAL_TASK, EVAL_TERMINATED, EVAL_UNIVERSE, Task
 from positronic.policy import Policy, Session
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkedSchedule
@@ -295,10 +295,10 @@ class _CountdownEnv(EnvProtocol):
 
 class _CountdownAdapter(EnvAdapter):
     def task_params(self, records):
-        return [{keys.EVAL_TASK: record['name']} for record in records]
+        return [{EVAL_TASK: record['name']} for record in records]
 
     def reset_token(self, params):
-        return params.get(keys.EVAL_SEED)
+        return params.get(EVAL_SEED)
 
     def action(self, commands):
         return {}
@@ -310,7 +310,7 @@ class _CountdownAdapter(EnvAdapter):
         return {}
 
     def terminal(self, result):
-        return {keys.EVAL_SUCCESS: True} if result['done'] else None
+        return {EVAL_SUCCESS: True} if result['done'] else None
 
 
 @pytest.mark.timeout(60.0)
@@ -322,9 +322,9 @@ def test_the_proxy_connects_on_a_tasks_call_before_any_reset():
         obs_rx = world.pair(proxy.observations['value'])
         world.start([proxy])
 
-        assert proxy.tasks({'task': _COUNTDOWN}) == [{keys.EVAL_TASK: _COUNTDOWN}]
+        assert proxy.tasks({'task': _COUNTDOWN}) == [{EVAL_TASK: _COUNTDOWN}]
 
-        proxy.reset({keys.EVAL_SEED: 0})
+        proxy.reset({EVAL_SEED: 0})
         np.testing.assert_array_equal(obs_rx.value, np.zeros(7))
 
 
@@ -370,7 +370,7 @@ def test_proxy_publishes_the_reset_frame_then_free_runs():
         scheduler = world.start([proxy])
         drive_scheduler(scheduler, steps=2)  # inactive: the proxy paces time without an env
 
-        proxy.reset({keys.EVAL_SEED: 0})
+        proxy.reset({EVAL_SEED: 0})
         np.testing.assert_array_equal(obs_rx.read().data, np.zeros(7))
         assert done_rx.read().data == {}
 
@@ -388,7 +388,7 @@ def test_proxy_caches_reset_meta_as_live_instruction_source():
         task = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=1.0)
         scheduler = world.start([proxy])
 
-        proxy.reset({keys.EVAL_SEED: 0})
+        proxy.reset({EVAL_SEED: 0})
         assert task.instruction == 'countdown'  # resolved live off the cached reset meta
         drive_scheduler(scheduler, steps=4)  # the env steps, each ``step`` omitting meta ...
         assert task.instruction == 'countdown'  # ... yet the reset-scoped cache holds
@@ -402,7 +402,7 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     host, port = env_server
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        trial = number_trials([(replace(next(iter(ev.tasks())), timeout_sec=0.1), {keys.EVAL_SEED: 100})])[0]
+        trial = number_trials([(replace(next(iter(ev.tasks())), timeout_sec=0.1), {EVAL_SEED: 100})])[0]
         policy = StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0)
         main(
             policy=ChunkedSchedule().wrap(policy),
@@ -414,10 +414,10 @@ def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     assert len(ds) == 1
     episode = ds[0]
     assert isinstance(episode, Episode)
-    assert episode.static[keys.EVAL_TERMINATED] is False
-    assert keys.EVAL_SUCCESS not in episode.static
-    assert episode.static[keys.EVAL_UNIVERSE] == 'sim'
-    assert episode.static[keys.EVAL_EMBODIMENT] == 'remote.mujoco.franka'
+    assert episode.static[EVAL_TERMINATED] is False
+    assert EVAL_SUCCESS not in episode.static
+    assert episode.static[EVAL_UNIVERSE] == 'sim'
+    assert episode.static[EVAL_EMBODIMENT] == 'remote.mujoco.franka'
     assert episode.static['scene_xml'].startswith('<mujoco')
     signals = episode.signals
     assert keys.EXTERIOR_IMAGE in signals
@@ -477,7 +477,7 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
         task = replace(next(iter(ev.tasks())), timeout_sec=20 * control_dt)
-        trial = number_trials([(task, {keys.EVAL_SEED: 100})])[0]
+        trial = number_trials([(task, {EVAL_SEED: 100})])[0]
         main(policy=policy, evals=[replace(ev, tasks=partial(iter, [trial]))], output_dir=str(tmp_path))
 
     grip = LocalDataset(tmp_path)[0].signals['target_grip']

@@ -11,8 +11,9 @@ from typing import Any
 import numpy as np
 
 import pimm
-from positronic import geom, keys
+from positronic import geom
 from positronic.drivers import vendor_import
+from positronic.drivers.roboarm.models import CONTROL_FRAME, JOINT_NAMES, URDF
 from positronic.drivers.utils import DriverRun, MoveAbandoned, MoveStatus, log_failure
 
 from . import RobotStatus, State, command
@@ -345,10 +346,10 @@ class Robot(pimm.ControlSystem):
         gripper = attach_robotiq_2f85(root, meshes)
         add_default_frame(root, EE_LINK)
         return {
-            keys.URDF: ET.tostring(root, encoding='unicode'),
-            keys.JOINT_NAMES: _revolute_joint_names(urdf_xml),
+            URDF: ET.tostring(root, encoding='unicode'),
+            JOINT_NAMES: _revolute_joint_names(urdf_xml),
             'meshes': meshes,
-            keys.CONTROL_FRAME: DEFAULT_FRAME,
+            CONTROL_FRAME: DEFAULT_FRAME,
             'gripper': gripper,
         }
 

@@ -15,9 +15,9 @@ import numpy as np
 from scipy.optimize import lsq_linear
 from scipy.spatial.transform import Rotation as ScipyRotation
 
-from positronic import geom, keys
+from positronic import geom
 from positronic.dataset import transforms
-from positronic.drivers.roboarm.models import DEFAULT_FRAME
+from positronic.drivers.roboarm.models import CONTROL_FRAME, DEFAULT_FRAME, EE_FRAME, JOINT_NAMES, URDF
 
 _QUAT = geom.Rotation.Representation.QUAT
 
@@ -117,23 +117,23 @@ def assert_default_frame(statics) -> None:
     TODO(#550): delete this. ``CONTROL_FRAME`` goes with that issue, leaving nothing to check: poses are at
     ``DEFAULT_FRAME`` by contract and ``EE_FRAME`` states any offset from it.
     """
-    if keys.CONTROL_FRAME not in statics:
+    if CONTROL_FRAME not in statics:
         return
-    frame = statics[keys.CONTROL_FRAME]
+    frame = statics[CONTROL_FRAME]
     if frame != DEFAULT_FRAME:
         raise ValueError(
             f'Poses are reported in {frame!r}, but every frame transform is measured from {DEFAULT_FRAME!r} '
             '— see positronic/drivers/roboarm/README.md'
         )
-    if keys.URDF in statics:
-        frame_transform(statics[keys.URDF], frame, frame)
+    if URDF in statics:
+        frame_transform(statics[URDF], frame, frame)
 
 
 def ee_frame(episode) -> geom.Transform3D:
     """Where an episode's poses sit relative to ``DEFAULT_FRAME`` — identity unless a codec moved them."""
-    if keys.EE_FRAME not in episode:
+    if EE_FRAME not in episode:
         return geom.Transform3D.identity
-    return geom.Transform3D.from_vector(np.asarray(episode[keys.EE_FRAME], dtype=np.float64), _QUAT)
+    return geom.Transform3D.from_vector(np.asarray(episode[EE_FRAME], dtype=np.float64), _QUAT)
 
 
 def pose_anchor(episode) -> tuple[str, geom.Transform3D]:
@@ -143,9 +143,9 @@ def pose_anchor(episode) -> tuple[str, geom.Transform3D]:
     that name is exact — ``DEFAULT_FRAME`` was added alongside those frames, not in place of them — so the branch
     lives until those datasets are re-expressed, not longer.
     """
-    if keys.EE_FRAME in episode:
+    if EE_FRAME in episode:
         return DEFAULT_FRAME, ee_frame(episode)
-    return episode[keys.CONTROL_FRAME], geom.Transform3D.identity
+    return episode[CONTROL_FRAME], geom.Transform3D.identity
 
 
 def _parse_target(target_ee_pose_vec):
@@ -463,7 +463,7 @@ def ik_joints_from_episode(episode, solver_cls, tgt_ee_pose_key, current_q_key):
     codec has moved elsewhere come back to that frame first.
     """
     frame, offset = pose_anchor(episode)
-    solver = solver_cls(episode[keys.URDF], episode[keys.JOINT_NAMES], frame)
+    solver = solver_cls(episode[URDF], episode[JOINT_NAMES], frame)
     move = partial(change_frame, transform=offset.inv)
     targets = transforms.Elementwise(episode[tgt_ee_pose_key], transforms.lazy_sequence(move))
     return transforms.pairwise(episode[current_q_key], targets, solver.solve)

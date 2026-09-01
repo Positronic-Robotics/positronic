@@ -19,7 +19,7 @@ from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.tests.conftest import round_trip
 from positronic.policy import Codec, Policy, RemotePolicy, Session
-from positronic.policy.base import Runtime
+from positronic.policy.base import POSITRONIC_VERSION, Runtime
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
@@ -60,7 +60,7 @@ def test_full_inference_cycle(stub_server):
         assert session.metadata['model_name'] == 'stub'
         assert session.metadata['type'] == 'stub'
         assert session.metadata['local_stack'] == {'name': 'chunked_schedule'}
-        assert keys.POSITRONIC_VERSION in session.metadata
+        assert POSITRONIC_VERSION in session.metadata
 
         obs = {'image': 'test'}
         result = session.infer(obs)
@@ -465,7 +465,7 @@ def test_auth_accepts_the_token(authed_endpoint):
     try:
         # Reaching the handshake metadata means the upgrade completed and the server's first frame arrived.
         # An ingress that drops ``Upgrade`` never gets that far: it answers the handshake with a plain 200.
-        assert keys.POSITRONIC_VERSION in session.metadata
+        assert POSITRONIC_VERSION in session.metadata
     finally:
         session.close()
 

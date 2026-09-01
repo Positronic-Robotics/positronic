@@ -6,13 +6,22 @@ from positronic import keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm.ik import frame_transform
-from positronic.drivers.roboarm.models import DEFAULT_FRAME, DROID_EEF_LINK, EE_LINK, FLANGE_LINK, bundled_franka_model
+from positronic.drivers.roboarm.models import (
+    CONTROL_FRAME,
+    DEFAULT_FRAME,
+    DROID_EEF_LINK,
+    EE_FRAME,
+    EE_LINK,
+    FLANGE_LINK,
+    URDF,
+    bundled_franka_model,
+)
 from positronic.geom import Rotation, Transform3D, quat_closest
 from positronic.policy.codec import ChangeEEFrame
 from positronic.policy.spec import from_spec
 
 QUAT = Rotation.Representation.QUAT
-URDF = bundled_franka_model()[keys.URDF]
+URDF = bundled_franka_model()[URDF]
 TO_DROID = frame_transform(URDF, DEFAULT_FRAME, DROID_EEF_LINK)
 
 
@@ -131,7 +140,7 @@ def test_encode_passes_through_when_no_pose_key_is_present():
 
 def test_advertises_the_frame_it_speaks():
     codec = ChangeEEFrame(TO_DROID)
-    np.testing.assert_allclose(codec.meta[keys.EE_FRAME], TO_DROID.as_vector(QUAT), atol=1e-12)
+    np.testing.assert_allclose(codec.meta[EE_FRAME], TO_DROID.as_vector(QUAT), atol=1e-12)
     assert codec.training_encoder.meta == codec.meta
 
 
@@ -152,8 +161,8 @@ def test_training_encoder_maps_both_poses_forward():
     ts = [1000, 2000]
     episode = EpisodeContainer(
         data={
-            keys.URDF: URDF,
-            keys.CONTROL_FRAME: DEFAULT_FRAME,
+            URDF: URDF,
+            CONTROL_FRAME: DEFAULT_FRAME,
             keys.EE_POSE: DummySignal(ts, np.stack([obs_pose.as_vector(QUAT)] * 2)),
             keys.TARGET_EE_POSE: DummySignal(ts, np.stack([cmd_pose.as_vector(QUAT)] * 2)),
             keys.GRIP: DummySignal(ts, np.array([0.0, 1.0])),
@@ -164,7 +173,7 @@ def test_training_encoder_maps_both_poses_forward():
 
     np.testing.assert_allclose(out[keys.EE_POSE][0][0], (obs_pose * TO_DROID).as_vector(QUAT), atol=1e-9)
     np.testing.assert_allclose(out[keys.TARGET_EE_POSE][0][0], (cmd_pose * TO_DROID).as_vector(QUAT), atol=1e-9)
-    np.testing.assert_allclose(out[keys.EE_FRAME], TO_DROID.as_vector(QUAT), atol=1e-9)
+    np.testing.assert_allclose(out[EE_FRAME], TO_DROID.as_vector(QUAT), atol=1e-9)
     assert keys.GRIP in out, 'unrelated signals pass through'
 
 
@@ -175,19 +184,19 @@ def _episode(**statics):
 def test_training_encoder_rejects_poses_anchored_elsewhere():
     """A recording predating the contract names its own frame, and moving those poses is a silent 10cm."""
     with pytest.raises(ValueError, match=EE_LINK):
-        ChangeEEFrame(TO_DROID).training_encoder(_episode(**{keys.URDF: URDF, keys.CONTROL_FRAME: EE_LINK}))
+        ChangeEEFrame(TO_DROID).training_encoder(_episode(**{URDF: URDF, CONTROL_FRAME: EE_LINK}))
 
 
 def test_training_encoder_accepts_a_rig_that_ships_no_model():
     """What frame the poses sit in is what the recording states; a model confirms that but is not the claim."""
-    out = ChangeEEFrame(TO_DROID).training_encoder(_episode(**{keys.CONTROL_FRAME: DEFAULT_FRAME}))
-    np.testing.assert_allclose(out[keys.EE_FRAME], TO_DROID.as_vector(QUAT), atol=1e-9)
+    out = ChangeEEFrame(TO_DROID).training_encoder(_episode(**{CONTROL_FRAME: DEFAULT_FRAME}))
+    np.testing.assert_allclose(out[EE_FRAME], TO_DROID.as_vector(QUAT), atol=1e-9)
 
 
 def test_training_encoder_rejects_an_episode_another_codec_already_moved():
     """The transform names the policy frame from ``default``, so it has no meaning applied twice — the poses
     would land at the product while ``meta`` still declares one of the pair."""
-    moved = _episode(**{keys.CONTROL_FRAME: DEFAULT_FRAME, keys.EE_FRAME: TO_DROID.as_vector(QUAT)})
+    moved = _episode(**{CONTROL_FRAME: DEFAULT_FRAME, EE_FRAME: TO_DROID.as_vector(QUAT)})
     with pytest.raises(ValueError, match='already sit at'):
         ChangeEEFrame(TO_DROID).training_encoder(moved)
 
@@ -197,8 +206,8 @@ def test_training_encoder_skips_absent_command_pose():
     ts = [1000, 2000]
     episode = EpisodeContainer(
         data={
-            keys.URDF: URDF,
-            keys.CONTROL_FRAME: DEFAULT_FRAME,
+            URDF: URDF,
+            CONTROL_FRAME: DEFAULT_FRAME,
             keys.EE_POSE: DummySignal(ts, np.stack([obs_pose.as_vector(QUAT)] * 2)),
             keys.TARGET_JOINTS: DummySignal(ts, np.zeros((2, 7), dtype=np.float32)),
         }

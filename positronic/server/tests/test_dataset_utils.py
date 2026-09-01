@@ -9,6 +9,7 @@ import pytest
 
 from positronic import keys
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
+from positronic.eval import JOINT_SIGNALS
 from positronic.server import dataset_utils
 from positronic.server.dataset_utils import (
     _MAX_PLOTTED_WIDTH,
@@ -56,7 +57,7 @@ def test_wide_signal_still_reaches_the_3d_view(tmp_path):
 
 def test_every_joint_signal_the_episode_records_is_collected(tmp_path):
     widths = {'robot_state.left.q': 6, 'robot_state.right.q': 6, keys.GRIP: 1}
-    static = {keys.JOINT_SIGNALS: ['robot_state.left.q', 'robot_state.right.q', 'robot_state.absent.q']}
+    static = {JOINT_SIGNALS: ['robot_state.left.q', 'robot_state.right.q', 'robot_state.absent.q']}
 
     signals = _collect_signal_groups(_episode(tmp_path / 'ep', widths, static))
 

@@ -13,6 +13,17 @@ from positronic.cfg.ds import internal
 from positronic.cfg.eval.real import tasks
 from positronic.dataset.episode import META_CREATED_TS_NS, Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
+from positronic.policy.base import (
+    CHECKPOINT_ID,
+    CHECKPOINT_PATH,
+    CONFIG_NAME,
+    EXPERIMENT_NAME,
+    HOST,
+    POLICY_META,
+    PORT,
+    SERVER_META,
+    TYPE,
+)
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
 from positronic.server.positronic_server import main as server_main
@@ -45,17 +56,17 @@ def _model_label_from_path(model_type: str, checkpoint_path: str) -> str | None:
 
 
 def model(ep: Episode) -> str:
-    policy_type = ep.get(f'{keys.POLICY_META}.{keys.TYPE}', '')
+    policy_type = ep.get(f'{POLICY_META}.{TYPE}', '')
 
     if policy_type == 'remote':
-        server_type = ep.get(f'{keys.SERVER_META}.{keys.TYPE}', '')
-        path_label = _model_label_from_path(server_type, ep.get(f'{keys.SERVER_META}.{keys.CHECKPOINT_PATH}', ''))
+        server_type = ep.get(f'{SERVER_META}.{TYPE}', '')
+        path_label = _model_label_from_path(server_type, ep.get(f'{SERVER_META}.{CHECKPOINT_PATH}', ''))
         if path_label:
             return path_label
         return server_type or ''
 
     if policy_type:
-        path_label = _model_label_from_path(policy_type, ep.get(f'{keys.POLICY_META}.{keys.CHECKPOINT_PATH}', ''))
+        path_label = _model_label_from_path(policy_type, ep.get(f'{POLICY_META}.{CHECKPOINT_PATH}', ''))
         if path_label:
             return path_label
         return policy_type
@@ -68,7 +79,7 @@ def _split_path(path: str) -> list[str]:
 
 
 def _ckpt_act(ep: Episode) -> str:
-    raw_path = ep[f'{keys.POLICY_META}.{keys.CHECKPOINT_PATH}']
+    raw_path = ep[f'{POLICY_META}.{CHECKPOINT_PATH}']
     parts = _split_path(raw_path)
     chkpt_idxs = [i for i, p in enumerate(parts) if p == 'checkpoints']
     if chkpt_idxs:
@@ -79,10 +90,10 @@ def _ckpt_act(ep: Episode) -> str:
 
 
 def _ckpt_remote(ep: Episode) -> str:
-    checkpoint_id = ep.get(f'{keys.SERVER_META}.{keys.CHECKPOINT_ID}', '')
+    checkpoint_id = ep.get(f'{SERVER_META}.{CHECKPOINT_ID}', '')
     if checkpoint_id:
         return str(checkpoint_id)
-    raw_path = ep.get(f'{keys.SERVER_META}.{keys.CHECKPOINT_PATH}', '')
+    raw_path = ep.get(f'{SERVER_META}.{CHECKPOINT_PATH}', '')
     if raw_path:
         parts = _split_path(raw_path)
         if parts[-1] == 'pretrained_model' and len(parts) >= 2:
@@ -93,7 +104,7 @@ def _ckpt_remote(ep: Episode) -> str:
 
 def ckpt(ep: Episode) -> str | None:
     try:
-        match ep.get(f'{keys.POLICY_META}.{keys.TYPE}', ''):
+        match ep.get(f'{POLICY_META}.{TYPE}', ''):
             case 'act':
                 return _ckpt_act(ep)
             case 'remote':
@@ -572,7 +583,7 @@ PHAIL_OUTCOME_BADGE = RendererConfig(
 
 
 def phail_model(ep: Episode) -> str:
-    return PHAIL_MODEL_DISPLAY.get(ep.get(f'{keys.SERVER_META}.{keys.TYPE}', ''), '')
+    return PHAIL_MODEL_DISPLAY.get(ep.get(f'{SERVER_META}.{TYPE}', ''), '')
 
 
 def phail_status(ep: Episode) -> str:
@@ -605,8 +616,8 @@ def phail_uph(ep: Episode) -> float | None:
 
 
 def phail_variant(ep: Episode) -> str:
-    exp = ep.get(f'{keys.SERVER_META}.{keys.EXPERIMENT_NAME}', '')
-    ckpt = ep.get(f'{keys.SERVER_META}.{keys.CHECKPOINT_ID}', '')
+    exp = ep.get(f'{SERVER_META}.{EXPERIMENT_NAME}', '')
+    ckpt = ep.get(f'{SERVER_META}.{CHECKPOINT_ID}', '')
     if exp and ckpt:
         return f'{exp}:{ckpt}'
     if exp:
@@ -639,13 +650,13 @@ phail_inference = base_cfg.transform.override(
                     'robot_commands.reset',
                     'robot_command.reset',
                     'eval.object',
-                    f'{keys.POLICY_META}.{keys.PORT}',
-                    f'{keys.POLICY_META}.{keys.HOST}',
-                    f'{keys.SERVER_META}.{keys.CHECKPOINT_ID}',
-                    f'{keys.SERVER_META}.{keys.CONFIG_NAME}',
-                    f'{keys.SERVER_META}.{keys.EXPERIMENT_NAME}',
-                    f'{keys.SERVER_META}.{keys.TYPE}',
-                    f'{keys.POLICY_META}.{keys.TYPE}',
+                    f'{POLICY_META}.{PORT}',
+                    f'{POLICY_META}.{HOST}',
+                    f'{SERVER_META}.{CHECKPOINT_ID}',
+                    f'{SERVER_META}.{CONFIG_NAME}',
+                    f'{SERVER_META}.{EXPERIMENT_NAME}',
+                    f'{SERVER_META}.{TYPE}',
+                    f'{POLICY_META}.{TYPE}',
                 ]
             ),
             # NOTE: _phail_derives reads inference.policy.server.type from the original episode,
@@ -728,7 +739,7 @@ phail_episodes = base_cfg.concat_ds.override(datasets=[phail_inference, phail_hu
 
 
 def _raw_model(ep: Episode) -> str:
-    return ep.get(f'{keys.SERVER_META}.{keys.TYPE}', '')
+    return ep.get(f'{SERVER_META}.{TYPE}', '')
 
 
 phail_inference_release = base_cfg.transform.override(
@@ -744,9 +755,9 @@ phail_inference_release = base_cfg.transform.override(
                 remove=[
                     'robot_commands.reset',
                     'robot_command.reset',
-                    f'{keys.POLICY_META}.{keys.PORT}',
-                    f'{keys.POLICY_META}.{keys.HOST}',
-                    f'{keys.POLICY_META}.{keys.TYPE}',
+                    f'{POLICY_META}.{PORT}',
+                    f'{POLICY_META}.{HOST}',
+                    f'{POLICY_META}.{TYPE}',
                 ]
             ),
             Derive(model=_raw_model, variant=phail_variant),
