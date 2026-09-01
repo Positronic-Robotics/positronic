@@ -77,18 +77,17 @@ def require_dataset(func):
     return wrapper
 
 
-def _get_rrd_cache_path(episode_id: int, max_hz: float, max_resolution: int) -> str:
+def _get_rrd_cache_path(episode_id: int, max_hz: float, max_resolution: int) -> Path:
     ds: LocalDataset | None = app_state.get('dataset')  # type: ignore[assignment]
     if ds is None:
         raise RuntimeError('Dataset not loaded')
-    cache_root = str(app_state['cache_dir'])
     ds_id = str(Path(str(app_state['root'])).resolve()).replace(os.sep, '_').replace(':', '')
-    episode_cache_dir = os.path.join(cache_root, ds_id)
-    os.makedirs(episode_cache_dir, exist_ok=True)
+    episode_cache_dir = Path(str(app_state['cache_dir'])) / ds_id
+    episode_cache_dir.mkdir(parents=True, exist_ok=True)
     # The cache identity is the episode uid and both caps: position is view-dependent, and a file
     # written under other caps holds different samples.
     uid = cast(Episode, ds[episode_id]).meta['uid']
-    return os.path.join(episode_cache_dir, f'{uid}-{max_hz!r}hz-{max_resolution}px.rrd')
+    return episode_cache_dir / f'{uid}-{max_hz!r}hz-{max_resolution}px.rrd'
 
 
 @asynccontextmanager
@@ -493,7 +492,7 @@ async def api_episode_rrd(episode_id: int):
     max_resolution = cast(int, app_state['max_resolution'])
     cache_path = _get_rrd_cache_path(episode_id, max_hz, max_resolution)
 
-    if os.path.exists(cache_path):
+    if cache_path.exists():
         logging.debug(f'Serving cached RRD for episode {episode_id} from {cache_path}')
         # Content-Length and range requests come free from a file of known length.
         return FileResponse(cache_path, media_type='application/octet-stream', filename=f'episode_{episode_id}.rrd')
@@ -501,14 +500,16 @@ async def api_episode_rrd(episode_id: int):
     def _stream_and_cache():
         success = False
         try:
-            with open(cache_path, 'wb') as cache_file:
+            with cache_path.open('wb') as cache_file:
                 for chunk in stream_episode_rrd(ds, episode_id, max_hz=max_hz, max_resolution=max_resolution):
                     cache_file.write(chunk)
                     yield chunk
             success = True
         finally:
+            # FOOTGUN: a half-written file is indistinguishable from a complete one on the next
+            # request, and FileResponse would serve it under a Content-Length that matches it.
             if not success:
-                shutil.rmtree(cache_path, ignore_errors=True)
+                cache_path.unlink(missing_ok=True)
 
     return StreamingResponse(
         _stream_and_cache(),
