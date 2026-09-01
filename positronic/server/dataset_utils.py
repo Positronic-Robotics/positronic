@@ -316,13 +316,10 @@ _MIN_ENCODED_SIDE = 2
 
 
 def _size_capped_to(width: int, height: int, max_resolution: int) -> tuple[int, int]:
-    """``width`` and ``height`` scaled so the long side fits ``max_resolution``, unchanged if it does."""
+    """``width`` and ``height`` on even sides, scaled down so the long side fits ``max_resolution``."""
     if max_resolution < _MIN_ENCODED_SIDE:
         raise ValueError(f'max_resolution={max_resolution} is below the {_MIN_ENCODED_SIDE}px an encoder can carry')
-    long_side = max(width, height)
-    if long_side <= max_resolution:
-        return width, height
-    scale = max_resolution / long_side
+    scale = min(1.0, max_resolution / max(width, height))
     return max(_MIN_ENCODED_SIDE, int(width * scale) // 2 * 2), max(_MIN_ENCODED_SIDE, int(height * scale) // 2 * 2)
 
 
@@ -368,9 +365,10 @@ def _mp4_downscaled_to(src: Path, max_resolution: int) -> bytes:
     with av.open(str(src)) as inp:
         in_stream = inp.streams.video[0]
         source = (in_stream.codec_context.width, in_stream.codec_context.height)
-        width, height = _size_capped_to(*source, max_resolution)
-        if (width, height) == source:
+        # An mp4 within the cap is passed through, odd sides and all: its own encoder already took them.
+        if max(source) <= max_resolution:
             return src.read_bytes()
+        width, height = _size_capped_to(*source, max_resolution)
 
         buffer = io.BytesIO()
         with av.open(buffer, 'w', format='mp4') as out:
@@ -434,7 +432,9 @@ def _decimation_indices(ts_arr: np.ndarray, max_hz: float) -> np.ndarray:
     A burst either side of a pause stays under the cap: the spacing is read off the timestamps,
     and a pause pulls the average rate below the rate inside each burst.
     """
-    if max_hz <= 0 or len(ts_arr) < 2:
+    if max_hz < 0:
+        raise ValueError(f'max_hz={max_hz} is not a rate; 0 is the opt-out')
+    if max_hz == 0 or len(ts_arr) < 2:
         return np.arange(len(ts_arr))
     period = np.timedelta64(max(1, round(1e9 / max_hz * (1 - _RATE_SLACK))), 'ns')
     kept = []
@@ -453,7 +453,7 @@ def _log_numeric_signals(
     A signal too wide to plot is still read, so that a joint or pose vector of any width reaches the
     3D view.
     """
-    gripper = ep.static.get('gripper')
+    gripper = ep.static.get(keys.GRIPPER)
     stash_keys = set(signals.poses) | set(signals.joints)
     if gripper:
         stash_keys.add(gripper['signal'])
@@ -594,7 +594,7 @@ def _log_urdf_robot(
         # its direction; recordings can overshoot slightly, so clip before scaling by ``travel``.
         # TODO: the spec names one signal, so every model grips with it. Arms that grip independently
         # need it pluralized the way `joint_signals` is.
-        gripper = ep.static.get('gripper')
+        gripper = ep.static.get(keys.GRIPPER)
         if gripper and gripper['signal'] in numeric_data:
             grip_ts, grip_vals = numeric_data[gripper['signal']]
             grip_keep = _decimation_indices(grip_ts, _URDF_ANIM_HZ)

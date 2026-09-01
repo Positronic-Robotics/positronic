@@ -134,6 +134,11 @@ def test_a_signal_recorded_at_the_cap_keeps_every_sample():
     assert len(_thinned(ts, max_hz=30)) == len(ts)
 
 
+def test_a_rate_cap_that_is_not_a_rate_is_refused():
+    with pytest.raises(ValueError):
+        _decimation_indices(_timestamps_ns(hz=100, seconds=1), max_hz=-30)
+
+
 def test_a_signal_below_the_cap_keeps_every_sample():
     ts = _timestamps_ns(hz=10, seconds=10)
 
@@ -165,6 +170,11 @@ def _frame_times(data: bytes) -> list[float]:
 def test_a_frame_size_within_the_cap_is_left_alone():
     assert _size_capped_to(320, 240, 640) == (320, 240)
     assert _size_capped_to(640, 480, 640) == (640, 480)
+
+
+def test_an_odd_frame_side_within_the_cap_is_still_evened():
+    assert _size_capped_to(301, 240, 640) == (300, 240)
+    assert _size_capped_to(320, 241, 640) == (320, 240)
 
 
 def test_a_frame_size_above_the_cap_fits_it_on_even_sides():
