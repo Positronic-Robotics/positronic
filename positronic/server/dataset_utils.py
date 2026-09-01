@@ -470,6 +470,7 @@ def _log_numeric_signals(
         try:
             vals = np.asarray(sig.values(), dtype=np.float64)
         except (TypeError, ValueError):
+            logging.warning(f'Signal {key!r} holds values that are not numeric: it is absent from the recording')
             continue
         if vals.ndim == 1:
             vals = vals.reshape(-1, 1)
