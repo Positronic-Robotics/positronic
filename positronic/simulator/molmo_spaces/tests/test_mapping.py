@@ -164,12 +164,12 @@ def test_unpack_wire_pose_rejects_wrong_width():
         mapping.unpack_wire_pose(np.zeros(7))  # a quaternion-encoded pose is not the wire form
 
 
-def test_compose_world_delta_adds_translation_and_left_multiplies_rotation():
-    # World-frame convention: goal_pos = ee_pos + dpos, goal_ori = R(delta) @ ee_ori. Left-multiplication is
-    # what keeps the delta world-framed; composing in the body frame would rotate the translation too.
+def test_compose_reference_delta_adds_translation_and_left_multiplies_rotation():
+    # Reference-frame convention: goal_pos = ee_pos + dpos, goal_ori = R(delta) @ ee_ori. Left-multiplication
+    # is what keeps the delta in the reference frame; composing in the body frame would rotate the translation.
     cur_rot = np.eye(3)
     delta_rot = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
-    pos, rot = mapping.compose_world_delta([1.0, 0.0, 0.0], cur_rot, [0.0, 2.0, 0.0], delta_rot)
+    pos, rot = mapping.compose_reference_delta([1.0, 0.0, 0.0], cur_rot, [0.0, 2.0, 0.0], delta_rot)
     assert np.allclose(pos, [1.0, 2.0, 0.0])
     assert np.allclose(rot, delta_rot)
 

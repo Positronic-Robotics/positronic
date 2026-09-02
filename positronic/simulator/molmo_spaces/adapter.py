@@ -52,7 +52,7 @@ class MolmoAdapter(WireCommandAdapter):
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
-        # env.py reports the eef pose in the grasp-site world frame; ``eef_quat`` is scalar-first (wxyz, from
+        # env.py reports the eef pose at the grasp site, in the robot frame; ``eef_quat`` is scalar-first (wxyz, from
         # ``mju_mat2Quat``), so ``from_quat`` is the matching decode.
         ee_pose = geom.Transform3D(raw_obs[mapping.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[mapping.OBS_EEF_QUAT]))
         state = MujocoFrankaState()

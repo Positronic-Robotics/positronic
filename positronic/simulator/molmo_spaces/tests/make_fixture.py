@@ -5,7 +5,7 @@
 """Regenerate the synthetic MolmoSpaces raw-observation fixture used by test_adapter.py.
 
 ``env.py`` reports the clean raw payload the adapter maps into the canonical contract — measured joints and
-velocities, the eef world pose, the grip closure, and one frame per camera. MolmoSpaces renders real MuJoCo
+velocities, the eef pose, the grip closure, and one frame per camera. MolmoSpaces renders real MuJoCo
 scenes needing the full asset stack and a GPU, so committing a real payload is impractical; the adapter under
 test only touches observation *structure* (keys, shapes, dtypes, the MujocoFrankaState assembly, camera key
 mapping), which a tiny synthetic payload exercises exactly. Frames are small (36x64, the DROID 16:9 aspect) and
