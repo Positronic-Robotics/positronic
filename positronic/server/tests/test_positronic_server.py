@@ -13,7 +13,7 @@ from cryptography.x509.oid import NameOID
 from fastapi.testclient import TestClient
 
 from positronic import keys
-from positronic.dataset.episode import META_UID
+from positronic.dataset.episode import META_PATH, META_UID
 from positronic.server import positronic_server
 from positronic.server.positronic_server import (
     _MAX_COMPONENT_BYTES,
@@ -228,7 +228,7 @@ def _server_rooted_urls(html: str, base_href: str) -> list[str]:
 
 
 class _StubEpisode:
-    meta = {'path': '/datasets/run-7/episode_3', 'size_mb': 12.5}
+    meta = {META_PATH: '/datasets/run-7/episode_3', 'size_mb': 12.5}
     static = {keys.TASK: 'pick the cube', 'scene': b'a mesh'}
 
 

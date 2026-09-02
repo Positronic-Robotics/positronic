@@ -35,7 +35,7 @@ import positronic.cfg.ds
 from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset import CachedDataset, Dataset, Episode
-from positronic.dataset.episode import META_UID
+from positronic.dataset.episode import META_PATH, META_UID
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import (
     DEFAULT_MAX_HZ,
@@ -270,7 +270,7 @@ async def episode_viewer(request: Request, episode_id: int):
             'rerun_version': rr.__version__,
             'task': episode.static.get(keys.TASK, None),
             'rrd_path': _cacheable_api_path(f'episode_rrd/{episode_id}'),
-            'episode_path': meta.get('path'),
+            'episode_path': meta.get(META_PATH),
             'episode_size_mb': size_mb_display,
             'static_data': _make_serializable(episode.static),
             **_page_context(),
