@@ -1083,12 +1083,12 @@ def test_a_release_the_rig_refuses_leaves_the_run_playing(world):
     the episode and keeps its remaining episodes: the episode is already recorded."""
     arm = _FailsNthAsk(2)  # the second ask is the close; the first opened the episode
     policy = StubPolicy()
-    harness = Harness(make_embodiment(prepare_handlers={keys.ARM: arm.env_reset}))
+    harness = Harness(make_embodiment(prepare_handlers={eval_keys.ARM: arm.env_reset}))
     p = _pair_all(world, harness, policy)
-    wire_call(world, harness.prepare[keys.ARM], arm.env_reset)
+    wire_call(world, harness.prepare[eval_keys.ARM], arm.env_reset)
 
     scheduler = world.start([harness, arm, _Pacer()])
-    task = Task(instruction_source='stack', timeout_sec=0.05, prepare_args={keys.ARM: JointPosition(np.zeros(7))})
+    task = Task(instruction_source='stack', timeout_sec=0.05, prepare_args={eval_keys.ARM: JointPosition(np.zeros(7))})
     answer = p['perform_task'](task)
     drive_scheduler(scheduler, steps=2000)
 
@@ -1103,12 +1103,12 @@ def test_a_rig_that_refuses_to_open_still_ends_the_run(world):
     whoever asked for the episode hears the failure."""
     arm = _FailsNthAsk(1)  # the first ask is the open
     policy = StubPolicy()
-    harness = Harness(make_embodiment(prepare_handlers={keys.ARM: arm.env_reset}))
+    harness = Harness(make_embodiment(prepare_handlers={eval_keys.ARM: arm.env_reset}))
     p = _pair_all(world, harness, policy)
-    wire_call(world, harness.prepare[keys.ARM], arm.env_reset)
+    wire_call(world, harness.prepare[eval_keys.ARM], arm.env_reset)
 
     scheduler = world.start([harness, arm, _Pacer()])
-    task = Task(instruction_source='stack', timeout_sec=0.05, prepare_args={keys.ARM: JointPosition(np.zeros(7))})
+    task = Task(instruction_source='stack', timeout_sec=0.05, prepare_args={eval_keys.ARM: JointPosition(np.zeros(7))})
     answer = p['perform_task'](task)
 
     with pytest.raises(RuntimeError, match='motion aborted by reflex'):
