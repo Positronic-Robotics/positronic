@@ -7,7 +7,8 @@ import pos3
 
 from positronic import telemetry, telemetry_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
-from positronic.policy.base import COMPRESS_IMAGES, LOCAL_STACK, POSITRONIC_VERSION, SERVER, TYPE
+from positronic.offboard.protocol import COMPRESS_IMAGES, LOCAL_STACK, POSITRONIC_VERSION
+from positronic.policy.base import SERVER, TYPE
 from positronic.utils import flatten_dict
 from positronic.utils.serialization import encode_jpeg
 

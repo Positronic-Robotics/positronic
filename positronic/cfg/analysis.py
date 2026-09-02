@@ -13,17 +13,8 @@ from positronic.cfg.ds import internal
 from positronic.cfg.eval.real import tasks
 from positronic.dataset.episode import META_CREATED_TS_NS, Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
-from positronic.policy.base import (
-    CHECKPOINT_ID,
-    CHECKPOINT_PATH,
-    CONFIG_NAME,
-    EXPERIMENT_NAME,
-    HOST,
-    POLICY_META,
-    PORT,
-    SERVER_META,
-    TYPE,
-)
+from positronic.offboard.protocol import CHECKPOINT_ID, HOST, PORT
+from positronic.policy.base import CHECKPOINT_PATH, CONFIG_NAME, EXPERIMENT_NAME, POLICY_META, SERVER_META, TYPE
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
 from positronic.server.positronic_server import main as server_main

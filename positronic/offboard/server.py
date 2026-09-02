@@ -18,12 +18,21 @@ from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocke
 from starlette.datastructures import QueryParams
 
 from positronic.policy import Policy, Recorder
-from positronic.policy.base import CHECKPOINT_ID, COMPRESS_IMAGES, HOST, LOCAL_STACK, PORT, POSITRONIC_VERSION, Layer
+from positronic.policy.base import Layer
 from positronic.policy.executor import blocking
 from positronic.policy.spec import ModelSource, Pipeline, split
 
 from . import protocol
-from .protocol import deserialise, serialise
+from .protocol import (
+    CHECKPOINT_ID,
+    COMPRESS_IMAGES,
+    HOST,
+    LOCAL_STACK,
+    PORT,
+    POSITRONIC_VERSION,
+    deserialise,
+    serialise,
+)
 
 logger = logging.getLogger(__name__)
 

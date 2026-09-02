@@ -12,9 +12,9 @@ from websockets.http11 import Response
 from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import command
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, _ConnectRetries
+from positronic.offboard.protocol import POSITRONIC_VERSION
 from positronic.offboard.tests.conftest import ANSWER_SEC, round_trip
 from positronic.policy import RemotePolicy
-from positronic.policy.base import POSITRONIC_VERSION
 from positronic.policy.codec import ActionHorizon
 from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.remote import _prepare_obs

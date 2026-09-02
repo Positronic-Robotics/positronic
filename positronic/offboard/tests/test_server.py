@@ -14,12 +14,12 @@ from websockets.sync.client import connect
 
 from positronic import keys
 from positronic.offboard.client import InferenceClient, InferenceSession, _ConnectRetries
-from positronic.offboard.protocol import deserialise
+from positronic.offboard.protocol import POSITRONIC_VERSION, deserialise
 from positronic.offboard.server import AUTH_HEADER, AUTH_TOKEN_ENV, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
 from positronic.offboard.tests.conftest import round_trip
 from positronic.policy import Codec, Policy, RemotePolicy, Session
-from positronic.policy.base import POSITRONIC_VERSION, Runtime
+from positronic.policy.base import Runtime
 from positronic.policy.codec import ActionTimestamp
 from positronic.policy.layers import ChunkedSchedule, TemporalStack
 from positronic.policy.spec import ModelSource, PolicySource, inline, remote
