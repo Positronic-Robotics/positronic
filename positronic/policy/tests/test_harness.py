@@ -1100,8 +1100,8 @@ def test_a_release_the_rig_refuses_leaves_the_run_playing(world):
 
 @pytest.mark.timeout(3.0)
 def test_a_rig_that_refuses_to_open_still_ends_the_run(world):
-    """The other side of that asymmetry. An episode must not record on a rig that never got ready, so the
-    OPENING ask raises where the closing one logs."""
+    """An episode must not record on a rig that never got ready. A failed opening ask ends the run, and
+    whoever asked for the episode hears the failure."""
     arm = _FailsNthAsk(1)  # the first ask is the open
     policy = StubPolicy()
     harness = Harness(make_embodiment(prepare_handlers={keys.ARM: arm.env_reset}))
@@ -1115,7 +1115,7 @@ def test_a_rig_that_refuses_to_open_still_ends_the_run(world):
     with pytest.raises(RuntimeError, match='motion aborted by reflex'):
         drive_scheduler(scheduler, steps=2000)
     with pytest.raises(RuntimeError):
-        answer.result()  # and whoever asked hears it, rather than reading a clean episode
+        answer.result()
 
 
 def test_the_deadline_is_published_once_the_rig_is_ready(world):

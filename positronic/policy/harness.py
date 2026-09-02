@@ -260,14 +260,11 @@ class Harness(pimm.ControlSystem):
         ready.result()
 
     def _release(self, should_stop: pimm.SignalReceiver, args: dict[str, Any]) -> Generator[pimm.Command, None, None]:
-        """Put the rig back the way ``_ready`` does, but log a failure instead of raising it.
+        """Put the rig back the way ``_ready`` does, and log a failure instead of raising it.
 
-        A reflex trip on the way home aborts that move, and the same ask raises for it. The gate on a rig
-        too stuck to run is the NEXT episode's opening ``_ready``, which refuses before anything is
-        recorded, so a release that fails costs the run nothing and raising here ends a run with episodes
-        left to play.
+        A release that raises ends the run with episodes left to play.
         """
-        # rules-allow: swallowed-error - the next episode's opening `_ready` is the gate; see the docstring.
+        # rules-allow: swallowed-error — the next episode's ``_ready`` refuses a stuck rig before it records.
         try:
             yield from self._ready(should_stop, args)
         except Exception as exc:
