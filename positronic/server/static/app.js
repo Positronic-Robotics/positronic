@@ -85,6 +85,18 @@ function appUrl(path) {
   return new URL(path, document.baseURI).href;
 }
 
+const FILTERED_EPISODE_IDS = 'filteredEpisodeIds';
+const EPISODES_REFERRER_URL = 'episodesReferrerUrl';
+
+// sessionStorage is origin-scoped and one origin serves many exports, so a key names the base
+// href of the export that wrote it.
+function baseScopedKey(name) {
+  return `${name}:${document.baseURI}`;
+}
+
+// The name an empty filter set takes, which the export writer and the browser must spell alike.
+const UNFILTERED_NAME = 'all';
+
 // The file name a static export writes an API response to; `static_export_key` in
 // positronic_server.py builds the same name — {b: '2', a: 'x y'} on `leaderboard` names
 // api/groups/leaderboard/a=x%20y&b=2.json.
@@ -95,7 +107,7 @@ function staticExportKey(path, params) {
     .sort()
     .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
     .join('&');
-  return `${path}/${query || 'all'}.json`;
+  return `${path}/${query || UNFILTERED_NAME}.json`;
 }
 
 // The path a browser asks for that file at. A host decodes a URL path before it looks the file
@@ -462,11 +474,11 @@ function populateTable(columns) {
     const hasFilters = Object.keys(state.serverFilters).length > 0 ||
       filtered.length < state.episodes.length;
     if (hasFilters) {
-      sessionStorage.setItem('filteredEpisodeIds', JSON.stringify(filtered.map(([id]) => id)));
-      sessionStorage.setItem('episodesReferrerUrl', window.location.href);
+      sessionStorage.setItem(baseScopedKey(FILTERED_EPISODE_IDS), JSON.stringify(filtered.map(([id]) => id)));
+      sessionStorage.setItem(baseScopedKey(EPISODES_REFERRER_URL), window.location.href);
     } else {
-      sessionStorage.removeItem('filteredEpisodeIds');
-      sessionStorage.removeItem('episodesReferrerUrl');
+      sessionStorage.removeItem(baseScopedKey(FILTERED_EPISODE_IDS));
+      sessionStorage.removeItem(baseScopedKey(EPISODES_REFERRER_URL));
     }
   }
 }
