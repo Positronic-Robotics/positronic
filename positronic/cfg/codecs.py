@@ -113,9 +113,19 @@ def joint_delta_action(num_joints: int):
     return JointDeltaAction(num_joints=num_joints)
 
 
-@cfn.config()
-def droid_execution(action):
-    """Wrap an action codec so its chunks execute under impedance, as DROID-pretrained checkpoints expect."""
+@cfn.config(control_mode='droid_impedance')
+def droid_execution(action, control_mode: str):
+    """Wrap an action codec so its chunks execute under the named control mode.
+
+    ``droid_impedance`` stamps the gains DROID-pretrained checkpoints expect on every command.
+    ``native`` stamps no mode, so the arm keeps the impedance its driver already holds. The value is
+    plain data, so one served endpoint offers both laws: a session selects one with the query param
+    ``?codec.action.control_mode=native``.
+    """
+    if control_mode == 'native':
+        return action
+    if control_mode != 'droid_impedance':
+        raise ValueError(f"Unknown control_mode {control_mode!r}: use 'droid_impedance' or 'native'")
     return SetControlMode(DROID_IMPEDANCE) | action
 
 
