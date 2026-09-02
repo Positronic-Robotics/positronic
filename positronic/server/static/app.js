@@ -114,8 +114,8 @@ async function staticExportKey(path, params) {
   if (!params) return `${path}.json`;
   let query = Object.keys(params)
     .filter((key) => params[key])
-    .sort()
     .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
+    .sort()
     .join('&');
   if (new TextEncoder().encode(query).length > MAX_QUERY_BYTES) {
     query = (await sha256Hex(query)).slice(0, QUERY_DIGEST_CHARS);
@@ -123,8 +123,7 @@ async function staticExportKey(path, params) {
   return `${path}/${query || UNFILTERED_NAME}.json`;
 }
 
-// The path a browser asks for that file at. A host decodes a URL path before it looks the file
-// up, so a name that carries a percent escape is reached by escaping its own `%` again.
+// The path a browser asks for that file at; `static_export_url_path` says why the escape.
 async function staticExportUrlPath(path, params) {
   return (await staticExportKey(path, params)).replaceAll('%', '%25');
 }

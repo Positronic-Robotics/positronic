@@ -5,6 +5,7 @@ import hashlib
 import ipaddress
 import logging
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -18,7 +19,7 @@ from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import configuronic as cfn
 import pos3
@@ -150,8 +151,8 @@ def static_export_key(path: str, params: Mapping[str, str] | None = None) -> str
 
     - `params` is None: `<path>.json`, for an endpoint the export writes whole.
     - `params` is a mapping: `<path>/<query>.json`, for one it writes a file per filter set for.
-      The query holds the parameters that carry a value, sorted by key and percent-encoded, and
-      an empty query is named `all`.
+      The query holds the parameters that carry a value, percent-encoded and then sorted, and
+      an empty query is named `all`. Sorting the encoded pair compares ASCII in every language.
     - A query past the byte budget becomes a digest of itself, which no filesystem's name limit
       rejects. A digest is hexadecimal, so it can never read as a query or as `all`.
 
@@ -159,8 +160,10 @@ def static_export_key(path: str, params: Mapping[str, str] | None = None) -> str
     """
     if params is None:
         return f'{path}.json'
-    pairs = sorted((key, value) for key, value in params.items() if value)
-    query = '&'.join(f'{quote(k, safe=_QUERY_SAFE)}={quote(v, safe=_QUERY_SAFE)}' for k, v in pairs)
+    pairs = sorted(
+        f'{quote(key, safe=_QUERY_SAFE)}={quote(value, safe=_QUERY_SAFE)}' for key, value in params.items() if value
+    )
+    query = '&'.join(pairs)
     if len(query.encode()) > _MAX_COMPONENT_BYTES:
         query = hashlib.sha256(query.encode()).hexdigest()[:_QUERY_DIGEST_CHARS]
     return f'{path}/{query or _UNFILTERED_NAME}.json'
@@ -242,12 +245,26 @@ def static_export_url_path(path: str, params: Mapping[str, str] | None = None) -
 def normalized_base_href(value: str) -> str:
     """`value` with the trailing slash a relative link needs.
 
-    A base href starts at the server root. A relative one resolves against each page's own URL, so
-    a page under `/episode/0` would reach a different prefix than the root page reaches.
+    Only a path at the server root: a relative one, a netloc, a query or a fragment each send a
+    relative link somewhere other than the prefix.
     """
-    if not value.startswith('/'):
-        raise ValueError(f"base_href must start at the server root ('/'), got {value!r}")
-    return value if value.endswith('/') else value + '/'
+    parts = urlsplit(value)
+    if parts.scheme or parts.netloc or parts.query or parts.fragment or not parts.path.startswith('/'):
+        raise ValueError(f'base_href must be a path at the server root and nothing else, got {value!r}')
+    return parts.path if parts.path.endswith('/') else parts.path + '/'
+
+
+_BUILD_ID = re.compile(r'[A-Za-z0-9_-]*')
+
+
+def validated_build_id(value: str) -> str:
+    """`value` when it holds only what `secrets.token_urlsafe` produces; empty names no build.
+
+    A `?` or a `#` would turn the rest of the URL path into a query or a fragment.
+    """
+    if not _BUILD_ID.fullmatch(value):
+        raise ValueError(f'build_id must match {_BUILD_ID.pattern!r}, got {value!r}')
+    return value
 
 
 def _cacheable_api_path(suffix: str) -> str:
@@ -255,7 +272,7 @@ def _cacheable_api_path(suffix: str) -> str:
 
     Only an export writes such a file: a live server serves no `build/…` route.
     """
-    build_id = str(app_state['build_id'])
+    build_id = validated_build_id(str(app_state['build_id']))
     if app_state['static_export'] and build_id:
         return f'build/{build_id}/api/{suffix}'
     return f'api/{suffix}'
@@ -780,12 +797,12 @@ def main(
                 },
             }
         group_tables: Mapping of group name to GroupTableConfig
-        base_href: Path every page link and API call resolves against
+        base_href: Path at the server root that every page link and API call resolves against
         title: Header text; the dataset root when empty
         show_paths: Whether the pages report where the dataset lives
         static_export: Whether the pages ask for the file names a static export writes
-        build_id: Names one build. With static_export, the episode RRD and the static-field
-            downloads sit under it
+        build_id: Names one build, in the `secrets.token_urlsafe` alphabet. With static_export,
+            the episode RRD and the static-field downloads sit under it
     """
     root = get_dataset_root(dataset) or 'unknown_dataset'
     deb_level = logging.DEBUG if debug else logging.INFO
@@ -805,7 +822,7 @@ def main(
     app_state['title'] = title
     app_state['show_paths'] = show_paths
     app_state['static_export'] = static_export
-    app_state['build_id'] = build_id
+    app_state['build_id'] = validated_build_id(build_id)
 
     if reset_cache and cache_root.exists():
         logging.info(f'Clearing RRD cache directory: {cache_root.resolve()}')

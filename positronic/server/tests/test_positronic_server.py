@@ -30,6 +30,7 @@ from positronic.server.positronic_server import (
     normalized_base_href,
     static_export_key,
     static_export_url_path,
+    validated_build_id,
 )
 
 _Addr = namedtuple('_Addr', 'family address netmask broadcast ptp')
@@ -437,20 +438,45 @@ def test_a_base_href_that_starts_at_the_server_root_stands():
     assert normalized_base_href('/v/tok') == '/v/tok/'
 
 
-def test_a_base_href_that_does_not_start_at_the_server_root_is_refused():
-    for value in ('shares/run', '', 'https://app.example.com/v/tok/'):
+def test_a_base_href_that_is_not_a_path_at_the_server_root_is_refused():
+    outside = ('shares/run', '', 'https://app.example.com/v/tok/', '//other.example/', '/p?q/', '/p#f/')
+
+    for value in outside:
         with pytest.raises(ValueError, match='server root'):
             normalized_base_href(value)
 
 
-def test_a_build_id_reaches_the_page_script_as_json(viewer, monkeypatch):
+def test_a_build_id_in_the_token_alphabet_stands():
+    assert validated_build_id('') == ''
+    assert validated_build_id('k3n9_-A') == 'k3n9_-A'
+
+
+def test_a_build_id_that_would_cut_a_url_path_short_is_refused():
+    for value in ('k3#n9', 'k3?n9', 'k3/n9', 'k3 n9'):
+        with pytest.raises(ValueError, match='build_id'):
+            validated_build_id(value)
+
+
+def test_a_filter_key_outside_the_basic_plane_orders_by_its_encoding():
+    # Python orders these two by code point and JavaScript by UTF-16 code unit, the other way
+    # about; both languages order their percent-encoded ASCII alike.
+    key = static_export_key('api/groups/g', {'\U0001f600': '1', '\ue000': '2'})
+
+    assert key == 'api/groups/g/%EE%80%80=2&%F0%9F%98%80=1.json'
+
+
+def test_the_rrd_path_reaches_the_page_script_as_json(viewer, monkeypatch):
     monkeypatch.setitem(app_state, 'static_export', True)
-    monkeypatch.setitem(app_state, 'build_id', 'k3&n9')
+    monkeypatch.setitem(app_state, 'build_id', 'k3n9')
 
-    body = viewer.get('/episode/0').text
+    assert 'appUrl("build/k3n9/api/episode_rrd/0")' in viewer.get('/episode/0').text
 
-    assert 'build/k3\\u0026n9/api/episode_rrd/0' in body
-    assert 'k3&amp;n9' not in body
+
+def test_a_group_name_reaches_the_page_script_as_json(viewer):
+    body = viewer.get('/groups/a&b').text
+
+    assert 'window.API_ENDPOINT = "api/groups/a\\u0026b";' in body
+    assert 'a&amp;b' not in body
 
 
 def test_app_js_asks_for_the_file_name_this_module_writes():
