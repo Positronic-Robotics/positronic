@@ -138,6 +138,9 @@ async def cache_rerun_assets(request: Request, call_next):
 # What `encodeURIComponent` leaves unescaped, so app.js and this module name one file alike.
 _QUERY_SAFE = "!*'()"
 
+# The name an empty filter set takes, which the export writer and the browser must spell alike.
+_UNFILTERED_NAME = 'all'
+
 
 def static_export_key(path: str, params: Mapping[str, str] | None = None) -> str:
     """The file name a static export writes an API response to.
@@ -153,7 +156,7 @@ def static_export_key(path: str, params: Mapping[str, str] | None = None) -> str
         return f'{path}.json'
     pairs = sorted((key, value) for key, value in params.items() if value)
     query = '&'.join(f'{quote(k, safe=_QUERY_SAFE)}={quote(v, safe=_QUERY_SAFE)}' for k, v in pairs)
-    return f'{path}/{query or "all"}.json'
+    return f'{path}/{query or _UNFILTERED_NAME}.json'
 
 
 def _shown_root() -> str:

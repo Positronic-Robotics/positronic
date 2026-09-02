@@ -307,6 +307,19 @@ def test_an_episode_page_hides_where_the_episode_lives(viewer, monkeypatch):
     assert '/datasets/run-7' not in body
 
 
+def test_an_episode_keeps_its_size_where_the_page_hides_paths(viewer, monkeypatch):
+    monkeypatch.setitem(app_state, 'show_paths', False)
+
+    assert '12.50 MB' in viewer.get('/episode/0').text
+
+
+def test_two_exports_on_one_origin_keep_their_own_session_state():
+    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+
+    assert 'return `${name}:${document.baseURI}`' in app_js
+    assert app_js.count("sessionStorage.setItem('") == 0
+
+
 def test_an_episode_page_shows_where_the_episode_lives_by_default(viewer):
     body = viewer.get('/episode/0').text
 
