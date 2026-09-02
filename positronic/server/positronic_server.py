@@ -154,12 +154,6 @@ def static_export_key(path: str, params: Mapping[str, str] | None = None) -> str
     return f'{path}/{query or "all"}.json'
 
 
-def _cacheable_api_path(suffix: str) -> str:
-    """`api/<suffix>` under the build id, so a rebuild never reads a file a browser cached."""
-    build_id = str(app_state['build_id'])
-    return f'build/{build_id}/api/{suffix}' if build_id else f'api/{suffix}'
-
-
 def _shown_root() -> str:
     """The dataset root the pages report; empty when the viewer hides paths."""
     return str(app_state['root']) if app_state['show_paths'] else ''
@@ -224,6 +218,12 @@ async def index(request: Request):
 async def episodes_view(request: Request):
     """Episodes list view (used when home_page is set to a group)."""
     return templates.TemplateResponse(request, 'index.html', {**_page_context(), 'current_page': 'episodes'})
+
+
+def _cacheable_api_path(suffix: str) -> str:
+    """`api/<suffix>` under the build id, so a rebuild never reads a file a browser cached."""
+    build_id = str(app_state['build_id'])
+    return f'build/{build_id}/api/{suffix}' if build_id else f'api/{suffix}'
 
 
 @app.get('/episode/{episode_id}', response_class=HTMLResponse)
