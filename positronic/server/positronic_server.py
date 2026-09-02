@@ -223,8 +223,7 @@ async def episodes_view(request: Request):
 def _cacheable_api_path(suffix: str) -> str:
     """`api/<suffix>`, under the build id when the pages read a static export.
 
-    A build id keeps one build's files clear of the ones a browser cached from the build before
-    it. Only an export writes such a file: a live server serves no `build/…` route.
+    Only an export writes such a file: a live server serves no `build/…` route.
     """
     build_id = str(app_state['build_id'])
     if app_state['static_export'] and build_id:
