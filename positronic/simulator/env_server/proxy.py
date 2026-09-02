@@ -79,8 +79,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                 raise ValueError(f'the env has no task for {spec!r}')
             return params
         except BaseException:
-            # An eval lists its tasks before the scheduler enters ``run``, whose teardown is the only other place
-            # that closes the server. So a listing that raises stops the server itself.
+            # The listing runs before ``run``, so its failure is the only path that closes the server.
             self._cleanup.close()
             raise
 
@@ -111,25 +110,19 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         try:
             while not should_stop.value:
-                # The proxy is the eval's sole time-master: it sleeps one control period every turn —
-                # stepping, resetting, or idle between trials alike. Before the first reset the env's
-                # ``control_dt`` is unknown, so it paces at ``_IDLE_DT`` until reset reports the real one.
+                # The proxy paces every turn; ``control_dt`` is known only once a reset ran.
                 yield pimm.Sleep(self._frame['control_dt'] if self._frame is not None else _IDLE_DT)
                 if (call := next(self.env_reset.incoming(), None)) is not None:
                     with pimm.calls.raise_to(call):
                         self.reset(dict(call.request or {}))
                         call.set_result(None)
                 elif self._active:
-                    # ``env.step`` spans the whole client-observed step; ``materialize`` nests the client-side
-                    # observation assembly (shared-memory image allocation + camera copies) inside it, so the
-                    # reduce can split materialisation out of the wire cost.
+                    # The materialize span nests inside the step span, so a reduce can split the two costs.
                     with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
                         self._frame = self._step_env()
                         with telemetry.span(telemetry_keys.SPAN_MATERIALIZE):
                             self._emit_payload(self._frame['obs'])
         finally:
-            # Closes the connection then the server, in that order (reverse of acquisition); a no-op if nothing
-            # ever connected.
             self._cleanup.close()
 
     def _step_env(self) -> dict[str, Any]:
