@@ -77,9 +77,11 @@ _RECONNECT_MAX_S = 30.0
 # The share of a joint's own velocity limit at which the driver stops driving. Past its limit the controller
 # faults and drops the arm to idle, so the driver stands down before it gets there.
 _VELOCITY_HEADROOM = 0.8
-# The share of a joint's velocity limit a streamed setpoint may ask for. Teleoperation is paced by the hand
-# it follows, so this only bounds what one wild target can ask for.
-_COMMANDED_SHARE = 0.1
+# The share of a joint's velocity limit a streamed setpoint may ask for. It bounds what one wild target can
+# ask of the arm; the hand the arm follows paces it. Measured over an episode driven by a leader arm: at
+# 0.1 the arm held 1 rad/s where the operator asked for 2 to 3, fell as far as 0.8 rad behind, and took a
+# second to take that up.
+_COMMANDED_SHARE = 0.3
 _MJCF_PATH = 'assets/mujoco/trossen_wxai/wxai_follower.xml'
 _EE_SITE = 'ee_site'
 _JOINT_NAMES = ('joint_0', 'joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5')
