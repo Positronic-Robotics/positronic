@@ -99,8 +99,14 @@ function staticExportKey(path, params) {
   return `${path}/${query || 'all'}.json`;
 }
 
+// The path a browser asks for that file at. A host decodes a URL path before it looks the file
+// up, so a name that carries a percent escape is reached by escaping its own `%` again.
+function staticExportUrlPath(path, params) {
+  return staticExportKey(path, params).replaceAll('%', '%25');
+}
+
 function apiUrl(path, params) {
-  if (window.STATIC_EXPORT) return appUrl(staticExportKey(path, params));
+  if (window.STATIC_EXPORT) return appUrl(staticExportUrlPath(path, params));
   const url = new URL(path, document.baseURI);
   for (const [key, value] of Object.entries(params || {})) url.searchParams.append(key, value);
   return url.href;

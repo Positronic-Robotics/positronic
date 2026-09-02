@@ -26,6 +26,7 @@ from positronic.server.positronic_server import (
     app,
     app_state,
     static_export_key,
+    static_export_url_path,
 )
 
 _Addr = namedtuple('_Addr', 'family address netmask broadcast ptp')
@@ -373,6 +374,18 @@ def test_a_filter_value_that_carries_a_separator_stays_in_one_component():
     key = static_export_key('api/groups/g', {'task': 'a&b=c/d'})
 
     assert key == 'api/groups/g/task=a%26b%3Dc%2Fd.json'
+
+
+def test_a_name_that_carries_a_percent_escape_is_asked_for_with_that_escape_escaped():
+    params = {'task': 'pick a cube'}
+
+    assert static_export_key('api/groups/g', params) == 'api/groups/g/task=pick%20a%20cube.json'
+    assert static_export_url_path('api/groups/g', params) == 'api/groups/g/task=pick%2520a%2520cube.json'
+
+
+def test_a_name_that_needs_no_escape_is_asked_for_as_it_stands():
+    for params in (None, {}, {'model': 'pi0'}):
+        assert static_export_url_path('api/x', params) == static_export_key('api/x', params)
 
 
 def test_app_js_asks_for_the_file_name_this_module_writes():

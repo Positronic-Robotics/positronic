@@ -220,6 +220,15 @@ async def episodes_view(request: Request):
     return templates.TemplateResponse(request, 'index.html', {**_page_context(), 'current_page': 'episodes'})
 
 
+def static_export_url_path(path: str, params: Mapping[str, str] | None = None) -> str:
+    """The path a browser asks for the `static_export_key` file at.
+
+    A host decodes a URL path before it looks the file up, so a name that carries a percent escape
+    is reached by escaping its own `%` again.
+    """
+    return static_export_key(path, params).replace('%', '%25')
+
+
 def _cacheable_api_path(suffix: str) -> str:
     """`api/<suffix>`, under the build id when the pages read a static export.
 
