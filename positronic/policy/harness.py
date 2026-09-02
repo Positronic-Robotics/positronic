@@ -259,17 +259,6 @@ class Harness(pimm.ControlSystem):
             raise RuntimeError('The world stopped before every device was ready')
         ready.result()
 
-    def _release(self, should_stop: pimm.SignalReceiver, args: dict[str, Any]) -> Generator[pimm.Command, None, None]:
-        """Put the rig back the way ``_ready`` does, and log a failure instead of raising it.
-
-        A release that raises ends the run with episodes left to play.
-        """
-        # rules-allow: swallowed-error — the next episode's ``_ready`` refuses a stuck rig before it records.
-        try:
-            yield from self._ready(should_stop, args)
-        except Exception as exc:
-            logging.error(f'Releasing the rig after the episode ended failed: {exc}')
-
     def _pace(self, clock: pimm.Clock) -> pimm.Command:
         """Sim: yield, so the simulator's control-period sleep is the sole time-master and the policy reads
         each observation instantly. Real: sleep to the next waypoint, capped at the poll period, so a
@@ -336,6 +325,17 @@ class Harness(pimm.ControlSystem):
         self.ds_command.emit(DsWriterCommand.START(call.request.output_path))
         # The fresh data is here, later round would read a frame the recording did not open on.
         self._infer(self._inference, clock, should_stop)
+
+    def _release(self, should_stop: pimm.SignalReceiver, args: dict[str, Any]) -> Generator[pimm.Command, None, None]:
+        """Put the rig back the way ``_ready`` does, and log a failure instead of raising it.
+
+        A release that raises ends the run with episodes left to play.
+        """
+        # rules-allow: swallowed-error — the next episode's ``_ready`` refuses a stuck rig before it records.
+        try:
+            yield from self._ready(should_stop, args)
+        except Exception as exc:
+            logging.error(f'Releasing the rig after the episode ended failed: {exc}')
 
     def _end_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, payload: dict[str, Any]
