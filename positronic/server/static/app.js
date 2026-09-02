@@ -86,8 +86,7 @@ function appUrl(path) {
 }
 
 // The file name a static export writes an API response to; `static_export_key` in
-// positronic_server.py builds the same name. Pass no parameters for an endpoint the export writes
-// whole. The filter set {b: '2', a: 'x y'} of the group `leaderboard` names
+// positronic_server.py builds the same name — {b: '2', a: 'x y'} on `leaderboard` names
 // api/groups/leaderboard/a=x%20y&b=2.json.
 function staticExportKey(path, params) {
   if (!params) return `${path}.json`;

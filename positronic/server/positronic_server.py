@@ -140,12 +140,14 @@ _QUERY_SAFE = "!*'()"
 
 
 def static_export_key(path: str, params: Mapping[str, str] | None = None) -> str:
-    """The file name a static export writes an API response to, and a browser asks for.
+    """The file name a static export writes an API response to.
 
-    `<path>.json` names an endpoint the export writes whole, and None asks for that form.
-    `<path>/<query>.json` names one the export writes a file per filter set for: the query holds
-    the parameters that carry a value, sorted by key and percent-encoded, and an empty query is
-    named `all`. `app.js` builds the same name.
+    - `params` is None: `<path>.json`, for an endpoint the export writes whole.
+    - `params` is a mapping: `<path>/<query>.json`, for one it writes a file per filter set for.
+      The query holds the parameters that carry a value, sorted by key and percent-encoded, and
+      an empty query is named `all`.
+
+    `app.js` builds the same name.
     """
     if params is None:
         return f'{path}.json'
