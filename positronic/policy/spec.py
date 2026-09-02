@@ -37,6 +37,7 @@ from positronic.policy.codec import (
     BinarizeGripInference,
     BinarizeGripTraining,
     ChangeEEFrame,
+    Codec,
     FlipGrip,
     RestrictImageSize,
 )
@@ -115,7 +116,7 @@ class Pipeline:
         self.source = source
         # Which side of ``remote`` the conversion sits on is a choice; doing it on both sides is not. Two
         # declarations convert twice, leaving poses at the product while the handshake still names one of them.
-        declared = [c for c in self.components if keys.EE_FRAME in c.meta]
+        declared = [c for c in self.components if isinstance(c, Codec) and keys.EE_FRAME in c.meta]
         if len(declared) > 1:
             raise ValueError(
                 f'{len(declared)} components of this pipeline declare {keys.EE_FRAME}; each converts, so poses '

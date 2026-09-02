@@ -1,20 +1,23 @@
 """Dataset utilities for Positronic dataset visualization."""
 
+import io
 import logging
 import tempfile
 import warnings
 import xml.etree.ElementTree as ET
 from collections import defaultdict
-from collections.abc import Generator, Iterator
+from collections.abc import Generator, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
+from fractions import Fraction
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import av
 import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
+from av.video.stream import VideoStream
 from rerun.urdf import UrdfTree
 
 from positronic import keys
@@ -309,40 +312,97 @@ class _BinaryStreamDrainer:
             self._buffer.clear()
 
 
-def _encode_frames_as_video(entity_path: str, sig) -> None:
-    """Encode raw image frames into an H.265 video stream via pyav."""
+# 4:2:0 chroma needs even dimensions.
+_MIN_ENCODED_SIDE = 2
+
+# A packet's pts is its frame's index: a 1/1 base is unrescaled.
+_FRAME_INDEX_TIME_BASE = Fraction(1, 1)
+
+
+def _size_capped_to(width: int, height: int, max_resolution: int) -> tuple[int, int]:
+    """``width`` and ``height`` on even sides, scaled down so the long side fits ``max_resolution``."""
+    if max_resolution < _MIN_ENCODED_SIDE:
+        raise ValueError(f'max_resolution={max_resolution} is below the {_MIN_ENCODED_SIDE}px an encoder can carry')
+    scale = min(1.0, max_resolution / max(width, height))
+    return max(_MIN_ENCODED_SIDE, int(width * scale) // 2 * 2), max(_MIN_ENCODED_SIDE, int(height * scale) // 2 * 2)
+
+
+def _encode_frames_as_video(entity_path: str, sig, max_resolution: int) -> None:
     codec = rr.VideoCodec.H265
     container = av.open('/dev/null', 'w', format='hevc')
 
+    # A frame may produce 0, 1 or more packets, and so may the final flush.
+    times_by_pts: dict[int, int] = {}
+
+    def _log_encoded(packets: Iterable[av.Packet]) -> None:
+        for packet in packets:
+            assert packet.pts is not None
+            set_timeline_time('time', times_by_pts[packet.pts])
+            rr.log(entity_path, rr.VideoStream.from_fields(sample=bytes(packet)))
+
     first_frame = np.asarray(sig[0][0])
     h, w = first_frame.shape[:2]
-    stream = container.add_stream('libx265', rate=30)
-    assert isinstance(stream, av.video.stream.VideoStream)
-    stream.width = w
-    stream.height = h
+    width, height = _size_capped_to(w, h, max_resolution)
+    stream = cast(VideoStream, container.add_stream('libx265', rate=30))
+    stream.width = width
+    stream.height = height
     stream.max_b_frames = 0
+    stream.codec_context.time_base = _FRAME_INDEX_TIME_BASE
 
     rr.log(entity_path, rr.VideoStream(codec=codec), static=True)
 
-    for val, ts in sig:
+    for index, (val, ts) in enumerate(sig):
         frame = av.VideoFrame.from_ndarray(np.asarray(val), format='rgb24')
-        for packet in stream.encode(frame):
-            if packet.pts is None:
-                continue
-            set_timeline_time('time', ts)
-            rr.log(entity_path, rr.VideoStream.from_fields(sample=bytes(packet)))
+        if (width, height) != (w, h):
+            frame = frame.reformat(width=width, height=height)
+        frame.pts, frame.time_base = index, _FRAME_INDEX_TIME_BASE
+        times_by_pts[index] = ts
+        _log_encoded(stream.encode(frame))
 
-    for packet in stream.encode():
-        if packet.pts is not None:
-            rr.log(entity_path, rr.VideoStream.from_fields(sample=bytes(packet)))
+    _log_encoded(stream.encode())
 
 
-def _log_video_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer) -> Iterator[bytes]:
+_DOWNSCALE_OPTIONS = {'crf': '28', 'preset': 'veryfast'}
+
+
+def _mp4_downscaled_to(src: Path, max_resolution: int) -> bytes:
+    """Re-encode ``src`` with its long side at most ``max_resolution``, or return it unchanged if it fits."""
+    with av.open(str(src)) as inp:
+        in_stream = inp.streams.video[0]
+        source = (in_stream.codec_context.width, in_stream.codec_context.height)
+        # Odd sides pass through; evening them here would re-encode every source that already fits.
+        if max(source) <= max_resolution:
+            return src.read_bytes()
+        width, height = _size_capped_to(*source, max_resolution)
+
+        buffer = io.BytesIO()
+        with av.open(buffer, 'w', format='mp4') as out:
+            out_stream = out.add_stream('libx264', rate=in_stream.average_rate or 30)
+            assert isinstance(out_stream, VideoStream)
+            out_stream.width = width
+            out_stream.height = height
+            out_stream.pix_fmt = 'yuv420p'
+            out_stream.time_base = in_stream.time_base
+            out_stream.max_b_frames = 0
+            out_stream.options = dict(_DOWNSCALE_OPTIONS)
+
+            for frame in inp.decode(in_stream):
+                scaled = frame.reformat(width=width, height=height, format='yuv420p')
+                scaled.pts, scaled.time_base = frame.pts, frame.time_base
+                out.mux(out_stream.encode(scaled))
+            out.mux(out_stream.encode())
+
+    return buffer.getvalue()
+
+
+def _log_video_signals(
+    ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, max_resolution: int
+) -> Iterator[bytes]:
     """Log video signals as AssetVideo + VideoFrameReference (columnar), or as individual images."""
     for name in signals.videos:
         sig = ep.signals[name]
         if isinstance(sig, VideoSignal):
-            video_bytes = sig.video_path.read_bytes()
+            video_bytes = _mp4_downscaled_to(sig.video_path, max_resolution)
             asset = rr.AssetVideo(contents=video_bytes, media_type='video/mp4')
             rr.log(name, asset, static=True)
 
@@ -354,7 +414,7 @@ def _log_video_signals(ep: Episode, signals: EpisodeSignals, drainer: _BinaryStr
                 columns=rr.VideoFrameReference.columns_nanos(frame_pts_ns),
             )
         else:
-            _encode_frames_as_video(name, sig)
+            _encode_frames_as_video(name, sig, max_resolution)
         yield from drainer.drain()
 
 
@@ -367,15 +427,34 @@ def _send_scalar_columns(key: str, ts_arr: np.ndarray, vals: np.ndarray) -> None
         rr.send_columns(f'/signals/{key}/{i}', indexes=time_idx, columns=rr.Scalars.columns(scalars=vals[:, i]))
 
 
+# Integer nanoseconds put a source recorded at the cap a hair above it.
+_RATE_SLACK = 1e-6
+
+
+def _decimation_indices(ts_arr: np.ndarray, max_hz: float) -> np.ndarray:
+    """Indices into ``ts_arr`` whose timestamps sit at least ``1 / max_hz`` apart."""
+    if max_hz < 0:
+        raise ValueError(f'max_hz={max_hz} is not a rate; 0 is the opt-out')
+    if max_hz == 0 or len(ts_arr) < 2:
+        return np.arange(len(ts_arr))
+    period = np.timedelta64(max(1, round(1e9 / max_hz * (1 - _RATE_SLACK))), 'ns')
+    kept = []
+    cursor = 0
+    while cursor < len(ts_arr):
+        kept.append(cursor)
+        cursor = int(np.searchsorted(ts_arr, ts_arr[cursor] + period, side='left'))
+    return np.asarray(kept, dtype=np.intp)
+
+
 def _log_numeric_signals(
-    ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer
+    ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, max_hz: float
 ) -> Generator[bytes, None, dict[str, tuple[np.ndarray, np.ndarray]]]:
     """Log numeric time-series via send_columns. Returns pose/joint data for 3D logging.
 
     A signal too wide to plot is still read, so that a joint or pose vector of any width reaches the
     3D view.
     """
-    gripper = ep.static.get('gripper')
+    gripper = ep.static.get(keys.GRIPPER)
     stash_keys = set(signals.poses) | set(signals.joints)
     if gripper:
         stash_keys.add(gripper['signal'])
@@ -392,9 +471,14 @@ def _log_numeric_signals(
         try:
             vals = np.asarray(sig.values(), dtype=np.float64)
         except (TypeError, ValueError):
+            # Preserve the rest of the episode when one signal cannot be converted.
+            logging.error(f'Signal {key!r} holds values that are not numeric: it is absent from the recording')
             continue
         if vals.ndim == 1:
             vals = vals.reshape(-1, 1)
+
+        keep = _decimation_indices(ts_arr, max_hz)
+        ts_arr, vals = ts_arr[keep], vals[keep]
 
         if key not in unplotted:
             _send_scalar_columns(key, ts_arr, vals)
@@ -495,11 +579,8 @@ def _log_urdf_robot(
     rr.log(prefix, rr.Transform3D(translation=mount or np.zeros(3), child_frame=tree.root_link().name), static=True)
     yield from drainer.drain()
 
-    # Downsample to ~15Hz — robot motion is smooth enough, avoids bloating the RRD
-    duration_ns = int(ts_arr[-1]) - int(ts_arr[0])
-    target_samples = max(1, int(_URDF_ANIM_HZ * duration_ns / 1e9))
-    step = max(1, len(ts_arr) // target_samples)
-    ts_ds, q_ds = ts_arr[::step], q_vals[::step]
+    keep = _decimation_indices(ts_arr, _URDF_ANIM_HZ)
+    ts_ds, q_ds = ts_arr[keep], q_vals[keep]
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
@@ -513,15 +594,15 @@ def _log_urdf_robot(
         # its direction; recordings can overshoot slightly, so clip before scaling by ``travel``.
         # TODO: the spec names one signal, so every model grips with it. Arms that grip independently
         # need it pluralized the way `joint_signals` is.
-        gripper = ep.static.get('gripper')
+        gripper = ep.static.get(keys.GRIPPER)
         if gripper and gripper['signal'] in numeric_data:
             grip_ts, grip_vals = numeric_data[gripper['signal']]
-            grip_step = max(1, len(grip_ts) // target_samples)
-            finger_pos = np.clip(grip_vals[::grip_step, 0], 0.0, 1.0) * gripper['travel']
+            grip_keep = _decimation_indices(grip_ts, _URDF_ANIM_HZ)
+            finger_pos = np.clip(grip_vals[grip_keep, 0], 0.0, 1.0) * gripper['travel']
             for name in gripper['joints']:
                 joint = tree.get_joint_by_name(namespace + name)
                 if joint is not None:
-                    _animate_joint(joint, finger_pos, grip_ts[::grip_step], link_path(joint))
+                    _animate_joint(joint, finger_pos, grip_ts[grip_keep], link_path(joint))
                     yield from drainer.drain()
 
 
@@ -559,9 +640,18 @@ def _log_pose_signals(
         yield from drainer.drain()
 
 
+DEFAULT_MAX_HZ = 30.0
+DEFAULT_MAX_RESOLUTION = 640
+
+
 @rr.recording_stream.recording_stream_generator_ctx
-def stream_episode_rrd(ds: Dataset, episode_id: int) -> Iterator[bytes]:
-    """Yield an episode RRD as chunks while it is being generated."""
+def stream_episode_rrd(
+    ds: Dataset, episode_id: int, max_hz: float = DEFAULT_MAX_HZ, max_resolution: int = DEFAULT_MAX_RESOLUTION
+) -> Iterator[bytes]:
+    """Yield an episode RRD as chunks while it is being generated.
+
+    ``max_hz=0`` with a resolution above the source keeps the recording as it was captured.
+    """
 
     ep = ds[episode_id]
     logging.info(f'Streaming RRD for episode {episode_id}')
@@ -584,8 +674,8 @@ def stream_episode_rrd(ds: Dataset, episode_id: int) -> Iterator[bytes]:
         _setup_series_names(signals, ep)
         yield from drainer.drain()
 
-        yield from _log_video_signals(ep, signals, drainer)
-        pose_data = yield from _log_numeric_signals(ep, signals, drainer)
+        yield from _log_video_signals(ep, signals, drainer, max_resolution)
+        pose_data = yield from _log_numeric_signals(ep, signals, drainer, max_hz)
         yield from drainer.drain(force=True)  # flush numerics to client before slow pose trails
         yield from _log_pose_signals(ep, signals, pose_data, drainer)
 

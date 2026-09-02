@@ -145,13 +145,15 @@ class _PassthroughCodec(Codec):
         return data
 
 
-class _MetaPolicy(Policy):
-    def new_session(self, context=None, rt=None):
-        return _FixedSession({})
-
+class _MetaSession(_FixedSession):
     @property
     def meta(self):
         return {'base_key': 'base_value'}
+
+
+class _MetaPolicy(Policy):
+    def new_session(self, context=None, rt=None):
+        return _MetaSession({})
 
 
 _T0_OBS = {obs_keys.OBS_TIME_NS: 0}
@@ -277,10 +279,10 @@ def test_codec_composition():
 
 
 def test_codec_wrap_meta_merges():
-    """Test that wrapped policy meta merges base and codec meta."""
+    """A wrapped session reports the base meta and the codec meta."""
     codec = ActionTiming(fps=15.0, horizon_sec=1.0)
     policy = codec.wrap(_MetaPolicy())
-    meta = policy.meta
+    meta = policy.new_session().meta
     assert meta['base_key'] == 'base_value'
     assert meta['action_fps'] == 15.0
     assert meta['action_horizon_sec'] == 1.0

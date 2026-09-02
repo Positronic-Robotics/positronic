@@ -24,7 +24,7 @@ curl http://localhost:8000/api/v1/models
 In a separate terminal, run inference inside the simulation:
 
 ```bash
-uv run positronic-inference sim \
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote --policy.url=localhost:8000 \
   --output_dir=~/datasets/demo_run
 ```
@@ -192,6 +192,10 @@ class MySession(Session):
             for pose in predicted_poses
         ]
 
+    @property
+    def meta(self):
+        return {'type': 'my_model'}
+
 
 class MyPolicy(Policy):
     def __init__(self, model):
@@ -199,10 +203,6 @@ class MyPolicy(Policy):
 
     def new_session(self, context=None, rt=None):
         return MySession(self._model)  # per-episode setup goes here
-
-    @property
-    def meta(self):
-        return {'type': 'my_model'}
 
 
 pipeline = StopOnFault() | ChunkedSchedule() | remote | PolicySource(MyPolicy(load_my_model()))
@@ -228,7 +228,8 @@ If your server sits behind a proxy that caps message size (Modal's is ~2 MB), wr
 Test the server with the same client as the demo:
 
 ```bash
-uv run positronic-inference sim --policy=.remote --policy.url=localhost:8000
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
+  --policy=.remote --policy.url=localhost:8000
 ```
 
 ### Slow-loading or subprocess models

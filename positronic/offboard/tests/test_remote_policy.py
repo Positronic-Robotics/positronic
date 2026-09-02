@@ -467,16 +467,6 @@ def test_records_infer_span_when_inference_raises(tmp_path, open_session):
     assert [s.name for s in spans] == [telemetry_keys.SPAN_POLICY_INFER]
 
 
-def test_remote_policy_meta_exposes_server_fields():
-    """RemotePolicy.meta prefixes the server's own fields with ``server.``, before any session exists."""
-    policy, _ = _mock_remote_policy({'checkpoint_path': '/ckpts/abc', 'model_name': 'foo', **CHUNKED_STACK})
-
-    meta = policy.meta
-    assert meta['type'] == 'remote'
-    assert meta['server.checkpoint_path'] == '/ckpts/abc'
-    assert meta['server.model_name'] == 'foo'
-
-
 def test_missing_declaration_fails_before_motion():
     """A handshake carrying no ``local_stack`` leaves nothing to build, so no session opens."""
     policy, _ = _mock_remote_policy({'positronic_version': '0.1.0'})

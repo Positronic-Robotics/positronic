@@ -12,7 +12,7 @@ Two composition operators:
 import collections.abc as cabc
 from dataclasses import replace
 from functools import partial
-from typing import Any, final
+from typing import Any, final, overload
 
 import numpy as np
 from PIL import Image as PilImage
@@ -84,8 +84,14 @@ class Codec(Layer):
     def make_session(self, inner: Session):
         return _CodecSession(inner, self)
 
+    @overload
+    def __or__(self, other: 'Codec') -> 'Codec': ...
+
+    @overload
+    def __or__(self, other: Layer) -> Layer: ...
+
     @final
-    def __or__(self, other):
+    def __or__(self, other) -> Any:
         if isinstance(other, Codec):
             return _ComposedCodec(self, other)
         if isinstance(other, Layer):

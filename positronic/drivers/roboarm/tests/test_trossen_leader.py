@@ -1,5 +1,7 @@
 """What a leader arm publishes while the operator moves it, and what it asks of its controller."""
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -32,7 +34,7 @@ class FakeLeader:
 
     def __init__(self, positions: list[float] | None = None):
         self.positions = list(positions if positions is not None else HELD)
-        self.modes: list[object] = []
+        self.modes: list[Any] = []
         self.efforts: list[list[float]] = []
         self.moves: list[tuple[list[float], float, bool]] = []
         self.characteristics = [self._Characteristic(0.0)] * 6 + [self._Characteristic(GRIPPER_FRICTION)]

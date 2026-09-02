@@ -11,7 +11,7 @@ from pimm.logging import init_logging
 from positronic import keys
 from positronic.cfg.ds import internal
 from positronic.cfg.eval.real import tasks
-from positronic.dataset.episode import Episode
+from positronic.dataset.episode import META_CREATED_TS_NS, Episode
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
@@ -104,7 +104,7 @@ def ckpt(ep: Episode) -> str | None:
 
 
 def started(ep: Episode) -> datetime:
-    return datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9)
+    return datetime.fromtimestamp(ep.meta[META_CREATED_TS_NS] / 1e9)
 
 
 def units(ep: Episode) -> int | None:

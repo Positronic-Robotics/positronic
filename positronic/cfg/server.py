@@ -8,6 +8,7 @@ import pos3
 from pimm.logging import init_logging
 from positronic import keys
 from positronic.dataset import Episode
+from positronic.dataset.episode import META_CREATED_TS_NS
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig
@@ -57,7 +58,7 @@ finetune_ds = ds.transform.override(
         ds.group.override(
             transforms=[
                 Identity(),
-                Derive(started=lambda ep: datetime.fromtimestamp(ep.meta['created_ts_ns'] / 1e9), uph=uph),
+                Derive(started=lambda ep: datetime.fromtimestamp(ep.meta[META_CREATED_TS_NS] / 1e9), uph=uph),
             ]
         )
     ],

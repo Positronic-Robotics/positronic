@@ -115,7 +115,7 @@ class _Endpoint(Policy):
 
     def __init__(self, url: str, *, headers: dict[str, str] | None, infer_timeout: float):
         self._client = InferenceClient(url, headers=headers, infer_timeout=infer_timeout)
-        # Filled on first contact, via a throwaway session if ``meta`` is read before any real one exists.
+        # Filled on first contact, through a session opened for it alone.
         self._server_meta: dict[str, Any] | None = None
 
     def server_meta(self) -> dict[str, Any]:
@@ -137,10 +137,6 @@ class _Endpoint(Policy):
     @property
     def functions(self) -> cabc.Mapping[str, cabc.Callable[..., Any]]:
         return {INFER: round_trip}
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return flatten_dict({keys.TYPE: 'remote', keys.SERVER: self.server_meta()})
 
     def close(self):
         self._client = None
@@ -203,10 +199,6 @@ class RemotePolicy(Policy):
     @property
     def functions(self) -> cabc.Mapping[str, cabc.Callable[..., Any]]:
         return self._policy().functions
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return self._policy().meta
 
     def close(self):
         self._endpoint.close()

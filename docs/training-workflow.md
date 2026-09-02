@@ -268,7 +268,7 @@ cd docker && docker compose run --rm lerobot-train expert_only \
 cd docker && docker compose run --rm --service-ports lerobot-server ee \
   --pipeline.source.checkpoints_dir=~/checkpoints/lerobot/baseline_v1/ &
 
-uv run positronic-inference sim \
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote \
   --output_dir=~/datasets/inference_logs/baseline_v1
 ```

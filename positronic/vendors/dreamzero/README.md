@@ -31,7 +31,7 @@ serverless alternative is in the [Appendix](#appendix-nebius-serverless).)
 
 ## Zero-shot inference (wan2.1 DROID checkpoint)
 
-To try the pretrained DROID model with no training. `positronic-inference` comes from `uv sync` (see
+To try the pretrained DROID model with no training. `positronic` comes from `uv sync` (see
 [Installation](../../../README.md#installation)). Replace `<user>` with your username on the H100 box —
 `CACHE_ROOT` is that box's home, where the mounted `~/.cache` and `~/.aws` live (more in
 [Prerequisites](#full-pipeline-fine-tune-your-own-checkpoint) below).
@@ -43,7 +43,7 @@ cd docker
 CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports dreamzero-server droid
 
 # Run sim inference locally (only inference is remote; MuJoCo runs on your machine).
-uv run --locked positronic-inference sim \
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote --policy.url=<h100-host>:8000 \
   --eval.trial_count=2
 ```
@@ -147,7 +147,7 @@ Sanity-check once warm: `curl http://<h100-host>:8000/api/v1/models` → `{"mode
 ### 4. Run sim inference
 
 ```bash
-uv run --locked positronic-inference sim \
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote --policy.url=<h100-host>:8000 \
   --eval.trial_count=<N> --output_dir=<dir-or-s3-path>
 ```
@@ -188,12 +188,12 @@ checkpoints; the `droid` pipeline pairs the pretrained DROID model with its requ
 
 A client can tune the serving pipeline per connection: session query params become dotted overrides into the
 pipeline config, applied server-side (values are literals; the model checkpoint and backbone are fixed at
-launch). With `positronic-inference`, pass them through the remote policy:
+launch). With `positronic eval run`, pass them through the remote policy:
 
 ```bash
 # At episode start, send only the observed history (a growing frame stack) instead of
 # padding the window with the current frame repeated.
-uv run --locked positronic-inference sim \
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
   --policy=.remote --policy.url='<h100-host>:8000?local.pad_start=false' \
   --eval.trial_count=2
 ```

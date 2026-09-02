@@ -69,10 +69,6 @@ class MolmoAct2Policy(Policy):
     def new_session(self, context=None, rt=None) -> Session:
         return _MolmoAct2Session(self._model, self._processor, self._norm_tag, self._num_steps, self._meta)
 
-    @property
-    def meta(self) -> dict[str, Any]:
-        return self._meta.copy()
-
     def close(self):
         if self._model is not None:
             del self._model

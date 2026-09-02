@@ -51,12 +51,12 @@ class DummyRobot(pimm.ControlSystem):
 
 
 def build_collection(world, out_dir: Path, *, metadata_getter: Callable[[], dict[str, object]] | None = None):
-    dc = DataCollectionController(operator_position=None, nominal_joints=(), metadata_getter=metadata_getter)
+    dc = DataCollectionController(
+        operator_position=None, nominal_joints=(), output_path=out_dir, metadata_getter=metadata_getter
+    )
     robot = DummyRobot()
 
-    writer_cm = LocalDatasetWriter(out_dir)
-    writer = writer_cm.__enter__()
-    ds_agent = wire.wire(world, dc, writer, {}, robot, None, None)
+    ds_agent = wire.wire(world, dc, LocalDatasetWriter, {}, robot, None, None)
     assert ds_agent is not None
     ds_agent.add_signal('controller_positions', controller_positions_serializer)
 
@@ -66,7 +66,7 @@ def build_collection(world, out_dir: Path, *, metadata_getter: Callable[[], dict
     ctrl_em_agent = world.pair(ds_agent.inputs['controller_positions'])
     buttons_em = world.pair(dc.buttons_receiver)
 
-    return dc, ds_agent, ctrl_em_dc, ctrl_em_agent, buttons_em, writer_cm, robot
+    return dc, ds_agent, ctrl_em_dc, ctrl_em_agent, buttons_em, robot
 
 
 def test_the_tracker_takes_the_shake_out_of_a_hand_that_holds_still():
@@ -98,7 +98,7 @@ def test_data_collection_records_task_metadata(tmp_path, world):
         call_count += 1
         return {keys.TASK: 'stack-blocks'}
 
-    (dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, writer_cm, robot) = build_collection(
+    (dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, robot) = build_collection(
         world, tmp_path, metadata_getter=metadata_getter
     )
 
@@ -121,9 +121,8 @@ def test_data_collection_records_task_metadata(tmp_path, world):
         (None, 0.005),
     ])
 
-    with writer_cm:
-        scheduler = world.start([dc, agent, robot, driver])
-        drive_scheduler(scheduler, steps=400)
+    scheduler = world.start([dc, agent, robot, driver])
+    drive_scheduler(scheduler, steps=400)
 
     assert call_count == 1
 
@@ -135,7 +134,7 @@ def test_data_collection_records_task_metadata(tmp_path, world):
 
 
 def test_data_collection_basic_recording(tmp_path, world):
-    dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, writer_cm, robot = build_collection(world, tmp_path)
+    dc, agent, ctrl_em_dc, ctrl_em_agent, buttons_em, robot = build_collection(world, tmp_path)
 
     # A simple right-hand pose and button frames
     right_pose = Transform3D(translation=np.array([0.1, 0.2, 0.3]), rotation=Rotation.identity)
@@ -143,7 +142,7 @@ def test_data_collection_basic_recording(tmp_path, world):
     payload = {'left': None, 'right': right_pose}
 
     def start_episode():
-        dc.ds_agent_commands.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+        dc.ds_agent_commands.emit(DsWriterCommand.START(tmp_path))
         buttons_em.emit(make_buttons(trigger=0.7, B=False))
 
     def emit_signals():
@@ -151,13 +150,12 @@ def test_data_collection_basic_recording(tmp_path, world):
         ctrl_em_agent.emit(payload)
 
     def stop_episode():
-        dc.ds_agent_commands.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+        dc.ds_agent_commands.emit(DsWriterCommand.STOP())
 
     driver = ManualDriver([(start_episode, 0.001), (emit_signals, 0.001), (stop_episode, 0.001)])
 
-    with writer_cm:
-        scheduler = world.start([dc, agent, robot, driver])
-        drive_scheduler(scheduler)
+    scheduler = world.start([dc, agent, robot, driver])
+    drive_scheduler(scheduler)
 
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
@@ -591,10 +589,11 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
 
     # Virtual time: the sim advances the world clock as physics steps
     with pimm.World(virtual_time=True) as world:
-        dc = DataCollectionController(operator_position=OperatorPosition.FRONT.value, nominal_joints=sim.initial_joints)
+        dc = DataCollectionController(
+            operator_position=OperatorPosition.FRONT.value, nominal_joints=sim.initial_joints, output_path=tmp_path
+        )
 
-        writer_cm = LocalDatasetWriter(tmp_path)
-        agent = DsWriterAgent(writer_cm.__enter__())
+        agent = DsWriterAgent(LocalDatasetWriter)
         agent.add_signal(keys.TARGET_GRIP)
         agent.add_signal(keys.ROBOT_COMMAND, Serializers.robot_command)
         agent.add_signal('controller_positions', controller_positions_serializer)
@@ -615,7 +614,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
         buttons_em = world.pair(dc.buttons_receiver)
 
         def start_episode():
-            dc.ds_agent_commands.emit(DsWriterCommand(DsWriterCommandType.START_EPISODE))
+            dc.ds_agent_commands.emit(DsWriterCommand.START(tmp_path))
             buttons_em.emit(make_buttons(trigger=0.5))
 
         def enable_tracking():
@@ -627,7 +626,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
             ctrl_em_agent.emit(payload)
 
         def stop_episode():
-            dc.ds_agent_commands.emit(DsWriterCommand(DsWriterCommandType.STOP_EPISODE))
+            dc.ds_agent_commands.emit(DsWriterCommand.STOP())
 
         driver = ManualDriver([
             (start_episode, 0.01),
@@ -636,9 +635,8 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
             (stop_episode, 0.005),
         ])
 
-        with writer_cm:
-            scheduler = world.start([sim, dc, agent, driver])
-            drive_scheduler(scheduler, steps=400)
+        scheduler = world.start([sim, dc, agent, driver])
+        drive_scheduler(scheduler, steps=400)
 
     # Validate dataset contents
     ds = LocalDataset(tmp_path)
