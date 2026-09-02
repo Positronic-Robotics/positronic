@@ -10,6 +10,9 @@ SO101_NOMINAL_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0]
 # The Trossen rests on the lower limit of joints 1 and 2, where half the directions out of it have no
 # solution at all. Its start pose is mid-range on every joint instead, end effector at [0.503, 0, 0.232].
 TROSSEN_NOMINAL_JOINTS = [0.0, 1.571, 1.178, 0.0, 0.0, 0.0]
+# Where the Trossen rests: every joint at zero, which is the lower limit of joints 1 and 2. The arm holds
+# itself there without the controller, so it is where a session leaves it.
+TROSSEN_PARK_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 # How far, per joint, a start pose drawn around the Franka's nominal may sit from it.
 FRANKA_JOINTS_SPREAD = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
 # The gains DROID's Franka ran, which its pretrained checkpoints were trained under.

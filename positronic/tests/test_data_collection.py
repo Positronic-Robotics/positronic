@@ -353,10 +353,23 @@ class _LeaderRig:
     grip: pimm.ControlSystemEmitter
     events: pimm.ControlSystemEmitter
     move: pimm.calls.ControlSystemHandler
+    leader_move: pimm.calls.ControlSystemHandler
+
+    def answer_moves(self) -> list:
+        """Answer every move both arms have been asked for, as arms that arrive do."""
+        asked = [*self.move.incoming(), *self.leader_move.incoming()]
+        for call in asked:
+            call.set_result(None)
+        return asked
+
+
+PARK_JOINTS = np.zeros(len(NOMINAL_JOINTS))
 
 
 def build_leader_rig(world) -> _LeaderRig:
-    dc = DataCollectionController(OperatorPosition.FRONT.value, NOMINAL_JOINTS, teleop=data_collection.Teleop.LEADER)
+    dc = DataCollectionController(
+        OperatorPosition.FRONT.value, NOMINAL_JOINTS, park_joints=PARK_JOINTS, teleop=data_collection.Teleop.LEADER
+    )
     commands, grips = RecordingEmitter(), RecordingEmitter()
     dc.robot_commands._bind(commands)
     dc.target_grip._bind(grips)
@@ -369,6 +382,7 @@ def build_leader_rig(world) -> _LeaderRig:
         grip=world.pair(dc.leader_grip),
         events=world.pair(dc.session_events),
         move=world.pair(dc.sync_move),
+        leader_move=world.pair(dc.leader_move),
     )
 
 
@@ -376,6 +390,7 @@ def test_the_keys_the_session_answers_to():
     """The names a key asks by are the session's, not the keyboard's: a pedal would ask by the same ones."""
     assert data_collection._session_event('r') is data_collection.SessionEvent.RECORD
     assert data_collection._session_event(' ') is data_collection.SessionEvent.READY
+    assert data_collection._session_event('h') is data_collection.SessionEvent.PARK
     assert data_collection._session_event('x') is None
 
 
@@ -387,6 +402,8 @@ def test_a_follower_waits_until_its_leader_has_come_to_it(world):
     marks = {}
 
     driver = ManualDriver([
+        (lambda: rig.events.emit(data_collection.SessionEvent.READY), 0.01),
+        (rig.answer_moves, 0.01),
         (lambda: rig.state.emit(_StandingStill(q=np.zeros(6))), 0.01),
         (lambda: rig.grip.emit(0.0), 0.01),
         (lambda: rig.joints.emit(apart), 0.01),
@@ -403,6 +420,59 @@ def test_a_follower_waits_until_its_leader_has_come_to_it(world):
     assert asked, 'the follower never took up the leader it had met'
     assert isinstance(asked[-1][1], roboarm_command.JointPosition), 'the leader was solved for, not copied'
     np.testing.assert_allclose(asked[-1][1].positions, together)
+
+
+def test_a_follower_holds_still_until_the_session_puts_both_arms_where_they_start(world):
+    """The arms stand close the moment a run starts, and the operator has asked for nothing yet. A follower
+    that took its leader up there moves on the first hand laid on the leader."""
+    rig = build_leader_rig(world)
+    together = np.full(6, 0.05)
+
+    driver = ManualDriver([
+        (lambda: rig.state.emit(_StandingStill(q=np.zeros(6))), 0.01),
+        (lambda: rig.joints.emit(together), 0.01),
+        (lambda: rig.joints.emit(together), 0.01),
+        (None, 0.01),
+    ])
+    drive_scheduler(world.start([rig.dc, driver]), steps=400)
+
+    assert not rig.commands.emitted, 'the follower took up its leader before the session asked for anything'
+
+
+def test_the_start_pose_takes_the_leader_with_the_follower(world):
+    """A leader left where it stands is the gap the follower jumps the moment it takes it up, so both arms
+    travel to the same start pose and stand together when the operator takes over."""
+    rig = build_leader_rig(world)
+    asked = []
+
+    driver = ManualDriver([
+        (lambda: rig.events.emit(data_collection.SessionEvent.READY), 0.01),
+        (lambda: asked.extend(rig.answer_moves()), 0.01),
+        (None, 0.01),
+    ])
+    drive_scheduler(world.start([rig.dc, driver]), steps=400)
+
+    assert len(asked) == 2, f'the start pose reached {len(asked)} of the two arms'
+    poses = [call.request.positions for call in asked]
+    np.testing.assert_allclose(poses[0], poses[1], err_msg='the arms were sent to poses of their own')
+
+
+def test_the_park_key_takes_both_arms_to_rest(world):
+    """The pose the arms rest at is measured, not drawn: an arm that rests where it is asked to holds
+    itself there with the controller off."""
+    rig = build_leader_rig(world)
+    asked = []
+
+    driver = ManualDriver([
+        (lambda: rig.events.emit(data_collection.SessionEvent.PARK), 0.01),
+        (lambda: asked.extend(rig.answer_moves()), 0.01),
+        (None, 0.01),
+    ])
+    drive_scheduler(world.start([rig.dc, driver]), steps=400)
+
+    assert len(asked) == 2, f'the rest pose reached {len(asked)} of the two arms'
+    for call in asked:
+        np.testing.assert_array_equal(call.request.positions, PARK_JOINTS)
 
 
 def test_the_trigger_of_a_leader_holds_the_follower_grip(world):
@@ -471,6 +541,21 @@ def test_an_arm_driven_by_both_a_leader_and_a_headset_is_refused():
             cameras=None,
             nominal_joints=NOMINAL_JOINTS.tolist(),
             leader=DummyRobot(),
+        )
+
+
+def test_a_rest_pose_that_does_not_cover_every_joint_of_the_start_pose_is_refused():
+    """Both poses belong to one arm. A rest pose of another length reaches the arm as a failed move, with
+    nothing to say which of the two the station named wrong."""
+    with pytest.raises(ValueError, match='park_joints'):
+        data_collection.main(
+            robot_arm=DummyRobot(),
+            gripper=None,
+            webxr=WebXR(port=0),
+            sound=None,
+            cameras=None,
+            nominal_joints=NOMINAL_JOINTS.tolist(),
+            park_joints=NOMINAL_JOINTS[:-1].tolist(),
         )
 
 

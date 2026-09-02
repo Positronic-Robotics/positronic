@@ -152,15 +152,24 @@ class _Follow:
 
     def __init__(self) -> None:
         self.on = False
+        self._armed = False
+
+    def arm(self) -> None:
+        """Let the follower take up its leader again, once the session has put both where they stand."""
+        self._armed = True
 
     def turn_off(self) -> None:
         if self.on:
             logging.info('The arm stopped following its leader')
         self.on = False
+        self._armed = False
 
     def met(self, leader: np.ndarray, follower: np.ndarray) -> bool:
-        """Whether the follower may copy the leader: it may once every joint of the two is within
-        ``_MEET_RAD`` of the other's, and goes on doing so until something turns it off."""
+        """Whether the follower may copy the leader: it may once the session has armed it and every joint
+        of the two is within ``_MEET_RAD`` of the other's, and goes on doing so until something turns it
+        off. An arm the operator has not asked for holds still, however close the two stand."""
+        if not self._armed:
+            return False
         if not self.on and leader.shape == follower.shape and np.max(np.abs(leader - follower)) <= _MEET_RAD:
             self.on = True
             logging.info('The arm met its leader and follows it now')
@@ -180,6 +189,7 @@ class DataCollectionController(pimm.ControlSystem):
         operator_position: geom.Transform3D | None,
         nominal_joints: Sequence[float] | np.ndarray,
         joints_spread: Sequence[float] | np.ndarray = (),
+        park_joints: Sequence[float] | np.ndarray = (),
         *,
         teleop: Teleop = Teleop.HAND,
         static_meta: dict | None = None,
@@ -191,6 +201,7 @@ class DataCollectionController(pimm.ControlSystem):
         # A station that measured no jitter sends the arm exactly to its nominal.
         spread = joints_spread if len(joints_spread) else np.zeros_like(self._nominal_joints)
         self._joints_spread = np.asarray(spread, dtype=np.float64)
+        self._park_joints = np.asarray(park_joints, dtype=np.float64)
         self._static_meta = static_meta or {}
         self.metadata_getter = metadata_getter or (lambda: {})
         self.controller_positions = pimm.DefaultingReceiver(self, default={})
@@ -209,6 +220,9 @@ class DataCollectionController(pimm.ControlSystem):
 
         self.robot_commands = pimm.ControlSystemEmitter(self)
         self.sync_move = pimm.calls.ControlSystemCaller[roboarm.command.CommandType, None](self)
+        # The leader travels to the poses the follower is sent to, so the two arms stand together when the
+        # operator takes over. A leader left behind hands the follower the whole gap as its first step.
+        self.leader_move = pimm.calls.ControlSystemCaller[roboarm.command.CommandType, None](self)
         self.redraw_scene = pimm.calls.ControlSystemCaller[Any, None](self)
         self.target_grip = pimm.ControlSystemEmitter(self)
 
@@ -221,19 +235,18 @@ class DataCollectionController(pimm.ControlSystem):
         start pose to put anything back at. A leader is never that: it is an arm, and it has one."""
         return self.teleop is Teleop.HAND and self.operator_position is None
 
-    def _ready(self, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
-        """Redraw the scene and put the arm at a start pose drawn around the nominal joints, yielding until
-        both are done.
+    def _travel(
+        self, target: roboarm.command.CommandType, should_stop: pimm.SignalReceiver, asks: Sequence[Any] = ()
+    ) -> Iterator[pimm.Sleep]:
+        """Take every arm of the rig to ``target``, yielding until it and everything in ``asks`` is done.
 
         Raises whatever a device failed on: a call hands its handler's exception back, so the vocabulary is
         the driver's — a move abandoned, a target it cannot hold, a fault from the vendor.
         """
-        logging.info('Readying the rig for the next episode')
-        asks = []
-        if self.redraw_scene.connected:  # a real scene is a person's to set up, and nothing here is asked
-            asks.append(self.redraw_scene(None))
-        if len(self._nominal_joints):  # a station with no arm has none to put anywhere
-            asks.append(self.sync_move(roboarm.command.sampled_joints(self._nominal_joints, self._joints_spread)))
+        asks = list(asks)
+        for move in (self.sync_move, self.leader_move):
+            if move.connected:  # a rig without the arm has none to put anywhere
+                asks.append(move(target))
         ready = pimm.calls.all_of(asks)
         while not ready.done():
             if should_stop.value:
@@ -243,6 +256,32 @@ class DataCollectionController(pimm.ControlSystem):
             self.session_events.read()
             yield pimm.Sleep(0.001)
         ready.result()
+
+    def _ready(self, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
+        """Redraw the scene and put every arm at a start pose drawn around the nominal joints, yielding
+        until all of them are done."""
+        logging.info('Readying the rig for the next episode')
+        # A real scene is a person's to set up, and nothing here is asked.
+        scene = [self.redraw_scene(None)] if self.redraw_scene.connected else []
+        yield from self._travel(
+            roboarm.command.sampled_joints(self._nominal_joints, self._joints_spread), should_stop, scene
+        )
+
+    def _park(self, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
+        """Put every arm of the rig where it rests, yielding until all of them are there."""
+        if not len(self._park_joints):
+            logging.warning('This rig names no pose to rest at, so there is nowhere to park it')
+            return
+        logging.info('Taking the rig to rest')
+        yield from self._travel(roboarm.command.JointPosition(self._park_joints), should_stop)
+
+    def _abandon(self, recording: bool, abort_wav_path: Path) -> bool:
+        """Give up the recording that runs, if one does, and answer that none runs now."""
+        if recording:
+            self.ds_agent_commands.emit(DsWriterCommand.ABORT())
+            self.sound.emit(abort_wav_path)
+            logging.info('The recording was abandoned')
+        return False
 
     def _from_hand(self, tracker: _Tracker, hands: set[str], buttons: ButtonHandler) -> tuple[Any, float | None]:
         """What the hand asks the arm for, and what it holds the grip at.
@@ -264,7 +303,7 @@ class DataCollectionController(pimm.ControlSystem):
         to solve between them.
         """
         held = self.leader_grip.read()
-        grip = None if held is None else float(held.data)
+        grip = float(held.data) if held is not None and held.updated else None
         joints = self.leader_joints.read()
         if joints is None or state is None:
             return None, grip
@@ -298,9 +337,11 @@ class DataCollectionController(pimm.ControlSystem):
                         meta.update(self.metadata_getter())
                         self.ds_agent_commands.emit(DsWriterCommand.START(meta))
                         self.sound.emit(start_wav_path)
+                        logging.info('The recording started')
                     else:
                         self.ds_agent_commands.emit(DsWriterCommand.STOP())
                         self.sound.emit(end_wav_path)
+                        logging.info('The recording stopped')
                     recording = not recording
                 elif isinstance(source, _Tracker) and button_handler.just_pressed('right_A'):
                     if source.on:
@@ -311,16 +352,24 @@ class DataCollectionController(pimm.ControlSystem):
                         source.turn_on(state.data.ee_pose)
                     logging.info('Tracking is %s', 'on' if source.on else 'off')
                 elif (button_handler.just_pressed('right_stick') or asked is SessionEvent.READY) and not self._umi:
-                    if recording:
-                        self.ds_agent_commands.emit(DsWriterCommand.ABORT())
-                        self.sound.emit(abort_wav_path)
+                    recording = self._abandon(recording, abort_wav_path)
                     source.turn_off()
-                    recording = False
                     try:
                         yield from self._ready(should_stop)
+                        if isinstance(source, _Follow):
+                            source.arm()
                     # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
                     except Exception as e:
                         logging.error(f'The rig was not readied: {e}')
+                        self.sound.emit(error_wav_path)
+                elif asked is SessionEvent.PARK:
+                    recording = self._abandon(recording, abort_wav_path)
+                    source.turn_off()
+                    try:
+                        yield from self._park(should_stop)
+                    # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
+                    except Exception as e:
+                        logging.error(f'The rig was not parked: {e}')
                         self.sound.emit(error_wav_path)
 
                 if isinstance(source, _Tracker):
@@ -352,11 +401,13 @@ class SessionEvent(Enum):
     RECORD = 'record'
     # Put the arm back at its start pose, and abandon the recording that runs.
     READY = 'ready'
+    # Put the arm where it rests, and abandon the recording that runs.
+    PARK = 'park'
 
 
 # The key that asks for each. An operator holding the leader has no hand free for these, so a second
 # person presses them; a pedal under the operator's own foot would ask for the same ones.
-_SESSION_KEYS = {'r': SessionEvent.RECORD, ' ': SessionEvent.READY}
+_SESSION_KEYS = {'r': SessionEvent.RECORD, ' ': SessionEvent.READY, 'h': SessionEvent.PARK}
 
 
 def _session_event(key: str) -> SessionEvent | None:
@@ -396,6 +447,7 @@ def _wire(
         # A driver's ports are its own: ``pimm.ControlSystem`` declares none for the checker to find.
         world.connect(leader.joints, data_collection.leader_joints)  # pyright: ignore[reportAttributeAccessIssue]
         world.connect(leader.grip, data_collection.leader_grip)  # pyright: ignore[reportAttributeAccessIssue]
+        world.connect(data_collection.leader_move, leader.sync_move)  # pyright: ignore[reportAttributeAccessIssue]
 
     if keyboard is not None:
         world.connect(
@@ -426,6 +478,48 @@ def _frame_array(frame: pimm.shared_memory.NumpySMAdapter) -> np.ndarray:
     return frame.array
 
 
+def _check_rig(
+    robot_arm: pimm.ControlSystem | None,
+    webxr: WebXR | None,
+    leader: pimm.ControlSystem | None,
+    nominal_joints: Sequence[float],
+    joints_spread: Sequence[float],
+    park_joints: Sequence[float],
+) -> None:
+    """Refuse a rig that cannot run, before any of it is started.
+
+    Every one of these reaches the operator as a failed move or an arm that does nothing, long after the
+    run began and with nothing to say which part of the configuration was wrong.
+    """
+    if (robot_arm is not None) != (len(nominal_joints) > 0):
+        raise ValueError(
+            '--robot_arm and --nominal_joints are named together or not at all: the right stick puts the arm '
+            'a station has at the pose it measured, and either one alone leaves the other with nothing'
+        )
+    if len(park_joints) not in (0, len(nominal_joints)):
+        raise ValueError(
+            f'--park_joints names {len(park_joints)} joints and --nominal_joints names {len(nominal_joints)}: '
+            'both are poses of the same arm, so they name the same joints'
+        )
+    if len(joints_spread) not in (0, len(nominal_joints)):
+        raise ValueError(
+            f'--joints_spread names {len(joints_spread)} joints and --nominal_joints names {len(nominal_joints)}: '
+            'the spread is jitter measured per joint, so it carries one value for each, or none at all'
+        )
+    if not np.all(np.isfinite([*nominal_joints, *joints_spread, *park_joints])):
+        raise ValueError(
+            '--nominal_joints, --joints_spread and --park_joints name joint angles: every value has to be '
+            'finite, or the draw between them raises instead of reaching the arm'
+        )
+    if leader is not None and robot_arm is None:
+        raise ValueError('--leader is held to drive a follower, and one with nothing on the other end drives nothing')
+    if leader is not None and webxr is not None:
+        raise ValueError(
+            'the arm is driven by a leader or by a hand tracked in space, not by both: --leader and --webxr '
+            'would leave two things asking one arm to be in two places at once'
+        )
+
+
 def main(
     robot_arm: pimm.ControlSystem | None,
     gripper: pimm.ControlSystem | None,
@@ -436,6 +530,8 @@ def main(
     # ``joints_spread``.
     nominal_joints: Sequence[float] = (),
     joints_spread: Sequence[float] = (),
+    # The pose the `h` key takes every arm to, where it rests between sessions.
+    park_joints: Sequence[float] = (),
     # The arm the operator holds. Naming it is what makes this a rig driven by a leader rather than by a
     # hand tracked in space.
     leader: pimm.ControlSystem | None = None,
@@ -446,28 +542,7 @@ def main(
     video_options: dict[str, str] | None = None,
 ):
     """Runs data collection in real hardware."""
-    if (robot_arm is not None) != (len(nominal_joints) > 0):
-        raise ValueError(
-            '--robot_arm and --nominal_joints are named together or not at all: the right stick puts the arm '
-            'a station has at the pose it measured, and either one alone leaves the other with nothing'
-        )
-    if len(joints_spread) not in (0, len(nominal_joints)):
-        raise ValueError(
-            f'--joints_spread names {len(joints_spread)} joints and --nominal_joints names {len(nominal_joints)}: '
-            'the spread is jitter measured per joint, so it carries one value for each, or none at all'
-        )
-    if not np.all(np.isfinite([*nominal_joints, *joints_spread])):
-        raise ValueError(
-            '--nominal_joints and --joints_spread name joint angles: every value has to be finite, or the '
-            'draw between them raises instead of reaching the arm'
-        )
-    if leader is not None and robot_arm is None:
-        raise ValueError('--leader is held to drive a follower, and one with nothing on the other end drives nothing')
-    if leader is not None and webxr is not None:
-        raise ValueError(
-            'the arm is driven by a leader or by a hand tracked in space, not by both: --leader and --webxr '
-            'would leave two things asking one arm to be in two places at once'
-        )
+    _check_rig(robot_arm, webxr, leader, nominal_joints, joints_spread, park_joints)
     camera_instances = cameras or {}
     camera_emitters = {name: cam.frame for name, cam in camera_instances.items()}
     static_meta = {}
@@ -481,6 +556,7 @@ def main(
         operator_position.value,
         nominal_joints,
         joints_spread,
+        park_joints,
         teleop=Teleop.LEADER if leader is not None else Teleop.HAND,
         static_meta=static_meta,
     )
@@ -501,7 +577,12 @@ def main(
             world.connect(camera_emitters[stream_video_to_webxr], webxr.frame, receiver_wrapper=pimm.map(_frame_array))
 
         # The keyboard reads the terminal this was started from, which no spawned process holds.
-        world.run([data_collection, keyboard], bg_cs)
+        try:
+            world.run([data_collection, keyboard], bg_cs)
+        # rules-allow: swallowed-error — an interrupt is how an operator ends a run, and the world has
+        # already stopped every process by the time it arrives here
+        except KeyboardInterrupt:
+            logging.info('The run ended on an interrupt')
 
 
 @cfn.config(
@@ -633,6 +714,7 @@ def yamcfg(robot_arm, **kwargs):
     },
     stream_video_to_webxr=keys.WRIST_IMAGE,
     nominal_joints=positronic.cfg.hardware.roboarm.TROSSEN_NOMINAL_JOINTS,
+    park_joints=positronic.cfg.hardware.roboarm.TROSSEN_PARK_JOINTS,
 )
 def trossencfg(robot_arm, **kwargs):
     """Runs data collection on a real Trossen WidowX AI arm (the arm driver carries the gripper)."""
@@ -640,8 +722,8 @@ def trossencfg(robot_arm, **kwargs):
 
 
 # The same arm, driven by the leader arm beside it instead of from the headset. There is nothing to wear:
-# the operator holds the leader, and the keys carry the session — `r` records, space puts the arm back at
-# its start pose, `q` ends the run.
+# the operator holds the leader, and the keys carry the session — `r` records, space puts both arms at the
+# start pose, `h` takes them to rest, and `q` ends the run.
 trossen_leader = trossencfg.override(
     leader=positronic.cfg.hardware.roboarm.trossen_leader, webxr=None, stream_video_to_webxr=None
 )

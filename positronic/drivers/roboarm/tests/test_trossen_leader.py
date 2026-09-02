@@ -3,8 +3,10 @@
 import numpy as np
 import pytest
 
-from pimm.tests.testing import MockClock
-from positronic.drivers.roboarm import trossen_leader
+import pimm
+from pimm.tests.testing import MockClock, wire_call
+from positronic import geom
+from positronic.drivers.roboarm import command, trossen_leader
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
@@ -27,6 +29,7 @@ class FakeLeader:
         self.positions = list(positions if positions is not None else HELD)
         self.modes: list[object] = []
         self.efforts: list[list[float]] = []
+        self.moves: list[tuple[list[float], float, bool]] = []
         self.raises: Exception | None = None
         self.cleaned_up = False
 
@@ -42,6 +45,12 @@ class FakeLeader:
         if self.raises is not None:
             raise self.raises
         self.efforts.append(list(efforts))
+
+    def set_all_positions(self, goal_positions, goal_time=2.0, blocking=True) -> None:
+        if self.raises is not None:
+            raise self.raises
+        self.moves.append((list(goal_positions), float(goal_time), bool(blocking)))
+        self.positions = list(goal_positions)
 
     def get_all_positions(self):
         if self.raises is not None:
@@ -85,9 +94,9 @@ def test_the_leader_publishes_the_joints_the_operator_moves_it_to():
         np.testing.assert_allclose(published, HELD[:6])
 
 
-def test_the_leader_is_never_put_in_position_mode():
-    """The operator holds this arm. A leader driven to a position fights the hand on it, and entering
-    position mode is also what faults a controller whose gripper reads outside its range."""
+def test_a_leader_nobody_drives_is_left_for_the_hand_that_holds_it():
+    """The operator moves this arm. A leader held in position mode fights the hand on it, so the driver
+    reads the arm and asks nothing of it."""
     arm = FakeLeader()
     leader, _joints, _grips, clock, stop = build(arm)
 
@@ -96,8 +105,48 @@ def test_the_leader_is_never_put_in_position_mode():
     names = [mode.name for mode in arm.modes]
     assert names[0] == 'external_effort', 'the arm was not freed for the operator to move'
     assert 'position' not in names, f'the leader was driven, not followed: {names}'
+    assert not arm.moves, 'the leader was sent somewhere nobody asked for'
     assert names[-1] == 'idle', 'the run left the arm holding itself up'
     assert arm.cleaned_up
+
+
+def test_a_move_the_session_asks_for_drives_the_leader_and_gives_it_back(world):
+    """Both arms travel to the pose the session opens on, so the follower has no gap to take up when it
+    copies its leader. The arm is free in the operator's hand again the moment it arrives."""
+    arm = FakeLeader()
+    leader, _joints, _grips, clock, stop = build(arm)
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](leader)
+    wire_call(world, caller, leader.sync_move)
+    target = np.array([0.0, 1.571, 1.178, 0.0, 0.0, 0.0])
+
+    answer = caller(command.JointPosition(target))
+    drive(leader, clock, stop, ticks=2)
+
+    answer.result()
+    goal, seconds, blocking = arm.moves[-1]
+    np.testing.assert_allclose(goal[:6], target)
+    assert goal[6] == pytest.approx(HELD[6]), 'the gripper was moved out of the hand that holds it'
+    assert blocking, 'the arm was left travelling with the driver reading it as held'
+    assert seconds == pytest.approx(np.max(np.abs(target - np.array(HELD[:6]))) / trossen_leader._MOVE_SPEED)
+    names = [mode.name for mode in arm.modes]
+    assert names[names.index('position') + 1] == 'external_effort', 'the arm was left holding itself'
+
+
+def test_a_leader_is_not_driven_to_a_pose(world):
+    """A leader has no kinematics: the joints it reads are the whole of what its follower is asked for.
+    A pose would have to be solved for, and the arm goes on being read either way."""
+    arm = FakeLeader()
+    leader, joints, _grips, clock, stop = build(arm)
+    caller = pimm.calls.ControlSystemCaller[command.CommandType, None](leader)
+    wire_call(world, caller, leader.sync_move)
+
+    answer = caller(command.CartesianPosition(geom.Transform3D()))
+    drive(leader, clock, stop, ticks=2)
+
+    with pytest.raises(NotImplementedError):
+        answer.result()
+    assert joints.emitted, 'a target the leader cannot take ended the run'
+    assert not arm.moves
 
 
 @pytest.mark.parametrize(

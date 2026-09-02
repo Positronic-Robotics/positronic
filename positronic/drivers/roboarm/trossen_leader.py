@@ -27,6 +27,8 @@ import numpy as np
 import pimm
 from positronic.drivers import vendor_import
 
+from . import command
+
 # trossen_arm lives in the `trossen` extra, which the type-check environment does not install.
 with vendor_import(
     'trossen_arm', 'Trossen arm support', hint='Re-run with the trossen extra:\n  uv run --locked --extra trossen ...\n'
@@ -45,6 +47,10 @@ _CONNECT_TIMEOUT_S = 20.0
 _COMPLAIN_EVERY_S = 5.0
 # How often the arm is asked back into the mode it should be in, once something has knocked it out.
 _RECOVER_EVERY_S = 1.0
+# The pace a leader is driven at, and the least time any such move takes. The operator has a hand on the
+# arm while it travels, so it goes no faster than the follower does.
+_MOVE_SPEED = 0.6  # rad/s
+_MIN_MOVE_TIME_S = 1.0
 
 
 def _connect(ip: str) -> Any:
@@ -94,6 +100,7 @@ class Leader(pimm.ControlSystem):
         self.joints = pimm.ControlSystemEmitter[np.ndarray](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.follower_efforts = pimm.ControlSystemReceiver[np.ndarray](self)
+        self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
 
     def _pushed_back(self) -> list[float]:
         """What the leader pushes back with: the follower's own external effort, reversed and scaled, so
@@ -109,6 +116,25 @@ class Leader(pimm.ControlSystem):
             return zero
         return (-self._gain * np.asarray(felt.data, dtype=np.float64)).tolist()
 
+    def _go_to(self, driver: Any, asked: command.CommandType, closed: float, travel: float) -> None:
+        """Drive the arm to the joints ``asked`` names, then give it back to the operator's hand.
+
+        The controller plans the whole move, at the pace the follower travels at. The gripper stays where
+        the operator holds it: ``set_all_positions`` takes every joint, and this move is the arm's.
+        """
+        if not isinstance(asked, command.JointPosition):
+            raise NotImplementedError(f'A leader is driven to joints, and {asked} names none')
+        target = np.asarray(asked.positions, dtype=np.float64)
+        positions = np.asarray(driver.get_all_positions(), dtype=np.float64)
+        seconds = max(_MIN_MOVE_TIME_S, float(np.max(np.abs(target - positions[:_ARM_JOINTS]))) / _MOVE_SPEED)
+        held = float(np.clip(positions[_GRIPPER_JOINT], closed, closed + travel))
+        logger.info(f'The leader at {self._ip} travels to the pose the session asked for, in {seconds:.1f} s')
+        driver.set_all_modes(trossen_arm.Mode.position)
+        try:
+            driver.set_all_positions([*target, held], seconds, True)
+        finally:
+            driver.set_all_modes(trossen_arm.Mode.external_effort)
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         with _opened(self._connect, self._ip) as driver:
             limit = driver.get_joint_limits()[_GRIPPER_JOINT]
@@ -121,6 +147,10 @@ class Leader(pimm.ControlSystem):
             failed_at: float | None = None
             while not should_stop.value:
                 now = clock.now()
+                for call in self.sync_move.incoming():
+                    with pimm.calls.raise_to(call):
+                        self._go_to(driver, call.request, closed, travel)
+                        call.set_result(None)
                 if failed_at is None or now - failed_at >= _RECOVER_EVERY_S:
                     try:
                         if failed_at is not None:
