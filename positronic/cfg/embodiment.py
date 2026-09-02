@@ -5,18 +5,8 @@ import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
 from positronic import keys
 from positronic.dataset.serializers import Serializers
-from positronic.eval import (
-    ARM,
-    GRIPPER,
-    JOINT_SIGNALS,
-    MOUNTS,
-    POSE_SIGNALS,
-    ROBOT_STATIC_META,
-    SCENE,
-    Command,
-    Embodiment,
-    Observation,
-)
+from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
+from positronic.eval import keys as eval_keys
 
 
 @cfn.config(
@@ -46,7 +36,7 @@ def droid(robot_arm, gripper, cameras):
         descriptor='',
         observations=observations,
         commands=commands,
-        prepare_handlers={ARM: robot_arm.sync_move, GRIPPER: gripper.sync_move},
+        prepare_handlers={eval_keys.ARM: robot_arm.sync_move, eval_keys.GRIPPER: gripper.sync_move},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
         control_systems=(*cameras.values(), robot_arm, gripper),
@@ -71,7 +61,7 @@ def yam(robot_arm, cameras):
         observations=observations,
         commands=commands,
         # One driver, one handler: the YAM chain carries its own fingers
-        prepare_handlers={ARM: robot_arm.sync_move},
+        prepare_handlers={eval_keys.ARM: robot_arm.sync_move},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
         control_systems=(*cameras.values(), robot_arm),
@@ -118,16 +108,16 @@ def yam_bimanual(left_channel: str, right_channel: str, mounts: dict[str, list[f
     }
     joint_signals = {side: f'{keys.ROBOT_STATE}.{side}.q' for side in arms}
     static_meta = {
-        JOINT_SIGNALS: list(joint_signals.values()),
-        POSE_SIGNALS: [f'{keys.ROBOT_STATE}.{s}.ee_pose' for s in arms]
+        eval_keys.JOINT_SIGNALS: list(joint_signals.values()),
+        eval_keys.POSE_SIGNALS: [f'{keys.ROBOT_STATE}.{s}.ee_pose' for s in arms]
         + [f'{keys.ROBOT_COMMAND}.{s}.pose' for s in arms],
-        MOUNTS: {sig: mounts[side] for side, sig in joint_signals.items()},
+        eval_keys.MOUNTS: {sig: mounts[side] for side, sig in joint_signals.items()},
     }
     return Embodiment(
         descriptor='yam_bimanual',
         observations=observations,
         commands=commands,
-        prepare_handlers={f'{ARM}.{s}': arm.sync_move for s, arm in arms.items()},
+        prepare_handlers={f'{eval_keys.ARM}.{s}': arm.sync_move for s, arm in arms.items()},
         static_meta=static_meta,
         # Both drivers emit the identical per-arm meta; record one copy.
         meta_source=arms['left'].robot_meta,
@@ -158,7 +148,7 @@ def mujoco_franka(sim, camera_dict):
         commands=commands,
         # Two handlers on one sim: the draw places the objects and leaves the arm at the pose the scene
         # itself starts from; the move is what a trial names to put the arm somewhere else.
-        prepare_handlers={SCENE: sim.env_reset, ARM: sim.sync_move},
+        prepare_handlers={eval_keys.SCENE: sim.env_reset, eval_keys.ARM: sim.sync_move},
         static_meta={**ROBOT_STATIC_META, 'simulation.mujoco_model_path': sim.mujoco_model_path},
         meta_source=sim.robot_meta,
         control_systems=(sim,),

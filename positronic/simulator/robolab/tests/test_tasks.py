@@ -10,9 +10,10 @@ import pytest
 
 from positronic import keys
 from positronic.cfg.eval.sim import robolab as robolab_cfg
-from positronic.eval import EVAL_TASK, EVAL_TRIAL_INDEX, SCENE
+from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
-from positronic.simulator.robolab.adapter import EVAL_EPISODE_LENGTH, EVAL_INSTRUCTION_TYPE, RobolabAdapter
+from positronic.simulator.robolab import keys as robolab_keys
+from positronic.simulator.robolab.adapter import RobolabAdapter
 
 
 @pytest.fixture
@@ -23,8 +24,8 @@ def asked(monkeypatch) -> list[Any]:
     def tasks(self, selection: Any) -> list[dict[str, Any]]:
         specs.append(selection)
         return [
-            {EVAL_TASK: 'BananaInBowlTask', EVAL_EPISODE_LENGTH: 50.0},
-            {EVAL_TASK: 'CleanUpToysTask', EVAL_EPISODE_LENGTH: 300.0},
+            {eval_keys.TASK: 'BananaInBowlTask', robolab_keys.EPISODE_LENGTH: 50.0},
+            {eval_keys.TASK: 'CleanUpToysTask', robolab_keys.EPISODE_LENGTH: 300.0},
         ]
 
     monkeypatch.setattr(RemoteEnvControlSystem, 'tasks', tasks)
@@ -36,8 +37,8 @@ def test_the_adapter_names_a_task_the_way_the_reset_token_does():
 
     params = adapter.task_params([{'name': 'AnimalsInBinTask', 'episode_length_s': 90.0}])
 
-    assert params == [{EVAL_TASK: 'AnimalsInBinTask', EVAL_EPISODE_LENGTH: 90.0}]
-    token = adapter.reset_token({**params[0], EVAL_INSTRUCTION_TYPE: 'vague'})
+    assert params == [{eval_keys.TASK: 'AnimalsInBinTask', robolab_keys.EPISODE_LENGTH: 90.0}]
+    token = adapter.reset_token({**params[0], robolab_keys.INSTRUCTION_TYPE: 'vague'})
     assert token == {'task': 'AnimalsInBinTask', 'instruction_type': 'vague'}
 
 
@@ -50,10 +51,14 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
     trials = list(ev.tasks())
 
     assert asked == [{'task': 'visual'}]
-    scenes = [trial.prepare_args[SCENE] for trial in trials]
-    assert [scene[EVAL_TASK] for scene in scenes] == ['BananaInBowlTask'] * 2 + ['CleanUpToysTask'] * 2
-    assert [trial.meta[EVAL_TRIAL_INDEX] for trial in trials] == [0, 1, 2, 3]
-    assert scenes[0] == {EVAL_TASK: 'BananaInBowlTask', EVAL_EPISODE_LENGTH: 50.0, EVAL_INSTRUCTION_TYPE: 'specific'}
+    scenes = [trial.prepare_args[eval_keys.SCENE] for trial in trials]
+    assert [scene[eval_keys.TASK] for scene in scenes] == ['BananaInBowlTask'] * 2 + ['CleanUpToysTask'] * 2
+    assert [trial.meta[eval_keys.TRIAL_INDEX] for trial in trials] == [0, 1, 2, 3]
+    assert scenes[0] == {
+        eval_keys.TASK: 'BananaInBowlTask',
+        robolab_keys.EPISODE_LENGTH: 50.0,
+        robolab_keys.INSTRUCTION_TYPE: 'specific',
+    }
 
 
 def test_a_spec_that_names_no_task_narrows_nothing(asked):

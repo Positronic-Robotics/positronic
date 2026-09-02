@@ -20,7 +20,7 @@ from pimm.logging import init_logging
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready
 from positronic.policy import Codec, Layer, Policy, Session
-from positronic.policy.base import CHECKPOINT_PATH, EXPERIMENT_NAME, TYPE
+from positronic.policy import keys as policy_keys
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.spec import ModelSource, remote
 from positronic.utils.checkpoints import list_checkpoints
@@ -359,11 +359,11 @@ class DreamZeroSource(ModelSource):
     def meta(self, model_id: str) -> dict[str, Any]:
         checkpoint_path = self._checkpoint_path(model_id)
         return {
-            TYPE: 'dreamzero',
+            policy_keys.TYPE: 'dreamzero',
             'backbone': self._backbone,
             'num_gpus': self._num_gpus,
-            CHECKPOINT_PATH: checkpoint_path,
-            EXPERIMENT_NAME: _experiment_name(checkpoint_path),
+            policy_keys.CHECKPOINT_PATH: checkpoint_path,
+            policy_keys.EXPERIMENT_NAME: _experiment_name(checkpoint_path),
         }
 
 

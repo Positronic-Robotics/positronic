@@ -16,7 +16,8 @@ from typing import Any
 import pimm
 from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.serializers import Serializers
-from positronic.eval import ROBOT_STATIC_META, SCENE, Command, Embodiment, Observation
+from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
+from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
 
@@ -170,7 +171,7 @@ def remote_franka_embodiment(
         observations=observations,
         commands=commands,
         # A remote env readies its own robot when it draws the scene; the proxy has no lever of its own
-        prepare_handlers={SCENE: proxy.env_reset},
+        prepare_handlers={eval_keys.SCENE: proxy.env_reset},
         static_meta={**ROBOT_STATIC_META, **(static_meta or {})},
         meta_source=proxy.robot_meta,
         control_systems=(proxy,),

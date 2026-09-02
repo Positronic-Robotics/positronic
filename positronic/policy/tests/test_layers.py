@@ -7,8 +7,8 @@ import pytest
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import Impedance, JointDelta
-from positronic.drivers.roboarm.models import EE_FRAME
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import spec
 from positronic.policy.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction, JointDeltaAction
@@ -251,20 +251,20 @@ class TestPipelineComposition:
         """Poses come out at the product of both transforms, which neither codec's declaration names."""
         a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
         b = Transform3D(np.array([0.01, 0.0, 0.02]), Rotation.from_euler([0.0, 0.0, -0.4]))
-        with pytest.raises(ValueError, match=EE_FRAME):
+        with pytest.raises(ValueError, match=roboarm_keys.EE_FRAME):
             _ = (ChangeEEFrame(a) | ChangeEEFrame(b)).meta
 
     def test_the_same_frame_twice_is_still_two_moves(self):
         """The second move starts where the first left off, so the shared value names neither end of the pair."""
         a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
-        with pytest.raises(ValueError, match=EE_FRAME):
+        with pytest.raises(ValueError, match=roboarm_keys.EE_FRAME):
             _ = (ChangeEEFrame(a) | ChangeEEFrame(a)).meta
 
     def test_parallel_frame_codecs_keep_the_frame_they_share(self):
         """Both halves encode the same input, so one move happens and the shared declaration describes it."""
         a = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
         np.testing.assert_allclose(
-            (ChangeEEFrame(a) & ChangeEEFrame(a)).meta[EE_FRAME], a.as_vector(Rotation.Representation.QUAT)
+            (ChangeEEFrame(a) & ChangeEEFrame(a)).meta[roboarm_keys.EE_FRAME], a.as_vector(Rotation.Representation.QUAT)
         )
 
 
@@ -534,7 +534,7 @@ class TestPipe:
         """Rig-side and server-side conversion are alternatives; running both puts poses at the product."""
         t = Transform3D(np.array([0.0, 0.0, 0.05]), Rotation.from_euler([0.0, 0.0, 0.3]))
         chain = ChangeEEFrame(t) | spec.remote | (ActionTimestamp(fps=10.0) | ChangeEEFrame(t))
-        with pytest.raises(ValueError, match=EE_FRAME):
+        with pytest.raises(ValueError, match=roboarm_keys.EE_FRAME):
             _ = chain | spec.PolicySource(_ConstPolicy([]))
 
     def test_pipe_composes_no_further(self):

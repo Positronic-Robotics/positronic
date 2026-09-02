@@ -15,7 +15,7 @@ from positronic import geom
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, wait_for_subprocess_ready, warmup
 from positronic.policy import Codec, Policy, Session
-from positronic.policy.base import CHECKPOINT_PATH, CONFIG_NAME, EXPERIMENT_NAME, TYPE
+from positronic.policy import keys as policy_keys
 from positronic.policy.codec import ChangeEEFrame, RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.spec import ModelSource, remote
@@ -235,10 +235,12 @@ class OpenpiSource(ModelSource):
 
     def meta(self, model_id: str) -> dict[str, Any]:
         return {
-            TYPE: 'openpi',
-            CONFIG_NAME: self.config_name,
-            CHECKPOINT_PATH: self.checkpoints_dir if self._passthrough else f'{self.checkpoints_dir}/{model_id}',
-            EXPERIMENT_NAME: self.checkpoints_dir.rsplit('/', 1)[-1],
+            policy_keys.TYPE: 'openpi',
+            policy_keys.CONFIG_NAME: self.config_name,
+            policy_keys.CHECKPOINT_PATH: self.checkpoints_dir
+            if self._passthrough
+            else f'{self.checkpoints_dir}/{model_id}',
+            policy_keys.EXPERIMENT_NAME: self.checkpoints_dir.rsplit('/', 1)[-1],
         }
 
 

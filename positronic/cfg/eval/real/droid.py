@@ -7,7 +7,8 @@ import configuronic as cfn
 from positronic.cfg.embodiment import droid
 from positronic.cfg.eval.real.tasks import BATTERIES_TASK, SCISSORS_TASK, SPOONS_TASK, TOWELS_TASK, UNIFIED_TASK
 from positronic.cfg.hardware.roboarm import droid_start_pose
-from positronic.eval import ARM, EVAL_TRIAL_COUNT, EVAL_TRIAL_INDEX, GRIPPER, Eval, Task
+from positronic.eval import Eval, Task
+from positronic.eval import keys as eval_keys
 
 
 def _droid_trial(instruction: str, timeout: float | None, meta: dict[str, Any] | None = None) -> Task:
@@ -15,7 +16,7 @@ def _droid_trial(instruction: str, timeout: float | None, meta: dict[str, Any] |
     return Task(
         instruction_source=instruction,
         timeout_sec=timeout,
-        prepare_args={ARM: droid_start_pose(), GRIPPER: 0.0},
+        prepare_args={eval_keys.ARM: droid_start_pose(), eval_keys.GRIPPER: 0.0},
         meta=meta or {},
     )
 
@@ -29,7 +30,7 @@ def attended_trials(instruction: str, timeout: float | None) -> Callable[[], Tas
 
 def _planned_trials(instruction: str, timeout: float | None, trial_count: int) -> list[Task]:
     return [
-        _droid_trial(instruction, timeout, {EVAL_TRIAL_INDEX: trial, EVAL_TRIAL_COUNT: trial_count})
+        _droid_trial(instruction, timeout, {eval_keys.TRIAL_INDEX: trial, eval_keys.TRIAL_COUNT: trial_count})
         for trial in range(trial_count)
     ]
 

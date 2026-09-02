@@ -10,7 +10,7 @@ from positronic import keys
 from positronic.dataset import Episode
 from positronic.dataset.episode import META_CREATED_TS_NS
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
-from positronic.eval import EVAL_SUCCESS, EVAL_TERMINATED
+from positronic.eval import keys as eval_keys
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig
 from positronic.server.positronic_server import main as server_main
@@ -32,7 +32,7 @@ def eval_table():
         '__index__': C(label='#', format='%d'),
         '__duration__': C(label='Duration', format='%.2f sec'),
         keys.TASK: C(label='Task', filter=True),
-        EVAL_SUCCESS: C(
+        eval_keys.SUCCESS: C(
             label='Pass',
             default=False,
             renderer=RendererConfig(
@@ -40,7 +40,7 @@ def eval_table():
                 options={True: {'label': 'Pass', 'variant': 'success'}, False: {'label': 'Fail', 'variant': 'danger'}},
             ),
         ),
-        EVAL_TERMINATED: C(label='Ended', default=False),
+        eval_keys.TERMINATED: C(label='Ended', default=False),
     }
 
 

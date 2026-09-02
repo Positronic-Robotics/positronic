@@ -19,7 +19,8 @@ from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import prepare_output_dir, run, run_world
 from positronic.dataset.local_dataset import load_all_datasets
 from positronic.drivers.keyboard import KeyboardControl
-from positronic.eval import ENDED_BY_OPERATOR, EVAL_ENDED_BY, Embodiment, Task
+from positronic.eval import Embodiment, Task
+from positronic.eval import keys as eval_keys
 from positronic.policy import Policy
 from positronic.policy.harness import Rollout
 
@@ -64,7 +65,7 @@ class KeyboardOperator(KeyboardControl):
                 except Exception as e:
                     logger.error(f'Episode failed to open: {e}')
             case 'p':
-                self.done.emit({EVAL_ENDED_BY: ENDED_BY_OPERATOR})
+                self.done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR})
 
 
 def real(policy, embodiment: Embodiment, next_task: Callable[[], Task], output_dir=None):

@@ -5,12 +5,8 @@ from positronic.cfg.eval import build_tasks, spec
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.eval import Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
-from positronic.simulator.libero.adapter import (
-    EVAL_CAMERA_RESOLUTION,
-    EVAL_CONTROL_MODE,
-    EVAL_SETTLE_STEPS,
-    LiberoAdapter,
-)
+from positronic.simulator.libero import keys as libero_keys
+from positronic.simulator.libero.adapter import LiberoAdapter
 from positronic.simulator.libero.launcher import serve_libero
 
 
@@ -66,9 +62,9 @@ def _libero_eval(
         scenes = [
             {
                 **params,
-                EVAL_CAMERA_RESOLUTION: camera_resolution,
-                EVAL_CONTROL_MODE: control_mode,
-                EVAL_SETTLE_STEPS: settle_steps,
+                libero_keys.CAMERA_RESOLUTION: camera_resolution,
+                libero_keys.CONTROL_MODE: control_mode,
+                libero_keys.SETTLE_STEPS: settle_steps,
             }
             for params in proxy.tasks(spec(suite=suite, task_id=task_id))
         ]

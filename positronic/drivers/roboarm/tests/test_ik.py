@@ -8,6 +8,7 @@ import pytest
 from positronic import geom, keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
+from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import (
     DLSIKSolver,
     DLSIKSolverWithLimits,
@@ -18,14 +19,10 @@ from positronic.drivers.roboarm.ik import (
     pose_anchor,
 )
 from positronic.drivers.roboarm.models import (
-    CONTROL_FRAME,
     DEFAULT_FRAME,
     DROID_EE_FRAME,
     DROID_EEF_LINK,
-    EE_FRAME,
     EE_LINK,
-    JOINT_NAMES,
-    URDF,
     bundled_franka_model,
     bundled_panda_model,
 )
@@ -115,9 +112,9 @@ def test_ik_joints_from_episode():
         data={
             keys.JOINTS: DummySignal(ts, q_traj),
             keys.TARGET_EE_POSE: DummySignal(ts, ee_poses),
-            URDF: PANDA_URDF,
-            JOINT_NAMES: PANDA_JOINTS,
-            CONTROL_FRAME: PANDA_FRAME,
+            roboarm_keys.URDF: PANDA_URDF,
+            roboarm_keys.JOINT_NAMES: PANDA_JOINTS,
+            roboarm_keys.CONTROL_FRAME: PANDA_FRAME,
         }
     )
     result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, keys.TARGET_EE_POSE, keys.JOINTS)
@@ -146,7 +143,7 @@ def test_ik_joints_from_episode_solves_targets_a_codec_moved():
     ts = np.arange(n_steps, dtype=np.int64) * 100_000_000
     q_traj = np.linspace(TEST_CONFIGS[0], TEST_CONFIGS[1], n_steps)
     quat = geom.Rotation.Representation.QUAT
-    urdf = bundled_panda_model()[URDF]
+    urdf = bundled_panda_model()[roboarm_keys.URDF]
     offset = geom.Transform3D(np.array([0.0, 0.0, 0.05]), geom.Rotation.from_euler([0.0, 0.0, np.pi / 4]))
     anchored = [geom.Transform3D.from_vector(_fk_site(urdf, q, DEFAULT_FRAME), quat) for q in q_traj]
     moved = np.array([(pose * offset).as_vector(quat) for pose in anchored])
@@ -155,10 +152,10 @@ def test_ik_joints_from_episode_solves_targets_a_codec_moved():
         data={
             keys.JOINTS: DummySignal(ts, q_traj),
             keys.TARGET_EE_POSE: DummySignal(ts, moved),
-            URDF: urdf,
-            JOINT_NAMES: PANDA_JOINTS,
-            CONTROL_FRAME: DEFAULT_FRAME,
-            EE_FRAME: offset.as_vector(quat),
+            roboarm_keys.URDF: urdf,
+            roboarm_keys.JOINT_NAMES: PANDA_JOINTS,
+            roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
+            roboarm_keys.EE_FRAME: offset.as_vector(quat),
         }
     )
     result = ik_joints_from_episode(episode, DLSIKSolverWithLimits, keys.TARGET_EE_POSE, keys.JOINTS)
@@ -169,7 +166,7 @@ def test_ik_joints_from_episode_solves_targets_a_codec_moved():
 
 
 def test_frame_transform_reproduces_droid_eef_across_configs():
-    urdf = bundled_franka_model()[URDF]
+    urdf = bundled_franka_model()[roboarm_keys.URDF]
     transform = frame_transform(urdf, EE_LINK, DROID_EEF_LINK)
     quat = geom.Rotation.Representation.QUAT
     for q in TEST_CONFIGS:
@@ -181,13 +178,13 @@ def test_frame_transform_reproduces_droid_eef_across_configs():
 
 @pytest.mark.parametrize('model', [bundled_franka_model(), bundled_panda_model()], ids=['franka', 'panda'])
 def test_bundled_model_declares_the_frame_it_reports_in(model):
-    assert model[CONTROL_FRAME] == DEFAULT_FRAME
-    frame_transform(model[URDF], DEFAULT_FRAME, DEFAULT_FRAME)
+    assert model[roboarm_keys.CONTROL_FRAME] == DEFAULT_FRAME
+    frame_transform(model[roboarm_keys.URDF], DEFAULT_FRAME, DEFAULT_FRAME)
 
 
 def test_declared_droid_frame_matches_the_model_geometry():
     """The checkpoint states its frame as a constant; this pins it to where the model puts that frame."""
-    urdf = bundled_franka_model()[URDF]
+    urdf = bundled_franka_model()[roboarm_keys.URDF]
     measured = frame_transform(urdf, DEFAULT_FRAME, DROID_EEF_LINK)
     np.testing.assert_allclose(DROID_EE_FRAME.as_matrix, measured.as_matrix, atol=1e-9)
 
@@ -198,15 +195,17 @@ def test_default_frame_still_coincides_with_the_franka_tool_frame():
     ``DEFAULT_FRAME`` sits. TODO(#550): moving it to the flange invalidates both, so re-express those
     recordings and re-measure the constant in the same change.
     """
-    transform = frame_transform(bundled_franka_model()[URDF], DEFAULT_FRAME, EE_LINK)
+    transform = frame_transform(bundled_franka_model()[roboarm_keys.URDF], DEFAULT_FRAME, EE_LINK)
     np.testing.assert_allclose(transform.as_matrix, np.eye(4), atol=1e-12)
 
 
 def test_pose_anchor_reads_a_stated_frame_and_falls_back_to_the_name():
     offset = geom.Transform3D(np.array([0.0, 0.0, 0.05]), geom.Rotation.identity)
     quat = geom.Rotation.Representation.QUAT
-    stated = EpisodeContainer(data={CONTROL_FRAME: PANDA_FRAME, EE_FRAME: offset.as_vector(quat)})
-    legacy = EpisodeContainer(data={CONTROL_FRAME: PANDA_FRAME})
+    stated = EpisodeContainer(
+        data={roboarm_keys.CONTROL_FRAME: PANDA_FRAME, roboarm_keys.EE_FRAME: offset.as_vector(quat)}
+    )
+    legacy = EpisodeContainer(data={roboarm_keys.CONTROL_FRAME: PANDA_FRAME})
 
     assert pose_anchor(stated)[0] == DEFAULT_FRAME
     np.testing.assert_allclose(pose_anchor(stated)[1].as_vector(quat), offset.as_vector(quat), atol=1e-12)
@@ -217,11 +216,11 @@ def test_pose_anchor_reads_a_stated_frame_and_falls_back_to_the_name():
 def test_frame_transform_rejects_frames_across_movable_joints():
     # rules-allow: hardcoded-keys — the base link is this test's input, not a name it shares with the code
     with pytest.raises(ValueError, match='movable joints'):
-        frame_transform(bundled_franka_model()[URDF], 'link0', EE_LINK)
+        frame_transform(bundled_franka_model()[roboarm_keys.URDF], 'link0', EE_LINK)
 
 
 def test_frame_transform_identity_when_frames_match():
-    transform = frame_transform(bundled_franka_model()[URDF], EE_LINK, EE_LINK)
+    transform = frame_transform(bundled_franka_model()[roboarm_keys.URDF], EE_LINK, EE_LINK)
     np.testing.assert_allclose(transform.translation, 0.0, atol=1e-12)
     assert transform.rotation == geom.Rotation.identity
 

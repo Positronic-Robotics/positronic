@@ -13,7 +13,7 @@ from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.ik import qpos_from_site_pose
 from positronic.drivers.roboarm.models import bundled_panda_model
 from positronic.drivers.utils import Moves, MoveStatus
-from positronic.eval import EVAL_SEED
+from positronic.eval import keys as eval_keys
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform, load_spec, load_spec_from_file, np_seed
 
 logger = logging.getLogger(__name__)
@@ -180,7 +180,7 @@ class MujocoSim(pimm.ControlSystem):
                 redraw = next(self.env_reset.incoming(), None)
                 if redraw is not None:
                     with pimm.calls.raise_to(redraw):
-                        self.reset(dict(redraw.request or {}).get(EVAL_SEED))
+                        self.reset(dict(redraw.request or {}).get(eval_keys.SEED))
                         redraw.set_result(None)
 
                 command = self._moves.next_request()

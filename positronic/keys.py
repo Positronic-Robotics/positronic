@@ -3,9 +3,8 @@
 Every sim adapter and embodiment produces them and every vendor codec consumes them. They are defined
 here once, in a leaf module with no positronic imports, so a rename is a single-site change the type
 checker propagates instead of a string literal duplicated across codecs, configs, adapters and datasets.
-A key one package owns lives in that package instead: a trial's in ``positronic.eval``, the robot
-model's in ``drivers.roboarm.models``, the inference handshake's in ``policy.base``, a benchmark's in
-its adapter.
+A key one package owns lives in that package's own ``keys`` module instead: a trial's in ``eval.keys``,
+the robot model's in ``drivers.roboarm.keys``, and so on.
 """
 
 # The arm's command channel, and the signals a recorded command unfolds into. The suffixes are the

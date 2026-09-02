@@ -13,7 +13,7 @@ from pimm.logging import init_logging
 from positronic.offboard.server import serve
 from positronic.offboard.server_utils import run_with_progress, warmup
 from positronic.policy import Codec, Policy
-from positronic.policy.base import CHECKPOINT_PATH, EXPERIMENT_NAME, TYPE
+from positronic.policy import keys as policy_keys
 from positronic.policy.codec import RestrictImageSize
 from positronic.policy.layers import ChunkedSchedule, StopOnFault
 from positronic.policy.spec import ModelSource, remote
@@ -68,13 +68,13 @@ class LerobotSource(ModelSource):
             lambda: pos3.download(checkpoint_path), f'Downloading checkpoint {model_id}', on_progress
         )
         backbone = self._policy_factory(str(local))
-        meta = {TYPE: self._model_type, CHECKPOINT_PATH: checkpoint_path}
+        meta = {policy_keys.TYPE: self._model_type, policy_keys.CHECKPOINT_PATH: checkpoint_path}
         policy = LerobotPolicy(backbone, self._device, extra_meta=meta)
         warmup(policy, warm_observation(backbone.config), on_progress)
         return policy
 
     def meta(self, model_id: str) -> dict[str, Any]:
-        return {'device': self._device, EXPERIMENT_NAME: self._experiment_name}
+        return {'device': self._device, policy_keys.EXPERIMENT_NAME: self._experiment_name}
 
 
 lerobot_source = cfn.Config(LerobotSource, policy_factory=act)

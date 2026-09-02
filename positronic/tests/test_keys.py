@@ -1,33 +1,10 @@
 import ast
-import inspect
 from pathlib import Path
 
-from positronic import eval as eval_keys
 from positronic import keys
-from positronic.drivers.roboarm import models
-from positronic.eval import (
-    EVAL_CHARGE_INFERENCE_TIME,
-    EVAL_EMBODIMENT,
-    EVAL_SEED,
-    EVAL_SUCCESS,
-    EVAL_TASK,
-    EVAL_TERMINATED,
-    EVAL_TIMEOUT,
-    EVAL_TRIAL_COUNT,
-    EVAL_TRIAL_INDEX,
-    EVAL_UNIVERSE,
-)
-from positronic.policy import base
-from positronic.simulator.libero import adapter as libero
-from positronic.simulator.libero.adapter import (
-    EVAL_CAMERA_RESOLUTION,
-    EVAL_CONTROL_MODE,
-    EVAL_SETTLE_STEPS,
-    EVAL_SUITE,
-    EVAL_TASK_ID,
-)
-from positronic.simulator.robolab import adapter as robolab
-from positronic.simulator.robolab.adapter import EVAL_EPISODE_LENGTH, EVAL_INSTRUCTION_TYPE
+from positronic.eval import keys as eval_keys
+from positronic.simulator.libero import keys as libero_keys
+from positronic.simulator.robolab import keys as robolab_keys
 
 # Namespaced raw wire keys that denote an observation signal, and the keys a trial records — the params it
 # runs under and the verdict it ends on — wherever they appear as a string literal. Writing any of these as a
@@ -39,23 +16,23 @@ _GUARDED = {
     keys.EE_POSE,
     keys.WRIST_IMAGE,
     keys.EXTERIOR_IMAGE,
-    EVAL_SUCCESS,
-    EVAL_TERMINATED,
-    EVAL_CHARGE_INFERENCE_TIME,
-    EVAL_UNIVERSE,
-    EVAL_EMBODIMENT,
-    EVAL_TIMEOUT,
-    EVAL_EPISODE_LENGTH,
-    EVAL_SEED,
-    EVAL_TRIAL_INDEX,
-    EVAL_TRIAL_COUNT,
-    EVAL_SUITE,
-    EVAL_TASK_ID,
-    EVAL_CAMERA_RESOLUTION,
-    EVAL_CONTROL_MODE,
-    EVAL_SETTLE_STEPS,
-    EVAL_TASK,
-    EVAL_INSTRUCTION_TYPE,
+    eval_keys.SUCCESS,
+    eval_keys.TERMINATED,
+    eval_keys.CHARGE_INFERENCE_TIME,
+    eval_keys.UNIVERSE,
+    eval_keys.EMBODIMENT,
+    eval_keys.TIMEOUT,
+    robolab_keys.EPISODE_LENGTH,
+    eval_keys.SEED,
+    eval_keys.TRIAL_INDEX,
+    eval_keys.TRIAL_COUNT,
+    libero_keys.SUITE,
+    libero_keys.TASK_ID,
+    libero_keys.CAMERA_RESOLUTION,
+    libero_keys.CONTROL_MODE,
+    libero_keys.SETTLE_STEPS,
+    eval_keys.TASK,
+    robolab_keys.INSTRUCTION_TYPE,
     keys.OBS_TIME_NS,
     keys.WALL_TIME_NS,
 }
@@ -65,9 +42,8 @@ _GUARDED = {
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _PACKAGE_ROOT.parent
-_KEYS_MODULE = _PACKAGE_ROOT / 'keys.py'
-# The modules that define the guarded keys; each spells its own values once.
-_KEY_MODULES = {Path(inspect.getfile(m)).resolve() for m in (keys, eval_keys, models, base, libero, robolab)}
+# Every ``keys.py`` defines the keys of its package; it is the one place a value is spelled.
+_KEY_MODULES = sorted(_PACKAGE_ROOT.rglob('keys.py'))
 # First-party trees whose Python consumes the wire and must import the constants rather than
 # re-spell the literals — the package itself and the repo's `utilities/` scripts.
 _GUARDED_ROOTS = (_PACKAGE_ROOT, _REPO_ROOT / 'utilities')
@@ -93,14 +69,14 @@ def test_no_guarded_key_literals():
     assert not offenders, f'Guarded key literals found — import the constant from its module:\n{listing}'
 
 
-def test_keys_module_imports_nothing():
-    # `positronic.keys` must stay a dependency-free leaf so an out-of-repo consumer can depend on it
-    # alone, without dragging in the rest of positronic (or its optional torch/lerobot deps). Any
-    # import statement appearing here breaks that contract.
-    tree = ast.parse(_KEYS_MODULE.read_text(), filename=str(_KEYS_MODULE))
+def test_keys_modules_import_nothing():
+    # A keys module must stay a dependency-free leaf so an out-of-repo consumer can depend on it alone,
+    # without dragging in the rest of positronic (or its optional torch/lerobot deps). Any import statement
+    # appearing in one breaks that contract.
     imports = [
-        f'{_KEYS_MODULE.relative_to(_PACKAGE_ROOT.parent)}:{node.lineno}'
-        for node in ast.walk(tree)
+        f'{path.relative_to(_REPO_ROOT)}:{node.lineno}'
+        for path in _KEY_MODULES
+        for node in ast.walk(ast.parse(path.read_text(), filename=str(path)))
         if isinstance(node, (ast.Import, ast.ImportFrom))
     ]
-    assert not imports, '`positronic.keys` must import nothing (dependency-free leaf module):\n' + '\n'.join(imports)
+    assert not imports, 'A keys module must import nothing (dependency-free leaf module):\n' + '\n'.join(imports)

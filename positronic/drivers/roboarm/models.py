@@ -9,18 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from positronic import geom, keys
-
-# The robot model, carried in episode statics for the transforms that solve against it (``IKJointsAction``).
-# ``CONTROL_FRAME`` names the frame in ``URDF`` that the embodiment reports ``EE_POSE`` in; every embodiment
-# declares it as ``DEFAULT_FRAME``, and datasets recorded before that convention name their own frame.
-URDF = 'urdf'
-CONTROL_FRAME = 'control_frame'
-JOINT_NAMES = 'joint_names'
-
-# Where the episode's poses sit relative to ``DEFAULT_FRAME``, as a ``[tx,ty,tz,qw,qx,qy,qz]`` transform.
-# Absent means they are in that frame itself; ``ChangeEEFrame`` writes it when it moves them.
-EE_FRAME = 'ee_frame'
-
+from positronic.drivers.roboarm import keys as roboarm_keys
 
 FLANGE_LINK = 'link8'
 DROID_EEF_LINK = 'droid_eef'
@@ -181,10 +170,10 @@ def bundled_franka_model() -> dict:
     gripper = attach_robotiq_2f85(arm_root, meshes)
     add_default_frame(arm_root, EE_LINK)
     return {
-        URDF: ET.tostring(arm_root, encoding='unicode'),
+        roboarm_keys.URDF: ET.tostring(arm_root, encoding='unicode'),
         'meshes': meshes,
-        JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
-        CONTROL_FRAME: DEFAULT_FRAME,
+        roboarm_keys.JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
+        roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
         'gripper': gripper,
     }
 
@@ -203,10 +192,10 @@ def bundled_panda_model() -> dict:
     mesh_files = {mesh.get('filename') for mesh in root.iter('mesh')}
     add_default_frame(root, EE_LINK)
     return {
-        URDF: ET.tostring(root, encoding='unicode'),
+        roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
         'meshes': {name: (mesh_dir / name).read_bytes() for name in sorted(mesh_files)},
-        JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
-        CONTROL_FRAME: DEFAULT_FRAME,
+        roboarm_keys.JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
+        roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
         # ``grip`` is recorded in [0, 1] (open→closed); each finger slides 0..0.04 m along its axis.
         'gripper': {'signal': keys.GRIP, 'joints': ['finger_joint1', 'finger_joint2'], 'travel': 0.04},
     }

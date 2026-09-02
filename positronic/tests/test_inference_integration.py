@@ -19,23 +19,10 @@ from positronic.cli.eval.run import main
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.drivers.roboarm.models import URDF, bundled_panda_model
-from positronic.eval import (
-    EVAL_EMBODIMENT,
-    EVAL_SEED,
-    EVAL_SUCCESS,
-    EVAL_TERMINATED,
-    EVAL_TIMEOUT,
-    EVAL_TRIAL_INDEX,
-    EVAL_UNIVERSE,
-    ROBOT_STATIC_META,
-    SCENE,
-    Command,
-    Embodiment,
-    Eval,
-    Observation,
-    Task,
-)
+from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.models import bundled_panda_model
+from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
+from positronic.eval import keys as eval_keys
 from positronic.policy.layers import ChunkedSchedule
 from positronic.policy.tests.test_harness import RemoteStubPolicy, StubPolicy
 from positronic.simulator.env_server import telemetry as env_telemetry
@@ -96,7 +83,7 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
             timeout=0.4,
         )
         task = next(iter(ev.tasks()))
-        trials = number_trials([(task, {EVAL_SEED: 100 + i}) for i in range(2)])
+        trials = number_trials([(task, {eval_keys.SEED: 100 + i}) for i in range(2)])
         main(
             policy=ChunkedSchedule().wrap(policy),
             evals=[replace(ev, tasks=partial(iter, trials))],
@@ -108,12 +95,12 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
     assert len(ds) == 2
 
     episode = ds[0]
-    assert episode.static[EVAL_TERMINATED] is False
-    assert episode.static[EVAL_TRIAL_INDEX] == 0
-    assert episode.static[EVAL_SEED] == 100
-    assert episode.static[EVAL_UNIVERSE] == 'sim'
-    assert episode.static[EVAL_EMBODIMENT] == 'mujoco.franka'
-    assert episode.static[EVAL_TIMEOUT] == 0.4
+    assert episode.static[eval_keys.TERMINATED] is False
+    assert episode.static[eval_keys.TRIAL_INDEX] == 0
+    assert episode.static[eval_keys.SEED] == 100
+    assert episode.static[eval_keys.UNIVERSE] == 'sim'
+    assert episode.static[eval_keys.EMBODIMENT] == 'mujoco.franka'
+    assert episode.static[eval_keys.TIMEOUT] == 0.4
     # The post-loader scene description rides robot_meta into static: with eval.seed it makes
     # the episode self-contained for downstream scoring and faithful replay.
     assert episode.static['scene_xml'].startswith('<mujoco')
@@ -205,7 +192,7 @@ class _CountdownProducer(pimm.ControlSystem):
                 self._steps += 1
                 self._emit_obs()
                 if self._done_after is not None and self._steps >= self._done_after:
-                    self.done.emit({EVAL_SUCCESS: True})
+                    self.done.emit({eval_keys.SUCCESS: True})
                     self._active = False
 
 
@@ -214,7 +201,7 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
         descriptor='test.countdown',
         observations={'value': Observation(producer.observations['value'], None)},
         commands={keys.ROBOT_COMMAND: Command(producer.commands[keys.ROBOT_COMMAND], Serializers.robot_command)},
-        prepare_handlers={SCENE: producer.env_reset},
+        prepare_handlers={eval_keys.SCENE: producer.env_reset},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=producer.robot_meta,
         control_systems=(producer,),
@@ -232,7 +219,7 @@ def test_every_trial_records_from_its_own_reset(tmp_path):
     first sample."""
     ev = _countdown_eval(_CountdownProducer(control_dt=0.01), timeout=0.35)
     task = next(iter(ev.tasks()))
-    trials = number_trials([(task, {EVAL_SEED: i}) for i in range(2)])
+    trials = number_trials([(task, {eval_keys.SEED: i}) for i in range(2)])
     with pos3.mirror():
         main(
             policy=StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0),
@@ -304,7 +291,7 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     """[harness + recorder + sim] with no MuJoCo: a trial ends early when the producer's ``done`` fires,
     recording ``eval.terminated`` True and the delivered payload into the episode's static data."""
     ev = _countdown_eval(_CountdownProducer(done_after=4), timeout=15.0)
-    trial = number_trials([(next(iter(ev.tasks())), {EVAL_SEED: 100})])[0]
+    trial = number_trials([(next(iter(ev.tasks())), {eval_keys.SEED: 100})])[0]
     with pos3.mirror():
         main(
             policy=StubPolicy(command=roboarm_command.JointPosition(np.zeros(7)), target_grip=0.0),
@@ -315,9 +302,9 @@ def test_countdown_terminates_on_done_records_payload(tmp_path):
     ds = LocalDataset(tmp_path)
     assert len(ds) == 1
     episode = ds[0]
-    assert episode.static[EVAL_TERMINATED] is True
-    assert episode.static[EVAL_SUCCESS] is True  # the delivered ``done`` payload lands in static data
-    assert episode.static[EVAL_EMBODIMENT] == 'test.countdown'
+    assert episode.static[eval_keys.TERMINATED] is True
+    assert episode.static[eval_keys.SUCCESS] is True  # the delivered ``done`` payload lands in static data
+    assert episode.static[eval_keys.EMBODIMENT] == 'test.countdown'
     # The terminal frame (the step where ``done`` fired) is recorded, not dropped by STOP closing the writer.
     values = [v for v, _ in episode.signals['value']]
     assert values[-1][0] == 4.0
@@ -411,7 +398,7 @@ def test_recorded_urdf_matches_sim_kinematics():
         model = spec.compile()
         return model, mj.MjData(model)
 
-    root = ET.fromstring(bundled_panda_model()[URDF])  # drop meshes so the URDF compiles file-free
+    root = ET.fromstring(bundled_panda_model()[roboarm_keys.URDF])  # drop meshes so the URDF compiles file-free
     for link in root.findall('.//link'):
         for el in link.findall('visual') + link.findall('collision'):
             link.remove(el)

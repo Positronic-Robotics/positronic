@@ -4,7 +4,8 @@ from positronic import keys
 from positronic.cfg.eval import number_trials, spec
 from positronic.eval import Eval, Observation, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_franka_embodiment
-from positronic.simulator.robolab.adapter import EVAL_EPISODE_LENGTH, EVAL_INSTRUCTION_TYPE, RobolabAdapter
+from positronic.simulator.robolab import keys as robolab_keys
+from positronic.simulator.robolab.adapter import RobolabAdapter
 from positronic.simulator.robolab.launcher import serve_robolab
 
 
@@ -44,10 +45,10 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, camera_dict):
         for params in proxy.tasks(spec(task=task)):
             # RoboLab truncates an episode at its own budget, so the deadline sits above it and the env's verdict
             # ends a trial.
-            deadline = timeout if timeout is not None else params[EVAL_EPISODE_LENGTH] + 10.0
+            deadline = timeout if timeout is not None else params[robolab_keys.EPISODE_LENGTH] + 10.0
             # rules-allow: hardcoded-keys — the env names this reset-meta field; it is not positronic's ``keys.TASK``
             trial = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=deadline)
-            trials += [(trial, {**params, EVAL_INSTRUCTION_TYPE: instruction_type}) for _ in range(trial_count)]
+            trials += [(trial, {**params, robolab_keys.INSTRUCTION_TYPE: instruction_type}) for _ in range(trial_count)]
         return number_trials(trials)
 
     return Eval(
