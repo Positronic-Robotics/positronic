@@ -1058,7 +1058,7 @@ def test_a_trial_does_not_end_until_the_rig_is_back_where_it_started(world):
     assert not answer.done(), 'the terminal landed while the return move was still in hand'
 
 
-# What `_FailsNthAsk` fails an ask with, and what a test expects to surface.
+# The diagnostic `_FailsNthAsk` fails an ask with.
 REFUSED_ASK_DIAGNOSTIC = 'motion aborted by reflex'
 
 
