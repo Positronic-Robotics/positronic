@@ -174,8 +174,10 @@ def test_a_grip_asked_for_past_the_range_is_tracked_against_a_width_the_fingers_
     assert answer.result() is None
 
 
-def test_a_streamed_grip_waits_for_the_call_queue_to_be_empty(asking):
-    """A signal holds only its latest value, so a stream read in the same tick as a call would be lost."""
+def test_a_setpoint_the_device_was_moved_away_from_is_let_go(asking):
+    """A setpoint says where the device is wanted now, and the move taken after it puts the device
+    somewhere else. Applying the setpoint once the move lands takes the device back off the pose it was
+    asked for, in one step and with nobody asking."""
     ask, moves, stream = asking
     stream.push(0.25)
     ask(0.9)
@@ -183,8 +185,34 @@ def test_a_streamed_grip_waits_for_the_call_queue_to_be_empty(asking):
     assert grip_setpoint(moves, grip=0.0, now=0.0) == 0.9
     assert grip_setpoint(moves, grip=0.9, now=0.1) is None  # the call arrives
     moves.answer()
-    assert grip_setpoint(moves, grip=0.9, now=0.2) == 0.25  # the stream, still waiting
-    assert grip_setpoint(moves, grip=0.25, now=0.3) is None
+    assert grip_setpoint(moves, grip=0.9, now=0.2) is None, 'the setpoint the move superseded reached the device'
+
+
+def test_the_newest_setpoint_is_what_the_device_is_asked_for(asking):
+    """A transport that queues setpoints hands the oldest over first. A device asked for one a tick is
+    driven through what its asker has already done, and falls further behind the longer it runs."""
+    _ask, moves, stream = asking
+    for width in (0.1, 0.2, 0.3):
+        stream.push(width)
+
+    assert grip_setpoint(moves, grip=0.0, now=0.0) == 0.3
+    assert grip_setpoint(moves, grip=0.3, now=0.1) is None, 'the device was asked for a width it had passed'
+
+
+def test_setpoints_streamed_at_a_travelling_device_do_not_reach_it_when_the_move_lands(asking):
+    """Nothing reads the stream for as long as a move owns the device, so what arrives in that time is
+    where the asker wanted the device before the move — every setpoint of it, oldest first."""
+    ask, moves, stream = asking
+    ask(0.9)
+    assert grip_setpoint(moves, grip=0.0, now=0.0) == 0.9
+
+    stream.push(0.25)
+    stream.push(0.30)
+    assert grip_setpoint(moves, grip=0.0, now=0.1) is None  # the move still travels
+    assert grip_setpoint(moves, grip=0.9, now=0.2) is None  # ... and lands
+    moves.answer()
+
+    assert grip_setpoint(moves, grip=0.9, now=0.3) is None, 'the device was driven back through the stream'
 
 
 def test_how_long_a_move_gets_is_the_driver_s_to_say():
