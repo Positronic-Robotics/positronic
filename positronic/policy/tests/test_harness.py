@@ -1058,6 +1058,10 @@ def test_a_trial_does_not_end_until_the_rig_is_back_where_it_started(world):
     assert not answer.done(), 'the terminal landed while the return move was still in hand'
 
 
+# What `_FailsNthAsk` fails an ask with, and what a test expects to surface.
+REFUSED_ASK_DIAGNOSTIC = 'motion aborted by reflex'
+
+
 class _FailsNthAsk(pimm.ControlSystem):
     """A device that answers every ask except the ``nth``, which it fails the way an aborted move does."""
 
@@ -1071,7 +1075,7 @@ class _FailsNthAsk(pimm.ControlSystem):
             for call in self.env_reset.incoming():
                 self.asks += 1
                 if self.asks == self._nth:
-                    call.set_exception(RuntimeError('motion aborted by reflex'))
+                    call.set_exception(RuntimeError(REFUSED_ASK_DIAGNOSTIC))
                 else:
                     call.set_result(None)
             yield pimm.Sleep(0.001)
@@ -1111,7 +1115,7 @@ def test_a_rig_that_refuses_to_open_still_ends_the_run(world):
     task = Task(instruction_source='stack', timeout_sec=0.05, prepare_args={eval_keys.ARM: JointPosition(np.zeros(7))})
     answer = p['perform_task'](task)
 
-    with pytest.raises(RuntimeError, match='motion aborted by reflex'):
+    with pytest.raises(RuntimeError, match=REFUSED_ASK_DIAGNOSTIC):
         drive_scheduler(scheduler, steps=2000)
     with pytest.raises(RuntimeError):
         answer.result()
