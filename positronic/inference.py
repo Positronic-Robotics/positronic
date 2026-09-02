@@ -12,6 +12,7 @@ import pos3
 import pimm
 import positronic.cfg.embodiment
 import positronic.cfg.eval.real.droid
+import positronic.cfg.eval.real.trossen
 import positronic.cfg.policy as policy_cfg
 from pimm.logging import init_logging
 from positronic import keys, wire
@@ -112,6 +113,13 @@ real_cfg = cfn.Config(
 )
 
 
+# The Trossen station, whose arm and cameras are the ones its demonstrations were recorded with. Every
+# trial opens at the same start pose the operator's own trials open at.
+trossen_cfg = real_cfg.override(
+    embodiment=positronic.cfg.embodiment.trossen, next_task=positronic.cfg.eval.real.trossen.attended_trials
+)
+
+
 # Console entry point for [project.scripts].
 @pos3.with_mirror()
 def _internal_main():
@@ -119,6 +127,7 @@ def _internal_main():
     cfn.cli({
         'run': real_cfg,
         'real': real_cfg,  # `real` is the documented name for the hardware path
+        'trossen': trossen_cfg,
         'sim': run.override(eval=stack_cubes),
         'stats': stats,
     })
