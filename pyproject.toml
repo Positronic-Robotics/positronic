@@ -106,6 +106,10 @@ lance = [
 yam = [
     "i2rt",  # i2rt YAM arm: joint-space position-PD + gravity-comp over CAN; not on PyPI, see [tool.uv.sources]
 ]
+trossen = [
+    # Trossen WidowX AI arm, over Ethernet. The SDK version must match the arm firmware version.
+    "trossen-arm>=1.11,<1.12",
+]
 telemetry = [
     # `positronic eval run --timing` only: the OTel SDK + exporter that write the span sidecars, and the
     # machine-load sampler's probes.

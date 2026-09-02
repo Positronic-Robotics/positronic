@@ -360,7 +360,7 @@ class Robot(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         with _opened(self._connect, self._channel, self._sim) as vendor:
             chain = self._chain(vendor, should_stop, clock)
-            meta = {'robot': 'i2rt_yam', keys.JOINT_NAMES: list(_JOINT_NAMES), keys.CONTROL_FRAME: DEFAULT_FRAME}
+            meta = {keys.ROBOT: 'i2rt_yam', keys.JOINT_NAMES: list(_JOINT_NAMES), keys.CONTROL_FRAME: DEFAULT_FRAME}
             self.robot_meta.emit(meta)
 
             q_target, grip_target = yield from chain.park(0.0)  # nothing has asked for a grip yet

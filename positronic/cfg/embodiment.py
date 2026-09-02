@@ -69,6 +69,39 @@ def yam(robot_arm, cameras):
 
 
 @cfn.config(
+    robot_arm=positronic.cfg.hardware.roboarm.trossen,
+    # The views the station records a demonstration with. A policy reads what it was trained on, so these
+    # are the cameras `trossencfg` names, under the same keys.
+    cameras={
+        keys.WRIST_IMAGE: positronic.cfg.hardware.camera.d405_wrist_right,
+        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.d405_scene_top,
+    },
+)
+def trossen(robot_arm, cameras):
+    """Real single-arm Trossen WidowX AI: the arm driver carries the gripper (they share one controller)."""
+    observations = {
+        keys.ROBOT_STATE: Observation(robot_arm.state, Serializers.robot_state),
+        keys.GRIP: Observation(robot_arm.grip, None),
+        **{name: Observation(cam.frame, Serializers.camera_images) for name, cam in cameras.items()},
+    }
+    commands = {
+        keys.ROBOT_COMMAND: Command(robot_arm.commands, Serializers.robot_command),
+        keys.TARGET_GRIP: Command(robot_arm.target_grip, None),
+    }
+    return Embodiment(
+        descriptor='trossen_wxai',
+        observations=observations,
+        commands=commands,
+        # One driver, one handler: the arm's controller carries its fingers
+        prepare_handlers={keys.ARM: robot_arm.sync_move},
+        static_meta=dict(ROBOT_STATIC_META),
+        meta_source=robot_arm.robot_meta,
+        control_systems=(*cameras.values(), robot_arm),
+        simulated=False,
+    )
+
+
+@cfn.config(
     left_channel='can0',
     right_channel='can1',
     # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the

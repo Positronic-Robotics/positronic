@@ -7,6 +7,12 @@ from positronic.drivers.roboarm import command
 FRANKA_NOMINAL_JOINTS = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
 YAM_NOMINAL_JOINTS = [0.0, 1.047, 1.047, 0.0, 0.0, 0.0]
 SO101_NOMINAL_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0]
+# The Trossen rests on the lower limit of joints 1 and 2, where half the directions out of it have no
+# solution at all. Its start pose is mid-range on every joint instead, end effector at [0.503, 0, 0.232].
+TROSSEN_NOMINAL_JOINTS = [0.0, 1.571, 1.178, 0.0, 0.0, 0.0]
+# Where the Trossen rests: every joint at zero, which is the lower limit of joints 1 and 2. The arm holds
+# itself there without the controller, so it is where a session leaves it.
+TROSSEN_PARK_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 # How far, per joint, a start pose drawn around the Franka's nominal may sit from it.
 FRANKA_JOINTS_SPREAD = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
 # The gains DROID's Franka ran, which its pretrained checkpoints were trained under.
@@ -73,3 +79,23 @@ def yam(channel: str, sim: bool, base_pose):
     from positronic.drivers.roboarm.yam import Robot
 
     return Robot(channel, base_pose=base_pose, sim=sim)
+
+
+@cfn.config(ip='192.168.1.4')
+def trossen(ip: str):
+    from positronic.drivers.roboarm.trossen import Robot
+
+    return Robot(ip=ip)
+
+
+# What the controller cancels of the gripper's own friction on a leader the operator holds, in N. Felt at
+# the rig on the leader at 192.168.1.2, which is calibrated at 5.77: at 10.02 the trigger moves under a
+# finger and still holds where it is left. Another arm may want its own.
+TROSSEN_LEADER_GRIPPER_FRICTION = 10.02
+
+
+@cfn.config(ip='192.168.1.2', force_feedback_gain=0.0, gripper_friction_constant=TROSSEN_LEADER_GRIPPER_FRICTION)
+def trossen_leader(ip: str, force_feedback_gain: float, gripper_friction_constant: float | None):
+    from positronic.drivers.roboarm.trossen_leader import Leader
+
+    return Leader(ip=ip, force_feedback_gain=force_feedback_gain, gripper_friction_constant=gripper_friction_constant)

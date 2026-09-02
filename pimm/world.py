@@ -6,6 +6,7 @@ import logging
 import multiprocessing as mp
 import multiprocessing.shared_memory
 import os
+import signal
 import sys
 import time
 import traceback
@@ -42,6 +43,7 @@ from .utils import identity
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T')
+U = TypeVar('U')
 Req = TypeVar('Req')
 Res = TypeVar('Res')
 
@@ -141,6 +143,8 @@ class MultiprocessEmitter(SignalEmitter[T]):
         return self._mode
 
     def _emit_queue(self, data: T, ts: int) -> bool:
+        if _interrupted:
+            return False
         msg = Message(data, ts)
         success = False
 
@@ -220,6 +224,18 @@ class MultiprocessEmitter(SignalEmitter[T]):
         self.close()
 
 
+# Set in a process that has taken an interrupt. An interrupt can land inside a call to the manager, and
+# that connection then holds half a message: the next call over it returns what another one asked for, so
+# a reader takes a value from a channel it never subscribed to. Nothing may be sent or read after it.
+_interrupted = False
+
+
+def _note_interrupt(signum, frame):
+    global _interrupted
+    _interrupted = True
+    raise KeyboardInterrupt
+
+
 class MultiprocessReceiver(SignalReceiver[T]):
     """Signal receiver companion for :class:`MultiprocessEmitter`.
 
@@ -270,11 +286,17 @@ class MultiprocessReceiver(SignalReceiver[T]):
         return self.transport_mode is TransportMode.SHARED_MEMORY
 
     def _read_queue(self) -> Message[T] | None:
+        if _interrupted:
+            return None
         try:
             message = self._queue.get_nowait()
         except Empty:
             message = None
         else:
+            if message is None:
+                # An interrupt that lands inside a manager call leaves that connection holding half a
+                # message, and every read after it comes back as something the queue never carried.
+                raise ConnectionError('the queue was read after an interrupt tore its connection')
             self._last_queue_message = Message(message.data, message.ts, True)
             if self._mode is TransportMode.UNDECIDED:
                 self._mode = TransportMode.QUEUE
@@ -456,16 +478,25 @@ class _CallAnsweringLoop:
         self.__name__ = f'{type(cs).__name__}.run'
 
     def __call__(self, should_stop: SignalReceiver, clock: Clock) -> Iterator[Command]:
+        interrupted = False
         try:
             yield from self.cs.run(should_stop, clock)
+        except KeyboardInterrupt:
+            # An interrupt lands in every process at once, and it can land inside a manager call, which
+            # leaves that connection in the middle of a message. Reading it again returns the tail of
+            # somebody else's, so a call is left unanswered here rather than answered from a torn stream.
+            interrupted = True
+            raise
         finally:
-            for handler in handlers_of(self.cs):
-                handler.fail_queued()
+            if not interrupted:
+                for handler in handlers_of(self.cs):
+                    handler.fail_queued()
 
 
 def _bg_wrapper(
     run_func: ControlLoop, stop_event: EventClass, clock: Clock, name: str, parent_component_levels: Mapping[str, int]
 ):
+    signal.signal(signal.SIGINT, _note_interrupt)
     try:
         # A freshly spawned subprocess carries no logging configuration, so set one up. It is inside
         # the `try` because a failure here must still reach the `finally` that stops the World.
@@ -645,10 +676,10 @@ class World:
     def connect(
         self,
         source: ControlSystemEmitter[T] | ControlSystemCaller[Req, Res],
-        target: ControlSystemReceiver[T] | ControlSystemHandler[Req, Res],
+        target: ControlSystemReceiver[U] | ControlSystemHandler[Req, Res],
         *,
         emitter_wrapper: Callable[[SignalEmitter[T]], SignalEmitter[T]] = identity,
-        receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[T]] = identity,
+        receiver_wrapper: Callable[[SignalReceiver[T]], SignalReceiver[U]] = identity,
     ) -> None:
         """Declare a logical connection: an Emitter feeding a Receiver, or a Caller invoking a Handler.
 
