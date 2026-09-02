@@ -1,3 +1,4 @@
+import logging
 import time
 from collections import deque
 from collections.abc import Generator, Iterator
@@ -256,6 +257,20 @@ class Harness(pimm.ControlSystem):
             raise RuntimeError('The world stopped before every device was ready')
         ready.result()
 
+    def _release(self, should_stop: pimm.SignalReceiver, args: dict[str, Any]) -> Generator[pimm.Command, None, None]:
+        """Put the rig back the way ``_ready`` does, but log a failure instead of raising it.
+
+        A reflex trip on the way home aborts that move, and the same ask raises for it. The gate on a rig
+        too stuck to run is the NEXT episode's opening ``_ready``, which refuses before anything is
+        recorded, so a release that fails costs the run nothing and raising here ends a run with episodes
+        left to play.
+        """
+        # rules-allow: swallowed-error - the next episode's opening `_ready` is the gate; see the docstring.
+        try:
+            yield from self._ready(should_stop, args)
+        except Exception as exc:
+            logging.error(f'Releasing the rig after the episode ended failed: {exc}')
+
     def _pace(self, clock: pimm.Clock) -> pimm.Command:
         """Sim: yield, so the simulator's control-period sleep is the sole time-master and the policy reads
         each observation instantly. Real: sleep to the next waypoint, capped at the poll period, so a
@@ -337,7 +352,7 @@ class Harness(pimm.ControlSystem):
         # goes back where it put it — the trial's own args, not a fresh draw. The scene is a person's to set
         # up, and is not asked again. The terminal waits on the move: a scene the next trial draws rebuilds
         # the model an unfinished one is still travelling under, which nothing but its timeout would end.
-        yield from self._ready(should_stop, {k: v for k, v in self._task.prepare_args.items() if k != keys.SCENE})
+        yield from self._release(should_stop, {k: v for k, v in self._task.prepare_args.items() if k != keys.SCENE})
         # The answer waits until the model is out of this episode's function. An in-process policy is one
         # model across every episode, so the session that the next ask opens must not overtake it. The move
         # back above gives the function that time.
