@@ -1079,8 +1079,8 @@ class _FailsNthAsk(pimm.ControlSystem):
 
 @pytest.mark.timeout(3.0)
 def test_a_release_the_rig_refuses_leaves_the_run_playing(world):
-    """A reflex trip on the way home fails the closing ask. The episode is already recorded, so the close
-    logs the failure, and the run answers the episode and keeps its remaining episodes."""
+    """A reflex trip on the way home fails the closing ask. The close logs the failure, and the run answers
+    the episode and keeps its remaining episodes: the episode is already recorded."""
     arm = _FailsNthAsk(2)  # the second ask is the close; the first opened the episode
     policy = StubPolicy()
     harness = Harness(make_embodiment(prepare_handlers={keys.ARM: arm.env_reset}))
@@ -1094,7 +1094,7 @@ def test_a_release_the_rig_refuses_leaves_the_run_playing(world):
 
     assert arm.asks == 2, 'the rig was never asked to go back, so no release was under test'
     assert answer.done(), 'the failed release ended the run instead of being logged'
-    answer.result()  # a terminal, not the reflex: whoever asked reads a clean episode
+    answer.result()  # whoever asked reads a clean episode
 
 
 @pytest.mark.timeout(3.0)
