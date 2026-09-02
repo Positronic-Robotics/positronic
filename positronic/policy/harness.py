@@ -351,7 +351,8 @@ class Harness(pimm.ControlSystem):
         # goes back where it put it — the trial's own args, not a fresh draw. The scene is a person's to set
         # up, and is not asked again. The terminal waits on the move: a scene the next trial draws rebuilds
         # the model an unfinished one is still travelling under, which nothing but its timeout would end.
-        yield from self._release(should_stop, {k: v for k, v in self._task.prepare_args.items() if k != eval_keys.SCENE})
+        release_args = {k: v for k, v in self._task.prepare_args.items() if k != eval_keys.SCENE}
+        yield from self._release(should_stop, release_args)
         # The answer waits until the model is out of this episode's function. An in-process policy is one
         # model across every episode, so the session that the next ask opens must not overtake it. The move
         # back above gives the function that time.
