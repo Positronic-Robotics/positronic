@@ -350,7 +350,7 @@ class Robot(pimm.ControlSystem):
             roboarm_keys.JOINT_NAMES: _revolute_joint_names(urdf_xml),
             'meshes': meshes,
             roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
-            'gripper': gripper,
+            roboarm_keys.GRIPPER: gripper,
         }
 
     def _init_robot(self, robot):

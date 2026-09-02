@@ -134,7 +134,7 @@ def _bundled_robotiq_2f85() -> dict:
     return {
         'subtree': subtree,
         'meshes': {f.name: f.read_bytes() for f in sorted(mesh_dir.glob('*.stl'))},
-        'gripper': {'signal': keys.GRIP, 'joints': _ROBOTIQ_2F85_JOINTS, 'travel': 0.8},
+        roboarm_keys.GRIPPER: {'signal': keys.GRIP, 'joints': _ROBOTIQ_2F85_JOINTS, 'travel': 0.8},
     }
 
 
@@ -153,7 +153,7 @@ def attach_robotiq_2f85(arm_root: ET.Element, meshes: dict[str, bytes]) -> dict:
     gripper = _bundled_robotiq_2f85()
     arm_root.extend(ET.fromstring(f'<robot>{gripper["subtree"]}</robot>'))
     meshes.update(gripper['meshes'])
-    return gripper['gripper']
+    return gripper[roboarm_keys.GRIPPER]
 
 
 @lru_cache(maxsize=1)
@@ -174,7 +174,7 @@ def bundled_franka_model() -> dict:
         'meshes': meshes,
         roboarm_keys.JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
         roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
-        'gripper': gripper,
+        roboarm_keys.GRIPPER: gripper,
     }
 
 
@@ -197,5 +197,5 @@ def bundled_panda_model() -> dict:
         roboarm_keys.JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
         roboarm_keys.CONTROL_FRAME: DEFAULT_FRAME,
         # ``grip`` is recorded in [0, 1] (open→closed); each finger slides 0..0.04 m along its axis.
-        'gripper': {'signal': keys.GRIP, 'joints': ['finger_joint1', 'finger_joint2'], 'travel': 0.04},
+        roboarm_keys.GRIPPER: {'signal': keys.GRIP, 'joints': ['finger_joint1', 'finger_joint2'], 'travel': 0.04},
     }

@@ -455,7 +455,7 @@ def _log_numeric_signals(
     A signal too wide to plot is still read, so that a joint or pose vector of any width reaches the
     3D view.
     """
-    gripper = ep.static.get(eval_keys.GRIPPER)
+    gripper = ep.static.get(roboarm_keys.GRIPPER)
     stash_keys = set(signals.poses) | set(signals.joints)
     if gripper:
         stash_keys.add(gripper['signal'])
@@ -595,7 +595,7 @@ def _log_urdf_robot(
         # its direction; recordings can overshoot slightly, so clip before scaling by ``travel``.
         # TODO: the spec names one signal, so every model grips with it. Arms that grip independently
         # need it pluralized the way `joint_signals` is.
-        gripper = ep.static.get(eval_keys.GRIPPER)
+        gripper = ep.static.get(roboarm_keys.GRIPPER)
         if gripper and gripper['signal'] in numeric_data:
             grip_ts, grip_vals = numeric_data[gripper['signal']]
             grip_keep = _decimation_indices(grip_ts, _URDF_ANIM_HZ)
